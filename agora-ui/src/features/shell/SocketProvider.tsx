@@ -44,7 +44,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.on('connect_error', (err) => {
-      if (err.message === 'Invalid token' || err.message === 'Authentication required') {
+      const fatal = [
+        'Invalid token',
+        'Authentication required',
+        'account_pending',
+        'account_suspended',
+      ];
+      if (fatal.includes(err.message)) {
         logout();
       }
     });

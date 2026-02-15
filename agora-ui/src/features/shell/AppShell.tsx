@@ -24,14 +24,12 @@ export function AppShell() {
 
     if (serverId && serverId !== 'dms') {
       setActiveServer(serverId);
-      if (channelId) {
-        setActiveChannel(channelId);
-      }
+      setActiveChannel(channelId);
     } else if (serverId === 'dms') {
       setActiveServer(null);
-      if (channelId) {
-        setActiveChannel(channelId);
-      }
+      setActiveChannel(channelId);
+    } else {
+      setActiveChannel(null);
     }
   }, [params, setActiveServer, setActiveChannel]);
 

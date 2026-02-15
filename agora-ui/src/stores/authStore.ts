@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import { api, ApiError, setTokenGetter } from '../lib/api';
 import type { AuthResponse, RegisterRequest, User } from '../lib/contracts/auth';
+import { useServerStore } from './serverStore';
+import { useChannelStore } from './channelStore';
+import { useMemberStore } from './memberStore';
+import { useUIStore } from './uiStore';
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'pending';
 
@@ -52,6 +56,10 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     set({ token: null, user: null, status: 'idle' });
+    useServerStore.getState().clear();
+    useChannelStore.getState().clear();
+    useMemberStore.getState().clear();
+    useUIStore.getState().setConnectionStatus('disconnected');
   },
 }));
 
