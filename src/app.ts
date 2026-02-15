@@ -90,6 +90,23 @@ export async function buildApp(opts?: {
                         io.to(evt.room).emit(evt.event, evt.data);
                     }
                 }
+
+                // Force-disconnect suspended users only after successful commit
+                // (best-effort — WS failures must not affect the committed suspension)
+                const pendingDisconnects = (request as any).pendingDisconnects;
+                if (io && pendingDisconnects) {
+                    for (const targetId of pendingDisconnects) {
+                        try {
+                            const sockets = await io.fetchSockets();
+                            for (const s of sockets) {
+                                if ((s as any).userId === targetId) {
+                                    s.emit('error', { code: 'account_suspended' });
+                                    s.disconnect(true);
+                                }
+                            }
+                        } catch { /* WS disconnect is best-effort */ }
+                    }
+                }
             } catch {
                 await client.query('ROLLBACK').catch(() => {});
             }

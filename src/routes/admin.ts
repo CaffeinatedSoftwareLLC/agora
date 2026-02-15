@@ -253,17 +253,8 @@ export async function adminRoutes(app: FastifyInstance) {
             after: { accountStatus: 'suspended' },
         });
 
-        // Force-disconnect suspended user's active WS sessions
-        const io = (app as any).io;
-        if (io) {
-            const sockets = await io.fetchSockets();
-            for (const s of sockets) {
-                if ((s as any).userId === targetId) {
-                    s.emit('error', { code: 'account_suspended' });
-                    s.disconnect(true);
-                }
-            }
-        }
+        // Defer WS disconnect until after transaction commits (see app.ts onResponse)
+        (request as any).pendingDisconnects = [targetId];
 
         return reply.send({
             user: {
@@ -296,27 +287,39 @@ export async function adminRoutes(app: FastifyInstance) {
         const userId = (request as any).userId;
         const { instanceName, registrationPolicy } = request.body as any;
 
+        // Pre-check: verify all requested config keys exist before making any changes
+        // (prevents partial writes when one key is present but the other is missing)
+        const keysToUpdate: string[] = [];
+        if (instanceName !== undefined) keysToUpdate.push('instance_name');
+        if (registrationPolicy !== undefined) keysToUpdate.push('registration_policy');
+
+        const existsRes = await db.query(
+            `SELECT key FROM instance_config WHERE key = ANY($1)`,
+            [keysToUpdate]
+        );
+
+        if (existsRes.rows.length !== keysToUpdate.length) {
+            const existingKeys = new Set(existsRes.rows.map((r: any) => r.key));
+            const missingKey = keysToUpdate.find(k => !existingKeys.has(k));
+            return reply.status(500).send({ error: 'config_key_missing', key: missingKey });
+        }
+
+        // All keys verified — safe to update
         const changes: Record<string, any> = {};
 
         if (instanceName !== undefined) {
-            const res = await db.query(
+            await db.query(
                 "UPDATE instance_config SET value = $1 WHERE key = 'instance_name'",
                 [instanceName]
             );
-            if (res.rowCount === 0) {
-                return reply.status(500).send({ error: 'config_key_missing', key: 'instance_name' });
-            }
             changes.instanceName = instanceName;
         }
 
         if (registrationPolicy !== undefined) {
-            const res = await db.query(
+            await db.query(
                 "UPDATE instance_config SET value = $1 WHERE key = 'registration_policy'",
                 [registrationPolicy]
             );
-            if (res.rowCount === 0) {
-                return reply.status(500).send({ error: 'config_key_missing', key: 'registration_policy' });
-            }
             changes.registrationPolicy = registrationPolicy;
         }
 

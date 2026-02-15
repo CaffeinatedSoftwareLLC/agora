@@ -516,6 +516,28 @@ describe('Phase 2 — Admin Dashboard', () => {
             expect(regRes.body).not.toHaveProperty('accessToken');
         });
 
+        test('rejects with no partial write when a config key is missing', async () => {
+            const admin = await insertUser('active', 'partialadmin', true);
+
+            // Delete one config key to simulate missing row
+            await ctx.db.query("DELETE FROM instance_config WHERE key = 'registration_policy'");
+
+            // Send both fields — should fail before any writes
+            const res = await ctx.request
+                .patch('/admin/instance')
+                .set(admin.auth)
+                .send({ instanceName: 'Should Not Persist', registrationPolicy: 'approval' });
+            expect(res.status).toBe(500);
+            expect(res.body.error).toBe('config_key_missing');
+            expect(res.body.key).toBe('registration_policy');
+
+            // Verify instance_name was NOT changed (no partial write)
+            const check = await ctx.db.query(
+                "SELECT value FROM instance_config WHERE key = 'instance_name'"
+            );
+            expect(check.rows[0].value).toBe('Agora'); // original default, untouched
+        });
+
         test('validates registrationPolicy enum', async () => {
             const admin = await insertUser('active', 'enumadmin', true);
 
