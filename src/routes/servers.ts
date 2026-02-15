@@ -126,6 +126,50 @@ export async function serverRoutes(app: FastifyInstance) {
         return reply.status(201).send({ code });
     });
 
+    // GET /servers/:id/members → 200 [{ id, username, joinedAt, roles }]
+    app.get('/servers/:id/members', async (request, reply) => {
+        const { id: serverId } = request.params as any;
+        const userId = (request as any).userId;
+        const db = (request as any).dbClient;
+
+        // Membership check
+        const member = await db.query(
+            'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+            [serverId, userId]
+        );
+        if (member.rows.length === 0) {
+            return reply.status(403).send({ error: 'Not a member of this server' });
+        }
+
+        const result = await db.query(
+            `SELECT u.id, u.username, sm.joined_at,
+                    COALESCE(json_agg(
+                        json_build_object('id', r.id, 'name', r.name, 'position', r.position)
+                        ORDER BY r.position
+                    ) FILTER (WHERE r.id IS NOT NULL), '[]') AS roles
+             FROM server_members sm
+             JOIN users u ON u.id = sm.user_id
+             LEFT JOIN member_roles mr ON mr.server_id = sm.server_id AND mr.user_id = sm.user_id
+             LEFT JOIN roles r ON r.id = mr.role_id
+             WHERE sm.server_id = $1
+             GROUP BY u.id, u.username, sm.joined_at
+             ORDER BY sm.joined_at`,
+            [serverId]
+        );
+
+        const members = result.rows.map((row: any) => ({
+            id: row.id.trim(),
+            username: row.username,
+            joinedAt: row.joined_at,
+            roles: row.roles.map((r: any) => ({
+                ...r,
+                id: r.id?.trim(),
+            })),
+        }));
+
+        return reply.status(200).send(members);
+    });
+
     // POST /invites/:code → 200 { serverId, userId }
     app.post('/invites/:code', async (request, reply) => {
         const { code } = request.params as any;

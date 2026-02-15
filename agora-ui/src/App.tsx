@@ -10,10 +10,8 @@ import { AdminDashboard } from './features/admin/AdminDashboard';
 import { PendingQueue } from './features/admin/PendingQueue';
 import { UserTable } from './features/admin/UserTable';
 import { InstanceSettings } from './features/admin/InstanceSettings';
-
-function AppPlaceholder() {
-  return <div className="flex items-center justify-center h-screen text-text-muted">App shell coming in Phase 3</div>;
-}
+import { SocketProvider } from './features/shell/SocketProvider';
+import { AppShell } from './features/shell/AppShell';
 
 export default function App() {
   return (
@@ -37,7 +35,13 @@ export default function App() {
               </AdminGuard>
             </AuthGuard>
           } />
-          <Route path="/app/*" element={<AuthGuard><AppPlaceholder /></AuthGuard>} />
+          <Route path="/app/*" element={
+            <AuthGuard>
+              <SocketProvider>
+                <AppShell />
+              </SocketProvider>
+            </AuthGuard>
+          } />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </InstanceGuard>

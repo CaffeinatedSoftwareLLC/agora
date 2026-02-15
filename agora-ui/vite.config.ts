@@ -13,6 +13,10 @@ export default defineConfig({
       '/invites': 'http://localhost:3000',
       '/admin': 'http://localhost:3000',
       '/health': 'http://localhost:3000',
+      '/socket.io': {
+        target: 'http://localhost:3000',
+        ws: true,
+      },
     }
   }
 })
