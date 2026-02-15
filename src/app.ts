@@ -1,11 +1,13 @@
 import Fastify from 'fastify';
 import { Pool } from 'pg';
+import { instanceRoutes } from './routes/instance';
 import { authRoutes } from './routes/auth';
 import { serverRoutes } from './routes/servers';
 import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
 import { dmRoutes } from './routes/dms';
 import { requireAuth } from './auth/middleware';
+import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
 
 export async function buildApp(opts?: {
@@ -37,10 +39,22 @@ export async function buildApp(opts?: {
         (request as any).dbClient = client;
     });
 
-    // Auth middleware for all routes except /auth/* and /health
+    // Initialization gate — block everything except bootstrap routes when not initialized
     app.addHook('preHandler', async (request, reply) => {
         const url = request.url.split('?')[0];
-        if (url === '/health' || url.startsWith('/auth/')) {
+        if (url === '/health' || url.startsWith('/instance/')) {
+            return;
+        }
+        const ready = await isInstanceInitialized((app as any).db);
+        if (!ready) {
+            return reply.status(503).send({ error: 'instance_not_initialized' });
+        }
+    });
+
+    // Auth middleware for all routes except /auth/*, /instance/*, and /health
+    app.addHook('preHandler', async (request, reply) => {
+        const url = request.url.split('?')[0];
+        if (url === '/health' || url.startsWith('/auth/') || url.startsWith('/instance/')) {
             return;
         }
         await requireAuth(request, reply);
@@ -93,6 +107,7 @@ export async function buildApp(opts?: {
     });
 
     // Register route modules
+    await app.register(instanceRoutes);
     await app.register(authRoutes);
     await app.register(serverRoutes);
     await app.register(channelRoutes);

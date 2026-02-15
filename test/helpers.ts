@@ -1,5 +1,6 @@
 import { buildApp } from '../src/app';
 import supertest from 'supertest';
+import { resetInitializedCache } from '../src/instance/check-initialized';
 
 // ─── App lifecycle ───
 // Each test FILE calls this in beforeAll / afterAll.
@@ -90,5 +91,37 @@ export async function joinViaInvite(
 
 // ─── Database cleanup for test isolation ───
 export async function cleanDatabase(db: any) {
-    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages CASCADE');
+    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, instance_config CASCADE');
+    // Re-seed instance_config so existing tests see an initialized instance
+    await db.query(
+        `INSERT INTO instance_config (key, value) VALUES
+            ('setup_complete', 'true'),
+            ('registration_policy', 'open'),
+            ('instance_name', 'Agora')`
+    );
+    // Reset the in-memory cache so the app re-reads from DB
+    resetInitializedCache();
+}
+
+// ─── Shortcut: run POST /instance/setup for tests that need it ───
+export async function setupInstance(
+    req: supertest.Agent,
+    opts?: { setupToken?: string; username?: string; email?: string; password?: string; instanceName?: string }
+) {
+    const token = opts?.setupToken ?? process.env.AGORA_SETUP_TOKEN ?? 'test-setup-token';
+    const res = await req.post('/instance/setup').send({
+        setupToken: token,
+        username: opts?.username ?? 'admin',
+        email: opts?.email ?? 'admin@test.com',
+        password: opts?.password ?? 'TestPass123!',
+        instanceName: opts?.instanceName ?? 'Test Instance',
+    });
+    if (res.status !== 201) {
+        throw new Error(`setupInstance failed: ${res.status} ${JSON.stringify(res.body)}`);
+    }
+    return {
+        userId: res.body.user.id as string,
+        token: res.body.accessToken as string,
+        auth: { Authorization: `Bearer ${res.body.accessToken}` },
+    };
 }

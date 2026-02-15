@@ -11,6 +11,21 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     const jwtSecret = (app as any).jwtSecret;
     const db = (app as any).db;
 
+    // Initialization gate — reject connections before instance is set up
+    io.use(async (_socket, next) => {
+        try {
+            const result = await db.query(
+                "SELECT value FROM instance_config WHERE key = 'setup_complete'"
+            );
+            if (result.rows.length === 0 || result.rows[0].value !== 'true') {
+                return next(new Error('instance_not_initialized'));
+            }
+            next();
+        } catch {
+            next(new Error('instance_not_initialized'));
+        }
+    });
+
     // Auth middleware — verify JWT from handshake
     io.use((socket, next) => {
         const token = socket.handshake.auth?.token;
