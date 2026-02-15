@@ -55,9 +55,10 @@ export async function instanceRoutes(app: FastifyInstance) {
             registrationPolicy,
         } = request.body as any;
 
-        // 1. Check if already initialized
+        // 1. Acquire exclusive row lock on setup_complete — serializes concurrent setup attempts.
+        //    The second request blocks here until the first commits, then sees 'true' and 409s.
         const setupCheck = await db.query(
-            "SELECT value FROM instance_config WHERE key = 'setup_complete'"
+            "SELECT value FROM instance_config WHERE key = 'setup_complete' FOR UPDATE"
         );
         if (setupCheck.rows.length > 0 && setupCheck.rows[0].value === 'true') {
             return reply.status(409).send({ error: 'instance_already_initialized' });
@@ -69,7 +70,7 @@ export async function instanceRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'invalid_setup_token' });
         }
 
-        // 3. Race guard — ensure no users exist
+        // 3. Race guard — ensure no users exist (belt-and-suspenders behind the row lock)
         const userCount = await db.query('SELECT COUNT(*)::int AS count FROM users');
         if (userCount.rows[0].count > 0) {
             return reply.status(409).send({ error: 'instance_already_initialized' });

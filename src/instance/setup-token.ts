@@ -30,12 +30,22 @@ export async function getSetupToken(): Promise<string> {
         // File doesn't exist or can't be read — generate new token
     }
 
-    // 3. Generate and persist
+    // 3. Generate and attempt to persist
     const token = crypto.randomBytes(32).toString('hex');
 
-    // Create directory if needed
-    fs.mkdirSync(dataDir, { recursive: true });
-    fs.writeFileSync(tokenPath, token, 'utf-8');
+    try {
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(tokenPath, token, 'utf-8');
+    } catch (err) {
+        console.error('');
+        console.error('='.repeat(60));
+        console.error('  WARNING: Could not persist setup token to disk.');
+        console.error(`  Path: ${tokenPath}`);
+        console.error(`  Error: ${(err as Error).message}`);
+        console.error('  The token below is EPHEMERAL — it will not survive a restart.');
+        console.error('  Set AGORA_SETUP_TOKEN env var for a stable token.');
+        console.error('='.repeat(60));
+    }
 
     console.log('');
     console.log('='.repeat(60));

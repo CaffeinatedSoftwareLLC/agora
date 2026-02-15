@@ -1,6 +1,6 @@
 process.env.AGORA_SETUP_TOKEN = 'test-setup-token-that-is-at-least-32chars!';
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { setupTestApp, cleanDatabase } from '../helpers';
 import { resetInitializedCache } from '../../src/instance/check-initialized';
 
@@ -111,6 +111,31 @@ describe('Phase 0 — Instance Bootstrap', () => {
             expect(second.body.error).toBe('instance_already_initialized');
         });
 
+        test('concurrent setup calls — exactly one succeeds', async () => {
+            await setUninitialized();
+
+            const payload = (suffix: string) => ({
+                setupToken: 'test-setup-token-that-is-at-least-32chars!',
+                username: `admin${suffix}`,
+                email: `admin${suffix}@test.com`,
+                password: 'TestPass123!',
+            });
+
+            // Fire two setup requests in parallel
+            const [a, b] = await Promise.all([
+                ctx.request.post('/instance/setup').send(payload('1')),
+                ctx.request.post('/instance/setup').send(payload('2')),
+            ]);
+
+            const statuses = [a.status, b.status].sort();
+            // Exactly one 201 and one 409
+            expect(statuses).toEqual([201, 409]);
+
+            // The 409 response has the correct error code
+            const rejected = a.status === 409 ? a : b;
+            expect(rejected.body.error).toBe('instance_already_initialized');
+        });
+
         test('setup with registrationPolicy sets it correctly', async () => {
             await setUninitialized();
 
@@ -153,6 +178,30 @@ describe('Phase 0 — Instance Bootstrap', () => {
             });
             expect(res.status).toBe(503);
             expect(res.body.error).toBe('instance_not_initialized');
+        });
+    });
+
+    describe('setup token resilience', () => {
+
+        test('getSetupToken returns ephemeral token when data dir is unwritable', async () => {
+            // Temporarily unset env var so the module tries to read/write file
+            const saved = process.env.AGORA_SETUP_TOKEN;
+            delete process.env.AGORA_SETUP_TOKEN;
+            // Point to a path that cannot be written (non-existent drive on Windows, /proc on Linux)
+            process.env.AGORA_DATA_DIR = process.platform === 'win32'
+                ? 'Z:\\nonexistent\\readonly'
+                : '/proc/nonexistent/readonly';
+
+            // Re-import to bypass any module caching
+            const { getSetupToken } = await import('../../src/instance/setup-token');
+            const token = await getSetupToken();
+
+            // Should still return a valid 64-hex-char token
+            expect(token).toMatch(/^[0-9a-f]{64}$/);
+
+            // Restore env
+            process.env.AGORA_SETUP_TOKEN = saved;
+            delete process.env.AGORA_DATA_DIR;
         });
     });
 
