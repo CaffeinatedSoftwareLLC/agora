@@ -5,7 +5,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
-import { shouldGroup } from './grouping';
+import { shouldGroup, estimateMessageHeight, computePrependShift } from './grouping';
 
 interface MessageListProps {
   channelId: string;
@@ -29,7 +29,6 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
   const lastMessageIdRef = useRef<string | null>(null);
   const prevCountRef = useRef(0);
   const initialLoadRef = useRef(true);
-  const anchorRef = useRef<{ index: number; offsetInItem: number } | null>(null);
 
   const count = messages?.length ?? 0;
 
@@ -38,10 +37,8 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => {
       if (!messages?.[index]) return 48;
-      const msg = messages[index];
       const prev = index > 0 ? messages[index - 1] : undefined;
-      if (msg.deletedAt) return shouldGroup(prev, msg) ? 28 : 48;
-      return shouldGroup(prev, msg) ? 28 : 64;
+      return estimateMessageHeight(prev, messages[index]);
     },
     overscan: 15,
     getItemKey: (index) => messages?.[index]?.id ?? String(index),
@@ -77,17 +74,14 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     if (currentCount > prevCount && prevCount > 0) {
       if (lastMsg.id === lastMessageIdRef.current) {
         // Prepend — older messages loaded at the start of the array.
-        // Anchor so the item the user was looking at stays in place.
+        // The virtualizer has re-indexed: every existing item shifted down by
+        // the cumulative estimated height of the new items.  Shift scrollTop
+        // by the same amount so the viewport stays on the same content.
         const prependedCount = currentCount - prevCount;
-        const anchor = anchorRef.current;
-        const targetIndex = (anchor?.index ?? 0) + prependedCount;
-        virtualizer.scrollToIndex(targetIndex, { align: 'start' });
-        // Restore sub-item pixel offset for exact position stability
-        if (anchor && anchor.offsetInItem > 0) {
-          const el = parentRef.current;
-          if (el) el.scrollTop += anchor.offsetInItem;
+        const el = parentRef.current;
+        if (el) {
+          el.scrollTop += computePrependShift(messages, prependedCount);
         }
-        anchorRef.current = null;
       } else {
         // Append — new message arrived at the end
         const isFromSelf = lastMsg.authorId === userId;
@@ -116,16 +110,6 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
 
     // Load older when scrolled near top
     if (el.scrollTop < 200 && hasMore && !loadingOlderRef.current) {
-      // Capture the first visible item for scroll anchoring after prepend
-      const items = virtualizer.getVirtualItems();
-      const scrollTop = el.scrollTop;
-      const firstVisible = items.find(item => item.start + item.size > scrollTop);
-      if (firstVisible) {
-        anchorRef.current = {
-          index: firstVisible.index,
-          offsetInItem: scrollTop - firstVisible.start,
-        };
-      }
       loadingOlderRef.current = true;
       setLoadingOlder(true);
       loadOlder(channelId)
@@ -134,7 +118,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
           setLoadingOlder(false);
         });
     }
-  }, [hasMore, channelId, loadOlder, newCount, virtualizer]);
+  }, [hasMore, channelId, loadOlder, newCount]);
 
   const scrollToBottom = useCallback(() => {
     if (messages && messages.length > 0) {
