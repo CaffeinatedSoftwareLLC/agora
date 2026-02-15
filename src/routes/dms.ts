@@ -40,51 +40,51 @@ export async function dmRoutes(app: FastifyInstance) {
         await db.query('SAVEPOINT dm_create');
 
         try {
-            // Try to find existing DM pair
+            // Create channel speculatively — will be rolled back if pair already exists
+            const channelId = generateUlid();
+
+            await db.query(
+                `INSERT INTO channels (id, channel_type) VALUES ($1, 1)`,
+                [channelId]
+            );
+
+            // Atomic upsert: ON CONFLICT returns nothing, so we SELECT after
+            const inserted = await db.query(
+                `INSERT INTO dm_pairs (user_a, user_b, channel_id)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (user_a, user_b) DO NOTHING
+                 RETURNING channel_id`,
+                [userA, userB, channelId]
+            );
+
+            if (inserted.rows.length > 0) {
+                // We won the race — wire up channel members
+                await db.query(
+                    `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+                    [channelId, userA]
+                );
+                await db.query(
+                    `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+                    [channelId, userB]
+                );
+
+                await db.query('RELEASE SAVEPOINT dm_create');
+                return reply.status(201).send({
+                    id: channelId.trim(),
+                    channelType: 1,
+                });
+            }
+
+            // Lost the race — rollback the speculative channel, return existing pair
+            await db.query('ROLLBACK TO SAVEPOINT dm_create');
+
             const existing = await db.query(
                 'SELECT channel_id FROM dm_pairs WHERE user_a = $1 AND user_b = $2',
                 [userA, userB]
             );
 
-            if (existing.rows.length > 0) {
-                const channelId = existing.rows[0].channel_id.trim();
-                await db.query('RELEASE SAVEPOINT dm_create');
-                return reply.status(201).send({
-                    id: channelId,
-                    channelType: 1,
-                });
-            }
-
-            // Create new DM channel
-            const channelId = generateUlid();
-
-            await db.query(
-                `INSERT INTO channels (id, channel_type)
-                 VALUES ($1, 1)`,
-                [channelId]
-            );
-
-            // Insert dm_pair
-            await db.query(
-                `INSERT INTO dm_pairs (user_a, user_b, channel_id)
-                 VALUES ($1, $2, $3)`,
-                [userA, userB, channelId]
-            );
-
-            // Add both users as channel members
-            await db.query(
-                `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
-                [channelId, userA]
-            );
-            await db.query(
-                `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
-                [channelId, userB]
-            );
-
-            await db.query('RELEASE SAVEPOINT dm_create');
-
             return reply.status(201).send({
-                id: channelId.trim(),
+                id: existing.rows[0].channel_id.trim(),
                 channelType: 1,
             });
         } catch (err: any) {
