@@ -30,29 +30,34 @@ export async function authRoutes(app: FastifyInstance) {
 
         // invite_only requires an invite code
         if (policy === 'invite_only' && !inviteCode) {
-            return reply.status(400).send({ error: 'Invite code is required' });
+            return reply.status(400).send({ error: 'invite_code_required' });
         }
 
         // Validate invite code if provided for invite_only
+        // Uses FOR UPDATE to lock the row and prevent concurrent registrations
+        // from exceeding max_uses (race condition guard)
         let invite: any = null;
         if (policy === 'invite_only') {
             const inviteResult = await db.query(
-                'SELECT code, server_id, max_uses, use_count, expires_at FROM server_invites WHERE code = $1',
+                `SELECT code, server_id, max_uses, use_count, expires_at
+                 FROM server_invites
+                 WHERE code = $1
+                 FOR UPDATE`,
                 [inviteCode]
             );
             if (inviteResult.rows.length === 0) {
-                return reply.status(404).send({ error: 'Invalid invite code' });
+                return reply.status(404).send({ error: 'invalid_invite_code' });
             }
             invite = inviteResult.rows[0];
 
             // Check if invite is expired
             if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-                return reply.status(404).send({ error: 'Invalid invite code' });
+                return reply.status(404).send({ error: 'invalid_invite_code' });
             }
 
             // Check if invite has reached max uses
             if (invite.max_uses !== null && invite.use_count >= invite.max_uses) {
-                return reply.status(404).send({ error: 'Invalid invite code' });
+                return reply.status(404).send({ error: 'invalid_invite_code' });
             }
         }
 
@@ -69,7 +74,7 @@ export async function authRoutes(app: FastifyInstance) {
             );
         } catch (err: any) {
             if (err.code === '23505') {
-                return reply.status(409).send({ error: 'Username or email already taken' });
+                return reply.status(409).send({ error: 'username_or_email_taken' });
             }
             throw err;
         }
@@ -119,14 +124,14 @@ export async function authRoutes(app: FastifyInstance) {
         );
 
         if (result.rows.length === 0) {
-            return reply.status(401).send({ error: 'Invalid credentials' });
+            return reply.status(401).send({ error: 'invalid_credentials' });
         }
 
         const user = result.rows[0];
         const valid = await verifyPassword(password, user.password_hash);
 
         if (!valid) {
-            return reply.status(401).send({ error: 'Invalid credentials' });
+            return reply.status(401).send({ error: 'invalid_credentials' });
         }
 
         // Check account status after credential verification

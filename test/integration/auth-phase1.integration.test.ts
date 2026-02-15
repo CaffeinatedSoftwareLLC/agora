@@ -150,7 +150,7 @@ describe('Phase 1 — Auth & Registration Policies', () => {
                 password: 'TestPass123!',
             });
             expect(res.status).toBe(400);
-            expect(res.body.error).toBe('Invite code is required');
+            expect(res.body.error).toBe('invite_code_required');
         });
 
         test('register with invalid inviteCode returns 404', async () => {
@@ -161,7 +161,7 @@ describe('Phase 1 — Auth & Registration Policies', () => {
                 inviteCode: 'nonexistent',
             });
             expect(res.status).toBe(404);
-            expect(res.body.error).toBe('Invalid invite code');
+            expect(res.body.error).toBe('invalid_invite_code');
         });
 
         test('register with valid inviteCode returns 201, user added to server', async () => {
@@ -204,7 +204,7 @@ describe('Phase 1 — Auth & Registration Policies', () => {
                 inviteCode,
             });
             expect(res.status).toBe(404);
-            expect(res.body.error).toBe('Invalid invite code');
+            expect(res.body.error).toBe('invalid_invite_code');
         });
 
         test('register with maxed-out invite returns 404', async () => {
@@ -221,7 +221,7 @@ describe('Phase 1 — Auth & Registration Policies', () => {
                 inviteCode,
             });
             expect(res.status).toBe(404);
-            expect(res.body.error).toBe('Invalid invite code');
+            expect(res.body.error).toBe('invalid_invite_code');
         });
     });
 

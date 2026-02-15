@@ -39,12 +39,12 @@ export function RegisterPage() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.code === 'email_taken') {
-          setError('An account with this email already exists.');
-        } else if (err.code === 'username_taken') {
-          setError('This username is already taken.');
-        } else if (err.code === 'invalid_invite') {
+        if (err.code === 'username_or_email_taken') {
+          setError('Username or email is already taken.');
+        } else if (err.code === 'invalid_invite_code') {
           setError('Invalid or expired invite code.');
+        } else if (err.code === 'invite_code_required') {
+          setError('An invite code is required to register.');
         } else {
           setError(err.code);
         }
