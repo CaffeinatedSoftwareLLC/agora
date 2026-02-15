@@ -1,4 +1,4 @@
-import { createContext, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Socket } from 'socket.io-client';
 import { createSocket } from '../../lib/socketFactory';
 import { useAuthStore } from '../../stores/authStore';
@@ -7,8 +7,7 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import type { ReadyPayload, MessagePayload, MessageUpdatePayload, MessageDeletePayload } from '../../lib/contracts/ws-events';
 import { useMessageStore } from '../../stores/messageStore';
-
-export const SocketContext = createContext<Socket | null>(null);
+import { SocketContext } from './SocketContext';
 
 export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -19,15 +18,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const setConnectionStatus = useUIStore(s => s.setConnectionStatus);
 
   useEffect(() => {
-    if (!token) {
-      setSocket(null);
-      return;
-    }
+    if (!token) return;
 
     const s = createSocket(token);
 
     s.on('connect', () => {
       setConnectionStatus('connected');
+      setSocket(s);
     });
 
     s.on('disconnect', () => {
@@ -70,7 +67,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.connect();
-    setSocket(s);
 
     return () => {
       s.removeAllListeners();

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { MessageItem } from './MessageItem';
@@ -32,54 +33,85 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
   const deleteMessage = useMessageStore(s => s.deleteMessage);
   const userId = useAuthStore(s => s.user?.id);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newCount, setNewCount] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const lastMessageIdRef = useRef<string | null>(null);
   const loadingOlderRef = useRef(false);
+  const lastMessageIdRef = useRef<string | null>(null);
+  const prevCountRef = useRef(0);
   const initialLoadRef = useRef(true);
 
-  // Load messages on mount / channel change
+  const count = messages?.length ?? 0;
+
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => parentRef.current,
+    estimateSize: (index) => {
+      if (!messages?.[index]) return 48;
+      const msg = messages[index];
+      const prev = index > 0 ? messages[index - 1] : undefined;
+      if (msg.deletedAt) return shouldGroup(prev, msg) ? 28 : 48;
+      return shouldGroup(prev, msg) ? 28 : 64;
+    },
+    overscan: 15,
+    getItemKey: (index) => messages?.[index]?.id ?? String(index),
+  });
+
+  // Load messages on channel change
   useEffect(() => {
     loadMessages(channelId);
     setNewCount(0);
     setIsAtBottom(true);
     lastMessageIdRef.current = null;
+    prevCountRef.current = 0;
     initialLoadRef.current = true;
   }, [channelId, loadMessages]);
 
-  // Scroll to bottom on initial load, track new messages at the bottom
-  useEffect(() => {
+  // Scroll positioning: initial scroll-to-bottom, prepend anchor, auto-scroll on new message
+  useLayoutEffect(() => {
     if (!messages || messages.length === 0) return;
 
     const lastMsg = messages[messages.length - 1];
+    const prevCount = prevCountRef.current;
+    const currentCount = messages.length;
 
-    // Initial load: scroll to bottom
     if (initialLoadRef.current) {
-      bottomRef.current?.scrollIntoView();
+      // Initial load: scroll to bottom immediately (no smooth — avoid visible travel)
+      virtualizer.scrollToIndex(currentCount - 1, { align: 'end' });
       lastMessageIdRef.current = lastMsg.id;
+      prevCountRef.current = currentCount;
       initialLoadRef.current = false;
       return;
     }
 
-    // If the last message ID changed, a new message was appended (not prepended)
-    if (lastMsg.id !== lastMessageIdRef.current) {
-      const isFromSelf = lastMsg.authorId === userId;
-      if (isAtBottom || isFromSelf) {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (currentCount > prevCount && prevCount > 0) {
+      if (lastMsg.id === lastMessageIdRef.current) {
+        // Prepend — older messages loaded at the start of the array.
+        // Anchor so the previously-first-visible item stays in view.
+        const prependedCount = currentCount - prevCount;
+        virtualizer.scrollToIndex(prependedCount, { align: 'start' });
       } else {
-        setNewCount(c => c + 1);
+        // Append — new message arrived at the end
+        const isFromSelf = lastMsg.authorId === userId;
+        if (isAtBottom || isFromSelf) {
+          virtualizer.scrollToIndex(currentCount - 1, { align: 'end', behavior: 'smooth' });
+        } else {
+          setNewCount(c => c + 1);
+        }
       }
-      lastMessageIdRef.current = lastMsg.id;
     }
+
+    lastMessageIdRef.current = lastMsg.id;
+    prevCountRef.current = currentCount;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, isAtBottom, userId]);
 
-  // Track scroll position
+  // Track scroll position + trigger load-older
   const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
+    const el = parentRef.current;
     if (!el) return;
+
     const threshold = 50;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     setIsAtBottom(atBottom);
@@ -89,24 +121,21 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     if (el.scrollTop < 200 && hasMore && !loadingOlderRef.current) {
       loadingOlderRef.current = true;
       setLoadingOlder(true);
-      const prevScrollHeight = el.scrollHeight;
-      loadOlder(channelId).then(() => {
-        // Preserve scroll position after prepending older messages
-        requestAnimationFrame(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight - prevScrollHeight;
-          }
+      loadOlder(channelId)
+        .finally(() => {
           loadingOlderRef.current = false;
           setLoadingOlder(false);
         });
-      }).catch(() => { loadingOlderRef.current = false; setLoadingOlder(false); });
     }
   }, [hasMore, channelId, loadOlder, newCount]);
 
   const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages && messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'smooth' });
+    }
     setNewCount(0);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages?.length]);
 
   const handleEdit = useCallback((msgId: string, content: string) => {
     editMessage(channelId, msgId, content);
@@ -128,28 +157,55 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     return <EmptyChannel channelName={channelName} />;
   }
 
+  const virtualItems = virtualizer.getVirtualItems();
+
   return (
     <div className="flex-1 relative overflow-hidden flex flex-col">
       <div
-        ref={scrollRef}
+        ref={parentRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto"
       >
-        {loadingOlder && (
-          <div className="py-4 text-center text-text-dim text-sm">Loading older messages...</div>
-        )}
-        {messages.map((msg, i) => (
-          <MessageItem
-            key={msg.id}
-            message={msg}
-            isGrouped={shouldGroup(messages[i - 1], msg)}
-            isOwn={msg.authorId === userId}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-          />
-        ))}
-        <div ref={bottomRef} />
+        <div
+          style={{
+            height: virtualizer.getTotalSize(),
+            width: '100%',
+            position: 'relative',
+          }}
+        >
+          {virtualItems.map((virtualRow) => {
+            const msg = messages[virtualRow.index];
+            const prevMsg = virtualRow.index > 0 ? messages[virtualRow.index - 1] : undefined;
+            return (
+              <div
+                key={msg.id}
+                data-index={virtualRow.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <MessageItem
+                  message={msg}
+                  isGrouped={shouldGroup(prevMsg, msg)}
+                  isOwn={msg.authorId === userId}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
+      {loadingOlder && (
+        <div className="absolute top-0 left-0 right-0 py-3 text-center text-text-dim text-sm bg-bg/80 backdrop-blur-sm z-10">
+          Loading older messages...
+        </div>
+      )}
       <NewMessagesPill count={newCount} onClick={scrollToBottom} />
     </div>
   );

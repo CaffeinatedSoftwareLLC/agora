@@ -20,11 +20,6 @@ export function MessageInput({ channelId }: MessageInputProps) {
     }
   }, [content]);
 
-  // Reset input when channel changes
-  useEffect(() => {
-    setContent('');
-  }, [channelId]);
-
   const handleSend = () => {
     const trimmed = content.trim();
     if (!trimmed || !user) return;

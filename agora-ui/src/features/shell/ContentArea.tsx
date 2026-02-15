@@ -7,7 +7,7 @@ export function ContentArea() {
   const channels = useChannelStore(s => s.channels);
   const channel = activeChannelId ? channels.get(activeChannelId) : null;
 
-  if (!channel) {
+  if (!activeChannelId || !channel) {
     return (
       <div className="flex-1 flex items-center justify-center bg-bg">
         <div className="text-center">
@@ -30,7 +30,7 @@ export function ContentArea() {
       <MessageList channelId={activeChannelId} channelName={channel.name} />
 
       {/* Input */}
-      <MessageInput channelId={activeChannelId} />
+      <MessageInput key={activeChannelId} channelId={activeChannelId} />
     </div>
   );
 }

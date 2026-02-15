@@ -13,6 +13,8 @@ export interface MessagePayload {
   authorUsername: string;
   channelId: string;
   createdAt: string;
+  editedAt?: string;
+  deletedAt?: string;
 }
 
 export interface MessageUpdatePayload {

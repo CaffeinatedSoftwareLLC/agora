@@ -49,8 +49,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       authorUsername: m.authorUsername ?? '',
       channelId: m.channelId,
       createdAt: m.createdAt,
-      editedAt: (m as any).editedAt,
-      deletedAt: (m as any).deletedAt,
+      editedAt: m.editedAt,
+      deletedAt: m.deletedAt,
     }));
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
@@ -78,8 +78,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       authorUsername: m.authorUsername ?? '',
       channelId: m.channelId,
       createdAt: m.createdAt,
-      editedAt: (m as any).editedAt,
-      deletedAt: (m as any).deletedAt,
+      editedAt: m.editedAt,
+      deletedAt: m.deletedAt,
     }));
     set((state) => {
       const nextByChannel = new Map(state.byChannel);

@@ -18,7 +18,9 @@ export function UserTable() {
   const [error, setError] = useState('');
   const [suspendTarget, setSuspendTarget] = useState<AdminUser | null>(null);
   const [suspendLoading, setSuspendLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const searchRef = useRef(search);
+  searchRef.current = search;
 
   const fetchUsers = useCallback(async (p: number, s: StatusFilter, q: string) => {
     setLoading(true);
@@ -38,7 +40,7 @@ export function UserTable() {
   }, []);
 
   useEffect(() => {
-    fetchUsers(page, status, search);
+    fetchUsers(page, status, searchRef.current);
   }, [page, status, fetchUsers]);
 
   function handleSearchChange(value: string) {
