@@ -75,9 +75,8 @@ describe('estimateMessageHeight', () => {
     expect(estimateMessageHeight(undefined, curr)).toBe(48);
   });
 
-  it('returns 28 for a grouped deleted message (same author, within threshold, prev not deleted)', () => {
-    // Note: shouldGroup returns false when curr is deleted, so "grouped deleted" can't happen.
-    // The function still returns the standalone-deleted height (48) because shouldGroup → false.
+  it('returns 48 for a deleted message even when same author and within threshold', () => {
+    // shouldGroup returns false when curr is deleted, so deleted messages are never grouped
     const prev = msg('u1', BASE_TIME);
     const curr = msg('u1', offsetMs(1000), offsetMs(1000));
     expect(estimateMessageHeight(prev, curr)).toBe(48);

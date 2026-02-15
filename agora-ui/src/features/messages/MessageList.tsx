@@ -29,6 +29,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
   const lastMessageIdRef = useRef<string | null>(null);
   const prevCountRef = useRef(0);
   const initialLoadRef = useRef(true);
+  const pendingCorrectionRef = useRef<{ anchorIndex: number; estimatedOffset: number } | null>(null);
 
   const count = messages?.length ?? 0;
 
@@ -52,6 +53,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     lastMessageIdRef.current = null;
     prevCountRef.current = 0;
     initialLoadRef.current = true;
+    pendingCorrectionRef.current = null;
   }, [channelId, loadMessages]);
 
   // Scroll positioning: initial scroll-to-bottom, prepend anchor, auto-scroll on new message
@@ -74,13 +76,20 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     if (currentCount > prevCount && prevCount > 0) {
       if (lastMsg.id === lastMessageIdRef.current) {
         // Prepend — older messages loaded at the start of the array.
-        // The virtualizer has re-indexed: every existing item shifted down by
-        // the cumulative estimated height of the new items.  Shift scrollTop
-        // by the same amount so the viewport stays on the same content.
+        // The virtualizer re-indexed every existing item downward by the
+        // cumulative estimated height of the new items.  Apply the same
+        // estimate-based shift now (self-consistent with the virtualizer's
+        // positioning) and schedule a measurement-based correction for
+        // after the browser has painted and measured the new items.
         const prependedCount = currentCount - prevCount;
         const el = parentRef.current;
         if (el) {
-          el.scrollTop += computePrependShift(messages, prependedCount);
+          const shift = computePrependShift(messages, prependedCount);
+          el.scrollTop += shift;
+          pendingCorrectionRef.current = {
+            anchorIndex: prependedCount,
+            estimatedOffset: shift,
+          };
         }
       } else {
         // Append — new message arrived at the end
@@ -97,6 +106,43 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     prevCountRef.current = currentCount;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, isAtBottom, userId]);
+
+  // Post-measurement scroll correction for prepended items.
+  // The useLayoutEffect above uses estimate-based sizes (self-consistent with
+  // the virtualizer's initial positioning).  Once ResizeObserver measures the
+  // actual heights and the virtualizer re-renders, the anchor item's position
+  // may shift.  Double-rAF waits for paint → ResizeObserver → re-render, then
+  // reads the anchor's measured position and applies the delta.
+  useEffect(() => {
+    if (!pendingCorrectionRef.current) return;
+    const { anchorIndex, estimatedOffset } = pendingCorrectionRef.current;
+    pendingCorrectionRef.current = null;
+
+    const el = parentRef.current;
+    if (!el) return;
+
+    let id2: number | undefined;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => {
+        const anchor = el.querySelector<HTMLElement>(
+          `[data-index="${anchorIndex}"]`
+        );
+        if (!anchor) return;
+        const containerTop = el.getBoundingClientRect().top;
+        const anchorTop = anchor.getBoundingClientRect().top;
+        const measuredOffset = anchorTop - containerTop + el.scrollTop;
+        const delta = measuredOffset - estimatedOffset;
+        if (Math.abs(delta) > 1) {
+          el.scrollTop += delta;
+        }
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(id1);
+      if (id2 !== undefined) cancelAnimationFrame(id2);
+    };
+  }, [messages]);
 
   // Track scroll position + trigger load-older
   const handleScroll = useCallback(() => {
