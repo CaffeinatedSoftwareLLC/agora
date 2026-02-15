@@ -83,23 +83,24 @@ export async function adminRoutes(app: FastifyInstance) {
         const userId = (request as any).userId;
         const { id: targetId } = request.params as any;
 
-        const userRes = await db.query(
-            'SELECT account_status, username, email FROM users WHERE id = $1',
+        // Atomic: only transitions pending → active, returns the row if successful
+        const updateRes = await db.query(
+            `UPDATE users SET account_status = 'active'
+             WHERE id = $1 AND account_status = 'pending'
+             RETURNING id, username, email`,
             [targetId]
         );
 
-        if (userRes.rows.length === 0) {
-            return reply.status(404).send({ error: 'user_not_found' });
-        }
-
-        if (userRes.rows[0].account_status !== 'pending') {
+        if (updateRes.rowCount === 0) {
+            // Distinguish not-found from wrong-status
+            const exists = await db.query('SELECT account_status FROM users WHERE id = $1', [targetId]);
+            if (exists.rows.length === 0) {
+                return reply.status(404).send({ error: 'user_not_found' });
+            }
             return reply.status(409).send({ error: 'user_not_pending' });
         }
 
-        await db.query(
-            "UPDATE users SET account_status = 'active' WHERE id = $1",
-            [targetId]
-        );
+        const row = updateRes.rows[0];
 
         await logAdminAction(db, userId, 'user_approve', 'user', targetId, {
             before: { accountStatus: 'pending' },
@@ -108,9 +109,9 @@ export async function adminRoutes(app: FastifyInstance) {
 
         return reply.send({
             user: {
-                id: targetId.trim ? targetId.trim() : targetId,
-                username: userRes.rows[0].username,
-                email: userRes.rows[0].email,
+                id: row.id.trim(),
+                username: row.username,
+                email: row.email,
                 accountStatus: 'active',
             },
         });
@@ -124,23 +125,22 @@ export async function adminRoutes(app: FastifyInstance) {
         const userId = (request as any).userId;
         const { id: targetId } = request.params as any;
 
-        const userRes = await db.query(
-            'SELECT account_status, username FROM users WHERE id = $1',
+        // Atomic: only deletes if pending, returns the row for audit logging
+        const deleteRes = await db.query(
+            `DELETE FROM users WHERE id = $1 AND account_status = 'pending' RETURNING username`,
             [targetId]
         );
 
-        if (userRes.rows.length === 0) {
-            return reply.status(404).send({ error: 'user_not_found' });
-        }
-
-        if (userRes.rows[0].account_status !== 'pending') {
+        if (deleteRes.rowCount === 0) {
+            const exists = await db.query('SELECT account_status FROM users WHERE id = $1', [targetId]);
+            if (exists.rows.length === 0) {
+                return reply.status(404).send({ error: 'user_not_found' });
+            }
             return reply.status(409).send({ error: 'user_not_pending' });
         }
 
-        await db.query('DELETE FROM users WHERE id = $1', [targetId]);
-
         await logAdminAction(db, userId, 'user_reject', 'user', targetId, {
-            username: userRes.rows[0].username,
+            username: deleteRes.rows[0].username,
         });
 
         return reply.send({ success: true });
@@ -220,38 +220,56 @@ export async function adminRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'cannot_suspend_self' });
         }
 
-        const userRes = await db.query(
-            'SELECT account_status, is_instance_admin, username, email FROM users WHERE id = $1',
+        // Pre-check for admin guard (must reject before attempting state transition)
+        const checkRes = await db.query(
+            'SELECT is_instance_admin FROM users WHERE id = $1',
             [targetId]
         );
 
-        if (userRes.rows.length === 0) {
+        if (checkRes.rows.length === 0) {
             return reply.status(404).send({ error: 'user_not_found' });
         }
 
-        if (userRes.rows[0].is_instance_admin) {
+        if (checkRes.rows[0].is_instance_admin) {
             return reply.status(400).send({ error: 'cannot_suspend_admin' });
         }
 
-        if (userRes.rows[0].account_status !== 'active') {
+        // Atomic: only transitions active → suspended
+        const updateRes = await db.query(
+            `UPDATE users SET account_status = 'suspended'
+             WHERE id = $1 AND account_status = 'active'
+             RETURNING id, username, email`,
+            [targetId]
+        );
+
+        if (updateRes.rowCount === 0) {
             return reply.status(409).send({ error: 'user_not_active' });
         }
 
-        await db.query(
-            "UPDATE users SET account_status = 'suspended' WHERE id = $1",
-            [targetId]
-        );
+        const row = updateRes.rows[0];
 
         await logAdminAction(db, userId, 'user_suspend', 'user', targetId, {
             before: { accountStatus: 'active' },
             after: { accountStatus: 'suspended' },
         });
 
+        // Force-disconnect suspended user's active WS sessions
+        const io = (app as any).io;
+        if (io) {
+            const sockets = await io.fetchSockets();
+            for (const s of sockets) {
+                if ((s as any).userId === targetId) {
+                    s.emit('error', { code: 'account_suspended' });
+                    s.disconnect(true);
+                }
+            }
+        }
+
         return reply.send({
             user: {
-                id: targetId.trim ? targetId.trim() : targetId,
-                username: userRes.rows[0].username,
-                email: userRes.rows[0].email,
+                id: row.id.trim(),
+                username: row.username,
+                email: row.email,
                 accountStatus: 'suspended',
             },
         });
@@ -278,26 +296,27 @@ export async function adminRoutes(app: FastifyInstance) {
         const userId = (request as any).userId;
         const { instanceName, registrationPolicy } = request.body as any;
 
-        const fieldMap: Record<string, string> = {
-            instanceName: 'instance_name',
-            registrationPolicy: 'registration_policy',
-        };
-
         const changes: Record<string, any> = {};
 
         if (instanceName !== undefined) {
-            await db.query(
+            const res = await db.query(
                 "UPDATE instance_config SET value = $1 WHERE key = 'instance_name'",
                 [instanceName]
             );
+            if (res.rowCount === 0) {
+                return reply.status(500).send({ error: 'config_key_missing', key: 'instance_name' });
+            }
             changes.instanceName = instanceName;
         }
 
         if (registrationPolicy !== undefined) {
-            await db.query(
+            const res = await db.query(
                 "UPDATE instance_config SET value = $1 WHERE key = 'registration_policy'",
                 [registrationPolicy]
             );
+            if (res.rowCount === 0) {
+                return reply.status(500).send({ error: 'config_key_missing', key: 'registration_policy' });
+            }
             changes.registrationPolicy = registrationPolicy;
         }
 
