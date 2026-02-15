@@ -1,8 +1,11 @@
-import { setupTestApp, authedUser, createServer } from '../helpers';
+import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 
-beforeAll(async () => { ctx = await setupTestApp(); });
+beforeAll(async () => {
+    ctx = await setupTestApp();
+    await cleanDatabase(ctx.db);
+});
 afterAll(async () => { await ctx.close(); });
 
 describe('Server Lifecycle', () => {

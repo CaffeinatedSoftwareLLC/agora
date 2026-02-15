@@ -2,13 +2,24 @@ import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 
 export async function channelRoutes(app: FastifyInstance) {
-    const db = (app as any).db;
 
     // POST /servers/:id/channels → 201 { id, name, channelType, serverId }
-    app.post('/servers/:id/channels', async (request, reply) => {
+    app.post('/servers/:id/channels', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['name', 'channelType'],
+                properties: {
+                    name: { type: 'string', minLength: 1, maxLength: 100 },
+                    channelType: { type: 'integer', enum: [3, 4, 5] },
+                },
+            },
+        },
+    }, async (request, reply) => {
         const { id: serverId } = request.params as any;
         const userId = (request as any).userId;
         const { name, channelType } = request.body as any;
+        const db = (request as any).dbClient;
 
         // Check membership
         const member = await db.query(
@@ -31,7 +42,7 @@ export async function channelRoutes(app: FastifyInstance) {
             id: channelId,
             name,
             channelType,
-            serverId: serverId.trim(),
+            serverId,
         });
     });
 }

@@ -20,13 +20,20 @@ export async function buildApp(opts?: {
 
     const jwtSecret = opts?.jwtSecret ?? process.env.JWT_SECRET ?? 'dev-secret-do-not-use-in-prod';
 
-    // Decorate app so routes can access db and jwtSecret
+    // Decorate app so routes can access db pool and jwtSecret
     app.decorate('db', db);
     app.decorate('jwtSecret', jwtSecret);
 
     // Health endpoint (no auth required)
     app.get('/health', async () => {
         return { status: 'ok' };
+    });
+
+    // ─── Per-request DB client lifecycle (RLS enforcement) ───
+    app.addHook('onRequest', async (request) => {
+        const client = await db.connect();
+        await client.query('BEGIN');
+        (request as any).dbClient = client;
     });
 
     // Auth middleware for all routes except /auth/* and /health
@@ -36,6 +43,43 @@ export async function buildApp(opts?: {
             return;
         }
         await requireAuth(request, reply);
+    });
+
+    // RLS context: after auth sets userId, switch to app_user role
+    app.addHook('preHandler', async (request) => {
+        const client = (request as any).dbClient;
+        const userId = (request as any).userId;
+        if (client && userId) {
+            await client.query('SET LOCAL ROLE app_user');
+            await client.query(
+                `SELECT set_config('app.current_user_id', $1, true)`,
+                [userId]
+            );
+        }
+    });
+
+    // Commit + release on success
+    app.addHook('onResponse', async (request) => {
+        const client = (request as any).dbClient;
+        if (client) {
+            (request as any).dbClient = null;
+            try {
+                await client.query('COMMIT');
+            } catch {
+                await client.query('ROLLBACK').catch(() => {});
+            }
+            client.release();
+        }
+    });
+
+    // Rollback + release on error
+    app.addHook('onError', async (request) => {
+        const client = (request as any).dbClient;
+        if (client) {
+            (request as any).dbClient = null;
+            await client.query('ROLLBACK').catch(() => {});
+            client.release();
+        }
     });
 
     // Register route modules

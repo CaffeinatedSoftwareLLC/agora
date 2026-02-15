@@ -1,11 +1,11 @@
-import { setupTestApp } from '../helpers';
+import { setupTestApp, cleanDatabase } from '../helpers';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 
 beforeAll(async () => {
     ctx = await setupTestApp();
     // Clean slate: remove users seeded by prior runs to prevent dirty-DB false passes
-    await ctx.db.query('DELETE FROM users');
+    await cleanDatabase(ctx.db);
 });
 afterAll(async () => { await ctx.close(); });
 

@@ -12,7 +12,7 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'Missing required fields: username, email, password' });
         }
 
-        const db = (app as any).db;
+        const db = (request as any).dbClient;
         const id = generateUlid();
         const passwordHash = await hashPassword(password);
 
@@ -39,7 +39,7 @@ export async function authRoutes(app: FastifyInstance) {
     // POST /auth/login
     app.post('/auth/login', async (request, reply) => {
         const { email, password } = request.body as any;
-        const db = (app as any).db;
+        const db = (request as any).dbClient;
 
         const result = await db.query(
             'SELECT id, username, password_hash FROM users WHERE email = $1',

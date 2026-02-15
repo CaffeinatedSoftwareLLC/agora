@@ -87,3 +87,8 @@ export async function joinViaInvite(
 
     return join.body;
 }
+
+// ─── Database cleanup for test isolation ───
+export async function cleanDatabase(db: any) {
+    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions CASCADE');
+}
