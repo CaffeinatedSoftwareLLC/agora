@@ -166,6 +166,63 @@ describe('ServerJoin WS event', () => {
         socket.disconnect();
     });
 
+    test('joiner receives channel messages immediately after ServerJoin (room-join-before-emit)', async () => {
+        const owner = await authedUser(ctx.request, 'sjoin_race_owner');
+        const joiner = await authedUser(ctx.request, 'sjoin_race_joiner');
+
+        const { serverId, generalChannelId } = await createServer(
+            ctx.request, owner.auth, 'RaceWindow Test'
+        );
+
+        // Joiner connects via WS BEFORE joining the server
+        const { socket } = await connectSocket(joiner.token);
+
+        // Listen for ServerJoin, then IMMEDIATELY send a message to the channel
+        // and verify the joiner's socket receives it. If rooms were joined after
+        // emit (old behavior), this message could be missed.
+        const messagePromise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Message timeout (2s) — room join likely happened after emit')), 2000);
+            socket.on('Message', (data: any) => {
+                clearTimeout(timeout);
+                resolve(data);
+            });
+        });
+
+        const joinPromise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('ServerJoin timeout (2s)')), 2000);
+            socket.on('ServerJoin', (data: any) => {
+                clearTimeout(timeout);
+                resolve(data);
+            });
+        });
+
+        // Owner creates invite, joiner accepts
+        const invite = await ctx.request
+            .post(`/servers/${serverId}/invites`)
+            .set(owner.auth)
+            .send({});
+
+        const join = await ctx.request
+            .post(`/invites/${invite.body.code}`)
+            .set(joiner.auth);
+        expect(join.status).toBe(200);
+
+        // Wait for ServerJoin to confirm the flow completed
+        await joinPromise;
+
+        // Owner sends a message right after — joiner must already be in the channel room
+        await ctx.request
+            .post(`/channels/${generalChannelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Post-join immediate message' });
+
+        const msg = await messagePromise;
+        expect(msg.content).toBe('Post-join immediate message');
+        expect(msg.channelId).toBe(generalChannelId);
+
+        socket.disconnect();
+    });
+
     test('already-member does not receive ServerJoin on re-invite', async () => {
         const owner = await authedUser(ctx.request, 'sjoin_owner2');
         const member = await authedUser(ctx.request, 'sjoin_member2');
