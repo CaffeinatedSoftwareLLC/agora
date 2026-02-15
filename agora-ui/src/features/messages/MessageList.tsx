@@ -5,23 +5,11 @@ import { useAuthStore } from '../../stores/authStore';
 import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
+import { shouldGroup } from './grouping';
 
 interface MessageListProps {
   channelId: string;
   channelName: string;
-}
-
-const GROUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
-
-function shouldGroup(
-  prev: { authorId: string; createdAt: string; deletedAt?: string } | undefined,
-  curr: { authorId: string; createdAt: string; deletedAt?: string },
-): boolean {
-  if (!prev) return false;
-  if (prev.deletedAt || curr.deletedAt) return false;
-  if (prev.authorId !== curr.authorId) return false;
-  const diff = new Date(curr.createdAt).getTime() - new Date(prev.createdAt).getTime();
-  return diff < GROUP_THRESHOLD_MS;
 }
 
 export function MessageList({ channelId, channelName }: MessageListProps) {
@@ -41,6 +29,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
   const lastMessageIdRef = useRef<string | null>(null);
   const prevCountRef = useRef(0);
   const initialLoadRef = useRef(true);
+  const anchorRef = useRef<{ index: number; offsetInItem: number } | null>(null);
 
   const count = messages?.length ?? 0;
 
@@ -88,9 +77,17 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     if (currentCount > prevCount && prevCount > 0) {
       if (lastMsg.id === lastMessageIdRef.current) {
         // Prepend — older messages loaded at the start of the array.
-        // Anchor so the previously-first-visible item stays in view.
+        // Anchor so the item the user was looking at stays in place.
         const prependedCount = currentCount - prevCount;
-        virtualizer.scrollToIndex(prependedCount, { align: 'start' });
+        const anchor = anchorRef.current;
+        const targetIndex = (anchor?.index ?? 0) + prependedCount;
+        virtualizer.scrollToIndex(targetIndex, { align: 'start' });
+        // Restore sub-item pixel offset for exact position stability
+        if (anchor && anchor.offsetInItem > 0) {
+          const el = parentRef.current;
+          if (el) el.scrollTop += anchor.offsetInItem;
+        }
+        anchorRef.current = null;
       } else {
         // Append — new message arrived at the end
         const isFromSelf = lastMsg.authorId === userId;
@@ -119,6 +116,16 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
 
     // Load older when scrolled near top
     if (el.scrollTop < 200 && hasMore && !loadingOlderRef.current) {
+      // Capture the first visible item for scroll anchoring after prepend
+      const items = virtualizer.getVirtualItems();
+      const scrollTop = el.scrollTop;
+      const firstVisible = items.find(item => item.start + item.size > scrollTop);
+      if (firstVisible) {
+        anchorRef.current = {
+          index: firstVisible.index,
+          offsetInItem: scrollTop - firstVisible.start,
+        };
+      }
       loadingOlderRef.current = true;
       setLoadingOlder(true);
       loadOlder(channelId)
@@ -127,7 +134,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
           setLoadingOlder(false);
         });
     }
-  }, [hasMore, channelId, loadOlder, newCount]);
+  }, [hasMore, channelId, loadOlder, newCount, virtualizer]);
 
   const scrollToBottom = useCallback(() => {
     if (messages && messages.length > 0) {
@@ -135,7 +142,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     }
     setNewCount(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages?.length]);
+  }, [messages?.length, virtualizer]);
 
   const handleEdit = useCallback((msgId: string, content: string) => {
     editMessage(channelId, msgId, content);
