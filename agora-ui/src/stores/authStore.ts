@@ -4,6 +4,7 @@ import type { AuthResponse, RegisterRequest, User } from '../lib/contracts/auth'
 import { useServerStore } from './serverStore';
 import { useChannelStore } from './channelStore';
 import { useMemberStore } from './memberStore';
+import { useMessageStore } from './messageStore';
 import { useUIStore } from './uiStore';
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'pending';
@@ -59,6 +60,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     useServerStore.getState().clear();
     useChannelStore.getState().clear();
     useMemberStore.getState().clear();
+    useMessageStore.getState().clear();
     useUIStore.getState().setConnectionStatus('disconnected');
   },
 }));

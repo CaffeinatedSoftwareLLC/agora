@@ -168,6 +168,15 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const updated = result.rows[0];
+
+        // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
+        (request as any).pendingEvents = (request as any).pendingEvents || [];
+        (request as any).pendingEvents.push({
+            room: `channel:${channelId.trim()}`,
+            event: 'MessageUpdate',
+            data: { id: updated.id.trim(), channelId: channelId.trim(), content: updated.content, editedAt: updated.edited_at },
+        });
+
         return reply.status(200).send({
             id: updated.id.trim(),
             content: updated.content,
@@ -207,6 +216,15 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const deleted = result.rows[0];
+
+        // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
+        (request as any).pendingEvents = (request as any).pendingEvents || [];
+        (request as any).pendingEvents.push({
+            room: `channel:${channelId.trim()}`,
+            event: 'MessageDelete',
+            data: { id: deleted.id.trim(), channelId: channelId.trim(), deletedAt: deleted.deleted_at },
+        });
+
         return reply.status(200).send({
             id: deleted.id.trim(),
             deletedAt: deleted.deleted_at,

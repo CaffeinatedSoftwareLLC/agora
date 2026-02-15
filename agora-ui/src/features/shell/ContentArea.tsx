@@ -1,4 +1,6 @@
 import { useChannelStore } from '../../stores/channelStore';
+import { MessageList } from '../messages/MessageList';
+import { MessageInput } from '../messages/MessageInput';
 
 export function ContentArea() {
   const activeChannelId = useChannelStore(s => s.activeChannelId);
@@ -11,7 +13,6 @@ export function ContentArea() {
         <div className="text-center">
           <div className="text-4xl mb-4">Select a channel</div>
           <div className="text-text-muted text-lg">Select a channel to start chatting</div>
-          <div className="text-text-dim text-sm mt-2">Messages coming in Phase 4</div>
         </div>
       </div>
     );
@@ -25,13 +26,11 @@ export function ContentArea() {
         <span className="font-semibold text-text">{channel.name}</span>
       </div>
 
-      {/* Message area placeholder */}
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center text-text-dim">
-          <div className="text-lg mb-2">Welcome to #{channel.name}</div>
-          <div className="text-sm">This is the beginning of the channel. Messages coming in Phase 4.</div>
-        </div>
-      </div>
+      {/* Messages */}
+      <MessageList channelId={activeChannelId} channelName={channel.name} />
+
+      {/* Input */}
+      <MessageInput channelId={activeChannelId} />
     </div>
   );
 }
