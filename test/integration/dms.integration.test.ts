@@ -57,4 +57,29 @@ describe('Direct Messages', () => {
             .set(user2.auth);
         expect(read.body.some((m: any) => m.content === 'Hey!')).toBe(true);
     });
+
+    test('outsider cannot read DM messages', async () => {
+        const user1 = await authedUser(ctx.request, 'dmprivate1');
+        const user2 = await authedUser(ctx.request, 'dmprivate2');
+        const outsider = await authedUser(ctx.request, 'dmoutsider');
+
+        // Create DM between user1 and user2
+        const dm = await ctx.request
+            .post('/channels/dm')
+            .set(user1.auth)
+            .send({ recipientId: user2.userId });
+
+        // user1 sends a message
+        await ctx.request
+            .post(`/channels/${dm.body.id}/messages`)
+            .set(user1.auth)
+            .send({ content: 'Private stuff' });
+
+        // outsider tries to read messages
+        const res = await ctx.request
+            .get(`/channels/${dm.body.id}/messages`)
+            .set(outsider.auth);
+
+        expect(res.status).toBe(403);
+    });
 });

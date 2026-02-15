@@ -57,10 +57,10 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(401).send({ error: 'Invalid credentials' });
         }
 
-        const token = generateToken({ userId: user.id }, (app as any).jwtSecret);
+        const token = generateToken({ userId: user.id.trim() }, (app as any).jwtSecret);
 
         return reply.status(200).send({
-            user: { id: user.id, username: user.username },
+            user: { id: user.id.trim(), username: user.username },
             accessToken: token,
         });
     });

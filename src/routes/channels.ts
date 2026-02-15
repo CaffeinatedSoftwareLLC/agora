@@ -39,10 +39,10 @@ export async function channelRoutes(app: FastifyInstance) {
         );
 
         return reply.status(201).send({
-            id: channelId,
+            id: channelId.trim(),
             name,
             channelType,
-            serverId,
+            serverId: typeof serverId === 'string' ? serverId.trim() : serverId,
         });
     });
 }

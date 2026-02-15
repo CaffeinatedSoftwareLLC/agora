@@ -91,7 +91,7 @@ export async function serverRoutes(app: FastifyInstance) {
         );
 
         const channels = result.rows.map((row: any) => ({
-            id: row.id,
+            id: row.id.trim(),
             name: row.name,
             channelType: row.channel_type,
         }));
