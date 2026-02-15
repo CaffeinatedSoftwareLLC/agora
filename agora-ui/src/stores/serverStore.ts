@@ -7,6 +7,7 @@ interface ServerState {
   setServers: (servers: Server[]) => void;
   setActiveServer: (id: string | null) => void;
   addServer: (server: Server) => void;
+  removeServer: (id: string) => void;
   clear: () => void;
 }
 
@@ -19,6 +20,12 @@ export const useServerStore = create<ServerState>((set) => ({
     const next = new Map(state.servers);
     next.set(server.id, server);
     return { servers: next };
+  }),
+  removeServer: (id) => set((state) => {
+    const next = new Map(state.servers);
+    next.delete(id);
+    const activeServerId = state.activeServerId === id ? null : state.activeServerId;
+    return { servers: next, activeServerId };
   }),
   clear: () => set({ servers: new Map(), activeServerId: null }),
 }));

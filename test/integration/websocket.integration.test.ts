@@ -119,3 +119,83 @@ describe('WebSocket Gateway', () => {
         await disconnectPromise;
     });
 });
+
+describe('ServerJoin WS event', () => {
+    test('joining user receives ServerJoin with server and channels', async () => {
+        const owner = await authedUser(ctx.request, 'sjoin_owner');
+        const joiner = await authedUser(ctx.request, 'sjoin_joiner');
+
+        const { serverId } = await createServer(
+            ctx.request, owner.auth, 'ServerJoin Test'
+        );
+
+        // Joiner connects via WS BEFORE joining the server
+        const { socket } = await connectSocket(joiner.token);
+
+        // Register listener for ServerJoin
+        const joinPromise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('ServerJoin timeout (2s)')), 2000);
+            socket.on('ServerJoin', (data: any) => {
+                clearTimeout(timeout);
+                resolve(data);
+            });
+        });
+
+        // Owner creates invite, joiner uses it via REST
+        const invite = await ctx.request
+            .post(`/servers/${serverId}/invites`)
+            .set(owner.auth)
+            .send({});
+        expect(invite.status).toBe(201);
+
+        const join = await ctx.request
+            .post(`/invites/${invite.body.code}`)
+            .set(joiner.auth);
+        expect(join.status).toBe(200);
+
+        // Joiner should receive ServerJoin event
+        const event = await joinPromise;
+        expect(event.server.id).toBe(serverId);
+        expect(event.server.name).toBe('ServerJoin Test');
+        expect(event.server.ownerId).toBe(owner.userId);
+        expect(Array.isArray(event.channels)).toBe(true);
+        expect(event.channels.length).toBeGreaterThan(0);
+        expect(event.channels[0].name).toBe('general');
+
+        socket.disconnect();
+    });
+
+    test('already-member does not receive ServerJoin on re-invite', async () => {
+        const owner = await authedUser(ctx.request, 'sjoin_owner2');
+        const member = await authedUser(ctx.request, 'sjoin_member2');
+
+        const { serverId } = await createServer(
+            ctx.request, owner.auth, 'ServerJoin NoDupe'
+        );
+
+        // Join via invite first
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        // Member connects via WS (already a member)
+        const { socket } = await connectSocket(member.token);
+
+        let received = false;
+        socket.on('ServerJoin', () => { received = true; });
+
+        // Try to join again via a new invite
+        const invite = await ctx.request
+            .post(`/servers/${serverId}/invites`)
+            .set(owner.auth)
+            .send({});
+
+        await ctx.request
+            .post(`/invites/${invite.body.code}`)
+            .set(member.auth);
+
+        // Wait a bit, should NOT receive ServerJoin
+        await new Promise((r) => setTimeout(r, 300));
+        expect(received).toBe(false);
+
+        socket.disconnect();
+    });
+});

@@ -29,3 +29,8 @@ export interface MessageDeletePayload {
   channelId: string;
   deletedAt: string;
 }
+
+export interface ServerJoinPayload {
+  server: Server;
+  channels: Channel[];
+}

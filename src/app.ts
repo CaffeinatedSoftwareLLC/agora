@@ -7,6 +7,7 @@ import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
 import { dmRoutes } from './routes/dms';
 import { adminRoutes } from './routes/admin';
+import { userRoutes } from './routes/users';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
@@ -88,6 +89,18 @@ export async function buildApp(opts?: {
                 if (io && pendingEvents) {
                     for (const evt of pendingEvents) {
                         io.to(evt.room).emit(evt.event, evt.data);
+
+                        // For ServerJoin, also join user's sockets to new channel rooms
+                        if (evt.event === 'ServerJoin' && evt.data?.channels) {
+                            try {
+                                const sockets = await io.in(evt.room).fetchSockets();
+                                for (const s of sockets) {
+                                    for (const ch of evt.data.channels) {
+                                        s.join(`channel:${ch.id}`);
+                                    }
+                                }
+                            } catch { /* best-effort room join */ }
+                        }
                     }
                 }
 
@@ -132,6 +145,7 @@ export async function buildApp(opts?: {
     await app.register(messageRoutes);
     await app.register(dmRoutes);
     await app.register(adminRoutes);
+    await app.register(userRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

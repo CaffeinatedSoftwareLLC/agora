@@ -64,6 +64,9 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         const userId = (socket as any).userId;
 
         try {
+            // Join user-specific room for targeted events (e.g. ServerJoin)
+            socket.join(`user:${userId.trim()}`);
+
             // Fetch user info
             const userResult = await db.query(
                 'SELECT id, username FROM users WHERE id = $1',
@@ -133,6 +136,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     serverId: c.server_id ? c.server_id.trim() : null,
                 })),
             });
+
         } catch {
             socket.disconnect();
         }

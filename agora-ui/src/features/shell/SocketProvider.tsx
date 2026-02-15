@@ -5,7 +5,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
-import type { ReadyPayload, MessagePayload, MessageUpdatePayload, MessageDeletePayload } from '../../lib/contracts/ws-events';
+import type { ReadyPayload, MessagePayload, MessageUpdatePayload, MessageDeletePayload, ServerJoinPayload } from '../../lib/contracts/ws-events';
 import { useMessageStore } from '../../stores/messageStore';
 import { SocketContext } from './SocketContext';
 
@@ -52,6 +52,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     s.on('MessageDelete', (data: MessageDeletePayload) => {
       useMessageStore.getState().removeMessage(data);
+    });
+
+    s.on('ServerJoin', (data: ServerJoinPayload) => {
+      useServerStore.getState().addServer(data.server);
+      useChannelStore.getState().addChannels(data.channels);
     });
 
     s.on('connect_error', (err) => {

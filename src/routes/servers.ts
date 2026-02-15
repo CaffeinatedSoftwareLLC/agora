@@ -188,10 +188,11 @@ export async function serverRoutes(app: FastifyInstance) {
         const serverId = invite.rows[0].server_id;
 
         // Add as member (ignore if already member)
-        await db.query(
+        const insertResult = await db.query(
             `INSERT INTO server_members (server_id, user_id)
              VALUES ($1, $2)
-             ON CONFLICT DO NOTHING`,
+             ON CONFLICT DO NOTHING
+             RETURNING server_id`,
             [serverId, userId]
         );
 
@@ -200,6 +201,38 @@ export async function serverRoutes(app: FastifyInstance) {
             'UPDATE server_invites SET use_count = use_count + 1 WHERE code = $1',
             [code]
         );
+
+        // If user was actually inserted (not already a member), emit ServerJoin
+        if (insertResult.rows.length > 0) {
+            const serverRow = await db.query(
+                'SELECT id, name, owner_id FROM servers WHERE id = $1',
+                [serverId]
+            );
+
+            const channelsResult = await db.query(
+                'SELECT id, name, channel_type FROM channels WHERE server_id = $1 ORDER BY position',
+                [serverId]
+            );
+
+            const server = {
+                id: serverRow.rows[0].id.trim(),
+                name: serverRow.rows[0].name,
+                ownerId: serverRow.rows[0].owner_id.trim(),
+            };
+
+            const channels = channelsResult.rows.map((c: any) => ({
+                id: c.id.trim(),
+                name: c.name,
+                channelType: c.channel_type,
+            }));
+
+            (request as any).pendingEvents = (request as any).pendingEvents || [];
+            (request as any).pendingEvents.push({
+                event: 'ServerJoin',
+                room: `user:${userId.trim()}`,
+                data: { server, channels },
+            });
+        }
 
         return reply.status(200).send({
             serverId: serverId.trim(),

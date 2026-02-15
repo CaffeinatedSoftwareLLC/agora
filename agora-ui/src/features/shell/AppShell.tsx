@@ -6,6 +6,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { ServerRail } from './ServerRail';
 import { ChannelSidebar } from './ChannelSidebar';
 import { ContentArea } from './ContentArea';
+import { MembersSidebar } from '../servers/MembersSidebar';
 
 export function AppShell() {
   const params = useParams();
@@ -16,6 +17,7 @@ export function AppShell() {
   const byServer = useChannelStore(s => s.byServer);
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
   const connectionStatus = useUIStore(s => s.connectionStatus);
+  const membersOpen = useUIStore(s => s.membersOpen);
 
   // Sync URL params to store on mount and URL changes
   useEffect(() => {
@@ -80,6 +82,7 @@ export function AppShell() {
       <ServerRail />
       <ChannelSidebar />
       <ContentArea />
+      {activeServerId && membersOpen && <MembersSidebar />}
     </div>
   );
 }
