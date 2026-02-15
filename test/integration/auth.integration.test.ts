@@ -2,7 +2,11 @@ import { setupTestApp } from '../helpers';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 
-beforeAll(async () => { ctx = await setupTestApp(); });
+beforeAll(async () => {
+    ctx = await setupTestApp();
+    // Clean slate: remove users seeded by prior runs to prevent dirty-DB false passes
+    await ctx.db.query('DELETE FROM users');
+});
 afterAll(async () => { await ctx.close(); });
 
 describe('POST /auth/register', () => {
@@ -20,9 +24,10 @@ describe('POST /auth/register', () => {
     });
 
     test('rejects duplicate username or email', async () => {
-        await ctx.request.post('/auth/register').send({
+        const seed = await ctx.request.post('/auth/register').send({
             username: 'taken', email: 'taken@test.com', password: 'SecurePass123!',
         });
+        expect(seed.status).toBe(201);
 
         // Same username
         const dupeUser = await ctx.request.post('/auth/register').send({
@@ -58,6 +63,9 @@ describe('POST /auth/login', () => {
         });
         expect(res.status).toBe(200);
         expect(res.body).toHaveProperty('accessToken');
+        expect(res.body.user).toBeDefined();
+        expect(res.body.user.id).toBeDefined();
+        expect(res.body.user.username).toBe('loginuser');
     });
 
     test('401 for wrong password (same shape as nonexistent email)', async () => {
@@ -73,5 +81,7 @@ describe('POST /auth/login', () => {
 
         // Same error shape — don't leak which emails exist
         expect(wrong.body.error).toBe(ghost.body.error);
+        // Full body shape must be identical to prevent enumeration via other fields
+        expect(Object.keys(wrong.body).sort()).toEqual(Object.keys(ghost.body).sort());
     });
 });
