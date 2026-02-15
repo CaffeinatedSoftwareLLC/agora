@@ -77,4 +77,45 @@ describe('WebSocket Gateway', () => {
 
         socket.disconnect();
     });
+
+    test('suspended user socket receives error and disconnects', async () => {
+        const admin = await authedUser(ctx.request, 'wsadmin');
+        const target = await authedUser(ctx.request, 'wstarget');
+
+        // Promote to instance admin
+        await ctx.db.query(
+            'UPDATE users SET is_instance_admin = true WHERE id = $1',
+            [admin.userId]
+        );
+
+        // Target connects via WS
+        const { socket } = await connectSocket(target.token);
+
+        // Set up listeners before triggering suspend
+        const errorPromise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('error event timeout (2s)')), 2000);
+            socket.on('error', (data: any) => {
+                clearTimeout(timeout);
+                resolve(data);
+            });
+        });
+        const disconnectPromise = new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('disconnect timeout (2s)')), 2000);
+            socket.on('disconnect', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+        });
+
+        // Admin suspends target via REST
+        const res = await ctx.request
+            .post(`/admin/users/${target.userId}/suspend`)
+            .set(admin.auth);
+        expect(res.status).toBe(200);
+
+        // Socket should receive error event and then disconnect
+        const error = await errorPromise;
+        expect(error.code).toBe('account_suspended');
+        await disconnectPromise;
+    });
 });
