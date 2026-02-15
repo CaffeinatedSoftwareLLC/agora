@@ -55,10 +55,13 @@ export async function instanceRoutes(app: FastifyInstance) {
             registrationPolicy,
         } = request.body as any;
 
-        // 1. Acquire exclusive row lock on setup_complete — serializes concurrent setup attempts.
-        //    The second request blocks here until the first commits, then sees 'true' and 409s.
+        // 1. Acquire advisory lock to serialize concurrent setup attempts.
+        //    Uses pg_advisory_xact_lock (released on COMMIT/ROLLBACK) so the lock
+        //    works even if the setup_complete row is missing (partial migration / data damage).
+        await db.query("SELECT pg_advisory_xact_lock(hashtext('instance_setup'))");
+
         const setupCheck = await db.query(
-            "SELECT value FROM instance_config WHERE key = 'setup_complete' FOR UPDATE"
+            "SELECT value FROM instance_config WHERE key = 'setup_complete'"
         );
         if (setupCheck.rows.length > 0 && setupCheck.rows[0].value === 'true') {
             return reply.status(409).send({ error: 'instance_already_initialized' });

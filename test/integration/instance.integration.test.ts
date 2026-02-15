@@ -183,25 +183,39 @@ describe('Phase 0 — Instance Bootstrap', () => {
 
     describe('setup token resilience', () => {
 
-        test('getSetupToken returns ephemeral token when data dir is unwritable', async () => {
+        test('getSetupToken returns stable token across calls when data dir is unwritable', async () => {
+            const { getSetupToken, resetSetupTokenCache } = await import('../../src/instance/setup-token');
+
+            // Clear any cached token from previous tests
+            resetSetupTokenCache();
+
             // Temporarily unset env var so the module tries to read/write file
-            const saved = process.env.AGORA_SETUP_TOKEN;
+            const savedToken = process.env.AGORA_SETUP_TOKEN;
+            const savedDataDir = process.env.AGORA_DATA_DIR;
             delete process.env.AGORA_SETUP_TOKEN;
-            // Point to a path that cannot be written (non-existent drive on Windows, /proc on Linux)
+            // Point to a path that cannot be written
             process.env.AGORA_DATA_DIR = process.platform === 'win32'
                 ? 'Z:\\nonexistent\\readonly'
                 : '/proc/nonexistent/readonly';
 
-            // Re-import to bypass any module caching
-            const { getSetupToken } = await import('../../src/instance/setup-token');
-            const token = await getSetupToken();
+            try {
+                const token1 = await getSetupToken();
+                const token2 = await getSetupToken();
 
-            // Should still return a valid 64-hex-char token
-            expect(token).toMatch(/^[0-9a-f]{64}$/);
-
-            // Restore env
-            process.env.AGORA_SETUP_TOKEN = saved;
-            delete process.env.AGORA_DATA_DIR;
+                // Must be valid format
+                expect(token1).toMatch(/^[0-9a-f]{64}$/);
+                // Must be the SAME token on repeated calls (process-lifetime cache)
+                expect(token2).toBe(token1);
+            } finally {
+                // Restore env and cache
+                process.env.AGORA_SETUP_TOKEN = savedToken;
+                if (savedDataDir !== undefined) {
+                    process.env.AGORA_DATA_DIR = savedDataDir;
+                } else {
+                    delete process.env.AGORA_DATA_DIR;
+                }
+                resetSetupTokenCache();
+            }
         });
     });
 
