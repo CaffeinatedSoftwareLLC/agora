@@ -224,6 +224,7 @@ export async function serverRoutes(app: FastifyInstance) {
                 id: c.id.trim(),
                 name: c.name,
                 channelType: c.channel_type,
+                serverId: serverId.trim(),
             }));
 
             (request as any).pendingEvents = (request as any).pendingEvents || [];

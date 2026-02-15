@@ -88,9 +88,8 @@ export async function buildApp(opts?: {
                 const io = (app as any).io;
                 if (io && pendingEvents) {
                     for (const evt of pendingEvents) {
-                        io.to(evt.room).emit(evt.event, evt.data);
-
-                        // For ServerJoin, also join user's sockets to new channel rooms
+                        // For ServerJoin, join user's sockets to new channel rooms BEFORE emitting
+                        // so they don't miss early channel events
                         if (evt.event === 'ServerJoin' && evt.data?.channels) {
                             try {
                                 const sockets = await io.in(evt.room).fetchSockets();
@@ -101,6 +100,8 @@ export async function buildApp(opts?: {
                                 }
                             } catch { /* best-effort room join */ }
                         }
+
+                        io.to(evt.room).emit(evt.event, evt.data);
                     }
                 }
 

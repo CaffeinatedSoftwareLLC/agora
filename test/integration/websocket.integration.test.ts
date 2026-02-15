@@ -161,6 +161,7 @@ describe('ServerJoin WS event', () => {
         expect(Array.isArray(event.channels)).toBe(true);
         expect(event.channels.length).toBeGreaterThan(0);
         expect(event.channels[0].name).toBe('general');
+        expect(event.channels[0].serverId).toBe(serverId);
 
         socket.disconnect();
     });
