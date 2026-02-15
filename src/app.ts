@@ -6,6 +6,7 @@ import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
 import { dmRoutes } from './routes/dms';
 import { requireAuth } from './auth/middleware';
+import { setupGateway } from './gateway';
 
 export async function buildApp(opts?: {
     logger?: boolean;
@@ -88,6 +89,10 @@ export async function buildApp(opts?: {
     await app.register(channelRoutes);
     await app.register(messageRoutes);
     await app.register(dmRoutes);
+
+    // Setup WebSocket gateway (Socket.IO)
+    const io = await setupGateway(app);
+    app.decorate('io', io);
 
     return { app, db };
 }

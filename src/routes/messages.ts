@@ -57,12 +57,20 @@ export async function messageRoutes(app: FastifyInstance) {
             [messageId, channelId, userId, content]
         );
 
-        return reply.status(201).send({
+        const message = {
             id: messageId.trim(),
             content,
             authorId: userId.trim(),
             channelId: channelId.trim(),
-        });
+        };
+
+        // Broadcast to channel room via Socket.IO
+        const io = (app as any).io;
+        if (io) {
+            io.to(`channel:${channelId.trim()}`).emit('Message', message);
+        }
+
+        return reply.status(201).send(message);
     });
 
     // GET /channels/:id/messages?limit&before → 200 [{ id, content, authorId, channelId, editedAt, deletedAt, createdAt }]
