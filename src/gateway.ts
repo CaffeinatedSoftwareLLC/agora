@@ -26,8 +26,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         }
     });
 
-    // Auth middleware — verify JWT from handshake
-    io.use((socket, next) => {
+    // Auth middleware — verify JWT from handshake + check account_status
+    io.use(async (socket, next) => {
         const token = socket.handshake.auth?.token;
         if (!token) {
             return next(new Error('Authentication required'));
@@ -35,8 +35,27 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         try {
             const payload = verifyToken(token, jwtSecret);
             (socket as any).userId = payload.userId;
+
+            // Check account_status using pool directly (no per-request transaction in WS)
+            const result = await db.query(
+                'SELECT account_status FROM users WHERE id = $1',
+                [payload.userId]
+            );
+            if (result.rows.length === 0) {
+                return next(new Error('Invalid token'));
+            }
+            const status = result.rows[0].account_status;
+            if (status === 'pending') {
+                return next(new Error('account_pending'));
+            }
+            if (status === 'suspended') {
+                return next(new Error('account_suspended'));
+            }
             next();
-        } catch {
+        } catch (err: any) {
+            if (err.message === 'account_pending' || err.message === 'account_suspended') {
+                return next(err);
+            }
             next(new Error('Invalid token'));
         }
     });

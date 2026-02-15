@@ -4,22 +4,68 @@ import { generateToken } from '../auth/tokens';
 import { generateUlid } from '../utils/ulid';
 
 export async function authRoutes(app: FastifyInstance) {
-    // POST /auth/register
-    app.post('/auth/register', async (request, reply) => {
-        const { username, email, password } = request.body as any;
+    // POST /auth/register — policy-aware registration
+    app.post('/auth/register', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['username', 'email', 'password'],
+                properties: {
+                    username: { type: 'string', minLength: 1, maxLength: 32 },
+                    email: { type: 'string', format: 'email' },
+                    password: { type: 'string', minLength: 8 },
+                    inviteCode: { type: 'string', minLength: 1 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { username, email, password, inviteCode } = request.body as any;
+        const db = (request as any).dbClient;
 
-        if (!username || !email || !password) {
-            return reply.status(400).send({ error: 'Missing required fields: username, email, password' });
+        // Read registration policy from instance_config
+        const policyResult = await db.query(
+            "SELECT value FROM instance_config WHERE key = 'registration_policy'"
+        );
+        const policy = policyResult.rows[0]?.value ?? 'open';
+
+        // invite_only requires an invite code
+        if (policy === 'invite_only' && !inviteCode) {
+            return reply.status(400).send({ error: 'Invite code is required' });
         }
 
-        const db = (request as any).dbClient;
+        // Validate invite code if provided for invite_only
+        let invite: any = null;
+        if (policy === 'invite_only') {
+            const inviteResult = await db.query(
+                'SELECT code, server_id, max_uses, use_count, expires_at FROM server_invites WHERE code = $1',
+                [inviteCode]
+            );
+            if (inviteResult.rows.length === 0) {
+                return reply.status(404).send({ error: 'Invalid invite code' });
+            }
+            invite = inviteResult.rows[0];
+
+            // Check if invite is expired
+            if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
+                return reply.status(404).send({ error: 'Invalid invite code' });
+            }
+
+            // Check if invite has reached max uses
+            if (invite.max_uses !== null && invite.use_count >= invite.max_uses) {
+                return reply.status(404).send({ error: 'Invalid invite code' });
+            }
+        }
+
+        // Determine account_status based on policy
+        const accountStatus = policy === 'approval' ? 'pending' : 'active';
+
         const id = generateUlid();
         const passwordHash = await hashPassword(password);
 
         try {
             await db.query(
-                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
-                [id, username, email, passwordHash]
+                'INSERT INTO users (id, username, email, password_hash, account_status) VALUES ($1, $2, $3, $4, $5)',
+                [id, username, email, passwordHash, accountStatus]
             );
         } catch (err: any) {
             if (err.code === '23505') {
@@ -28,6 +74,32 @@ export async function authRoutes(app: FastifyInstance) {
             throw err;
         }
 
+        // For invite_only: add user to the invite's server and increment use_count
+        if (policy === 'invite_only' && invite) {
+            const serverId = invite.server_id;
+
+            await db.query(
+                `INSERT INTO server_members (server_id, user_id)
+                 VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING`,
+                [serverId, id]
+            );
+
+            await db.query(
+                'UPDATE server_invites SET use_count = use_count + 1 WHERE code = $1',
+                [inviteCode]
+            );
+        }
+
+        // For approval policy: return user info with pending status but NO token
+        if (policy === 'approval') {
+            return reply.status(201).send({
+                user: { id, username },
+                status: 'pending',
+            });
+        }
+
+        // For open and invite_only: return token
         const token = generateToken({ userId: id }, (app as any).jwtSecret);
 
         return reply.status(201).send({
@@ -42,7 +114,7 @@ export async function authRoutes(app: FastifyInstance) {
         const db = (request as any).dbClient;
 
         const result = await db.query(
-            'SELECT id, username, password_hash FROM users WHERE email = $1',
+            'SELECT id, username, password_hash, account_status FROM users WHERE email = $1',
             [email]
         );
 
@@ -55,6 +127,14 @@ export async function authRoutes(app: FastifyInstance) {
 
         if (!valid) {
             return reply.status(401).send({ error: 'Invalid credentials' });
+        }
+
+        // Check account status after credential verification
+        if (user.account_status === 'pending') {
+            return reply.status(403).send({ error: 'account_pending' });
+        }
+        if (user.account_status === 'suspended') {
+            return reply.status(403).send({ error: 'account_suspended' });
         }
 
         const token = generateToken({ userId: user.id.trim() }, (app as any).jwtSecret);

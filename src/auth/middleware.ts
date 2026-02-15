@@ -14,4 +14,23 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     } catch {
         return reply.status(401).send({ error: 'Invalid token' });
     }
+
+    // Check account_status — reject non-active users
+    const db = (request as any).dbClient;
+    const result = await db.query(
+        'SELECT account_status FROM users WHERE id = $1',
+        [(request as any).userId]
+    );
+
+    if (result.rows.length === 0) {
+        return reply.status(401).send({ error: 'Invalid token' });
+    }
+
+    const status = result.rows[0].account_status;
+    if (status === 'pending') {
+        return reply.status(403).send({ error: 'account_pending' });
+    }
+    if (status === 'suspended') {
+        return reply.status(403).send({ error: 'account_suspended' });
+    }
 }
