@@ -34,3 +34,19 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         return reply.status(403).send({ error: 'account_suspended' });
     }
 }
+
+export async function requireInstanceAdmin(request: FastifyRequest, reply: FastifyReply) {
+    const db = (request as any).dbClient;
+    const userId = (request as any).userId;
+
+    const result = await db.query(
+        'SELECT is_instance_admin FROM users WHERE id = $1',
+        [userId]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].is_instance_admin) {
+        return reply.status(403).send({ error: 'insufficient_permissions' });
+    }
+
+    (request as any).isInstanceAdmin = true;
+}
