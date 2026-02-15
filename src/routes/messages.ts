@@ -64,11 +64,13 @@ export async function messageRoutes(app: FastifyInstance) {
             channelId: channelId.trim(),
         };
 
-        // Broadcast to channel room via Socket.IO
-        const io = (app as any).io;
-        if (io) {
-            io.to(`channel:${channelId.trim()}`).emit('Message', message);
-        }
+        // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
+        (request as any).pendingEvents = (request as any).pendingEvents || [];
+        (request as any).pendingEvents.push({
+            room: `channel:${channelId.trim()}`,
+            event: 'Message',
+            data: message,
+        });
 
         return reply.status(201).send(message);
     });

@@ -59,13 +59,22 @@ export async function buildApp(opts?: {
         }
     });
 
-    // Commit + release on success
+    // Commit + release on success, then flush pending socket events
     app.addHook('onResponse', async (request) => {
         const client = (request as any).dbClient;
         if (client) {
             (request as any).dbClient = null;
             try {
                 await client.query('COMMIT');
+
+                // Emit socket events only after successful commit
+                const pendingEvents = (request as any).pendingEvents;
+                const io = (app as any).io;
+                if (io && pendingEvents) {
+                    for (const evt of pendingEvents) {
+                        io.to(evt.room).emit(evt.event, evt.data);
+                    }
+                }
             } catch {
                 await client.query('ROLLBACK').catch(() => {});
             }
