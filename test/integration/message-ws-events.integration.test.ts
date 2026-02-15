@@ -39,6 +39,42 @@ afterAll(async () => {
     await ctx.close();
 });
 
+describe('Message WS event payload', () => {
+    test('Message event includes authorUsername and createdAt', async () => {
+        const owner = await authedUser(ctx.request, 'mpayload_owner');
+        const member = await authedUser(ctx.request, 'mpayload_member');
+
+        const { serverId, generalChannelId } = await createServer(
+            ctx.request, owner.auth, 'MsgPayload Server'
+        );
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const { socket } = await connectSocket(member.token);
+
+        const msgPromise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Message timeout (2s)')), 2000);
+            socket.on('Message', (data: any) => {
+                clearTimeout(timeout);
+                resolve(data);
+            });
+        });
+
+        await ctx.request
+            .post(`/channels/${generalChannelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'hello payload test' });
+
+        const event = await msgPromise;
+        expect(event.content).toBe('hello payload test');
+        expect(event.authorId).toBeTruthy();
+        expect(event.authorUsername).toBe('mpayload_owner');
+        expect(event.createdAt).toBeTruthy();
+        expect(event.channelId).toBe(generalChannelId);
+
+        socket.disconnect();
+    });
+});
+
 describe('MessageUpdate WS event', () => {
     test('editing a message broadcasts MessageUpdate to channel members', async () => {
         const owner = await authedUser(ctx.request, 'mupd_owner');

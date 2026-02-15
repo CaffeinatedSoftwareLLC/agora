@@ -27,7 +27,7 @@ async function checkChannelMembership(db: any, channelId: string, userId: string
 
 export async function messageRoutes(app: FastifyInstance) {
 
-    // POST /channels/:id/messages → 201 { id, content, authorId, channelId }
+    // POST /channels/:id/messages → 201 { id, content, authorId, authorUsername, channelId, createdAt }
     app.post('/channels/:id/messages', {
         schema: {
             body: {
@@ -57,11 +57,18 @@ export async function messageRoutes(app: FastifyInstance) {
             [messageId, channelId, userId, content]
         );
 
+        const userRow = await db.query(
+            'SELECT username FROM users WHERE id = $1',
+            [userId]
+        );
+
         const message = {
             id: messageId.trim(),
             content,
             authorId: userId.trim(),
+            authorUsername: userRow.rows[0].username,
             channelId: channelId.trim(),
+            createdAt: new Date().toISOString(),
         };
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
@@ -75,7 +82,7 @@ export async function messageRoutes(app: FastifyInstance) {
         return reply.status(201).send(message);
     });
 
-    // GET /channels/:id/messages?limit&before → 200 [{ id, content, authorId, channelId, editedAt, deletedAt, createdAt }]
+    // GET /channels/:id/messages?limit&before → 200 [{ id, content, authorId, authorUsername, channelId, editedAt, deletedAt, createdAt }]
     app.get('/channels/:id/messages', async (request, reply) => {
         const { id: channelId } = request.params as any;
         const userId = (request as any).userId;
@@ -95,17 +102,21 @@ export async function messageRoutes(app: FastifyInstance) {
         let params: any[];
 
         if (before) {
-            query = `SELECT id, content, author_id, channel_id, edited_at, deleted_at, created_at
-                     FROM messages
-                     WHERE channel_id = $1 AND id < $2
-                     ORDER BY id DESC
+            query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
+                            u.username AS author_username
+                     FROM messages m
+                     LEFT JOIN users u ON u.id = m.author_id
+                     WHERE m.channel_id = $1 AND m.id < $2
+                     ORDER BY m.id DESC
                      LIMIT $3`;
             params = [channelId, before, limit];
         } else {
-            query = `SELECT id, content, author_id, channel_id, edited_at, deleted_at, created_at
-                     FROM messages
-                     WHERE channel_id = $1
-                     ORDER BY id DESC
+            query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
+                            u.username AS author_username
+                     FROM messages m
+                     LEFT JOIN users u ON u.id = m.author_id
+                     WHERE m.channel_id = $1
+                     ORDER BY m.id DESC
                      LIMIT $2`;
             params = [channelId, limit];
         }
@@ -116,6 +127,7 @@ export async function messageRoutes(app: FastifyInstance) {
             id: row.id.trim(),
             content: row.content,
             authorId: row.author_id ? row.author_id.trim() : null,
+            authorUsername: row.author_username ?? null,
             channelId: row.channel_id.trim(),
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,

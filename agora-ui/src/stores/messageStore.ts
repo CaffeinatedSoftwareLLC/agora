@@ -112,7 +112,16 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
 
     try {
-      await api.post(`/channels/${channelId}/messages`, { content });
+      const res = await api.post<{ id: string }>(`/channels/${channelId}/messages`, { content });
+      // Store the real ID on the optimistic message so addMessage can match by ID
+      set((state) => {
+        const nextByChannel = new Map(state.byChannel);
+        const current = nextByChannel.get(channelId) ?? [];
+        nextByChannel.set(channelId, current.map((m) =>
+          m.id === tempId ? { ...m, id: res.id, pending: true } : m
+        ));
+        return { byChannel: nextByChannel };
+      });
       // The real message arrives via WS 'Message' event and replaces the optimistic one
     } catch {
       // Mark as failed
@@ -201,13 +210,13 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       const nextByChannel = new Map(state.byChannel);
       const current = nextByChannel.get(msg.channelId) ?? [];
 
-      // Check if this is confirming an optimistic (pending) message
+      // Check if this is confirming an optimistic (pending) message by real ID
       const pendingIdx = current.findIndex(
-        (m) => m.pending && m.authorId === msg.authorId && m.channelId === msg.channelId
+        (m) => m.pending && m.id === msg.id
       );
 
       if (pendingIdx !== -1) {
-        // Replace the oldest pending message from this author in this channel
+        // Replace the optimistic message with the confirmed server version
         const updated = [...current];
         updated[pendingIdx] = {
           id: msg.id,
@@ -219,6 +228,10 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         };
         nextByChannel.set(msg.channelId, updated);
       } else {
+        // Ignore duplicate (WS arrived before POST response updated the ID)
+        if (current.some((m) => m.id === msg.id)) {
+          return state;
+        }
         // New message from another user (or no pending match)
         const newMsg: Message = {
           id: msg.id,

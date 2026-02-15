@@ -36,6 +36,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newCount, setNewCount] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const lastMessageIdRef = useRef<string | null>(null);
   const loadingOlderRef = useRef(false);
   const initialLoadRef = useRef(true);
@@ -87,6 +88,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     // Load older when scrolled near top
     if (el.scrollTop < 200 && hasMore && !loadingOlderRef.current) {
       loadingOlderRef.current = true;
+      setLoadingOlder(true);
       const prevScrollHeight = el.scrollHeight;
       loadOlder(channelId).then(() => {
         // Preserve scroll position after prepending older messages
@@ -95,8 +97,9 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight - prevScrollHeight;
           }
           loadingOlderRef.current = false;
+          setLoadingOlder(false);
         });
-      }).catch(() => { loadingOlderRef.current = false; });
+      }).catch(() => { loadingOlderRef.current = false; setLoadingOlder(false); });
     }
   }, [hasMore, channelId, loadOlder, newCount]);
 
@@ -132,7 +135,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto"
       >
-        {hasMore && (
+        {loadingOlder && (
           <div className="py-4 text-center text-text-dim text-sm">Loading older messages...</div>
         )}
         {messages.map((msg, i) => (
