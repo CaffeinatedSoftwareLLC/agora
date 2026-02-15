@@ -207,6 +207,49 @@ describe('Phase 1 — Auth & Registration Policies', () => {
             expect(res.body.error).toBe('invalid_invite_code');
         });
 
+        test('concurrent registrations with max_uses=1 invite — exactly one wins', async () => {
+            // Set invite to max_uses=1 (fresh, use_count=0)
+            await ctx.db.query(
+                'UPDATE server_invites SET max_uses = 1 WHERE code = $1',
+                [inviteCode]
+            );
+
+            // Fire two registrations concurrently against the same single-use invite
+            const [resA, resB] = await Promise.all([
+                ctx.request.post('/auth/register').send({
+                    username: 'racer_a',
+                    email: 'racer_a@test.com',
+                    password: 'TestPass123!',
+                    inviteCode,
+                }),
+                ctx.request.post('/auth/register').send({
+                    username: 'racer_b',
+                    email: 'racer_b@test.com',
+                    password: 'TestPass123!',
+                    inviteCode,
+                }),
+            ]);
+
+            const statuses = [resA.status, resB.status].sort();
+            // Exactly one 201, exactly one 404 (FOR UPDATE serializes them)
+            expect(statuses).toEqual([201, 404]);
+
+            // use_count must be exactly 1
+            const inviteCheck = await ctx.db.query(
+                'SELECT use_count FROM server_invites WHERE code = $1',
+                [inviteCode]
+            );
+            expect(inviteCheck.rows[0].use_count).toBe(1);
+
+            // Exactly one user should be a server member from this invite
+            const members = await ctx.db.query(
+                `SELECT user_id FROM server_members
+                 WHERE server_id = $1 AND user_id != $2`,
+                [serverId, ownerUserId]
+            );
+            expect(members.rows.length).toBe(1);
+        });
+
         test('register with maxed-out invite returns 404', async () => {
             // Set invite to max_uses=1, use_count=1
             await ctx.db.query(
