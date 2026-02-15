@@ -39,3 +39,20 @@ export function computePrependShift(
   }
   return shift;
 }
+
+/**
+ * Compute how much to adjust scrollTop after the virtualizer re-measures
+ * prepended items.  Compares the anchor item's measured DOM position to the
+ * estimated offset used for the initial shift.  Returns the delta to add to
+ * scrollTop, or 0 if the difference is within a 1px dead-zone.
+ */
+export function computeScrollCorrection(
+  anchorRect: { top: number },
+  containerRect: { top: number },
+  scrollTop: number,
+  estimatedOffset: number,
+): number {
+  const measuredOffset = anchorRect.top - containerRect.top + scrollTop;
+  const delta = measuredOffset - estimatedOffset;
+  return Math.abs(delta) > 1 ? delta : 0;
+}

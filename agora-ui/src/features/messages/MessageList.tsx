@@ -5,7 +5,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
-import { shouldGroup, estimateMessageHeight, computePrependShift } from './grouping';
+import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
 
 interface MessageListProps {
   channelId: string;
@@ -128,11 +128,13 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
           `[data-index="${anchorIndex}"]`
         );
         if (!anchor) return;
-        const containerTop = el.getBoundingClientRect().top;
-        const anchorTop = anchor.getBoundingClientRect().top;
-        const measuredOffset = anchorTop - containerTop + el.scrollTop;
-        const delta = measuredOffset - estimatedOffset;
-        if (Math.abs(delta) > 1) {
+        const delta = computeScrollCorrection(
+          anchor.getBoundingClientRect(),
+          el.getBoundingClientRect(),
+          el.scrollTop,
+          estimatedOffset,
+        );
+        if (delta !== 0) {
           el.scrollTop += delta;
         }
       });

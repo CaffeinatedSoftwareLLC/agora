@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldGroup, GROUP_THRESHOLD_MS, estimateMessageHeight, computePrependShift } from './grouping';
+import { shouldGroup, GROUP_THRESHOLD_MS, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
 
 function msg(authorId: string, createdAt: string, deletedAt?: string) {
   return { authorId, createdAt, deletedAt };
@@ -137,5 +137,49 @@ describe('computePrependShift', () => {
       msg('u2', offsetMs(61_000)),   // not prepended (existing)
     ];
     expect(computePrependShift(messages, 1)).toBe(64);
+  });
+});
+
+describe('computeScrollCorrection', () => {
+  it('returns 0 when measured position matches estimated', () => {
+    // anchor visual top 100, container visual top 0, scrollTop 300
+    // measuredOffset = 100 - 0 + 300 = 400, estimatedOffset = 400 → delta = 0
+    expect(computeScrollCorrection({ top: 100 }, { top: 0 }, 300, 400)).toBe(0);
+  });
+
+  it('returns positive delta when items are taller than estimated', () => {
+    // anchor pushed further down → measuredOffset > estimatedOffset
+    // measuredOffset = 150 - 0 + 300 = 450, estimatedOffset = 400 → delta = 50
+    expect(computeScrollCorrection({ top: 150 }, { top: 0 }, 300, 400)).toBe(50);
+  });
+
+  it('returns negative delta when items are shorter than estimated', () => {
+    // anchor moved up → measuredOffset < estimatedOffset
+    // measuredOffset = 50 - 0 + 300 = 350, estimatedOffset = 400 → delta = -50
+    expect(computeScrollCorrection({ top: 50 }, { top: 0 }, 300, 400)).toBe(-50);
+  });
+
+  it('returns 0 for sub-pixel differences within dead zone', () => {
+    // measuredOffset = 100 - 0 + 300 = 400, estimatedOffset = 400.5 → |delta| = 0.5 < 1
+    expect(computeScrollCorrection({ top: 100 }, { top: 0 }, 300, 400.5)).toBe(0);
+    // edge: |delta| = 1 is also in dead zone
+    expect(computeScrollCorrection({ top: 100 }, { top: 0 }, 300, 401)).toBe(0);
+  });
+
+  it('corrects just outside the dead zone', () => {
+    // measuredOffset = 100 - 0 + 300 = 400, estimatedOffset = 398.9 → delta = 1.1
+    expect(computeScrollCorrection({ top: 100 }, { top: 0 }, 300, 398.9)).toBeCloseTo(1.1);
+  });
+
+  it('accounts for non-zero container top', () => {
+    // container 50px below viewport top
+    // measuredOffset = 200 - 50 + 300 = 450, estimatedOffset = 400 → delta = 50
+    expect(computeScrollCorrection({ top: 200 }, { top: 50 }, 300, 400)).toBe(50);
+  });
+
+  it('handles large scroll offsets', () => {
+    // Far down the list, large scrollTop
+    // measuredOffset = 500 - 0 + 5000 = 5500, estimatedOffset = 5400 → delta = 100
+    expect(computeScrollCorrection({ top: 500 }, { top: 0 }, 5000, 5400)).toBe(100);
   });
 });
