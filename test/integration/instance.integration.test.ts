@@ -136,6 +136,29 @@ describe('Phase 0 — Instance Bootstrap', () => {
             expect(rejected.body.error).toBe('instance_already_initialized');
         });
 
+        test('concurrent setup with missing setup_complete row — advisory lock still serializes', async () => {
+            await setUninitialized();
+            // Delete the setup_complete row to simulate partial migration / data damage
+            await ctx.db.query("DELETE FROM instance_config WHERE key = 'setup_complete'");
+            resetInitializedCache();
+
+            const payload = (suffix: string) => ({
+                setupToken: 'test-setup-token-that-is-at-least-32chars!',
+                username: `admin${suffix}`,
+                email: `admin${suffix}@test.com`,
+                password: 'TestPass123!',
+            });
+
+            const [a, b] = await Promise.all([
+                ctx.request.post('/instance/setup').send(payload('1')),
+                ctx.request.post('/instance/setup').send(payload('2')),
+            ]);
+
+            const statuses = [a.status, b.status].sort();
+            // Exactly one 201 and one 409 — advisory lock prevents both from succeeding
+            expect(statuses).toEqual([201, 409]);
+        });
+
         test('setup with registrationPolicy sets it correctly', async () => {
             await setUninitialized();
 
@@ -208,6 +231,52 @@ describe('Phase 0 — Instance Bootstrap', () => {
                 expect(token2).toBe(token1);
             } finally {
                 // Restore env and cache
+                process.env.AGORA_SETUP_TOKEN = savedToken;
+                if (savedDataDir !== undefined) {
+                    process.env.AGORA_DATA_DIR = savedDataDir;
+                } else {
+                    delete process.env.AGORA_DATA_DIR;
+                }
+                resetSetupTokenCache();
+            }
+        });
+
+        test('POST /instance/setup succeeds end-to-end with ephemeral token', async () => {
+            const { getSetupToken, resetSetupTokenCache } = await import('../../src/instance/setup-token');
+
+            await setUninitialized();
+
+            // Switch to ephemeral token mode: no env var, unwritable data dir
+            const savedToken = process.env.AGORA_SETUP_TOKEN;
+            const savedDataDir = process.env.AGORA_DATA_DIR;
+            delete process.env.AGORA_SETUP_TOKEN;
+            process.env.AGORA_DATA_DIR = process.platform === 'win32'
+                ? 'Z:\\nonexistent\\readonly'
+                : '/proc/nonexistent/readonly';
+            resetSetupTokenCache();
+
+            try {
+                // Resolve the ephemeral token (same one the route will compare against)
+                const ephemeralToken = await getSetupToken();
+
+                // Full end-to-end: POST /instance/setup with the ephemeral token
+                const res = await ctx.request.post('/instance/setup').send({
+                    setupToken: ephemeralToken,
+                    username: 'admin',
+                    email: 'admin@test.com',
+                    password: 'TestPass123!',
+                    instanceName: 'Ephemeral Instance',
+                });
+
+                expect(res.status).toBe(201);
+                expect(res.body.user.isInstanceAdmin).toBe(true);
+                expect(res.body.accessToken).toBeDefined();
+
+                // Verify the instance is fully initialized
+                const status = await ctx.request.get('/instance/status');
+                expect(status.body.initialized).toBe(true);
+                expect(status.body.instanceName).toBe('Ephemeral Instance');
+            } finally {
                 process.env.AGORA_SETUP_TOKEN = savedToken;
                 if (savedDataDir !== undefined) {
                     process.env.AGORA_DATA_DIR = savedDataDir;
