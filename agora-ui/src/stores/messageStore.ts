@@ -113,16 +113,23 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
     try {
       const res = await api.post<{ id: string }>(`/channels/${channelId}/messages`, { content });
-      // Store the real ID on the optimistic message so addMessage can match by ID
+      // Reconcile: if WS already delivered the real message, drop the optimistic row.
+      // Otherwise remap tempId → real ID so addMessage can match when WS arrives.
       set((state) => {
         const nextByChannel = new Map(state.byChannel);
         const current = nextByChannel.get(channelId) ?? [];
-        nextByChannel.set(channelId, current.map((m) =>
-          m.id === tempId ? { ...m, id: res.id, pending: true } : m
-        ));
+        const wsAlreadyDelivered = current.some((m) => !m.pending && m.id === res.id);
+        if (wsAlreadyDelivered) {
+          // WS won the race — remove the optimistic row
+          nextByChannel.set(channelId, current.filter((m) => m.id !== tempId));
+        } else {
+          // POST won the race — remap so addMessage can match by real ID
+          nextByChannel.set(channelId, current.map((m) =>
+            m.id === tempId ? { ...m, id: res.id, pending: true } : m
+          ));
+        }
         return { byChannel: nextByChannel };
       });
-      // The real message arrives via WS 'Message' event and replaces the optimistic one
     } catch {
       // Mark as failed
       set((state) => {
