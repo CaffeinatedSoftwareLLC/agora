@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.env
+.env.prod
+*.md
+test
+.agora
+initial-docs
+nul
+agora-ui/node_modules
+agora-ui/dist

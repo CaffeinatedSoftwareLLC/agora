@@ -9,6 +9,7 @@
     "test:integration": "vitest run test/integration",
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "start": "node dist/src/index.js",
     "migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useReactionStore } from '../../stores/reactionStore';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../lib/api';
@@ -10,7 +10,8 @@ interface ReactionBarProps {
 }
 
 export function ReactionBar({ messageId, channelId }: ReactionBarProps) {
-  const reactions = useReactionStore((s) => s.getReactions(messageId));
+  const rawReactions = useReactionStore((s) => s.byMessage.get(messageId));
+  const reactions = useMemo(() => rawReactions ?? [], [rawReactions]);
   const userId = useAuthStore((s) => s.user?.id);
   const [showPicker, setShowPicker] = useState(false);
 
