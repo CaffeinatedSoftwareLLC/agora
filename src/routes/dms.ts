@@ -68,9 +68,31 @@ export async function dmRoutes(app: FastifyInstance) {
                     [channelId, userB]
                 );
 
+                // Fetch usernames for the DMCreated events
+                const usersResult = await db.query(
+                    'SELECT id, username FROM users WHERE id = ANY($1)',
+                    [[userA, userB]]
+                );
+                const usersById = new Map(usersResult.rows.map((u: any) => [u.id.trim(), u.username]));
+
                 await db.query('RELEASE SAVEPOINT dm_create');
+
+                // Queue DMCreated events so both users' sockets join the new channel room
+                const trimmedId = channelId.trim();
+                const pendingEvents = (request as any).pendingEvents = (request as any).pendingEvents || [];
+                pendingEvents.push({
+                    room: `user:${userA}`,
+                    event: 'DMCreated',
+                    data: { channelId: trimmedId, name: usersById.get(userB) || '' },
+                });
+                pendingEvents.push({
+                    room: `user:${userB}`,
+                    event: 'DMCreated',
+                    data: { channelId: trimmedId, name: usersById.get(userA) || '' },
+                });
+
                 return reply.status(201).send({
-                    id: channelId.trim(),
+                    id: trimmedId,
                     channelType: 1,
                 });
             }

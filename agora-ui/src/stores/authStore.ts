@@ -22,15 +22,40 @@ interface AuthState {
   logout: () => void;
 }
 
+// Restore persisted session from localStorage
+function loadPersistedAuth(): { token: string | null; user: User | null; status: AuthStatus } {
+  try {
+    const token = localStorage.getItem('agora_token');
+    const userJson = localStorage.getItem('agora_user');
+    if (token && userJson) {
+      return { token, user: JSON.parse(userJson), status: 'authenticated' };
+    }
+  } catch { /* corrupted storage — start fresh */ }
+  return { token: null, user: null, status: 'idle' };
+}
+
+function persistAuth(token: string, user: User) {
+  localStorage.setItem('agora_token', token);
+  localStorage.setItem('agora_user', JSON.stringify(user));
+}
+
+function clearPersistedAuth() {
+  localStorage.removeItem('agora_token');
+  localStorage.removeItem('agora_user');
+}
+
+const initialAuth = loadPersistedAuth();
+
 export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  user: null,
-  status: 'idle',
+  token: initialAuth.token,
+  user: initialAuth.user,
+  status: initialAuth.status,
 
   login: async (email, password) => {
     set({ status: 'loading' });
     try {
       const res = await api.post<AuthResponse>('/auth/login', { email, password });
+      persistAuth(res.accessToken, res.user);
       set({ token: res.accessToken, user: res.user, status: 'authenticated' });
     } catch (err) {
       if (err instanceof ApiError) {
@@ -49,6 +74,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const res = await api.post<AuthResponse & { status?: string }>('/auth/register', data);
       if (res.accessToken) {
+        persistAuth(res.accessToken, res.user);
         set({ token: res.accessToken, user: res.user, status: 'authenticated' });
       } else {
         set({ status: 'pending', token: null, user: null });
@@ -60,6 +86,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    clearPersistedAuth();
     set({ token: null, user: null, status: 'idle' });
     useServerStore.getState().clear();
     useChannelStore.getState().clear();

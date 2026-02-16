@@ -103,6 +103,16 @@ export async function buildApp(opts?: {
                             } catch { /* best-effort room join */ }
                         }
 
+                        // For DMCreated, join user's sockets to the new DM channel room
+                        if (evt.event === 'DMCreated' && evt.data?.channelId) {
+                            try {
+                                const sockets = await io.in(evt.room).fetchSockets();
+                                for (const s of sockets) {
+                                    s.join(`channel:${evt.data.channelId}`);
+                                }
+                            } catch { /* best-effort room join */ }
+                        }
+
                         io.to(evt.room).emit(evt.event, evt.data);
                     }
                 }

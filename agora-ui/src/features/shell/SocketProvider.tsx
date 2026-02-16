@@ -20,6 +20,7 @@ import type {
   PresenceUpdatePayload,
   ReactionAddPayload,
   ReactionRemovePayload,
+  DMCreatedPayload,
 } from '../../lib/contracts/ws-events';
 import { SocketContext } from './SocketContext';
 
@@ -87,6 +88,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('ServerJoin', (data: ServerJoinPayload) => {
       useServerStore.getState().addServer(data.server);
       useChannelStore.getState().addChannels(data.channels);
+    });
+
+    s.on('DMCreated', (data: DMCreatedPayload) => {
+      useChannelStore.getState().addChannel({
+        id: data.channelId,
+        name: data.name,
+        channelType: 1,
+        serverId: null,
+      });
     });
 
     s.on('Typing', (data: TypingPayload) => {

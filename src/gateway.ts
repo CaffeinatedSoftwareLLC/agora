@@ -106,11 +106,13 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                 channels = channelsResult.rows;
             }
 
-            // Fetch DM channels
+            // Fetch DM channels with the OTHER user's username as the channel name
             const dmChannelsResult = await db.query(
-                `SELECT c.id, c.name, c.channel_type, c.server_id
+                `SELECT c.id, u.username AS name, c.channel_type, c.server_id
                  FROM channels c
                  JOIN channel_members cm ON cm.channel_id = c.id
+                 JOIN channel_members cm2 ON cm2.channel_id = c.id AND cm2.user_id != $1
+                 JOIN users u ON u.id = cm2.user_id
                  WHERE cm.user_id = $1 AND c.server_id IS NULL`,
                 [userId]
             );

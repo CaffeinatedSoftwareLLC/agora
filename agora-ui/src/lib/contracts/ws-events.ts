@@ -64,3 +64,8 @@ export interface ReactionRemovePayload {
   userId: string;
   emoji: string;
 }
+
+export interface DMCreatedPayload {
+  channelId: string;
+  name: string;
+}
