@@ -58,7 +58,7 @@ agora-ui/src/
 │       └── ConfirmDialog.tsx
 │
 └── features/                   # Feature modules (see section below)
-    ├── setup/                  # Instance initialization guard
+    ├── setup/                  # Instance initialization guard + setup wizard
     ├── auth/                   # Login, register, pending approval
     ├── admin/                  # Admin dashboard, user management
     ├── shell/                  # App chrome: layout, socket lifecycle, sidebar
@@ -93,7 +93,7 @@ BrowserRouter
 Calls `GET /instance/status` via the `useInstance()` hook on mount. Shows:
 - Spinner while loading
 - Error screen if the server is unreachable
-- "Not Set Up" screen if `data.initialized` is `false`
+- `SetupWizard` if `data.initialized` is `false`
 - Children if the instance is initialized
 
 ### AuthGuard (`features/auth/AuthGuard.tsx`)
@@ -598,6 +598,7 @@ When the user scrolls within 200px of the top of the message list, `loadOlder()`
 | Component | Purpose |
 |---|---|
 | `InstanceGuard` | Blocks rendering until `GET /instance/status` confirms the instance is initialized |
+| `SetupWizard` | Three-step first-run flow: setup token, admin account, and instance settings |
 
 ### `features/auth/`
 
