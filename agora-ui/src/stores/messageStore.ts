@@ -54,17 +54,15 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
     }));
-    // Hydrate reaction store from history-loaded reactions
+    // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
     for (const m of reversed) {
-      if (m.reactions && m.reactions.length > 0) {
-        reactionStore.setReactions(m.id, m.reactions.map((r) => ({
-          emoji: r.emoji,
-          count: r.count,
-          me: r.me,
-          userIds: [],
-        })));
-      }
+      reactionStore.setReactions(m.id, (m.reactions ?? []).map((r) => ({
+        emoji: r.emoji,
+        count: r.count,
+        me: r.me,
+        userIds: [],
+      })));
     }
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
@@ -96,17 +94,15 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
     }));
-    // Hydrate reaction store from history-loaded reactions
+    // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
     for (const m of reversed) {
-      if (m.reactions && m.reactions.length > 0) {
-        reactionStore.setReactions(m.id, m.reactions.map((r) => ({
-          emoji: r.emoji,
-          count: r.count,
-          me: r.me,
-          userIds: [],
-        })));
-      }
+      reactionStore.setReactions(m.id, (m.reactions ?? []).map((r) => ({
+        emoji: r.emoji,
+        count: r.count,
+        me: r.me,
+        userIds: [],
+      })));
     }
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
