@@ -197,7 +197,7 @@ The setup token is resolved in this priority order:
 ============================================================
 ```
 
-The auto-generated token is saved to `.agora/setup-token` so it persists across restarts.
+The auto-generated token is saved to `.agora/setup-token` so it persists across restarts. If the file cannot be written (for example, a read-only filesystem), the token still works for the current process but will not survive restart; set `AGORA_SETUP_TOKEN` for a stable token.
 
 ### Completing setup
 
