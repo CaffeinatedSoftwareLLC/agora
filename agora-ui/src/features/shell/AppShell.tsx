@@ -3,14 +3,17 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
-import { ServerRail } from './ServerRail';
-import { ChannelSidebar } from './ChannelSidebar';
-import { ContentArea } from './ContentArea';
+import { usePalette } from '../../theme';
+import { TabBar } from './TabBar';
+import { HomeView } from './HomeView';
+import { ArcChannelSidebar } from './ArcChannelSidebar';
+import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 
 export function AppShell() {
   const params = useParams();
   const navigate = useNavigate();
+  const P = usePalette();
   const servers = useServerStore(s => s.servers);
   const activeServerId = useServerStore(s => s.activeServerId);
   const setActiveServer = useServerStore(s => s.setActiveServer);
@@ -18,6 +21,7 @@ export function AppShell() {
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
+  const addServerTab = useUIStore(s => s.addServerTab);
 
   // Extract stable primitives from params
   const urlServerId = params['*']?.split('/')[0] || null;
@@ -28,14 +32,17 @@ export function AppShell() {
     if (urlServerId && urlServerId !== 'dms') {
       setActiveServer(urlServerId);
       setActiveChannel(urlChannelId);
+      // Auto-add server to tab bar when navigating to it
+      addServerTab(urlServerId);
     } else if (urlServerId === 'dms') {
       setActiveServer(null);
       setActiveChannel(urlChannelId);
     } else {
+      // Home view: /app with no subpath
       setActiveServer(null);
       setActiveChannel(null);
     }
-  }, [urlServerId, urlChannelId, setActiveServer, setActiveChannel]);
+  }, [urlServerId, urlChannelId, setActiveServer, setActiveChannel, addServerTab]);
 
   // Auto-select first channel when navigating to a server without a channel
   useEffect(() => {
@@ -47,41 +54,57 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlServerId, urlChannelId, servers.size]);
 
-  // Show skeleton/loading while connecting
+  // Show skeleton while connecting
   if (connectionStatus === 'disconnected' && servers.size === 0) {
     return (
-      <div className="h-screen flex">
-        {/* Skeleton server rail */}
-        <div className="w-[72px] bg-bg flex flex-col items-center py-3 gap-2">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="w-12 h-12 rounded-2xl bg-surface animate-pulse" />
-          ))}
+      <div
+        className="h-screen flex flex-col overflow-hidden"
+        style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+      >
+        {/* Skeleton tab bar */}
+        <div className="flex items-center gap-2 px-3 pt-2 pb-0 shrink-0">
+          <div className="h-8 w-20 rounded-xl animate-pulse" style={{ background: P.surface }} />
+          <div className="h-8 w-24 rounded-xl animate-pulse" style={{ background: P.surface }} />
+          <div className="h-8 w-24 rounded-xl animate-pulse" style={{ background: P.surface }} />
+          <div className="flex-1" />
+          <div className="h-8 w-16 rounded-full animate-pulse" style={{ background: P.surface }} />
         </div>
-        {/* Skeleton sidebar */}
-        <div className="w-60 bg-surface border-r border-border flex flex-col">
-          <div className="h-12 px-4 flex items-center border-b border-border">
-            <div className="h-4 w-32 bg-surface-hover rounded animate-pulse" />
-          </div>
-          <div className="p-3 space-y-2">
+        <div className="h-px" style={{ background: P.border }} />
+        {/* Skeleton content */}
+        <div className="flex flex-1 min-h-0">
+          <div className="w-[260px] shrink-0 flex flex-col p-3 gap-2" style={{ background: P.surface }}>
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-6 bg-surface-hover rounded animate-pulse" />
+              <div key={i} className="h-10 rounded-lg animate-pulse" style={{ background: P.surfaceHover }} />
             ))}
           </div>
-        </div>
-        {/* Skeleton content */}
-        <div className="flex-1 bg-bg flex items-center justify-center">
-          <div className="text-text-muted animate-pulse">Connecting...</div>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="animate-pulse" style={{ color: P.muted }}>Connecting...</div>
+          </div>
         </div>
       </div>
     );
   }
 
+  // Is the user on the home view?
+  const isHome = !urlServerId || urlServerId === 'dms';
+
   return (
-    <div className="h-screen flex">
-      <ServerRail />
-      <ChannelSidebar />
-      <ContentArea />
-      {activeServerId && membersOpen && <MembersSidebar />}
+    <div
+      className="h-screen flex flex-col overflow-hidden"
+      style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+    >
+      <TabBar />
+
+      {/* Main content area */}
+      {isHome ? (
+        <HomeView />
+      ) : (
+        <div className="flex flex-1 min-h-0">
+          <ArcChannelSidebar />
+          <ArcContentArea />
+          {activeServerId && membersOpen && <MembersSidebar />}
+        </div>
+      )}
     </div>
   );
 }
