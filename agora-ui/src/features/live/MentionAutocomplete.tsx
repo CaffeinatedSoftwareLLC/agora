@@ -12,6 +12,14 @@ interface MentionAutocompleteProps {
 function MentionAutocompleteInner({ query, serverId, onSelect, onClose }: Omit<MentionAutocompleteProps, 'visible'>) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const members = useMemberStore((s) => (serverId ? s.byServer.get(serverId) : null));
+  const loadMembers = useMemberStore((s) => s.loadMembers);
+
+  // Lazy-load members if not already in store
+  useEffect(() => {
+    if (serverId && !members) {
+      loadMembers(serverId);
+    }
+  }, [serverId, members, loadMembers]);
 
   const filtered = useMemo(
     () =>

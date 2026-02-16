@@ -2,6 +2,8 @@ import { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useUnreadStore } from '../../stores/unreadStore';
+import { api } from '../../lib/api';
 import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
@@ -54,7 +56,18 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
     prevCountRef.current = 0;
     initialLoadRef.current = true;
     pendingCorrectionRef.current = null;
+    ackedRef.current = false;
   }, [channelId, loadMessages]);
+
+  // Send server ACK when messages first load for this channel
+  const ackedRef = useRef(false);
+  useEffect(() => {
+    if (ackedRef.current || !messages || messages.length === 0) return;
+    ackedRef.current = true;
+    const lastMsgId = messages[messages.length - 1].id;
+    useUnreadStore.getState().markRead(channelId, lastMsgId);
+    api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
+  }, [channelId, messages]);
 
   // Scroll positioning: initial scroll-to-bottom, prepend anchor, auto-scroll on new message
   useLayoutEffect(() => {

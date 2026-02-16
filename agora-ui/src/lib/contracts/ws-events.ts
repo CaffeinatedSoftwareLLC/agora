@@ -17,6 +17,9 @@ export interface MessagePayload {
   createdAt: string;
   editedAt?: string;
   deletedAt?: string;
+  mentions?: string[];
+  mentionsEveryone?: boolean;
+  reactions?: { emoji: string; count: number; me: boolean }[];
 }
 
 export interface MessageUpdatePayload {

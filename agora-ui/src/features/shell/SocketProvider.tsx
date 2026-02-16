@@ -65,6 +65,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const activeChannelId = useChannelStore.getState().activeChannelId;
       if (data.channelId !== activeChannelId) {
         useUnreadStore.getState().incrementUnread(data.channelId);
+        // Check if current user is mentioned — increment mention count
+        const currentUserId = useAuthStore.getState().user?.id;
+        if (currentUserId) {
+          const isMentioned = data.mentions?.includes(currentUserId) || data.mentionsEveryone;
+          if (isMentioned) {
+            useUnreadStore.getState().incrementMention(data.channelId);
+          }
+        }
       }
     });
 

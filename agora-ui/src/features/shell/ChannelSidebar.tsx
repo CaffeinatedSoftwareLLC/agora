@@ -61,16 +61,13 @@ export function ChannelSidebar() {
   const handleChannelClick = (channelId: string) => {
     setActiveChannel(channelId);
 
-    // Mark channel as read
-    const messageStore = useMessageStore.getState();
-    const messages = messageStore.byChannel.get(channelId);
+    // If messages are already loaded, ACK immediately for instant badge clear.
+    // Otherwise MessageList will ACK after its initial load completes.
+    const messages = useMessageStore.getState().byChannel.get(channelId);
     if (messages && messages.length > 0) {
       const lastMsgId = messages[messages.length - 1].id;
       useUnreadStore.getState().markRead(channelId, lastMsgId);
       api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
-    } else {
-      // Even without loaded messages, clear local unread state
-      useUnreadStore.getState().markRead(channelId, '');
     }
 
     if (activeServerId) {

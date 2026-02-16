@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
+import { useReactionStore } from './reactionStore';
 import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload } from '../lib/contracts/ws-events';
 
 export interface Message {
@@ -42,7 +43,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
   loadMessages: async (channelId) => {
     const data = await api.get<MessagePayload[]>(`/channels/${channelId}/messages?limit=${PAGE_SIZE}`);
     // API returns newest-first; reverse for chronological (oldest-first) order
-    const messages: Message[] = data.reverse().map((m) => ({
+    const reversed = data.reverse();
+    const messages: Message[] = reversed.map((m) => ({
       id: m.id,
       content: m.content,
       authorId: m.authorId,
@@ -52,6 +54,18 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
     }));
+    // Hydrate reaction store from history-loaded reactions
+    const reactionStore = useReactionStore.getState();
+    for (const m of reversed) {
+      if (m.reactions && m.reactions.length > 0) {
+        reactionStore.setReactions(m.id, m.reactions.map((r) => ({
+          emoji: r.emoji,
+          count: r.count,
+          me: r.me,
+          userIds: [],
+        })));
+      }
+    }
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
       const nextHasMore = new Map(state.hasMore);
@@ -71,7 +85,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       `/channels/${channelId}/messages?limit=${PAGE_SIZE}&before=${oldestId}`
     );
     // API returns newest-first; reverse to chronological order then prepend
-    const older: Message[] = data.reverse().map((m) => ({
+    const reversed = data.reverse();
+    const older: Message[] = reversed.map((m) => ({
       id: m.id,
       content: m.content,
       authorId: m.authorId,
@@ -81,6 +96,18 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
     }));
+    // Hydrate reaction store from history-loaded reactions
+    const reactionStore = useReactionStore.getState();
+    for (const m of reversed) {
+      if (m.reactions && m.reactions.length > 0) {
+        reactionStore.setReactions(m.id, m.reactions.map((r) => ({
+          emoji: r.emoji,
+          count: r.count,
+          me: r.me,
+          userIds: [],
+        })));
+      }
+    }
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
       const nextHasMore = new Map(state.hasMore);
