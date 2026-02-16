@@ -11,11 +11,13 @@ interface ServerState {
   clear: () => void;
 }
 
-export const useServerStore = create<ServerState>((set) => ({
+export const useServerStore = create<ServerState>((set, get) => ({
   servers: new Map(),
   activeServerId: null,
   setServers: (servers) => set({ servers: new Map(servers.map(s => [s.id, s])) }),
-  setActiveServer: (id) => set({ activeServerId: id }),
+  setActiveServer: (id) => {
+    if (get().activeServerId !== id) set({ activeServerId: id });
+  },
   addServer: (server) => set((state) => {
     const next = new Map(state.servers);
     next.set(server.id, server);

@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useTypingStore } from '../../stores/typingStore';
 
 interface TypingIndicatorProps {
@@ -12,7 +13,11 @@ function formatTypingText(usernames: string[]): string {
 }
 
 export function TypingIndicator({ channelId }: TypingIndicatorProps) {
-  const typingUsers = useTypingStore((s) => s.getTypingUsers(channelId));
+  const channelTyping = useTypingStore((s) => s.byChannel.get(channelId));
+  const typingUsers = useMemo(
+    () => (channelTyping ? Array.from(channelTyping.values()).map((e) => e.username) : []),
+    [channelTyping],
+  );
 
   return (
     <div className="h-6 px-4 flex items-center text-xs text-text-muted shrink-0">

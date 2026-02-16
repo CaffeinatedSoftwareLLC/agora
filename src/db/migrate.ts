@@ -45,7 +45,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
 // Allow running directly: tsx src/db/migrate.ts
 if (require.main === module) {
     const pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
+        connectionString: process.env.DATABASE_URL ?? 'postgres://accord:accord@localhost:5432/accord_test',
     });
 
     runMigrations(pool)

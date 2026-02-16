@@ -1,8 +1,14 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useState, useCallback } from 'react';
 import { useInstance } from '../../hooks/useInstance';
+import { SetupWizard } from './SetupWizard';
 
 export function InstanceGuard({ children }: { children: ReactNode }) {
   const { data, loading, error } = useInstance();
+  const [setupDone, setSetupDone] = useState(false);
+
+  const handleSetupComplete = useCallback(() => {
+    setSetupDone(true);
+  }, []);
 
   if (loading) {
     return (
@@ -27,15 +33,8 @@ export function InstanceGuard({ children }: { children: ReactNode }) {
     );
   }
 
-  if (!data?.initialized) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <h1 className="text-xl text-text-muted mb-2">Not Set Up</h1>
-          <p className="text-text-dim">This instance has not been set up yet.</p>
-        </div>
-      </div>
-    );
+  if (!data?.initialized && !setupDone) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
   return <>{children}</>;

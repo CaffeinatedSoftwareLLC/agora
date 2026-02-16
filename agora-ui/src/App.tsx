@@ -12,10 +12,12 @@ import { UserTable } from './features/admin/UserTable';
 import { InstanceSettings } from './features/admin/InstanceSettings';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 
 export default function App() {
   return (
     <BrowserRouter>
+      <ErrorBoundary>
       <InstanceGuard>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -45,6 +47,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </InstanceGuard>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

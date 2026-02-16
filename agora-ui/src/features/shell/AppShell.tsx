@@ -19,34 +19,33 @@ export function AppShell() {
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
 
-  // Sync URL params to store on mount and URL changes
-  useEffect(() => {
-    const serverId = params['*']?.split('/')[0] || null;
-    const channelId = params['*']?.split('/')[1] || null;
+  // Extract stable primitives from params
+  const urlServerId = params['*']?.split('/')[0] || null;
+  const urlChannelId = params['*']?.split('/')[1] || null;
 
-    if (serverId && serverId !== 'dms') {
-      setActiveServer(serverId);
-      setActiveChannel(channelId);
-    } else if (serverId === 'dms') {
+  // Sync URL → store (only when URL segments change)
+  useEffect(() => {
+    if (urlServerId && urlServerId !== 'dms') {
+      setActiveServer(urlServerId);
+      setActiveChannel(urlChannelId);
+    } else if (urlServerId === 'dms') {
       setActiveServer(null);
-      setActiveChannel(channelId);
+      setActiveChannel(urlChannelId);
     } else {
+      setActiveServer(null);
       setActiveChannel(null);
     }
-  }, [params, setActiveServer, setActiveChannel]);
+  }, [urlServerId, urlChannelId, setActiveServer, setActiveChannel]);
 
-  // Auto-select first channel when server changes and no channel is in URL
+  // Auto-select first channel when navigating to a server without a channel
   useEffect(() => {
-    if (!activeServerId || !servers.has(activeServerId)) return;
-    const channelId = params['*']?.split('/')[1];
-    if (channelId) return; // Already have a channel in URL
-
-    const serverChannels = byServer(activeServerId).filter(c => c.channelType === 3);
+    if (!urlServerId || urlServerId === 'dms' || urlChannelId) return;
+    const serverChannels = byServer(urlServerId).filter(c => c.channelType === 3);
     if (serverChannels.length > 0) {
-      setActiveChannel(serverChannels[0].id);
-      navigate(`/app/${activeServerId}/${serverChannels[0].id}`, { replace: true });
+      navigate(`/app/${urlServerId}/${serverChannels[0].id}`, { replace: true });
     }
-  }, [activeServerId, servers, byServer, setActiveChannel, navigate, params]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlServerId, urlChannelId, servers.size]);
 
   // Show skeleton/loading while connecting
   if (connectionStatus === 'disconnected' && servers.size === 0) {

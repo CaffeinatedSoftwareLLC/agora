@@ -18,7 +18,9 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
   channels: new Map(),
   activeChannelId: null,
   setChannels: (channels) => set({ channels: new Map(channels.map(c => [c.id, c])) }),
-  setActiveChannel: (id) => set({ activeChannelId: id }),
+  setActiveChannel: (id) => {
+    if (get().activeChannelId !== id) set({ activeChannelId: id });
+  },
   addChannel: (channel) => set((state) => {
     const next = new Map(state.channels);
     next.set(channel.id, channel);
