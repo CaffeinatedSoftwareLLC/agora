@@ -6,6 +6,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { usePalette } from '../../theme';
 import { TabBar } from './TabBar';
 import { HomeView } from './HomeView';
+import { DMSidebar } from './DMSidebar';
 import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
@@ -85,8 +86,9 @@ export function AppShell() {
     );
   }
 
-  // Is the user on the home view?
-  const isHome = !urlServerId || urlServerId === 'dms';
+  // Layout states: home, DM conversation, or server
+  const isHome = !urlServerId || (urlServerId === 'dms' && !urlChannelId);
+  const isDm = urlServerId === 'dms' && !!urlChannelId;
 
   return (
     <div
@@ -98,6 +100,11 @@ export function AppShell() {
       {/* Main content area */}
       {isHome ? (
         <HomeView />
+      ) : isDm ? (
+        <div className="flex flex-1 min-h-0">
+          <DMSidebar />
+          <ArcContentArea />
+        </div>
       ) : (
         <div className="flex flex-1 min-h-0">
           <ArcChannelSidebar />

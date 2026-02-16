@@ -32,6 +32,7 @@ export function ArcContentArea() {
   const toggleMembers = useUIStore(s => s.toggleMembers);
 
   const accentColor = activeServer ? serverColor(activeServer.name) : P.accent;
+  const isDm = !activeServerId && !!channel;
 
   // ── Empty state (no channel selected) ──────────────────────────────────
   if (!activeChannelId || !channel) {
@@ -64,15 +65,19 @@ export function ArcContentArea() {
         }}
       >
         <span className="text-lg font-light" style={{ color: accentColor }}>
-          #
+          {isDm ? '@' : '#'}
         </span>
         <h1 className="text-[14px] font-semibold" style={{ color: P.text }}>
           {channel.name}
         </h1>
-        <div className="h-4 w-px" style={{ background: P.border }} />
-        <p className="text-[12px] truncate" style={{ color: P.dim }}>
-          Channel description
-        </p>
+        {!isDm && (
+          <>
+            <div className="h-4 w-px" style={{ background: P.border }} />
+            <p className="text-[12px] truncate" style={{ color: P.dim }}>
+              Channel description
+            </p>
+          </>
+        )}
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-1 shrink-0">
