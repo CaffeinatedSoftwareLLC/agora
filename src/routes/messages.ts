@@ -1,29 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
-
-async function checkChannelMembership(db: any, channelId: string, userId: string): Promise<boolean> {
-    const channel = await db.query(
-        'SELECT id, channel_type, server_id FROM channels WHERE id = $1',
-        [channelId]
-    );
-    if (channel.rows.length === 0) return false;
-
-    const ch = channel.rows[0];
-
-    if (ch.server_id) {
-        const member = await db.query(
-            'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
-            [ch.server_id, userId]
-        );
-        return member.rows.length > 0;
-    } else {
-        const member = await db.query(
-            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
-            [channelId, userId]
-        );
-        return member.rows.length > 0;
-    }
-}
+import { checkChannelMembership } from './shared';
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -51,11 +28,95 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const messageId = generateUlid();
 
+        // Parse @mentions from content
+        const mentionMatches: string[] = content.match(/@(\w+)/g) || [];
+        const mentionedUsernames = [...new Set(mentionMatches.map((m) => m.slice(1)))];
+        const mentionsEveryone = mentionedUsernames.includes('everyone');
+
         await db.query(
-            `INSERT INTO messages (id, channel_id, author_id, content)
-             VALUES ($1, $2, $3, $4)`,
-            [messageId, channelId, userId, content]
+            `INSERT INTO messages (id, channel_id, author_id, content, mentions_everyone)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [messageId, channelId, userId, content, mentionsEveryone]
         );
+
+        // Look up the channel to determine how to check membership for mentioned users
+        const channelRow = await db.query(
+            'SELECT server_id FROM channels WHERE id = $1',
+            [channelId]
+        );
+        const serverId = channelRow.rows[0]?.server_id?.trim() || null;
+
+        // Resolve mentioned usernames to user IDs (batch query)
+        const nonEveryoneUsernames = mentionedUsernames.filter((u: string) => u !== 'everyone');
+        let mentionedUserIds: string[] = [];
+
+        if (nonEveryoneUsernames.length > 0) {
+            // Find users that exist AND are members of this channel/server
+            let validMentions;
+            if (serverId) {
+                validMentions = await db.query(
+                    `SELECT u.id FROM users u
+                     INNER JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2
+                     WHERE u.username = ANY($1)`,
+                    [nonEveryoneUsernames, serverId]
+                );
+            } else {
+                validMentions = await db.query(
+                    `SELECT u.id FROM users u
+                     INNER JOIN channel_members cm ON cm.user_id = u.id AND cm.channel_id = $2
+                     WHERE u.username = ANY($1)`,
+                    [nonEveryoneUsernames, channelId]
+                );
+            }
+
+            mentionedUserIds = validMentions.rows.map((r: any) => r.id.trim());
+
+            // Insert into message_mentions
+            if (mentionedUserIds.length > 0) {
+                const mentionValues = mentionedUserIds
+                    .map((_: string, i: number) => `($1, $${i + 2})`)
+                    .join(', ');
+                await db.query(
+                    `INSERT INTO message_mentions (message_id, user_id) VALUES ${mentionValues}
+                     ON CONFLICT DO NOTHING`,
+                    [messageId, ...mentionedUserIds]
+                );
+
+                // Increment mention_count for each directly mentioned user
+                await db.query(
+                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
+                     SELECT $1, unnest($2::char(26)[]), 1
+                     ON CONFLICT (channel_id, user_id) DO UPDATE
+                        SET mention_count = channel_unreads.mention_count + 1`,
+                    [channelId, mentionedUserIds]
+                );
+            }
+        }
+
+        // If @everyone, increment mention_count for all channel members except the author
+        if (mentionsEveryone) {
+            if (serverId) {
+                await db.query(
+                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
+                     SELECT $1, sm.user_id, 1
+                     FROM server_members sm
+                     WHERE sm.server_id = $2 AND sm.user_id != $3
+                     ON CONFLICT (channel_id, user_id) DO UPDATE
+                        SET mention_count = channel_unreads.mention_count + 1`,
+                    [channelId, serverId, userId]
+                );
+            } else {
+                await db.query(
+                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
+                     SELECT $1, cm.user_id, 1
+                     FROM channel_members cm
+                     WHERE cm.channel_id = $1 AND cm.user_id != $2
+                     ON CONFLICT (channel_id, user_id) DO UPDATE
+                        SET mention_count = channel_unreads.mention_count + 1`,
+                    [channelId, userId]
+                );
+            }
+        }
 
         const userRow = await db.query(
             'SELECT username FROM users WHERE id = $1',
@@ -69,6 +130,8 @@ export async function messageRoutes(app: FastifyInstance) {
             authorUsername: userRow.rows[0].username,
             channelId: channelId.trim(),
             createdAt: new Date().toISOString(),
+            mentions: mentionedUserIds,
+            mentionsEveryone,
         };
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
@@ -123,6 +186,30 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const result = await db.query(query, params);
 
+        // Fetch reactions for all returned messages in one query
+        const messageIds = result.rows.map((r: any) => r.id);
+        let reactionsMap: Record<string, { emoji: string; count: number; me: boolean }[]> = {};
+        if (messageIds.length > 0) {
+            const rxResult = await db.query(
+                `SELECT message_id, emoji_unicode,
+                        count(*)::int AS count,
+                        bool_or(user_id = $2) AS me
+                 FROM message_reactions
+                 WHERE message_id = ANY($1)
+                 GROUP BY message_id, emoji_unicode`,
+                [messageIds, userId]
+            );
+            for (const row of rxResult.rows) {
+                const mid = row.message_id.trim();
+                if (!reactionsMap[mid]) reactionsMap[mid] = [];
+                reactionsMap[mid].push({
+                    emoji: row.emoji_unicode,
+                    count: row.count,
+                    me: row.me,
+                });
+            }
+        }
+
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -132,6 +219,7 @@ export async function messageRoutes(app: FastifyInstance) {
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,
             createdAt: row.created_at,
+            reactions: reactionsMap[row.id.trim()] || [],
         }));
 
         return reply.status(200).send(messages);

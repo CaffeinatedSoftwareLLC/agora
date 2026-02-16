@@ -234,6 +234,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
                   isOwn={msg.authorId === userId}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
+                  channelId={channelId}
                 />
               </div>
             );

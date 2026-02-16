@@ -6,6 +6,39 @@ import { UserPanel } from './UserPanel';
 import { InviteModal } from '../servers/InviteModal';
 import { CreateChannelModal } from '../servers/CreateChannelModal';
 import { NewDMModal } from '../servers/NewDMModal';
+import { UnreadBadge } from '../live/UnreadBadge';
+import { useUnreadStore } from '../../stores/unreadStore';
+import { useMessageStore } from '../../stores/messageStore';
+import { api } from '../../lib/api';
+
+function ChannelButton({ channelId, channelName, isActive, prefix, onClick }: {
+  channelId: string;
+  channelName: string;
+  isActive: boolean;
+  prefix: string;
+  onClick: () => void;
+}) {
+  const unread = useUnreadStore(s => s.getUnread(channelId));
+  const hasUnread = unread !== null && (unread.unreadCount > 0 || unread.mentionCount > 0);
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full px-3 py-1.5 flex items-center gap-2 text-sm rounded-md mx-1 ${
+        isActive
+          ? 'bg-surface-hover text-text font-medium'
+          : hasUnread
+            ? 'text-text font-semibold hover:bg-surface-hover/50'
+            : 'text-text-muted hover:text-text hover:bg-surface-hover/50'
+      }`}
+      style={{ width: 'calc(100% - 8px)' }}
+    >
+      <span className="text-text-dim">{prefix}</span>
+      <span className="truncate">{channelName}</span>
+      <UnreadBadge channelId={channelId} />
+    </button>
+  );
+}
 
 export function ChannelSidebar() {
   const activeServerId = useServerStore(s => s.activeServerId);
@@ -27,6 +60,19 @@ export function ChannelSidebar() {
 
   const handleChannelClick = (channelId: string) => {
     setActiveChannel(channelId);
+
+    // Mark channel as read
+    const messageStore = useMessageStore.getState();
+    const messages = messageStore.byChannel.get(channelId);
+    if (messages && messages.length > 0) {
+      const lastMsgId = messages[messages.length - 1].id;
+      useUnreadStore.getState().markRead(channelId, lastMsgId);
+      api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
+    } else {
+      // Even without loaded messages, clear local unread state
+      useUnreadStore.getState().markRead(channelId, '');
+    }
+
     if (activeServerId) {
       navigate(`/app/${activeServerId}/${channelId}`);
     } else {
@@ -89,19 +135,14 @@ export function ChannelSidebar() {
           </div>
         ) : (
           channels.map((channel) => (
-            <button
+            <ChannelButton
               key={channel.id}
+              channelId={channel.id}
+              channelName={channel.name}
+              isActive={activeChannelId === channel.id}
+              prefix={activeServerId ? '#' : '@'}
               onClick={() => handleChannelClick(channel.id)}
-              className={`w-full px-3 py-1.5 flex items-center gap-2 text-sm rounded-md mx-1 ${
-                activeChannelId === channel.id
-                  ? 'bg-surface-hover text-text font-medium'
-                  : 'text-text-muted hover:text-text hover:bg-surface-hover/50'
-              }`}
-              style={{ width: 'calc(100% - 8px)' }}
-            >
-              <span className="text-text-dim">{activeServerId ? '#' : '@'}</span>
-              <span className="truncate">{channel.name}</span>
-            </button>
+            />
           ))
         )}
       </div>

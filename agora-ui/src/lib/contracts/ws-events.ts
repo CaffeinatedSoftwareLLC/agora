@@ -4,6 +4,8 @@ export interface ReadyPayload {
   user: { id: string; username: string };
   servers: Server[];
   channels: Channel[];
+  unreads: { channelId: string; lastReadId: string | null; mentionCount: number }[];
+  onlineUserIds: string[];
 }
 
 export interface MessagePayload {
@@ -33,4 +35,29 @@ export interface MessageDeletePayload {
 export interface ServerJoinPayload {
   server: Server;
   channels: Channel[];
+}
+
+export interface TypingPayload {
+  channelId: string;
+  userId: string;
+  username: string;
+}
+
+export interface PresenceUpdatePayload {
+  userId: string;
+  status: 'online' | 'idle' | 'offline';
+}
+
+export interface ReactionAddPayload {
+  messageId: string;
+  channelId: string;
+  userId: string;
+  emoji: string;
+}
+
+export interface ReactionRemovePayload {
+  messageId: string;
+  channelId: string;
+  userId: string;
+  emoji: string;
 }

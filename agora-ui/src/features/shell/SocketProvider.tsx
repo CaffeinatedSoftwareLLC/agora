@@ -5,8 +5,22 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
-import type { ReadyPayload, MessagePayload, MessageUpdatePayload, MessageDeletePayload, ServerJoinPayload } from '../../lib/contracts/ws-events';
 import { useMessageStore } from '../../stores/messageStore';
+import { useTypingStore } from '../../stores/typingStore';
+import { usePresenceStore } from '../../stores/presenceStore';
+import { useUnreadStore } from '../../stores/unreadStore';
+import { useReactionStore } from '../../stores/reactionStore';
+import type {
+  ReadyPayload,
+  MessagePayload,
+  MessageUpdatePayload,
+  MessageDeletePayload,
+  ServerJoinPayload,
+  TypingPayload,
+  PresenceUpdatePayload,
+  ReactionAddPayload,
+  ReactionRemovePayload,
+} from '../../lib/contracts/ws-events';
 import { SocketContext } from './SocketContext';
 
 export function SocketProvider({ children }: { children: ReactNode }) {
@@ -40,10 +54,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setServers(data.servers);
       setChannels(data.channels);
       useMessageStore.getState().clear();
+      useTypingStore.getState().clear();
+      useReactionStore.getState().clear();
+      useUnreadStore.getState().setUnreads(data.unreads || []);
+      usePresenceStore.getState().setOnlineUsers(data.onlineUserIds || []);
     });
 
     s.on('Message', (data: MessagePayload) => {
       useMessageStore.getState().addMessage(data);
+      const activeChannelId = useChannelStore.getState().activeChannelId;
+      if (data.channelId !== activeChannelId) {
+        useUnreadStore.getState().incrementUnread(data.channelId);
+      }
     });
 
     s.on('MessageUpdate', (data: MessageUpdatePayload) => {
@@ -57,6 +79,24 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('ServerJoin', (data: ServerJoinPayload) => {
       useServerStore.getState().addServer(data.server);
       useChannelStore.getState().addChannels(data.channels);
+    });
+
+    s.on('Typing', (data: TypingPayload) => {
+      useTypingStore.getState().addTyping(data.channelId, data.userId, data.username);
+    });
+
+    s.on('PresenceUpdate', (data: PresenceUpdatePayload) => {
+      usePresenceStore.getState().setPresence(data.userId, data.status);
+    });
+
+    s.on('ReactionAdd', (data: ReactionAddPayload) => {
+      const me = data.userId === useAuthStore.getState().user?.id;
+      useReactionStore.getState().addReaction(data.messageId, data.emoji, data.userId, me);
+    });
+
+    s.on('ReactionRemove', (data: ReactionRemovePayload) => {
+      const me = data.userId === useAuthStore.getState().user?.id;
+      useReactionStore.getState().removeReaction(data.messageId, data.emoji, data.userId, me);
     });
 
     s.on('connect_error', (err) => {

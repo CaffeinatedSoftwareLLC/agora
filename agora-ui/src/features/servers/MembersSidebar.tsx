@@ -4,6 +4,7 @@ import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { dmApi } from '../../lib/api';
 import { useNavigate } from 'react-router-dom';
+import { PresenceDot } from '../live/PresenceDot';
 
 export function MembersSidebar() {
   const activeServerId = useServerStore(s => s.activeServerId);
@@ -50,8 +51,13 @@ export function MembersSidebar() {
             style={{ width: 'calc(100% - 8px)' }}
             title={`Message ${member.username}`}
           >
-            <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-white shrink-0">
-              {member.username[0].toUpperCase()}
+            <div className="relative shrink-0">
+              <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-white">
+                {member.username[0].toUpperCase()}
+              </div>
+              <div className="absolute -bottom-0.5 -right-0.5">
+                <PresenceDot userId={member.id} size="sm" />
+              </div>
             </div>
             <div className="flex flex-col min-w-0">
               <span className="truncate">{member.username}</span>

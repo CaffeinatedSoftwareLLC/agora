@@ -6,6 +6,10 @@ import { useChannelStore } from './channelStore';
 import { useMemberStore } from './memberStore';
 import { useMessageStore } from './messageStore';
 import { useUIStore } from './uiStore';
+import { useTypingStore } from './typingStore';
+import { usePresenceStore } from './presenceStore';
+import { useUnreadStore } from './unreadStore';
+import { useReactionStore } from './reactionStore';
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'pending';
 
@@ -61,6 +65,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     useChannelStore.getState().clear();
     useMemberStore.getState().clear();
     useMessageStore.getState().clear();
+    useTypingStore.getState().clear();
+    usePresenceStore.getState().clear();
+    useUnreadStore.getState().clear();
+    useReactionStore.getState().clear();
     useUIStore.getState().setConnectionStatus('disconnected');
   },
 }));

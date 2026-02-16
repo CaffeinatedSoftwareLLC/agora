@@ -3,6 +3,7 @@ import { useServerStore } from '../../stores/serverStore';
 import { useUIStore } from '../../stores/uiStore';
 import { MessageList } from '../messages/MessageList';
 import { MessageInput } from '../messages/MessageInput';
+import { TypingIndicator } from '../live/TypingIndicator';
 
 export function ContentArea() {
   const activeChannelId = useChannelStore(s => s.activeChannelId);
@@ -49,6 +50,9 @@ export function ContentArea() {
 
       {/* Messages */}
       <MessageList channelId={activeChannelId} channelName={channel.name} />
+
+      {/* Typing indicator */}
+      <TypingIndicator channelId={activeChannelId} />
 
       {/* Input */}
       <MessageInput key={activeChannelId} channelId={activeChannelId} />

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Message } from '../../stores/messageStore';
 import { MessageActions } from './MessageActions';
 import { EditMessageInput } from './EditMessageInput';
+import { ReactionBar } from '../live/ReactionBar';
 
 interface MessageItemProps {
   message: Message;
@@ -9,6 +10,7 @@ interface MessageItemProps {
   isOwn: boolean;
   onEdit: (msgId: string, content: string) => void;
   onDelete: (msgId: string) => void;
+  channelId?: string;
 }
 
 function formatTimestamp(dateStr: string): string {
@@ -31,7 +33,7 @@ function formatTimestamp(dateStr: string): string {
   });
 }
 
-export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete }: MessageItemProps) {
+export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, channelId }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
 
   // Deleted message tombstone
@@ -59,6 +61,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete }: Mes
         ) : (
           <div className="text-sm text-text">{message.content}</div>
         )}
+        {channelId && <ReactionBar messageId={message.id} channelId={channelId} />}
         {message.failed && (
           <span className="text-xs text-danger ml-2">Failed to send</span>
         )}
@@ -89,6 +92,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete }: Mes
         ) : (
           <div className="text-sm text-text">{message.content}</div>
         )}
+        {channelId && <ReactionBar messageId={message.id} channelId={channelId} />}
         {message.failed && (
           <span className="text-xs text-danger">Failed to send</span>
         )}

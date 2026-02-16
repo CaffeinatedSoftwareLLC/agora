@@ -2,6 +2,9 @@ import { FastifyInstance } from 'fastify';
 import { Server } from 'socket.io';
 import { verifyToken } from './auth/tokens';
 
+// In-memory presence: userId → Set of socket IDs (supports multiple tabs/devices)
+export const onlineUsers = new Map<string, Set<string>>();
+
 export async function setupGateway(app: FastifyInstance): Promise<Server> {
     const io = new Server(app.server, {
         transports: ['websocket'],
@@ -113,10 +116,40 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             );
             channels = channels.concat(dmChannelsResult.rows);
 
+            // Fetch unread state for all user's channels
+            const unreadResult = await db.query(
+                `SELECT cu.channel_id, cu.last_read_id, cu.mention_count
+                 FROM channel_unreads cu
+                 WHERE cu.user_id = $1`,
+                [userId]
+            );
+
+            // Collect co-member user IDs (users in the same servers) for online filtering
+            let coMemberIds: Set<string> = new Set();
+            if (serverIds.length > 0) {
+                const coMembersResult = await db.query(
+                    `SELECT DISTINCT user_id FROM server_members WHERE server_id = ANY($1)`,
+                    [serverIds]
+                );
+                for (const row of coMembersResult.rows) {
+                    coMemberIds.add(row.user_id.trim());
+                }
+            }
+
             // Join socket rooms for all channels
+            const channelRoomIds = channels.map((c: any) => c.id.trim());
             for (const ch of channels) {
                 socket.join(`channel:${ch.id.trim()}`);
             }
+
+            // Store channel rooms on socket for disconnect cleanup
+            (socket as any).channelRooms = channelRoomIds;
+            (socket as any).trimmedUserId = userId.trim();
+
+            // Filter online users to only those in shared servers
+            const onlineUserIds = Array.from(onlineUsers.keys()).filter(
+                (uid) => coMemberIds.has(uid)
+            );
 
             // Emit Ready
             socket.emit('Ready', {
@@ -135,6 +168,65 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     channelType: c.channel_type,
                     serverId: c.server_id ? c.server_id.trim() : null,
                 })),
+                unreads: unreadResult.rows.map((r: any) => ({
+                    channelId: r.channel_id.trim(),
+                    lastReadId: r.last_read_id ? r.last_read_id.trim() : null,
+                    mentionCount: r.mention_count,
+                })),
+                onlineUserIds,
+            });
+
+            // --- Presence: track this connection ---
+            const trimmedUserId = userId.trim();
+            const wasOnline = onlineUsers.has(trimmedUserId);
+            const sockets = onlineUsers.get(trimmedUserId) || new Set<string>();
+            sockets.add(socket.id);
+            onlineUsers.set(trimmedUserId, sockets);
+
+            if (!wasOnline) {
+                // Broadcast PresenceUpdate 'online' to all channel rooms
+                for (const roomId of channelRoomIds) {
+                    socket.to(`channel:${roomId}`).emit('PresenceUpdate', {
+                        userId: trimmedUserId,
+                        status: 'online',
+                    });
+                }
+            }
+
+            // --- Typing handler ---
+            socket.on('Typing', (data: { channelId: string }) => {
+                if (!data || !data.channelId) return;
+                const channelId = data.channelId.trim();
+                socket.to(`channel:${channelId}`).emit('Typing', {
+                    channelId,
+                    userId: trimmedUserId,
+                    username: user.username,
+                });
+            });
+
+            // --- Disconnect handler ---
+            socket.on('disconnect', () => {
+                try {
+                    const sockets = onlineUsers.get(trimmedUserId);
+                    if (sockets) {
+                        sockets.delete(socket.id);
+                        if (sockets.size === 0) {
+                            onlineUsers.delete(trimmedUserId);
+                            // Broadcast PresenceUpdate 'offline' to all their channel rooms
+                            const rooms = (socket as any).channelRooms as string[] | undefined;
+                            if (rooms) {
+                                for (const roomId of rooms) {
+                                    socket.to(`channel:${roomId}`).emit('PresenceUpdate', {
+                                        userId: trimmedUserId,
+                                        status: 'offline',
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    // Presence is best-effort — don't crash on disconnect cleanup
+                }
             });
 
         } catch {

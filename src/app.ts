@@ -5,6 +5,8 @@ import { authRoutes } from './routes/auth';
 import { serverRoutes } from './routes/servers';
 import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
+import { reactionRoutes } from './routes/reactions';
+import { unreadRoutes } from './routes/unreads';
 import { dmRoutes } from './routes/dms';
 import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
@@ -144,6 +146,8 @@ export async function buildApp(opts?: {
     await app.register(serverRoutes);
     await app.register(channelRoutes);
     await app.register(messageRoutes);
+    await app.register(reactionRoutes);
+    await app.register(unreadRoutes);
     await app.register(dmRoutes);
     await app.register(adminRoutes);
     await app.register(userRoutes);
