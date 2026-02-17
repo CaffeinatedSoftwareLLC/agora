@@ -24,15 +24,15 @@ export function ArcContentArea() {
   const channels = useChannelStore(s => s.channels);
   const channel = activeChannelId ? channels.get(activeChannelId) : null;
 
-  const activeServerId = useServerStore(s => s.activeServerId);
+  const instanceServerId = useServerStore(s => s.instanceServerId);
   const servers = useServerStore(s => s.servers);
-  const activeServer = activeServerId ? servers.get(activeServerId) : null;
+  const instanceServer = instanceServerId ? servers.get(instanceServerId) : null;
 
   const membersOpen = useUIStore(s => s.membersOpen);
   const toggleMembers = useUIStore(s => s.toggleMembers);
 
-  const accentColor = activeServer ? serverColor(activeServer.name) : P.accent;
-  const isDm = !activeServerId && !!channel;
+  const accentColor = instanceServer ? serverColor(instanceServer.name) : P.accent;
+  const isDm = !!channel && channel.serverId === null;
 
   // ── Empty state (no channel selected) ──────────────────────────────────
   if (!activeChannelId || !channel) {
@@ -122,7 +122,7 @@ export function ArcContentArea() {
           </button>
 
           {/* Members toggle button */}
-          {activeServerId && (
+          {!isDm && (
             <button
               onClick={toggleMembers}
               className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"

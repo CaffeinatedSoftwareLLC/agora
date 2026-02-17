@@ -102,6 +102,20 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const row = updateRes.rows[0];
 
+        // Auto-join the approved user to the instance server
+        const serverIdResult = await db.query(
+            "SELECT value FROM instance_config WHERE key = 'instance_server_id'"
+        );
+        const instanceServerId = serverIdResult.rows[0]?.value;
+        if (instanceServerId) {
+            await db.query(
+                `INSERT INTO server_members (server_id, user_id)
+                 VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING`,
+                [instanceServerId, targetId]
+            );
+        }
+
         await logAdminAction(db, userId, 'user_approve', 'user', targetId, {
             before: { accountStatus: 'pending' },
             after: { accountStatus: 'active' },

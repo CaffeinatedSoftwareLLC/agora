@@ -177,7 +177,7 @@ export function ArcChannelSidebar() {
   const P = usePalette();
   const navigate = useNavigate();
 
-  const activeServerId = useServerStore(s => s.activeServerId);
+  const instanceServerId = useServerStore(s => s.instanceServerId);
   const servers = useServerStore(s => s.servers);
   const byServer = useChannelStore(s => s.byServer);
   const activeChannelId = useChannelStore(s => s.activeChannelId);
@@ -189,24 +189,24 @@ export function ArcChannelSidebar() {
   const [showInvite, setShowInvite] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
 
-  const server = activeServerId ? servers.get(activeServerId) : null;
+  const server = instanceServerId ? servers.get(instanceServerId) : null;
   const accentColor = server ? serverColor(server.name) : P.accent;
   const accentRgb = hexToRgb(accentColor);
 
   // Filter to text channels only (channelType 3)
   const textChannels = useMemo(() => {
-    if (!activeServerId) return [];
-    return byServer(activeServerId).filter(c => c.channelType === 3);
-  }, [activeServerId, byServer]);
+    if (!instanceServerId) return [];
+    return byServer(instanceServerId).filter(c => c.channelType === 3);
+  }, [instanceServerId, byServer]);
 
   // Count online members for this server
   const onlineCount = useMemo(() => {
-    if (!activeServerId) return 0;
-    const members = useMemberStore.getState().byServer.get(activeServerId);
+    if (!instanceServerId) return 0;
+    const members = useMemberStore.getState().byServer.get(instanceServerId);
     if (!members) return 0;
     const presenceStore = usePresenceStore.getState();
     return members.filter(m => presenceStore.getStatus(m.id) === 'online').length;
-  }, [activeServerId]);
+  }, [instanceServerId]);
 
   const toggleCategory = (name: string) => {
     setExpandedCategories((prev) => {
@@ -231,10 +231,10 @@ export function ArcChannelSidebar() {
       api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
     }
 
-    navigate(`/app/${activeServerId}/${channelId}`);
+    navigate(`/app/${channelId}`);
   };
 
-  if (!activeServerId || !server) return null;
+  if (!instanceServerId || !server) return null;
 
   // Server initial for the gradient icon
   const serverInitial = server.name[0]?.toUpperCase() ?? '?';
@@ -310,7 +310,7 @@ export function ArcChannelSidebar() {
             <button
               className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
               style={{ color: P.dim }}
-              title="Server Options"
+              title="Options"
             >
               <svg
                 className="h-4 w-4"
@@ -355,12 +355,12 @@ export function ArcChannelSidebar() {
 
       {/* ── Modals ─────────────────────────────────────────────────────── */}
       <InviteModal
-        serverId={activeServerId}
+        serverId={instanceServerId}
         isOpen={showInvite}
         onClose={() => setShowInvite(false)}
       />
       <CreateChannelModal
-        serverId={activeServerId}
+        serverId={instanceServerId}
         isOpen={showCreateChannel}
         onClose={() => setShowCreateChannel(false)}
       />

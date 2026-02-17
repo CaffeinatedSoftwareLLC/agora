@@ -9,11 +9,6 @@ interface UIState {
   setPalette: (key: PaletteKey) => void;
   togglePalette: () => void;
 
-  // Arc V2: tab bar tracks which server tabs are open
-  openServerTabs: string[];
-  addServerTab: (serverId: string) => void;
-  removeServerTab: (serverId: string) => void;
-
   // Members sidebar
   membersOpen: boolean;
   toggleMembers: () => void;
@@ -32,10 +27,6 @@ const storedPalette = (typeof window !== 'undefined'
   ? localStorage.getItem('agora:palette') as PaletteKey | null
   : null) || 'aegean';
 
-const storedTabs = (typeof window !== 'undefined'
-  ? JSON.parse(localStorage.getItem('agora:openTabs') || '[]') as string[]
-  : []);
-
 export const useUIStore = create<UIState>((set) => ({
   paletteKey: storedPalette,
   setPalette: (key) => {
@@ -46,19 +37,6 @@ export const useUIStore = create<UIState>((set) => ({
     const next = s.paletteKey === 'aegean' ? 'terracotta' : 'aegean';
     localStorage.setItem('agora:palette', next);
     return { paletteKey: next as PaletteKey };
-  }),
-
-  openServerTabs: storedTabs,
-  addServerTab: (serverId) => set((s) => {
-    if (s.openServerTabs.includes(serverId)) return s;
-    const next = [...s.openServerTabs, serverId];
-    localStorage.setItem('agora:openTabs', JSON.stringify(next));
-    return { openServerTabs: next };
-  }),
-  removeServerTab: (serverId) => set((s) => {
-    const next = s.openServerTabs.filter(id => id !== serverId);
-    localStorage.setItem('agora:openTabs', JSON.stringify(next));
-    return { openServerTabs: next };
   }),
 
   membersOpen: false,

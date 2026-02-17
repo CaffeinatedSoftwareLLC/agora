@@ -1,83 +1,58 @@
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useUIStore } from '../../stores/uiStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useUnreadStore } from '../../stores/unreadStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { usePalette, hexToRgb } from '../../theme';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/** Deterministic color from server name (no color property on the Server contract). */
-function serverColor(name: string): string {
-  const colors = [
-    '#0FA3B1', '#4ADE80', '#FBBF24', '#C77DFF', '#F97316',
-    '#EF4444', '#3B82F6', '#EC4899', '#8B5CF6', '#10B981',
-  ];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return colors[Math.abs(hash) % colors.length];
-}
-
-/** Sum unread + mention counts for every channel belonging to `serverId`. */
-function getServerUnread(serverId: string, byChannel: Map<string, { unreadCount: number; mentionCount: number }>): number {
-  const channels = useChannelStore.getState().byServer(serverId);
-  let total = 0;
-  for (const ch of channels) {
-    const entry = byChannel.get(ch.id);
-    if (entry) total += entry.unreadCount + entry.mentionCount;
-  }
-  return total;
-}
-
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function TabBar() {
   const navigate = useNavigate();
+  const location = useLocation();
   const P = usePalette();
 
   // UI store
   const paletteKey = useUIStore(s => s.paletteKey);
   const togglePalette = useUIStore(s => s.togglePalette);
-  const openServerTabs = useUIStore(s => s.openServerTabs);
 
   // Server store
   const servers = useServerStore(s => s.servers);
-  const activeServerId = useServerStore(s => s.activeServerId);
+  const instanceServerId = useServerStore(s => s.instanceServerId);
 
   // Unread store
   const byChannel = useUnreadStore(s => s.byChannel);
 
-  // Derived: active server object (if any)
-  const activeServer = activeServerId ? servers.get(activeServerId) ?? null : null;
-  const isHome = activeServerId === null;
+  // Derived
+  const instanceServer = instanceServerId ? servers.get(instanceServerId) ?? null : null;
+  const instanceName = instanceServer?.name ?? 'Agora';
+  const isDmView = location.pathname.startsWith('/app/dms');
 
-  // Derived: accent color for the active server tab
-  const accentColor = activeServer ? serverColor(activeServer.name) : P.accent;
-  const accentRgb = hexToRgb(accentColor);
-
-  // Derived: total unread across ALL servers (shown on the Home badge)
-  const totalUnread = useMemo(() => {
-    let sum = 0;
-    for (const [sid] of servers) {
-      sum += getServerUnread(sid, byChannel);
+  // Derived: total unread across DM channels (shown on DMs button badge)
+  const dmUnread = useMemo(() => {
+    const dmChannels = useChannelStore.getState().dmChannels();
+    let total = 0;
+    for (const dm of dmChannels) {
+      const entry = byChannel.get(dm.id);
+      if (entry) total += entry.unreadCount + entry.mentionCount;
     }
-    return sum;
-  }, [servers, byChannel]);
+    return total;
+  }, [byChannel]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  const handleHomeClick = () => {
-    useServerStore.getState().setActiveServer(null);
+  const handleChannelsClick = () => {
     navigate('/app');
   };
 
-  const handleServerTabClick = (serverId: string) => {
-    useServerStore.getState().setActiveServer(serverId);
-    navigate(`/app/${serverId}`);
+  const handleDmsClick = () => {
+    navigate('/app/dms');
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  const accentRgb = hexToRgb(P.accent);
 
   return (
     <>
@@ -85,44 +60,34 @@ export function TabBar() {
       <div
         className="flex items-center gap-1 px-3 pt-2 pb-0 shrink-0"
         style={{
-          background: isHome
-            ? `linear-gradient(180deg, rgba(${hexToRgb(P.accent)}, 0.06) 0%, transparent 100%)`
-            : `linear-gradient(180deg, rgba(${accentRgb}, 0.08) 0%, transparent 100%)`,
+          background: `linear-gradient(180deg, rgba(${accentRgb}, 0.06) 0%, transparent 100%)`,
         }}
       >
-        {/* ── Home tab ─────────────────────────────────────────────────────── */}
+        {/* ── Instance name / Channels tab ────────────────────────────────── */}
         <button
-          onClick={handleHomeClick}
+          onClick={handleChannelsClick}
           className="relative flex items-center gap-2 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0"
           style={
-            isHome
+            !isDmView
               ? {
-                  background: `linear-gradient(180deg, rgba(${hexToRgb(P.accent)}, 0.15) 0%, rgba(${hexToRgb(P.accent)}, 0.04) 100%)`,
-                  boxShadow: `0 1px 0 0 rgba(${hexToRgb(P.accent)}, 0.3), inset 0 1px 0 0 rgba(${hexToRgb(P.accent)}, 0.12)`,
+                  background: `linear-gradient(180deg, rgba(${accentRgb}, 0.15) 0%, rgba(${accentRgb}, 0.04) 100%)`,
+                  boxShadow: `0 1px 0 0 rgba(${accentRgb}, 0.3), inset 0 1px 0 0 rgba(${accentRgb}, 0.12)`,
                   color: P.text,
                 }
               : { color: P.dim }
           }
         >
-          {/* House icon */}
+          {/* Hash icon */}
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-            <polyline points="9 22 9 12 15 12 15 22" />
+            <line x1="4" y1="9" x2="20" y2="9" />
+            <line x1="4" y1="15" x2="20" y2="15" />
+            <line x1="10" y1="3" x2="8" y2="21" />
+            <line x1="16" y1="3" x2="14" y2="21" />
           </svg>
-          Home
-
-          {/* Total unread badge (visible only when Home is NOT active) */}
-          {totalUnread > 0 && !isHome && (
-            <span
-              className="h-4 min-w-[16px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-              style={{ background: P.danger, color: P.text }}
-            >
-              {totalUnread}
-            </span>
-          )}
+          {instanceName}
 
           {/* Active underline */}
-          {isHome && (
+          {!isDmView && (
             <span
               className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
               style={{ background: `linear-gradient(90deg, transparent, ${P.accent}, transparent)` }}
@@ -133,64 +98,47 @@ export function TabBar() {
         {/* Separator */}
         <div className="w-px h-5 mx-1" style={{ background: `${P.border}88` }} />
 
-        {/* ── Server tabs ──────────────────────────────────────────────────── */}
-        <div className="flex items-end gap-0.5 flex-1 min-w-0 overflow-x-auto">
-          {openServerTabs.map(serverId => {
-            const server = servers.get(serverId);
-            if (!server) return null;
-
-            const isActive = activeServerId === serverId;
-            const color = serverColor(server.name);
-            const sRgb = hexToRgb(color);
-            const unread = getServerUnread(serverId, byChannel);
-
-            return (
-              <button
-                key={serverId}
-                onClick={() => handleServerTabClick(serverId)}
-                className={`relative flex items-center gap-2 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0 ${
-                  isActive ? '' : 'hover:text-[#A09AAB]'
-                }`}
-                style={
-                  isActive
-                    ? {
-                        background: `linear-gradient(180deg, rgba(${sRgb}, 0.18) 0%, rgba(${sRgb}, 0.05) 100%)`,
-                        boxShadow: `0 1px 0 0 rgba(${sRgb}, 0.3), inset 0 1px 0 0 rgba(${sRgb}, 0.12)`,
-                        color: P.text,
-                      }
-                    : { color: P.dim }
+        {/* ── DMs button ──────────────────────────────────────────────────── */}
+        <button
+          onClick={handleDmsClick}
+          className="relative flex items-center gap-2 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0"
+          style={
+            isDmView
+              ? {
+                  background: `linear-gradient(180deg, rgba(${accentRgb}, 0.15) 0%, rgba(${accentRgb}, 0.04) 100%)`,
+                  boxShadow: `0 1px 0 0 rgba(${accentRgb}, 0.3), inset 0 1px 0 0 rgba(${accentRgb}, 0.12)`,
+                  color: P.text,
                 }
-              >
-                {/* Colored dot */}
-                <span
-                  className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all ${isActive ? 'scale-100' : 'scale-75 opacity-50'}`}
-                  style={{ background: color, boxShadow: isActive ? `0 0 8px ${color}60` : 'none' }}
-                />
+              : { color: P.dim }
+          }
+        >
+          {/* Chat bubble icon */}
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg>
+          Messages
 
-                {/* Server name (truncated) */}
-                <span className="truncate max-w-[120px]">{server.name}</span>
+          {/* DM unread badge */}
+          {dmUnread > 0 && !isDmView && (
+            <span
+              className="h-4 min-w-[16px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
+              style={{ background: P.danger, color: P.text }}
+            >
+              {dmUnread}
+            </span>
+          )}
 
-                {/* Unread badge (visible only when NOT active) */}
-                {unread > 0 && !isActive && (
-                  <span
-                    className="ml-0.5 h-4 min-w-[16px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-                    style={{ background: color, color: P.bg }}
-                  >
-                    {unread}
-                  </span>
-                )}
+          {/* Active underline */}
+          {isDmView && (
+            <span
+              className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
+              style={{ background: `linear-gradient(90deg, transparent, ${P.accent}, transparent)` }}
+            />
+          )}
+        </button>
 
-                {/* Active underline */}
-                {isActive && (
-                  <span
-                    className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
-                    style={{ background: `linear-gradient(90deg, transparent, ${color}, transparent)` }}
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {/* Spacer */}
+        <div className="flex-1" />
 
         {/* ── Right controls ───────────────────────────────────────────────── */}
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -232,9 +180,7 @@ export function TabBar() {
       <div
         className="h-px shrink-0"
         style={{
-          background: isHome
-            ? `linear-gradient(90deg, transparent, rgba(${hexToRgb(P.accent)}, 0.2), transparent)`
-            : `linear-gradient(90deg, transparent, rgba(${accentRgb}, 0.25), transparent)`,
+          background: `linear-gradient(90deg, transparent, rgba(${accentRgb}, 0.2), transparent)`,
         }}
       />
     </>

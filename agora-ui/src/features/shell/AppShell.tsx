@@ -5,7 +5,6 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import { usePalette } from '../../theme';
 import { TabBar } from './TabBar';
-import { HomeView } from './HomeView';
 import { DMSidebar } from './DMSidebar';
 import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
@@ -16,44 +15,33 @@ export function AppShell() {
   const navigate = useNavigate();
   const P = usePalette();
   const servers = useServerStore(s => s.servers);
-  const activeServerId = useServerStore(s => s.activeServerId);
-  const setActiveServer = useServerStore(s => s.setActiveServer);
-  const byServer = useChannelStore(s => s.byServer);
+  const instanceServerId = useServerStore(s => s.instanceServerId);
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
+  const byServer = useChannelStore(s => s.byServer);
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
-  const addServerTab = useUIStore(s => s.addServerTab);
 
-  // Extract stable primitives from params
-  const urlServerId = params['*']?.split('/')[0] || null;
-  const urlChannelId = params['*']?.split('/')[1] || null;
+  // URL: /app/dms/{channelId} or /app/{channelId} or /app
+  const urlSegment1 = params['*']?.split('/')[0] || null;
+  const urlSegment2 = params['*']?.split('/')[1] || null;
 
-  // Sync URL → store (only when URL segments change)
+  const isDmRoute = urlSegment1 === 'dms';
+  const urlChannelId = isDmRoute ? urlSegment2 : urlSegment1;
+
+  // Sync URL → store
   useEffect(() => {
-    if (urlServerId && urlServerId !== 'dms') {
-      setActiveServer(urlServerId);
-      setActiveChannel(urlChannelId);
-      // Auto-add server to tab bar when navigating to it
-      addServerTab(urlServerId);
-    } else if (urlServerId === 'dms') {
-      setActiveServer(null);
-      setActiveChannel(urlChannelId);
-    } else {
-      // Home view: /app with no subpath
-      setActiveServer(null);
-      setActiveChannel(null);
-    }
-  }, [urlServerId, urlChannelId, setActiveServer, setActiveChannel, addServerTab]);
+    setActiveChannel(urlChannelId);
+  }, [urlChannelId, setActiveChannel]);
 
-  // Auto-select first channel when navigating to a server without a channel
+  // Auto-navigate to first text channel when at /app with no channel
   useEffect(() => {
-    if (!urlServerId || urlServerId === 'dms' || urlChannelId) return;
-    const serverChannels = byServer(urlServerId).filter(c => c.channelType === 3);
+    if (urlSegment1 || !instanceServerId) return;
+    const serverChannels = byServer(instanceServerId).filter(c => c.channelType === 3);
     if (serverChannels.length > 0) {
-      navigate(`/app/${urlServerId}/${serverChannels[0].id}`, { replace: true });
+      navigate(`/app/${serverChannels[0].id}`, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlServerId, urlChannelId, servers.size]);
+  }, [urlSegment1, instanceServerId, servers.size]);
 
   // Show skeleton while connecting
   if (connectionStatus === 'disconnected' && servers.size === 0) {
@@ -86,9 +74,9 @@ export function AppShell() {
     );
   }
 
-  // Layout states: home, DM conversation, or server
-  const isHome = !urlServerId || (urlServerId === 'dms' && !urlChannelId);
-  const isDm = urlServerId === 'dms' && !!urlChannelId;
+  // Layout: DM view or channel view
+  const isDm = isDmRoute;
+  const showDmSidebar = isDmRoute;
 
   return (
     <div
@@ -98,20 +86,11 @@ export function AppShell() {
       <TabBar />
 
       {/* Main content area */}
-      {isHome ? (
-        <HomeView />
-      ) : isDm ? (
-        <div className="flex flex-1 min-h-0">
-          <DMSidebar />
-          <ArcContentArea />
-        </div>
-      ) : (
-        <div className="flex flex-1 min-h-0">
-          <ArcChannelSidebar />
-          <ArcContentArea />
-          {activeServerId && membersOpen && <MembersSidebar />}
-        </div>
-      )}
+      <div className="flex flex-1 min-h-0">
+        {showDmSidebar ? <DMSidebar /> : <ArcChannelSidebar />}
+        <ArcContentArea />
+        {!isDm && membersOpen && <MembersSidebar />}
+      </div>
     </div>
   );
 }

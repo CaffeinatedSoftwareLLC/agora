@@ -13,7 +13,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     <div className="flex h-screen">
       <aside className="w-56 bg-surface border-r border-border flex flex-col">
         <div className="p-4 border-b border-border">
-          <h1 className="text-lg font-bold">Admin</h1>
+          <h1 className="text-lg font-bold">Instance Settings</h1>
           <Link to="/app" className="text-text-muted text-sm hover:text-text">
             Back to chat
           </Link>

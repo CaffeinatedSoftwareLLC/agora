@@ -13,7 +13,7 @@ export async function instanceRoutes(app: FastifyInstance) {
         const db = (request as any).dbClient;
 
         const result = await db.query(
-            "SELECT key, value FROM instance_config WHERE key IN ('setup_complete', 'registration_policy', 'instance_name')"
+            "SELECT key, value FROM instance_config WHERE key IN ('setup_complete', 'registration_policy', 'instance_name', 'instance_server_id')"
         );
 
         const config: Record<string, string> = {};
@@ -25,6 +25,7 @@ export async function instanceRoutes(app: FastifyInstance) {
             initialized: config.setup_complete === 'true',
             registrationPolicy: config.registration_policy ?? 'open',
             instanceName: config.instance_name ?? 'Agora',
+            instanceServerId: config.instance_server_id ?? null,
         };
     });
 
@@ -129,9 +130,10 @@ export async function instanceRoutes(app: FastifyInstance) {
                 `INSERT INTO instance_config (key, value) VALUES
                     ('setup_complete', 'true'),
                     ('instance_name', $1),
-                    ('registration_policy', $2)
+                    ('registration_policy', $2),
+                    ('instance_server_id', $3)
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-                [instanceName ?? 'Agora', registrationPolicy ?? 'open']
+                [instanceName ?? 'Agora', registrationPolicy ?? 'open', serverId]
             );
 
             await db.query('RELEASE SAVEPOINT instance_setup');

@@ -79,6 +79,22 @@ export async function authRoutes(app: FastifyInstance) {
             throw err;
         }
 
+        // For open policy: auto-join the instance server
+        if (policy === 'open') {
+            const serverIdResult = await db.query(
+                "SELECT value FROM instance_config WHERE key = 'instance_server_id'"
+            );
+            const instanceServerId = serverIdResult.rows[0]?.value;
+            if (instanceServerId) {
+                await db.query(
+                    `INSERT INTO server_members (server_id, user_id)
+                     VALUES ($1, $2)
+                     ON CONFLICT DO NOTHING`,
+                    [instanceServerId, id]
+                );
+            }
+        }
+
         // For invite_only: add user to the invite's server and increment use_count
         if (policy === 'invite_only' && invite) {
             const serverId = invite.server_id;
@@ -119,7 +135,7 @@ export async function authRoutes(app: FastifyInstance) {
         const db = (request as any).dbClient;
 
         const result = await db.query(
-            'SELECT id, username, password_hash, account_status FROM users WHERE email = $1',
+            'SELECT id, username, password_hash, account_status, is_instance_admin FROM users WHERE email = $1',
             [email]
         );
 
@@ -145,7 +161,7 @@ export async function authRoutes(app: FastifyInstance) {
         const token = generateToken({ userId: user.id.trim() }, (app as any).jwtSecret);
 
         return reply.status(200).send({
-            user: { id: user.id.trim(), username: user.username },
+            user: { id: user.id.trim(), username: user.username, isInstanceAdmin: user.is_instance_admin },
             accessToken: token,
         });
     });

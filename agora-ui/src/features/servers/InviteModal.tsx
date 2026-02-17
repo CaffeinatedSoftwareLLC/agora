@@ -59,7 +59,7 @@ export function InviteModal({ serverId, isOpen, onClose }: InviteModalProps) {
       ) : (
         <>
           <p className="text-text-muted text-sm mb-3">
-            Share this invite code with others to let them join your server.
+            Share this invite code with others to let them join this community.
           </p>
           <div className="flex gap-2">
             <div className="flex-1 bg-bg border border-border rounded px-3 py-2 text-text font-mono text-lg select-all">

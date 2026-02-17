@@ -7,8 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { PresenceDot } from '../live/PresenceDot';
 
 export function MembersSidebar() {
-  const activeServerId = useServerStore(s => s.activeServerId);
-  const setActiveServer = useServerStore(s => s.setActiveServer);
+  const instanceServerId = useServerStore(s => s.instanceServerId);
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
   const addChannel = useChannelStore(s => s.addChannel);
   const byServer = useMemberStore(s => s.byServer);
@@ -16,20 +15,19 @@ export function MembersSidebar() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (activeServerId) {
-      loadMembers(activeServerId);
+    if (instanceServerId) {
+      loadMembers(instanceServerId);
     }
-  }, [activeServerId, loadMembers]);
+  }, [instanceServerId, loadMembers]);
 
-  if (!activeServerId) return null;
+  if (!instanceServerId) return null;
 
-  const members = byServer.get(activeServerId) || [];
+  const members = byServer.get(instanceServerId) || [];
 
   const handleMemberClick = async (memberId: string, username: string) => {
     try {
       const dm = await dmApi.createDM(memberId);
       addChannel({ id: dm.id, name: username, channelType: dm.channelType, serverId: null });
-      setActiveServer(null);
       setActiveChannel(dm.id);
       navigate(`/app/dms/${dm.id}`);
     } catch {

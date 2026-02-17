@@ -11,7 +11,12 @@ export default defineConfig({
       '/servers': 'http://localhost:3000',
       '/channels': 'http://localhost:3000',
       '/invites': 'http://localhost:3000',
-      '/admin': 'http://localhost:3000',
+      '/admin/stats': 'http://localhost:3000',
+      '/admin/pending-users': 'http://localhost:3000',
+      '/admin/approve-user': 'http://localhost:3000',
+      '/admin/reject-user': 'http://localhost:3000',
+      '/admin/users': 'http://localhost:3000',
+      '/admin/instance': 'http://localhost:3000',
       '/users': 'http://localhost:3000',
       '/health': 'http://localhost:3000',
       '/socket.io': {

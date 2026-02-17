@@ -15,7 +15,6 @@ import type {
   MessagePayload,
   MessageUpdatePayload,
   MessageDeletePayload,
-  ServerJoinPayload,
   TypingPayload,
   PresenceUpdatePayload,
   ReactionAddPayload,
@@ -83,11 +82,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     s.on('MessageDelete', (data: MessageDeletePayload) => {
       useMessageStore.getState().removeMessage(data);
-    });
-
-    s.on('ServerJoin', (data: ServerJoinPayload) => {
-      useServerStore.getState().addServer(data.server);
-      useChannelStore.getState().addChannels(data.channels);
     });
 
     s.on('DMCreated', (data: DMCreatedPayload) => {

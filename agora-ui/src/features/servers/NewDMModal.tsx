@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Modal } from '../../components/ui/Modal';
 import { UserSearch } from './UserSearch';
 import { dmApi, ApiError } from '../../lib/api';
-import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useNavigate } from 'react-router-dom';
 import type { UserSearchResult } from '../../lib/contracts/server';
@@ -15,7 +14,6 @@ interface NewDMModalProps {
 export function NewDMModal({ isOpen, onClose }: NewDMModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const setActiveServer = useServerStore(s => s.setActiveServer);
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
   const addChannel = useChannelStore(s => s.addChannel);
   const navigate = useNavigate();
@@ -26,7 +24,6 @@ export function NewDMModal({ isOpen, onClose }: NewDMModalProps) {
     try {
       const dm = await dmApi.createDM(user.id);
       addChannel({ id: dm.id, name: user.username, channelType: dm.channelType, serverId: null });
-      setActiveServer(null);
       setActiveChannel(dm.id);
       navigate(`/app/dms/${dm.id}`);
       onClose();

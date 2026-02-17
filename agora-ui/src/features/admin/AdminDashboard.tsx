@@ -19,8 +19,8 @@ export function AdminDashboard() {
 
   if (!stats) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[1, 2, 3].map((i) => (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {[1, 2].map((i) => (
           <div key={i} className="bg-surface rounded-lg border border-border p-4 animate-pulse">
             <div className="h-4 bg-surface-hover rounded w-24 mb-2" />
             <div className="h-8 bg-surface-hover rounded w-16" />
@@ -33,7 +33,7 @@ export function AdminDashboard() {
   return (
     <div>
       <h2 className="text-xl font-bold mb-4">Dashboard</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <StatCard label="Total Users" value={stats.totalUsers} />
         <div className="bg-surface rounded-lg border border-border p-4">
           <p className="text-text-muted text-sm">Pending Approvals</p>
@@ -46,7 +46,6 @@ export function AdminDashboard() {
             </Link>
           )}
         </div>
-        <StatCard label="Servers" value={stats.serverCount} />
       </div>
     </div>
   );
