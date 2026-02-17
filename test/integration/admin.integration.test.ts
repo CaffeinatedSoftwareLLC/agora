@@ -503,6 +503,39 @@ describe('Phase 2 — Admin Dashboard', () => {
             expect(res.body.ipBanned).toBe(true);
             expect(res.body.user.accountStatus).toBe('pending');
         });
+
+        test('re-banning an IP after expiration makes ban active again', async () => {
+            const admin = await insertUser('active', 'rebanadmin', true);
+            const target = await insertUser('active', 'rebantarget');
+
+            // Give target a recorded IP
+            await ctx.db.query(
+                "UPDATE users SET last_ip_hmac = 'rebanhash', last_ip_encrypted = 'rebanenc' WHERE id = $1",
+                [target.userId]
+            );
+
+            // Insert an expired IP ban directly
+            const { generateUlid: genId } = await import('../../src/utils/ulid');
+            await ctx.db.query(
+                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, banned_by, expires_at)
+                 VALUES ($1, $2, $3, $4, NOW() - INTERVAL '1 hour')`,
+                [genId(), 'rebanhash', 'rebanenc', admin.userId]
+            );
+
+            // Re-ban via admin endpoint — should upsert and clear expires_at
+            const res = await ctx.request
+                .post(`/admin/users/${target.userId}/ip-ban`)
+                .set(admin.auth);
+            expect(res.status).toBe(200);
+            expect(res.body.ipBanned).toBe(true);
+
+            // Verify the ban is now active (expires_at cleared)
+            const ban = await ctx.db.query(
+                "SELECT expires_at FROM ip_bans WHERE ip_hmac = 'rebanhash'"
+            );
+            expect(ban.rows).toHaveLength(1);
+            expect(ban.rows[0].expires_at).toBeNull();
+        });
     });
 
     // ─── GET /admin/ip-bans ───

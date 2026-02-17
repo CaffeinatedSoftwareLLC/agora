@@ -315,15 +315,18 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const targetUser = checkRes.rows[0];
 
-        if (!targetUser.last_ip_hmac) {
+        if (!targetUser.last_ip_hmac || !targetUser.last_ip_encrypted) {
             return reply.status(400).send({ error: 'no_ip_recorded' });
         }
 
-        // Insert IP ban
+        // Upsert IP ban — clears expires_at so expired bans become active again
         await db.query(
             `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, reason, banned_by)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (ip_hmac) DO NOTHING`,
+             ON CONFLICT (ip_hmac) DO UPDATE SET
+                 expires_at = NULL,
+                 ip_encrypted = EXCLUDED.ip_encrypted,
+                 banned_by = EXCLUDED.banned_by`,
             [generateUlid(), targetUser.last_ip_hmac, targetUser.last_ip_encrypted, null, userId]
         );
 
