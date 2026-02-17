@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { api, ApiError } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
-import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import type { AdminUser, PaginatedUsers } from '../../lib/contracts/admin';
 
 type StatusFilter = 'all' | 'active' | 'pending' | 'suspended';
@@ -16,8 +15,10 @@ export function UserTable() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [suspendTarget, setSuspendTarget] = useState<AdminUser | null>(null);
-  const [suspendLoading, setSuspendLoading] = useState(false);
+  const [banTarget, setBanTarget] = useState<AdminUser | null>(null);
+  const [banLoading, setBanLoading] = useState(false);
+  const [banIp, setBanIp] = useState(false);
+  const [banResult, setBanResult] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const searchRef = useRef(search);
   searchRef.current = search;
@@ -57,21 +58,35 @@ export function UserTable() {
     setPage(1);
   }
 
-  async function suspendUser() {
-    if (!suspendTarget) return;
-    setSuspendLoading(true);
+  async function banUser() {
+    if (!banTarget) return;
+    setBanLoading(true);
     try {
-      await api.post(`/admin/users/${suspendTarget.id}/suspend`);
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === suspendTarget.id ? { ...u, accountStatus: 'suspended' as const } : u
-        )
-      );
-      setSuspendTarget(null);
+      if (banIp) {
+        const res = await api.post<{ user: AdminUser; accountBanned: boolean; ipBanned: boolean }>(
+          `/admin/users/${banTarget.id}/ip-ban`
+        );
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === banTarget.id ? { ...u, accountStatus: res.user.accountStatus } : u
+          )
+        );
+        setBanResult(res.accountBanned ? 'IP banned and account banned' : 'IP banned');
+      } else {
+        await api.post(`/admin/users/${banTarget.id}/ban`);
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === banTarget.id ? { ...u, accountStatus: 'suspended' as const } : u
+          )
+        );
+        setBanResult('Account banned');
+      }
+      setBanTarget(null);
+      setBanIp(false);
     } catch (err) {
-      setError(err instanceof ApiError ? err.code : 'Failed to suspend user');
+      setError(err instanceof ApiError ? err.code : 'Failed to ban user');
     } finally {
-      setSuspendLoading(false);
+      setBanLoading(false);
     }
   }
 
@@ -90,7 +105,7 @@ export function UserTable() {
           <option value="all">All</option>
           <option value="active">Active</option>
           <option value="pending">Pending</option>
-          <option value="suspended">Suspended</option>
+          <option value="suspended">Banned</option>
         </select>
         <input
           type="text"
@@ -102,6 +117,12 @@ export function UserTable() {
       </div>
 
       {error && <p className="text-danger text-sm mb-4">{error}</p>}
+      {banResult && (
+        <p className="text-online text-sm mb-4">
+          {banResult}
+          <button className="ml-2 underline text-text-muted" onClick={() => setBanResult('')}>dismiss</button>
+        </p>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -151,9 +172,9 @@ export function UserTable() {
                       <Button
                         variant="danger"
                         className="text-xs px-2 py-1"
-                        onClick={() => setSuspendTarget(user)}
+                        onClick={() => { setBanTarget(user); setBanIp(false); setBanResult(''); }}
                       >
-                        Suspend
+                        Ban
                       </Button>
                     )}
                   </td>
@@ -186,15 +207,13 @@ export function UserTable() {
         </div>
       )}
 
-      <ConfirmDialog
-        open={suspendTarget !== null}
-        title="Suspend user"
-        message={`Are you sure you want to suspend ${suspendTarget?.username}?`}
-        confirmLabel="Suspend"
-        variant="danger"
-        onConfirm={suspendUser}
-        onCancel={() => setSuspendTarget(null)}
-        loading={suspendLoading}
+      <BanDialog
+        target={banTarget}
+        banIp={banIp}
+        onBanIpChange={setBanIp}
+        onConfirm={banUser}
+        onCancel={() => { setBanTarget(null); setBanIp(false); }}
+        loading={banLoading}
       />
     </div>
   );
@@ -207,9 +226,63 @@ function StatusChip({ status }: { status: AdminUser['accountStatus'] }) {
     suspended: 'text-danger bg-danger/10',
   };
 
+  const labels: Record<AdminUser['accountStatus'], string> = {
+    active: 'active',
+    pending: 'pending',
+    suspended: 'Banned',
+  };
+
   return (
     <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles[status]}`}>
-      {status}
+      {labels[status]}
     </span>
+  );
+}
+
+function BanDialog({
+  target,
+  banIp,
+  onBanIpChange,
+  onConfirm,
+  onCancel,
+  loading,
+}: {
+  target: AdminUser | null;
+  banIp: boolean;
+  onBanIpChange: (v: boolean) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading: boolean;
+}) {
+  if (!target) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+      <div className="bg-surface rounded-lg border border-border p-6 max-w-md w-full mx-4">
+        <h2 className="text-lg font-bold">Ban user</h2>
+        <p className="text-text-muted text-sm mt-2">
+          Are you sure you want to ban {target.username}?
+        </p>
+        {target.lastIp && (
+          <label className="flex items-center gap-2 mt-4 text-sm text-text-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={banIp}
+              onChange={(e) => onBanIpChange(e.target.checked)}
+              className="rounded border-border"
+            />
+            Also ban IP address ({target.lastIp})
+          </label>
+        )}
+        <div className="flex justify-end gap-2 mt-6">
+          <Button variant="secondary" onClick={onCancel} disabled={loading}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={onConfirm} loading={loading}>
+            Ban
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

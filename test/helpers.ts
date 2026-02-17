@@ -11,6 +11,7 @@ export async function setupTestApp() {
         jwtSecret: 'test-secret-do-not-use-in-prod',
         dbUrl: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL
             ?? 'postgres://accord:accord@localhost:5432/accord_test',
+        rateLimit: false,
     });
     await app.ready();
     return {
@@ -91,7 +92,7 @@ export async function joinViaInvite(
 
 // ─── Database cleanup for test isolation ───
 export async function cleanDatabase(db: any) {
-    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, message_reactions, message_mentions, channel_unreads, instance_config, audit_log CASCADE');
+    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, message_reactions, message_mentions, channel_unreads, instance_config, audit_log, ip_bans CASCADE');
     // Re-seed instance_config so existing tests see an initialized instance
     await db.query(
         `INSERT INTO instance_config (key, value) VALUES

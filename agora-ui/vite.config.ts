@@ -16,6 +16,7 @@ export default defineConfig({
       '/admin/approve-user': 'http://localhost:3000',
       '/admin/reject-user': 'http://localhost:3000',
       '/admin/users': 'http://localhost:3000',
+      '/admin/ip-bans': 'http://localhost:3000',
       '/admin/instance': 'http://localhost:3000',
       '/users': 'http://localhost:3000',
       '/health': 'http://localhost:3000',

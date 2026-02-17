@@ -109,7 +109,7 @@ describe('WebSocket Gateway', () => {
 
         // Admin suspends target via REST
         const res = await ctx.request
-            .post(`/admin/users/${target.userId}/suspend`)
+            .post(`/admin/users/${target.userId}/ban`)
             .set(admin.auth);
         expect(res.status).toBe(200);
 

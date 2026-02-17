@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { requireInstanceAdmin } from '../auth/middleware';
 import { generateUlid } from '../utils/ulid';
+import { hmacIp, encryptIp, decryptIp } from '../auth/crypto';
 
 async function logAdminAction(
     db: any,
@@ -196,9 +197,11 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+        const ipKey = (app as any).ipEncryptionKey as Buffer;
+
         const [usersRes, countRes] = await Promise.all([
             db.query(
-                `SELECT id, username, email, account_status, is_instance_admin, created_at
+                `SELECT id, username, email, account_status, is_instance_admin, created_at, last_ip_encrypted
                  FROM users ${whereClause}
                  ORDER BY created_at ASC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
                 [...params, limit, offset]
@@ -216,25 +219,22 @@ export async function adminRoutes(app: FastifyInstance) {
             accountStatus: row.account_status,
             isInstanceAdmin: row.is_instance_admin,
             createdAt: row.created_at,
+            lastIp: row.last_ip_encrypted ? decryptIp(row.last_ip_encrypted, ipKey) : null,
         }));
 
         return reply.send({ users, total: countRes.rows[0].count, page, limit });
     });
 
-    // POST /admin/users/:id/suspend
-    app.post('/admin/users/:id/suspend', {
-        preHandler: [requireInstanceAdmin],
-    }, async (request, reply) => {
+    // POST /admin/users/:id/ban (and backwards-compat /suspend alias)
+    const banHandler = async (request: any, reply: any) => {
         const db = (request as any).dbClient;
         const userId = (request as any).userId;
         const { id: targetId } = request.params as any;
 
-        // Cannot suspend yourself
         if (userId === targetId) {
             return reply.status(400).send({ error: 'cannot_suspend_self' });
         }
 
-        // Pre-check for admin guard (must reject before attempting state transition)
         const checkRes = await db.query(
             'SELECT is_instance_admin FROM users WHERE id = $1',
             [targetId]
@@ -248,7 +248,6 @@ export async function adminRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'cannot_suspend_admin' });
         }
 
-        // Atomic: only transitions active → suspended
         const updateRes = await db.query(
             `UPDATE users SET account_status = 'suspended'
              WHERE id = $1 AND account_status = 'active'
@@ -262,12 +261,11 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const row = updateRes.rows[0];
 
-        await logAdminAction(db, userId, 'user_suspend', 'user', targetId, {
+        await logAdminAction(db, userId, 'user_ban', 'user', targetId, {
             before: { accountStatus: 'active' },
             after: { accountStatus: 'suspended' },
         });
 
-        // Defer WS disconnect until after transaction commits (see app.ts onResponse)
         (request as any).pendingDisconnects = [targetId];
 
         return reply.send({
@@ -278,6 +276,151 @@ export async function adminRoutes(app: FastifyInstance) {
                 accountStatus: 'suspended',
             },
         });
+    };
+
+    app.post('/admin/users/:id/ban', {
+        preHandler: [requireInstanceAdmin],
+    }, banHandler);
+
+    // Backwards-compat alias — TODO: remove /suspend alias after v0.1.0 release
+    app.post('/admin/users/:id/suspend', {
+        preHandler: [requireInstanceAdmin],
+    }, banHandler);
+
+    // POST /admin/users/:id/ip-ban
+    app.post('/admin/users/:id/ip-ban', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        const db = (request as any).dbClient;
+        const userId = (request as any).userId;
+        const ipKey = (app as any).ipEncryptionKey as Buffer;
+        const { id: targetId } = request.params as any;
+
+        if (userId === targetId) {
+            return reply.status(400).send({ error: 'cannot_suspend_self' });
+        }
+
+        const checkRes = await db.query(
+            'SELECT is_instance_admin, last_ip_hmac, last_ip_encrypted, account_status FROM users WHERE id = $1',
+            [targetId]
+        );
+
+        if (checkRes.rows.length === 0) {
+            return reply.status(404).send({ error: 'user_not_found' });
+        }
+
+        if (checkRes.rows[0].is_instance_admin) {
+            return reply.status(400).send({ error: 'cannot_suspend_admin' });
+        }
+
+        const targetUser = checkRes.rows[0];
+
+        if (!targetUser.last_ip_hmac) {
+            return reply.status(400).send({ error: 'no_ip_recorded' });
+        }
+
+        // Insert IP ban
+        await db.query(
+            `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, reason, banned_by)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (ip_hmac) DO NOTHING`,
+            [generateUlid(), targetUser.last_ip_hmac, targetUser.last_ip_encrypted, null, userId]
+        );
+
+        // Ban account if active
+        let accountBanned = false;
+        if (targetUser.account_status === 'active') {
+            await db.query(
+                `UPDATE users SET account_status = 'suspended' WHERE id = $1`,
+                [targetId]
+            );
+            accountBanned = true;
+            (request as any).pendingDisconnects = [targetId];
+        }
+
+        await logAdminAction(db, userId, 'user_ip_ban', 'user', targetId, {
+            ipBanned: true,
+            accountBanned,
+        });
+
+        // Fetch updated user for response
+        const userRes = await db.query(
+            'SELECT id, username, email, account_status FROM users WHERE id = $1',
+            [targetId]
+        );
+        const row = userRes.rows[0];
+
+        return reply.send({
+            user: {
+                id: row.id.trim(),
+                username: row.username,
+                email: row.email,
+                accountStatus: row.account_status,
+            },
+            accountBanned,
+            ipBanned: true,
+        });
+    });
+
+    // GET /admin/ip-bans
+    app.get('/admin/ip-bans', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            querystring: {
+                type: 'object',
+                properties: {
+                    page: { type: 'integer', minimum: 1, default: 1 },
+                    limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const db = (request as any).dbClient;
+        const ipKey = (app as any).ipEncryptionKey as Buffer;
+        const { page = 1, limit = 20 } = request.query as any;
+        const offset = (page - 1) * limit;
+
+        const [bansRes, countRes] = await Promise.all([
+            db.query(
+                `SELECT id, ip_encrypted, reason, banned_by, created_at, expires_at
+                 FROM ip_bans ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+                [limit, offset]
+            ),
+            db.query('SELECT COUNT(*)::int AS count FROM ip_bans'),
+        ]);
+
+        const bans = bansRes.rows.map((row: any) => ({
+            id: row.id.trim(),
+            ip: decryptIp(row.ip_encrypted, ipKey),
+            reason: row.reason,
+            bannedBy: row.banned_by?.trim() ?? null,
+            createdAt: row.created_at,
+            expiresAt: row.expires_at,
+        }));
+
+        return reply.send({ bans, total: countRes.rows[0].count, page, limit });
+    });
+
+    // DELETE /admin/ip-bans/:id
+    app.delete('/admin/ip-bans/:id', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        const db = (request as any).dbClient;
+        const userId = (request as any).userId;
+        const { id: banId } = request.params as any;
+
+        const deleteRes = await db.query(
+            'DELETE FROM ip_bans WHERE id = $1 RETURNING id',
+            [banId]
+        );
+
+        if (deleteRes.rowCount === 0) {
+            return reply.status(404).send({ error: 'ip_ban_not_found' });
+        }
+
+        await logAdminAction(db, userId, 'ip_ban_remove', 'ip_ban', banId);
+
+        return reply.send({ success: true });
     });
 
     // PATCH /admin/instance

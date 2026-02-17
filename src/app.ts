@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
 import { Pool } from 'pg';
+import rateLimit from '@fastify/rate-limit';
+import { config } from './config';
 import { instanceRoutes } from './routes/instance';
 import { authRoutes } from './routes/auth';
 import { serverRoutes } from './routes/servers';
@@ -18,8 +20,9 @@ export async function buildApp(opts?: {
     logger?: boolean;
     jwtSecret?: string;
     dbUrl?: string;
+    rateLimit?: boolean;
 }) {
-    const app = Fastify({ logger: opts?.logger ?? false });
+    const app = Fastify({ logger: opts?.logger ?? false, trustProxy: config.trustProxy });
 
     const db = new Pool({
         connectionString: opts?.dbUrl ?? process.env.DATABASE_URL,
@@ -30,11 +33,17 @@ export async function buildApp(opts?: {
     // Decorate app so routes can access db pool and jwtSecret
     app.decorate('db', db);
     app.decorate('jwtSecret', jwtSecret);
+    app.decorate('ipEncryptionKey', config.ipEncryptionKey);
 
     // Health endpoint (no auth required)
     app.get('/health', async () => {
         return { status: 'ok' };
     });
+
+    // Rate limiting (disabled in test mode)
+    if (opts?.rateLimit !== false) {
+        await app.register(rateLimit, { global: false });
+    }
 
     // ─── Per-request DB client lifecycle (RLS enforcement) ───
     app.addHook('onRequest', async (request) => {

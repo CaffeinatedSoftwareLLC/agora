@@ -13,6 +13,7 @@ export interface AdminUser {
   accountStatus: 'active' | 'pending' | 'suspended';
   isInstanceAdmin: boolean;
   createdAt: string;
+  lastIp?: string | null;
 }
 
 export interface PendingUser {
@@ -27,6 +28,21 @@ export interface PaginatedUsers<T = AdminUser> {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface IpBanResponse {
+  user: AdminUser;
+  accountBanned: boolean;
+  ipBanned: boolean;
+}
+
+export interface IpBan {
+  id: string;
+  ip: string | null;
+  reason: string | null;
+  bannedBy: string | null;
+  createdAt: string;
+  expiresAt: string | null;
 }
 
 export interface InstanceConfig {
