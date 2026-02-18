@@ -13,17 +13,13 @@ import { InstanceSettings } from './features/admin/InstanceSettings';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
-import { DesignShowcase } from './features/design-showcase/DesignShowcase';
 
 export default function App() {
   return (
     <BrowserRouter>
       <ErrorBoundary>
         <Routes>
-          {/* Design showcase — no auth or instance setup required */}
-          <Route path="/designs" element={<DesignShowcase />} />
-
-          {/* All other routes go through instance guard */}
+          {/* All routes go through instance guard */}
           <Route path="*" element={
             <InstanceGuard>
               <Routes>
