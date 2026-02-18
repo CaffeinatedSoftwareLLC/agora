@@ -35,6 +35,7 @@ function formatTimestamp(dateStr: string): string {
 
 export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, channelId }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
 
   // Deleted message tombstone
   if (message.deletedAt) {
@@ -51,7 +52,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   if (isGrouped) {
     return (
       <div className={`group relative px-4 py-0.5 pl-[68px] hover:bg-surface-hover/30 ${opacity}`}>
-        {isOwn && !editing && <MessageActions onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} />}
+        {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} />}
         {editing ? (
           <EditMessageInput
             message={message}
@@ -61,7 +62,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         ) : (
           <div className="text-sm text-text">{message.content}</div>
         )}
-        {channelId && <ReactionBar messageId={message.id} channelId={channelId} />}
+        {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
         {message.failed && (
           <span className="text-xs text-danger ml-2">Failed to send</span>
         )}
@@ -71,7 +72,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
 
   return (
     <div className={`group relative px-4 pt-3 pb-0.5 hover:bg-surface-hover/30 flex gap-3 ${opacity}`}>
-      {isOwn && !editing && <MessageActions onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} />}
+      {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} />}
       {/* Avatar */}
       <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-white shrink-0 mt-0.5">
         {(message.authorUsername || '?')[0].toUpperCase()}
@@ -92,7 +93,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         ) : (
           <div className="text-sm text-text">{message.content}</div>
         )}
-        {channelId && <ReactionBar messageId={message.id} channelId={channelId} />}
+        {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
         {message.failed && (
           <span className="text-xs text-danger">Failed to send</span>
         )}

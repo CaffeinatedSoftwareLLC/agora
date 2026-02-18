@@ -7,13 +7,17 @@ import { ReactionPicker } from './ReactionPicker';
 interface ReactionBarProps {
   messageId: string;
   channelId: string;
+  pickerOpen?: boolean;
+  onPickerClose?: () => void;
 }
 
-export function ReactionBar({ messageId, channelId }: ReactionBarProps) {
+export function ReactionBar({ messageId, channelId, pickerOpen, onPickerClose }: ReactionBarProps) {
   const rawReactions = useReactionStore((s) => s.byMessage.get(messageId));
   const reactions = useMemo(() => rawReactions ?? [], [rawReactions]);
   const userId = useAuthStore((s) => s.user?.id);
-  const [showPicker, setShowPicker] = useState(false);
+  const [internalPicker, setInternalPicker] = useState(false);
+  const showPicker = pickerOpen ?? internalPicker;
+  const closePicker = () => { setInternalPicker(false); onPickerClose?.(); };
 
   const handleToggle = async (emoji: string, isMe: boolean) => {
     if (!userId) return;
@@ -25,7 +29,7 @@ export function ReactionBar({ messageId, channelId }: ReactionBarProps) {
   };
 
   const handlePickerSelect = async (emoji: string) => {
-    setShowPicker(false);
+    closePicker();
     if (!userId) return;
     await api.put(`/channels/${channelId}/messages/${messageId}/reactions`, { emoji });
   };
@@ -50,7 +54,7 @@ export function ReactionBar({ messageId, channelId }: ReactionBarProps) {
       ))}
       <div className="relative">
         <button
-          onClick={() => setShowPicker(!showPicker)}
+          onClick={() => showPicker ? closePicker() : setInternalPicker(true)}
           className="w-6 h-6 flex items-center justify-center rounded border border-border text-text-dim hover:text-text hover:bg-surface-hover transition-colors text-xs"
           title="Add reaction"
         >
@@ -59,7 +63,7 @@ export function ReactionBar({ messageId, channelId }: ReactionBarProps) {
         {showPicker && (
           <ReactionPicker
             onSelect={handlePickerSelect}
-            onClose={() => setShowPicker(false)}
+            onClose={closePicker}
           />
         )}
       </div>
