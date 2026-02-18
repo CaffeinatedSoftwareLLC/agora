@@ -256,6 +256,7 @@ export function ArcChannelSidebar() {
   );
   const [showInvite, setShowInvite] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [createChannelDefaultType, setCreateChannelDefaultType] = useState<3 | 4>(3);
 
   const server = instanceServerId ? servers.get(instanceServerId) : null;
   const accentColor = server ? serverColor(server.name) : P.accent;
@@ -306,6 +307,11 @@ export function ArcChannelSidebar() {
     }
 
     navigate(`/app/${channelId}`);
+  };
+
+  const openCreateChannel = (defaultType: 3 | 4) => {
+    setCreateChannelDefaultType(defaultType);
+    setShowCreateChannel(true);
   };
 
   const handleVoiceChannelClick = (channelId: string, channelName: string) => {
@@ -411,48 +417,36 @@ export function ArcChannelSidebar() {
 
       {/* ── Channel categories ─────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto py-2">
-        {textChannels.length === 0 && voiceChannels.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm" style={{ color: P.dim }}>
-            No channels yet
-          </div>
-        ) : (
-          <>
-            {textChannels.length > 0 && (
-              <ChannelCategory
-                categoryName="Text Channels"
-                channels={textChannels}
-                isExpanded={expandedCategories.has('Text Channels')}
-                onToggle={() => toggleCategory('Text Channels')}
-                activeChannelId={activeChannelId}
-                accentColor={accentColor}
-                onChannelClick={handleChannelClick}
-                onCreateChannel={() => setShowCreateChannel(true)}
-              />
-            )}
-            {voiceChannels.length > 0 && (
-              <ChannelCategory
-                categoryName="Voice Channels"
-                channels={voiceChannels}
-                isExpanded={expandedCategories.has('Voice Channels')}
-                onToggle={() => toggleCategory('Voice Channels')}
-                activeChannelId={activeChannelId}
-                accentColor={accentColor}
-                onChannelClick={() => {}}
-                onCreateChannel={() => setShowCreateChannel(true)}
-                renderItem={(ch) => (
-                  <VoiceChannelItem
-                    key={ch.id}
-                    channelId={ch.id}
-                    channelName={ch.name}
-                    accentColor={accentColor}
-                    serverId={instanceServerId}
-                    onClick={() => handleVoiceChannelClick(ch.id, ch.name)}
-                  />
-                )}
-              />
-            )}
-          </>
-        )}
+        <ChannelCategory
+          categoryName="Text Channels"
+          channels={textChannels}
+          isExpanded={expandedCategories.has('Text Channels')}
+          onToggle={() => toggleCategory('Text Channels')}
+          activeChannelId={activeChannelId}
+          accentColor={accentColor}
+          onChannelClick={handleChannelClick}
+          onCreateChannel={() => openCreateChannel(3)}
+        />
+        <ChannelCategory
+          categoryName="Voice Channels"
+          channels={voiceChannels}
+          isExpanded={expandedCategories.has('Voice Channels')}
+          onToggle={() => toggleCategory('Voice Channels')}
+          activeChannelId={activeChannelId}
+          accentColor={accentColor}
+          onChannelClick={() => {}}
+          onCreateChannel={() => openCreateChannel(4)}
+          renderItem={(ch) => (
+            <VoiceChannelItem
+              key={ch.id}
+              channelId={ch.id}
+              channelName={ch.name}
+              accentColor={accentColor}
+              serverId={instanceServerId}
+              onClick={() => handleVoiceChannelClick(ch.id, ch.name)}
+            />
+          )}
+        />
       </div>
 
       {/* ── Voice control bar (when connected) ──────────────────────────── */}
@@ -471,6 +465,7 @@ export function ArcChannelSidebar() {
         serverId={instanceServerId}
         isOpen={showCreateChannel}
         onClose={() => setShowCreateChannel(false)}
+        defaultType={createChannelDefaultType}
       />
     </div>
   );
