@@ -1,8 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ReactionPickerProps {
   onSelect: (emoji: string) => void;
   onClose: () => void;
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
 const emojiCategories = [
@@ -37,8 +39,37 @@ const emojiCategories = [
   },
 ];
 
-export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
+const PICKER_HEIGHT = 320;
+
+export function ReactionPicker({ onSelect, onClose, anchorRef }: ReactionPickerProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  const updatePosition = useCallback(() => {
+    const anchor = anchorRef?.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const spaceAbove = rect.top;
+    const spaceBelow = window.innerHeight - rect.bottom;
+
+    let top: number;
+    if (spaceBelow >= PICKER_HEIGHT || spaceBelow >= spaceAbove) {
+      top = rect.bottom + 4;
+    } else {
+      top = rect.top - PICKER_HEIGHT - 4;
+    }
+
+    let left = rect.left;
+    if (left + 288 > window.innerWidth) {
+      left = window.innerWidth - 288 - 8;
+    }
+
+    setPos({ top, left });
+  }, [anchorRef]);
+
+  useEffect(() => {
+    updatePosition();
+  }, [updatePosition]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -50,10 +81,11 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [onClose]);
 
-  return (
+  const picker = (
     <div
       ref={ref}
-      className="absolute bottom-full mb-1 right-0 bg-surface border border-border rounded-lg shadow-lg p-2 w-72 z-50"
+      style={pos ? { position: 'fixed', top: pos.top, left: pos.left } : { position: 'fixed', top: -9999, left: -9999 }}
+      className="bg-surface border border-border rounded-lg shadow-lg p-2 w-72 z-50 max-h-80 overflow-y-auto"
     >
       {emojiCategories.map((category) => (
         <div key={category.name}>
@@ -75,4 +107,6 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
       ))}
     </div>
   );
+
+  return createPortal(picker, document.body);
 }

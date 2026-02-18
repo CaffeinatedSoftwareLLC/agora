@@ -7,7 +7,7 @@ interface MessageActionsProps {
 
 export function MessageActions({ isOwn, onEdit, onDelete, onReact }: MessageActionsProps) {
   return (
-    <div className="absolute -top-3 right-2 flex gap-0.5 bg-surface border border-border rounded shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-10">
+    <div className="absolute bottom-1 right-2 flex gap-0.5 bg-surface border border-border rounded shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-10">
       <button
         onClick={onReact}
         className={`px-2 py-1 text-text-muted hover:text-text hover:bg-surface-hover transition-colors ${isOwn ? '' : 'rounded'}`}

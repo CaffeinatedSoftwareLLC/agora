@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useReactionStore } from '../../stores/reactionStore';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../lib/api';
@@ -16,6 +16,7 @@ export function ReactionBar({ messageId, channelId, pickerOpen, onPickerClose }:
   const reactions = useMemo(() => rawReactions ?? [], [rawReactions]);
   const userId = useAuthStore((s) => s.user?.id);
   const [internalPicker, setInternalPicker] = useState(false);
+  const addBtnRef = useRef<HTMLDivElement>(null);
   const showPicker = pickerOpen ?? internalPicker;
   const closePicker = () => { setInternalPicker(false); onPickerClose?.(); };
 
@@ -52,7 +53,7 @@ export function ReactionBar({ messageId, channelId, pickerOpen, onPickerClose }:
           <span>{r.count}</span>
         </button>
       ))}
-      <div className="relative">
+      <div className="relative" ref={addBtnRef}>
         <button
           onClick={() => showPicker ? closePicker() : setInternalPicker(true)}
           className="w-6 h-6 flex items-center justify-center rounded border border-border text-text-dim hover:text-text hover:bg-surface-hover transition-colors text-xs"
@@ -64,6 +65,7 @@ export function ReactionBar({ messageId, channelId, pickerOpen, onPickerClose }:
           <ReactionPicker
             onSelect={handlePickerSelect}
             onClose={closePicker}
+            anchorRef={addBtnRef}
           />
         )}
       </div>
