@@ -9,6 +9,7 @@ import { DMSidebar } from './DMSidebar';
 import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
+import { VoiceChannelProvider } from '../voice/VoiceChannelProvider';
 
 export function AppShell() {
   const params = useParams();
@@ -79,18 +80,20 @@ export function AppShell() {
   const showDmSidebar = isDmRoute;
 
   return (
-    <div
-      className="h-screen flex flex-col overflow-hidden"
-      style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
-    >
-      <TabBar />
+    <VoiceChannelProvider>
+      <div
+        className="h-screen flex flex-col overflow-hidden"
+        style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+      >
+        <TabBar />
 
-      {/* Main content area */}
-      <div className="flex flex-1 min-h-0">
-        {showDmSidebar ? <DMSidebar /> : <ArcChannelSidebar />}
-        <ArcContentArea />
-        {!isDm && membersOpen && <MembersSidebar />}
+        {/* Main content area */}
+        <div className="flex flex-1 min-h-0">
+          {showDmSidebar ? <DMSidebar /> : <ArcChannelSidebar />}
+          <ArcContentArea />
+          {!isDm && membersOpen && <MembersSidebar />}
+        </div>
       </div>
-    </div>
+    </VoiceChannelProvider>
   );
 }

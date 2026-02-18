@@ -10,6 +10,7 @@ import { useTypingStore } from '../../stores/typingStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useUnreadStore } from '../../stores/unreadStore';
 import { useReactionStore } from '../../stores/reactionStore';
+import { useVoiceStore } from '../../stores/voiceStore';
 import type {
   ReadyPayload,
   MessagePayload,
@@ -109,6 +110,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('ReactionRemove', (data: ReactionRemovePayload) => {
       const me = data.userId === useAuthStore.getState().user?.id;
       useReactionStore.getState().removeReaction(data.messageId, data.emoji, data.userId, me);
+    });
+
+    // Voice participant events (track for ALL channels, not just current)
+    s.on('voice:participant_joined', (data: { channelId: string; userId: string; username: string }) => {
+      useVoiceStore.getState().addParticipant(data.channelId, data.userId, data.username);
+    });
+
+    s.on('voice:participant_left', (data: { channelId: string; userId: string }) => {
+      useVoiceStore.getState().removeParticipant(data.channelId, data.userId);
+    });
+
+    s.on('voice:room_finished', (data: { channelId: string }) => {
+      useVoiceStore.getState().clearChannelParticipants(data.channelId);
     });
 
     s.on('connect_error', (err) => {

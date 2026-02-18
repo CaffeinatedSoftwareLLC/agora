@@ -23,4 +23,7 @@ export const config = {
     port: parseInt(process.env.PORT ?? '3000', 10),
     ipEncryptionKey: Buffer.from(rawIpKey, 'hex'),
     trustProxy: process.env.TRUST_PROXY === 'true',
+    livekitUrl: process.env.LIVEKIT_URL ?? 'ws://localhost:7880',
+    livekitApiKey: process.env.LIVEKIT_API_KEY ?? 'devkey',
+    livekitApiSecret: process.env.LIVEKIT_API_SECRET ?? 'secret',
 };
