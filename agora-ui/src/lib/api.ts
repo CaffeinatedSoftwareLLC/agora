@@ -24,14 +24,15 @@ let getToken: () => string | null = () => null;
 export function setTokenGetter(fn: () => string | null) { getToken = fn; }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const res = await fetch(path, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
   const data = await res.json().catch(() => ({}));
