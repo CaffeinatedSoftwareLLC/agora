@@ -61,60 +61,52 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-This starts five services:
+This starts six services:
 - **postgres** — PostgreSQL 16 with persistent volume
 - **redis** — Redis 7 with AOF persistence
 - **migrate** — Runs database migrations once, then exits
 - **api** — Backend on port 3000 (internal only)
-- **web** — nginx on port 80 (serves frontend + reverse proxies API/WebSocket)
+- **web** — nginx (serves frontend + reverse proxies API/WebSocket, internal only)
+- **caddy** — Reverse proxy on ports 80/443 with automatic Let's Encrypt TLS
 
 ### 3. Verify
 
 ```bash
-curl http://localhost/health
+curl https://your-domain.com/health
 ```
 
-Open **http://localhost** in your browser — you should see the setup wizard.
+Open **https://your-domain.com** in your browser — you should see the setup wizard. Caddy auto-provisions a Let's Encrypt certificate, so HTTPS works immediately (make sure DNS points to your server first).
 
 The setup token is printed in the API logs:
 
 ```bash
-# macOS / Linux
-docker compose -f docker-compose.prod.yml --env-file .env.prod logs api 2>&1 | grep -A1 "SETUP TOKEN" | tail -1 | tr -d ' '
-
-# Windows (PowerShell)
-(docker compose -f docker-compose.prod.yml --env-file .env.prod logs api 2>&1 | Select-String "SETUP TOKEN" -Context 0,1).Context.PostContext.Trim()
+docker logs agora-api-1 2>&1 | grep -A 2 "SETUP TOKEN"
 ```
 
-### 4. Expose publicly
+This prints the token block:
 
-To access from other devices or networks:
-
-**Option A: Cloudflare Tunnel** (free HTTPS, no port forwarding needed)
-
-```bash
-# Install: winget install cloudflare.cloudflared (Win) / brew install cloudflared (Mac)
-cloudflared tunnel --url http://localhost:80
+```
+  AGORA SETUP TOKEN (use this to complete initial setup):
+  <your-token-here>
 ```
 
-**Option B: ngrok** (zero-config, no domain needed)
+Copy the hex string and paste it into the setup wizard.
 
-```bash
-# Install: winget install ngrok.ngrok (Win) / brew install ngrok (Mac)
-# One-time: ngrok config add-authtoken <your-token-from-ngrok.com>
-ngrok http 80
-```
+### 4. DNS
 
-Both give you a public HTTPS URL you can share.
+Point your domain (e.g., `alpha.agora.host`) to your server's IP address. Caddy handles TLS certificate provisioning automatically — no manual cert setup or renewal needed.
+
+The domain is configured in the `Caddyfile` at the project root.
 
 ### Architecture
 
 ```
-Internet → Tunnel (cloudflared / ngrok) → nginx (port 80)
-                                            ├── static files (React SPA)
-                                            ├── /auth, /servers, /channels, etc. → api:3000
-                                            └── /socket.io (WebSocket) → api:3000
-                                         postgres:5432, redis:6379 (internal only)
+Internet → Caddy (ports 80/443, auto TLS)
+              └── nginx (web container)
+                    ├── static files (React SPA)
+                    ├── /auth, /servers, /channels, etc. → api:3000
+                    └── /socket.io (WebSocket) → api:3000
+           postgres:5432, redis:6379 (internal only)
 ```
 
 ### Stopping and resetting
@@ -282,7 +274,8 @@ agora/
 │   ├── src/features/             # Feature modules (auth, messages, etc.)
 │   ├── src/stores/               # Zustand state stores
 │   └── src/lib/                  # API client, Socket.IO, type contracts
-├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis)
+├── Caddyfile                     # Caddy reverse proxy config (TLS)
+├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + LiveKit)
 ├── docker-compose.prod.yml       # Full production stack
 ├── Dockerfile                    # Backend Docker image
 ├── agora-ui/Dockerfile           # Frontend Docker image
