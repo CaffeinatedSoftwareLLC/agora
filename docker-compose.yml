@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: accord
       POSTGRES_PASSWORD: accord
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U accord"]
+      test: ["CMD-SHELL", "pg_isready -U accord -d accord_test"]
       interval: 5s
       timeout: 3s
       retries: 5

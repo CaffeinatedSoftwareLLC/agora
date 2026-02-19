@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 const rawIpKey = process.env.IP_ENCRYPTION_KEY ?? '0'.repeat(64);
 
 // Validate IP_ENCRYPTION_KEY format if explicitly set

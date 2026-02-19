@@ -31,7 +31,7 @@ export function VoiceChannelProvider({ children }: { children: ReactNode }) {
       serverUrl={livekitUrl}
       token={token}
       connect={true}
-      audio={true}
+      audio={!!navigator.mediaDevices}
       video={false}
       onDisconnected={handleDisconnected}
       onError={handleError}
