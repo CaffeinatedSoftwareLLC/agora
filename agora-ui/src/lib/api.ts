@@ -77,3 +77,17 @@ export const dmApi = {
   createDM: (recipientId: string) =>
     api.post<CreateDMResponse>('/channels/dm', { recipientId }),
 };
+
+export const voiceApi = {
+  getToken: (channelId: string) =>
+    api.post<{ token: string; url: string }>('/voice/token', { channelId }),
+
+  getParticipants: (channelId: string) =>
+    api.get<{ identity: string; name: string }[]>(`/voice/participants/${channelId}`),
+
+  kick: (channelId: string, userId: string) =>
+    api.post('/voice/kick', { channelId, userId }),
+
+  mute: (channelId: string, userId: string) =>
+    api.post('/voice/mute', { channelId, userId }),
+};

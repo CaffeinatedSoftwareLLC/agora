@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: accord
       POSTGRES_PASSWORD: accord
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U accord"]
+      test: ["CMD-SHELL", "pg_isready -U accord -d accord_test"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -22,3 +22,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --config /etc/livekit.yaml --dev
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    depends_on:
+      redis:
+        condition: service_healthy

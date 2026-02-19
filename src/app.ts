@@ -12,6 +12,8 @@ import { unreadRoutes } from './routes/unreads';
 import { dmRoutes } from './routes/dms';
 import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
+import { voiceRoutes } from './routes/voice';
+import { voiceWebhookRoutes } from './routes/voice-webhooks';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
@@ -55,7 +57,7 @@ export async function buildApp(opts?: {
     // Initialization gate — block everything except bootstrap routes when not initialized
     app.addHook('preHandler', async (request, reply) => {
         const url = request.url.split('?')[0];
-        if (url === '/health' || url.startsWith('/instance/')) {
+        if (url === '/health' || url.startsWith('/instance/') || url.startsWith('/webhooks/')) {
             return;
         }
         const ready = await isInstanceInitialized((app as any).db);
@@ -67,7 +69,7 @@ export async function buildApp(opts?: {
     // Auth middleware for all routes except /auth/*, /instance/*, and /health
     app.addHook('preHandler', async (request, reply) => {
         const url = request.url.split('?')[0];
-        if (url === '/health' || url.startsWith('/auth/') || url.startsWith('/instance/')) {
+        if (url === '/health' || url.startsWith('/auth/') || url.startsWith('/instance/') || url.startsWith('/webhooks/')) {
             return;
         }
         await requireAuth(request, reply);
@@ -170,6 +172,8 @@ export async function buildApp(opts?: {
     await app.register(dmRoutes);
     await app.register(adminRoutes);
     await app.register(userRoutes);
+    await app.register(voiceRoutes);
+    await app.register(voiceWebhookRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

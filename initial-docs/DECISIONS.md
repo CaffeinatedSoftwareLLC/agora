@@ -2,7 +2,7 @@
 
 > **Living document.** Update this file as decisions are made in web chats or Claude Code sessions. CC reads this before every session to stay in sync.
 >
-> Last updated: 2026-02-17
+> Last updated: 2026-02-18
 
 ---
 
@@ -63,9 +63,9 @@ The codebase was migrated from a Discord-like multi-server model to a single-ins
 | Database | PostgreSQL 16 |
 | Real-time | Socket.IO with Redis adapter |
 | Cache/PubSub | Redis 7 |
-| File Storage | MinIO (S3-compatible) |
-| Frontend | React + Vite + TypeScript + Zustand |
-| Voice/Video | LiveKit (future) |
+| File Storage | MinIO (S3-compatible) — not yet integrated |
+| Frontend | React 19 + Vite 7 + Tailwind v4 + Zustand |
+| Voice/Video | LiveKit (future) — not yet integrated |
 | Containers | Docker + Docker Compose |
 
 ### Why This Stack
@@ -119,10 +119,18 @@ Optional Supabase-backed OAuth identity provider. A "passport" for Agora users.
 
 ## Security Decisions
 
-- **Mentions:** MVP-insecure with client-trusted arrays. Flagged explicitly — not shipped pretending it's production behavior.
+- **Mentions:** Server-side resolution. Client sends message content with `@username` syntax; backend parses mentions, resolves usernames to user IDs (membership-gated), and stores in `message_mentions` table. `@everyone` increments `mention_count` for all channel members.
 - **Permissions:** Discord-style model. Role overrides aggregated into single allow/deny pair, then `(base & ~aggregated_deny) | aggregated_allow`. Allow bits override deny bits within the same scope.
 - **Setup token:** If env var set, use it. If not, generate 32-char token on first boot, write to data volume (`.agora/setup-token`), print to logs. Persisted to survive container restarts. Never regenerated.
 - **Instance admin:** `is_instance_admin` boolean on users table. Only set by `/instance/setup`.
+
+### Anti-Abuse (Implemented 2026-02-17)
+
+- **Encrypted IP tracking:** User IPs recorded on register and login. Stored as HMAC (for lookups) + AES-encrypted (for admin display). Admins see decrypted IPs in the user table; the DB never stores plaintext IPs.
+- **IP bans:** `ip_bans` table keyed by HMAC. Checked before `/auth/register` and `/auth/login` — returns 403 `ip_banned`. Supports optional expiration (`expires_at`). Upsert clears expiration on re-ban.
+- **Rate limiting:** `@fastify/rate-limit` globally, with `/auth/register` specifically capped at 5 per hour per IP. Disabled in test mode.
+- **Account suspension:** `account_status` field (`active`/`pending`/`suspended`). Suspended users cannot log in (403) and are force-disconnected from WebSocket via `pendingDisconnects`. Admin can suspend account + ban IP in one action.
+- **Audit logging:** All admin actions (approve, reject, ban, IP ban, settings changes) logged to `audit_log` with actor, target, action type, and changes JSON.
 
 ---
 
@@ -162,41 +170,59 @@ The "Add Instance" flow in the client: user pastes a tunnel URL, authenticates a
 
 ---
 
-## What's Built (as of 2026-02-17)
+## What's Built (as of 2026-02-18)
 
 ### Backend
 - Auth: register, login, Argon2id, JWT
 - Instance setup wizard with setup token, admin creation, registration policy (open/invite_only/approval)
 - Auto-join: users are automatically added to the instance server on registration (open), invite redemption (invite_only), or admin approval (approval)
-- Channels: text channels with CRUD
+- Channels: text channels with CRUD (types: text, voice, forum — voice/forum are schema-ready but not feature-complete)
 - Real-time messaging: send, edit, soft-delete via Socket.IO
 - DMs with `dm_pairs` deduplication and speculative insert
+- Emoji reactions: add/remove with idempotent upsert, real-time events
+- Unreads: per-channel read markers with `last_read_id` + `mention_count`, ACK endpoint that only moves marker forward
+- Mentions: server-side `@username` resolution (membership-gated) + `@everyone` support with per-user mention counts
+- User search: prefix-matching endpoint (`GET /users/search?q=`)
 - Roles: @everyone + custom with server-level bitmask permissions
 - Row Level Security on all multi-tenant tables
 - Per-request transaction lifecycle with RLS context
-- Admin dashboard: user management, approve/reject/suspend, instance settings
-- WebSocket Ready event bootstraps full client state in one round-trip
-- Docker Compose local development stack
+- Admin panel: user management (paginated, filterable, searchable), approve/reject/suspend, IP ban management, instance settings, audit logging
+- Anti-abuse: encrypted IP tracking, IP bans with expiration, rate limiting, account suspension with forced WS disconnect
+- WebSocket Ready event bootstraps full client state in one round-trip (servers, channels, unreads, online users)
+- Post-COMMIT event emission: Socket.IO events queued during request, only emitted after transaction commits
+- Docker Compose for local dev (PostgreSQL 16 + Redis 7)
+- Production Docker Compose: multi-service stack (postgres, redis, migrate, api, web/nginx) with persistent volumes
+- 13 database migrations, 19 tables
 
 ### Frontend
-- Arc-inspired UI with two palette themes (Aegean, Terracotta)
+- Arc V2-inspired UI with two palette themes (Aegean, Terracotta)
 - Single-instance layout: TabBar (instance name + Messages), channel sidebar, content area, members sidebar
 - Auth flow: login, register (with invite code support), pending approval page
-- Admin dashboard with user management
+- Admin dashboard: stats cards, user table (paginated, filterable by status, searchable), IP ban management, instance settings
 - Instance setup wizard
-- Real-time: messages, typing indicators, presence dots, reactions
-- Unread tracking with per-channel badges
-- DM sidebar with search
+- Real-time: messages, typing indicators, presence dots, reactions (bar + picker), @mention autocomplete
+- Unread tracking with per-channel badges and mention counts
+- DM sidebar with user search + new DM modal
+- Message features: grouping by author/time, edit/delete, "new messages" pill, empty channel placeholder
+- Members sidebar with online/offline status
+- Invite generation + copy modal
+- Channel creation modal
+- Connection status indicator
 - WebSocket-first state hydration via Ready event (no REST waterfall)
 
 ---
 
 ## Deferred (Explicitly Not Now)
 
-- File uploads / image attachments
-- Message search
+- File uploads / image attachments (MinIO integration — `files` table exists but no endpoints)
+- Message search (no full-text search)
 - Custom emoji
 - Threads / forums
+- Voice / video (LiveKit — channel type exists in schema but no WebRTC integration)
+- User profiles (display_name, avatar, banner, bio columns exist but no endpoints)
+- Role management UI (permission system built in backend, no frontend)
+- Friend / block relationships (table exists but no endpoints)
+- E2EE for DMs
 - Federation between instances
 - Bot API
 - Mobile client

@@ -1,0 +1,3 @@
+alpha.agora.host {
+    reverse_proxy web:80
+}

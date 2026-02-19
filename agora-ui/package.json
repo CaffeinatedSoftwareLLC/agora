@@ -12,7 +12,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.19",
+    "@livekit/components-styles": "^1.2.0",
     "@tanstack/react-virtual": "^3.13.18",
+    "livekit-client": "^2.17.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.0",

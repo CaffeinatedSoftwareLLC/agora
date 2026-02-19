@@ -20,6 +20,8 @@ export default defineConfig({
       '/admin/instance': 'http://localhost:3000',
       '/users': 'http://localhost:3000',
       '/health': 'http://localhost:3000',
+      '/voice': 'http://localhost:3000',
+      '/webhooks': 'http://localhost:3000',
       '/socket.io': {
         target: 'http://localhost:3000',
         ws: true,

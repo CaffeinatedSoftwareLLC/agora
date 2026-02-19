@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 const rawIpKey = process.env.IP_ENCRYPTION_KEY ?? '0'.repeat(64);
 
 // Validate IP_ENCRYPTION_KEY format if explicitly set
@@ -23,4 +25,7 @@ export const config = {
     port: parseInt(process.env.PORT ?? '3000', 10),
     ipEncryptionKey: Buffer.from(rawIpKey, 'hex'),
     trustProxy: process.env.TRUST_PROXY === 'true',
+    livekitUrl: process.env.LIVEKIT_URL ?? 'ws://localhost:7880',
+    livekitApiKey: process.env.LIVEKIT_API_KEY ?? 'devkey',
+    livekitApiSecret: process.env.LIVEKIT_API_SECRET ?? 'secret',
 };
