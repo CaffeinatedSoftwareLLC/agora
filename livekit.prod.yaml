@@ -7,8 +7,6 @@ rtc:
 turn:
   enabled: true
   udp_port: 3478
-  tls_port: 5349
-  domain: alpha.agora.host
 redis:
   address: redis:6379
 keys:
