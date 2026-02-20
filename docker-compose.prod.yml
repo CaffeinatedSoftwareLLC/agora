@@ -43,6 +43,8 @@ services:
     command: --config /etc/livekit.yaml
     restart: unless-stopped
     ports:
+      - "3478:3478/udp"
+      - "5349:5349/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
       - ./livekit.prod.yaml:/etc/livekit.yaml
