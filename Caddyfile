@@ -1,3 +1,11 @@
 alpha.agora.host {
-    reverse_proxy web:80
+    # LiveKit WebSocket signaling (must be before the catch-all)
+    handle /rtc* {
+        reverse_proxy livekit:7880
+    }
+
+    # Everything else → nginx (frontend + API)
+    handle {
+        reverse_proxy web:80
+    }
 }

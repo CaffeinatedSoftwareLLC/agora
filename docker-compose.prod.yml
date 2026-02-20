@@ -38,6 +38,18 @@ services:
         condition: service_healthy
     restart: "no"
 
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    ports:
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./livekit.prod.yaml:/etc/livekit.yaml
+    depends_on:
+      redis:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -48,11 +60,16 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.prod}
       HOST: 0.0.0.0
       PORT: "3000"
+      LIVEKIT_URL: wss://${DOMAIN:-alpha.agora.host}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      livekit:
+        condition: service_started
     restart: unless-stopped
 
   web:
