@@ -26,6 +26,25 @@ This is an early alpha — the foundation is solid but the feature set is slim:
 
 **Not yet implemented:** search, message pinning, file uploads, notifications, roles/permissions UI, server settings, and a lot more.
 
+## Roadmap
+
+Roughly in priority order. No ETAs — this is a community project, not a product launch.
+
+- [ ] File uploads and image embeds
+- [ ] Voice channel participant visibility (see who's in a room without joining)
+- [ ] Roles and permissions UI (backend already supports this)
+- [ ] Server settings (name, icon, moderation options)
+- [ ] Message pinning
+- [ ] Search (messages, users, channels)
+- [ ] Notifications (desktop + in-app)
+- [ ] Message replies and threads
+- [ ] Group DMs
+- [ ] Custom emoji
+- [ ] Mobile-friendly / responsive UI
+- [ ] E2E encryption (stretch goal)
+
+Want to help? Pick something off the list and open a PR. Contributions are welcome.
+
 ## Tech Stack
 
 | Layer | Technology |
