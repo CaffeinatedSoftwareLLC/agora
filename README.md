@@ -353,3 +353,9 @@ docker compose down -v
 docker compose up -d
 npm run migrate
 ```
+
+## Support the Project
+
+If you'd like to support Agora's development, you can buy me an espresso:
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Agora-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/misterespresso)
