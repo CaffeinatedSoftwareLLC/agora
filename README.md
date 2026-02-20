@@ -295,6 +295,9 @@ cd agora-ui && npm test
 | `HOST` | Host address to bind to | `0.0.0.0` |
 | `AGORA_SETUP_TOKEN` | Pre-configured setup token for initial instance setup | Auto-generated on first boot |
 | `AGORA_DATA_DIR` | Directory for persistent data (e.g., setup token file) | `.agora/` in project root |
+| `CORS_ORIGIN` | Allowed origin for Socket.IO connections. **Must be set in production** (e.g., `https://your-domain.com`). | Disabled (same-origin only) |
+| `LIVEKIT_API_KEY` | LiveKit API key for voice channels. **Required for voice to work.** | None (voice disabled) |
+| `LIVEKIT_API_SECRET` | LiveKit API secret for voice channels. **Required for voice to work.** | None (voice disabled) |
 
 ## Project Structure
 

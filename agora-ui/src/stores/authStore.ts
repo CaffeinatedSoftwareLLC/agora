@@ -86,6 +86,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    // Revoke token server-side (best-effort — don't block on failure)
+    api.post('/auth/logout', undefined).catch(() => {});
     clearPersistedAuth();
     set({ token: null, user: null, status: 'idle' });
     useServerStore.getState().clear();

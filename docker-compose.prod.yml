@@ -62,8 +62,10 @@ services:
       HOST: 0.0.0.0
       PORT: "3000"
       LIVEKIT_URL: wss://${DOMAIN:-alpha.agora.host}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      CORS_ORIGIN: https://${DOMAIN:-alpha.agora.host}
+      TRUST_PROXY: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully

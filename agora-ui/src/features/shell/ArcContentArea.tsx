@@ -153,13 +153,14 @@ export function ArcContentArea() {
 
       {/* ── Messages + typing + input ─────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-h-0">
-        <MessageList channelId={activeChannelId} channelName={channel.name} />
+        <MessageList channelId={activeChannelId} channelName={channel.name} isDm={isDm} />
         <TypingIndicator channelId={activeChannelId} />
         <FloatingMessageInput
           key={activeChannelId}
           channelId={activeChannelId}
           channelName={channel.name}
           accentColor={accentColor}
+          isDm={isDm}
         />
       </div>
     </main>

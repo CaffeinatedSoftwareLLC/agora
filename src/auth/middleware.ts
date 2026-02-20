@@ -1,18 +1,24 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { verifyToken } from './tokens';
+import { verifyToken, extractToken } from './tokens';
+import { isTokenBlacklisted } from './token-blacklist';
 
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
+    const token = extractToken(request.headers.authorization);
+    if (!token) {
         return reply.status(401).send({ error: 'Missing or invalid authorization header' });
     }
 
-    const token = authHeader.slice(7);
+    let payload;
     try {
-        const payload = verifyToken(token, (request.server as any).jwtSecret);
+        payload = verifyToken(token, (request.server as any).jwtSecret);
         (request as any).userId = payload.userId;
     } catch {
         return reply.status(401).send({ error: 'Invalid token' });
+    }
+
+    // Check token blacklist (logout revocation)
+    if (payload.jti && await isTokenBlacklisted(payload.jti)) {
+        return reply.status(401).send({ error: 'Token revoked' });
     }
 
     // Check account_status — reject non-active users

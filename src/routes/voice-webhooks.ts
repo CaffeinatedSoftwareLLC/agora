@@ -3,6 +3,11 @@ import { WebhookReceiver } from 'livekit-server-sdk';
 import { config } from '../config';
 
 export async function voiceWebhookRoutes(app: FastifyInstance) {
+    if (!config.livekitApiKey || !config.livekitApiSecret) {
+        // LiveKit not configured — skip registering webhook routes
+        return;
+    }
+
     const receiver = new WebhookReceiver(config.livekitApiKey, config.livekitApiSecret);
 
     // Override the JSON content-type parser within this encapsulated context so we

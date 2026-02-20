@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { hashPassword, verifyPassword } from '../auth/passwords';
-import { generateToken } from '../auth/tokens';
+import { generateToken, verifyToken, extractToken } from '../auth/tokens';
+import { blacklistToken } from '../auth/token-blacklist';
 import { generateUlid } from '../utils/ulid';
 import { hmacIp, encryptIp } from '../auth/crypto';
 
@@ -209,5 +210,24 @@ export async function authRoutes(app: FastifyInstance) {
             user: { id: user.id.trim(), username: user.username, isInstanceAdmin: user.is_instance_admin },
             accessToken: token,
         });
+    });
+
+    // POST /auth/logout — revoke the current token
+    app.post('/auth/logout', async (request, reply) => {
+        const raw = extractToken(request.headers.authorization);
+        if (!raw) {
+            return reply.status(401).send({ error: 'Missing token' });
+        }
+
+        try {
+            const payload = verifyToken(raw, (app as any).jwtSecret);
+            if (payload.jti && payload.exp) {
+                await blacklistToken(payload.jti, payload.exp);
+            }
+        } catch {
+            // Token is already invalid/expired — nothing to revoke
+        }
+
+        return reply.status(200).send({ success: true });
     });
 }

@@ -12,9 +12,10 @@ import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollC
 interface MessageListProps {
   channelId: string;
   channelName: string;
+  isDm?: boolean;
 }
 
-export function MessageList({ channelId, channelName }: MessageListProps) {
+export function MessageList({ channelId, channelName, isDm }: MessageListProps) {
   const messages = useMessageStore(s => s.byChannel.get(channelId));
   const hasMore = useMessageStore(s => s.hasMore.get(channelId) ?? false);
   const loadMessages = useMessageStore(s => s.loadMessages);
@@ -206,7 +207,7 @@ export function MessageList({ channelId, channelName }: MessageListProps) {
   }
 
   if (messages.length === 0) {
-    return <EmptyChannel channelName={channelName} />;
+    return <EmptyChannel channelName={channelName} isDm={isDm} />;
   }
 
   const virtualItems = virtualizer.getVirtualItems();

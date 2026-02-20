@@ -88,6 +88,13 @@ async function loadPermissions(
 }
 
 export async function voiceRoutes(app: FastifyInstance) {
+    // Guard: all voice endpoints require LiveKit to be configured
+    app.addHook('preHandler', async (_request, reply) => {
+        if (!config.livekitApiKey || !config.livekitApiSecret) {
+            return reply.status(503).send({ error: 'Voice chat is not configured on this instance' });
+        }
+    });
+
     // POST /voice/token → generate LiveKit access token
     app.post('/voice/token', {
         schema: {

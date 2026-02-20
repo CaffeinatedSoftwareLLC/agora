@@ -12,6 +12,7 @@ interface FloatingMessageInputProps {
   channelId: string;
   channelName?: string;
   accentColor: string;
+  isDm?: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ export function FloatingMessageInput({
   channelId,
   channelName,
   accentColor,
+  isDm,
 }: FloatingMessageInputProps) {
   const P = usePalette();
   const accentRgb = hexToRgb(accentColor);
@@ -165,7 +167,7 @@ export function FloatingMessageInput({
             value={content}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={`Message #${channelName || 'channel'}`}
+            placeholder={isDm ? `Message @${channelName || 'user'}` : `Message #${channelName || 'channel'}`}
             className="flex-1 bg-transparent text-[14px] outline-none min-w-0 py-1 resize-none overflow-y-auto"
             style={{ color: P.text, caretColor: accentColor, maxHeight: 144 }}
             rows={1}

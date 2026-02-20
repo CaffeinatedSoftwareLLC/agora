@@ -1,6 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { Server } from 'socket.io';
 import { verifyToken } from './auth/tokens';
+import { isTokenBlacklisted } from './auth/token-blacklist';
+import { config } from './config';
 
 // In-memory presence: userId → Set of socket IDs (supports multiple tabs/devices)
 export const onlineUsers = new Map<string, Set<string>>();
@@ -8,7 +10,7 @@ export const onlineUsers = new Map<string, Set<string>>();
 export async function setupGateway(app: FastifyInstance): Promise<Server> {
     const io = new Server(app.server, {
         transports: ['websocket'],
-        cors: { origin: '*' },
+        cors: { origin: config.corsOrigin ?? false },
     });
 
     const jwtSecret = (app as any).jwtSecret;
@@ -38,6 +40,11 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         try {
             const payload = verifyToken(token, jwtSecret);
             (socket as any).userId = payload.userId;
+
+            // Check token blacklist (logout revocation)
+            if (payload.jti && await isTokenBlacklisted(payload.jti)) {
+                return next(new Error('Token revoked'));
+            }
 
             // Check account_status using pool directly (no per-request transaction in WS)
             const result = await db.query(
