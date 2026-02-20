@@ -4,6 +4,7 @@ import { usePalette, hexToRgb } from '../../theme';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUnreadStore } from '../../stores/unreadStore';
 import { ArcUserPanel } from './ArcUserPanel';
+import { NewDMModal } from '../servers/NewDMModal';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ export function DMSidebar() {
 
   const [search, setSearch] = useState('');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [showNewDM, setShowNewDM] = useState(false);
 
   const dms = dmChannels();
 
@@ -55,6 +57,7 @@ export function DMSidebar() {
             Messages
           </h3>
           <button
+            onClick={() => setShowNewDM(true)}
             className="h-6 w-6 rounded-md flex items-center justify-center transition-colors"
             style={{ color: P.muted }}
           >
@@ -169,6 +172,7 @@ export function DMSidebar() {
 
       {/* ── User panel ────────────────────────────────────────────────────── */}
       <ArcUserPanel />
+      <NewDMModal isOpen={showNewDM} onClose={() => setShowNewDM(false)} />
     </aside>
   );
 }

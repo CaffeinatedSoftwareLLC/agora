@@ -1,6 +1,30 @@
-# Agora
+# Agora Alpha Test
+
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+
+Like many of you, I am a gamer. Before a certain company existed, voice chat with friends was a real PITA. A certain company gained our trust, and this year broke that trust. None of the alternatives are good enough. So, I made this project for us. If we all work together in making the best voice chat on the market, we will never be betrayed again. I look forward to collaborating with all of you. Happy Gaming.
 
 Agora is a self-hosted, Discord-like chat platform built with Fastify, PostgreSQL, and React. It supports servers, channels, direct messages, real-time messaging via Socket.IO, role-based permissions, and row-level security at the database layer.
+
+## What Works Right Now
+
+This is an early alpha — the foundation is solid but the feature set is slim:
+
+- **Text chat** — send, edit, and delete messages in channels with real-time updates
+- **Direct messages** — 1-on-1 conversations between users
+- **Voice channels** — join, mute/unmute (via LiveKit)
+- **Servers & channels** — create text/voice channels, invite users via shareable codes
+- **Presence** — online/offline indicators and typing notifications
+- **Mentions** — @mention users with autocomplete
+- **Unread tracking** — badge counts on channels and DMs
+- **Admin panel** — approve/reject registrations, view user stats
+- **Two color themes** — Aegean and Terracotta
+
+**Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP.
+
+**Try it out:** A public alpha instance is live at [alpha.agora.host](https://alpha.agora.host). Note that you currently cannot see who is in a voice room until you join it. During the alpha test, moderation will be minimal for the first few days — join at your own risk.
+
+**Not yet implemented:** search, message pinning, file uploads, notifications, roles/permissions UI, server settings, and a lot more.
 
 ## Tech Stack
 
