@@ -22,6 +22,7 @@ import type {
   ReactionRemovePayload,
   DMCreatedPayload,
 } from '../../lib/contracts/ws-events';
+import { api } from '../../lib/api';
 import { SocketContext } from './SocketContext';
 
 export function SocketProvider({ children }: { children: ReactNode }) {
@@ -59,6 +60,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       useReactionStore.getState().clear();
       useUnreadStore.getState().setUnreads(data.unreads || []);
       usePresenceStore.getState().setOnlineUsers(data.onlineUserIds || []);
+
+      // Fetch current voice participants for all voice channels
+      const voiceChannels = (data.channels || []).filter((c: any) => c.channelType === 4);
+      for (const vc of voiceChannels) {
+        api.get<{ identity: string; name: string }[]>(`/voice/participants/${vc.id}`)
+          .then((participants) => {
+            for (const p of participants) {
+              useVoiceStore.getState().addParticipant(vc.id, p.identity, p.name ?? p.identity);
+            }
+          })
+          .catch(() => {}); // best-effort
+      }
     });
 
     s.on('Message', (data: MessagePayload) => {

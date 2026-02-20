@@ -124,8 +124,8 @@ function VoiceChannelItem({
           {channelName}
         </span>
       </button>
-      {/* Show participants when connected to this channel */}
-      {isConnected && <VoiceChannelUsers channelId={channelId} />}
+      {/* Show participants in this voice channel (for everyone, not just connected users) */}
+      <VoiceChannelUsers channelId={channelId} />
     </div>
   );
 }
