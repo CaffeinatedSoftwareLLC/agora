@@ -81,12 +81,14 @@ cd agora
 cp .env.prod.example .env.prod
 ```
 
-Edit `.env.prod` and set both values:
+Edit `.env.prod` and set the required values:
 
 | Variable | How to generate |
 |---|---|
 | `DB_PASSWORD` | Any strong password |
 | `JWT_SECRET` | Generate a random secret (see below) |
+| `LIVEKIT_API_KEY` | Must match `livekit.prod.yaml` (see voice setup below) |
+| `LIVEKIT_API_SECRET` | Must match `livekit.prod.yaml` (see voice setup below) |
 
 Generate `JWT_SECRET`:
 
@@ -97,6 +99,36 @@ openssl rand -base64 32
 # Windows (PowerShell)
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
+
+### Voice chat setup (LiveKit)
+
+Voice channels require [LiveKit](https://livekit.io/). The prod Docker stack includes a LiveKit container that reads its config from `livekit.prod.yaml` in the project root.
+
+1. Generate an API key and secret:
+
+```bash
+# Key (short identifier)
+openssl rand -hex 16
+
+# Secret (long random string)
+openssl rand -hex 32
+```
+
+2. Put them in `livekit.prod.yaml`:
+
+```yaml
+keys:
+  your-api-key: your-api-secret
+```
+
+3. Set the **same values** in `.env.prod`:
+
+```
+LIVEKIT_API_KEY=your-api-key
+LIVEKIT_API_SECRET=your-api-secret
+```
+
+If you skip this, everything else works — voice channels will just return a "not configured" error.
 
 ### 2. Build and start
 
