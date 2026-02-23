@@ -86,7 +86,7 @@ function ConnectedControls() {
   };
 
   const toggleScreenShare = async () => {
-    await localParticipant.setScreenShareEnabled(!isScreenShareEnabled);
+    await localParticipant.setScreenShareEnabled(!isScreenShareEnabled, { audio: true });
   };
 
   const toggleDeafen = useCallback(() => {
