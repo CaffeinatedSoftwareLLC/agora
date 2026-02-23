@@ -162,6 +162,26 @@ export function mapParticipant(p: {
     };
 }
 
+/**
+ * Fetch a participant's current permission state from LiveKit.
+ * Returns { canPublish, canSubscribe } with defaults of true when unknown.
+ */
+async function getParticipantPerms(
+    roomService: RoomServiceClient,
+    roomName: string,
+    identity: string,
+): Promise<{ canPublish: boolean; canSubscribe: boolean }> {
+    try {
+        const info = await roomService.getParticipant(roomName, identity);
+        return {
+            canPublish: info.permission?.canPublish ?? true,
+            canSubscribe: info.permission?.canSubscribe ?? true,
+        };
+    } catch {
+        return { canPublish: true, canSubscribe: true };
+    }
+}
+
 const adminBodySchema = {
     type: 'object' as const,
     required: ['channelId', 'userId'],
@@ -352,6 +372,7 @@ export async function voiceRoutes(app: FastifyInstance) {
         if (!check) return;
 
         const { userId: targetUserId } = request.body as any;
+        const identity = targetUserId.trim();
         const roomService = new RoomServiceClient(
             livekitHttpUrl(),
             config.livekitApiKey,
@@ -359,10 +380,9 @@ export async function voiceRoutes(app: FastifyInstance) {
         );
 
         try {
-            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
-                permission: {
-                    canPublish: false,
-                },
+            const current = await getParticipantPerms(roomService, check.roomName, identity);
+            await roomService.updateParticipant(check.roomName, identity, {
+                permission: { ...current, canPublish: false },
             });
         } catch {
             return reply.status(404).send({ error: 'Participant not found in voice channel' });
@@ -379,6 +399,7 @@ export async function voiceRoutes(app: FastifyInstance) {
         if (!check) return;
 
         const { userId: targetUserId } = request.body as any;
+        const identity = targetUserId.trim();
         const roomService = new RoomServiceClient(
             livekitHttpUrl(),
             config.livekitApiKey,
@@ -386,10 +407,9 @@ export async function voiceRoutes(app: FastifyInstance) {
         );
 
         try {
-            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
-                permission: {
-                    canPublish: true,
-                },
+            const current = await getParticipantPerms(roomService, check.roomName, identity);
+            await roomService.updateParticipant(check.roomName, identity, {
+                permission: { ...current, canPublish: true },
             });
         } catch {
             return reply.status(404).send({ error: 'Participant not found in voice channel' });
@@ -406,6 +426,7 @@ export async function voiceRoutes(app: FastifyInstance) {
         if (!check) return;
 
         const { userId: targetUserId } = request.body as any;
+        const identity = targetUserId.trim();
         const roomService = new RoomServiceClient(
             livekitHttpUrl(),
             config.livekitApiKey,
@@ -413,10 +434,9 @@ export async function voiceRoutes(app: FastifyInstance) {
         );
 
         try {
-            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
-                permission: {
-                    canSubscribe: false,
-                },
+            const current = await getParticipantPerms(roomService, check.roomName, identity);
+            await roomService.updateParticipant(check.roomName, identity, {
+                permission: { ...current, canSubscribe: false },
             });
         } catch {
             return reply.status(404).send({ error: 'Participant not found in voice channel' });
@@ -433,6 +453,7 @@ export async function voiceRoutes(app: FastifyInstance) {
         if (!check) return;
 
         const { userId: targetUserId } = request.body as any;
+        const identity = targetUserId.trim();
         const roomService = new RoomServiceClient(
             livekitHttpUrl(),
             config.livekitApiKey,
@@ -440,10 +461,9 @@ export async function voiceRoutes(app: FastifyInstance) {
         );
 
         try {
-            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
-                permission: {
-                    canSubscribe: true,
-                },
+            const current = await getParticipantPerms(roomService, check.roomName, identity);
+            await roomService.updateParticipant(check.roomName, identity, {
+                permission: { ...current, canSubscribe: true },
             });
         } catch {
             return reply.status(404).send({ error: 'Participant not found in voice channel' });
