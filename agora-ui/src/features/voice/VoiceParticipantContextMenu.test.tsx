@@ -100,7 +100,7 @@ describe('VoiceParticipantContextMenu', () => {
 
   it('shows Disconnect when canMoveMembers', () => {
     render(<VoiceParticipantContextMenu {...baseProps} />);
-    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Disconnect/ })).toBeInTheDocument();
   });
 
   it('calls voiceApi.mute on Mute click, then onActionComplete, then onClose', async () => {
@@ -149,7 +149,7 @@ describe('VoiceParticipantContextMenu', () => {
 
   it('calls voiceApi.kick on Disconnect click, then onActionComplete, then onClose', async () => {
     render(<VoiceParticipantContextMenu {...baseProps} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    fireEvent.click(screen.getByRole('button', { name: /Disconnect/ }));
 
     await waitFor(() => {
       expect(mockKick).toHaveBeenCalledWith('ch1', 'user-2');

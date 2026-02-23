@@ -94,7 +94,7 @@ describe('VoiceChannelUsers', () => {
       expect(screen.getByRole('button', { name: 'Mute' })).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: 'Deafen' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Disconnect/ })).toBeInTheDocument();
   });
 
   it('right-click on self does not open context menu', async () => {
@@ -135,6 +135,6 @@ describe('VoiceChannelUsers', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Mute' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Disconnect/ })).not.toBeInTheDocument();
   });
 });

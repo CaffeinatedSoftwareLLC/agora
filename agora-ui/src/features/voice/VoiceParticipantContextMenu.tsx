@@ -123,12 +123,15 @@ export function VoiceParticipantContextMenu({
       )}
 
       {permissions.canMoveMembers && (
-        <button
-          style={{ ...buttonStyle, color: P.danger }}
-          onClick={() => handleAction(() => voiceApi.kick(channelId, targetUserId))}
-        >
-          Disconnect
-        </button>
+        <>
+          <div style={{ borderTop: `1px solid ${P.border}`, margin: '4px 0' }} />
+          <button
+            style={{ ...buttonStyle, color: P.danger, fontWeight: 600 }}
+            onClick={() => handleAction(() => voiceApi.kick(channelId, targetUserId))}
+          >
+            ✕ Disconnect
+          </button>
+        </>
       )}
 
       {error && (
