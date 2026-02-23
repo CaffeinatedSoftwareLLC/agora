@@ -1,9 +1,13 @@
+import { useTracks } from '@livekit/components-react';
+import { Track } from 'livekit-client';
 import { useChannelStore } from '../../stores/channelStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useUIStore } from '../../stores/uiStore';
+import { useVoiceStore } from '../../stores/voiceStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
 import { TypingIndicator } from '../live/TypingIndicator';
+import { VideoGrid } from '../voice/VideoGrid';
 import { usePalette } from '../../theme';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -30,6 +34,8 @@ export function ArcContentArea() {
 
   const membersOpen = useUIStore(s => s.membersOpen);
   const toggleMembers = useUIStore(s => s.toggleMembers);
+
+  const voiceConnected = useVoiceStore(s => s.connectionState) === 'connected';
 
   const accentColor = instanceServer ? serverColor(instanceServer.name) : P.accent;
   const isDm = !!channel && channel.serverId === null;
@@ -151,6 +157,9 @@ export function ArcContentArea() {
         </div>
       </header>
 
+      {/* ── Video panel (only when connected to voice with active tracks) */}
+      {voiceConnected && <VideoPanel />}
+
       {/* ── Messages + typing + input ─────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-h-0">
         <MessageList channelId={activeChannelId} channelName={channel.name} isDm={isDm} />
@@ -164,5 +173,28 @@ export function ArcContentArea() {
         />
       </div>
     </main>
+  );
+}
+
+// ─── VideoPanel ─────────────────────────────────────────────────────────────
+
+function VideoPanel() {
+  const cameraTracks = useTracks([Track.Source.Camera]);
+  const screenShareTracks = useTracks([Track.Source.ScreenShare]);
+
+  if (cameraTracks.length === 0 && screenShareTracks.length === 0) return null;
+
+  const hasScreenShare = screenShareTracks.length > 0;
+
+  return (
+    <div
+      className="shrink-0 overflow-hidden"
+      style={{
+        maxHeight: hasScreenShare ? '60vh' : '40vh',
+        minHeight: '200px',
+      }}
+    >
+      <VideoGrid />
+    </div>
   );
 }

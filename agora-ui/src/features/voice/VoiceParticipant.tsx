@@ -62,6 +62,43 @@ export function VoiceParticipant({ participant }: VoiceParticipantProps) {
           <line x1="8" y1="23" x2="16" y2="23" />
         </svg>
       )}
+
+      {/* Camera indicator */}
+      {participant.isCameraEnabled && (
+        <svg
+          className="h-3 w-3 shrink-0"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ color: P.accent }}
+        >
+          <title>Camera On</title>
+          <path d="M23 7l-7 5 7 5V7z" />
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+        </svg>
+      )}
+
+      {/* Screen share indicator */}
+      {participant.isScreenShareEnabled && (
+        <svg
+          className="h-3 w-3 shrink-0"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ color: P.online }}
+        >
+          <title>Screen Sharing</title>
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+          <line x1="12" y1="17" x2="12" y2="21" />
+        </svg>
+      )}
     </div>
   );
 }
