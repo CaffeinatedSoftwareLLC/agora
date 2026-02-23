@@ -4,9 +4,10 @@ import { usePalette, hexToRgb } from '../../theme';
 
 interface VoiceParticipantProps {
   participant: Participant;
+  onContextMenu?: (e: React.MouseEvent, participant: Participant) => void;
 }
 
-export function VoiceParticipant({ participant }: VoiceParticipantProps) {
+export function VoiceParticipant({ participant, onContextMenu }: VoiceParticipantProps) {
   const P = usePalette();
   const isSpeaking = useIsSpeaking(participant);
   const isMuted = !participant.isMicrophoneEnabled;
@@ -20,6 +21,7 @@ export function VoiceParticipant({ participant }: VoiceParticipantProps) {
       style={{
         background: isSpeaking ? `rgba(${onlineRgb}, 0.08)` : 'transparent',
       }}
+      onContextMenu={onContextMenu ? (e) => { e.preventDefault(); onContextMenu(e, participant); } : undefined}
     >
       {/* Avatar */}
       <div className="relative shrink-0">

@@ -1,6 +1,12 @@
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useParticipants } from '@livekit/components-react';
+import type { Participant } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useAuthStore } from '../../stores/authStore';
 import { VoiceParticipant } from './VoiceParticipant';
+import { VoiceParticipantContextMenu } from './VoiceParticipantContextMenu';
+import { useVoicePermissions } from './useVoicePermissions';
+import { voiceApi } from '../../lib/api';
 import { usePalette } from '../../theme';
 
 interface VoiceChannelUsersProps {
@@ -17,23 +23,102 @@ export function VoiceChannelUsers({ channelId }: VoiceChannelUsersProps) {
   const isInThisChannel = currentChannel?.channelId === channelId && connectionState === 'connected';
 
   if (isInThisChannel) {
-    return <LiveParticipantList />;
+    return <LiveParticipantList channelId={channelId} />;
   }
 
   return <StoreParticipantList channelId={channelId} />;
 }
 
+interface ContextMenuState {
+  x: number;
+  y: number;
+  participant: Participant;
+}
+
 /** Shows participants from LiveKit room context (only available when connected to this channel) */
-function LiveParticipantList() {
+function LiveParticipantList({ channelId }: { channelId: string }) {
   const participants = useParticipants();
+  const permissions = useVoicePermissions(channelId);
+  const currentUser = useAuthStore(s => s.user);
+  const [menuState, setMenuState] = useState<ContextMenuState | null>(null);
+  const [participantPerms, setParticipantPerms] = useState<Map<string, { canPublish: boolean; canSubscribe: boolean }>>(new Map());
+  const fetchCounter = useRef(0);
+
+  const fetchParticipantPerms = useCallback(async () => {
+    const counter = ++fetchCounter.current;
+    try {
+      const data = await voiceApi.getParticipants(channelId);
+      if (counter !== fetchCounter.current) return;
+      const map = new Map<string, { canPublish: boolean; canSubscribe: boolean }>();
+      for (const p of data) {
+        if (p.permission) {
+          map.set(p.identity, p.permission);
+        }
+      }
+      setParticipantPerms(map);
+    } catch {
+      // ignore fetch errors — stale cache is still usable
+    }
+  }, [channelId]);
+
+  // Fetch participant permissions on mount so the cache isn't empty on first right-click
+  useEffect(() => { fetchParticipantPerms(); }, [fetchParticipantPerms]);
+
+  const handleContextMenu = useCallback(async (e: React.MouseEvent, participant: Participant) => {
+    const counter = ++fetchCounter.current;
+    try {
+      const data = await voiceApi.getParticipants(channelId);
+      if (counter !== fetchCounter.current) return;
+      const map = new Map<string, { canPublish: boolean; canSubscribe: boolean }>();
+      for (const p of data) {
+        if (p.permission) {
+          map.set(p.identity, p.permission);
+        }
+      }
+      setParticipantPerms(map);
+    } catch {
+      // Fetch failed — open menu anyway with existing cache (or conservative defaults)
+    }
+    if (counter !== fetchCounter.current) return;
+    setMenuState({ x: e.clientX, y: e.clientY, participant });
+  }, [channelId]);
+
+  const handleClose = useCallback(() => setMenuState(null), []);
+
+  const handleActionComplete = useCallback(() => {
+    fetchParticipantPerms();
+  }, [fetchParticipantPerms]);
 
   if (participants.length === 0) return null;
+
+  const targetPerms = menuState
+    ? participantPerms.get(menuState.participant.identity) ?? { canPublish: true, canSubscribe: true }
+    : null;
 
   return (
     <div className="pl-4 pr-1 pb-1">
       {participants.map(p => (
-        <VoiceParticipant key={p.identity} participant={p} />
+        <VoiceParticipant
+          key={p.identity}
+          participant={p}
+          onContextMenu={handleContextMenu}
+        />
       ))}
+      {menuState && targetPerms && currentUser && (
+        <VoiceParticipantContextMenu
+          x={menuState.x}
+          y={menuState.y}
+          channelId={channelId}
+          targetUserId={menuState.participant.identity}
+          targetName={menuState.participant.name || menuState.participant.identity}
+          permissions={permissions}
+          isSelf={menuState.participant.identity === currentUser.id}
+          targetCanPublish={targetPerms.canPublish}
+          targetCanSubscribe={targetPerms.canSubscribe}
+          onClose={handleClose}
+          onActionComplete={handleActionComplete}
+        />
+      )}
     </div>
   );
 }

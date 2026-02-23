@@ -32,7 +32,7 @@ describe('Voice – POST /voice/token', () => {
         expect(typeof res.body.url).toBe('string');
     });
 
-    test('returns 403 for non-member', async () => {
+    test('returns 404 for non-member (RLS hides channel)', async () => {
         const owner = await authedUser(ctx.request, 'vt_owner2');
         const outsider = await authedUser(ctx.request, 'vt_outsider');
         const { serverId } = await createServer(ctx.request, owner.auth, 'Voice Token Forbid');
@@ -48,7 +48,7 @@ describe('Voice – POST /voice/token', () => {
             .set(outsider.auth)
             .send({ channelId: voiceChannelId });
 
-        expect(res.status).toBe(403);
+        expect(res.status).toBe(404);
     });
 
     test('returns 404 for text channel', async () => {
@@ -103,7 +103,7 @@ describe('Voice – GET /voice/participants/:channelId', () => {
         expect(res.body).toEqual([]);
     });
 
-    test('returns 403 for non-member', async () => {
+    test('returns 404 for non-member (RLS hides channel)', async () => {
         const owner = await authedUser(ctx.request, 'vp_owner2');
         const outsider = await authedUser(ctx.request, 'vp_outsider');
         const { serverId } = await createServer(ctx.request, owner.auth, 'VP Forbid');
@@ -118,7 +118,7 @@ describe('Voice – GET /voice/participants/:channelId', () => {
             .get(`/voice/participants/${voiceChannelId}`)
             .set(outsider.auth);
 
-        expect(res.status).toBe(403);
+        expect(res.status).toBe(404);
     });
 
     test('returns 404 for non-voice channel', async () => {
@@ -134,7 +134,7 @@ describe('Voice – GET /voice/participants/:channelId', () => {
 });
 
 describe('Voice – POST /voice/kick', () => {
-    test('returns 403 for non-member', async () => {
+    test('returns 404 for non-member (RLS hides channel)', async () => {
         const owner = await authedUser(ctx.request, 'vk_owner');
         const outsider = await authedUser(ctx.request, 'vk_outsider');
         const { serverId } = await createServer(ctx.request, owner.auth, 'VK Forbid');
@@ -150,7 +150,7 @@ describe('Voice – POST /voice/kick', () => {
             .set(outsider.auth)
             .send({ channelId: voiceChannelId, userId: owner.userId });
 
-        expect(res.status).toBe(403);
+        expect(res.status).toBe(404);
     });
 
     test('returns 403 without VoiceMoveMembers permission', async () => {
@@ -200,7 +200,7 @@ describe('Voice – POST /voice/kick', () => {
 });
 
 describe('Voice – POST /voice/mute', () => {
-    test('returns 403 for non-member', async () => {
+    test('returns 404 for non-member (RLS hides channel)', async () => {
         const owner = await authedUser(ctx.request, 'vm_owner');
         const outsider = await authedUser(ctx.request, 'vm_outsider');
         const { serverId } = await createServer(ctx.request, owner.auth, 'VM Forbid');
@@ -216,7 +216,7 @@ describe('Voice – POST /voice/mute', () => {
             .set(outsider.auth)
             .send({ channelId: voiceChannelId, userId: owner.userId });
 
-        expect(res.status).toBe(403);
+        expect(res.status).toBe(404);
     });
 
     test('returns 403 without VoiceMuteMembers permission', async () => {
@@ -265,6 +265,343 @@ describe('Voice – POST /voice/mute', () => {
         expect(res.status).not.toBe(403);
         // Expect 404 from the catch block (LiveKit not running → error → participant not found)
         expect(res.status).toBe(404);
+    });
+});
+
+describe('Voice – POST /voice/unmute', () => {
+    test('returns 401 without auth', async () => {
+        const res = await ctx.request
+            .post('/voice/unmute')
+            .send({ channelId: '00000000000000000000000000', userId: '00000000000000000000000000' });
+
+        expect(res.status).toBe(401);
+    });
+
+    test('returns 404 for non-member (RLS hides channel)', async () => {
+        const owner = await authedUser(ctx.request, 'vum_owner');
+        const outsider = await authedUser(ctx.request, 'vum_outsider');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VUM Forbid');
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Unmute', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/unmute')
+            .set(outsider.auth)
+            .send({ channelId: voiceChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 403 without VoiceMuteMembers permission', async () => {
+        const owner = await authedUser(ctx.request, 'vum_owner2');
+        const member = await authedUser(ctx.request, 'vum_member');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VUM Perm');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Unmute2', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/unmute')
+            .set(member.auth)
+            .send({ channelId: voiceChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(403);
+    });
+
+    test('owner unmute attempt reaches LiveKit (returns 404)', async () => {
+        const owner = await authedUser(ctx.request, 'vum_owner3');
+        const member = await authedUser(ctx.request, 'vum_target');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VUM Owner');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Unmute3', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/unmute')
+            .set(owner.auth)
+            .send({ channelId: voiceChannelId, userId: member.userId });
+
+        expect(res.status).not.toBe(403);
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 404 for text channel', async () => {
+        const owner = await authedUser(ctx.request, 'vum_owner4');
+        const { generalChannelId } = await createServer(ctx.request, owner.auth, 'VUM Text');
+
+        const res = await ctx.request
+            .post('/voice/unmute')
+            .set(owner.auth)
+            .send({ channelId: generalChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(404);
+    });
+});
+
+describe('Voice – POST /voice/deafen', () => {
+    test('returns 401 without auth', async () => {
+        const res = await ctx.request
+            .post('/voice/deafen')
+            .send({ channelId: '00000000000000000000000000', userId: '00000000000000000000000000' });
+
+        expect(res.status).toBe(401);
+    });
+
+    test('returns 404 for non-member (RLS hides channel)', async () => {
+        const owner = await authedUser(ctx.request, 'vd_owner');
+        const outsider = await authedUser(ctx.request, 'vd_outsider');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VD Forbid');
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Deafen', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/deafen')
+            .set(outsider.auth)
+            .send({ channelId: voiceChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 403 without VoiceDeafenMembers permission', async () => {
+        const owner = await authedUser(ctx.request, 'vd_owner2');
+        const member = await authedUser(ctx.request, 'vd_member');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VD Perm');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Deafen2', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/deafen')
+            .set(member.auth)
+            .send({ channelId: voiceChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(403);
+    });
+
+    test('owner deafen attempt reaches LiveKit (returns 404)', async () => {
+        const owner = await authedUser(ctx.request, 'vd_owner3');
+        const member = await authedUser(ctx.request, 'vd_target');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VD Owner');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Deafen3', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/deafen')
+            .set(owner.auth)
+            .send({ channelId: voiceChannelId, userId: member.userId });
+
+        expect(res.status).not.toBe(403);
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 404 for text channel', async () => {
+        const owner = await authedUser(ctx.request, 'vd_owner4');
+        const { generalChannelId } = await createServer(ctx.request, owner.auth, 'VD Text');
+
+        const res = await ctx.request
+            .post('/voice/deafen')
+            .set(owner.auth)
+            .send({ channelId: generalChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(404);
+    });
+});
+
+describe('Voice – POST /voice/undeafen', () => {
+    test('returns 401 without auth', async () => {
+        const res = await ctx.request
+            .post('/voice/undeafen')
+            .send({ channelId: '00000000000000000000000000', userId: '00000000000000000000000000' });
+
+        expect(res.status).toBe(401);
+    });
+
+    test('returns 404 for non-member (RLS hides channel)', async () => {
+        const owner = await authedUser(ctx.request, 'vud_owner');
+        const outsider = await authedUser(ctx.request, 'vud_outsider');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VUD Forbid');
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Undeafen', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/undeafen')
+            .set(outsider.auth)
+            .send({ channelId: voiceChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 403 without VoiceDeafenMembers permission', async () => {
+        const owner = await authedUser(ctx.request, 'vud_owner2');
+        const member = await authedUser(ctx.request, 'vud_member');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VUD Perm');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Undeafen2', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/undeafen')
+            .set(member.auth)
+            .send({ channelId: voiceChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(403);
+    });
+
+    test('owner undeafen attempt reaches LiveKit (returns 404)', async () => {
+        const owner = await authedUser(ctx.request, 'vud_owner3');
+        const member = await authedUser(ctx.request, 'vud_target');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VUD Owner');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Undeafen3', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .post('/voice/undeafen')
+            .set(owner.auth)
+            .send({ channelId: voiceChannelId, userId: member.userId });
+
+        expect(res.status).not.toBe(403);
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 404 for text channel', async () => {
+        const owner = await authedUser(ctx.request, 'vud_owner4');
+        const { generalChannelId } = await createServer(ctx.request, owner.auth, 'VUD Text');
+
+        const res = await ctx.request
+            .post('/voice/undeafen')
+            .set(owner.auth)
+            .send({ channelId: generalChannelId, userId: owner.userId });
+
+        expect(res.status).toBe(404);
+    });
+});
+
+describe('Voice – GET /voice/permissions/:channelId', () => {
+    test('returns 401 without auth', async () => {
+        const res = await ctx.request
+            .get('/voice/permissions/00000000000000000000000000');
+
+        expect(res.status).toBe(401);
+    });
+
+    test('returns 404 for non-member (RLS hides channel)', async () => {
+        const owner = await authedUser(ctx.request, 'vpe_owner');
+        const outsider = await authedUser(ctx.request, 'vpe_outsider');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VPE Forbid');
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Perms', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .get(`/voice/permissions/${voiceChannelId}`)
+            .set(outsider.auth);
+
+        expect(res.status).toBe(404);
+    });
+
+    test('returns 404 for text channel', async () => {
+        const owner = await authedUser(ctx.request, 'vpe_owner2');
+        const { generalChannelId } = await createServer(ctx.request, owner.auth, 'VPE Text');
+
+        const res = await ctx.request
+            .get(`/voice/permissions/${generalChannelId}`)
+            .set(owner.auth);
+
+        expect(res.status).toBe(404);
+    });
+
+    test('owner gets all permissions true', async () => {
+        const owner = await authedUser(ctx.request, 'vpe_owner3');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VPE Owner');
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Perms2', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .get(`/voice/permissions/${voiceChannelId}`)
+            .set(owner.auth);
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+            canMuteMembers: true,
+            canDeafenMembers: true,
+            canMoveMembers: true,
+        });
+    });
+
+    test('regular member gets all permissions false', async () => {
+        const owner = await authedUser(ctx.request, 'vpe_owner4');
+        const member = await authedUser(ctx.request, 'vpe_member');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'VPE Member');
+
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const ch = await ctx.request
+            .post(`/servers/${serverId}/channels`)
+            .set(owner.auth)
+            .send({ name: 'VC Perms3', channelType: 4 });
+        const voiceChannelId = ch.body.id;
+
+        const res = await ctx.request
+            .get(`/voice/permissions/${voiceChannelId}`)
+            .set(member.auth);
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+            canMuteMembers: false,
+            canDeafenMembers: false,
+            canMoveMembers: false,
+        });
     });
 });
 

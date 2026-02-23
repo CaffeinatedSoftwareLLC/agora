@@ -87,6 +87,87 @@ async function loadPermissions(
     });
 }
 
+/**
+ * Shared boilerplate for voice admin actions (kick/mute/unmute/deafen/undeafen).
+ * Validates: channel is voice type -> actor is server member -> actor has required permission.
+ * Returns { serverId, roomName } on success, or null if reply was already sent.
+ */
+async function voiceAdminCheck(
+    request: any,
+    reply: any,
+    requiredPermission: bigint,
+): Promise<{ serverId: string; roomName: string } | null> {
+    const actorId = request.userId;
+    const { channelId } = request.body;
+    const db = request.dbClient;
+
+    // Verify channel exists and is voice type (channel_type = 4)
+    const channelResult = await db.query(
+        'SELECT id, server_id FROM channels WHERE id = $1 AND channel_type = 4',
+        [channelId],
+    );
+    if (channelResult.rows.length === 0) {
+        reply.status(404).send({ error: 'Voice channel not found' });
+        return null;
+    }
+
+    const serverId = channelResult.rows[0].server_id.trim();
+
+    // Check actor's server membership
+    const member = await db.query(
+        'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+        [serverId, actorId],
+    );
+    if (member.rows.length === 0) {
+        reply.status(403).send({ error: 'Not a member of this server' });
+        return null;
+    }
+
+    // Check required permission
+    const perms = await loadPermissions(db, actorId, serverId, channelId);
+    if (!(perms & requiredPermission)) {
+        const permName = Object.entries(Permissions).find(([, v]) => v === requiredPermission)?.[0] ?? 'unknown';
+        reply.status(403).send({ error: `Missing ${permName} permission` });
+        return null;
+    }
+
+    const roomName = `channel-${channelId.trim()}`;
+    return { serverId, roomName };
+}
+
+/** Map a raw LiveKit participant to the API response shape. Exported for unit testing. */
+export function mapParticipant(p: {
+    identity: string;
+    name: string;
+    joinedAt?: bigint | number;
+    tracks: { sid: string; source: unknown; muted: boolean }[];
+    permission?: { canPublish: boolean; canSubscribe: boolean };
+}) {
+    return {
+        identity: p.identity,
+        name: p.name,
+        joinedAt: p.joinedAt ? Number(p.joinedAt) : undefined,
+        tracks: p.tracks.map((t) => ({
+            sid: t.sid,
+            source: t.source,
+            muted: t.muted,
+        })),
+        permission: p.permission ? {
+            canPublish: p.permission.canPublish,
+            canSubscribe: p.permission.canSubscribe,
+        } : undefined,
+    };
+}
+
+const adminBodySchema = {
+    type: 'object' as const,
+    required: ['channelId', 'userId'],
+    properties: {
+        channelId: { type: 'string' as const, minLength: 1 },
+        userId: { type: 'string' as const, minLength: 1 },
+    },
+};
+
 export async function voiceRoutes(app: FastifyInstance) {
     // Guard: all voice endpoints require LiveKit to be configured
     app.addHook('preHandler', async (_request, reply) => {
@@ -230,18 +311,7 @@ export async function voiceRoutes(app: FastifyInstance) {
 
         try {
             const participants = await roomService.listParticipants(roomName);
-            return reply.status(200).send(
-                participants.map((p) => ({
-                    identity: p.identity,
-                    name: p.name,
-                    joinedAt: p.joinedAt ? Number(p.joinedAt) : undefined,
-                    tracks: p.tracks.map((t) => ({
-                        sid: t.sid,
-                        source: t.source,
-                        muted: t.muted,
-                    })),
-                })),
-            );
+            return reply.status(200).send(participants.map(mapParticipant));
         } catch {
             // Room may not exist yet in LiveKit — return empty array
             return reply.status(200).send([]);
@@ -250,48 +320,12 @@ export async function voiceRoutes(app: FastifyInstance) {
 
     // POST /voice/kick → remove participant from voice channel
     app.post('/voice/kick', {
-        schema: {
-            body: {
-                type: 'object',
-                required: ['channelId', 'userId'],
-                properties: {
-                    channelId: { type: 'string', minLength: 1 },
-                    userId: { type: 'string', minLength: 1 },
-                },
-            },
-        },
+        schema: { body: adminBodySchema },
     }, async (request, reply) => {
-        const actorId = (request as any).userId;
-        const { channelId, userId: targetUserId } = request.body as any;
-        const db = (request as any).dbClient;
+        const check = await voiceAdminCheck(request, reply, Permissions.VoiceMoveMembers);
+        if (!check) return;
 
-        // Verify channel exists and is voice type
-        const channelResult = await db.query(
-            'SELECT id, server_id FROM channels WHERE id = $1 AND channel_type = 4',
-            [channelId],
-        );
-        if (channelResult.rows.length === 0) {
-            return reply.status(404).send({ error: 'Voice channel not found' });
-        }
-
-        const serverId = channelResult.rows[0].server_id.trim();
-
-        // Check actor's server membership
-        const member = await db.query(
-            'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
-            [serverId, actorId],
-        );
-        if (member.rows.length === 0) {
-            return reply.status(403).send({ error: 'Not a member of this server' });
-        }
-
-        // Check VoiceMoveMembers permission
-        const perms = await loadPermissions(db, actorId, serverId, channelId);
-        if (!(perms & Permissions.VoiceMoveMembers)) {
-            return reply.status(403).send({ error: 'Missing VoiceMoveMembers permission' });
-        }
-
-        const roomName = `channel-${channelId.trim()}`;
+        const { userId: targetUserId } = request.body as any;
         const roomService = new RoomServiceClient(
             livekitHttpUrl(),
             config.livekitApiKey,
@@ -299,7 +333,7 @@ export async function voiceRoutes(app: FastifyInstance) {
         );
 
         try {
-            await roomService.removeParticipant(roomName, targetUserId.trim());
+            await roomService.removeParticipant(check.roomName, targetUserId.trim());
         } catch {
             // Participant may already have left — treat as success
         }
@@ -309,19 +343,126 @@ export async function voiceRoutes(app: FastifyInstance) {
 
     // POST /voice/mute → server-mute a participant
     app.post('/voice/mute', {
+        schema: { body: adminBodySchema },
+    }, async (request, reply) => {
+        const check = await voiceAdminCheck(request, reply, Permissions.VoiceMuteMembers);
+        if (!check) return;
+
+        const { userId: targetUserId } = request.body as any;
+        const roomService = new RoomServiceClient(
+            livekitHttpUrl(),
+            config.livekitApiKey,
+            config.livekitApiSecret,
+        );
+
+        try {
+            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
+                permission: {
+                    canPublish: false,
+                },
+            });
+        } catch {
+            return reply.status(404).send({ error: 'Participant not found in voice channel' });
+        }
+
+        return reply.status(200).send({ success: true });
+    });
+
+    // POST /voice/unmute → server-unmute a participant
+    app.post('/voice/unmute', {
+        schema: { body: adminBodySchema },
+    }, async (request, reply) => {
+        const check = await voiceAdminCheck(request, reply, Permissions.VoiceMuteMembers);
+        if (!check) return;
+
+        const { userId: targetUserId } = request.body as any;
+        const roomService = new RoomServiceClient(
+            livekitHttpUrl(),
+            config.livekitApiKey,
+            config.livekitApiSecret,
+        );
+
+        try {
+            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
+                permission: {
+                    canPublish: true,
+                },
+            });
+        } catch {
+            return reply.status(404).send({ error: 'Participant not found in voice channel' });
+        }
+
+        return reply.status(200).send({ success: true });
+    });
+
+    // POST /voice/deafen → server-deafen a participant
+    app.post('/voice/deafen', {
+        schema: { body: adminBodySchema },
+    }, async (request, reply) => {
+        const check = await voiceAdminCheck(request, reply, Permissions.VoiceDeafenMembers);
+        if (!check) return;
+
+        const { userId: targetUserId } = request.body as any;
+        const roomService = new RoomServiceClient(
+            livekitHttpUrl(),
+            config.livekitApiKey,
+            config.livekitApiSecret,
+        );
+
+        try {
+            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
+                permission: {
+                    canSubscribe: false,
+                },
+            });
+        } catch {
+            return reply.status(404).send({ error: 'Participant not found in voice channel' });
+        }
+
+        return reply.status(200).send({ success: true });
+    });
+
+    // POST /voice/undeafen → server-undeafen a participant
+    app.post('/voice/undeafen', {
+        schema: { body: adminBodySchema },
+    }, async (request, reply) => {
+        const check = await voiceAdminCheck(request, reply, Permissions.VoiceDeafenMembers);
+        if (!check) return;
+
+        const { userId: targetUserId } = request.body as any;
+        const roomService = new RoomServiceClient(
+            livekitHttpUrl(),
+            config.livekitApiKey,
+            config.livekitApiSecret,
+        );
+
+        try {
+            await roomService.updateParticipant(check.roomName, targetUserId.trim(), {
+                permission: {
+                    canSubscribe: true,
+                },
+            });
+        } catch {
+            return reply.status(404).send({ error: 'Participant not found in voice channel' });
+        }
+
+        return reply.status(200).send({ success: true });
+    });
+
+    // GET /voice/permissions/:channelId → get voice admin permissions for requesting user
+    app.get('/voice/permissions/:channelId', {
         schema: {
-            body: {
+            params: {
                 type: 'object',
-                required: ['channelId', 'userId'],
+                required: ['channelId'],
                 properties: {
                     channelId: { type: 'string', minLength: 1 },
-                    userId: { type: 'string', minLength: 1 },
                 },
             },
         },
     }, async (request, reply) => {
-        const actorId = (request as any).userId;
-        const { channelId, userId: targetUserId } = request.body as any;
+        const userId = (request as any).userId;
+        const { channelId } = request.params as any;
         const db = (request as any).dbClient;
 
         // Verify channel exists and is voice type
@@ -335,39 +476,21 @@ export async function voiceRoutes(app: FastifyInstance) {
 
         const serverId = channelResult.rows[0].server_id.trim();
 
-        // Check actor's server membership
+        // Check server membership
         const member = await db.query(
             'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
-            [serverId, actorId],
+            [serverId, userId],
         );
         if (member.rows.length === 0) {
             return reply.status(403).send({ error: 'Not a member of this server' });
         }
 
-        // Check VoiceMuteMembers permission
-        const perms = await loadPermissions(db, actorId, serverId, channelId);
-        if (!(perms & Permissions.VoiceMuteMembers)) {
-            return reply.status(403).send({ error: 'Missing VoiceMuteMembers permission' });
-        }
+        const perms = await loadPermissions(db, userId, serverId, channelId);
 
-        const roomName = `channel-${channelId.trim()}`;
-        const roomService = new RoomServiceClient(
-            livekitHttpUrl(),
-            config.livekitApiKey,
-            config.livekitApiSecret,
-        );
-
-        try {
-            await roomService.updateParticipant(roomName, targetUserId.trim(), {
-                permission: {
-                    canPublish: false,
-                },
-            });
-        } catch {
-            // Participant may not be in room
-            return reply.status(404).send({ error: 'Participant not found in voice channel' });
-        }
-
-        return reply.status(200).send({ success: true });
+        return reply.status(200).send({
+            canMuteMembers: !!(perms & Permissions.VoiceMuteMembers),
+            canDeafenMembers: !!(perms & Permissions.VoiceDeafenMembers),
+            canMoveMembers: !!(perms & Permissions.VoiceMoveMembers),
+        });
     });
 }

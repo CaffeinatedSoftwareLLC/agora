@@ -78,16 +78,40 @@ export const dmApi = {
     api.post<CreateDMResponse>('/channels/dm', { recipientId }),
 };
 
+export interface VoicePermissions {
+  canMuteMembers: boolean;
+  canDeafenMembers: boolean;
+  canMoveMembers: boolean;
+}
+
+export interface VoiceParticipantInfo {
+  identity: string;
+  name: string;
+  permission?: { canPublish: boolean; canSubscribe: boolean };
+}
+
 export const voiceApi = {
   getToken: (channelId: string) =>
     api.post<{ token: string; url: string }>('/voice/token', { channelId }),
 
   getParticipants: (channelId: string) =>
-    api.get<{ identity: string; name: string }[]>(`/voice/participants/${channelId}`),
+    api.get<VoiceParticipantInfo[]>(`/voice/participants/${channelId}`),
 
   kick: (channelId: string, userId: string) =>
     api.post('/voice/kick', { channelId, userId }),
 
   mute: (channelId: string, userId: string) =>
     api.post('/voice/mute', { channelId, userId }),
+
+  unmute: (channelId: string, userId: string) =>
+    api.post('/voice/unmute', { channelId, userId }),
+
+  deafen: (channelId: string, userId: string) =>
+    api.post('/voice/deafen', { channelId, userId }),
+
+  undeafen: (channelId: string, userId: string) =>
+    api.post('/voice/undeafen', { channelId, userId }),
+
+  getPermissions: (channelId: string) =>
+    api.get<VoicePermissions>(`/voice/permissions/${channelId}`),
 };
