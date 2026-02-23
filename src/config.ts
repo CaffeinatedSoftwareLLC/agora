@@ -26,6 +26,7 @@ export const config = {
     ipEncryptionKey: Buffer.from(rawIpKey, 'hex'),
     trustProxy: process.env.TRUST_PROXY === 'true',
     livekitUrl: process.env.LIVEKIT_URL ?? 'ws://localhost:7880',
+    livekitInternalUrl: process.env.LIVEKIT_INTERNAL_URL || undefined,
     livekitApiKey: process.env.LIVEKIT_API_KEY || undefined,
     livekitApiSecret: process.env.LIVEKIT_API_SECRET || undefined,
     corsOrigin: process.env.CORS_ORIGIN || undefined,

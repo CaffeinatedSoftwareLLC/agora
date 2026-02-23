@@ -3,8 +3,11 @@ import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk'
 import { config } from '../config';
 import { computePermissions, Permissions } from '../permissions';
 
-/** Convert ws:// LiveKit URL to http:// for the RoomServiceClient REST API. */
+/** HTTP URL for the RoomServiceClient REST API.
+ *  Uses LIVEKIT_INTERNAL_URL if set (e.g. http://livekit:7880 inside Docker),
+ *  otherwise converts the public WS URL to HTTP. */
 function livekitHttpUrl(): string {
+    if (config.livekitInternalUrl) return config.livekitInternalUrl;
     return config.livekitUrl
         .replace(/^ws:\/\//, 'http://')
         .replace(/^wss:\/\//, 'https://');
