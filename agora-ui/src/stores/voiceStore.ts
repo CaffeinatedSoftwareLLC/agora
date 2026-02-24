@@ -33,6 +33,7 @@ interface VoiceState {
   getChannelParticipants: (channelId: string) => VoiceParticipant[];
   setMuted: (muted: boolean) => void;
   setDeafened: (deafened: boolean) => void;
+  connectWithToken: (token: string, url: string, channelId: string, channelName: string, serverId: string) => void;
 }
 
 export const useVoiceStore = create<VoiceState>((set, get) => ({
@@ -123,4 +124,18 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
 
   setMuted: (muted) => set({ isMuted: muted }),
   setDeafened: (deafened) => set({ isDeafened: deafened }),
+
+  connectWithToken: (token, url, channelId, channelName, serverId) => {
+    // If already connected, leave first
+    if (get().currentChannel) {
+      get().leaveChannel();
+    }
+
+    set({
+      token,
+      livekitUrl: url,
+      currentChannel: { channelId, serverId, channelName },
+      connectionState: 'connecting',
+    });
+  },
 }));

@@ -6,12 +6,14 @@ import {
 } from '@livekit/components-react';
 import { ConnectionState } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useCallStore } from '../../stores/callStore';
 
 export function VoiceChannelProvider({ children }: { children: ReactNode }) {
   const token = useVoiceStore(s => s.token);
   const livekitUrl = useVoiceStore(s => s.livekitUrl);
   const currentChannel = useVoiceStore(s => s.currentChannel);
   const leaveChannel = useVoiceStore(s => s.leaveChannel);
+  const callType = useCallStore(s => s.callType);
 
   const handleDisconnected = useCallback(() => {
     leaveChannel();
@@ -32,7 +34,7 @@ export function VoiceChannelProvider({ children }: { children: ReactNode }) {
       token={token}
       connect={true}
       audio={!!navigator.mediaDevices}
-      video={false}
+      video={callType === 'video'}
       onDisconnected={handleDisconnected}
       onError={handleError}
       style={{ display: 'contents' }}

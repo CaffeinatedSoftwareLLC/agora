@@ -14,6 +14,7 @@ import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
 import { voiceRoutes } from './routes/voice';
 import { voiceWebhookRoutes } from './routes/voice-webhooks';
+import { dmCallRoutes } from './routes/dm-calls';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
@@ -23,6 +24,7 @@ export async function buildApp(opts?: {
     jwtSecret?: string;
     dbUrl?: string;
     rateLimit?: boolean;
+    callTimeoutMs?: number;
 }) {
     const app = Fastify({ logger: opts?.logger ?? false, trustProxy: config.trustProxy });
 
@@ -174,6 +176,7 @@ export async function buildApp(opts?: {
     await app.register(userRoutes);
     await app.register(voiceRoutes);
     await app.register(voiceWebhookRoutes);
+    await app.register(dmCallRoutes, { timeoutMs: opts?.callTimeoutMs });
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

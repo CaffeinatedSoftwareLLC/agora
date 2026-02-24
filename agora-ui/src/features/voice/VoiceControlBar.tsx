@@ -5,6 +5,7 @@ import {
 } from '@livekit/components-react';
 import { Track, RoomEvent, type RemoteTrack, type RemoteTrackPublication, type RemoteParticipant } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useCallStore } from '../../stores/callStore';
 import { usePalette, hexToRgb } from '../../theme';
 import { DeviceSelector } from './DeviceSelector';
 
@@ -38,6 +39,7 @@ function ConnectingState() {
   const P = usePalette();
   const currentChannel = useVoiceStore(s => s.currentChannel);
   const leaveChannel = useVoiceStore(s => s.leaveChannel);
+  const isDmCall = currentChannel?.serverId === '__dm_call__';
 
   return (
     <div className="flex items-center gap-2">
@@ -46,7 +48,7 @@ function ConnectingState() {
           Connecting...
         </div>
         <div className="text-[10px] truncate" style={{ color: P.dim }}>
-          #{currentChannel?.channelName}
+          {isDmCall ? `@${currentChannel?.channelName}` : `#${currentChannel?.channelName}`}
         </div>
       </div>
       <button
@@ -65,7 +67,9 @@ function ConnectedControls() {
   const P = usePalette();
   const currentChannel = useVoiceStore(s => s.currentChannel);
   const leaveChannel = useVoiceStore(s => s.leaveChannel);
+  const endCall = useCallStore(s => s.endCall);
   const onlineRgb = hexToRgb(P.online);
+  const isDmCall = currentChannel?.serverId === '__dm_call__';
 
   const isDeafened = useVoiceStore(s => s.isDeafened);
   const setDeafened = useVoiceStore(s => s.setDeafened);
@@ -119,8 +123,12 @@ function ConnectedControls() {
   }, [room]);
 
   const handleDisconnect = () => {
-    room.disconnect();
-    leaveChannel();
+    if (isDmCall) {
+      endCall();
+    } else {
+      room.disconnect();
+      leaveChannel();
+    }
   };
 
   return (
@@ -133,10 +141,10 @@ function ConnectedControls() {
         />
         <div className="flex-1 min-w-0">
           <div className="text-[11px] font-medium" style={{ color: P.online }}>
-            Voice Connected
+            {isDmCall ? 'In call' : 'Voice Connected'}
           </div>
           <div className="text-[10px] truncate" style={{ color: P.dim }}>
-            #{currentChannel?.channelName}
+            {isDmCall ? `@${currentChannel?.channelName}` : `#${currentChannel?.channelName}`}
           </div>
         </div>
       </div>

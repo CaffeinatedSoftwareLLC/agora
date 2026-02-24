@@ -14,6 +14,7 @@ export interface Message {
   deletedAt?: string;
   pending?: boolean;
   failed?: boolean;
+  systemEvent?: string;
 }
 
 interface MessageState {
@@ -53,6 +54,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       createdAt: m.createdAt,
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
+      systemEvent: m.systemEvent,
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -93,6 +95,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       createdAt: m.createdAt,
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
+      systemEvent: m.systemEvent,
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -255,6 +258,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           authorUsername: msg.authorUsername,
           channelId: msg.channelId,
           createdAt: msg.createdAt,
+          systemEvent: msg.systemEvent,
         };
         nextByChannel.set(msg.channelId, updated);
       } else {
@@ -270,6 +274,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           authorUsername: msg.authorUsername,
           channelId: msg.channelId,
           createdAt: msg.createdAt,
+          systemEvent: msg.systemEvent,
         };
         nextByChannel.set(msg.channelId, [...current, newMsg]);
       }

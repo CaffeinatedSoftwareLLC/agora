@@ -10,6 +10,8 @@ import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 import { VoiceChannelProvider } from '../voice/VoiceChannelProvider';
+import { IncomingCallOverlay } from '../calls/IncomingCallOverlay';
+import { OutgoingCallOverlay } from '../calls/OutgoingCallOverlay';
 
 export function AppShell() {
   const params = useParams();
@@ -94,6 +96,8 @@ export function AppShell() {
           {!isDm && membersOpen && <MembersSidebar />}
         </div>
       </div>
+      <IncomingCallOverlay />
+      <OutgoingCallOverlay />
     </VoiceChannelProvider>
   );
 }

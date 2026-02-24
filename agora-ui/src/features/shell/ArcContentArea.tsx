@@ -4,6 +4,7 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useCallStore } from '../../stores/callStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
 import { TypingIndicator } from '../live/TypingIndicator';
@@ -36,6 +37,9 @@ export function ArcContentArea() {
   const toggleMembers = useUIStore(s => s.toggleMembers);
 
   const voiceConnected = useVoiceStore(s => s.connectionState) === 'connected';
+  const voiceCurrentChannel = useVoiceStore(s => s.currentChannel);
+  const initiateCall = useCallStore(s => s.initiateCall);
+  const callStatus = useCallStore(s => s.status);
 
   const accentColor = instanceServer ? serverColor(instanceServer.name) : P.accent;
   const isDm = !!channel && channel.serverId === null;
@@ -87,6 +91,35 @@ export function ArcContentArea() {
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-1 shrink-0">
+          {/* Call buttons (DM only) */}
+          {isDm && (
+            <>
+              <button
+                onClick={() => activeChannelId && channel && initiateCall(activeChannelId, 'voice', channel.name)}
+                disabled={voiceCurrentChannel !== null || callStatus !== 'idle'}
+                className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-30"
+                style={{ color: P.dim }}
+                title="Voice Call"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => activeChannelId && channel && initiateCall(activeChannelId, 'video', channel.name)}
+                disabled={voiceCurrentChannel !== null || callStatus !== 'idle'}
+                className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-30"
+                style={{ color: P.dim }}
+                title="Video Call"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M23 7l-7 5 7 5V7z" />
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                </svg>
+              </button>
+            </>
+          )}
+
           {/* Search button */}
           <button
             className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"

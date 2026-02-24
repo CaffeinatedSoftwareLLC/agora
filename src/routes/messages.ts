@@ -166,7 +166,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username
+                            u.username AS author_username, m.system_event
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2
@@ -175,7 +175,7 @@ export async function messageRoutes(app: FastifyInstance) {
             params = [channelId, before, limit];
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username
+                            u.username AS author_username, m.system_event
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1
@@ -220,6 +220,7 @@ export async function messageRoutes(app: FastifyInstance) {
             deletedAt: row.deleted_at,
             createdAt: row.created_at,
             reactions: reactionsMap[row.id.trim()] || [],
+            ...(row.system_event ? { systemEvent: row.system_event } : {}),
         }));
 
         return reply.status(200).send(messages);

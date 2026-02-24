@@ -90,6 +90,19 @@ export interface VoiceParticipantInfo {
   permission?: { canPublish: boolean; canSubscribe: boolean };
 }
 
+export const callApi = {
+  initiate: (channelId: string, callType: 'voice' | 'video') =>
+    api.post<{ callId: string; token: string; url: string; callType: string }>('/calls/initiate', { channelId, callType }),
+  accept: (callId: string) =>
+    api.post<{ callId: string; token: string; url: string }>('/calls/accept', { callId }),
+  decline: (callId: string) =>
+    api.post<{ success: boolean }>('/calls/decline', { callId }),
+  cancel: (callId: string) =>
+    api.post<{ success: boolean }>('/calls/cancel', { callId }),
+  end: (callId: string) =>
+    api.post<{ success: boolean; duration: number }>('/calls/end', { callId }),
+};
+
 export const voiceApi = {
   getToken: (channelId: string) =>
     api.post<{ token: string; url: string }>('/voice/token', { channelId }),

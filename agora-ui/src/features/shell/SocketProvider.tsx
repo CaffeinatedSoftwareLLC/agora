@@ -11,6 +11,7 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { useUnreadStore } from '../../stores/unreadStore';
 import { useReactionStore } from '../../stores/reactionStore';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useCallStore } from '../../stores/callStore';
 import type {
   ReadyPayload,
   MessagePayload,
@@ -137,6 +138,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('voice:room_finished', (data: { channelId: string }) => {
       useVoiceStore.getState().clearChannelParticipants(data.channelId);
     });
+
+    // Call events
+    s.on('call:incoming', (data) => useCallStore.getState().handleIncoming(data));
+    s.on('call:accepted', (data) => useCallStore.getState().handleAccepted(data));
+    s.on('call:declined', (data) => useCallStore.getState().handleDeclined(data));
+    s.on('call:cancelled', (data) => useCallStore.getState().handleCancelled(data));
+    s.on('call:timeout', (data) => useCallStore.getState().handleTimeout(data));
+    s.on('call:ended', (data) => useCallStore.getState().handleEnded(data));
 
     s.on('connect_error', (err) => {
       const fatal = [

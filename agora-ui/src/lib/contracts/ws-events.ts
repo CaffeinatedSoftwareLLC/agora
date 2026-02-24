@@ -20,6 +20,7 @@ export interface MessagePayload {
   mentions?: string[];
   mentionsEveryone?: boolean;
   reactions?: { emoji: string; count: number; me: boolean }[];
+  systemEvent?: string;
 }
 
 export interface MessageUpdatePayload {
@@ -69,3 +70,17 @@ export interface DMCreatedPayload {
   channelId: string;
   name: string;
 }
+
+export interface CallIncomingPayload {
+  callId: string;
+  channelId: string;
+  callerId: string;
+  callerUsername: string;
+  callType: 'voice' | 'video';
+}
+
+export interface CallAcceptedPayload { callId: string; }
+export interface CallDeclinedPayload { callId: string; }
+export interface CallCancelledPayload { callId: string; }
+export interface CallTimeoutPayload { callId: string; }
+export interface CallEndedPayload { callId: string; duration?: number; }
