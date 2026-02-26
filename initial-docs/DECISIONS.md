@@ -2,7 +2,7 @@
 
 > **Living document.** Update this file as decisions are made in web chats or Claude Code sessions. CC reads this before every session to stay in sync.
 >
-> Last updated: 2026-02-18
+> Last updated: 2026-02-26
 
 ---
 
@@ -65,7 +65,7 @@ The codebase was migrated from a Discord-like multi-server model to a single-ins
 | Cache/PubSub | Redis 7 |
 | File Storage | MinIO (S3-compatible) — not yet integrated |
 | Frontend | React 19 + Vite 7 + Tailwind v4 + Zustand |
-| Voice/Video | LiveKit (future) — not yet integrated |
+| Voice/Video | LiveKit (self-hosted SFU) with built-in TURN |
 | Containers | Docker + Docker Compose |
 
 ### Why This Stack
@@ -132,6 +132,12 @@ Optional Supabase-backed OAuth identity provider. A "passport" for Agora users.
 - **Account suspension:** `account_status` field (`active`/`pending`/`suspended`). Suspended users cannot log in (403) and are force-disconnected from WebSocket via `pendingDisconnects`. Admin can suspend account + ban IP in one action.
 - **Audit logging:** All admin actions (approve, reject, ban, IP ban, settings changes) logged to `audit_log` with actor, target, action type, and changes JSON.
 
+### Security Hardening (Implemented 2026-02-20)
+
+- **CORS lockdown:** Removed wildcard `*` CORS. Origin now set via `CORS_ORIGIN` env var (defaults to `http://localhost:5173` in dev).
+- **Token revocation on logout:** `POST /auth/logout` blacklists the JWT `jti` in Redis with TTL matching token expiry. Auth middleware checks the blacklist on every request. WebSocket gateway also checks blacklist on connect.
+- **No fallback credentials:** Removed hardcoded LiveKit API key/secret fallbacks. All secrets must be provided via env vars.
+
 ---
 
 ## E2EE Roadmap (DMs)
@@ -146,17 +152,25 @@ Optional Supabase-backed OAuth identity provider. A "passport" for Agora users.
 
 ---
 
-## Voice & Screen Sharing Roadmap
+## Voice, Video & Calls (Implemented 2026-02-18 → 2026-02-26)
 
-**LiveKit** is the chosen SFU — open source (Apache 2.0), self-hostable, Go binary, Docker-friendly.
+**LiveKit** is the SFU — open source (Apache 2.0), self-hostable, Go binary, Docker-friendly. Built-in TURN server enabled for NAT/mobile clients.
 
-Integration pattern:
-1. Add `livekit-server` service to `docker-compose.yml`
-2. `POST /api/voice/token` endpoint generates LiveKit access token scoped to channel
-3. `<VoiceChannel />` React component using `@livekit/components-react`
-4. Screen sharing is a prop toggle in their React SDK
+### Channel Voice/Video (Phases 1–3)
 
-**Note:** ngrok won't work for voice (WebRTC needs UDP ports). Voice requires a real box with public IP or a TURN server. Messaging + signaling works through ngrok.
+- **Phase 1 — Voice channels:** `POST /voice/token` generates LiveKit access token scoped to channel. `livekit-server` service in Docker Compose (dev + prod). Channel sidebar shows connected participants with real-time join/leave via Socket.IO. Voice channel type selectable in Create Channel modal.
+- **Phase 2 — Video & screen share:** Video grid with responsive layout, screen sharing with audio capture, deafen toggle, device selector (mic/camera/speaker). Frontend unit tests with comprehensive LiveKit mocks (`agora-ui/src/test/livekit-mocks.tsx`).
+- **Phase 3 — Admin controls:** Server-side `POST /voice/mute/:userId`, `/voice/deafen/:userId`, `/voice/undeafen/:userId` endpoints. Uses LiveKit REST API (`RoomServiceClient`) to set participant track permissions. Right-click context menu on voice participants (mute, deafen, disconnect). Permission-gated via `useVoicePermissions` hook. `LIVEKIT_INTERNAL_URL` env var for Docker-internal REST API (avoids prod 404s when public URL isn't reachable from the API container).
+
+### DM Voice/Video Calls (Phase 4)
+
+- **Ring/accept/decline flow:** `POST /dm-calls/start` initiates a call, emits `dm:call:incoming` Socket.IO event to recipient. Recipient can accept (`POST /dm-calls/:callId/accept`) or decline (`POST /dm-calls/:callId/decline`). 30-second ring timeout auto-cancels.
+- **In-memory call state:** `src/call-state.ts` maintains three maps — `activeCalls` (channelId → call), `callIdToChannel` (reverse lookup), `userInCall` (prevents multi-call). Recipient isn't marked "in call" until they accept.
+- **System messages:** Call events (missed, declined, ended with duration) written as messages with `system_event` column (migration 014). Displayed in chat history.
+- **LiveKit room lifecycle:** Room created on call start, caller joins immediately. Recipient joins on accept. Room auto-cleaned by LiveKit webhook (`participant_left` / `room_finished`).
+- **UI:** `IncomingCallOverlay` (ring animation, accept/decline buttons), `OutgoingCallOverlay` (ringing state, cancel button). Call store (`callStore.ts`) manages UI state.
+
+**Note:** ngrok won't work for voice (WebRTC needs UDP ports). Voice requires a real box with public IP or the built-in TURN server. Messaging + signaling works through ngrok.
 
 ---
 
@@ -170,7 +184,7 @@ The "Add Instance" flow in the client: user pastes a tunnel URL, authenticates a
 
 ---
 
-## What's Built (as of 2026-02-18)
+## What's Built (as of 2026-02-26)
 
 ### Backend
 - Auth: register, login, Argon2id, JWT
@@ -190,9 +204,14 @@ The "Add Instance" flow in the client: user pastes a tunnel URL, authenticates a
 - Anti-abuse: encrypted IP tracking, IP bans with expiration, rate limiting, account suspension with forced WS disconnect
 - WebSocket Ready event bootstraps full client state in one round-trip (servers, channels, unreads, online users)
 - Post-COMMIT event emission: Socket.IO events queued during request, only emitted after transaction commits
-- Docker Compose for local dev (PostgreSQL 16 + Redis 7)
-- Production Docker Compose: multi-service stack (postgres, redis, migrate, api, web/nginx) with persistent volumes
-- 13 database migrations, 19 tables
+- Voice channels: LiveKit integration with token generation, join/leave tracking, participant lists via Socket.IO
+- Voice admin controls: server-side mute/deafen/undeafen via LiveKit REST API, permission-gated
+- DM voice/video calls: ring/accept/decline flow, 30s timeout, in-memory call state, system messages for call history
+- Security hardening: CORS lockdown, JWT blacklist on logout (Redis-backed), no fallback credentials
+- Docker Compose for local dev (PostgreSQL 16 + Redis 7 + LiveKit)
+- Production Docker Compose: multi-service stack (postgres, redis, livekit, migrate, api, web/nginx) with persistent volumes, Caddy reverse proxy for TLS
+- 14 database migrations, 19 tables
+- v0.0.1 public alpha release (AGPL-3.0 license)
 
 ### Frontend
 - Arc V2-inspired UI with two palette themes (Aegean, Terracotta)
@@ -209,6 +228,11 @@ The "Add Instance" flow in the client: user pastes a tunnel URL, authenticates a
 - Channel creation modal
 - Connection status indicator
 - WebSocket-first state hydration via Ready event (no REST waterfall)
+- Voice channels: join/leave UI, participant list in sidebar, voice control bar (mute, deafen, disconnect)
+- Video grid with responsive layout, screen sharing with audio capture, device selector (mic/camera/speaker)
+- Voice admin: right-click context menu on participants (mute, deafen, disconnect), permission-gated
+- DM calls: incoming/outgoing call overlays with ring animation, accept/decline/cancel buttons
+- Call history as system messages in DM chat
 
 ---
 
@@ -218,7 +242,7 @@ The "Add Instance" flow in the client: user pastes a tunnel URL, authenticates a
 - Message search (no full-text search)
 - Custom emoji
 - Threads / forums
-- Voice / video (LiveKit — channel type exists in schema but no WebRTC integration)
+- ~~Voice / video~~ — **Implemented** (Phases 1–4, see above)
 - User profiles (display_name, avatar, banner, bio columns exist but no endpoints)
 - Role management UI (permission system built in backend, no frontend)
 - Friend / block relationships (table exists but no endpoints)
