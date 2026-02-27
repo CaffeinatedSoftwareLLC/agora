@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent, type DragEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
@@ -57,8 +57,15 @@ export function FloatingMessageInput({
   const addUpload = useUploadStore(s => s.addUpload);
   const removeUpload = useUploadStore(s => s.removeUpload);
   const clearCompleted = useUploadStore(s => s.clearCompleted);
-  const uploads = useUploadStore(s => s.getChannelUploads(channelId));
-  const completedIds = useUploadStore(s => s.getCompletedIds(channelId));
+  const allUploads = useUploadStore(s => s.uploads);
+  const uploads = useMemo(
+    () => Array.from(allUploads.values()).filter(u => u.channelId === channelId),
+    [allUploads, channelId],
+  );
+  const completedIds = useMemo(
+    () => uploads.filter(u => u.status === 'done' && u.result).map(u => u.result!.id),
+    [uploads],
+  );
 
   // Auto-resize textarea
   useEffect(() => {
