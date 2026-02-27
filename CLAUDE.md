@@ -10,7 +10,7 @@ Agora is a Discord-like chat platform. Backend is Fastify + PostgreSQL with Row 
 
 ```bash
 # Infrastructure
-docker compose up                    # PostgreSQL 16 + Redis 7
+docker compose up                    # PostgreSQL 16 + Redis 7 + MinIO + LiveKit
 
 # Backend (root directory)
 npm run dev                          # Start backend (port 3000)
@@ -85,6 +85,18 @@ Circular FK between `roles` and `servers` uses `DEFERRABLE INITIALLY DEFERRED` c
 
 Fresh instances require a one-time setup via `POST /instance/setup` with a setup token. Uses `pg_advisory_xact_lock` to serialize concurrent attempts. Registration policies: `open`, `invite_only`, `approval`.
 
+### File Storage (MinIO)
+
+Files are stored in MinIO (S3-compatible). `src/lib/minio.ts` creates the client, `src/routes/files.ts` handles upload/download/delete. Files are validated by magic bytes (`src/lib/file-validation.ts`) and optionally encrypted at rest (`src/lib/encryption.ts`).
+
+All file limits (max size, allowed extensions, retention, quota) are admin-configurable via `instance_settings` table — no hardcoded caps anywhere else. The DB setting is the sole authority.
+
+Background cleanup worker (`src/workers/file-cleanup.ts`) enforces retention and quota policies.
+
+### nginx Route Proxying
+
+`agora-ui/nginx.conf` has a regex that proxies API route prefixes to `api:3000`. **When adding new top-level route prefixes**, add them to this regex or they'll serve `index.html` instead (works in dev because Vite proxies differently).
+
 ## Testing
 
 Tests run against real PostgreSQL (not mocked). Vitest with `fileParallelism: false`.
@@ -119,9 +131,9 @@ WebSocket tests use port 4999 and wait for the `Ready` event before asserting.
 
 React 19 + Vite 7 + Tailwind v4 + Zustand for state. Vite dev server proxies `/api` to backend at `localhost:3000`.
 
-Structure: `agora-ui/src/features/{auth,admin,setup,shell,servers,messages,live}/` with shared components in `components/ui/`. API client at `lib/api.ts`. Type contracts at `lib/contracts/`.
+Structure: `agora-ui/src/features/{auth,admin,setup,shell,servers,messages,live,voice}/` with shared components in `components/ui/`. API client at `lib/api.ts`. Type contracts at `lib/contracts/`.
 
-Current state: Auth flow, admin dashboard, and instance setup are implemented. Main chat UI is Phase 3.
+Current state: Auth flow, admin dashboard, instance setup, chat UI, voice/video, file sharing are all implemented.
 
 ## Race Condition Patterns
 
@@ -132,4 +144,4 @@ Current state: Auth flow, admin dashboard, and instance setup are implemented. M
 
 ## Environment
 
-Copy `.env.example` to `.env`. Defaults: `accord:accord@localhost:5432/accord_test`, JWT secret for dev.
+Copy `.env.example` to `.env`. Defaults: `accord:accord@localhost:5432/accord_test`, JWT secret for dev, MinIO at `localhost:9000`.
