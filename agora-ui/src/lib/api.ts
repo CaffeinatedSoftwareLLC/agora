@@ -103,6 +103,35 @@ export const callApi = {
     api.post<{ success: boolean; duration: number }>('/calls/end', { callId }),
 };
 
+export async function uploadFile(channelId: string, file: File): Promise<{
+  id: string; name: string; mime: string; size: number;
+  width: number | null; height: number | null; url: string;
+}> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('channel_id', channelId);
+
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  // DO NOT set Content-Type — browser sets it with boundary for FormData
+
+  const res = await fetch('/files/upload', {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, data.error || 'upload_failed');
+  return data;
+}
+
+export function getAuthHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export const voiceApi = {
   getToken: (channelId: string) =>
     api.post<{ token: string; url: string }>('/voice/token', { channelId }),

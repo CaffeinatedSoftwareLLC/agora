@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { requireInstanceAdmin } from '../auth/middleware';
 import { generateUlid } from '../utils/ulid';
 import { hmacIp, encryptIp, decryptIp } from '../auth/crypto';
+import { getFileSettings, invalidateSettingsCache } from '../lib/settings';
 
 async function logAdminAction(
     db: any,
@@ -498,6 +499,96 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.send({
             instanceName: config.instance_name,
             registrationPolicy: config.registration_policy,
+        });
+    });
+
+    // GET /admin/settings/files
+    app.get('/admin/settings/files', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        const db = (request as any).dbClient;
+        const settings = await getFileSettings(db);
+        return reply.send(settings);
+    });
+
+    // PATCH /admin/settings/files
+    app.patch('/admin/settings/files', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    'files.max_size_bytes': { type: 'number', minimum: 1024, maximum: 104857600 },
+                    'files.allowed_extensions': {
+                        type: 'array',
+                        items: { type: 'string', pattern: '^[a-z0-9]+$' },
+                    },
+                    'files.retention_days': {
+                        oneOf: [
+                            { type: 'null' },
+                            { type: 'integer', minimum: 1, maximum: 3650 },
+                        ],
+                    },
+                    'files.storage_quota_bytes': {
+                        oneOf: [
+                            { type: 'null' },
+                            { type: 'integer', minimum: 1 },
+                        ],
+                    },
+                    'files.exif_strip': { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+        },
+    }, async (request, reply) => {
+        const db = (request as any).dbClient;
+        const userId = (request as any).userId;
+        const body = request.body as Record<string, any>;
+
+        for (const [key, value] of Object.entries(body)) {
+            await db.query(
+                `INSERT INTO instance_settings (key, value) VALUES ($1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = $2`,
+                [key, JSON.stringify(value)]
+            );
+        }
+
+        invalidateSettingsCache();
+
+        await logAdminAction(db, userId, 'file_settings_update', 'instance_settings', null, body);
+
+        return reply.send({ success: true });
+    });
+
+    // GET /admin/storage
+    app.get('/admin/storage', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        const db = (request as any).dbClient;
+
+        const statsRes = await db.query(`
+            SELECT
+                COUNT(*)::int as total_files,
+                COALESCE(SUM(size_bytes), 0)::bigint as total_bytes,
+                COUNT(*) FILTER (WHERE mime_type LIKE 'image/%')::int as image_count,
+                COALESCE(SUM(size_bytes) FILTER (WHERE mime_type LIKE 'image/%'), 0)::bigint as image_bytes,
+                COUNT(*) FILTER (WHERE expires_at IS NOT NULL)::int as expiring_files
+            FROM files
+            WHERE deleted_at IS NULL
+        `);
+
+        const stats = statsRes.rows[0];
+        const settings = await getFileSettings(db);
+        const quotaBytes = settings['files.storage_quota_bytes'] ?? null;
+
+        return reply.send({
+            totalFiles: stats.total_files,
+            totalBytes: String(stats.total_bytes),
+            imageCount: stats.image_count,
+            imageBytes: String(stats.image_bytes),
+            expiringFiles: stats.expiring_files,
+            quotaBytes: quotaBytes != null ? String(quotaBytes) : null,
+            quotaUsedPercent: quotaBytes != null ? Number(((BigInt(stats.total_bytes) * 10000n) / BigInt(quotaBytes)) ) / 100 : null,
         });
     });
 }

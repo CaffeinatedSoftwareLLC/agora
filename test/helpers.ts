@@ -92,13 +92,23 @@ export async function joinViaInvite(
 
 // ─── Database cleanup for test isolation ───
 export async function cleanDatabase(db: any) {
-    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, message_reactions, message_mentions, channel_unreads, instance_config, audit_log, ip_bans CASCADE');
+    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, message_reactions, message_mentions, channel_unreads, instance_config, audit_log, ip_bans, instance_settings, files CASCADE');
     // Re-seed instance_config so existing tests see an initialized instance
     await db.query(
         `INSERT INTO instance_config (key, value) VALUES
             ('setup_complete', 'true'),
             ('registration_policy', 'open'),
             ('instance_name', 'Agora')`
+    );
+    // Re-seed default file-sharing settings
+    await db.query(
+        `INSERT INTO instance_settings (key, value) VALUES
+            ('files.max_size_bytes',      '26214400'::jsonb),
+            ('files.allowed_extensions',  '["jpg","jpeg","png","gif","webp","pdf","txt","md","zip","mp3","mp4","mov","csv","json"]'::jsonb),
+            ('files.retention_days',      'null'::jsonb),
+            ('files.storage_quota_bytes', 'null'::jsonb),
+            ('files.exif_strip',          'true'::jsonb)
+        ON CONFLICT DO NOTHING`
     );
     // Reset the in-memory cache so the app re-reads from DB
     resetInitializedCache();

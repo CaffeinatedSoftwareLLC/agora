@@ -6,6 +6,7 @@ const navItems = [
   { to: '/admin/pending', label: 'Pending Users', end: false },
   { to: '/admin/users', label: 'All Users', end: false },
   { to: '/admin/settings', label: 'Settings', end: false },
+  { to: '/admin/storage', label: 'File Storage', end: false },
 ];
 
 export function AdminLayout({ children }: { children: ReactNode }) {

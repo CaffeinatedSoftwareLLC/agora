@@ -49,3 +49,21 @@ export interface InstanceConfig {
   instanceName: string;
   registrationPolicy: RegistrationPolicy;
 }
+
+export interface FileSettings {
+  'files.max_size_bytes'?: number;
+  'files.allowed_extensions'?: string[];
+  'files.retention_days'?: number | null;
+  'files.storage_quota_bytes'?: number | null;
+  'files.exif_strip'?: boolean;
+}
+
+export interface StorageStats {
+  totalFiles: number;
+  totalBytes: string;
+  imageCount: number;
+  imageBytes: string;
+  expiringFiles: number;
+  quotaBytes: string | null;
+  quotaUsedPercent: number | null;
+}

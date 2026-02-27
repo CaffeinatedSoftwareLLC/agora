@@ -8,6 +8,17 @@ export interface ReadyPayload {
   onlineUserIds: string[];
 }
 
+export interface MessageAttachmentPayload {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  url: string;
+  deletedAt?: string;
+}
+
 export interface MessagePayload {
   id: string;
   content: string;
@@ -21,6 +32,7 @@ export interface MessagePayload {
   mentionsEveryone?: boolean;
   reactions?: { emoji: string; count: number; me: boolean }[];
   systemEvent?: string;
+  attachments?: MessageAttachmentPayload[];
 }
 
 export interface MessageUpdatePayload {
