@@ -60,10 +60,10 @@ services:
       - minio-data:/data
     command: server /data
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     restart: unless-stopped
 
   api:
