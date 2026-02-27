@@ -3,6 +3,7 @@ import type { Message } from '../../stores/messageStore';
 import { MessageActions } from './MessageActions';
 import { EditMessageInput } from './EditMessageInput';
 import { ReactionBar } from '../live/ReactionBar';
+import { FileAttachment } from './FileAttachment';
 import { usePalette } from '../../theme';
 
 interface MessageItemProps {
@@ -78,6 +79,13 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         ) : (
           <div className="text-sm text-text">{message.content}</div>
         )}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="mt-1">
+            {message.attachments.map(att => (
+              <FileAttachment key={att.id} attachment={att} />
+            ))}
+          </div>
+        )}
         {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
         {message.failed && (
           <span className="text-xs text-danger ml-2">Failed to send</span>
@@ -108,6 +116,13 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
           />
         ) : (
           <div className="text-sm text-text">{message.content}</div>
+        )}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="mt-1">
+            {message.attachments.map(att => (
+              <FileAttachment key={att.id} attachment={att} />
+            ))}
+          </div>
         )}
         {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
         {message.failed && (

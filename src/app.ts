@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { Pool } from 'pg';
 import rateLimit from '@fastify/rate-limit';
+import multipart from '@fastify/multipart';
 import { config } from './config';
 import { instanceRoutes } from './routes/instance';
 import { authRoutes } from './routes/auth';
@@ -15,6 +16,7 @@ import { userRoutes } from './routes/users';
 import { voiceRoutes } from './routes/voice';
 import { voiceWebhookRoutes } from './routes/voice-webhooks';
 import { dmCallRoutes } from './routes/dm-calls';
+import { fileRoutes } from './routes/files';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
@@ -48,6 +50,11 @@ export async function buildApp(opts?: {
     if (opts?.rateLimit !== false) {
         await app.register(rateLimit, { global: false });
     }
+
+    // Multipart file upload support
+    await app.register(multipart, {
+        limits: { fileSize: 104857600, files: 1 },
+    });
 
     // ─── Per-request DB client lifecycle (RLS enforcement) ───
     app.addHook('onRequest', async (request) => {
@@ -177,6 +184,7 @@ export async function buildApp(opts?: {
     await app.register(voiceRoutes);
     await app.register(voiceWebhookRoutes);
     await app.register(dmCallRoutes, { timeoutMs: opts?.callTimeoutMs });
+    await app.register(fileRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

@@ -17,6 +17,22 @@ if (rawIpKey === '0'.repeat(64) && process.env.NODE_ENV !== 'test') {
     console.warn('WARNING: Using default IP_ENCRYPTION_KEY — set a real key for production');
 }
 
+// Validate AGORA_ENCRYPTION_KEY format if explicitly set
+const rawEncryptionKey = process.env.AGORA_ENCRYPTION_KEY;
+if (rawEncryptionKey && !/^[0-9a-fA-F]{64}$/.test(rawEncryptionKey)) {
+    throw new Error('AGORA_ENCRYPTION_KEY must be exactly 64 hex characters');
+}
+
+// Hard-fail in production if encryption key is missing
+if (process.env.NODE_ENV === 'production' && !rawEncryptionKey) {
+    throw new Error('AGORA_ENCRYPTION_KEY must be set in production');
+}
+
+// Warn in non-test environments if using default key
+if (!rawEncryptionKey && process.env.NODE_ENV !== 'test') {
+    console.warn('WARNING: Using default AGORA_ENCRYPTION_KEY — set a real key for production');
+}
+
 export const config = {
     dbUrl: process.env.DATABASE_URL ?? 'postgres://accord:accord@localhost:5432/accord_test',
     testDbUrl: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgres://accord:accord@localhost:5432/accord_test',
@@ -30,4 +46,8 @@ export const config = {
     livekitApiKey: process.env.LIVEKIT_API_KEY || undefined,
     livekitApiSecret: process.env.LIVEKIT_API_SECRET || undefined,
     corsOrigin: process.env.CORS_ORIGIN || undefined,
+    minioEndpoint: process.env.MINIO_ENDPOINT ?? 'http://localhost:9000',
+    minioRootUser: process.env.MINIO_ROOT_USER ?? 'agora',
+    minioRootPassword: process.env.MINIO_ROOT_PASSWORD ?? 'agoradevpassword',
+    encryptionKey: Buffer.from(rawEncryptionKey ?? '0'.repeat(64), 'hex'),
 };

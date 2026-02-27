@@ -3,6 +3,17 @@ import { api } from '../lib/api';
 import { useReactionStore } from './reactionStore';
 import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload } from '../lib/contracts/ws-events';
 
+export interface Attachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  url: string;
+  deletedAt?: string;
+}
+
 export interface Message {
   id: string;
   content: string | null;
@@ -15,6 +26,7 @@ export interface Message {
   pending?: boolean;
   failed?: boolean;
   systemEvent?: string;
+  attachments?: Attachment[];
 }
 
 interface MessageState {
@@ -23,7 +35,7 @@ interface MessageState {
 
   loadMessages: (channelId: string) => Promise<void>;
   loadOlder: (channelId: string) => Promise<void>;
-  sendMessage: (channelId: string, content: string, authorId: string, authorUsername: string) => Promise<void>;
+  sendMessage: (channelId: string, content: string, authorId: string, authorUsername: string, attachmentIds?: string[]) => Promise<void>;
   editMessage: (channelId: string, msgId: string, content: string) => Promise<void>;
   deleteMessage: (channelId: string, msgId: string) => Promise<void>;
 
@@ -55,6 +67,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
+      attachments: m.attachments,
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -96,6 +109,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
+      attachments: m.attachments,
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -117,7 +131,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
   },
 
-  sendMessage: async (channelId, content, authorId, authorUsername) => {
+  sendMessage: async (channelId, content, authorId, authorUsername, attachmentIds?) => {
     // Create optimistic message
     const tempId = `pending-${Date.now()}`;
     const optimistic: Message = {
@@ -138,7 +152,10 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
 
     try {
-      const res = await api.post<{ id: string }>(`/channels/${channelId}/messages`, { content });
+      const body: Record<string, unknown> = {};
+      if (content) body.content = content;
+      if (attachmentIds && attachmentIds.length > 0) body.attachments = attachmentIds;
+      const res = await api.post<{ id: string }>(`/channels/${channelId}/messages`, body);
       // Reconcile: if WS already delivered the real message, drop the optimistic row.
       // Otherwise remap tempId → real ID so addMessage can match when WS arrives.
       set((state) => {
@@ -259,6 +276,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
+          attachments: msg.attachments,
         };
         nextByChannel.set(msg.channelId, updated);
       } else {
@@ -275,6 +293,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
+          attachments: msg.attachments,
         };
         nextByChannel.set(msg.channelId, [...current, newMsg]);
       }

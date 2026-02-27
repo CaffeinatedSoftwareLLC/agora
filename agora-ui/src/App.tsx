@@ -10,6 +10,7 @@ import { AdminDashboard } from './features/admin/AdminDashboard';
 import { PendingQueue } from './features/admin/PendingQueue';
 import { UserTable } from './features/admin/UserTable';
 import { InstanceSettings } from './features/admin/InstanceSettings';
+import { StorageSettings } from './features/admin/StorageSettings';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -35,6 +36,7 @@ export default function App() {
                           <Route path="pending" element={<PendingQueue />} />
                           <Route path="users" element={<UserTable />} />
                           <Route path="settings" element={<InstanceSettings />} />
+                          <Route path="storage" element={<StorageSettings />} />
                         </Routes>
                       </AdminLayout>
                     </AdminGuard>

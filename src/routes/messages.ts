@@ -4,21 +4,30 @@ import { checkChannelMembership } from './shared';
 
 export async function messageRoutes(app: FastifyInstance) {
 
-    // POST /channels/:id/messages → 201 { id, content, authorId, authorUsername, channelId, createdAt }
+    // POST /channels/:id/messages → 201 { id, content, authorId, authorUsername, channelId, createdAt, attachments }
     app.post('/channels/:id/messages', {
         schema: {
             body: {
                 type: 'object',
-                required: ['content'],
                 properties: {
                     content: { type: 'string', minLength: 1, maxLength: 4000 },
+                    attachments: {
+                        type: 'array',
+                        items: { type: 'string', minLength: 26, maxLength: 26 },
+                        maxItems: 10,
+                    },
                 },
+                anyOf: [
+                    { required: ['content'] },
+                    { required: ['attachments'] },
+                ],
             },
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
         const userId = (request as any).userId;
-        const { content } = request.body as any;
+        const { content: rawContent, attachments: attachmentIds } = request.body as any;
+        const content = rawContent || null;
         const db = (request as any).dbClient;
 
         const isMember = await checkChannelMembership(db, channelId, userId);
@@ -29,8 +38,9 @@ export async function messageRoutes(app: FastifyInstance) {
         const messageId = generateUlid();
 
         // Parse @mentions from content
-        const mentionMatches: string[] = content.match(/@(\w+)/g) || [];
-        const mentionedUsernames = [...new Set(mentionMatches.map((m) => m.slice(1)))];
+        const mentionContent = content || '';
+        const mentionMatches: string[] = mentionContent.match(/@(\w+)/g) || [];
+        const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
         const mentionsEveryone = mentionedUsernames.includes('everyone');
 
         await db.query(
@@ -118,6 +128,61 @@ export async function messageRoutes(app: FastifyInstance) {
             }
         }
 
+        // Validate and bind attachments
+        let resolvedAttachments: any[] = [];
+
+        if (attachmentIds && attachmentIds.length > 0) {
+            // Reject duplicates
+            const uniqueIds = [...new Set(attachmentIds)] as string[];
+            if (attachmentIds.length !== uniqueIds.length) {
+                return reply.status(400).send({ error: 'Duplicate attachment IDs' });
+            }
+
+            if (uniqueIds.length > 10) {
+                return reply.status(400).send({ error: 'Too many attachments (max 10)' });
+            }
+
+            // Validate all attachments (lock rows with FOR UPDATE)
+            const filesResult = await db.query(`
+                SELECT id, uploader_id, channel_id, message_id, filename, mime_type, content_type, size_bytes, width, height, deleted_at
+                FROM files WHERE id = ANY($1) FOR UPDATE
+            `, [uniqueIds]);
+
+            // Cardinality check
+            if (filesResult.rows.length !== uniqueIds.length) {
+                return reply.status(400).send({ error: 'One or more attachment IDs are invalid or deleted' });
+            }
+
+            for (const file of filesResult.rows) {
+                if (file.deleted_at) {
+                    return reply.status(400).send({ error: 'One or more attachments are deleted' });
+                }
+                if (file.uploader_id.trim() !== userId.trim()) {
+                    return reply.status(400).send({ error: 'Attachment does not belong to you' });
+                }
+                if (file.channel_id?.trim() !== channelId.trim()) {
+                    return reply.status(400).send({ error: 'Attachment channel mismatch' });
+                }
+                if (file.message_id) {
+                    return reply.status(400).send({ error: 'Attachment already bound to a message' });
+                }
+            }
+
+            // Bind files to message
+            await db.query('UPDATE files SET message_id = $1 WHERE id = ANY($2)', [messageId, uniqueIds]);
+
+            // Resolve attachment metadata for response
+            resolvedAttachments = filesResult.rows.map((f: any) => ({
+                id: f.id.trim(),
+                name: f.filename,
+                mime: f.mime_type || f.content_type,
+                size: f.size_bytes,
+                width: f.width,
+                height: f.height,
+                url: `/files/${f.id.trim()}`,
+            }));
+        }
+
         const userRow = await db.query(
             'SELECT username FROM users WHERE id = $1',
             [userId]
@@ -132,6 +197,7 @@ export async function messageRoutes(app: FastifyInstance) {
             createdAt: new Date().toISOString(),
             mentions: mentionedUserIds,
             mentionsEveryone,
+            attachments: resolvedAttachments,
         };
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
@@ -210,6 +276,32 @@ export async function messageRoutes(app: FastifyInstance) {
             }
         }
 
+        // Fetch attachments for all returned messages
+        let attachmentsMap: Record<string, any[]> = {};
+        if (messageIds.length > 0) {
+            const attachResult = await db.query(`
+                SELECT id, message_id, filename, mime_type, content_type, size_bytes, width, height, deleted_at
+                FROM files
+                WHERE message_id = ANY($1)
+                ORDER BY created_at ASC
+            `, [messageIds]);
+
+            for (const row of attachResult.rows) {
+                const mid = row.message_id.trim();
+                if (!attachmentsMap[mid]) attachmentsMap[mid] = [];
+                attachmentsMap[mid].push({
+                    id: row.id.trim(),
+                    name: row.filename,
+                    mime: row.mime_type || row.content_type,
+                    size: row.size_bytes,
+                    width: row.width,
+                    height: row.height,
+                    url: `/files/${row.id.trim()}`,
+                    deletedAt: row.deleted_at,
+                });
+            }
+        }
+
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -220,6 +312,7 @@ export async function messageRoutes(app: FastifyInstance) {
             deletedAt: row.deleted_at,
             createdAt: row.created_at,
             reactions: reactionsMap[row.id.trim()] || [],
+            attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
         }));
 
