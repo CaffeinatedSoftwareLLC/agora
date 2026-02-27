@@ -108,8 +108,8 @@ export async function uploadFile(channelId: string, file: File): Promise<{
   width: number | null; height: number | null; url: string;
 }> {
   const formData = new FormData();
-  formData.append('file', file);
   formData.append('channel_id', channelId);
+  formData.append('file', file);
 
   const token = getToken();
   const headers: Record<string, string> = {};
