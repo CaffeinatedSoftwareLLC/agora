@@ -53,7 +53,7 @@ export async function buildApp(opts?: {
 
     // Multipart file upload support
     await app.register(multipart, {
-        limits: { fileSize: 104857600, files: 1 },
+        limits: { files: 1 },
     });
 
     // ─── Per-request DB client lifecycle (RLS enforcement) ───

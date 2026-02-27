@@ -166,13 +166,12 @@ export function StorageSettings() {
             id="max-file-size"
             type="number"
             min={1}
-            max={100}
             value={maxSizeMB}
             onChange={(e) => setMaxSizeMB(Number(e.target.value))}
             className="bg-surface border border-border rounded px-3 py-2 text-text focus:outline-none focus:ring-2 focus:ring-primary w-32"
           />
           <span className="text-xs text-text-muted">
-            1 MB - 100 MB ({(maxSizeMB * 1048576).toLocaleString()} bytes)
+            {(maxSizeMB * 1048576).toLocaleString()} bytes
           </span>
         </div>
 
