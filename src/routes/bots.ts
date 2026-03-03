@@ -1,0 +1,531 @@
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { generateUlid } from '../utils/ulid';
+import { generateBotToken } from '../auth/bot-tokens';
+import { Permissions, computePermissions } from '../permissions';
+
+/**
+ * Load permission context and compute permissions for a user in a server.
+ * Same pattern used in voice.ts and files.ts.
+ */
+async function loadAndComputePermissions(db: any, userId: string, serverId: string): Promise<bigint> {
+    // Check server ownership first
+    const serverRow = await db.query(
+        'SELECT owner_id, everyone_role_id FROM servers WHERE id = $1',
+        [serverId]
+    );
+    if (!serverRow.rows[0]) return 0n;
+
+    const server = serverRow.rows[0];
+
+    // Fetch user's assigned roles
+    const memberRolesResult = await db.query(
+        'SELECT role_id FROM member_roles WHERE server_id = $1 AND user_id = $2',
+        [serverId, userId]
+    );
+    const roleIds = memberRolesResult.rows.map((r: any) => r.role_id.trim());
+
+    // Fetch all roles for this server
+    const allRolesResult = await db.query(
+        'SELECT id, permissions FROM roles WHERE server_id = $1',
+        [serverId]
+    );
+    const roles = new Map<string, { permissions: bigint }>();
+    for (const r of allRolesResult.rows) {
+        roles.set(r.id.trim(), { permissions: BigInt(r.permissions) });
+    }
+
+    return computePermissions({
+        userId: userId.trim(),
+        roleIds,
+        server: {
+            ownerId: server.owner_id.trim(),
+            everyoneRoleId: server.everyone_role_id.trim(),
+        },
+        roles,
+        channelRoleOverrides: new Map(),
+        channelMemberOverride: undefined,
+    });
+}
+
+/**
+ * PreHandler: require ManageBots permission for /servers/:serverId/bots/* routes
+ */
+async function requireManageBots(request: FastifyRequest, reply: FastifyReply) {
+    if ((request as any).isBot) {
+        return reply.status(403).send({ error: 'Bots cannot manage other bots' });
+    }
+    const { serverId } = request.params as any;
+    const userId = (request as any).userId;
+    const db = (request as any).dbClient;
+
+    // Check server membership first
+    const member = await db.query(
+        'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+        [serverId, userId]
+    );
+    if (member.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this server' });
+    }
+
+    const perms = await loadAndComputePermissions(db, userId, serverId);
+    if (!(perms & Permissions.ManageBots) && !(perms & Permissions.Administrator)) {
+        return reply.status(403).send({ error: 'Missing ManageBots permission' });
+    }
+}
+
+/**
+ * PreHandler: require ManageBots for /channels/:id/bots/:botId routes
+ * Does channel→server lookup, DM rejection, cross-server bot check
+ */
+async function requireManageBotsForChannel(request: FastifyRequest, reply: FastifyReply) {
+    if ((request as any).isBot) {
+        return reply.status(403).send({ error: 'Bots cannot manage other bots' });
+    }
+    const { id: channelId, botId } = request.params as any;
+    const userId = (request as any).userId;
+    const db = (request as any).dbClient;
+
+    // Look up which server this channel belongs to
+    const channelRow = await db.query(
+        'SELECT server_id FROM channels WHERE id = $1',
+        [channelId]
+    );
+    if (!channelRow.rows[0]) {
+        return reply.status(404).send({ error: 'Channel not found' });
+    }
+
+    // Reject DM/group DM channels
+    if (!channelRow.rows[0].server_id) {
+        return reply.status(400).send({ error: 'Bots cannot be added to DM channels' });
+    }
+
+    const serverId = channelRow.rows[0].server_id.trim();
+
+    // Verify the bot exists and belongs to the same server
+    const botRow = await db.query(
+        'SELECT server_id FROM users WHERE id = $1 AND bot = true',
+        [botId]
+    );
+    if (!botRow.rows[0]) {
+        return reply.status(404).send({ error: 'Bot not found' });
+    }
+    if (botRow.rows[0].server_id.trim() !== serverId) {
+        return reply.status(400).send({ error: 'Bot belongs to a different server' });
+    }
+
+    // Check membership
+    const member = await db.query(
+        'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+        [serverId, userId]
+    );
+    if (member.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this server' });
+    }
+
+    const perms = await loadAndComputePermissions(db, userId, serverId);
+    if (!(perms & Permissions.ManageBots) && !(perms & Permissions.Administrator)) {
+        return reply.status(403).send({ error: 'Missing ManageBots permission' });
+    }
+}
+
+export async function botRoutes(app: FastifyInstance) {
+
+    // ─── Bot Management (human auth, requires ManageBots) ───
+
+    // POST /servers/:serverId/bots → 201 { id, username, serverId }
+    app.post('/servers/:serverId/bots', {
+        preHandler: [requireManageBots],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['username'],
+                properties: {
+                    username: { type: 'string', minLength: 1, maxLength: 32 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { serverId } = request.params as any;
+        const userId = (request as any).userId;
+        const db = (request as any).dbClient;
+
+        const botId = generateUlid();
+
+        try {
+            await db.query(
+                `INSERT INTO users (id, username, bot, bot_owner_id, server_id)
+                 VALUES ($1, $2, true, $3, $4)`,
+                [botId, (request.body as any).username, userId, serverId]
+            );
+        } catch (err: any) {
+            if (err.code === '23505') {
+                return reply.status(409).send({ error: 'Username already taken' });
+            }
+            throw err;
+        }
+
+        return reply.status(201).send({
+            id: botId,
+            username: (request.body as any).username,
+            serverId: serverId.trim(),
+            ownerId: userId.trim(),
+            bot: true,
+        });
+    });
+
+    // GET /servers/:serverId/bots → 200 [{ id, username, ownerId, createdAt }]
+    app.get('/servers/:serverId/bots', {
+        preHandler: [requireManageBots],
+    }, async (request, reply) => {
+        const { serverId } = request.params as any;
+        const db = (request as any).dbClient;
+
+        const result = await db.query(
+            `SELECT id, username, bot_owner_id, created_at
+             FROM users
+             WHERE bot = true AND server_id = $1
+             ORDER BY created_at`,
+            [serverId]
+        );
+
+        const bots = result.rows.map((r: any) => ({
+            id: r.id.trim(),
+            username: r.username,
+            ownerId: r.bot_owner_id?.trim() || null,
+            createdAt: r.created_at,
+        }));
+
+        return reply.status(200).send(bots);
+    });
+
+    // PATCH /servers/:serverId/bots/:id → 200 { id, username }
+    app.patch('/servers/:serverId/bots/:id', {
+        preHandler: [requireManageBots],
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    username: { type: 'string', minLength: 1, maxLength: 32 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const { username } = request.body as any;
+        const db = (request as any).dbClient;
+
+        // Verify bot belongs to this server
+        const botRow = await db.query(
+            'SELECT id, username FROM users WHERE id = $1 AND bot = true AND server_id = $2',
+            [botId, serverId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        if (username) {
+            try {
+                await db.query(
+                    'UPDATE users SET username = $1 WHERE id = $2',
+                    [username, botId]
+                );
+            } catch (err: any) {
+                if (err.code === '23505') {
+                    return reply.status(409).send({ error: 'Username already taken' });
+                }
+                throw err;
+            }
+        }
+
+        return reply.status(200).send({
+            id: botId.trim(),
+            username: username || botRow.rows[0].username,
+        });
+    });
+
+    // DELETE /servers/:serverId/bots/:id → 200 { deleted: true }
+    app.delete('/servers/:serverId/bots/:id', {
+        preHandler: [requireManageBots],
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const db = (request as any).dbClient;
+
+        const result = await db.query(
+            'DELETE FROM users WHERE id = $1 AND bot = true AND server_id = $2 RETURNING id',
+            [botId, serverId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        return reply.status(200).send({ deleted: true });
+    });
+
+    // ─── Bot Token Management (human auth, bot owner only) ───
+
+    // POST /servers/:serverId/bots/:id/tokens → 201 { tokenId, token, name }
+    app.post('/servers/:serverId/bots/:id/tokens', {
+        preHandler: [requireManageBots],
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', minLength: 1, maxLength: 100 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const { name } = (request.body as any) || {};
+        const db = (request as any).dbClient;
+
+        // Verify bot belongs to this server
+        const botRow = await db.query(
+            'SELECT id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
+            [botId, serverId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        const { tokenId, secretHash, raw } = await generateBotToken();
+
+        await db.query(
+            `INSERT INTO bot_tokens (id, bot_id, secret_hash, name)
+             VALUES ($1, $2, $3, $4)`,
+            [tokenId, botId, secretHash, name || null]
+        );
+
+        // Return the raw token ONCE — it cannot be retrieved later
+        return reply.status(201).send({
+            tokenId,
+            token: raw,
+            name: name || null,
+        });
+    });
+
+    // GET /servers/:serverId/bots/:id/tokens → 200 [{ id, name, lastUsedAt, createdAt, revokedAt }]
+    app.get('/servers/:serverId/bots/:id/tokens', {
+        preHandler: [requireManageBots],
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const db = (request as any).dbClient;
+
+        // Verify bot belongs to this server
+        const botRow = await db.query(
+            'SELECT id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
+            [botId, serverId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        const result = await db.query(
+            `SELECT id, name, last_used_at, created_at, revoked_at
+             FROM bot_tokens
+             WHERE bot_id = $1
+             ORDER BY created_at`,
+            [botId]
+        );
+
+        const tokens = result.rows.map((r: any) => ({
+            id: r.id.trim(),
+            name: r.name,
+            lastUsedAt: r.last_used_at,
+            createdAt: r.created_at,
+            revokedAt: r.revoked_at,
+        }));
+
+        return reply.status(200).send(tokens);
+    });
+
+    // DELETE /servers/:serverId/bots/:id/tokens/:tokenId → 200 { revoked: true }
+    app.delete('/servers/:serverId/bots/:id/tokens/:tokenId', {
+        preHandler: [requireManageBots],
+    }, async (request, reply) => {
+        const { serverId, id: botId, tokenId } = request.params as any;
+        const db = (request as any).dbClient;
+
+        // Verify bot belongs to this server
+        const botRow = await db.query(
+            'SELECT id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
+            [botId, serverId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        const result = await db.query(
+            `UPDATE bot_tokens SET revoked_at = NOW()
+             WHERE id = $1 AND bot_id = $2 AND revoked_at IS NULL
+             RETURNING id`,
+            [tokenId, botId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Token not found or already revoked' });
+        }
+
+        return reply.status(200).send({ revoked: true });
+    });
+
+    // ─── Bot Channel Assignment (human auth, requires ManageBots) ───
+
+    // POST /channels/:id/bots/:botId → 201 { botId, channelId }
+    app.post('/channels/:id/bots/:botId', {
+        preHandler: [requireManageBotsForChannel],
+    }, async (request, reply) => {
+        const { id: channelId, botId } = request.params as any;
+        const userId = (request as any).userId;
+        const db = (request as any).dbClient;
+
+        try {
+            await db.query(
+                `INSERT INTO bot_channel_access (bot_id, channel_id, granted_by)
+                 VALUES ($1, $2, $3)`,
+                [botId, channelId, userId]
+            );
+        } catch (err: any) {
+            if (err.code === '23505') {
+                return reply.status(409).send({ error: 'Bot already has access to this channel' });
+            }
+            throw err;
+        }
+
+        return reply.status(201).send({
+            botId: botId.trim(),
+            channelId: channelId.trim(),
+        });
+    });
+
+    // DELETE /channels/:id/bots/:botId → 200 { removed: true }
+    app.delete('/channels/:id/bots/:botId', {
+        preHandler: [requireManageBotsForChannel],
+    }, async (request, reply) => {
+        const { id: channelId, botId } = request.params as any;
+        const db = (request as any).dbClient;
+
+        const result = await db.query(
+            'DELETE FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2 RETURNING bot_id',
+            [botId, channelId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Bot does not have access to this channel' });
+        }
+
+        return reply.status(200).send({ removed: true });
+    });
+
+    // ─── Bot Self-Info (bot auth) ───
+
+    // GET /bots/@me → 200 { id, username, serverId, channels }
+    app.get('/bots/@me', async (request, reply) => {
+        const userId = (request as any).userId;
+        const isBot = (request as any).isBot;
+        const db = (request as any).dbClient;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        const botRow = await db.query(
+            'SELECT id, username, server_id FROM users WHERE id = $1 AND bot = true',
+            [userId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found' });
+        }
+
+        const channelsResult = await db.query(
+            `SELECT c.id, c.name, c.channel_type
+             FROM bot_channel_access bca
+             JOIN channels c ON c.id = bca.channel_id
+             WHERE bca.bot_id = $1`,
+            [userId]
+        );
+
+        return reply.status(200).send({
+            id: botRow.rows[0].id.trim(),
+            username: botRow.rows[0].username,
+            serverId: botRow.rows[0].server_id?.trim() || null,
+            bot: true,
+            channels: channelsResult.rows.map((c: any) => ({
+                id: c.id.trim(),
+                name: c.name,
+                channelType: c.channel_type,
+            })),
+        });
+    });
+
+    // ─── Bot Cursor Management (bot auth) ───
+
+    // GET /bots/@me/cursors → 200 [{ channelId, lastReadId, updatedAt }]
+    app.get('/bots/@me/cursors', async (request, reply) => {
+        const userId = (request as any).userId;
+        const isBot = (request as any).isBot;
+        const db = (request as any).dbClient;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        const result = await db.query(
+            `SELECT channel_id, last_read_id, updated_at
+             FROM bot_read_cursors
+             WHERE bot_id = $1`,
+            [userId]
+        );
+
+        const cursors = result.rows.map((r: any) => ({
+            channelId: r.channel_id.trim(),
+            lastReadId: r.last_read_id.trim(),
+            updatedAt: r.updated_at,
+        }));
+
+        return reply.status(200).send(cursors);
+    });
+
+    // PUT /bots/@me/cursors/:channelId → 200 { channelId, lastReadId }
+    app.put('/bots/@me/cursors/:channelId', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['lastReadId'],
+                properties: {
+                    lastReadId: { type: 'string', minLength: 26, maxLength: 26 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { channelId } = request.params as any;
+        const userId = (request as any).userId;
+        const isBot = (request as any).isBot;
+        const { lastReadId } = request.body as any;
+        const db = (request as any).dbClient;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        // Verify bot has access to this channel
+        const access = await db.query(
+            'SELECT 1 FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2',
+            [userId, channelId]
+        );
+        if (access.rows.length === 0) {
+            return reply.status(403).send({ error: 'Bot does not have access to this channel' });
+        }
+
+        await db.query(
+            `INSERT INTO bot_read_cursors (bot_id, channel_id, last_read_id, updated_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT (bot_id, channel_id) DO UPDATE
+                SET last_read_id = $3, updated_at = NOW()`,
+            [userId, channelId, lastReadId]
+        );
+
+        return reply.status(200).send({
+            channelId: channelId.trim(),
+            lastReadId: lastReadId.trim(),
+        });
+    });
+}

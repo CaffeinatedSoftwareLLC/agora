@@ -30,7 +30,7 @@ export async function messageRoutes(app: FastifyInstance) {
         const content = rawContent || null;
         const db = (request as any).dbClient;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -208,6 +208,11 @@ export async function messageRoutes(app: FastifyInstance) {
             data: message,
         });
 
+        // Stash for idempotency cache (written in onResponse after COMMIT)
+        if ((request as any).idempotencyKey) {
+            (request as any).idempotencyResponseBody = message;
+        }
+
         return reply.status(201).send(message);
     });
 
@@ -218,7 +223,7 @@ export async function messageRoutes(app: FastifyInstance) {
         const { limit: rawLimit, before } = request.query as any;
         const db = (request as any).dbClient;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -336,7 +341,7 @@ export async function messageRoutes(app: FastifyInstance) {
         const { content } = request.body as any;
         const db = (request as any).dbClient;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -384,7 +389,7 @@ export async function messageRoutes(app: FastifyInstance) {
         const userId = (request as any).userId;
         const db = (request as any).dbClient;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }

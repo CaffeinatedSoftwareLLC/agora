@@ -24,13 +24,16 @@ export async function dmRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'Cannot create DM with yourself' });
         }
 
-        // Verify recipient exists
+        // Verify recipient exists and is not a bot
         const recipientCheck = await db.query(
-            'SELECT id FROM users WHERE id = $1',
+            'SELECT id, bot FROM users WHERE id = $1',
             [recipientId]
         );
         if (recipientCheck.rows.length === 0) {
             return reply.status(404).send({ error: 'Recipient not found' });
+        }
+        if (recipientCheck.rows[0].bot) {
+            return reply.status(400).send({ error: 'Cannot create DM with a bot' });
         }
 
         // Normalize ordering: user_a < user_b (lexicographic on trimmed values)

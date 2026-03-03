@@ -20,7 +20,7 @@ export async function userRoutes(app: FastifyInstance) {
 
         const result = await db.query(
             `SELECT id, username FROM users
-             WHERE username ILIKE $1 AND id != $2
+             WHERE username ILIKE $1 AND id != $2 AND bot = false
              LIMIT 20`,
             [q + '%', userId]
         );

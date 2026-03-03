@@ -17,9 +17,11 @@ import { voiceRoutes } from './routes/voice';
 import { voiceWebhookRoutes } from './routes/voice-webhooks';
 import { dmCallRoutes } from './routes/dm-calls';
 import { fileRoutes } from './routes/files';
+import { botRoutes } from './routes/bots';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
+import { getRedis } from './auth/token-blacklist';
 
 export async function buildApp(opts?: {
     logger?: boolean;
@@ -82,6 +84,29 @@ export async function buildApp(opts?: {
             return;
         }
         await requireAuth(request, reply);
+    });
+
+    // Idempotency check for bot requests
+    app.addHook('preHandler', async (request, reply) => {
+        if (!(request as any).isBot) return;
+
+        const key = request.headers['idempotency-key'] as string | undefined;
+        if (!key) return;
+
+        const channelId = (request.params as any)?.id || '_';
+        const cacheKey = `idempotent:${(request as any).userId}:${request.method}:${request.routeOptions.url}:${channelId}:${key}`;
+
+        try {
+            const cached = await getRedis().get(cacheKey);
+            if (cached) {
+                const { status, body } = JSON.parse(cached);
+                return reply.code(status).send(body);
+            }
+        } catch {
+            // Redis failure is non-fatal — proceed without idempotency
+        }
+
+        (request as any).idempotencyKey = cacheKey;
     });
 
     // RLS context: after auth sets userId, switch to app_user role
@@ -153,6 +178,18 @@ export async function buildApp(opts?: {
                         } catch { /* WS disconnect is best-effort */ }
                     }
                 }
+
+                // Idempotency cache write — AFTER commit, in same hook (no ordering ambiguity)
+                const idempotencyKey = (request as any).idempotencyKey;
+                if (idempotencyKey && (request as any).idempotencyResponseBody) {
+                    try {
+                        await getRedis().set(
+                            idempotencyKey,
+                            JSON.stringify({ status: 201, body: (request as any).idempotencyResponseBody }),
+                            'EX', 300  // 5 min TTL
+                        );
+                    } catch { /* Redis failure is non-fatal */ }
+                }
             } catch {
                 await client.query('ROLLBACK').catch(() => {});
             }
@@ -185,6 +222,7 @@ export async function buildApp(opts?: {
     await app.register(voiceWebhookRoutes);
     await app.register(dmCallRoutes, { timeoutMs: opts?.callTimeoutMs });
     await app.register(fileRoutes);
+    await app.register(botRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);
