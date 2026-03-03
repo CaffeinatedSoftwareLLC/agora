@@ -688,7 +688,7 @@ describe('Bot integration', () => {
             expect(res.status).toBe(201);
         });
 
-        test('failed request clears in-flight lock so retry succeeds', async () => {
+        test('failed request clears in-flight lock so retry works', async () => {
             const key = 'fail-retry-' + Date.now();
 
             // Send to a channel the bot lacks access to — passes schema
@@ -704,15 +704,16 @@ describe('Bot integration', () => {
             // Wait for onResponse to clear the in-flight marker
             await new Promise(r => setTimeout(r, 100));
 
-            // Retry with the same key on the authorized channel —
-            // should succeed, not 409 (lock was cleared after the 403).
+            // Retry with the SAME key on the SAME channel — the cache key
+            // includes channelId, so both attempts must target deniedChannelId
+            // to hit the same slot. Should get 403 again (not 409), proving
+            // the in-flight lock was cleared.
             const retryRes = await ctx.request
-                .post(`/channels/${generalChannelId}/messages`)
+                .post(`/channels/${deniedChannelId}/messages`)
                 .set({ Authorization: `Bot ${rawToken}`, 'Idempotency-Key': key })
-                .send({ content: 'Retry after failure' });
+                .send({ content: 'Should be denied again' });
 
-            expect(retryRes.status).toBe(201);
-            expect(retryRes.body.content).toBe('Retry after failure');
+            expect(retryRes.status).toBe(403);
         });
 
         test('concurrent duplicate gets 409 in-flight response', async () => {
