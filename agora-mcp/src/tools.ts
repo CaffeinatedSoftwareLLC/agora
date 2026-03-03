@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { AgoraApi, BotInfo, Message } from './api.js';
 import type { CursorTracker } from './cursor.js';
 
-function formatMessages(messages: Message[]): string {
+export function formatMessages(messages: Message[]): string {
     if (messages.length === 0) return 'No messages.';
     return messages.map(m => {
         const tag = m.authorBot ? ' [BOT]' : '';
@@ -13,6 +13,56 @@ function formatMessages(messages: Message[]): string {
         if (m.deletedAt) return `[${m.createdAt}] ${author}${tag}: [deleted]`;
         return `[${m.createdAt}] ${author}${tag}: ${m.content}`;
     }).join('\n');
+}
+
+/**
+ * Fetch all unread messages since the cursor, paging backwards from newest.
+ * Returns messages in chronological order (oldest first).
+ * Advances the cursor to the newest returned message.
+ */
+export async function fetchUnreadMessages(
+    api: AgoraApi,
+    cursors: CursorTracker,
+    channelId: string,
+    maxMessages: number,
+    pageSize: number = 100,
+): Promise<Message[]> {
+    await cursors.load();
+    const cursor = cursors.getCursor(channelId);
+
+    const allUnread: Message[] = [];
+    let before: string | undefined;
+    let reachedCursor = false;
+
+    while (allUnread.length < maxMessages) {
+        const fetchLimit = Math.min(pageSize, maxMessages - allUnread.length);
+        const page = await api.getMessages(channelId, { limit: fetchLimit, before });
+
+        if (page.length === 0) break;
+
+        for (const msg of page) {
+            if (cursor && msg.id <= cursor) {
+                reachedCursor = true;
+                break;
+            }
+            allUnread.push(msg);
+        }
+
+        if (reachedCursor) break;
+        if (page.length < fetchLimit) break;
+
+        before = page[page.length - 1].id;
+    }
+
+    // Reverse for chronological order (collected in DESC)
+    allUnread.reverse();
+
+    // Advance cursor to latest
+    if (allUnread.length > 0) {
+        await cursors.ack(channelId, allUnread[allUnread.length - 1].id);
+    }
+
+    return allUnread;
 }
 
 export function registerTools(
@@ -76,33 +126,17 @@ export function registerTools(
         'Read new messages from an Agora channel. Cursor-aware: returns only unread messages on subsequent calls.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
-            limit: z.number().optional().describe('Max messages to fetch (default: 50)'),
+            limit: z.number().optional().describe('Max messages to return (default: 200)'),
         },
         async ({ channel, limit }) => {
             const ch = await resolveChannel(channel);
-            await cursors.load();
-
-            const messages = await api.getMessages(ch.id, { limit: limit || 50 });
-            const cursor = cursors.getCursor(ch.id);
-
-            // Filter to unread (ULID is lexicographically sortable)
-            let unread = cursor
-                ? messages.filter(m => m.id > cursor)
-                : messages;
-
-            // API returns DESC, reverse for chronological
-            unread = unread.reverse();
-
-            // Advance cursor to latest
-            if (unread.length > 0) {
-                await cursors.ack(ch.id, unread[unread.length - 1].id);
-            }
+            const allUnread = await fetchUnreadMessages(api, cursors, ch.id, limit || 200);
 
             return {
                 content: [{
                     type: 'text' as const,
-                    text: unread.length > 0
-                        ? `#${ch.name} — ${unread.length} new message(s):\n\n${formatMessages(unread)}`
+                    text: allUnread.length > 0
+                        ? `#${ch.name} — ${allUnread.length} new message(s):\n\n${formatMessages(allUnread)}`
                         : `#${ch.name} — no new messages`,
                 }],
             };
