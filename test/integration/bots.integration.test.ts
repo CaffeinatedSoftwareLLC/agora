@@ -602,6 +602,7 @@ describe('Bot integration', () => {
     // ─── Idempotency ───
     describe('Idempotency', () => {
         let rawToken: string;
+        let deniedChannelId: string; // channel the bot does NOT have access to
 
         beforeAll(async () => {
             const botRes = await ctx.request
@@ -621,6 +622,25 @@ describe('Bot integration', () => {
                 .post(`/channels/${generalChannelId}/bots/${botRes.body.id}`)
                 .set(owner.auth);
             await waitForRow('bot_channel_access', 'bot_id', botRes.body.id);
+
+            // Create a second channel the bot is NOT granted access to
+            const chRes = await ctx.request
+                .post(`/servers/${serverId}/channels`)
+                .set(owner.auth)
+                .send({ name: 'no-bot-access', channelType: 3 });
+            // Wait for channel COMMIT
+            for (let i = 0; i < 20; i++) {
+                const dbRes = await ctx.db.query(
+                    "SELECT id FROM channels WHERE server_id = $1 AND name = 'no-bot-access'",
+                    [serverId]
+                );
+                if (dbRes.rows.length > 0) {
+                    deniedChannelId = dbRes.rows[0].id.trim();
+                    break;
+                }
+                await new Promise(r => setTimeout(r, 50));
+            }
+            if (!deniedChannelId) throw new Error('Denied channel not found');
         });
 
         test('same idempotency key returns same response', async () => {
@@ -671,18 +691,21 @@ describe('Bot integration', () => {
         test('failed request clears in-flight lock so retry succeeds', async () => {
             const key = 'fail-retry-' + Date.now();
 
-            // Send a request that will fail validation (empty content, no attachments)
+            // Send to a channel the bot lacks access to — passes schema
+            // validation, idempotency preHandler claims the key, then the
+            // route handler returns 403 (not a member).
             const failRes = await ctx.request
-                .post(`/channels/${generalChannelId}/messages`)
+                .post(`/channels/${deniedChannelId}/messages`)
                 .set({ Authorization: `Bot ${rawToken}`, 'Idempotency-Key': key })
-                .send({});
+                .send({ content: 'Should be denied' });
 
-            expect(failRes.status).toBe(400);
+            expect(failRes.status).toBe(403);
 
             // Wait for onResponse to clear the in-flight marker
             await new Promise(r => setTimeout(r, 100));
 
-            // Retry with the same key — should succeed, not 409
+            // Retry with the same key on the authorized channel —
+            // should succeed, not 409 (lock was cleared after the 403).
             const retryRes = await ctx.request
                 .post(`/channels/${generalChannelId}/messages`)
                 .set({ Authorization: `Bot ${rawToken}`, 'Idempotency-Key': key })
