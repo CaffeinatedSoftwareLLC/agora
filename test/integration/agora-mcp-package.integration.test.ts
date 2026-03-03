@@ -252,9 +252,9 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
 
             // Fetch with pageSize=2 — forces 3 pages to get all 5 messages
             const freshTracker = new CursorTracker(api);
-            const unread = await fetchUnreadMessages(api, freshTracker, channelId, 200, 2);
+            const { messages: unread, skipped } = await fetchUnreadMessages(api, freshTracker, channelId, 200, 2);
 
-            // Should have all 5 messages in chronological order
+            expect(skipped).toBe(0);
             expect(unread.length).toBe(5);
             expect(unread[0].content).toBe('Page test 0');
             expect(unread[4].content).toBe('Page test 4');
@@ -268,7 +268,7 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
             expect(freshTracker.getCursor(channelId)).toBe(sentIds[4]);
         });
 
-        test('returns empty array when no unread messages', async () => {
+        test('returns empty when no unread messages', async () => {
             const api = new AgoraApi(baseUrl, botToken);
             const tracker = new CursorTracker(api);
 
@@ -280,8 +280,8 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
             await new Promise(r => setTimeout(r, 100));
 
             const freshTracker = new CursorTracker(api);
-            const unread = await fetchUnreadMessages(api, freshTracker, channelId, 200);
-            expect(unread).toEqual([]);
+            const { messages } = await fetchUnreadMessages(api, freshTracker, channelId, 200);
+            expect(messages).toEqual([]);
         });
 
         test('maxMessages returns oldest chunk and preserves remaining for next call', async () => {
@@ -301,9 +301,10 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
                 await waitForRow('messages', 'id', msg.id);
             }
 
-            // First call: maxMessages=3 → returns OLDEST 3 (msg 0,1,2)
+            // First call: maxMessages=3 → returns OLDEST 3 (msg 0,1,2), skipped=0
             const tracker1 = new CursorTracker(api);
-            const batch1 = await fetchUnreadMessages(api, tracker1, channelId, 3);
+            const { messages: batch1, skipped: s1 } = await fetchUnreadMessages(api, tracker1, channelId, 3);
+            expect(s1).toBe(0);
             expect(batch1.length).toBe(3);
             expect(batch1[0].content).toBe('Limit test 0');
             expect(batch1[1].content).toBe('Limit test 1');
@@ -314,13 +315,13 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
 
             // Second call: remaining 2 messages (msg 3,4) are still accessible
             const tracker2 = new CursorTracker(api);
-            const batch2 = await fetchUnreadMessages(api, tracker2, channelId, 200);
+            const { messages: batch2 } = await fetchUnreadMessages(api, tracker2, channelId, 200);
             expect(batch2.length).toBe(2);
             expect(batch2[0].content).toBe('Limit test 3');
             expect(batch2[1].content).toBe('Limit test 4');
         });
 
-        test('first read with no cursor returns latest messages and sets cursor', async () => {
+        test('first read with no cursor returns newest messages', async () => {
             const api = new AgoraApi(baseUrl, botToken);
             const tracker = new CursorTracker(api);
 
@@ -328,15 +329,70 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
             await ctx.db.query('DELETE FROM bot_read_cursors WHERE bot_id = $1', [botId]);
             await new Promise(r => setTimeout(r, 100));
 
-            const unread = await fetchUnreadMessages(api, tracker, channelId, 5);
-            // With no cursor, scans to channel start, returns oldest 5
-            expect(unread.length).toBe(5);
+            // Channel has many messages from prior tests. Request only 3.
+            const { messages, skipped } = await fetchUnreadMessages(api, tracker, channelId, 3);
+            expect(skipped).toBe(0);
+            expect(messages.length).toBe(3);
 
-            // Cursor should be set to the last returned message
-            expect(tracker.getCursor(channelId)).toBe(unread[unread.length - 1].id);
+            // Verify these are the NEWEST 3 messages (not oldest)
+            const allMsgs = await api.getMessages(channelId, { limit: 3 });
+            const newestIds = allMsgs.map(m => m.id).sort();
+            const returnedIds = messages.map(m => m.id).sort();
+            expect(returnedIds).toEqual(newestIds);
+
+            // Cursor set to newest returned
+            expect(tracker.getCursor(channelId)).toBe(messages[messages.length - 1].id);
         });
 
-        test('incomplete scan does not advance cursor', async () => {
+        test('incomplete scan: skips gap, makes progress, reports skip', async () => {
+            const api = new AgoraApi(baseUrl, botToken);
+
+            // Mark everything read
+            const latest = await api.getMessages(channelId, { limit: 1 });
+            const setupTracker = new CursorTracker(api);
+            if (latest.length > 0) {
+                await setupTracker.ack(channelId, latest[0].id);
+            }
+            await new Promise(r => setTimeout(r, 100));
+            const cursorBefore = setupTracker.getCursor(channelId)!;
+
+            // Send 5 messages — more than maxScan=3
+            for (let i = 0; i < 5; i++) {
+                const msg = await api.sendMessage(channelId, `Overflow ${i}`, `overflow-${i}`);
+                await waitForRow('messages', 'id', msg.id);
+            }
+
+            // maxScan=3: scan sees only newest 3 (Overflow 2,3,4), can't reach cursor
+            const tracker1 = new CursorTracker(api);
+            const { messages: batch1, skipped: s1 } = await fetchUnreadMessages(
+                api, tracker1, channelId, 2, /* pageSize */ 1, /* maxScan */ 3
+            );
+
+            // Returns oldest 2 from the scanned window (Overflow 2,3)
+            expect(batch1.length).toBe(2);
+            expect(batch1[0].content).toBe('Overflow 2');
+            expect(batch1[1].content).toBe('Overflow 3');
+            expect(s1).not.toBe(0); // signals incomplete scan
+
+            // Cursor advanced past the gap to make forward progress
+            const newCursor = tracker1.getCursor(channelId)!;
+            expect(newCursor > cursorBefore).toBe(true);
+            expect(newCursor).toBe(batch1[1].id);
+
+            // Wait for cursor commit
+            await new Promise(r => setTimeout(r, 100));
+
+            // Next call: cursor is now past the gap, Overflow 4 is accessible
+            const tracker2 = new CursorTracker(api);
+            const { messages: batch2, skipped: s2 } = await fetchUnreadMessages(
+                api, tracker2, channelId, 200, 1
+            );
+            expect(s2).toBe(0);
+            expect(batch2.length).toBe(1);
+            expect(batch2[0].content).toBe('Overflow 4');
+        });
+
+        test('complete scan with small pageSize still works', async () => {
             const api = new AgoraApi(baseUrl, botToken);
 
             // Mark everything read
@@ -347,36 +403,32 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
             }
             await new Promise(r => setTimeout(r, 100));
 
-            // Send 4 messages (more than our tiny MAX_SCAN=3 below)
+            // Send 4 messages
             for (let i = 0; i < 4; i++) {
-                const msg = await api.sendMessage(channelId, `Scan cap ${i}`, `scan-cap-${i}`);
+                const msg = await api.sendMessage(channelId, `Small page ${i}`, `small-page-${i}`);
                 await waitForRow('messages', 'id', msg.id);
             }
 
-            // Fetch with pageSize=1 and maxMessages=200 — we'd need 4 pages
-            // to reach cursor. Use MAX_SCAN=3 by passing pageSize=1 and
-            // relying on the function's internal MAX_SCAN. But MAX_SCAN is
-            // hardcoded at 2000, so we can't trigger it in a test without
-            // sending 2000+ messages. Instead, verify the normal case works:
-            // scan IS complete (only 4 messages), cursor DOES advance.
+            // pageSize=1, maxScan=10 (big enough to reach cursor)
             const tracker = new CursorTracker(api);
-            const result = await fetchUnreadMessages(api, tracker, channelId, 2, 1);
-            expect(result.length).toBe(2);
-            expect(result[0].content).toBe('Scan cap 0');
-            expect(result[1].content).toBe('Scan cap 1');
+            const { messages, skipped } = await fetchUnreadMessages(api, tracker, channelId, 2, 1, 10);
+            expect(skipped).toBe(0);
+            expect(messages.length).toBe(2);
+            expect(messages[0].content).toBe('Small page 0');
+            expect(messages[1].content).toBe('Small page 1');
 
-            // Cursor advanced to last returned (scan was complete)
-            expect(tracker.getCursor(channelId)).toBe(result[1].id);
+            // Cursor advanced (complete scan)
+            expect(tracker.getCursor(channelId)).toBe(messages[1].id);
 
             // Wait for cursor commit
             await new Promise(r => setTimeout(r, 100));
 
-            // Remaining 2 messages still accessible
+            // Remaining accessible
             const tracker2 = new CursorTracker(api);
-            const remaining = await fetchUnreadMessages(api, tracker2, channelId, 200, 1);
+            const { messages: remaining } = await fetchUnreadMessages(api, tracker2, channelId, 200, 1, 10);
             expect(remaining.length).toBe(2);
-            expect(remaining[0].content).toBe('Scan cap 2');
-            expect(remaining[1].content).toBe('Scan cap 3');
+            expect(remaining[0].content).toBe('Small page 2');
+            expect(remaining[1].content).toBe('Small page 3');
         });
     });
 

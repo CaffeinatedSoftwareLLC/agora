@@ -15,19 +15,28 @@ export function formatMessages(messages: Message[]): string {
     }).join('\n');
 }
 
+export interface ReadResult {
+    messages: Message[];
+    /** Number of older unread messages skipped (backlog exceeded scan cap). */
+    skipped: number;
+}
+
 /**
  * Fetch unread messages since the cursor, returning oldest-first.
  *
- * Scans backward from newest until the cursor boundary (or channel start)
- * is reached. Returns the oldest `maxMessages` from the unread set and
- * advances the cursor only to the last returned message — remaining newer
- * unread messages stay accessible for subsequent calls.
+ * **No cursor (first read):** Returns the newest `maxMessages` for quick
+ * context. Sets cursor to the newest returned message.
  *
- * If the scan hits MAX_SCAN before reaching the cursor, the scan is
- * incomplete: the cursor is NOT advanced to avoid skipping messages that
- * were never fetched. The returned messages (from the newest end of the
- * scanned window) are still useful context but the caller should be aware
- * the backlog is extremely large.
+ * **With cursor, backlog fits in scan window:** Scans backward to the
+ * cursor boundary, returns oldest `maxMessages`. Cursor advances to the
+ * last returned message; remaining newer messages stay for the next call.
+ *
+ * **With cursor, backlog exceeds scan window:** Scans the newest maxScan
+ * messages. Returns the oldest `maxMessages` from the scanned window.
+ * Cursor advances to the last returned message, skipping the gap between
+ * the old cursor and the scan window. `skipped` reports the approximate
+ * count so the caller can warn. This ensures forward progress — without
+ * it, subsequent calls would return the same batch forever.
  */
 export async function fetchUnreadMessages(
     api: AgoraApi,
@@ -35,28 +44,53 @@ export async function fetchUnreadMessages(
     channelId: string,
     maxMessages: number,
     pageSize: number = 100,
-): Promise<Message[]> {
+    maxScan: number = 2000,
+): Promise<ReadResult> {
     await cursors.load();
     const cursor = cursors.getCursor(channelId);
 
-    // Scan backward from newest to the cursor boundary (or channel start).
-    const MAX_SCAN = 2000;
+    if (!cursor) {
+        // First read: fetch newest maxMessages for immediate context.
+        // Page backward until we have enough or run out.
+        const collected: Message[] = [];
+        let before: string | undefined;
+
+        while (collected.length < maxMessages) {
+            const fetchLimit = Math.min(pageSize, maxMessages - collected.length);
+            const page = await api.getMessages(channelId, { limit: fetchLimit, before });
+            if (page.length === 0) break;
+            collected.push(...page);
+            if (page.length < fetchLimit) break;
+            before = page[page.length - 1].id;
+        }
+
+        // Reverse to chronological, take last maxMessages (newest)
+        collected.reverse();
+        const result = collected.slice(-maxMessages);
+
+        if (result.length > 0) {
+            await cursors.ack(channelId, result[result.length - 1].id);
+        }
+        return { messages: result, skipped: 0 };
+    }
+
+    // With cursor: scan backward from newest toward the cursor boundary.
     const collected: Message[] = []; // newest-first as collected
     let before: string | undefined;
-    let scanComplete = false;
+    let reachedCursor = false;
 
-    while (collected.length < MAX_SCAN) {
-        const fetchLimit = Math.min(pageSize, MAX_SCAN - collected.length);
+    while (collected.length < maxScan) {
+        const fetchLimit = Math.min(pageSize, maxScan - collected.length);
         const page = await api.getMessages(channelId, { limit: fetchLimit, before });
 
         if (page.length === 0) {
-            scanComplete = true;
+            reachedCursor = true;
             break;
         }
 
         let hitCursor = false;
         for (const msg of page) {
-            if (cursor && msg.id <= cursor) {
+            if (msg.id <= cursor) {
                 hitCursor = true;
                 break;
             }
@@ -64,12 +98,12 @@ export async function fetchUnreadMessages(
         }
 
         if (hitCursor) {
-            scanComplete = true;
+            reachedCursor = true;
             break;
         }
 
         if (page.length < fetchLimit) {
-            scanComplete = true;
+            reachedCursor = true;
             break;
         }
 
@@ -79,17 +113,26 @@ export async function fetchUnreadMessages(
     // Reverse to chronological (oldest first)
     collected.reverse();
 
-    // Take the oldest maxMessages to preserve continuity.
+    // Take oldest maxMessages to preserve continuity.
     const result = collected.slice(0, maxMessages);
 
-    // Only advance cursor when the scan reached the cursor boundary.
-    // If scan hit MAX_SCAN cap, we don't know what's between the cursor
-    // and our scan window — advancing would permanently skip those messages.
-    if (scanComplete && result.length > 0) {
+    // Calculate skipped messages when scan was incomplete.
+    // The gap is between the old cursor and the oldest scanned message.
+    // We can't know the exact count, but collected.length == maxScan
+    // when incomplete, so report the minimum known skip.
+    let skipped = 0;
+    if (!reachedCursor && collected.length > 0) {
+        // Scan didn't reach cursor — there are unseen messages in the gap.
+        // We still advance cursor to make forward progress; without this,
+        // every subsequent call returns the same batch forever.
+        skipped = -1; // exact count unknown; set to sentinel
+    }
+
+    if (result.length > 0) {
         await cursors.ack(channelId, result[result.length - 1].id);
     }
 
-    return result;
+    return { messages: result, skipped };
 }
 
 export function registerTools(
@@ -157,15 +200,20 @@ export function registerTools(
         },
         async ({ channel, limit }) => {
             const ch = await resolveChannel(channel);
-            const allUnread = await fetchUnreadMessages(api, cursors, ch.id, limit || 200);
+            const { messages, skipped } = await fetchUnreadMessages(api, cursors, ch.id, limit || 200);
+
+            let text: string;
+            if (messages.length === 0) {
+                text = `#${ch.name} — no new messages`;
+            } else {
+                text = `#${ch.name} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`;
+                if (skipped !== 0) {
+                    text += '\n\n[Note: Large backlog detected. Some older unread messages were skipped to make progress.]';
+                }
+            }
 
             return {
-                content: [{
-                    type: 'text' as const,
-                    text: allUnread.length > 0
-                        ? `#${ch.name} — ${allUnread.length} new message(s):\n\n${formatMessages(allUnread)}`
-                        : `#${ch.name} — no new messages`,
-                }],
+                content: [{ type: 'text' as const, text }],
             };
         },
     );
