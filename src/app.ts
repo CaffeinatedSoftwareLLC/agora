@@ -194,15 +194,22 @@ export async function buildApp(opts?: {
                     }
                 }
 
-                // Idempotency cache write — AFTER commit, in same hook (no ordering ambiguity)
+                // Idempotency: replace in-flight marker with terminal response,
+                // or delete it if the request didn't produce a cacheable body.
                 const idempotencyKey = (request as any).idempotencyKey;
-                if (idempotencyKey && (request as any).idempotencyResponseBody) {
+                if (idempotencyKey) {
                     try {
-                        await getRedis().set(
-                            idempotencyKey,
-                            JSON.stringify({ status: 201, body: (request as any).idempotencyResponseBody }),
-                            'EX', 300  // 5 min TTL
-                        );
+                        if ((request as any).idempotencyResponseBody) {
+                            await getRedis().set(
+                                idempotencyKey,
+                                JSON.stringify({ status: 201, body: (request as any).idempotencyResponseBody }),
+                                'EX', 300  // 5 min TTL
+                            );
+                        } else {
+                            // Non-201 or missing body — clear the in-flight lock
+                            // so the client can retry with the same key.
+                            await getRedis().del(idempotencyKey);
+                        }
                     } catch { /* Redis failure is non-fatal */ }
                 }
             } catch {
@@ -219,6 +226,12 @@ export async function buildApp(opts?: {
             (request as any).dbClient = null;
             await client.query('ROLLBACK').catch(() => {});
             client.release();
+        }
+
+        // Clear idempotency in-flight marker so the client can retry
+        const idempotencyKey = (request as any).idempotencyKey;
+        if (idempotencyKey) {
+            try { await getRedis().del(idempotencyKey); } catch { /* non-fatal */ }
         }
     });
 

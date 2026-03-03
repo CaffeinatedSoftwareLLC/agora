@@ -667,5 +667,58 @@ describe('Bot integration', () => {
 
             expect(res.status).toBe(201);
         });
+
+        test('failed request clears in-flight lock so retry succeeds', async () => {
+            const key = 'fail-retry-' + Date.now();
+
+            // Send a request that will fail validation (empty content, no attachments)
+            const failRes = await ctx.request
+                .post(`/channels/${generalChannelId}/messages`)
+                .set({ Authorization: `Bot ${rawToken}`, 'Idempotency-Key': key })
+                .send({});
+
+            expect(failRes.status).toBe(400);
+
+            // Wait for onResponse to clear the in-flight marker
+            await new Promise(r => setTimeout(r, 100));
+
+            // Retry with the same key — should succeed, not 409
+            const retryRes = await ctx.request
+                .post(`/channels/${generalChannelId}/messages`)
+                .set({ Authorization: `Bot ${rawToken}`, 'Idempotency-Key': key })
+                .send({ content: 'Retry after failure' });
+
+            expect(retryRes.status).toBe(201);
+            expect(retryRes.body.content).toBe('Retry after failure');
+        });
+
+        test('concurrent duplicate gets 409 in-flight response', async () => {
+            const key = 'concurrent-' + Date.now();
+
+            // Directly set an in-flight marker in Redis to simulate a concurrent request
+            const { getRedis } = await import('../../src/auth/token-blacklist');
+            const cacheKey = `idempotent:${parseBotToken(rawToken)!.tokenId}:POST:/channels/:id/messages:${generalChannelId}:${key}`;
+
+            // Wait — the cacheKey format uses userId, not tokenId.
+            // Reconstruct the real key format from the preHandler:
+            // `idempotent:${userId}:${method}:${routeUrl}:${channelId}:${key}`
+            // We need the bot's userId. Get it from @me.
+            const meRes = await ctx.request.get('/bots/@me').set({ Authorization: `Bot ${rawToken}` });
+            const botUserId = meRes.body.id;
+            const realCacheKey = `idempotent:${botUserId}:POST:/channels/:id/messages:${generalChannelId}:${key}`;
+
+            await getRedis().set(realCacheKey, JSON.stringify({ inflight: true }), 'EX', 30);
+
+            const res = await ctx.request
+                .post(`/channels/${generalChannelId}/messages`)
+                .set({ Authorization: `Bot ${rawToken}`, 'Idempotency-Key': key })
+                .send({ content: 'Should be blocked' });
+
+            expect(res.status).toBe(409);
+            expect(res.body.error).toBe('Duplicate request in flight');
+
+            // Clean up
+            await getRedis().del(realCacheKey);
+        });
     });
 });
