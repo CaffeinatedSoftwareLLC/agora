@@ -261,11 +261,34 @@ export async function botRoutes(app: FastifyInstance) {
         return reply.status(200).send({ deleted: true });
     });
 
-    // ─── Bot Token Management (human auth, bot owner only) ───
+    // ─── Bot Token Management (human auth, bot owner or Administrator) ───
+
+    // Inline preHandler: verify caller is the bot's owner or has Administrator
+    async function requireBotOwnerOrAdmin(request: FastifyRequest, reply: FastifyReply) {
+        const { serverId, id: botId } = request.params as any;
+        const userId = (request as any).userId;
+        const db = (request as any).dbClient;
+
+        const botRow = await db.query(
+            'SELECT bot_owner_id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
+            [botId, serverId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        const isOwner = botRow.rows[0].bot_owner_id?.trim() === userId.trim();
+        if (!isOwner) {
+            const perms = await loadAndComputePermissions(db, userId, serverId);
+            if (!(perms & Permissions.Administrator)) {
+                return reply.status(403).send({ error: 'Only the bot owner or an Administrator can manage tokens' });
+            }
+        }
+    }
 
     // POST /servers/:serverId/bots/:id/tokens → 201 { tokenId, token, name }
     app.post('/servers/:serverId/bots/:id/tokens', {
-        preHandler: [requireManageBots],
+        preHandler: [requireManageBots, requireBotOwnerOrAdmin],
         schema: {
             body: {
                 type: 'object',
@@ -275,18 +298,11 @@ export async function botRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const { serverId, id: botId } = request.params as any;
+        const { id: botId } = request.params as any;
         const { name } = (request.body as any) || {};
         const db = (request as any).dbClient;
 
-        // Verify bot belongs to this server
-        const botRow = await db.query(
-            'SELECT id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
-            [botId, serverId]
-        );
-        if (!botRow.rows[0]) {
-            return reply.status(404).send({ error: 'Bot not found in this server' });
-        }
+        // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
         const { tokenId, secretHash, raw } = await generateBotToken();
 
@@ -306,19 +322,12 @@ export async function botRoutes(app: FastifyInstance) {
 
     // GET /servers/:serverId/bots/:id/tokens → 200 [{ id, name, lastUsedAt, createdAt, revokedAt }]
     app.get('/servers/:serverId/bots/:id/tokens', {
-        preHandler: [requireManageBots],
+        preHandler: [requireManageBots, requireBotOwnerOrAdmin],
     }, async (request, reply) => {
-        const { serverId, id: botId } = request.params as any;
+        const { id: botId } = request.params as any;
         const db = (request as any).dbClient;
 
-        // Verify bot belongs to this server
-        const botRow = await db.query(
-            'SELECT id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
-            [botId, serverId]
-        );
-        if (!botRow.rows[0]) {
-            return reply.status(404).send({ error: 'Bot not found in this server' });
-        }
+        // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
         const result = await db.query(
             `SELECT id, name, last_used_at, created_at, revoked_at
@@ -341,19 +350,12 @@ export async function botRoutes(app: FastifyInstance) {
 
     // DELETE /servers/:serverId/bots/:id/tokens/:tokenId → 200 { revoked: true }
     app.delete('/servers/:serverId/bots/:id/tokens/:tokenId', {
-        preHandler: [requireManageBots],
+        preHandler: [requireManageBots, requireBotOwnerOrAdmin],
     }, async (request, reply) => {
-        const { serverId, id: botId, tokenId } = request.params as any;
+        const { id: botId, tokenId } = request.params as any;
         const db = (request as any).dbClient;
 
-        // Verify bot belongs to this server
-        const botRow = await db.query(
-            'SELECT id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
-            [botId, serverId]
-        );
-        if (!botRow.rows[0]) {
-            return reply.status(404).send({ error: 'Bot not found in this server' });
-        }
+        // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
         const result = await db.query(
             `UPDATE bot_tokens SET revoked_at = NOW()

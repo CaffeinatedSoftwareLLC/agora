@@ -64,6 +64,10 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
 
                 (socket as any).userId = tokenRow.rows[0].bot_id;
                 (socket as any).isBot = true;
+
+                // Update last_used_at (fire and forget)
+                db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
+
                 return next();
             } catch {
                 return next(new Error('Invalid bot token'));

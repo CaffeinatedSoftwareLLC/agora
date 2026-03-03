@@ -86,7 +86,8 @@ export async function buildApp(opts?: {
         await requireAuth(request, reply);
     });
 
-    // Idempotency check for bot requests
+    // Idempotency check for bot requests — uses SET NX to claim the key
+    // atomically, preventing duplicate messages from concurrent retries.
     app.addHook('preHandler', async (request, reply) => {
         if (!(request as any).isBot) return;
 
@@ -97,10 +98,24 @@ export async function buildApp(opts?: {
         const cacheKey = `idempotent:${(request as any).userId}:${request.method}:${request.routeOptions.url}:${channelId}:${key}`;
 
         try {
-            const cached = await getRedis().get(cacheKey);
+            const redis = getRedis();
+            const cached = await redis.get(cacheKey);
             if (cached) {
-                const { status, body } = JSON.parse(cached);
+                const parsed = JSON.parse(cached);
+                if (parsed.inflight) {
+                    // Another request is currently processing this key
+                    return reply.code(409).send({ error: 'Duplicate request in flight' });
+                }
+                const { status, body } = parsed;
                 return reply.code(status).send(body);
+            }
+
+            // Atomically claim the key with a short TTL in-flight marker.
+            // NX ensures only one concurrent request wins the race.
+            const claimed = await redis.set(cacheKey, JSON.stringify({ inflight: true }), 'EX', 30, 'NX');
+            if (!claimed) {
+                // Another request claimed between our GET and SET — treat as in-flight
+                return reply.code(409).send({ error: 'Duplicate request in flight' });
             }
         } catch {
             // Redis failure is non-fatal — proceed without idempotency

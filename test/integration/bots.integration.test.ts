@@ -226,6 +226,51 @@ describe('Bot integration', () => {
 
             expect(res.status).toBe(401);
         });
+
+        test('non-owner with ManageBots cannot manage tokens', async () => {
+            // Create a second user with ManageBots permission
+            const other = await authedUser(ctx.request, 'tokenintruder');
+            await waitForRow('users', 'id', other.userId);
+
+            // Join the server via invite (with COMMIT waits between steps)
+            const inviteRes = await ctx.request
+                .post(`/servers/${serverId}/invites`)
+                .set(owner.auth)
+                .send({});
+
+            // Wait for invite COMMIT, then join
+            for (let i = 0; i < 20; i++) {
+                const joinRes = await ctx.request
+                    .post(`/invites/${inviteRes.body.code}`)
+                    .set(other.auth);
+                if (joinRes.status === 200 || joinRes.status === 201) break;
+                await new Promise(r => setTimeout(r, 50));
+            }
+
+            // Grant ManageBots to @everyone role (direct DB, bypasses COMMIT race)
+            await ctx.db.query(
+                `UPDATE roles SET permissions = permissions | (1::bigint << 27) WHERE id = $1`,
+                [everyoneRoleId]
+            );
+
+            // Wait for join COMMIT so requireManageBots can find server_members row
+            await new Promise(r => setTimeout(r, 100));
+
+            // Non-owner tries to create a token — should be denied
+            const res = await ctx.request
+                .post(`/servers/${serverId}/bots/${botId}/tokens`)
+                .set(other.auth)
+                .send({ name: 'stolen-token' });
+
+            expect(res.status).toBe(403);
+            expect(res.body.error).toMatch(/owner/i);
+
+            // Clean up: remove ManageBots from @everyone
+            await ctx.db.query(
+                `UPDATE roles SET permissions = permissions & ~(1::bigint << 27) WHERE id = $1`,
+                [everyoneRoleId]
+            );
+        });
     });
 
     // ─── Bot Auth & Channel Access ───
