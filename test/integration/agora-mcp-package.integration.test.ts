@@ -284,7 +284,7 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
             expect(unread).toEqual([]);
         });
 
-        test('respects maxMessages limit', async () => {
+        test('maxMessages returns oldest chunk and preserves remaining for next call', async () => {
             const api = new AgoraApi(baseUrl, botToken);
 
             // Mark everything read
@@ -301,14 +301,23 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
                 await waitForRow('messages', 'id', msg.id);
             }
 
-            // Fetch with maxMessages=3 — should only return 3 newest
-            const freshTracker = new CursorTracker(api);
-            const unread = await fetchUnreadMessages(api, freshTracker, channelId, 3);
-            expect(unread.length).toBe(3);
+            // First call: maxMessages=3 → returns OLDEST 3 (msg 0,1,2)
+            const tracker1 = new CursorTracker(api);
+            const batch1 = await fetchUnreadMessages(api, tracker1, channelId, 3);
+            expect(batch1.length).toBe(3);
+            expect(batch1[0].content).toBe('Limit test 0');
+            expect(batch1[1].content).toBe('Limit test 1');
+            expect(batch1[2].content).toBe('Limit test 2');
 
-            // Should be the 3 newest (messages 2,3,4) in chronological order
-            expect(unread[0].content).toBe('Limit test 2');
-            expect(unread[2].content).toBe('Limit test 4');
+            // Wait for cursor commit
+            await new Promise(r => setTimeout(r, 100));
+
+            // Second call: remaining 2 messages (msg 3,4) are still accessible
+            const tracker2 = new CursorTracker(api);
+            const batch2 = await fetchUnreadMessages(api, tracker2, channelId, 200);
+            expect(batch2.length).toBe(2);
+            expect(batch2[0].content).toBe('Limit test 3');
+            expect(batch2[1].content).toBe('Limit test 4');
         });
 
         test('first read with no cursor returns latest messages', async () => {

@@ -16,9 +16,15 @@ export function formatMessages(messages: Message[]): string {
 }
 
 /**
- * Fetch all unread messages since the cursor, paging backwards from newest.
- * Returns messages in chronological order (oldest first).
- * Advances the cursor to the newest returned message.
+ * Fetch unread messages since the cursor, returning oldest-first.
+ *
+ * No cursor (first call): returns the latest `maxMessages` and sets cursor
+ * to the newest returned message.
+ *
+ * With cursor: scans backward from newest to the cursor boundary, collects
+ * all unread, then returns the oldest `maxMessages` chunk. The cursor
+ * advances only to the last *returned* message, so remaining newer unread
+ * messages stay accessible for subsequent calls.
  */
 export async function fetchUnreadMessages(
     api: AgoraApi,
@@ -30,39 +36,57 @@ export async function fetchUnreadMessages(
     await cursors.load();
     const cursor = cursors.getCursor(channelId);
 
-    const allUnread: Message[] = [];
-    let before: string | undefined;
-    let reachedCursor = false;
+    if (!cursor) {
+        // First read: fetch latest maxMessages, set cursor to newest
+        const page = await api.getMessages(channelId, {
+            limit: Math.min(maxMessages, 100),
+        });
+        const chronological = page.reverse();
+        if (chronological.length > 0) {
+            await cursors.ack(channelId, chronological[chronological.length - 1].id);
+        }
+        return chronological;
+    }
 
-    while (allUnread.length < maxMessages) {
-        const fetchLimit = Math.min(pageSize, maxMessages - allUnread.length);
+    // Subsequent reads: scan backward from newest to the cursor boundary.
+    // Hard cap prevents runaway fetching in extreme backlogs.
+    const MAX_SCAN = 2000;
+    const collected: Message[] = []; // newest-first as collected
+    let before: string | undefined;
+
+    while (collected.length < MAX_SCAN) {
+        const fetchLimit = Math.min(pageSize, MAX_SCAN - collected.length);
         const page = await api.getMessages(channelId, { limit: fetchLimit, before });
 
         if (page.length === 0) break;
 
+        let hitCursor = false;
         for (const msg of page) {
-            if (cursor && msg.id <= cursor) {
-                reachedCursor = true;
+            if (msg.id <= cursor) {
+                hitCursor = true;
                 break;
             }
-            allUnread.push(msg);
+            collected.push(msg);
         }
 
-        if (reachedCursor) break;
+        if (hitCursor) break;
         if (page.length < fetchLimit) break;
 
         before = page[page.length - 1].id;
     }
 
-    // Reverse for chronological order (collected in DESC)
-    allUnread.reverse();
+    // Reverse to chronological (oldest first)
+    collected.reverse();
 
-    // Advance cursor to latest
-    if (allUnread.length > 0) {
-        await cursors.ack(channelId, allUnread[allUnread.length - 1].id);
+    // Return the oldest maxMessages to preserve continuity.
+    // Remaining newer messages stay unread for subsequent calls.
+    const result = collected.slice(0, maxMessages);
+
+    if (result.length > 0) {
+        await cursors.ack(channelId, result[result.length - 1].id);
     }
 
-    return allUnread;
+    return result;
 }
 
 export function registerTools(
