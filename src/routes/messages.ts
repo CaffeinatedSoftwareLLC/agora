@@ -193,33 +193,6 @@ export async function messageRoutes(app: FastifyInstance) {
                 }
             }
 
-            // Phase 2: Fire MessageMention events for bot mentions (post-commit via pendingEvents)
-            if (serverId) {
-                const botMentions = mentionedUsers.filter(u => u.bot);
-                if (botMentions.length > 0 && !isBot) {
-                    // Only human senders can trigger bot mentions; check UseBots permission
-                    const senderPerms = await loadAndComputePermissions(db, userId, serverId);
-                    const hasUseBots = !!(senderPerms & Permissions.UseBots) || !!(senderPerms & Permissions.Administrator);
-
-                    if (hasUseBots) {
-                        (request as any).pendingEvents ??= [];
-                        const timestamp = new Date().toISOString();
-                        for (const botMention of botMentions) {
-                            (request as any).pendingEvents.push({
-                                room: `user:${botMention.id}`,
-                                event: 'MessageMention',
-                                data: {
-                                    channelId: channelId.trim(),
-                                    messageId: messageId.trim(),
-                                    content,
-                                    author: { id: userId.trim(), username: '' },
-                                    timestamp,
-                                },
-                            });
-                        }
-                    }
-                }
-            }
         }
 
         // If @everyone, increment mention_count for all channel members except the author
@@ -309,12 +282,31 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const mentionedUserIds = mentionedUsers.map(u => u.id);
 
-        // Backfill author username in MessageMention events now that we have it
-        const pendingEvents = (request as any).pendingEvents;
-        if (pendingEvents) {
-            for (const evt of pendingEvents) {
-                if (evt.event === 'MessageMention' && evt.data.author.username === '') {
-                    evt.data.author.username = userRow.rows[0].username;
+        // Phase 2: Fire MessageMention events for bot mentions (post-commit via pendingEvents).
+        // Placed after all validation gates so events are only queued for successful creates.
+        if (serverId) {
+            const botMentions = mentionedUsers.filter(u => u.bot);
+            if (botMentions.length > 0 && !isBot) {
+                // Only human senders can trigger bot mentions; check UseBots permission
+                const senderPerms = await loadAndComputePermissions(db, userId, serverId);
+                const hasUseBots = !!(senderPerms & Permissions.UseBots) || !!(senderPerms & Permissions.Administrator);
+
+                if (hasUseBots) {
+                    (request as any).pendingEvents ??= [];
+                    const timestamp = new Date().toISOString();
+                    for (const botMention of botMentions) {
+                        (request as any).pendingEvents.push({
+                            room: `user:${botMention.id}`,
+                            event: 'MessageMention',
+                            data: {
+                                channelId: channelId.trim(),
+                                messageId: messageId.trim(),
+                                content,
+                                author: { id: userId.trim(), username: userRow.rows[0].username },
+                                timestamp,
+                            },
+                        });
+                    }
                 }
             }
         }
