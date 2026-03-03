@@ -105,6 +105,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
           <span className="font-semibold text-sm text-text">{message.authorUsername || 'Unknown'}</span>
+          {message.authorBot && (
+            <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-semibold leading-none bg-primary/20 text-primary">BOT</span>
+          )}
           <span className="text-xs text-text-dim">{formatTimestamp(message.createdAt)}</span>
           {message.editedAt && <span className="text-xs text-text-dim">(edited)</span>}
         </div>

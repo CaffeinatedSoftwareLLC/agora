@@ -24,6 +24,7 @@ export interface MessagePayload {
   content: string;
   authorId: string;
   authorUsername: string;
+  authorBot?: boolean;
   channelId: string;
   createdAt: string;
   editedAt?: string;

@@ -7,7 +7,7 @@ import { Permissions, computePermissions } from '../permissions';
  * Load permission context and compute permissions for a user in a server.
  * Same pattern used in voice.ts and files.ts.
  */
-async function loadAndComputePermissions(db: any, userId: string, serverId: string): Promise<bigint> {
+export async function loadAndComputePermissions(db: any, userId: string, serverId: string): Promise<bigint> {
     // Check server ownership first
     const serverRow = await db.query(
         'SELECT owner_id, everyone_role_id FROM servers WHERE id = $1',
