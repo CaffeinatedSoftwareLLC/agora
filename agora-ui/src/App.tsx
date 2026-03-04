@@ -13,6 +13,8 @@ import { InstanceSettings } from './features/admin/InstanceSettings';
 import { StorageSettings } from './features/admin/StorageSettings';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
+import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
+import { BotManagement } from './features/settings/BotManagement';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 
 export default function App() {
@@ -42,10 +44,23 @@ export default function App() {
                     </AdminGuard>
                   </AuthGuard>
                 } />
+                {/* Shared SocketProvider for /app and /settings */}
                 <Route path="/app/*" element={
                   <AuthGuard>
                     <SocketProvider>
                       <AppShell />
+                    </SocketProvider>
+                  </AuthGuard>
+                } />
+                <Route path="/settings/*" element={
+                  <AuthGuard>
+                    <SocketProvider>
+                      <ServerSettingsLayout>
+                        <Routes>
+                          <Route index element={<Navigate to="/settings/bots" replace />} />
+                          <Route path="bots" element={<BotManagement />} />
+                        </Routes>
+                      </ServerSettingsLayout>
                     </SocketProvider>
                   </AuthGuard>
                 } />

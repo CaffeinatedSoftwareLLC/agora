@@ -45,7 +45,7 @@ export async function messageRoutes(app: FastifyInstance) {
             [channelId]
         );
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 4;
+        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 9999;
         const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
 
         // ─── Bot rate limiting (per-bot, per-channel, Redis sliding window) ───

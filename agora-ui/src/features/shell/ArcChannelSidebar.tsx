@@ -391,11 +391,12 @@ export function ArcChannelSidebar() {
               </svg>
             </button>
 
-            {/* More menu button */}
+            {/* More menu button → Server Settings */}
             <button
+              onClick={() => navigate('/settings/bots')}
               className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
               style={{ color: P.dim }}
-              title="Options"
+              title="Server Settings"
             >
               <svg
                 className="h-4 w-4"

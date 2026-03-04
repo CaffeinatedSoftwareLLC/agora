@@ -143,6 +143,15 @@ export function registerTools(
 ) {
     let botInfo: BotInfo | null = null;
 
+    async function getBotId(): Promise<string> {
+        if (!botInfo) botInfo = await api.getMe();
+        return botInfo.id;
+    }
+
+    function filterSelf(messages: Message[], selfId: string): Message[] {
+        return messages.filter(m => m.authorId !== selfId);
+    }
+
     async function resolveChannel(channel?: string): Promise<{ id: string; name: string }> {
         if (!botInfo) botInfo = await api.getMe();
 
@@ -200,7 +209,9 @@ export function registerTools(
         },
         async ({ channel, limit }) => {
             const ch = await resolveChannel(channel);
-            const { messages, skipped } = await fetchUnreadMessages(api, cursors, ch.id, limit || 200);
+            const selfId = await getBotId();
+            const { messages: raw, skipped } = await fetchUnreadMessages(api, cursors, ch.id, limit || 200);
+            const messages = filterSelf(raw, selfId);
 
             let text: string;
             if (messages.length === 0) {
@@ -236,6 +247,45 @@ export function registerTools(
                     text: lines.length > 0
                         ? `Channels:\n${lines.join('\n')}`
                         : 'No channels assigned. Ask an admin to grant channel access.',
+                }],
+            };
+        },
+    );
+
+    server.tool(
+        'chat_wait',
+        'Wait for new messages in an Agora channel. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            timeout: z.number().optional().describe('Max seconds to wait (default: 30, max: 120)'),
+        },
+        async ({ channel, timeout }) => {
+            const ch = await resolveChannel(channel);
+            const selfId = await getBotId();
+            const maxWait = Math.min(timeout || 30, 120) * 1000;
+            const pollInterval = 2000;
+            const deadline = Date.now() + maxWait;
+
+            while (Date.now() < deadline) {
+                const { messages: raw } = await fetchUnreadMessages(api, cursors, ch.id, 200);
+                const messages = filterSelf(raw, selfId);
+                if (messages.length > 0) {
+                    return {
+                        content: [{
+                            type: 'text' as const,
+                            text: `#${ch.name} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`,
+                        }],
+                    };
+                }
+                const remaining = deadline - Date.now();
+                if (remaining <= 0) break;
+                await new Promise(r => setTimeout(r, Math.min(pollInterval, remaining)));
+            }
+
+            return {
+                content: [{
+                    type: 'text' as const,
+                    text: `#${ch.name} — no new messages after ${Math.round(maxWait / 1000)}s`,
                 }],
             };
         },
