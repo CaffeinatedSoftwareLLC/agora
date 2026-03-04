@@ -161,6 +161,97 @@ describe('Bot integration', () => {
         });
     });
 
+    // ─── Bot Detail (GET /servers/:serverId/bots/:id) ───
+    describe('Bot Detail', () => {
+        let detailBotId: string;
+
+        beforeAll(async () => {
+            const botRes = await ctx.request
+                .post(`/servers/${serverId}/bots`)
+                .set(owner.auth)
+                .send({ username: 'detail-bot' });
+            detailBotId = botRes.body.id;
+            await waitForRow('users', 'id', detailBotId);
+
+            // Grant channel access so we can verify channels in response
+            await ctx.request
+                .post(`/channels/${generalChannelId}/bots/${detailBotId}`)
+                .set(owner.auth);
+            await waitForRow('bot_channel_access', 'bot_id', detailBotId);
+        });
+
+        test('returns bot detail with channels and canManageTokens=true for owner', async () => {
+            const res = await ctx.request
+                .get(`/servers/${serverId}/bots/${detailBotId}`)
+                .set(owner.auth);
+
+            expect(res.status).toBe(200);
+            expect(res.body.id).toBe(detailBotId);
+            expect(res.body.username).toBe('detail-bot');
+            expect(res.body.ownerId).toBe(owner.userId);
+            expect(res.body.canManageTokens).toBe(true);
+            expect(res.body.channels.length).toBeGreaterThanOrEqual(1);
+            expect(res.body.channels.some((c: any) => c.id === generalChannelId)).toBe(true);
+            expect(res.body.channels[0]).toHaveProperty('channelType');
+        });
+
+        test('cross-server request returns 404', async () => {
+            // Create a second server
+            const s2Res = await ctx.request.post('/servers').set(owner.auth).send({ name: 'Detail Server Two' });
+            let s2Id: string | undefined;
+            for (let i = 0; i < 20; i++) {
+                const dbRes = await ctx.db.query('SELECT id FROM servers WHERE id = $1', [s2Res.body.id]);
+                if (dbRes.rows.length > 0) { s2Id = dbRes.rows[0].id.trim(); break; }
+                await new Promise(r => setTimeout(r, 50));
+            }
+            if (!s2Id) throw new Error('Server 2 not found');
+
+            const res = await ctx.request
+                .get(`/servers/${s2Id}/bots/${detailBotId}`)
+                .set(owner.auth);
+
+            expect(res.status).toBe(404);
+        });
+
+        test('canManageTokens=false for non-owner with ManageBots only', async () => {
+            const other = await authedUser(ctx.request, 'detail-viewer');
+            await waitForRow('users', 'id', other.userId);
+
+            // Join server via invite
+            const inviteRes = await ctx.request
+                .post(`/servers/${serverId}/invites`)
+                .set(owner.auth)
+                .send({});
+            for (let i = 0; i < 20; i++) {
+                const joinRes = await ctx.request
+                    .post(`/invites/${inviteRes.body.code}`)
+                    .set(other.auth);
+                if (joinRes.status === 200 || joinRes.status === 201) break;
+                await new Promise(r => setTimeout(r, 50));
+            }
+
+            // Grant ManageBots to @everyone role
+            await ctx.db.query(
+                `UPDATE roles SET permissions = permissions | (1::bigint << 27) WHERE id = $1`,
+                [everyoneRoleId]
+            );
+            await new Promise(r => setTimeout(r, 100));
+
+            const res = await ctx.request
+                .get(`/servers/${serverId}/bots/${detailBotId}`)
+                .set(other.auth);
+
+            expect(res.status).toBe(200);
+            expect(res.body.canManageTokens).toBe(false);
+
+            // Clean up: remove ManageBots from @everyone
+            await ctx.db.query(
+                `UPDATE roles SET permissions = permissions & ~(1::bigint << 27) WHERE id = $1`,
+                [everyoneRoleId]
+            );
+        });
+    });
+
     // ─── Bot Token Management ───
     describe('Bot Token Management', () => {
         let botId: string;
@@ -547,6 +638,157 @@ describe('Bot integration', () => {
                 .set({ Authorization: `Bot ${tokenRes.body.token}` });
 
             expect(authRes.status).toBe(401);
+        });
+    });
+
+    // ─── Bot Avatar Support ───
+    describe('Bot Avatar', () => {
+        const validSvgAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0MCIgZmlsbD0icmVkIi8+PC9zdmc+';
+        const validPngAvatar = 'data:image/png;base64,iVBORw0KGgo=';
+        let avatarBotId: string;
+        let avatarBotToken: string;
+
+        test('create bot with avatar', async () => {
+            const res = await ctx.request
+                .post(`/servers/${serverId}/bots`)
+                .set(owner.auth)
+                .send({ username: 'avatar-bot', avatarUrl: validSvgAvatar });
+
+            expect(res.status).toBe(201);
+            expect(res.body.avatarUrl).toBe(validSvgAvatar);
+            avatarBotId = res.body.id;
+            await waitForRow('users', 'id', avatarBotId);
+
+            // Create token for message tests
+            const tokenRes = await ctx.request
+                .post(`/servers/${serverId}/bots/${avatarBotId}/tokens`)
+                .set(owner.auth)
+                .send({});
+            avatarBotToken = tokenRes.body.token;
+            await waitForRow('bot_tokens', 'id', parseBotToken(avatarBotToken)!.tokenId);
+
+            // Grant channel access
+            await ctx.request
+                .post(`/channels/${generalChannelId}/bots/${avatarBotId}`)
+                .set(owner.auth);
+            await waitForRow('bot_channel_access', 'bot_id', avatarBotId);
+        });
+
+        test('bot list includes avatarUrl', async () => {
+            const res = await ctx.request
+                .get(`/servers/${serverId}/bots`)
+                .set(owner.auth);
+
+            expect(res.status).toBe(200);
+            const bot = res.body.find((b: any) => b.id === avatarBotId);
+            expect(bot).toBeDefined();
+            expect(bot.avatarUrl).toBe(validSvgAvatar);
+        });
+
+        test('bot detail includes avatarUrl', async () => {
+            const res = await ctx.request
+                .get(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth);
+
+            expect(res.status).toBe(200);
+            expect(res.body.avatarUrl).toBe(validSvgAvatar);
+        });
+
+        test('bots/@me includes avatarUrl', async () => {
+            const res = await ctx.request
+                .get('/bots/@me')
+                .set({ Authorization: `Bot ${avatarBotToken}` });
+
+            expect(res.status).toBe(200);
+            expect(res.body.avatarUrl).toBe(validSvgAvatar);
+        });
+
+        test('update bot avatar', async () => {
+            const res = await ctx.request
+                .patch(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth)
+                .send({ avatarUrl: validPngAvatar });
+
+            expect(res.status).toBe(200);
+            expect(res.body.avatarUrl).toBe(validPngAvatar);
+        });
+
+        test('clear bot avatar with null', async () => {
+            const res = await ctx.request
+                .patch(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth)
+                .send({ avatarUrl: null });
+
+            expect(res.status).toBe(200);
+            expect(res.body.avatarUrl).toBeNull();
+
+            // Restore for message test
+            await ctx.request
+                .patch(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth)
+                .send({ avatarUrl: validSvgAvatar });
+        });
+
+        test('reject invalid MIME type', async () => {
+            const res = await ctx.request
+                .patch(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth)
+                .send({ avatarUrl: 'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==' });
+
+            expect(res.status).toBe(400);
+            expect(res.body.error).toMatch(/Invalid avatar/);
+        });
+
+        test('reject external URL', async () => {
+            const res = await ctx.request
+                .patch(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth)
+                .send({ avatarUrl: 'https://example.com/avatar.png' });
+
+            expect(res.status).toBe(400);
+            expect(res.body.error).toMatch(/Invalid avatar/);
+        });
+
+        test('reject oversized avatar', async () => {
+            // Generate a data URI > 50KB
+            const bigData = 'data:image/png;base64,' + 'A'.repeat(51000);
+            const res = await ctx.request
+                .patch(`/servers/${serverId}/bots/${avatarBotId}`)
+                .set(owner.auth)
+                .send({ avatarUrl: bigData });
+
+            expect(res.status).toBe(400);
+            expect(res.body.error).toMatch(/Invalid avatar/);
+        });
+
+        test('bot message includes authorAvatarUrl in REST response', async () => {
+            const res = await ctx.request
+                .post(`/channels/${generalChannelId}/messages`)
+                .set({ Authorization: `Bot ${avatarBotToken}` })
+                .send({ content: 'Hello with avatar!' });
+
+            expect(res.status).toBe(201);
+            expect(res.body.authorAvatarUrl).toBe(validSvgAvatar);
+        });
+
+        test('message history includes authorAvatarUrl', async () => {
+            const res = await ctx.request
+                .get(`/channels/${generalChannelId}/messages`)
+                .set(owner.auth);
+
+            expect(res.status).toBe(200);
+            const botMsg = res.body.find((m: any) => m.authorAvatarUrl === validSvgAvatar);
+            expect(botMsg).toBeDefined();
+        });
+
+        test('create bot without avatar returns null avatarUrl', async () => {
+            const res = await ctx.request
+                .post(`/servers/${serverId}/bots`)
+                .set(owner.auth)
+                .send({ username: 'no-avatar-bot' });
+
+            expect(res.status).toBe(201);
+            expect(res.body.avatarUrl).toBeNull();
         });
     });
 

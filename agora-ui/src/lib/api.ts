@@ -132,6 +132,67 @@ export function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// ─── Bot Management API ───
+
+export interface Bot {
+  id: string;
+  username: string;
+  ownerId: string | null;
+  createdAt: string;
+  avatarUrl?: string | null;
+}
+
+export interface BotDetail extends Bot {
+  canManageTokens: boolean;
+  channels: { id: string; name: string; channelType: number }[];
+}
+
+export interface BotToken {
+  id: string;
+  name: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export interface CreateTokenResponse {
+  tokenId: string;
+  token: string;
+  name: string | null;
+}
+
+export const botApi = {
+  list: (serverId: string) =>
+    api.get<Bot[]>(`/servers/${serverId}/bots`),
+
+  get: (serverId: string, botId: string) =>
+    api.get<BotDetail>(`/servers/${serverId}/bots/${botId}`),
+
+  create: (serverId: string, username: string) =>
+    api.post<Bot & { bot: true; serverId: string }>(`/servers/${serverId}/bots`, { username }),
+
+  update: (serverId: string, botId: string, data: { username?: string; avatarUrl?: string | null }) =>
+    api.patch<{ id: string; username: string; avatarUrl: string | null }>(`/servers/${serverId}/bots/${botId}`, data),
+
+  remove: (serverId: string, botId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/bots/${botId}`),
+
+  createToken: (serverId: string, botId: string, name?: string) =>
+    api.post<CreateTokenResponse>(`/servers/${serverId}/bots/${botId}/tokens`, { name }),
+
+  listTokens: (serverId: string, botId: string) =>
+    api.get<BotToken[]>(`/servers/${serverId}/bots/${botId}/tokens`),
+
+  revokeToken: (serverId: string, botId: string, tokenId: string) =>
+    api.delete<{ revoked: true }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}`),
+
+  grantChannel: (channelId: string, botId: string) =>
+    api.post<{ botId: string; channelId: string }>(`/channels/${channelId}/bots/${botId}`),
+
+  revokeChannel: (channelId: string, botId: string) =>
+    api.delete<{ removed: true }>(`/channels/${channelId}/bots/${botId}`),
+};
+
 export const voiceApi = {
   getToken: (channelId: string) =>
     api.post<{ token: string; url: string }>('/voice/token', { channelId }),

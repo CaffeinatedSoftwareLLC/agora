@@ -3,6 +3,14 @@ import { generateUlid } from '../utils/ulid';
 import { generateBotToken } from '../auth/bot-tokens';
 import { Permissions, computePermissions } from '../permissions';
 
+const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
+const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+
+function isValidAvatarUrl(value: string): boolean {
+    if (value.length > AVATAR_URL_MAX_LENGTH) return false;
+    return AVATAR_DATA_URI_RE.test(value);
+}
+
 /**
  * Load permission context and compute permissions for a user in a server.
  * Same pattern used in voice.ts and files.ts.
@@ -141,6 +149,7 @@ export async function botRoutes(app: FastifyInstance) {
                 required: ['username'],
                 properties: {
                     username: { type: 'string', minLength: 1, maxLength: 32 },
+                    avatarUrl: { type: 'string' },
                 },
             },
         },
@@ -148,14 +157,21 @@ export async function botRoutes(app: FastifyInstance) {
         const { serverId } = request.params as any;
         const userId = (request as any).userId;
         const db = (request as any).dbClient;
+        const { username, avatarUrl } = request.body as any;
+
+        if (avatarUrl !== undefined && avatarUrl !== null) {
+            if (!isValidAvatarUrl(avatarUrl)) {
+                return reply.status(400).send({ error: 'Invalid avatar URL. Must be a data:image URI (png, jpeg, webp, gif, svg+xml) under 50KB.' });
+            }
+        }
 
         const botId = generateUlid();
 
         try {
             await db.query(
-                `INSERT INTO users (id, username, bot, bot_owner_id, server_id)
-                 VALUES ($1, $2, true, $3, $4)`,
-                [botId, (request.body as any).username, userId, serverId]
+                `INSERT INTO users (id, username, bot, bot_owner_id, server_id, avatar_url)
+                 VALUES ($1, $2, true, $3, $4, $5)`,
+                [botId, username, userId, serverId, avatarUrl || null]
             );
         } catch (err: any) {
             if (err.code === '23505') {
@@ -166,10 +182,11 @@ export async function botRoutes(app: FastifyInstance) {
 
         return reply.status(201).send({
             id: botId,
-            username: (request.body as any).username,
+            username,
             serverId: serverId.trim(),
             ownerId: userId.trim(),
             bot: true,
+            avatarUrl: avatarUrl || null,
         });
     });
 
@@ -181,7 +198,7 @@ export async function botRoutes(app: FastifyInstance) {
         const db = (request as any).dbClient;
 
         const result = await db.query(
-            `SELECT id, username, bot_owner_id, created_at
+            `SELECT id, username, bot_owner_id, created_at, avatar_url
              FROM users
              WHERE bot = true AND server_id = $1
              ORDER BY created_at`,
@@ -193,12 +210,62 @@ export async function botRoutes(app: FastifyInstance) {
             username: r.username,
             ownerId: r.bot_owner_id?.trim() || null,
             createdAt: r.created_at,
+            avatarUrl: r.avatar_url || null,
         }));
 
         return reply.status(200).send(bots);
     });
 
-    // PATCH /servers/:serverId/bots/:id → 200 { id, username }
+    // GET /servers/:serverId/bots/:id → 200 { id, username, ownerId, createdAt, canManageTokens, channels }
+    app.get('/servers/:serverId/bots/:id', {
+        preHandler: [requireManageBots],
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const userId = (request as any).userId;
+        const db = (request as any).dbClient;
+
+        const botRow = await db.query(
+            `SELECT id, username, bot_owner_id, created_at, avatar_url
+             FROM users
+             WHERE id = $1 AND bot = true AND server_id = $2`,
+            [botId, serverId]
+        );
+        if (!botRow.rows[0]) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        const bot = botRow.rows[0];
+        const isOwner = bot.bot_owner_id?.trim() === userId.trim();
+        let canManageTokens = isOwner;
+        if (!isOwner) {
+            const perms = await loadAndComputePermissions(db, userId, serverId);
+            canManageTokens = !!(perms & Permissions.Administrator);
+        }
+
+        const channelsResult = await db.query(
+            `SELECT c.id, c.name, c.channel_type
+             FROM bot_channel_access bca
+             JOIN channels c ON c.id = bca.channel_id
+             WHERE bca.bot_id = $1`,
+            [botId]
+        );
+
+        return reply.status(200).send({
+            id: bot.id.trim(),
+            username: bot.username,
+            ownerId: bot.bot_owner_id?.trim() || null,
+            createdAt: bot.created_at,
+            avatarUrl: bot.avatar_url || null,
+            canManageTokens,
+            channels: channelsResult.rows.map((c: any) => ({
+                id: c.id.trim(),
+                name: c.name,
+                channelType: c.channel_type,
+            })),
+        });
+    });
+
+    // PATCH /servers/:serverId/bots/:id → 200 { id, username, avatarUrl }
     app.patch('/servers/:serverId/bots/:id', {
         preHandler: [requireManageBots],
         schema: {
@@ -206,21 +273,28 @@ export async function botRoutes(app: FastifyInstance) {
                 type: 'object',
                 properties: {
                     username: { type: 'string', minLength: 1, maxLength: 32 },
+                    avatarUrl: { type: ['string', 'null'] },
                 },
             },
         },
     }, async (request, reply) => {
         const { serverId, id: botId } = request.params as any;
-        const { username } = request.body as any;
+        const { username, avatarUrl } = request.body as any;
         const db = (request as any).dbClient;
 
         // Verify bot belongs to this server
         const botRow = await db.query(
-            'SELECT id, username FROM users WHERE id = $1 AND bot = true AND server_id = $2',
+            'SELECT id, username, avatar_url FROM users WHERE id = $1 AND bot = true AND server_id = $2',
             [botId, serverId]
         );
         if (!botRow.rows[0]) {
             return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        if (avatarUrl !== undefined && avatarUrl !== null) {
+            if (!isValidAvatarUrl(avatarUrl)) {
+                return reply.status(400).send({ error: 'Invalid avatar URL. Must be a data:image URI (png, jpeg, webp, gif, svg+xml) under 50KB.' });
+            }
         }
 
         if (username) {
@@ -237,9 +311,17 @@ export async function botRoutes(app: FastifyInstance) {
             }
         }
 
+        if (avatarUrl !== undefined) {
+            await db.query(
+                'UPDATE users SET avatar_url = $1 WHERE id = $2',
+                [avatarUrl, botId]
+            );
+        }
+
         return reply.status(200).send({
             id: botId.trim(),
             username: username || botRow.rows[0].username,
+            avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : (botRow.rows[0].avatar_url || null),
         });
     });
 
@@ -430,7 +512,7 @@ export async function botRoutes(app: FastifyInstance) {
         }
 
         const botRow = await db.query(
-            'SELECT id, username, server_id FROM users WHERE id = $1 AND bot = true',
+            'SELECT id, username, server_id, avatar_url FROM users WHERE id = $1 AND bot = true',
             [userId]
         );
         if (!botRow.rows[0]) {
@@ -450,6 +532,7 @@ export async function botRoutes(app: FastifyInstance) {
             username: botRow.rows[0].username,
             serverId: botRow.rows[0].server_id?.trim() || null,
             bot: true,
+            avatarUrl: botRow.rows[0].avatar_url || null,
             channels: channelsResult.rows.map((c: any) => ({
                 id: c.id.trim(),
                 name: c.name,

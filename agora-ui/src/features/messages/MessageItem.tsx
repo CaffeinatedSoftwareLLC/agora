@@ -98,9 +98,17 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
     <div className={`group relative px-4 pt-3 pb-0.5 hover:bg-surface-hover/30 flex gap-3 ${opacity}`}>
       {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} />}
       {/* Avatar */}
-      <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-white shrink-0 mt-0.5">
-        {(message.authorUsername || '?')[0].toUpperCase()}
-      </div>
+      {message.authorAvatarUrl ? (
+        <img
+          src={message.authorAvatarUrl}
+          alt={message.authorUsername || '?'}
+          className="w-10 h-10 rounded-full object-cover shrink-0 mt-0.5"
+        />
+      ) : (
+        <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-white shrink-0 mt-0.5">
+          {(message.authorUsername || '?')[0].toUpperCase()}
+        </div>
+      )}
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">

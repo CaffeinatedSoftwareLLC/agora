@@ -276,7 +276,7 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         const userRow = await db.query(
-            'SELECT username, bot FROM users WHERE id = $1',
+            'SELECT username, bot, avatar_url FROM users WHERE id = $1',
             [userId]
         );
 
@@ -317,6 +317,7 @@ export async function messageRoutes(app: FastifyInstance) {
             authorId: userId.trim(),
             authorUsername: userRow.rows[0].username,
             authorBot: userRow.rows[0].bot || false,
+            authorAvatarUrl: userRow.rows[0].avatar_url || null,
             channelId: channelId.trim(),
             createdAt: new Date().toISOString(),
             mentions: mentionedUserIds,
@@ -361,7 +362,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username, u.bot AS author_bot, m.system_event
+                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url, m.system_event
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2
@@ -370,7 +371,7 @@ export async function messageRoutes(app: FastifyInstance) {
             params = [channelId, before, limit];
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username, u.bot AS author_bot, m.system_event
+                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url, m.system_event
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1
@@ -437,6 +438,7 @@ export async function messageRoutes(app: FastifyInstance) {
             authorId: row.author_id ? row.author_id.trim() : null,
             authorUsername: row.author_username ?? null,
             authorBot: row.author_bot || false,
+            authorAvatarUrl: row.author_avatar_url || null,
             channelId: row.channel_id.trim(),
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,

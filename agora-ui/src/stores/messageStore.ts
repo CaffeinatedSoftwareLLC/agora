@@ -20,6 +20,7 @@ export interface Message {
   authorId: string;
   authorUsername: string;
   authorBot?: boolean;
+  authorAvatarUrl?: string | null;
   channelId: string;
   createdAt: string;
   editedAt?: string;
@@ -64,6 +65,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       authorId: m.authorId,
       authorUsername: m.authorUsername ?? '',
       authorBot: m.authorBot,
+      authorAvatarUrl: m.authorAvatarUrl,
       channelId: m.channelId,
       createdAt: m.createdAt,
       editedAt: m.editedAt,
@@ -107,6 +109,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       authorId: m.authorId,
       authorUsername: m.authorUsername ?? '',
       authorBot: m.authorBot,
+      authorAvatarUrl: m.authorAvatarUrl,
       channelId: m.channelId,
       createdAt: m.createdAt,
       editedAt: m.editedAt,
@@ -277,6 +280,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           authorId: msg.authorId,
           authorUsername: msg.authorUsername,
           authorBot: msg.authorBot,
+          authorAvatarUrl: msg.authorAvatarUrl,
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
@@ -295,6 +299,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           authorId: msg.authorId,
           authorUsername: msg.authorUsername,
           authorBot: msg.authorBot,
+          authorAvatarUrl: msg.authorAvatarUrl,
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
