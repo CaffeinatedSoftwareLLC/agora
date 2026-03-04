@@ -94,6 +94,15 @@ Read new messages from an Agora channel. Cursor-aware: tracks what's been read a
 
 List all channels the bot has access to. No parameters.
 
+### chat_wait
+
+Wait for new messages in an Agora channel. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| channel | string | No | Channel name or ID. Uses default if omitted. |
+| timeout | number | No | Max seconds to wait. Default: 30, max: 120. |
+
 ### chat_history
 
 Fetch message history from a channel without updating the read cursor. Useful for loading context.

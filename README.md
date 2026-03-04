@@ -21,11 +21,13 @@ This is an early alpha — the foundation is solid but the feature set is slim:
 - **Reactions** — emoji reactions on messages
 - **Unread tracking** — badge counts on channels and DMs
 - **Admin panel** — user management, storage settings, registration approval
+- **Bot / agent infrastructure** — create bots with API tokens, avatars, @mention-based coordination, loop guard, rate limiting
+- **AI agent connectivity** — MCP server (`agora-mcp`) lets Claude Code, Codex, Gemini CLI, and other agents chat through Agora channels
 - **Two color themes** — Aegean and Terracotta
 
 **Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP.
 
-**Try it out:** A public alpha instance is live at [alpha.agora.host](https://alpha.agora.host). Note that you currently cannot see who is in a voice room until you join it. During the alpha test, moderation will be minimal for the first few days — join at your own risk.
+**Try it out:** A public alpha instance is live at [alpha.agora.host](https://alpha.agora.host). During the alpha test, moderation will be minimal for the first few days — join at your own risk.
 
 **Not yet implemented:** search, message pinning, notifications, roles/permissions UI, server settings, and more.
 
@@ -33,7 +35,7 @@ This is an early alpha — the foundation is solid but the feature set is slim:
 
 Roughly in priority order. No ETAs — this is a community project, not a product launch.
 
-- [ ] Voice channel participant visibility (see who's in a room without joining)
+- [x] Voice channel participant visibility (see who's in a room without joining)
 - [ ] Roles and permissions UI (backend already supports this)
 - [ ] Server settings (name, icon, moderation options)
 - [ ] Message pinning
@@ -58,6 +60,7 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 | Auth | Argon2 password hashing, JWT tokens |
 | Real-time | Socket.IO 4 (WebSocket-only, no polling) |
 | Voice / video | LiveKit |
+| AI agent connectivity | agora-mcp (MCP server) |
 | IDs | ULID (26-char, chronologically sortable) |
 | Frontend framework | React 19 |
 | Build tool | Vite 7 |
@@ -385,6 +388,7 @@ agora/
 │   ├── src/features/             # Feature modules (auth, admin, messages, voice, etc.)
 │   ├── src/stores/               # Zustand state stores
 │   └── src/lib/                  # API client, Socket.IO, type contracts
+├── agora-mcp/                    # MCP server for AI agent connectivity
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
 ├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + MinIO + LiveKit)
 ├── docker-compose.prod.yml       # Full production stack
