@@ -6,6 +6,7 @@ import type {
   JoinServerResponse,
   UserSearchResult,
   CreateDMResponse,
+  ServerAccess,
 } from './contracts/server';
 
 export class ApiError extends Error {
@@ -66,6 +67,9 @@ export const serverApi = {
 
   getChannels: (serverId: string) =>
     api.get<Channel[]>(`/servers/${serverId}/channels`),
+
+  getAccess: (serverId: string) =>
+    api.get<ServerAccess>(`/servers/${serverId}/access`),
 };
 
 export const userApi = {
@@ -191,6 +195,9 @@ export const botApi = {
 
   revokeChannel: (channelId: string, botId: string) =>
     api.delete<{ removed: true }>(`/channels/${channelId}/bots/${botId}`),
+
+  updateChannelBotConfig: (channelId: string, data: { maxBotHops: number }) =>
+    api.patch<{ channelId: string; maxBotHops: number }>(`/channels/${channelId}/bot-config`, data),
 };
 
 export const voiceApi = {

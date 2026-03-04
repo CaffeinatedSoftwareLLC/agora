@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
 import { botApi, serverApi, ApiError } from '../../lib/api';
@@ -63,6 +63,8 @@ export function BotManagement() {
 
       {error && <p className="text-danger text-sm mb-4">{error}</p>}
 
+      <ChannelLoopGuardSection serverId={instanceServerId} />
+
       {bots.length === 0 ? (
         <p className="text-text-muted">No bots yet. Create one to get started.</p>
       ) : (
@@ -87,6 +89,113 @@ export function BotManagement() {
         onCreated={fetchBots}
       />
     </div>
+  );
+}
+
+// ─── Channel Loop Guard Settings ──────────────────────────────────────────
+
+function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [values, setValues] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const abortControllers = useRef<Record<string, AbortController>>({});
+
+  useEffect(() => {
+    serverApi.getChannels(serverId).then((chs) => {
+      const textChannels = chs.filter(c => c.channelType === 3);
+      setChannels(textChannels);
+      const initial: Record<string, number> = {};
+      for (const ch of textChannels) {
+        initial[ch.id] = ch.maxBotHops ?? 4;
+      }
+      setValues(initial);
+    }).catch(() => setError('Failed to load channels'));
+  }, [serverId]);
+
+  // Cleanup debounce timers and abort controllers on unmount
+  useEffect(() => {
+    const timers = debounceTimers.current;
+    const controllers = abortControllers.current;
+    return () => {
+      for (const t of Object.values(timers)) clearTimeout(t);
+      for (const c of Object.values(controllers)) c.abort();
+    };
+  }, []);
+
+  function handleChange(channelId: string, raw: string) {
+    const num = parseInt(raw, 10);
+    if (isNaN(num) || num < 0) return;
+    setValues(prev => ({ ...prev, [channelId]: num }));
+
+    // Debounce save
+    if (debounceTimers.current[channelId]) {
+      clearTimeout(debounceTimers.current[channelId]);
+    }
+    debounceTimers.current[channelId] = setTimeout(() => {
+      save(channelId, num);
+    }, 600);
+  }
+
+  async function save(channelId: string, maxBotHops: number) {
+    // Cancel any in-flight request for this channel
+    if (abortControllers.current[channelId]) {
+      abortControllers.current[channelId].abort();
+    }
+    const controller = new AbortController();
+    abortControllers.current[channelId] = controller;
+
+    setSaving(channelId);
+    setError('');
+    try {
+      await botApi.updateChannelBotConfig(channelId, { maxBotHops });
+      if (!controller.signal.aborted) {
+        setSaving(null);
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setError(err instanceof ApiError ? err.code : 'Failed to save');
+        setSaving(null);
+      }
+    }
+  }
+
+  if (channels.length === 0) return null;
+
+  return (
+    <section className="mb-6">
+      <h3 className="text-sm font-semibold text-text mb-2">Channel Loop Guard</h3>
+      <p className="text-text-muted text-xs mb-3">
+        Max consecutive bot messages per channel before pausing. Set to 0 to disable.
+      </p>
+      {error && <p className="text-danger text-xs mb-2">{error}</p>}
+      <div className="flex flex-col gap-1">
+        {channels.map((ch) => (
+          <div
+            key={ch.id}
+            className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-surface-hover"
+          >
+            <span className="text-text-muted">#</span>
+            <span className="text-text text-sm flex-1">{ch.name}</span>
+            <input
+              type="number"
+              min={0}
+              max={1000}
+              value={values[ch.id] ?? 4}
+              onChange={(e) => handleChange(ch.id, e.target.value)}
+              className="w-20 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
+            />
+            {values[ch.id] === 0 && (
+              <span className="text-text-muted text-xs">Disabled</span>
+            )}
+            {saving === ch.id && (
+              <span className="text-text-dim text-xs">Saving...</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

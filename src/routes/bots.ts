@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { generateBotToken } from '../auth/bot-tokens';
 import { Permissions, computePermissions } from '../permissions';
+import { getRedis } from '../auth/token-blacklist';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -122,6 +123,45 @@ async function requireManageBotsForChannel(request: FastifyRequest, reply: Fasti
     }
 
     // Check membership
+    const member = await db.query(
+        'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+        [serverId, userId]
+    );
+    if (member.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this server' });
+    }
+
+    const perms = await loadAndComputePermissions(db, userId, serverId);
+    if (!(perms & Permissions.ManageBots) && !(perms & Permissions.Administrator)) {
+        return reply.status(403).send({ error: 'Missing ManageBots permission' });
+    }
+}
+
+/**
+ * PreHandler: require ManageBots for /channels/:id/bot-config
+ * Channel→server lookup, membership check, no botId needed.
+ */
+async function requireManageBotsForChannelConfig(request: FastifyRequest, reply: FastifyReply) {
+    if ((request as any).isBot) {
+        return reply.status(403).send({ error: 'Bots cannot manage bot config' });
+    }
+    const { id: channelId } = request.params as any;
+    const userId = (request as any).userId;
+    const db = (request as any).dbClient;
+
+    const channelRow = await db.query(
+        'SELECT server_id FROM channels WHERE id = $1',
+        [channelId]
+    );
+    if (!channelRow.rows[0]) {
+        return reply.status(404).send({ error: 'Channel not found' });
+    }
+    if (!channelRow.rows[0].server_id) {
+        return reply.status(400).send({ error: 'Cannot configure bot settings on DM channels' });
+    }
+
+    const serverId = channelRow.rows[0].server_id.trim();
+
     const member = await db.query(
         'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
         [serverId, userId]
@@ -497,6 +537,41 @@ export async function botRoutes(app: FastifyInstance) {
         }
 
         return reply.status(200).send({ removed: true });
+    });
+
+    // ─── Channel Bot Config (human auth, requires ManageBots) ───
+
+    // PATCH /channels/:id/bot-config → 200 { channelId, maxBotHops }
+    app.patch('/channels/:id/bot-config', {
+        preHandler: [requireManageBotsForChannelConfig],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['maxBotHops'],
+                properties: {
+                    maxBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { id: channelId } = request.params as any;
+        const { maxBotHops } = request.body as any;
+        const db = (request as any).dbClient;
+
+        await db.query(
+            'UPDATE channels SET max_bot_hops = $1 WHERE id = $2',
+            [maxBotHops, channelId]
+        );
+
+        // Clear stale Redis loop guard counter so new limit applies immediately
+        try {
+            await getRedis().del(`loopguard:${channelId}`);
+        } catch { /* Redis failure is non-fatal */ }
+
+        return reply.status(200).send({
+            channelId: channelId.trim(),
+            maxBotHops,
+        });
     });
 
     // ─── Bot Self-Info (bot auth) ───

@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerStore } from '../../stores/serverStore';
+import { useServerAccess } from '../../hooks/useServerAccess';
 import { usePalette, hexToRgb } from '../../theme';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -17,7 +19,8 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
   const navigate = useNavigate();
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
-  const isAdmin = user?.isInstanceAdmin === true;
+  const instanceServerId = useServerStore(s => s.instanceServerId);
+  const { hasModerationAccess } = useServerAccess(instanceServerId);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -113,16 +116,31 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
           </svg>
         </button>
 
-        {/* ── Admin button (instance admins only) ──────────────────────── */}
-        {isAdmin && (
+        {/* ── Moderation button (users with mod perms) ──────────────── */}
+        {hasModerationAccess && (
+          <button
+            onClick={() => navigate('/moderation')}
+            className={`${buttonSize} flex items-center justify-center transition-colors`}
+            style={{ color: P.dim }}
+            title="Moderation"
+          >
+            <svg className={iconSize} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          </button>
+        )}
+
+        {/* ── Instance Admin button (instance admins only) ─────────── */}
+        {user?.isInstanceAdmin && (
           <button
             onClick={() => navigate('/admin')}
             className={`${buttonSize} flex items-center justify-center transition-colors`}
             style={{ color: P.dim }}
-            title="Instance Settings"
+            title="Instance Admin"
           >
             <svg className={iconSize} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
             </svg>
           </button>
         )}

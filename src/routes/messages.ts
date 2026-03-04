@@ -45,7 +45,7 @@ export async function messageRoutes(app: FastifyInstance) {
             [channelId]
         );
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 9999;
+        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 4;
         const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
 
         // ─── Bot rate limiting (per-bot, per-channel, Redis sliding window) ───
@@ -67,7 +67,8 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         // ─── Loop guard (per-channel, consecutive bot messages) ───
-        if (isBot) {
+        // maxBotHops === 0 means loop guard is disabled
+        if (isBot && maxBotHops > 0) {
             try {
                 const redis = getRedis();
                 const guardKey = `loopguard:${channelId}`;
@@ -109,7 +110,7 @@ export async function messageRoutes(app: FastifyInstance) {
                     return reply.status(429).send({ error: 'Loop guard triggered' });
                 }
             } catch { /* Redis failure is non-fatal */ }
-        } else {
+        } else if (!isBot) {
             // Human message resets loop guard counter
             try {
                 await getRedis().del(`loopguard:${channelId}`);

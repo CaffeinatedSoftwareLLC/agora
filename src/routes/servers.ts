@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import { generateUlid } from '../utils/ulid';
-import { DEFAULT_EVERYONE_PERMS } from '../permissions';
+import { DEFAULT_EVERYONE_PERMS, Permissions } from '../permissions';
+import { loadAndComputePermissions } from './bots';
 
 export async function serverRoutes(app: FastifyInstance) {
 
@@ -70,7 +71,7 @@ export async function serverRoutes(app: FastifyInstance) {
         });
     });
 
-    // GET /servers/:id/channels → 200 [{ id, name, channelType }]
+    // GET /servers/:id/channels → 200 [{ id, name, channelType, maxBotHops }]
     app.get('/servers/:id/channels', async (request, reply) => {
         const { id: serverId } = request.params as any;
         const userId = (request as any).userId;
@@ -86,7 +87,7 @@ export async function serverRoutes(app: FastifyInstance) {
         }
 
         const result = await db.query(
-            'SELECT id, name, channel_type FROM channels WHERE server_id = $1 ORDER BY position',
+            'SELECT id, name, channel_type, max_bot_hops FROM channels WHERE server_id = $1 ORDER BY position',
             [serverId]
         );
 
@@ -94,6 +95,7 @@ export async function serverRoutes(app: FastifyInstance) {
             id: row.id.trim(),
             name: row.name,
             channelType: row.channel_type,
+            maxBotHops: row.max_bot_hops ?? 4,
         }));
 
         return reply.status(200).send(channels);
@@ -168,6 +170,43 @@ export async function serverRoutes(app: FastifyInstance) {
         }));
 
         return reply.status(200).send(members);
+    });
+
+    // GET /servers/:id/access → 200 { permissions, isInstanceAdmin, hasModerationAccess, hasServerAdminAccess }
+    app.get('/servers/:id/access', async (request, reply) => {
+        const { id: serverId } = request.params as any;
+        const userId = (request as any).userId;
+        const db = (request as any).dbClient;
+
+        // Membership check
+        const member = await db.query(
+            'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+            [serverId, userId]
+        );
+        if (member.rows.length === 0) {
+            return reply.status(403).send({ error: 'Not a member of this server' });
+        }
+
+        const perms = await loadAndComputePermissions(db, userId, serverId);
+
+        const adminRow = await db.query(
+            'SELECT is_instance_admin FROM users WHERE id = $1',
+            [userId]
+        );
+        const isInstanceAdmin = adminRow.rows[0]?.is_instance_admin === true;
+
+        const MODERATION_MASK = Permissions.KickMembers | Permissions.BanMembers | Permissions.ManageMessages | Permissions.ManageNicknames;
+        const ADMIN_MASK = Permissions.Administrator | Permissions.ManageServer;
+
+        const hasModerationAccess = isInstanceAdmin || (perms & MODERATION_MASK) !== 0n;
+        const hasServerAdminAccess = isInstanceAdmin || (perms & ADMIN_MASK) !== 0n;
+
+        return reply.status(200).send({
+            permissions: String(perms),
+            isInstanceAdmin,
+            hasModerationAccess,
+            hasServerAdminAccess,
+        });
     });
 
     // POST /invites/:code → 200 { serverId, userId }

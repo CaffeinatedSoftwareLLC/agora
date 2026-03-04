@@ -2,17 +2,15 @@ import type { ReactNode } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 
 const navItems = [
-  { to: '/admin', label: 'Dashboard', end: true },
-  { to: '/admin/pending', label: 'Pending Users', end: false },
-  { to: '/admin/users', label: 'All Users', end: false },
+  { to: '/moderation/members', label: 'Members', end: false },
 ];
 
-export function AdminLayout({ children }: { children: ReactNode }) {
+export function ModerationLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-bg">
       <aside className="w-56 bg-surface border-r border-border flex flex-col">
         <div className="p-4 border-b border-border">
-          <h1 className="text-lg font-bold">Instance Settings</h1>
+          <h1 className="text-lg font-bold text-text">Moderation</h1>
           <Link to="/app" className="text-text-muted text-sm hover:text-text">
             Back to chat
           </Link>

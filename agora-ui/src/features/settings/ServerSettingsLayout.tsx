@@ -1,19 +1,28 @@
 import type { ReactNode } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
-
-const navItems = [
-  { to: '/settings/bots', label: 'Bots', end: false },
-];
+import { useAuthStore } from '../../stores/authStore';
 
 export function ServerSettingsLayout({ children }: { children: ReactNode }) {
   const instanceServerId = useServerStore(s => s.instanceServerId);
+  const isAdmin = useAuthStore(s => s.user?.isInstanceAdmin) === true;
 
   if (!instanceServerId) {
     return (
       <div className="flex h-screen items-center justify-center bg-bg text-text-muted">
         Connecting...
       </div>
+    );
+  }
+
+  const navItems: { to: string; label: string; end: boolean }[] = [
+    { to: '/settings/bots', label: 'Bots', end: false },
+  ];
+
+  if (isAdmin) {
+    navItems.push(
+      { to: '/settings/instance', label: 'Instance Settings', end: false },
+      { to: '/settings/storage', label: 'File Storage', end: false },
     );
   }
 
