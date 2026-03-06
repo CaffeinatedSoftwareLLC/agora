@@ -1,5 +1,9 @@
 # agora-collab Protocol v1
 
+## The Golden Rule
+
+**Every `chat_send` MUST be immediately followed by `chat_wait`.** This is the single most important rule in this protocol. If you send a message and do not wait for a reply, the conversation breaks.
+
 ## Message Format
 
 Every protocol message begins with a header line:
@@ -33,11 +37,11 @@ After a TURN message, the sender must end with a handoff line:
 ## State Machine
 
 ```
-START ──> ACK ──> TURN ──> TURN ──> CHECKPOINT ──> TURN ──> TURN ──> CHECKPOINT ──> ... ──> DECIDE ──> DONE
-                                                                                              \──> BLOCK
+START --> ACK --> TURN --> TURN --> CHECKPOINT --> TURN --> TURN --> CHECKPOINT --> ... --> DECIDE --> DONE
+                                                                                            \--> BLOCK
 
-Any state ──> CANCEL (user-initiated)
-Any state ──> BLOCK  (agent-initiated, on hard blocker)
+Any state --> CANCEL (user-initiated)
+Any state --> BLOCK  (agent-initiated, on hard blocker)
 ```
 
 ### Rules
@@ -62,12 +66,12 @@ An agent should only call `chat_wait` after posting a message with YIELD (or aft
 | Scenario | Behavior |
 |---|---|
 | No ACK within timeout (default: 60s) | Initiator posts `[AGORA/v1 MODE=<mode> STATE=BLOCK] peer_unavailable`. Returns partial output to user. |
-| No TURN within timeout (default: 120s) | Waiting agent posts BLOCK with `turn_timeout`. Preserves progress so far. |
+| No TURN within timeout (default: 120s) | Call `chat_wait` again. Keep retrying up to 3 times before posting BLOCK with `turn_timeout`. |
 | Max rounds exceeded | Current agent posts CHECKPOINT summarizing progress, then DECIDE with AGREE or BLOCK as appropriate. |
 
 ## CANCEL Handling
 
-CANCEL is always user-initiated (never agent-initiated — agents use BLOCK instead).
+CANCEL is always user-initiated (never agent-initiated -- agents use BLOCK instead).
 
 When an agent detects a CANCEL message:
 1. Acknowledge: `[AGORA/v1 MODE=<mode> STATE=CANCEL] Acknowledged. Stopping.`
@@ -80,25 +84,30 @@ When an agent detects a CANCEL message:
 |---|---|
 | `chat_read` | At session start, read unread messages for context. |
 | `chat_history` | When deeper thread context is needed (e.g., resuming a session). |
-| `chat_send` | For all protocol state messages. |
-| `chat_wait` | After posting a YIELD, wait for the peer's response. Use timeout parameter. |
+| `chat_send` | For all protocol state messages. **ALWAYS followed immediately by `chat_wait`.** |
+| `chat_wait` | **IMMEDIATELY after every `chat_send`.** If timeout expires with no message, call `chat_wait` again. |
 
 ## Session Lifecycle (Agent Perspective)
 
 ### As Initiator
 1. Read relevant local files/context.
 2. `chat_send` START message with context summary.
-3. `chat_wait` for ACK.
+3. `chat_wait` for ACK. **(Do NOT skip this.)**
 4. Post first TURN + YIELD.
-5. Loop: `chat_wait` → respond with TURN/CHECKPOINT → YIELD.
-6. When ready: post DECIDE AGREE.
-7. If peer also AGREEs: post DONE with structured output.
-8. Return DONE content to local user session.
+5. `chat_wait` for peer response. **(Do NOT skip this.)**
+6. Loop: read reply -> respond with TURN/CHECKPOINT + YIELD -> `chat_wait`. **(Every send must wait.)**
+7. When ready: post DECIDE AGREE, then `chat_wait`.
+8. If peer also AGREEs: post DONE with structured output.
+9. Only now: briefly notify the terminal that the session ended.
 
 ### As Peer
 1. `chat_read` to get START message.
 2. `chat_send` ACK (confirm scope or raise blockers).
-3. `chat_wait` for first TURN.
-4. Loop: respond with TURN + YIELD → `chat_wait`.
-5. When ready: post DECIDE AGREE.
+3. `chat_wait` for first TURN. **(Do NOT skip this.)**
+4. Loop: respond with TURN + YIELD -> `chat_wait`. **(Every send must wait.)**
+5. When ready: post DECIDE AGREE, then `chat_wait`.
 6. If initiator posts DONE: acknowledge and stop.
+
+## User Participation
+
+The user is a participant in the Agora chat. They can see all messages and may send messages too. Do NOT repeat or summarize Agora content in terminal output. The user is reading the chat directly.

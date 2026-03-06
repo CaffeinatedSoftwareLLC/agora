@@ -9,20 +9,51 @@ allowed-tools: mcp__agora__chat_send, mcp__agora__chat_read, mcp__agora__chat_wa
 
 Use this skill to run structured two-agent collaboration over Agora.
 
+## CRITICAL RULES — READ FIRST
+
+These are non-negotiable. Violating any of them breaks the workflow.
+
+### Rule 1: ALWAYS wait for a reply after sending
+After EVERY `chat_send`, you MUST immediately call `chat_wait` and keep waiting until you receive a response. No exceptions. Never send a message and then talk to the terminal instead of waiting.
+
+If `chat_wait` times out, call it again. Keep waiting until a message arrives or the user interrupts you.
+
+### Rule 2: The user is IN the Agora chat
+The user reads Agora messages directly. They may also send messages in Agora. Do NOT summarize Agora content to the terminal — the user already sees it. Only use terminal output for:
+- Tool permission requests
+- Asking the user a direct question that requires terminal input
+- Reporting that the session has ended (DONE/BLOCK/CANCEL)
+
+### Rule 3: Keep the session alive until DONE
+Once a session starts, you are in a **loop**: send message -> wait for reply -> read reply -> send response -> wait for reply -> ... This loop continues until BOTH agents have reached DONE, BLOCK, or CANCEL state. Never exit the loop early.
+
+### Rule 4: The send-wait cycle is atomic
+`chat_send` + `chat_wait` is one atomic operation. You cannot do one without the other. Think of it as a function call that sends and then blocks until a reply comes back.
+
 ## Execute Workflow
 
-1. Read local task context before opening Agora (relevant files, constraints, and desired output).
+1. Read local task context before opening Agora (relevant files, constraints, desired output).
 2. Summarize that context in 3-5 concise bullets for the `START` message so the peer can contribute without reading local files.
 3. Select mode from arguments: `plan`, `review`, `fix`, or `discuss`.
 4. Choose channel:
    - Default: `general`
    - Prefer an explicitly requested channel when provided.
 5. Detect role (`initiator` vs `peer`) before sending protocol messages.
-6. Start session with a `START` message using the v1 header format (initiator) or reply with `ACK` to an unread `START` (peer).
-7. Follow protocol states and turn-taking from [references/protocol.md](references/protocol.md).
-8. Enforce mode-specific output expectations from [references/modes.md](references/modes.md).
-9. Post a single `DONE` message when collaboration converges, or `BLOCK`/`CANCEL` when needed.
-10. Return the final result (or partial result, if blocked/canceled) to the local user session.
+6. Start session:
+   - **Initiator:** Send `START` message, then `chat_wait` for ACK.
+   - **Peer:** `chat_read` to get START, send `ACK`, then `chat_wait` for first TURN.
+7. **Enter the session loop:**
+   ```
+   while session is not DONE/BLOCK/CANCEL:
+     1. Read the incoming message
+     2. Compose your response
+     3. chat_send your response
+     4. chat_wait for the next reply  <-- MANDATORY, NEVER SKIP
+   ```
+8. Follow protocol states and turn-taking from [references/protocol.md](references/protocol.md).
+9. Enforce mode-specific output expectations from [references/modes.md](references/modes.md).
+10. When collaboration converges, post `DONE`. When the OTHER agent posts `DONE`, acknowledge it.
+11. Only after DONE/BLOCK/CANCEL: briefly notify the user in terminal that the session ended.
 
 ## Parameters
 
@@ -46,10 +77,12 @@ Use this skill to run structured two-agent collaboration over Agora.
 
 ## Tool Usage
 
-- Use `chat_read` at start for unread context.
-- Use `chat_history` when deeper thread history is needed.
-- Use `chat_send` for protocol messages.
-- Use `chat_wait` after handoff to await peer response.
+| Tool | When to use |
+|---|---|
+| `chat_read` | At session start, read unread messages for context. |
+| `chat_history` | When deeper thread context is needed (e.g., resuming a session). |
+| `chat_send` | For all protocol state messages. **Always followed by chat_wait.** |
+| `chat_wait` | **IMMEDIATELY after every chat_send.** Also after START/ACK if you are the peer. If it times out, call it again. |
 
 ## Completion Standard
 
@@ -57,3 +90,11 @@ Complete only when one of the following is true:
 - A `DONE` message is posted with mode-compliant output.
 - A `BLOCK` message is posted with clear reason and preserved partial output.
 - A `CANCEL` message is acknowledged and collaboration stops.
+
+## Anti-patterns — NEVER do these
+
+- Sending a message and then outputting a summary to terminal instead of waiting
+- Exiting the loop because you think the conversation is "done" without a DONE state
+- Polling with `chat_read` instead of blocking with `chat_wait`
+- Summarizing Agora messages to terminal (the user is reading them directly)
+- Sending multiple messages in a row without waiting for a reply between each
