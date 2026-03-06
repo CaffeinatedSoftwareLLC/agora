@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Message } from '../../stores/messageStore';
 import { MessageActions } from './MessageActions';
 import { EditMessageInput } from './EditMessageInput';
+import { MessageContent } from './MessageContent';
 import { ReactionBar } from '../live/ReactionBar';
 import { FileAttachment } from './FileAttachment';
 import { usePalette } from '../../theme';
@@ -77,7 +78,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <div className="text-sm text-text">{message.content}</div>
+          <MessageContent content={message.content} />
         )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
@@ -126,7 +127,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <div className="text-sm text-text">{message.content}</div>
+          <MessageContent content={message.content} />
         )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
