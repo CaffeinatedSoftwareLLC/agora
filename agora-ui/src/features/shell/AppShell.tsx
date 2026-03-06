@@ -24,6 +24,24 @@ export function AppShell() {
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
 
+  // Sync palette → CSS custom properties so Tailwind classes follow the active theme
+  useEffect(() => {
+    const s = document.documentElement.style;
+    s.setProperty('--color-bg', P.bg);
+    s.setProperty('--color-surface', P.surface);
+    s.setProperty('--color-surface-hover', P.surfaceHover);
+    s.setProperty('--color-primary', P.primary);
+    s.setProperty('--color-primary-hover', P.primaryHover);
+    s.setProperty('--color-accent', P.accent);
+    s.setProperty('--color-text', P.text);
+    s.setProperty('--color-text-muted', P.muted);
+    s.setProperty('--color-text-dim', P.dim);
+    s.setProperty('--color-border', P.border);
+    s.setProperty('--color-online', P.online);
+    s.setProperty('--color-danger', P.danger);
+    s.setProperty('--color-warn', P.warn);
+  }, [P]);
+
   // URL: /app/dms/{channelId} or /app/{channelId} or /app
   const urlSegment1 = params['*']?.split('/')[0] || null;
   const urlSegment2 = params['*']?.split('/')[1] || null;

@@ -1,5 +1,6 @@
 import { useTracks } from '@livekit/components-react';
 import { Track } from 'livekit-client';
+import { useLocation } from 'react-router-dom';
 import { useChannelStore } from '../../stores/channelStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -24,6 +25,8 @@ function serverColor(name: string): string {
 
 export function ArcContentArea() {
   const P = usePalette();
+  const location = useLocation();
+  const isDmRoute = location.pathname.startsWith('/app/dms');
 
   const activeChannelId = useChannelStore(s => s.activeChannelId);
   const channels = useChannelStore(s => s.channels);
@@ -53,10 +56,10 @@ export function ArcContentArea() {
       >
         <div className="text-center">
           <div className="text-4xl mb-4" style={{ color: P.text }}>
-            Select a channel
+            {isDmRoute ? 'Select a conversation' : 'Select a channel'}
           </div>
           <div className="text-lg" style={{ color: P.muted }}>
-            Select a channel to start chatting
+            {isDmRoute ? 'Select a conversation to start messaging' : 'Select a channel to start chatting'}
           </div>
         </div>
       </div>

@@ -276,14 +276,13 @@ export function ArcChannelSidebar() {
     return byServer(instanceServerId).filter(c => c.channelType === 4);
   }, [instanceServerId, byServer]);
 
-  // Count online members for this server
+  // Count online members for this server (reactive to presence + member changes)
+  const members = useMemberStore(s => instanceServerId ? s.byServer.get(instanceServerId) : undefined);
+  const presenceMap = usePresenceStore(s => s.status);
   const onlineCount = useMemo(() => {
-    if (!instanceServerId) return 0;
-    const members = useMemberStore.getState().byServer.get(instanceServerId);
     if (!members) return 0;
-    const presenceStore = usePresenceStore.getState();
-    return members.filter(m => presenceStore.getStatus(m.id) === 'online').length;
-  }, [instanceServerId]);
+    return members.filter(m => presenceMap.get(m.id) === 'online').length;
+  }, [members, presenceMap]);
 
   const toggleCategory = (name: string) => {
     setExpandedCategories((prev) => {
