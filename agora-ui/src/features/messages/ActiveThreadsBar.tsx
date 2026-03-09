@@ -20,7 +20,7 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
     loadActiveThreads(channelId);
   }, [channelId, loadActiveThreads]);
 
-  const threads: ThreadSummary[] = activeThreads.get(channelId) ?? [];
+  const threads: ThreadSummary[] = (activeThreads.get(channelId) ?? []).filter(t => !t.threadClosedAt);
 
   if (threads.length === 0) return null;
 

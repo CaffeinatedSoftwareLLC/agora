@@ -296,16 +296,16 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       const next = new Map(state.activeThreads);
       const threads = next.get(data.channelId);
       if (threads) {
-        if (data.threadClosedAt) {
-          // Remove closed thread from active list
-          next.set(data.channelId, threads.filter((t) => t.id !== data.messageId));
-        } else {
-          next.set(data.channelId, threads.map((t) =>
-            t.id === data.messageId
-              ? { ...t, replyCount: data.replyCount, lastReplyAt: data.lastReplyAt ?? t.lastReplyAt }
-              : t
-          ));
-        }
+        next.set(data.channelId, threads.map((t) =>
+          t.id === data.messageId
+            ? {
+                ...t,
+                replyCount: data.replyCount,
+                lastReplyAt: data.lastReplyAt ?? t.lastReplyAt,
+                ...(data.threadClosedAt !== undefined ? { threadClosedAt: data.threadClosedAt } : {}),
+              }
+            : t
+        ));
       }
       return { activeThreads: next };
     });

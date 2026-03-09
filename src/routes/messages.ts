@@ -474,7 +474,7 @@ export async function messageRoutes(app: FastifyInstance) {
                     reply_count = GREATEST(reply_count - 1, 0),
                     last_reply_at = (SELECT m2.created_at FROM messages m2 WHERE m2.thread_id = $1 AND m2.deleted_at IS NULL AND m2.id != $2 ORDER BY m2.id DESC LIMIT 1)
                  WHERE id = $1
-                 RETURNING reply_count, last_reply_at`,
+                 RETURNING reply_count, last_reply_at, thread_closed_at`,
                 [threadId, msgId]
             );
 
@@ -488,7 +488,7 @@ export async function messageRoutes(app: FastifyInstance) {
                         messageId: threadId,
                         replyCount: parentUpdate.rows[0].reply_count,
                         lastReplyAt: parentUpdate.rows[0].last_reply_at,
-                        threadClosedAt: null,
+                        threadClosedAt: parentUpdate.rows[0].thread_closed_at ?? null,
                     },
                 });
             }
