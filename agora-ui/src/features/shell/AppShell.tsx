@@ -9,6 +9,8 @@ import { DMSidebar } from './DMSidebar';
 import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
+import { ThreadPanel } from '../messages/ThreadPanel';
+import { useThreadStore } from '../../stores/threadStore';
 import { VoiceChannelProvider } from '../voice/VoiceChannelProvider';
 import { IncomingCallOverlay } from '../calls/IncomingCallOverlay';
 import { OutgoingCallOverlay } from '../calls/OutgoingCallOverlay';
@@ -23,6 +25,7 @@ export function AppShell() {
   const byServer = useChannelStore(s => s.byServer);
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
+  const openThreadId = useThreadStore(s => s.openThreadId);
 
   // Sync palette → CSS custom properties so Tailwind classes follow the active theme
   useEffect(() => {
@@ -112,6 +115,7 @@ export function AppShell() {
           {showDmSidebar ? <DMSidebar /> : <ArcChannelSidebar />}
           <ArcContentArea />
           {!isDm && membersOpen && <MembersSidebar />}
+          {openThreadId && <ThreadPanel />}
         </div>
       </div>
       <IncomingCallOverlay />

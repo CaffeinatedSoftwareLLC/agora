@@ -9,6 +9,7 @@ import { useCallStore } from '../../stores/callStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
 import { TypingIndicator } from '../live/TypingIndicator';
+import { ActiveThreadsBar } from '../messages/ActiveThreadsBar';
 import { VideoGrid } from '../voice/VideoGrid';
 import { usePalette } from '../../theme';
 
@@ -198,6 +199,7 @@ export function ArcContentArea() {
 
       {/* ── Messages + typing + input ─────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-h-0">
+        {!isDm && <ActiveThreadsBar channelId={activeChannelId} />}
         <MessageList channelId={activeChannelId} channelName={channel.name} isDm={isDm} />
         <TypingIndicator channelId={activeChannelId} />
         <FloatingMessageInput

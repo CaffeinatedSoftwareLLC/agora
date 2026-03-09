@@ -12,6 +12,7 @@ import { useUnreadStore } from '../../stores/unreadStore';
 import { useReactionStore } from '../../stores/reactionStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useCallStore } from '../../stores/callStore';
+import { useThreadStore } from '../../stores/threadStore';
 import type {
   ReadyPayload,
   MessagePayload,
@@ -22,6 +23,7 @@ import type {
   ReactionAddPayload,
   ReactionRemovePayload,
   DMCreatedPayload,
+  ThreadMetadataUpdatePayload,
 } from '../../lib/contracts/ws-events';
 import { api } from '../../lib/api';
 import { SocketContext } from './SocketContext';
@@ -57,6 +59,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setServers(data.servers);
       setChannels(data.channels);
       useMessageStore.getState().clear();
+      useThreadStore.getState().clear();
       useTypingStore.getState().clear();
       useReactionStore.getState().clear();
       useUnreadStore.getState().setUnreads(data.unreads || []);
@@ -76,7 +79,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.on('Message', (data: MessagePayload) => {
-      useMessageStore.getState().addMessage(data);
+      if (data.threadId) {
+        // Thread reply — route to thread store
+        useThreadStore.getState().addReply(data);
+      } else {
+        useMessageStore.getState().addMessage(data);
+      }
       const activeChannelId = useChannelStore.getState().activeChannelId;
       if (data.channelId !== activeChannelId) {
         useUnreadStore.getState().incrementUnread(data.channelId);
@@ -92,11 +100,24 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.on('MessageUpdate', (data: MessageUpdatePayload) => {
-      useMessageStore.getState().updateMessage(data);
+      if (data.threadId) {
+        useThreadStore.getState().updateReply(data);
+      } else {
+        useMessageStore.getState().updateMessage(data);
+      }
     });
 
     s.on('MessageDelete', (data: MessageDeletePayload) => {
-      useMessageStore.getState().removeMessage(data);
+      if (data.threadId) {
+        useThreadStore.getState().removeReply(data);
+      } else {
+        useMessageStore.getState().removeMessage(data);
+      }
+    });
+
+    s.on('ThreadMetadataUpdate', (data: ThreadMetadataUpdatePayload) => {
+      useMessageStore.getState().updateThreadMetadata(data.channelId, data.messageId, data.replyCount, data.lastReplyAt);
+      useThreadStore.getState().updateParentMetadata(data);
     });
 
     s.on('DMCreated', (data: DMCreatedPayload) => {

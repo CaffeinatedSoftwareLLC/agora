@@ -5,6 +5,8 @@ import { EditMessageInput } from './EditMessageInput';
 import { MessageContent } from './MessageContent';
 import { ReactionBar } from '../live/ReactionBar';
 import { FileAttachment } from './FileAttachment';
+import { ThreadIndicator } from './ThreadIndicator';
+import { useThreadStore } from '../../stores/threadStore';
 import { usePalette } from '../../theme';
 
 interface MessageItemProps {
@@ -40,6 +42,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const P = usePalette();
+  const openThread = useThreadStore(s => s.openThread);
+  const canReply = !!(channelId && !message.deletedAt && !message.systemEvent);
+  const handleReply = canReply ? () => openThread(channelId!, message.id) : undefined;
 
   // System event message (e.g., call started, call ended)
   if (message.systemEvent) {
@@ -70,7 +75,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   if (isGrouped) {
     return (
       <div className={`group relative px-4 py-0.5 pl-[68px] hover:bg-surface-hover/30 ${opacity}`}>
-        {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} />}
+        {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} onReply={handleReply} />}
         {editing ? (
           <EditMessageInput
             message={message}
@@ -88,6 +93,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
           </div>
         )}
         {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
+        {!!(message.replyCount && message.replyCount > 0 && channelId) && (
+          <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} />
+        )}
         {message.failed && (
           <span className="text-xs text-danger ml-2">Failed to send</span>
         )}
@@ -97,7 +105,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
 
   return (
     <div className={`group relative px-4 pt-3 pb-0.5 hover:bg-surface-hover/30 flex gap-3 ${opacity}`}>
-      {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} />}
+      {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReact={() => setShowPicker(true)} onReply={handleReply} />}
       {/* Avatar */}
       {message.authorAvatarUrl ? (
         <img
@@ -137,6 +145,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
           </div>
         )}
         {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
+        {!!(message.replyCount && message.replyCount > 0 && channelId) && (
+          <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} />
+        )}
         {message.failed && (
           <span className="text-xs text-danger">Failed to send</span>
         )}

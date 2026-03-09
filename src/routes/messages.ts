@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
-import { checkChannelMembership } from './shared';
+import { checkChannelMembership, resolveMentions } from './shared';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
@@ -119,7 +119,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const messageId = generateUlid();
 
-        // Parse @mentions from content
+        // Parse and resolve @mentions (shared helper)
         const mentionContent = content || '';
         const mentionMatches: string[] = mentionContent.match(/@(\w+)/g) || [];
         const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
@@ -131,95 +131,7 @@ export async function messageRoutes(app: FastifyInstance) {
             [messageId, channelId, userId, content, mentionsEveryone]
         );
 
-        // Resolve mentioned usernames to user IDs (batch query)
-        // UNION with bot_channel_access so bots are discoverable via @mention
-        const nonEveryoneUsernames = mentionedUsernames.filter((u: string) => u !== 'everyone');
-        let mentionedUsers: { id: string; bot: boolean }[] = [];
-
-        if (nonEveryoneUsernames.length > 0) {
-            let validMentions;
-            if (serverId) {
-                // Server channels: find humans via server_members, bots via bot_channel_access
-                validMentions = await db.query(
-                    `SELECT u.id, u.bot FROM users u
-                     INNER JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2
-                     WHERE u.username = ANY($1)
-                     UNION
-                     SELECT u.id, u.bot FROM users u
-                     INNER JOIN bot_channel_access bca ON bca.bot_id = u.id
-                     WHERE bca.channel_id = $3 AND u.username = ANY($1)`,
-                    [nonEveryoneUsernames, serverId, channelId]
-                );
-            } else {
-                // DM channels: only channel members (bots can't be in DMs in v1)
-                validMentions = await db.query(
-                    `SELECT u.id, u.bot FROM users u
-                     INNER JOIN channel_members cm ON cm.user_id = u.id AND cm.channel_id = $2
-                     WHERE u.username = ANY($1)`,
-                    [nonEveryoneUsernames, channelId]
-                );
-            }
-
-            mentionedUsers = validMentions.rows.map((r: any) => ({
-                id: r.id.trim(),
-                bot: r.bot,
-            }));
-
-            const mentionedUserIds = mentionedUsers.map(u => u.id);
-
-            // Phase 1: Insert into message_mentions (all mentions, including bots, for UI rendering)
-            if (mentionedUserIds.length > 0) {
-                const mentionValues = mentionedUserIds
-                    .map((_: string, i: number) => `($1, $${i + 2})`)
-                    .join(', ');
-                await db.query(
-                    `INSERT INTO message_mentions (message_id, user_id) VALUES ${mentionValues}
-                     ON CONFLICT DO NOTHING`,
-                    [messageId, ...mentionedUserIds]
-                );
-
-                // Increment mention_count only for human users (bots use cursor reads)
-                const humanMentionIds = mentionedUsers
-                    .filter(u => !u.bot)
-                    .map(u => u.id);
-
-                if (humanMentionIds.length > 0) {
-                    await db.query(
-                        `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
-                         SELECT $1, unnest($2::char(26)[]), 1
-                         ON CONFLICT (channel_id, user_id) DO UPDATE
-                            SET mention_count = channel_unreads.mention_count + 1`,
-                        [channelId, humanMentionIds]
-                    );
-                }
-            }
-
-        }
-
-        // If @everyone, increment mention_count for all channel members except the author
-        if (mentionsEveryone) {
-            if (serverId) {
-                await db.query(
-                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
-                     SELECT $1, sm.user_id, 1
-                     FROM server_members sm
-                     WHERE sm.server_id = $2 AND sm.user_id != $3
-                     ON CONFLICT (channel_id, user_id) DO UPDATE
-                        SET mention_count = channel_unreads.mention_count + 1`,
-                    [channelId, serverId, userId]
-                );
-            } else {
-                await db.query(
-                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
-                     SELECT $1, cm.user_id, 1
-                     FROM channel_members cm
-                     WHERE cm.channel_id = $1 AND cm.user_id != $2
-                     ON CONFLICT (channel_id, user_id) DO UPDATE
-                        SET mention_count = channel_unreads.mention_count + 1`,
-                    [channelId, userId]
-                );
-            }
-        }
+        const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
 
         // Validate and bind attachments
         let resolvedAttachments: any[] = [];
@@ -363,19 +275,21 @@ export async function messageRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url, m.system_event
+                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
+                            m.system_event, m.reply_count, m.last_reply_at
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
-                     WHERE m.channel_id = $1 AND m.id < $2
+                     WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
                      ORDER BY m.id DESC
                      LIMIT $3`;
             params = [channelId, before, limit];
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url, m.system_event
+                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
+                            m.system_event, m.reply_count, m.last_reply_at
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
-                     WHERE m.channel_id = $1
+                     WHERE m.channel_id = $1 AND m.thread_id IS NULL
                      ORDER BY m.id DESC
                      LIMIT $2`;
             params = [channelId, limit];
@@ -447,6 +361,7 @@ export async function messageRoutes(app: FastifyInstance) {
             reactions: reactionsMap[row.id.trim()] || [],
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
+            ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at } : {}),
         }));
 
         return reply.status(200).send(messages);
@@ -476,7 +391,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         // Find the message
         const msg = await db.query(
-            'SELECT id, author_id FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, author_id, thread_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (msg.rows.length === 0) {
@@ -495,13 +410,20 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const updated = result.rows[0];
+        const threadId = msg.rows[0].thread_id?.trim() || undefined;
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
         (request as any).pendingEvents = (request as any).pendingEvents || [];
         (request as any).pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageUpdate',
-            data: { id: updated.id.trim(), channelId: channelId.trim(), content: updated.content, editedAt: updated.edited_at },
+            data: {
+                id: updated.id.trim(),
+                channelId: channelId.trim(),
+                content: updated.content,
+                editedAt: updated.edited_at,
+                ...(threadId ? { threadId } : {}),
+            },
         });
 
         return reply.status(200).send({
@@ -524,7 +446,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         // Find the message
         const msg = await db.query(
-            'SELECT id, author_id FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, author_id, thread_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (msg.rows.length === 0) {
@@ -543,13 +465,45 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const deleted = result.rows[0];
+        const threadId = msg.rows[0].thread_id?.trim() || undefined;
+
+        // If this was a thread reply, update the parent's metadata
+        if (threadId) {
+            const parentUpdate = await db.query(
+                `UPDATE messages SET
+                    reply_count = GREATEST(reply_count - 1, 0),
+                    last_reply_at = (SELECT m2.created_at FROM messages m2 WHERE m2.thread_id = $1 AND m2.deleted_at IS NULL AND m2.id != $2 ORDER BY m2.id DESC LIMIT 1)
+                 WHERE id = $1
+                 RETURNING reply_count, last_reply_at`,
+                [threadId, msgId]
+            );
+
+            if (parentUpdate.rows.length > 0) {
+                (request as any).pendingEvents = (request as any).pendingEvents || [];
+                (request as any).pendingEvents.push({
+                    room: `channel:${channelId.trim()}`,
+                    event: 'ThreadMetadataUpdate',
+                    data: {
+                        channelId: channelId.trim(),
+                        messageId: threadId,
+                        replyCount: parentUpdate.rows[0].reply_count,
+                        lastReplyAt: parentUpdate.rows[0].last_reply_at,
+                    },
+                });
+            }
+        }
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
         (request as any).pendingEvents = (request as any).pendingEvents || [];
         (request as any).pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageDelete',
-            data: { id: deleted.id.trim(), channelId: channelId.trim(), deletedAt: deleted.deleted_at },
+            data: {
+                id: deleted.id.trim(),
+                channelId: channelId.trim(),
+                deletedAt: deleted.deleted_at,
+                ...(threadId ? { threadId } : {}),
+            },
         });
 
         return reply.status(200).send({

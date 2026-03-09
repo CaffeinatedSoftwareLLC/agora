@@ -18,6 +18,7 @@ import { voiceWebhookRoutes } from './routes/voice-webhooks';
 import { dmCallRoutes } from './routes/dm-calls';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
+import { threadRoutes } from './routes/threads';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
@@ -251,6 +252,7 @@ export async function buildApp(opts?: {
     await app.register(dmCallRoutes, { timeoutMs: opts?.callTimeoutMs });
     await app.register(fileRoutes);
     await app.register(botRoutes);
+    await app.register(threadRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

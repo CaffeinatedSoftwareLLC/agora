@@ -35,6 +35,9 @@ export interface MessagePayload {
   reactions?: { emoji: string; count: number; me: boolean }[];
   systemEvent?: string;
   attachments?: MessageAttachmentPayload[];
+  threadId?: string;
+  replyCount?: number;
+  lastReplyAt?: string;
 }
 
 export interface MessageUpdatePayload {
@@ -42,12 +45,21 @@ export interface MessageUpdatePayload {
   channelId: string;
   content: string;
   editedAt: string;
+  threadId?: string;
 }
 
 export interface MessageDeletePayload {
   id: string;
   channelId: string;
   deletedAt: string;
+  threadId?: string;
+}
+
+export interface ThreadMetadataUpdatePayload {
+  channelId: string;
+  messageId: string;
+  replyCount: number;
+  lastReplyAt: string | null;
 }
 
 export interface ServerJoinPayload {
