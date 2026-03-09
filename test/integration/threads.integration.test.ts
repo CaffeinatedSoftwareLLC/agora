@@ -2,7 +2,7 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { generateBotToken, parseBotToken } from '../../src/auth/bot-tokens';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
-let owner: any, channelId: string, serverId: string;
+let owner: any, channelId: string, serverId: string, everyoneRoleId: string;
 
 beforeAll(async () => {
     ctx = await setupTestApp();
@@ -11,6 +11,7 @@ beforeAll(async () => {
     const srv = await createServer(ctx.request, owner.auth, 'Thread Server');
     channelId = srv.generalChannelId;
     serverId = srv.serverId;
+    everyoneRoleId = srv.everyoneRoleId;
 });
 afterAll(async () => { await ctx.close(); });
 
@@ -378,5 +379,301 @@ describe('Threads', () => {
         expect(reply.body.content).toBe('Bot reply');
         expect(reply.body.threadId).toBe(pid);
         expect(reply.body.authorBot).toBe(true);
+    });
+
+    // ─── Thread Close/Reopen ───
+
+    test('author can close own thread', async () => {
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Closeable thread' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'Reply before close' });
+
+        const res = await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body.id).toBe(pid);
+        expect(res.body.threadClosedAt).toBeTruthy();
+
+        // Verify in DB
+        const dbRes = await ctx.db.query(
+            'SELECT thread_closed_at FROM messages WHERE id = $1',
+            [pid]
+        );
+        expect(dbRes.rows[0].thread_closed_at).toBeTruthy();
+    });
+
+    test('reply to closed thread returns 409', async () => {
+        // Create and close a thread
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Closed thread parent' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'Reply' });
+
+        await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        const res = await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'Should fail' });
+
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('Thread is closed');
+    });
+
+    test('reopen thread allows replies again', async () => {
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Reopen thread parent' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'Before close' });
+
+        // Close
+        await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        // Reopen
+        const reopenRes = await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: false });
+        expect(reopenRes.status).toBe(200);
+        expect(reopenRes.body.threadClosedAt).toBeNull();
+
+        // Reply should succeed again
+        const reply = await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'After reopen' });
+        expect(reply.status).toBe(201);
+    });
+
+    test('server owner (Administrator) can close another user thread', async () => {
+        // Create a member and have them create a thread
+        const member = await authedUser(ctx.request, 'threadmember1');
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(member.auth)
+            .send({ content: 'Member thread' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(member.auth)
+            .send({ content: 'Member reply' });
+
+        // Owner (Administrator) closes it
+        const res = await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body.threadClosedAt).toBeTruthy();
+    });
+
+    test('user with ManageMessages role can close another thread', async () => {
+        const moderator = await authedUser(ctx.request, 'threadmod');
+        await joinViaInvite(ctx.request, owner.auth, moderator.auth, serverId);
+
+        // Grant ManageMessages to @everyone role (bit 12)
+        await ctx.db.query(
+            `UPDATE roles SET permissions = permissions | (1::bigint << 12) WHERE id = $1`,
+            [everyoneRoleId]
+        );
+
+        const author = await authedUser(ctx.request, 'threadauthor2');
+        await joinViaInvite(ctx.request, owner.auth, author.auth, serverId);
+
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(author.auth)
+            .send({ content: 'Author thread for mod' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(author.auth)
+            .send({ content: 'Author reply' });
+
+        const res = await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(moderator.auth)
+            .send({ closed: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body.threadClosedAt).toBeTruthy();
+
+        // Clean up: remove ManageMessages from @everyone
+        await ctx.db.query(
+            `UPDATE roles SET permissions = permissions & ~(1::bigint << 12) WHERE id = $1`,
+            [everyoneRoleId]
+        );
+    });
+
+    test('regular member cannot close another user thread', async () => {
+        const author3 = await authedUser(ctx.request, 'threadauthor3');
+        await joinViaInvite(ctx.request, owner.auth, author3.auth, serverId);
+
+        const regular = await authedUser(ctx.request, 'threadregular');
+        await joinViaInvite(ctx.request, owner.auth, regular.auth, serverId);
+
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(author3.auth)
+            .send({ content: 'Protected thread' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(author3.auth)
+            .send({ content: 'Some reply' });
+
+        const res = await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(regular.auth)
+            .send({ closed: true });
+
+        expect(res.status).toBe(403);
+    });
+
+    test('DM: any participant can close thread and reply is blocked', async () => {
+        const user1 = await authedUser(ctx.request, 'dmthread1');
+        const user2 = await authedUser(ctx.request, 'dmthread2');
+
+        // Create DM
+        const dm = await ctx.request
+            .post('/channels/dm')
+            .set(user1.auth)
+            .send({ recipientId: user2.userId });
+        const dmChannelId = dm.body.id;
+
+        // Create parent + reply
+        const msg = await ctx.request
+            .post(`/channels/${dmChannelId}/messages`)
+            .set(user1.auth)
+            .send({ content: 'DM thread parent' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${dmChannelId}/messages/${pid}/replies`)
+            .set(user2.auth)
+            .send({ content: 'DM reply' });
+
+        // user2 (non-author) closes the thread
+        const closeRes = await ctx.request
+            .patch(`/channels/${dmChannelId}/messages/${pid}/thread`)
+            .set(user2.auth)
+            .send({ closed: true });
+        expect(closeRes.status).toBe(200);
+
+        // Reply blocked
+        const replyRes = await ctx.request
+            .post(`/channels/${dmChannelId}/messages/${pid}/replies`)
+            .set(user1.auth)
+            .send({ content: 'Should fail' });
+        expect(replyRes.status).toBe(409);
+    });
+
+    test('closed threads excluded from GET active threads', async () => {
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Thread to exclude' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'Reply' });
+
+        // Close it
+        await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        const res = await ctx.request
+            .get(`/channels/${channelId}/threads?limit=10`)
+            .set(owner.auth);
+
+        expect(res.status).toBe(200);
+        const ids = res.body.map((t: any) => t.id);
+        expect(ids).not.toContain(pid);
+    });
+
+    test('idempotent close (close already-closed) returns 200', async () => {
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Idempotent close test' });
+        const pid = msg.body.id;
+
+        await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'Reply' });
+
+        // Close twice
+        await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        const res = await ctx.request
+            .patch(`/channels/${channelId}/messages/${pid}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body.threadClosedAt).toBeTruthy();
+    });
+
+    test('close non-parent message returns 404', async () => {
+        // Create a reply and try to close it
+        const msg = await ctx.request
+            .post(`/channels/${channelId}/messages`)
+            .set(owner.auth)
+            .send({ content: 'Non-parent test' });
+        const pid = msg.body.id;
+
+        const reply = await ctx.request
+            .post(`/channels/${channelId}/messages/${pid}/replies`)
+            .set(owner.auth)
+            .send({ content: 'A reply' });
+
+        const res = await ctx.request
+            .patch(`/channels/${channelId}/messages/${reply.body.id}/thread`)
+            .set(owner.auth)
+            .send({ closed: true });
+
+        expect(res.status).toBe(404);
     });
 });

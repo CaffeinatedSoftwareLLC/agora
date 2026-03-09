@@ -38,6 +38,7 @@ export interface MessagePayload {
   threadId?: string;
   replyCount?: number;
   lastReplyAt?: string;
+  threadClosedAt?: string;
 }
 
 export interface MessageUpdatePayload {
@@ -60,6 +61,7 @@ export interface ThreadMetadataUpdatePayload {
   messageId: string;
   replyCount: number;
   lastReplyAt: string | null;
+  threadClosedAt?: string | null;
 }
 
 export interface ServerJoinPayload {

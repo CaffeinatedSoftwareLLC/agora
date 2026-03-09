@@ -32,7 +32,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Fetch parent message
         const parent = await db.query(
-            'SELECT id, channel_id, thread_id FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, channel_id, thread_id, thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
@@ -42,6 +42,11 @@ export async function threadRoutes(app: FastifyInstance) {
         // Reject nested replies (flat threads only)
         if (parent.rows[0].thread_id !== null) {
             return reply.status(400).send({ error: 'Cannot reply to a reply' });
+        }
+
+        // Reject replies to closed threads
+        if (parent.rows[0].thread_closed_at !== null) {
+            return reply.status(409).send({ error: 'Thread is closed' });
         }
 
         // Fetch channel details for mention resolution, rate limiting, loop guard
@@ -196,6 +201,7 @@ export async function threadRoutes(app: FastifyInstance) {
                 messageId: msgId.trim(),
                 replyCount: parentUpdate.rows[0].reply_count,
                 lastReplyAt: parentUpdate.rows[0].last_reply_at,
+                threadClosedAt: null,
             },
         });
 
@@ -367,7 +373,7 @@ export async function threadRoutes(app: FastifyInstance) {
                          ) sub
                      ) previews ON true
                      WHERE p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL
-                       AND p.last_reply_at < $2
+                       AND p.thread_closed_at IS NULL AND p.last_reply_at < $2
                      ORDER BY p.last_reply_at DESC
                      LIMIT $3`;
             params = [channelId, before, limit];
@@ -391,12 +397,25 @@ export async function threadRoutes(app: FastifyInstance) {
                          ) sub
                      ) previews ON true
                      WHERE p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL
+                       AND p.thread_closed_at IS NULL
                      ORDER BY p.last_reply_at DESC
                      LIMIT $2`;
             params = [channelId, limit];
         }
 
         const result = await db.query(query, params);
+
+        // Compute canClose: author OR ManageMessages/Administrator
+        const channelRow = await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId]);
+        const serverId = channelRow.rows[0]?.server_id?.trim() || null;
+        let hasManagePerms = false;
+        if (serverId) {
+            const perms = await loadAndComputePermissions(db, userId, serverId);
+            hasManagePerms = !!(perms & Permissions.ManageMessages) || !!(perms & Permissions.Administrator);
+        } else {
+            // DM channel: any participant can close
+            hasManagePerms = true;
+        }
 
         const threads = result.rows.map((row: any) => ({
             id: row.id.trim(),
@@ -410,6 +429,7 @@ export async function threadRoutes(app: FastifyInstance) {
             editedAt: row.edited_at,
             replyCount: row.reply_count,
             lastReplyAt: row.last_reply_at,
+            canClose: hasManagePerms || (row.author_id?.trim() === userId.trim()),
             previewReplies: (row.preview_replies || []).map((r: any) => ({
                 id: r.id?.trim(),
                 content: r.content,
@@ -420,5 +440,95 @@ export async function threadRoutes(app: FastifyInstance) {
         }));
 
         return reply.status(200).send(threads);
+    });
+
+    // PATCH /channels/:id/messages/:msgId/thread → 200 { id, threadClosedAt }
+    app.patch('/channels/:id/messages/:msgId/thread', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['closed'],
+                properties: {
+                    closed: { type: 'boolean' },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { id: channelId, msgId } = request.params as any;
+        const userId = (request as any).userId;
+        const { closed } = request.body as any;
+        const db = (request as any).dbClient;
+
+        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        if (!isMember) {
+            return reply.status(403).send({ error: 'Not a member of this channel' });
+        }
+
+        // Fetch parent message (thread_id IS NULL ensures only parents)
+        const parent = await db.query(
+            `SELECT id, author_id, reply_count, last_reply_at, thread_closed_at
+             FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL`,
+            [msgId, channelId]
+        );
+        if (parent.rows.length === 0) {
+            return reply.status(404).send({ error: 'Thread parent not found' });
+        }
+
+        const parentRow = parent.rows[0];
+
+        // Permission check
+        const channelRow = await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId]);
+        const serverId = channelRow.rows[0]?.server_id?.trim() || null;
+
+        if (serverId) {
+            // Server channel: author OR ManageMessages OR Administrator
+            const isAuthor = parentRow.author_id?.trim() === userId.trim();
+            if (!isAuthor) {
+                const perms = await loadAndComputePermissions(db, userId, serverId);
+                const hasManagePerms = !!(perms & Permissions.ManageMessages) || !!(perms & Permissions.Administrator);
+                if (!hasManagePerms) {
+                    return reply.status(403).send({ error: 'Not authorized to close this thread' });
+                }
+            }
+        }
+        // DM channels: any participant (membership already verified above)
+
+        // Idempotent: if already in desired state, return current state
+        const alreadyClosed = parentRow.thread_closed_at !== null;
+        if (closed === alreadyClosed) {
+            return reply.status(200).send({
+                id: parentRow.id.trim(),
+                threadClosedAt: parentRow.thread_closed_at,
+            });
+        }
+
+        // Update
+        const result = await db.query(
+            `UPDATE messages SET thread_closed_at = ${closed ? 'NOW()' : 'NULL'}
+             WHERE id = $1
+             RETURNING id, thread_closed_at`,
+            [msgId]
+        );
+
+        const updated = result.rows[0];
+
+        // Emit ThreadMetadataUpdate with threadClosedAt
+        (request as any).pendingEvents = (request as any).pendingEvents || [];
+        (request as any).pendingEvents.push({
+            room: `channel:${channelId.trim()}`,
+            event: 'ThreadMetadataUpdate',
+            data: {
+                channelId: channelId.trim(),
+                messageId: updated.id.trim(),
+                replyCount: parentRow.reply_count,
+                lastReplyAt: parentRow.last_reply_at,
+                threadClosedAt: updated.thread_closed_at,
+            },
+        });
+
+        return reply.status(200).send({
+            id: updated.id.trim(),
+            threadClosedAt: updated.thread_closed_at,
+        });
     });
 }

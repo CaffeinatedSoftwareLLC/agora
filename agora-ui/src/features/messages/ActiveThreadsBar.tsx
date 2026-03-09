@@ -11,6 +11,8 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
   const P = usePalette();
   const activeThreads = useThreadStore(s => s.activeThreads);
   const loadActiveThreads = useThreadStore(s => s.loadActiveThreads);
+  const loadMoreThreads = useThreadStore(s => s.loadMoreThreads);
+  const hasMoreThreads = useThreadStore(s => s.hasMoreThreads);
   const openThread = useThreadStore(s => s.openThread);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -69,6 +71,17 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
               </span>
             </button>
           ))}
+          {hasMoreThreads.get(channelId) && (
+            <button
+              onClick={() => loadMoreThreads(channelId)}
+              className="flex items-center justify-center px-2 py-1 rounded text-xs transition-colors"
+              style={{ color: P.accent }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = P.surfaceHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              Show more
+            </button>
+          )}
         </div>
       )}
     </div>

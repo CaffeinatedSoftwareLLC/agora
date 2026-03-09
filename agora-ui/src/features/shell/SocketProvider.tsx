@@ -116,7 +116,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.on('ThreadMetadataUpdate', (data: ThreadMetadataUpdatePayload) => {
-      useMessageStore.getState().updateThreadMetadata(data.channelId, data.messageId, data.replyCount, data.lastReplyAt);
+      useMessageStore.getState().updateThreadMetadata(data.channelId, data.messageId, data.replyCount, data.lastReplyAt, data.threadClosedAt);
       useThreadStore.getState().updateParentMetadata(data);
     });
 

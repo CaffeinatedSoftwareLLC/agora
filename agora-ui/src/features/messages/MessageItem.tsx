@@ -94,7 +94,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         )}
         {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
         {!!(message.replyCount && message.replyCount > 0 && channelId) && (
-          <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} />
+          <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} threadClosedAt={message.threadClosedAt} />
         )}
         {message.failed && (
           <span className="text-xs text-danger ml-2">Failed to send</span>
@@ -146,7 +146,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         )}
         {channelId && <ReactionBar messageId={message.id} channelId={channelId} pickerOpen={showPicker} onPickerClose={() => setShowPicker(false)} />}
         {!!(message.replyCount && message.replyCount > 0 && channelId) && (
-          <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} />
+          <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} threadClosedAt={message.threadClosedAt} />
         )}
         {message.failed && (
           <span className="text-xs text-danger">Failed to send</span>

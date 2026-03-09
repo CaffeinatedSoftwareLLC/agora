@@ -276,7 +276,7 @@ export async function messageRoutes(app: FastifyInstance) {
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.reply_count, m.last_reply_at
+                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
@@ -286,7 +286,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.reply_count, m.last_reply_at
+                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.thread_id IS NULL
@@ -361,7 +361,7 @@ export async function messageRoutes(app: FastifyInstance) {
             reactions: reactionsMap[row.id.trim()] || [],
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
-            ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at } : {}),
+            ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at } : {}) } : {}),
         }));
 
         return reply.status(200).send(messages);
@@ -488,6 +488,7 @@ export async function messageRoutes(app: FastifyInstance) {
                         messageId: threadId,
                         replyCount: parentUpdate.rows[0].reply_count,
                         lastReplyAt: parentUpdate.rows[0].last_reply_at,
+                        threadClosedAt: null,
                     },
                 });
             }

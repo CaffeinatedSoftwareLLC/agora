@@ -15,6 +15,8 @@ export interface ThreadSummary {
   editedAt?: string;
   replyCount: number;
   lastReplyAt: string;
+  threadClosedAt?: string | null;
+  canClose?: boolean;
   previewReplies: {
     id: string;
     content: string | null;
@@ -30,6 +32,7 @@ interface ThreadState {
   repliesByThread: Map<string, Message[]>;
   hasMore: Map<string, boolean>;
   activeThreads: Map<string, ThreadSummary[]>;
+  hasMoreThreads: Map<string, boolean>;
 
   openThread: (channelId: string, messageId: string) => void;
   closeThread: () => void;
@@ -40,6 +43,9 @@ interface ThreadState {
   updateReply: (payload: MessageUpdatePayload) => void;
   removeReply: (payload: MessageDeletePayload) => void;
   loadActiveThreads: (channelId: string) => Promise<void>;
+  loadMoreThreads: (channelId: string) => Promise<void>;
+  closeThreadRemote: (channelId: string, messageId: string) => Promise<void>;
+  reopenThread: (channelId: string, messageId: string) => Promise<void>;
   updateParentMetadata: (data: ThreadMetadataUpdatePayload) => void;
   clear: () => void;
 }
@@ -52,6 +58,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   repliesByThread: new Map(),
   hasMore: new Map(),
   activeThreads: new Map(),
+  hasMoreThreads: new Map(),
 
   openThread: (channelId, messageId) => {
     set({ openThreadId: messageId, openThreadChannelId: channelId });
@@ -249,9 +256,39 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     const data = await api.get<ThreadSummary[]>(`/channels/${channelId}/threads?limit=5`);
     set((state) => {
       const next = new Map(state.activeThreads);
+      const nextHasMore = new Map(state.hasMoreThreads);
       next.set(channelId, data);
-      return { activeThreads: next };
+      nextHasMore.set(channelId, data.length === 5);
+      return { activeThreads: next, hasMoreThreads: nextHasMore };
     });
+  },
+
+  loadMoreThreads: async (channelId) => {
+    const existing = get().activeThreads.get(channelId);
+    if (!existing || existing.length === 0) return;
+    if (!get().hasMoreThreads.get(channelId)) return;
+
+    const lastReplyAt = existing[existing.length - 1].lastReplyAt;
+    const data = await api.get<ThreadSummary[]>(
+      `/channels/${channelId}/threads?limit=5&before=${lastReplyAt}`
+    );
+    set((state) => {
+      const next = new Map(state.activeThreads);
+      const nextHasMore = new Map(state.hasMoreThreads);
+      const current = next.get(channelId) ?? [];
+      next.set(channelId, [...current, ...data]);
+      nextHasMore.set(channelId, data.length === 5);
+      return { activeThreads: next, hasMoreThreads: nextHasMore };
+    });
+  },
+
+  closeThreadRemote: async (channelId, messageId) => {
+    await api.patch(`/channels/${channelId}/messages/${messageId}/thread`, { closed: true });
+  },
+
+  reopenThread: async (channelId, messageId) => {
+    await api.patch(`/channels/${channelId}/messages/${messageId}/thread`, { closed: false });
+    get().loadActiveThreads(channelId);
   },
 
   updateParentMetadata: (data) => {
@@ -259,11 +296,16 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       const next = new Map(state.activeThreads);
       const threads = next.get(data.channelId);
       if (threads) {
-        next.set(data.channelId, threads.map((t) =>
-          t.id === data.messageId
-            ? { ...t, replyCount: data.replyCount, lastReplyAt: data.lastReplyAt ?? t.lastReplyAt }
-            : t
-        ));
+        if (data.threadClosedAt) {
+          // Remove closed thread from active list
+          next.set(data.channelId, threads.filter((t) => t.id !== data.messageId));
+        } else {
+          next.set(data.channelId, threads.map((t) =>
+            t.id === data.messageId
+              ? { ...t, replyCount: data.replyCount, lastReplyAt: data.lastReplyAt ?? t.lastReplyAt }
+              : t
+          ));
+        }
       }
       return { activeThreads: next };
     });
@@ -275,5 +317,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     repliesByThread: new Map(),
     hasMore: new Map(),
     activeThreads: new Map(),
+    hasMoreThreads: new Map(),
   }),
 }));

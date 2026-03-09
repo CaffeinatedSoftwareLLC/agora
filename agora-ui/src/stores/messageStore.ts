@@ -31,6 +31,7 @@ export interface Message {
   attachments?: Attachment[];
   replyCount?: number;
   lastReplyAt?: string;
+  threadClosedAt?: string;
 }
 
 interface MessageState {
@@ -46,7 +47,7 @@ interface MessageState {
   addMessage: (msg: MessagePayload) => void;
   updateMessage: (payload: MessageUpdatePayload) => void;
   removeMessage: (payload: MessageDeletePayload) => void;
-  updateThreadMetadata: (channelId: string, messageId: string, replyCount: number, lastReplyAt: string | null) => void;
+  updateThreadMetadata: (channelId: string, messageId: string, replyCount: number, lastReplyAt: string | null, threadClosedAt?: string | null) => void;
 
   clearChannel: (channelId: string) => void;
   clear: () => void;
@@ -75,7 +76,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
       attachments: m.attachments,
-      ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt } : {}),
+      ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -120,7 +121,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
       attachments: m.attachments,
-      ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt } : {}),
+      ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -347,7 +348,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
   },
 
-  updateThreadMetadata: (channelId, messageId, replyCount, lastReplyAt) => {
+  updateThreadMetadata: (channelId, messageId, replyCount, lastReplyAt, threadClosedAt?) => {
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
       const current = nextByChannel.get(channelId);
@@ -355,7 +356,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
       nextByChannel.set(channelId, current.map((m) =>
         m.id === messageId
-          ? { ...m, replyCount, lastReplyAt: lastReplyAt ?? undefined }
+          ? { ...m, replyCount, lastReplyAt: lastReplyAt ?? undefined, threadClosedAt: threadClosedAt ?? undefined }
           : m
       ));
       return { byChannel: nextByChannel };
