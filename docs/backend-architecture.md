@@ -16,6 +16,8 @@ Agora's backend is built on **Fastify 5**, **PostgreSQL 16**, **Socket.IO 4**, a
 - [WebSocket Gateway](#websocket-gateway)
 - [Race Condition Patterns](#race-condition-patterns)
 - [Input Validation](#input-validation)
+- [Bot Infrastructure](#bot-infrastructure)
+- [Threads](#threads)
 
 ---
 
@@ -169,7 +171,7 @@ The `true` parameter in `set_config` makes the setting local to the current tran
 
 ## Authentication
 
-**Source:** `src/auth/tokens.ts`, `src/auth/passwords.ts`, `src/auth/middleware.ts`
+**Source:** `src/auth/tokens.ts`, `src/auth/passwords.ts`, `src/auth/middleware.ts`, `src/auth/bot-tokens.ts`
 
 ### Password hashing
 
@@ -240,6 +242,21 @@ app.get('/admin/stats', {
     preHandler: [requireInstanceAdmin],
 }, handler);
 ```
+
+### Bot token authentication
+
+**Source:** `src/auth/bot-tokens.ts`, `src/auth/middleware.ts`
+
+Bots authenticate with `Authorization: Bot bot_<tokenId>.<secret>` headers. The token format is `bot_<tokenId>.<secret>` where the secret is Argon2-hashed in the `bot_tokens` table.
+
+Bot auth is restricted to an explicit **route allowlist** — only message, channel, cursor, and bot self-info endpoints are accessible. The `requireAuth` middleware detects the `Bot ` prefix and routes to the bot auth path, which:
+1. Parses the `bot_<tokenId>.<secret>` format
+2. Looks up the token by ID, verifies the secret hash
+3. Checks the token is not revoked
+4. Sets `(request).userId` to the bot's user ID and `(request).isBot = true`
+5. Updates `last_used_at` for audit
+
+Bots are **not** in the `server_members` table — they use `bot_channel_access` for authorization. This is intentional to limit bot scope.
 
 ---
 
@@ -429,6 +446,47 @@ dm_pairs
   -- CHECK: user_a != user_b
 ```
 
+### Bot tables
+
+```
+bot_tokens
+  id              CHAR(26) PK
+  bot_id          CHAR(26) FK -> users (bot=true)
+  secret_hash     TEXT (Argon2id)
+  name            VARCHAR(100)
+  last_used_at    TIMESTAMPTZ
+  created_at      TIMESTAMPTZ
+  revoked_at      TIMESTAMPTZ
+
+bot_channel_access
+  bot_id          CHAR(26) FK -> users  \  composite PK
+  channel_id      CHAR(26) FK -> channels /
+  granted_by      CHAR(26) FK -> users
+  created_at      TIMESTAMPTZ
+  -- DB triggers enforce: server channels only, same server as bot
+
+bot_read_cursors
+  bot_id          CHAR(26) FK -> users  \  composite PK
+  channel_id      CHAR(26) FK -> channels /
+  last_read_id    CHAR(26)
+  updated_at      TIMESTAMPTZ
+```
+
+Bot users reuse the `users` table with `bot = true`, nullable email/password, and additional columns:
+- `bot_owner_id CHAR(26)` — the human user who created the bot
+- `server_id CHAR(26)` — the server the bot belongs to
+- `avatar_url TEXT` — data URI avatar (max 50KB)
+
+CHECK constraints enforce bot/human invariants at the DB level (bots must have server_id, no email/password; humans must have email/password, no server_id/bot_owner_id).
+
+### Thread columns on messages
+
+Messages gain three thread-related columns:
+- `thread_id CHAR(26)` — FK to parent message (NULL for top-level messages)
+- `reply_count INTEGER` — denormalized count of replies (on parent only)
+- `last_reply_at TIMESTAMPTZ` — timestamp of most recent reply (on parent only)
+- `thread_closed_at TIMESTAMPTZ` — when the thread was closed (NULL = open)
+
 ### Additional tables
 
 - **channel_members**: For DM/group DM membership (PK: channel_id, user_id)
@@ -473,6 +531,12 @@ The custom migration runner reads `.sql` files from `src/db/migrations/`, applie
 | 009 | `009_user_account_status.sql` | Adds `account_status VARCHAR(20)` column to `users` with CHECK constraint (`active`, `pending`, `suspended`). Supports registration approval workflows. |
 | 010 | `010_nullable_audit_server_id.sql` | Makes `audit_log.server_id` nullable to allow instance-level admin actions that have no server context. |
 | 011 | `011_grant_instance_config_to_app_user.sql` | Grants `SELECT, UPDATE` on `instance_config` to `app_user`. Required because the table was created in migration 007, after the blanket `GRANT ALL TABLES` in migration 006. |
+| 012–015 | _(various)_ | File storage, voice, and incremental schema additions. |
+| 016 | `016_bot_infrastructure.sql` | Bot infrastructure: makes email/password nullable for bots, adds `bot_owner_id` and `server_id` to users with CHECK constraints enforcing bot/human invariants. Creates `bot_tokens`, `bot_channel_access`, `bot_read_cursors` tables. Adds `max_bot_hops` and `bot_rate_limit` columns to channels. Creates RLS policy for bot channel access via `is_bot_channel_member()` SECURITY DEFINER function. Three DB triggers enforce: (1) bot_channel_access targets server channels only, (2) bot and channel must share the same server, (3) bot_tokens reference bot users only. |
+| 017 | `017_avatar_url.sql` | Adds `avatar_url TEXT` column to users for bot data URI avatars. |
+| 018 | `018_channels_update_policy.sql` | Adds RLS UPDATE policy on channels for server members (enables bot config updates). |
+| 019 | `019_threads.sql` | Thread support: adds `thread_id` FK, `reply_count`, `last_reply_at` to messages. Creates partial indexes for thread replies and active threads per channel. |
+| 020 | `020_thread_close.sql` | Adds `thread_closed_at` column to messages. Recreates active threads index to exclude closed threads. |
 
 ---
 
@@ -493,11 +557,11 @@ const io = new Server(app.server, {
 
 ### Connection authentication
 
-Two middleware functions run in sequence before `connection`:
+Two middleware functions run in sequence before `connection`, supporting both human and bot auth:
 
 1. **Initialization gate**: Queries `instance_config` to verify `setup_complete = 'true'`. Rejects with `instance_not_initialized` error if not.
 
-2. **JWT auth**: Extracts token from `socket.handshake.auth.token`, verifies it, then checks `account_status` in the database:
+2. **Auth**: Extracts token from `socket.handshake.auth.token`. For `Bot ` prefixed tokens, validates via bot token auth (same as HTTP). For Bearer tokens, verifies JWT and checks `account_status`:
    - Missing/invalid token -> `Authentication required` / `Invalid token`
    - `account_status = 'pending'` -> `account_pending`
    - `account_status = 'suspended'` -> `account_suspended`
@@ -542,6 +606,10 @@ Presence is tracked in an in-memory `Map<string, Set<string>>` mapping userId to
 | `Typing` | `{ channelId, userId, username }` | Client sends `Typing` event |
 | `ReactionAdd` | `{ messageId, channelId, userId, emoji }` | PUT `/channels/:channelId/messages/:msgId/reactions` commits |
 | `ReactionRemove` | `{ messageId, channelId, userId, emoji }` | DELETE `/channels/:channelId/messages/:msgId/reactions/:emoji` commits |
+| `BotReady` | `{ user, channels[] }` | Bot Socket.IO connect (subset of Ready) |
+| `MessageMention` | `{ messageId, channelId, mentionedUserId, ... }` | POST message with @bot mention (gated by UseBots permission) |
+| `ChannelLoopGuard` | `{ channelId, message }` | Bot-to-bot loop detected (exceeds max_bot_hops) |
+| `ThreadMetadataUpdate` | `{ messageId, channelId, replyCount, lastReplyAt, threadClosedAt }` | Reply created/deleted, or thread closed/reopened |
 
 #### Ready event payload shape
 
@@ -671,3 +739,96 @@ schema: {
 ```
 
 All database queries use **parameterized queries** (`$1`, `$2`, etc.) -- there is no string concatenation of user input into SQL.
+
+---
+
+## Bot Infrastructure
+
+**Source:** `src/routes/bots.ts`, `src/auth/bot-tokens.ts`, `src/auth/middleware.ts`
+
+### Architecture
+
+Bots are special user rows (`bot = true`) scoped to a single server. They do **not** appear in `server_members` — their access is controlled by an explicit channel allowlist (`bot_channel_access`). This limits blast radius: a bot can only see channels it's been assigned to.
+
+### Token format
+
+```
+bot_<tokenId>.<secret>
+```
+
+The `<tokenId>` is a ULID (links to `bot_tokens.id`), and `<secret>` is a random string whose Argon2 hash is stored in `bot_tokens.secret_hash`. Tokens are shown once on creation.
+
+### Bot REST API (`/bots/*`)
+
+Requires `ManageBots` permission (bit 27) unless noted:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/servers/:id/bots` | Create a bot (with initial token) |
+| GET | `/servers/:id/bots` | List all bots in a server |
+| GET | `/servers/:id/bots/:botId` | Get bot details |
+| PATCH | `/servers/:id/bots/:botId` | Update bot (name, avatar) |
+| DELETE | `/servers/:id/bots/:botId` | Delete bot (cascades tokens, access) |
+| POST | `/servers/:id/bots/:botId/tokens` | Create a new token (owner/admin only) |
+| GET | `/servers/:id/bots/:botId/tokens` | List tokens (owner/admin only) |
+| DELETE | `/servers/:id/bots/:botId/tokens/:tokenId` | Revoke a token (owner/admin only) |
+| PUT | `/servers/:id/bots/:botId/channels/:channelId` | Grant channel access |
+| DELETE | `/servers/:id/bots/:botId/channels/:channelId` | Revoke channel access |
+| GET | `/bots/@me` | Bot self-info (bot token auth) |
+| GET | `/bots/@me/cursors/:channelId` | Get read cursor |
+| PUT | `/bots/@me/cursors/:channelId` | Update read cursor |
+
+### Idempotency layer
+
+Bot message sends support idempotency via the `Idempotency-Key` header. The flow:
+1. `SET NX` in Redis with the key (30s TTL) — claims the request
+2. If key already exists: return cached response (or 409 if in-flight)
+3. On success: store the response body in Redis, replacing the in-flight marker
+4. On failure/rollback: delete the key so retries can proceed
+
+### Mention resolution
+
+When a message contains `@botname`, the mention resolution queries both `server_members` (humans) and `bot_channel_access` (bots) via a UNION. Bot mentions fire `MessageMention` events (gated by `UseBots` permission) for the bot's Socket.IO connection.
+
+### Loop guard
+
+A Redis-based per-channel counter tracks consecutive bot messages. When the count exceeds `max_bot_hops` (configurable per channel, default 4), a system message is posted and the `ChannelLoopGuard` event is emitted. Human messages reset the counter. Setting `max_bot_hops = 0` disables the guard.
+
+### Rate limiting
+
+Per-bot per-channel sliding window rate limit (default 10 messages/minute). Returns 429 with `retryAfter` header when exceeded.
+
+---
+
+## Threads
+
+**Source:** `src/routes/threads.ts`, `src/db/migrations/019_threads.sql`, `src/db/migrations/020_thread_close.sql`
+
+### Design
+
+Threads use a flat reply model (Discord-style): replies are regular message rows with `thread_id` pointing to the parent message. The parent message has denormalized `reply_count` and `last_reply_at` for fast thread indicator rendering without JOINs.
+
+### Thread REST API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/channels/:id/messages/:msgId/replies` | Create a reply (409 if thread closed) |
+| GET | `/channels/:id/messages/:msgId/replies` | List replies (cursor-paginated, oldest first) |
+| GET | `/channels/:id/threads` | List active threads with LATERAL preview (2 latest replies) |
+| PATCH | `/channels/:id/messages/:msgId/thread` | Close or reopen a thread |
+
+### Thread lifecycle
+
+- **Reply creation**: Inserts the reply, increments parent's `reply_count`, updates `last_reply_at`
+- **Reply deletion**: Soft-deletes the reply, decrements parent's `reply_count`, recalculates `last_reply_at` from remaining replies (preserves `thread_closed_at`)
+- **Close/reopen**: Sets or clears `thread_closed_at` on the parent. Requires author, ManageMessages permission, or Administrator
+- **Closed thread guard**: Replies to closed threads return 409
+
+### WebSocket events
+
+- `Message` / `MessageUpdate` / `MessageDelete` events include `threadId` when the message is a reply
+- `ThreadMetadataUpdate` is emitted on reply create/delete and thread close/reopen, carrying `replyCount`, `lastReplyAt`, and `threadClosedAt`
+
+### Exclusion from main feed
+
+Replies (`thread_id IS NOT NULL`) are excluded from `GET /channels/:id/messages` — they only appear via the thread-specific endpoints. Parent messages include thread metadata (`replyCount`, `lastReplyAt`, `threadClosedAt`) in the message response.

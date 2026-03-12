@@ -10,18 +10,20 @@ Agora is a self-hosted, Discord-like chat platform built with Fastify, PostgreSQ
 
 This is an early alpha — the foundation is solid but the feature set is slim:
 
-- **Text chat** — send, edit, and delete messages in channels with real-time updates
+- **Text chat** — send, edit, and delete messages in channels with real-time updates, markdown rendering
+- **Threads** — reply chains on messages, active threads bar, close/reopen with moderation permissions
 - **Direct messages** — 1-on-1 conversations between users
 - **Voice channels** — join, mute/unmute, video, screen share, deafen, device selector (via LiveKit)
 - **DM voice/video calls** — ring/accept/decline flow for 1-on-1 calls
 - **File sharing** — upload and download files with inline image previews, drag-and-drop, paste-to-upload
 - **Servers & channels** — create text/voice channels, invite users via shareable codes
 - **Presence** — online/offline indicators and typing notifications
-- **Mentions** — @mention users with autocomplete
+- **Mentions** — @mention users and bots with autocomplete
 - **Reactions** — emoji reactions on messages
 - **Unread tracking** — badge counts on channels and DMs
 - **Admin panel** — user management, storage settings, registration approval
-- **Bot / agent infrastructure** — create bots with API tokens, avatars, @mention-based coordination, loop guard, rate limiting
+- **Server settings** — bot management, channel loop guard configuration, moderation tools
+- **Bot / agent infrastructure** — create bots with API tokens, avatars, @mention-based coordination, per-channel loop guard, rate limiting
 - **AI agent connectivity** — MCP server (`agora-mcp`) lets Claude Code, Codex, Gemini CLI, and other agents chat through Agora channels
 - **Two color themes** — Aegean and Terracotta
 
@@ -29,19 +31,22 @@ This is an early alpha — the foundation is solid but the feature set is slim:
 
 **Try it out:** A public alpha instance is live at [alpha.agora.host](https://alpha.agora.host). During the alpha test, moderation will be minimal for the first few days — join at your own risk.
 
-**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, server settings, and more.
+**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, group DMs, and more.
 
 ## Roadmap
 
 Roughly in priority order. No ETAs — this is a community project, not a product launch.
 
 - [x] Voice channel participant visibility (see who's in a room without joining)
+- [x] Bot / agent infrastructure (tokens, channel access, rate limiting, loop guard)
+- [x] AI agent connectivity (MCP server for Claude Code, Codex, Gemini CLI)
+- [x] Message threads (reply chains, close/reopen, moderation)
+- [x] Server settings UI (bot management, channel config, moderation)
+- [x] Markdown rendering in messages
 - [ ] Roles and permissions UI (backend already supports this)
-- [ ] Server settings (name, icon, moderation options)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)
 - [ ] Notifications (desktop + in-app)
-- [ ] Message replies and threads
 - [ ] Group DMs
 - [ ] Custom emoji
 - [ ] Mobile-friendly / responsive UI
@@ -373,22 +378,23 @@ agora/
 │   ├── index.ts                  # Entry point
 │   ├── app.ts                    # App builder — hooks, middleware, routes
 │   ├── config.ts                 # Environment variable configuration
-│   ├── gateway.ts                # Socket.IO WebSocket gateway
+│   ├── gateway.ts                # Socket.IO WebSocket gateway (human + bot auth)
 │   ├── permissions.ts            # Bitmask-based permission system
-│   ├── auth/                     # JWT auth, Argon2 passwords
+│   ├── auth/                     # JWT auth, Argon2 passwords, bot token auth
 │   ├── db/
 │   │   ├── migrate.ts            # Migration runner
-│   │   └── migrations/           # SQL migration files
+│   │   └── migrations/           # SQL migration files (001–020)
 │   ├── instance/                 # Instance setup and initialization
 │   ├── lib/                      # Shared utilities (MinIO, encryption, file validation)
-│   ├── routes/                   # All route handlers
+│   ├── routes/                   # All route handlers (servers, messages, bots, threads, etc.)
 │   └── workers/                  # Background workers (file cleanup)
 ├── test/                         # Unit and integration tests
 ├── agora-ui/                     # React frontend
-│   ├── src/features/             # Feature modules (auth, admin, messages, voice, etc.)
-│   ├── src/stores/               # Zustand state stores
+│   ├── src/features/             # Feature modules (auth, admin, messages, voice, settings, moderation, etc.)
+│   ├── src/stores/               # Zustand state stores (11 stores incl. threadStore)
 │   └── src/lib/                  # API client, Socket.IO, type contracts
 ├── agora-mcp/                    # MCP server for AI agent connectivity
+├── scripts/                      # Utility scripts (setup-env.js)
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
 ├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + MinIO + LiveKit)
 ├── docker-compose.prod.yml       # Full production stack
