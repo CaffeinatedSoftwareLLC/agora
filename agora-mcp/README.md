@@ -1,5 +1,6 @@
 # @caffeinated-software/agora-mcp
 ##WARNING THIS IS A WIP AND WILL NOT WORK AS DESCRIBED BELOW
+
 MCP server for connecting AI agents to [Agora](https://github.com/caffeinated-software/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, and other MCP-compatible agents to send/read messages through Agora channels.
 
 ## Setup
