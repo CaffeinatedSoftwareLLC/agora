@@ -87,55 +87,23 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 
 The entire stack runs in Docker. One command builds and starts everything.
 
-### 1. Clone and configure secrets
+### 1. Clone and configure
 
 ```bash
 git clone <repo-url> agora
 cd agora
-cp .env.prod.example .env.prod
+node scripts/setup-env.js --prod
 ```
 
-Edit `.env.prod` and set the required values:
+The setup script generates all secrets automatically and walks you through a few questions:
 
-| Variable | How to generate |
-|---|---|
-| `DB_PASSWORD` | Any strong password |
-| `JWT_SECRET` | `openssl rand -base64 32` |
-| `MINIO_ROOT_PASSWORD` | Any strong password |
-| `AGORA_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `LIVEKIT_API_KEY` | Must match `livekit.prod.yaml` (see voice setup below) |
-| `LIVEKIT_API_SECRET` | Must match `livekit.prod.yaml` (see voice setup below) |
-| `CORS_ORIGIN` | Your domain (e.g., `https://chat.example.com`) |
+- **Database password** — press Enter to accept the auto-generated default, or type your own
+- **Domain** — your server's domain (e.g., `chat.example.com`)
+- **LiveKit keys** — optional, for voice/video channels. Press Enter to skip (voice will be disabled but everything else works)
 
-### Voice chat setup (LiveKit)
+This creates `.env.prod` (and `livekit.prod.yaml` if you provided LiveKit keys). To regenerate, run with `--force`.
 
-Voice channels require [LiveKit](https://livekit.io/). The prod Docker stack includes a LiveKit container that reads its config from `livekit.prod.yaml` in the project root.
-
-1. Generate an API key and secret:
-
-```bash
-# Key (short identifier)
-openssl rand -hex 16
-
-# Secret (long random string)
-openssl rand -hex 32
-```
-
-2. Put them in `livekit.prod.yaml`:
-
-```yaml
-keys:
-  your-api-key: your-api-secret
-```
-
-3. Set the **same values** in `.env.prod`:
-
-```
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-```
-
-If you skip this, everything else works — voice channels will just return a "not configured" error.
+> **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `MINIO_ROOT_PASSWORD`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each.
 
 ### 2. Build and start
 
@@ -217,10 +185,10 @@ cd agora-ui && npm install && cd ..
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env
+node scripts/setup-env.js
 ```
 
-Defaults work out of the box for local development.
+This generates `.env` with random secrets from `.env.example`. No prompts — defaults work out of the box for local development.
 
 ### 3. Start infrastructure
 
