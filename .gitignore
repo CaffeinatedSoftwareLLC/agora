@@ -144,3 +144,8 @@ vite.config.ts.timestamp-*
 # Agora local data
 .agora/
 .mcp.json
+
+# Agent skill copies (generated from .claude/skills/ at setup time)
+.codex/
+.gemini/
+.opencode/
