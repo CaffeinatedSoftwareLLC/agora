@@ -239,6 +239,46 @@ export const aiApi = {
     api.get<AIUsageStats>(`/servers/${serverId}/ai-config/usage${days ? `?days=${days}` : ''}`),
 };
 
+// ─── Role Management API ───
+
+import type { Role, ChannelOverrides as ChannelOverridesType } from './contracts/roles';
+
+export const roleApi = {
+  list: (serverId: string) =>
+    api.get<Role[]>(`/servers/${serverId}/roles`),
+
+  create: (serverId: string, data: { name: string; color?: string; hoist?: boolean; permissions?: string; mentionable?: boolean }) =>
+    api.post<Role>(`/servers/${serverId}/roles`, data),
+
+  update: (serverId: string, roleId: string, data: Record<string, unknown>) =>
+    api.patch<Role>(`/servers/${serverId}/roles/${roleId}`, data),
+
+  remove: (serverId: string, roleId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/roles/${roleId}`),
+
+  assignRole: (serverId: string, userId: string, roleId: string) =>
+    api.put<{ assigned: true }>(`/servers/${serverId}/members/${userId}/roles/${roleId}`),
+
+  removeRole: (serverId: string, userId: string, roleId: string) =>
+    api.delete<{ removed: true }>(`/servers/${serverId}/members/${userId}/roles/${roleId}`),
+
+  // Channel overrides
+  getOverrides: (channelId: string) =>
+    api.get<ChannelOverridesType>(`/channels/${channelId}/overrides`),
+
+  upsertRoleOverride: (channelId: string, roleId: string, data: { allow: string; deny: string }) =>
+    api.put(`/channels/${channelId}/overrides/roles/${roleId}`, data),
+
+  removeRoleOverride: (channelId: string, roleId: string) =>
+    api.delete(`/channels/${channelId}/overrides/roles/${roleId}`),
+
+  upsertMemberOverride: (channelId: string, userId: string, data: { allow: string; deny: string }) =>
+    api.put(`/channels/${channelId}/overrides/members/${userId}`, data),
+
+  removeMemberOverride: (channelId: string, userId: string) =>
+    api.delete(`/channels/${channelId}/overrides/members/${userId}`),
+};
+
 export const voiceApi = {
   getToken: (channelId: string) =>
     api.post<{ token: string; url: string }>('/voice/token', { channelId }),

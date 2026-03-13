@@ -14,8 +14,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         cors: { origin: config.corsOrigin ?? false },
     });
 
-    const jwtSecret = (app as any).jwtSecret;
-    const db = (app as any).db;
+    const jwtSecret = app.jwtSecret;
+    const db = app.db;
 
     // Initialization gate — reject connections before instance is set up
     io.use(async (_socket, next) => {

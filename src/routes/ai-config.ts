@@ -7,12 +7,12 @@ import { testConnection } from '../ai/providers';
 import { config } from '../config';
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
-    if ((request as any).isBot) {
+    if (request.isBot) {
         return reply.status(403).send({ error: 'Bots cannot manage AI config' });
     }
     const { serverId } = request.params as any;
-    const userId = (request as any).userId;
-    const db = (request as any).dbClient;
+    const userId = request.userId;
+    const db = request.dbClient!;
 
     const member = await db.query(
         'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
@@ -35,7 +35,7 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         preHandler: [requireAdmin],
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const result = await db.query(
             'SELECT provider, model, bot_id, system_prompt, max_context, enabled, created_at, updated_at FROM ai_provider_config WHERE server_id = $1',
@@ -78,8 +78,8 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
         const { provider, model, apiKey, systemPrompt, maxContext } = request.body as any;
 
         const { encrypted, iv, authTag } = encryptString(apiKey, config.encryptionKey);
@@ -175,7 +175,7 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const { enabled } = request.body as any;
 
         const result = await db.query(
@@ -216,7 +216,7 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         preHandler: [requireAdmin],
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const days = Math.max(1, Math.min(365, parseInt((request.query as any).days || '30', 10) || 30));
 
         const result = await db.query(

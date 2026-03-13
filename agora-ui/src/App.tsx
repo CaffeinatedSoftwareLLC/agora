@@ -17,6 +17,9 @@ import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
 import { ServerAdminGuard } from './features/settings/ServerAdminGuard';
 import { BotManagement } from './features/settings/BotManagement';
 import { AISettings } from './features/settings/AISettings';
+import { RoleManagement } from './features/settings/RoleManagement';
+import { RoleAssignment } from './features/settings/RoleAssignment';
+import { ChannelOverrides } from './features/settings/ChannelOverrides';
 import { ModerationGuard } from './features/moderation/ModerationGuard';
 import { ModerationLayout } from './features/moderation/ModerationLayout';
 import { MemberList } from './features/moderation/MemberList';
@@ -63,7 +66,10 @@ export default function App() {
                       <ServerAdminGuard>
                         <ServerSettingsLayout>
                           <Routes>
-                            <Route index element={<Navigate to="/settings/bots" replace />} />
+                            <Route index element={<Navigate to="/settings/roles" replace />} />
+                            <Route path="roles" element={<RoleManagement />} />
+                            <Route path="role-assign" element={<RoleAssignment />} />
+                            <Route path="overrides" element={<ChannelOverrides />} />
                             <Route path="bots" element={<BotManagement />} />
                             <Route path="ai" element={<AISettings />} />
                             <Route path="instance" element={<AdminGuard><InstanceSettings /></AdminGuard>} />

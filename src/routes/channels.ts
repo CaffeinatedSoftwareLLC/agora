@@ -17,9 +17,9 @@ export async function channelRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: serverId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { name, channelType } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Check membership
         const member = await db.query(

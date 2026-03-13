@@ -27,7 +27,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
             return reply.status(401).send({ error: 'Malformed bot token' });
         }
 
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // O(1) lookup by primary key
         const tokenRow = await db.query(
@@ -49,8 +49,8 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
             return reply.status(403).send({ error: 'Bots cannot access this endpoint' });
         }
 
-        (request as any).userId = tokenRow.rows[0].bot_id;
-        (request as any).isBot = true;
+        request.userId = tokenRow.rows[0].bot_id;
+        request.isBot = true;
 
         // Update last_used_at (fire and forget)
         db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
@@ -65,8 +65,8 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 
     let payload;
     try {
-        payload = verifyToken(token, (request.server as any).jwtSecret);
-        (request as any).userId = payload.userId;
+        payload = verifyToken(token, request.server.jwtSecret);
+        request.userId = payload.userId;
     } catch {
         return reply.status(401).send({ error: 'Invalid token' });
     }
@@ -77,10 +77,10 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     }
 
     // Check account_status — reject non-active users
-    const db = (request as any).dbClient;
+    const db = request.dbClient!;
     const result = await db.query(
         'SELECT account_status FROM users WHERE id = $1',
-        [(request as any).userId]
+        [request.userId]
     );
 
     if (result.rows.length === 0) {
@@ -97,8 +97,8 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 }
 
 export async function requireInstanceAdmin(request: FastifyRequest, reply: FastifyReply) {
-    const db = (request as any).dbClient;
-    const userId = (request as any).userId;
+    const db = request.dbClient!;
+    const userId = request.userId;
 
     const result = await db.query(
         'SELECT is_instance_admin FROM users WHERE id = $1',
@@ -109,5 +109,5 @@ export async function requireInstanceAdmin(request: FastifyRequest, reply: Fasti
         return reply.status(403).send({ error: 'insufficient_permissions' });
     }
 
-    (request as any).isInstanceAdmin = true;
+    request.isInstanceAdmin = true;
 }

@@ -10,7 +10,7 @@ export async function instanceRoutes(app: FastifyInstance) {
 
     // GET /instance/status — unauthenticated, returns instance config
     app.get('/instance/status', async (request) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const result = await db.query(
             "SELECT key, value FROM instance_config WHERE key IN ('setup_complete', 'registration_policy', 'instance_name', 'instance_server_id')"
@@ -46,7 +46,7 @@ export async function instanceRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const {
             setupToken,
             username,
@@ -146,7 +146,7 @@ export async function instanceRoutes(app: FastifyInstance) {
         resetInitializedCache();
 
         // 8. Generate access token
-        const accessToken = generateToken({ userId }, (app as any).jwtSecret);
+        const accessToken = generateToken({ userId }, app.jwtSecret);
 
         return reply.status(201).send({
             user: {

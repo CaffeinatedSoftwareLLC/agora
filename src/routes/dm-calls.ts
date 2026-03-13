@@ -134,9 +134,9 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { channelId, callType } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Verify channel exists and is DM type (channel_type = 1)
         const channelResult = await db.query(
@@ -200,8 +200,8 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         const token = await generateCallToken(userId.trim(), callerUsername, roomName);
 
         // Start timeout
-        const pool = (app as any).db;
-        const io = (app as any).io;
+        const pool = app.db;
+        const io = app.io;
         startCallTimeout(call, CALL_TIMEOUT_MS, async (snapshot) => {
             // Only clean up if call still exists (not already handled by accept/decline/cancel)
             const existing = getCallById(snapshot.callId);
@@ -253,8 +253,8 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         });
 
         // Queue incoming call event for recipient
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `user:${recipientId}`,
             event: 'call:incoming',
             data: {
@@ -287,7 +287,7 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { callId } = request.body as any;
 
         const call = getCallById(callId);
@@ -302,7 +302,7 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         setCallConnected(callId);
 
         // Fetch recipient username
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const userRow = await db.query(
             'SELECT username FROM users WHERE id = $1',
             [userId],
@@ -313,13 +313,13 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         const token = await generateCallToken(userId.trim(), recipientUsername, roomName);
 
         // Queue accepted event for both parties (multi-tab sync)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `user:${call.callerId}`,
             event: 'call:accepted',
             data: { callId },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `user:${call.recipientId}`,
             event: 'call:accepted',
             data: { callId },
@@ -345,7 +345,7 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { callId } = request.body as any;
 
         const call = getCallById(callId);
@@ -360,23 +360,23 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         const removed = removeCall(callId)!;
 
         // Insert system message
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const callLabel = removed.callType === 'video' ? 'Video call' : 'Voice call';
         const sysMsg = await insertSystemMessage(db, removed.channelId, removed.callerId, `${callLabel} declined`, 'call_declined');
 
         // Queue events: declined to both parties + Message broadcast
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `user:${removed.callerId}`,
             event: 'call:declined',
             data: { callId },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `user:${removed.recipientId}`,
             event: 'call:declined',
             data: { callId },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `channel:${removed.channelId}`,
             event: 'Message',
             data: systemMessageEvent(sysMsg, removed.callerUsername),
@@ -401,7 +401,7 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { callId } = request.body as any;
 
         const call = getCallById(callId);
@@ -416,23 +416,23 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         const removed = removeCall(callId)!;
 
         // Insert system message
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const callLabel = removed.callType === 'video' ? 'video call' : 'voice call';
         const sysMsg = await insertSystemMessage(db, removed.channelId, removed.callerId, `Missed ${callLabel}`, 'call_missed');
 
         // Queue events: cancelled to both parties + Message broadcast
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `user:${removed.callerId}`,
             event: 'call:cancelled',
             data: { callId },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `user:${removed.recipientId}`,
             event: 'call:cancelled',
             data: { callId },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `channel:${removed.channelId}`,
             event: 'Message',
             data: systemMessageEvent(sysMsg, removed.callerUsername),
@@ -457,7 +457,7 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { callId } = request.body as any;
 
         const call = getCallById(callId);
@@ -474,24 +474,24 @@ export async function dmCallRoutes(app: FastifyInstance, opts?: DmCallRouteOptio
         const duration = removed.connectedAt ? Date.now() - removed.connectedAt : 0;
 
         // Insert system message
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const callLabel = removed.callType === 'video' ? 'Video call' : 'Voice call';
         const durationStr = removed.connectedAt ? ` \u2014 ${formatDuration(duration)}` : '';
         const sysMsg = await insertSystemMessage(db, removed.channelId, removed.callerId, `${callLabel}${durationStr}`, 'call_ended');
 
         // Queue events: ended to both parties + Message broadcast
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `user:${removed.callerId}`,
             event: 'call:ended',
             data: { callId, duration },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `user:${removed.recipientId}`,
             event: 'call:ended',
             data: { callId, duration },
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `channel:${removed.channelId}`,
             event: 'Message',
             data: systemMessageEvent(sysMsg, removed.callerUsername),

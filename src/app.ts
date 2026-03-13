@@ -20,6 +20,7 @@ import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
 import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
+import { roleRoutes } from './routes/roles';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
@@ -43,9 +44,9 @@ export async function buildApp(opts?: {
     const jwtSecret = opts?.jwtSecret ?? process.env.JWT_SECRET ?? 'dev-secret-do-not-use-in-prod';
 
     // Decorate app so routes can access db pool and jwtSecret
-    app.decorate('db', db);
-    app.decorate('jwtSecret', jwtSecret);
-    app.decorate('ipEncryptionKey', config.ipEncryptionKey);
+    (app as any).decorate('db', db);
+    (app as any).decorate('jwtSecret', jwtSecret);
+    (app as any).decorate('ipEncryptionKey', config.ipEncryptionKey);
 
     // Health endpoint (no auth required)
     app.get('/health', async () => {
@@ -66,7 +67,7 @@ export async function buildApp(opts?: {
     app.addHook('onRequest', async (request) => {
         const client = await db.connect();
         await client.query('BEGIN');
-        (request as any).dbClient = client;
+        request.dbClient = client;
     });
 
     // Initialization gate — block everything except bootstrap routes when not initialized
@@ -75,7 +76,7 @@ export async function buildApp(opts?: {
         if (url === '/health' || url.startsWith('/instance/') || url.startsWith('/webhooks/')) {
             return;
         }
-        const ready = await isInstanceInitialized((app as any).db);
+        const ready = await isInstanceInitialized(app.db);
         if (!ready) {
             return reply.status(503).send({ error: 'instance_not_initialized' });
         }
@@ -88,18 +89,22 @@ export async function buildApp(opts?: {
             return;
         }
         await requireAuth(request, reply);
+        // Enrich request logger with authenticated user context
+        if (request.userId) {
+            request.log = request.log.child({ userId: request.userId, requestId: request.id });
+        }
     });
 
     // Idempotency check for bot requests — uses SET NX to claim the key
     // atomically, preventing duplicate messages from concurrent retries.
     app.addHook('preHandler', async (request, reply) => {
-        if (!(request as any).isBot) return;
+        if (!request.isBot) return;
 
         const key = request.headers['idempotency-key'] as string | undefined;
         if (!key) return;
 
         const channelId = (request.params as any)?.id || '_';
-        const cacheKey = `idempotent:${(request as any).userId}:${request.method}:${request.routeOptions.url}:${channelId}:${key}`;
+        const cacheKey = `idempotent:${request.userId}:${request.method}:${request.routeOptions.url}:${channelId}:${key}`;
 
         try {
             const redis = getRedis();
@@ -125,13 +130,13 @@ export async function buildApp(opts?: {
             // Redis failure is non-fatal — proceed without idempotency
         }
 
-        (request as any).idempotencyKey = cacheKey;
+        request.idempotencyKey = cacheKey;
     });
 
     // RLS context: after auth sets userId, switch to app_user role
     app.addHook('preHandler', async (request) => {
-        const client = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const client = request.dbClient;
+        const userId = request.userId;
         if (client && userId) {
             await client.query('SET LOCAL ROLE app_user');
             await client.query(
@@ -143,15 +148,15 @@ export async function buildApp(opts?: {
 
     // Commit + release on success, then flush pending socket events
     app.addHook('onResponse', async (request) => {
-        const client = (request as any).dbClient;
+        const client = request.dbClient;
         if (client) {
-            (request as any).dbClient = null;
+            request.dbClient = null;
             try {
                 await client.query('COMMIT');
 
                 // Emit socket events only after successful commit
-                const pendingEvents = (request as any).pendingEvents;
-                const io = (app as any).io;
+                const pendingEvents = request.pendingEvents;
+                const io = app.io;
                 if (io && pendingEvents) {
                     for (const evt of pendingEvents) {
                         // For ServerJoin, join user's sockets to new channel rooms BEFORE emitting
@@ -196,7 +201,7 @@ export async function buildApp(opts?: {
 
                 // Force-disconnect suspended users only after successful commit
                 // (best-effort — WS failures must not affect the committed suspension)
-                const pendingDisconnects = (request as any).pendingDisconnects;
+                const pendingDisconnects = request.pendingDisconnects;
                 if (io && pendingDisconnects) {
                     for (const targetId of pendingDisconnects) {
                         try {
@@ -213,13 +218,13 @@ export async function buildApp(opts?: {
 
                 // Idempotency: replace in-flight marker with terminal response,
                 // or delete it if the request didn't produce a cacheable body.
-                const idempotencyKey = (request as any).idempotencyKey;
+                const idempotencyKey = request.idempotencyKey;
                 if (idempotencyKey) {
                     try {
-                        if ((request as any).idempotencyResponseBody) {
+                        if (request.idempotencyResponseBody) {
                             await getRedis().set(
                                 idempotencyKey,
-                                JSON.stringify({ status: 201, body: (request as any).idempotencyResponseBody }),
+                                JSON.stringify({ status: 201, body: request.idempotencyResponseBody }),
                                 'EX', 300  // 5 min TTL
                             );
                         } else {
@@ -238,15 +243,15 @@ export async function buildApp(opts?: {
 
     // Rollback + release on error
     app.addHook('onError', async (request) => {
-        const client = (request as any).dbClient;
+        const client = request.dbClient;
         if (client) {
-            (request as any).dbClient = null;
+            request.dbClient = null;
             await client.query('ROLLBACK').catch(() => {});
             client.release();
         }
 
         // Clear idempotency in-flight marker so the client can retry
-        const idempotencyKey = (request as any).idempotencyKey;
+        const idempotencyKey = request.idempotencyKey;
         if (idempotencyKey) {
             try { await getRedis().del(idempotencyKey); } catch { /* non-fatal */ }
         }
@@ -270,13 +275,14 @@ export async function buildApp(opts?: {
     await app.register(botRoutes);
     await app.register(threadRoutes);
     await app.register(aiConfigRoutes);
+    await app.register(roleRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);
     app.decorate('io', io);
 
     // Start built-in AI assistant handler
-    startAssistantHandler(db, io);
+    startAssistantHandler(db, io, app.log);
 
     return { app, db };
 }

@@ -15,9 +15,9 @@ export async function dmRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { recipientId } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Can't DM yourself
         if (userId.trim() === recipientId.trim()) {
@@ -82,7 +82,7 @@ export async function dmRoutes(app: FastifyInstance) {
 
                 // Queue DMCreated events so both users' sockets join the new channel room
                 const trimmedId = channelId.trim();
-                const pendingEvents = (request as any).pendingEvents = (request as any).pendingEvents || [];
+                const pendingEvents = request.pendingEvents = request.pendingEvents || [];
                 pendingEvents.push({
                     room: `user:${userA}`,
                     event: 'DMCreated',

@@ -1,17 +1,36 @@
 import type { Pool } from 'pg';
 import type { Server } from 'socket.io';
+import type { FastifyBaseLogger } from 'fastify';
 import { internalBus, AssistantMentionEvent } from './internal-bus';
 import { streamCompletion, ConversationMessage } from './providers';
 import { decryptString } from '../lib/encryption';
 import { config } from '../config';
 import { generateUlid } from '../utils/ulid';
 
-export function startAssistantHandler(db: Pool, io: Server): void {
+/** Fallback logger when Fastify logger is not available (e.g. tests with logger: false) */
+const noopLogger: FastifyBaseLogger = {
+    info: () => {},
+    error: (...args: any[]) => console.error('[AI Assistant]', ...args),
+    warn: (...args: any[]) => console.warn('[AI Assistant]', ...args),
+    debug: () => {},
+    fatal: (...args: any[]) => console.error('[AI Assistant FATAL]', ...args),
+    trace: () => {},
+    child: () => noopLogger,
+    silent: () => {},
+    level: 'error',
+} as any;
+
+let log: FastifyBaseLogger = noopLogger;
+
+export function startAssistantHandler(db: Pool, io: Server, logger?: FastifyBaseLogger): void {
+    log = logger?.child({ module: 'ai-assistant' }) ?? noopLogger;
+
     // Guard against stacked listeners on repeated buildApp() calls (e.g. tests)
     internalBus.removeAllListeners('assistantMention');
     internalBus.on('assistantMention', (event: AssistantMentionEvent) => {
         handleMention(db, io, event).catch((err) => {
-            console.error('[AI Assistant] Unhandled error in mention handler:', err);
+            log.error({ err, botId: event.botId, channelId: event.channelId, messageId: event.messageId },
+                'Unhandled error in mention handler');
         });
     });
 }
@@ -55,7 +74,7 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
     try {
         apiKey = decryptString(aiConfig.api_key_enc, config.encryptionKey, aiConfig.api_key_iv, aiConfig.api_key_tag);
     } catch {
-        console.error('[AI Assistant] Failed to decrypt API key for server', serverId);
+        log.error({ serverId, botId, channelId, messageId }, 'Failed to decrypt API key');
         return;
     }
 

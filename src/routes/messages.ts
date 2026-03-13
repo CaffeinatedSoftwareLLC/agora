@@ -28,11 +28,11 @@ export async function messageRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const userId = (request as any).userId;
-        const isBot = (request as any).isBot;
+        const userId = request.userId;
+        const isBot = request.isBot;
         const { content: rawContent, attachments: attachmentIds } = request.body as any;
         const content = rawContent || null;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const isMember = await checkChannelMembership(db, channelId, userId, isBot);
         if (!isMember) {
@@ -87,8 +87,8 @@ export async function messageRoutes(app: FastifyInstance) {
                          `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`]
                     );
 
-                    (request as any).pendingEvents ??= [];
-                    (request as any).pendingEvents.push({
+                    request.pendingEvents ??= [];
+                    request.pendingEvents.push({
                         room: `channel:${channelId.trim()}`,
                         event: 'Message',
                         data: {
@@ -101,7 +101,7 @@ export async function messageRoutes(app: FastifyInstance) {
                             systemEvent: 'loop_guard',
                         },
                     });
-                    (request as any).pendingEvents.push({
+                    request.pendingEvents.push({
                         room: `channel:${channelId.trim()}`,
                         event: 'ChannelLoopGuard',
                         data: { channelId: channelId.trim(), paused: true },
@@ -205,10 +205,10 @@ export async function messageRoutes(app: FastifyInstance) {
                 const hasUseBots = !!(senderPerms & Permissions.UseBots) || !!(senderPerms & Permissions.Administrator);
 
                 if (hasUseBots) {
-                    (request as any).pendingEvents ??= [];
+                    request.pendingEvents ??= [];
                     const timestamp = new Date().toISOString();
                     for (const botMention of botMentions) {
-                        (request as any).pendingEvents.push({
+                        request.pendingEvents.push({
                             room: `user:${botMention.id}`,
                             event: 'MessageMention',
                             data: {
@@ -239,16 +239,16 @@ export async function messageRoutes(app: FastifyInstance) {
         };
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'Message',
             data: message,
         });
 
         // Stash for idempotency cache (written in onResponse after COMMIT)
-        if ((request as any).idempotencyKey) {
-            (request as any).idempotencyResponseBody = message;
+        if (request.idempotencyKey) {
+            request.idempotencyResponseBody = message;
         }
 
         return reply.status(201).send(message);
@@ -257,11 +257,11 @@ export async function messageRoutes(app: FastifyInstance) {
     // GET /channels/:id/messages?limit&before → 200 [{ id, content, authorId, authorUsername, channelId, editedAt, deletedAt, createdAt }]
     app.get('/channels/:id/messages', async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { limit: rawLimit, before } = request.query as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -380,11 +380,11 @@ export async function messageRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { content } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -413,8 +413,8 @@ export async function messageRoutes(app: FastifyInstance) {
         const threadId = msg.rows[0].thread_id?.trim() || undefined;
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageUpdate',
             data: {
@@ -436,10 +436,10 @@ export async function messageRoutes(app: FastifyInstance) {
     // DELETE /channels/:id/messages/:msgId → 200 { id, deletedAt }
     app.delete('/channels/:id/messages/:msgId', async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -479,8 +479,8 @@ export async function messageRoutes(app: FastifyInstance) {
             );
 
             if (parentUpdate.rows.length > 0) {
-                (request as any).pendingEvents = (request as any).pendingEvents || [];
-                (request as any).pendingEvents.push({
+                request.pendingEvents = request.pendingEvents || [];
+                request.pendingEvents.push({
                     room: `channel:${channelId.trim()}`,
                     event: 'ThreadMetadataUpdate',
                     data: {
@@ -495,8 +495,8 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageDelete',
             data: {

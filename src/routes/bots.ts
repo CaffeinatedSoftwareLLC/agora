@@ -60,12 +60,12 @@ export async function loadAndComputePermissions(db: any, userId: string, serverI
  * PreHandler: require ManageBots permission for /servers/:serverId/bots/* routes
  */
 async function requireManageBots(request: FastifyRequest, reply: FastifyReply) {
-    if ((request as any).isBot) {
+    if (request.isBot) {
         return reply.status(403).send({ error: 'Bots cannot manage other bots' });
     }
     const { serverId } = request.params as any;
-    const userId = (request as any).userId;
-    const db = (request as any).dbClient;
+    const userId = request.userId;
+    const db = request.dbClient!;
 
     // Check server membership first
     const member = await db.query(
@@ -87,12 +87,12 @@ async function requireManageBots(request: FastifyRequest, reply: FastifyReply) {
  * Does channel→server lookup, DM rejection, cross-server bot check
  */
 async function requireManageBotsForChannel(request: FastifyRequest, reply: FastifyReply) {
-    if ((request as any).isBot) {
+    if (request.isBot) {
         return reply.status(403).send({ error: 'Bots cannot manage other bots' });
     }
     const { id: channelId, botId } = request.params as any;
-    const userId = (request as any).userId;
-    const db = (request as any).dbClient;
+    const userId = request.userId;
+    const db = request.dbClient!;
 
     // Look up which server this channel belongs to
     const channelRow = await db.query(
@@ -142,12 +142,12 @@ async function requireManageBotsForChannel(request: FastifyRequest, reply: Fasti
  * Channel→server lookup, membership check, no botId needed.
  */
 async function requireManageBotsForChannelConfig(request: FastifyRequest, reply: FastifyReply) {
-    if ((request as any).isBot) {
+    if (request.isBot) {
         return reply.status(403).send({ error: 'Bots cannot manage bot config' });
     }
     const { id: channelId } = request.params as any;
-    const userId = (request as any).userId;
-    const db = (request as any).dbClient;
+    const userId = request.userId;
+    const db = request.dbClient!;
 
     const channelRow = await db.query(
         'SELECT server_id FROM channels WHERE id = $1',
@@ -195,8 +195,8 @@ export async function botRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
         const { username, avatarUrl } = request.body as any;
 
         if (avatarUrl !== undefined && avatarUrl !== null) {
@@ -235,7 +235,7 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBots],
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const result = await db.query(
             `SELECT id, username, bot_owner_id, created_at, avatar_url
@@ -261,8 +261,8 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBots],
     }, async (request, reply) => {
         const { serverId, id: botId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const botRow = await db.query(
             `SELECT id, username, bot_owner_id, created_at, avatar_url
@@ -320,7 +320,7 @@ export async function botRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { serverId, id: botId } = request.params as any;
         const { username, avatarUrl } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Verify bot belongs to this server
         const botRow = await db.query(
@@ -370,7 +370,7 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBots],
     }, async (request, reply) => {
         const { serverId, id: botId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const result = await db.query(
             'DELETE FROM users WHERE id = $1 AND bot = true AND server_id = $2 RETURNING id',
@@ -388,8 +388,8 @@ export async function botRoutes(app: FastifyInstance) {
     // Inline preHandler: verify caller is the bot's owner or has Administrator
     async function requireBotOwnerOrAdmin(request: FastifyRequest, reply: FastifyReply) {
         const { serverId, id: botId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const botRow = await db.query(
             'SELECT bot_owner_id FROM users WHERE id = $1 AND bot = true AND server_id = $2',
@@ -422,7 +422,7 @@ export async function botRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { id: botId } = request.params as any;
         const { name } = (request.body as any) || {};
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
@@ -447,7 +447,7 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBots, requireBotOwnerOrAdmin],
     }, async (request, reply) => {
         const { id: botId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
@@ -475,7 +475,7 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBots, requireBotOwnerOrAdmin],
     }, async (request, reply) => {
         const { id: botId, tokenId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
@@ -499,8 +499,8 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBotsForChannel],
     }, async (request, reply) => {
         const { id: channelId, botId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         try {
             await db.query(
@@ -526,7 +526,7 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBotsForChannel],
     }, async (request, reply) => {
         const { id: channelId, botId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const result = await db.query(
             'DELETE FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2 RETURNING bot_id',
@@ -556,7 +556,7 @@ export async function botRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
         const { maxBotHops } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         await db.query(
             'UPDATE channels SET max_bot_hops = $1 WHERE id = $2',
@@ -578,9 +578,9 @@ export async function botRoutes(app: FastifyInstance) {
 
     // GET /bots/@me → 200 { id, username, serverId, channels }
     app.get('/bots/@me', async (request, reply) => {
-        const userId = (request as any).userId;
-        const isBot = (request as any).isBot;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const isBot = request.isBot;
+        const db = request.dbClient!;
 
         if (!isBot) {
             return reply.status(403).send({ error: 'This endpoint is for bots only' });
@@ -620,9 +620,9 @@ export async function botRoutes(app: FastifyInstance) {
 
     // GET /bots/@me/cursors → 200 [{ channelId, lastReadId, updatedAt }]
     app.get('/bots/@me/cursors', async (request, reply) => {
-        const userId = (request as any).userId;
-        const isBot = (request as any).isBot;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const isBot = request.isBot;
+        const db = request.dbClient!;
 
         if (!isBot) {
             return reply.status(403).send({ error: 'This endpoint is for bots only' });
@@ -657,10 +657,10 @@ export async function botRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { channelId } = request.params as any;
-        const userId = (request as any).userId;
-        const isBot = (request as any).isBot;
+        const userId = request.userId;
+        const isBot = request.isBot;
         const { lastReadId } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         if (!isBot) {
             return reply.status(403).send({ error: 'This endpoint is for bots only' });

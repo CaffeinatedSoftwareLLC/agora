@@ -19,8 +19,8 @@ export async function serverRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { name } = request.body as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const serverId = generateUlid();
         const roleId = generateUlid();
@@ -74,8 +74,8 @@ export async function serverRoutes(app: FastifyInstance) {
     // GET /servers/:id/channels → 200 [{ id, name, channelType, maxBotHops }]
     app.get('/servers/:id/channels', async (request, reply) => {
         const { id: serverId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Check membership
         const member = await db.query(
@@ -104,8 +104,8 @@ export async function serverRoutes(app: FastifyInstance) {
     // POST /servers/:id/invites → 201 { code }
     app.post('/servers/:id/invites', async (request, reply) => {
         const { id: serverId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Membership check — prevents non-members from minting invites
         const member = await db.query(
@@ -131,8 +131,8 @@ export async function serverRoutes(app: FastifyInstance) {
     // GET /servers/:id/members → 200 [{ id, username, joinedAt, roles }]
     app.get('/servers/:id/members', async (request, reply) => {
         const { id: serverId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Membership check
         const member = await db.query(
@@ -175,8 +175,8 @@ export async function serverRoutes(app: FastifyInstance) {
     // GET /servers/:id/access → 200 { permissions, isInstanceAdmin, hasModerationAccess, hasServerAdminAccess }
     app.get('/servers/:id/access', async (request, reply) => {
         const { id: serverId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Membership check
         const member = await db.query(
@@ -212,8 +212,8 @@ export async function serverRoutes(app: FastifyInstance) {
     // POST /invites/:code → 200 { serverId, userId }
     app.post('/invites/:code', async (request, reply) => {
         const { code } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const invite = await db.query(
             'SELECT server_id FROM server_invites WHERE code = $1',
@@ -266,8 +266,8 @@ export async function serverRoutes(app: FastifyInstance) {
                 serverId: serverId.trim(),
             }));
 
-            (request as any).pendingEvents = (request as any).pendingEvents || [];
-            (request as any).pendingEvents.push({
+            request.pendingEvents = request.pendingEvents || [];
+            request.pendingEvents.push({
                 event: 'ServerJoin',
                 room: `user:${userId.trim()}`,
                 data: { server, channels },

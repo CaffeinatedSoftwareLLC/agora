@@ -25,7 +25,7 @@ export async function adminRoutes(app: FastifyInstance) {
     app.get('/admin/stats', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const [usersRes, pendingRes, serversRes] = await Promise.all([
             db.query('SELECT COUNT(*)::int AS count FROM users'),
@@ -53,7 +53,7 @@ export async function adminRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const { page = 1, limit = 20 } = request.query as any;
         const offset = (page - 1) * limit;
 
@@ -81,8 +81,8 @@ export async function adminRoutes(app: FastifyInstance) {
     app.post('/admin/approve-user/:id', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const db = request.dbClient!;
+        const userId = request.userId;
         const { id: targetId } = request.params as any;
 
         // Atomic: only transitions pending → active, returns the row if successful
@@ -137,8 +137,8 @@ export async function adminRoutes(app: FastifyInstance) {
     app.post('/admin/reject-user/:id', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const db = request.dbClient!;
+        const userId = request.userId;
         const { id: targetId } = request.params as any;
 
         // Atomic: only deletes if pending, returns the row for audit logging
@@ -177,7 +177,7 @@ export async function adminRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const { page = 1, limit = 20, status, search } = request.query as any;
         const offset = (page - 1) * limit;
 
@@ -198,7 +198,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-        const ipKey = (app as any).ipEncryptionKey as Buffer;
+        const ipKey = app.ipEncryptionKey as Buffer;
 
         const [usersRes, countRes] = await Promise.all([
             db.query(
@@ -228,8 +228,8 @@ export async function adminRoutes(app: FastifyInstance) {
 
     // POST /admin/users/:id/ban (and backwards-compat /suspend alias)
     const banHandler = async (request: any, reply: any) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const db = request.dbClient!;
+        const userId = request.userId;
         const { id: targetId } = request.params as any;
 
         if (userId === targetId) {
@@ -267,7 +267,7 @@ export async function adminRoutes(app: FastifyInstance) {
             after: { accountStatus: 'suspended' },
         });
 
-        (request as any).pendingDisconnects = [targetId];
+        request.pendingDisconnects = [targetId];
 
         return reply.send({
             user: {
@@ -292,9 +292,9 @@ export async function adminRoutes(app: FastifyInstance) {
     app.post('/admin/users/:id/ip-ban', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
-        const ipKey = (app as any).ipEncryptionKey as Buffer;
+        const db = request.dbClient!;
+        const userId = request.userId;
+        const ipKey = app.ipEncryptionKey as Buffer;
         const { id: targetId } = request.params as any;
 
         if (userId === targetId) {
@@ -339,7 +339,7 @@ export async function adminRoutes(app: FastifyInstance) {
                 [targetId]
             );
             accountBanned = true;
-            (request as any).pendingDisconnects = [targetId];
+            request.pendingDisconnects = [targetId];
         }
 
         await logAdminAction(db, userId, 'user_ip_ban', 'user', targetId, {
@@ -379,8 +379,8 @@ export async function adminRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const ipKey = (app as any).ipEncryptionKey as Buffer;
+        const db = request.dbClient!;
+        const ipKey = app.ipEncryptionKey as Buffer;
         const { page = 1, limit = 20 } = request.query as any;
         const offset = (page - 1) * limit;
 
@@ -409,8 +409,8 @@ export async function adminRoutes(app: FastifyInstance) {
     app.delete('/admin/ip-bans/:id', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const db = request.dbClient!;
+        const userId = request.userId;
         const { id: banId } = request.params as any;
 
         const deleteRes = await db.query(
@@ -444,8 +444,8 @@ export async function adminRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const db = request.dbClient!;
+        const userId = request.userId;
         const { instanceName, registrationPolicy } = request.body as any;
 
         // Pre-check: verify all requested config keys exist before making any changes
@@ -506,7 +506,7 @@ export async function adminRoutes(app: FastifyInstance) {
     app.get('/admin/settings/files', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const settings = await getFileSettings(db);
         return reply.send(settings);
     });
@@ -541,8 +541,8 @@ export async function adminRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
-        const userId = (request as any).userId;
+        const db = request.dbClient!;
+        const userId = request.userId;
         const body = request.body as Record<string, any>;
 
         for (const [key, value] of Object.entries(body)) {
@@ -564,7 +564,7 @@ export async function adminRoutes(app: FastifyInstance) {
     app.get('/admin/storage', {
         preHandler: [requireInstanceAdmin],
     }, async (request, reply) => {
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const statsRes = await db.query(`
             SELECT

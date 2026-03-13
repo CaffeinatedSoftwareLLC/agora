@@ -20,10 +20,10 @@ export async function threadRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
-        const isBot = (request as any).isBot;
+        const userId = request.userId;
+        const isBot = request.isBot;
         const { content } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const isMember = await checkChannelMembership(db, channelId, userId, isBot);
         if (!isMember) {
@@ -90,8 +90,8 @@ export async function threadRoutes(app: FastifyInstance) {
                         [sysId, channelId,
                          `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`]
                     );
-                    (request as any).pendingEvents ??= [];
-                    (request as any).pendingEvents.push({
+                    request.pendingEvents ??= [];
+                    request.pendingEvents.push({
                         room: `channel:${channelId.trim()}`,
                         event: 'Message',
                         data: {
@@ -103,7 +103,7 @@ export async function threadRoutes(app: FastifyInstance) {
                             systemEvent: 'loop_guard',
                         },
                     });
-                    (request as any).pendingEvents.push({
+                    request.pendingEvents.push({
                         room: `channel:${channelId.trim()}`,
                         event: 'ChannelLoopGuard',
                         data: { channelId: channelId.trim(), paused: true },
@@ -154,10 +154,10 @@ export async function threadRoutes(app: FastifyInstance) {
                 const senderPerms = await loadAndComputePermissions(db, userId, serverId);
                 const hasUseBots = !!(senderPerms & Permissions.UseBots) || !!(senderPerms & Permissions.Administrator);
                 if (hasUseBots) {
-                    (request as any).pendingEvents ??= [];
+                    request.pendingEvents ??= [];
                     const timestamp = new Date().toISOString();
                     for (const botMention of botMentions) {
-                        (request as any).pendingEvents.push({
+                        request.pendingEvents.push({
                             room: `user:${botMention.id}`,
                             event: 'MessageMention',
                             data: {
@@ -187,13 +187,13 @@ export async function threadRoutes(app: FastifyInstance) {
             mentionsEveryone,
         };
 
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'Message',
             data: replyMessage,
         });
-        (request as any).pendingEvents.push({
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ThreadMetadataUpdate',
             data: {
@@ -205,8 +205,8 @@ export async function threadRoutes(app: FastifyInstance) {
             },
         });
 
-        if ((request as any).idempotencyKey) {
-            (request as any).idempotencyResponseBody = replyMessage;
+        if (request.idempotencyKey) {
+            request.idempotencyResponseBody = replyMessage;
         }
 
         return reply.status(201).send(replyMessage);
@@ -215,11 +215,11 @@ export async function threadRoutes(app: FastifyInstance) {
     // GET /channels/:id/messages/:msgId/replies?limit&after → 200 [Message]
     app.get('/channels/:id/messages/:msgId/replies', async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { limit: rawLimit, after } = request.query as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -337,11 +337,11 @@ export async function threadRoutes(app: FastifyInstance) {
     // GET /channels/:id/threads?limit&before → 200 [ThreadSummary]
     app.get('/channels/:id/threads', async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { limit: rawLimit, before } = request.query as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -455,11 +455,11 @@ export async function threadRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { closed } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, (request as any).isBot);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -513,8 +513,8 @@ export async function threadRoutes(app: FastifyInstance) {
         const updated = result.rows[0];
 
         // Emit ThreadMetadataUpdate with threadClosedAt
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ThreadMetadataUpdate',
             data: {

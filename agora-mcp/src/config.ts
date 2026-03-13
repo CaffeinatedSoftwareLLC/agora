@@ -25,12 +25,29 @@ export function loadConfig(args: string[]): AgoraMcpConfig {
         };
     }
 
+    // CLI args: --instance and --token
+    const instanceIdx = args.indexOf('--instance');
+    const tokenIdx = args.indexOf('--token');
+    const channelIdx = args.indexOf('--channel');
+
+    if (instanceIdx !== -1 && tokenIdx !== -1 && args[instanceIdx + 1] && args[tokenIdx + 1]) {
+        return {
+            instance: args[instanceIdx + 1],
+            token: args[tokenIdx + 1],
+            defaultChannel: channelIdx !== -1 ? args[channelIdx + 1] : undefined,
+        };
+    }
+
+    // Env vars
     const instance = process.env.AGORA_INSTANCE;
     const token = process.env.AGORA_BOT_TOKEN;
 
     if (!instance || !token) {
         throw new Error(
-            'Missing configuration. Provide --config <path> or set AGORA_INSTANCE and AGORA_BOT_TOKEN environment variables.'
+            'Missing configuration. Provide one of:\n' +
+            '  --instance <url> --token <bot_token>  (CLI args)\n' +
+            '  --config <path>                       (JSON config file)\n' +
+            '  AGORA_INSTANCE + AGORA_BOT_TOKEN      (env vars)'
         );
     }
 

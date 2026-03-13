@@ -42,7 +42,7 @@ export async function voiceWebhookRoutes(app: FastifyInstance) {
             return reply.status(401).send({ error: 'Invalid webhook signature' });
         }
 
-        const io = (request.server as any).io;
+        const io = request.server.io;
         const roomName = event.room?.name ?? '';
 
         // Guard: only handle channel-* rooms for server voice events
@@ -83,7 +83,7 @@ export async function voiceWebhookRoutes(app: FastifyInstance) {
             if (call) {
                 const wasConnected = call.status === 'connected';
                 const removed = removeCall(callId)!;
-                const pool = (app as any).db;
+                const pool = app.db;
 
                 // Choose message/event based on whether the call was ever connected
                 const callLabel = removed.callType === 'video'

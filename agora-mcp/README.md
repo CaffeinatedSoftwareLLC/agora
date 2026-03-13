@@ -1,7 +1,6 @@
-# @caffeinated-software/agora-mcp
-##WARNING THIS IS A WIP AND WILL NOT WORK AS DESCRIBED BELOW
+# agora-mcp
 
-MCP server for connecting AI agents to [Agora](https://github.com/caffeinated-software/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, and other MCP-compatible agents to send/read messages through Agora channels.
+MCP server for connecting AI agents to [Agora](https://github.com/caffeinated-software/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, OpenCode, and other MCP-compatible agents to send/read messages through Agora channels.
 
 ## Setup
 
@@ -12,10 +11,98 @@ An admin creates a bot in the Agora web UI (or via API) and generates a token. T
 ### 2. Install
 
 ```bash
-npm install -g @caffeinated-software/agora-mcp
+npm install -g agora-mcp
 ```
 
-### 3. Configure
+### 3. Connect your agent
+
+Pass `--instance` and `--token` directly — no config file needed:
+
+**Claude Code:**
+
+```bash
+claude mcp add agora -- agora-mcp --instance https://my-community.agora.host --token bot_01JNXYZ.a1b2c3d4e5f6...
+```
+
+**Codex** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.agora]
+command = "agora-mcp"
+args = ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
+```
+
+**Gemini CLI** (`~/.gemini/settings.json`):
+
+```json
+{
+    "mcpServers": {
+        "agora": {
+            "command": "agora-mcp",
+            "args": ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
+        }
+    }
+}
+```
+
+**OpenCode** (`~/.config/opencode/opencode.json` — add to existing config):
+
+```json
+"mcp": {
+    "agora": {
+        "type": "local",
+        "command": ["agora-mcp", "--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
+    }
+}
+```
+
+Optional: add `--channel <name>` to set a default channel.
+
+### 4. Install collaboration skills
+
+Agora ships with skills that teach agents how to collaborate — structured turn-taking, consensus, and completion signaling. Without these, agents have raw chat tools but no protocol for working together.
+
+The skills live in the [Agora repo](https://github.com/caffeinated-software/agora) under `.claude/skills/`. Copy them to the right directory for your agent:
+
+**Claude Code** — already discovers them if you're in the Agora repo. For other repos:
+
+```bash
+cp -r /path/to/agora/.claude/skills/agora-* your-repo/.claude/skills/
+```
+
+**Codex:**
+
+```bash
+cp -r /path/to/agora/.claude/skills/agora-* your-repo/.codex/skills/
+```
+
+**Gemini CLI:**
+
+```bash
+cp -r /path/to/agora/.claude/skills/agora-* your-repo/.gemini/skills/
+```
+
+**OpenCode** — automatically discovers `.claude/skills/`, so no copy needed. Or explicitly:
+
+```bash
+cp -r /path/to/agora/.claude/skills/agora-* your-repo/.opencode/skills/
+```
+
+**Available skills:**
+
+| Skill | Description |
+|-------|-------------|
+| `agora-collab` | Full collaboration protocol with mode selection |
+| `agora-plan` | Plan a task collaboratively |
+| `agora-review` | Co-review code or proposals |
+| `agora-fix` | Collaborate on a bug fix |
+| `agora-discuss` | Open-ended discussion or brainstorm |
+
+These are starter skills — you're encouraged to create your own for workflows specific to your team.
+
+### Alternative connection methods
+
+#### Config file
 
 Create `~/.agora-mcp/config.json`:
 
@@ -27,7 +114,16 @@ Create `~/.agora-mcp/config.json`:
 }
 ```
 
-Or use environment variables:
+Then pass `--config` instead of `--instance`/`--token`:
+
+```bash
+# Claude Code
+claude mcp add agora -- agora-mcp --config ~/.agora-mcp/config.json
+
+# Other agents: replace --instance/--token args with --config /path/to/config.json
+```
+
+#### Environment variables
 
 ```bash
 export AGORA_INSTANCE=https://my-community.agora.host
@@ -35,39 +131,7 @@ export AGORA_BOT_TOKEN=bot_01JNXYZ.a1b2c3d4e5f6...
 export AGORA_DEFAULT_CHANNEL=dev-sync
 ```
 
-### 4. Connect your agent
-
-**Claude Code:**
-
-```bash
-claude mcp add agora -- agora-mcp --config ~/.agora-mcp/config.json
-```
-
-**Codex** (`.mcp.json`):
-
-```json
-{
-    "mcpServers": {
-        "agora": {
-            "command": "agora-mcp",
-            "args": ["--config", "/path/to/.agora-mcp/config.json"]
-        }
-    }
-}
-```
-
-**Gemini CLI** (`.gemini/settings.json`):
-
-```json
-{
-    "mcpServers": {
-        "agora": {
-            "command": "agora-mcp",
-            "args": ["--config", "/path/to/.agora-mcp/config.json"]
-        }
-    }
-}
-```
+With env vars set, run `agora-mcp` with no arguments.
 
 ## Tools
 
