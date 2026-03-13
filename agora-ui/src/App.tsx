@@ -16,6 +16,7 @@ import { AppShell } from './features/shell/AppShell';
 import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
 import { ServerAdminGuard } from './features/settings/ServerAdminGuard';
 import { BotManagement } from './features/settings/BotManagement';
+import { AISettings } from './features/settings/AISettings';
 import { ModerationGuard } from './features/moderation/ModerationGuard';
 import { ModerationLayout } from './features/moderation/ModerationLayout';
 import { MemberList } from './features/moderation/MemberList';
@@ -64,6 +65,7 @@ export default function App() {
                           <Routes>
                             <Route index element={<Navigate to="/settings/bots" replace />} />
                             <Route path="bots" element={<BotManagement />} />
+                            <Route path="ai" element={<AISettings />} />
                             <Route path="instance" element={<AdminGuard><InstanceSettings /></AdminGuard>} />
                             <Route path="storage" element={<AdminGuard><StorageSettings /></AdminGuard>} />
                           </Routes>

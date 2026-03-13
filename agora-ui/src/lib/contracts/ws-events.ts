@@ -112,3 +112,10 @@ export interface CallDeclinedPayload { callId: string; }
 export interface CallCancelledPayload { callId: string; }
 export interface CallTimeoutPayload { callId: string; }
 export interface CallEndedPayload { callId: string; duration?: number; }
+
+export interface BotMessageStreamPayload {
+    messageId: string;
+    channelId: string;
+    content: string;
+    streaming: boolean;
+}

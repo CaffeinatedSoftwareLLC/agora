@@ -24,6 +24,7 @@ import type {
   ReactionRemovePayload,
   DMCreatedPayload,
   ThreadMetadataUpdatePayload,
+  BotMessageStreamPayload,
 } from '../../lib/contracts/ws-events';
 import { api } from '../../lib/api';
 import { SocketContext } from './SocketContext';
@@ -127,6 +128,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         channelType: 1,
         serverId: null,
       });
+    });
+
+    s.on('BotMessageStream', (data: BotMessageStreamPayload) => {
+      useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming);
     });
 
     s.on('Typing', (data: TypingPayload) => {

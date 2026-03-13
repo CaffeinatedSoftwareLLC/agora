@@ -58,7 +58,7 @@ export function MessageInput({ channelId }: MessageInputProps) {
     // Detect @mention
     const cursorPos = e.target.selectionStart;
     const textUpToCursor = value.slice(0, cursorPos);
-    const mentionMatch = textUpToCursor.match(/@(\w*)$/);
+    const mentionMatch = textUpToCursor.match(/@([\w-]*)$/);
     if (mentionMatch) {
       setMentionQuery(mentionMatch[1]);
       setShowMentions(true);

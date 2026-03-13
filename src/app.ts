@@ -19,6 +19,9 @@ import { dmCallRoutes } from './routes/dm-calls';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
 import { threadRoutes } from './routes/threads';
+import { aiConfigRoutes } from './routes/ai-config';
+import { startAssistantHandler } from './ai/assistant-handler';
+import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
@@ -175,6 +178,19 @@ export async function buildApp(opts?: {
                         }
 
                         io.to(evt.room).emit(evt.event, evt.data);
+
+                        // Dispatch built-in assistant mentions via internal bus
+                        if (evt.event === 'MessageMention') {
+                            const botId = evt.room.replace('user:', '');
+                            internalBus.emit('assistantMention', {
+                                channelId: evt.data.channelId,
+                                messageId: evt.data.messageId,
+                                content: evt.data.content,
+                                author: evt.data.author,
+                                botId,
+                                timestamp: evt.data.timestamp,
+                            });
+                        }
                     }
                 }
 
@@ -253,10 +269,14 @@ export async function buildApp(opts?: {
     await app.register(fileRoutes);
     await app.register(botRoutes);
     await app.register(threadRoutes);
+    await app.register(aiConfigRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);
     app.decorate('io', io);
+
+    // Start built-in AI assistant handler
+    startAssistantHandler(db, io);
 
     return { app, db };
 }

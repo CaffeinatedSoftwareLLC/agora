@@ -200,6 +200,45 @@ export const botApi = {
     api.patch<{ channelId: string; maxBotHops: number }>(`/channels/${channelId}/bot-config`, data),
 };
 
+// ─── AI Config API ───
+
+export interface AIConfig {
+  configured: boolean;
+  provider?: string;
+  model?: string;
+  botId?: string | null;
+  systemPrompt?: string | null;
+  maxContext?: number;
+  enabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AIUsageStats {
+  total_requests: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  avg_latency_ms: number;
+  error_count: number;
+}
+
+export const aiApi = {
+  getConfig: (serverId: string) =>
+    api.get<AIConfig>(`/servers/${serverId}/ai-config`),
+
+  updateConfig: (serverId: string, data: { provider: string; model: string; apiKey: string; systemPrompt?: string | null; maxContext?: number }) =>
+    api.put<AIConfig>(`/servers/${serverId}/ai-config`, data),
+
+  patchConfig: (serverId: string, data: { enabled: boolean }) =>
+    api.patch<{ enabled: boolean }>(`/servers/${serverId}/ai-config`, data),
+
+  testConnection: (serverId: string, data: { provider: string; model: string; apiKey: string }) =>
+    api.post<{ ok: boolean; error?: string }>(`/servers/${serverId}/ai-config/test`, data),
+
+  getUsage: (serverId: string, days?: number) =>
+    api.get<AIUsageStats>(`/servers/${serverId}/ai-config/usage${days ? `?days=${days}` : ''}`),
+};
+
 export const voiceApi = {
   getToken: (channelId: string) =>
     api.post<{ token: string; url: string }>('/voice/token', { channelId }),

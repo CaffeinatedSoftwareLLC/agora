@@ -17,6 +17,7 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
 
   const navItems: { to: string; label: string; end: boolean }[] = [
     { to: '/settings/bots', label: 'Bots', end: false },
+    { to: '/settings/ai', label: 'AI Assistant', end: false },
   ];
 
   if (isAdmin) {

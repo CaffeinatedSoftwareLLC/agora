@@ -16,7 +16,7 @@ export async function resolveMentions(
     content: string | null,
 ): Promise<{ mentionedUsers: { id: string; bot: boolean }[]; mentionsEveryone: boolean }> {
     const mentionContent = content || '';
-    const mentionMatches: string[] = mentionContent.match(/@(\w+)/g) || [];
+    const mentionMatches: string[] = mentionContent.match(/@([\w-]+)/g) || [];
     const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
     const mentionsEveryone = mentionedUsernames.includes('everyone');
 

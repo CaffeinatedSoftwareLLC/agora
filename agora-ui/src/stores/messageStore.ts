@@ -27,6 +27,7 @@ export interface Message {
   deletedAt?: string;
   pending?: boolean;
   failed?: boolean;
+  streaming?: boolean;
   systemEvent?: string;
   attachments?: Attachment[];
   replyCount?: number;
@@ -48,6 +49,7 @@ interface MessageState {
   updateMessage: (payload: MessageUpdatePayload) => void;
   removeMessage: (payload: MessageDeletePayload) => void;
   updateThreadMetadata: (channelId: string, messageId: string, replyCount: number, lastReplyAt: string | null, threadClosedAt?: string | null) => void;
+  streamUpdate: (messageId: string, channelId: string, content: string, streaming: boolean) => void;
 
   clearChannel: (channelId: string) => void;
   clear: () => void;
@@ -359,6 +361,22 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           ? { ...m, replyCount, lastReplyAt: lastReplyAt ?? undefined, threadClosedAt: threadClosedAt ?? undefined }
           : m
       ));
+      return { byChannel: nextByChannel };
+    });
+  },
+
+  streamUpdate: (messageId, channelId, content, streaming) => {
+    set((state) => {
+      const nextByChannel = new Map(state.byChannel);
+      const current = nextByChannel.get(channelId);
+      if (!current) return state;
+
+      nextByChannel.set(channelId, current.map((m) => {
+        if (m.id !== messageId) return m;
+        // Ignore updates after stream has been finalized
+        if (m.streaming === false) return m;
+        return { ...m, content, streaming };
+      }));
       return { byChannel: nextByChannel };
     });
   },
