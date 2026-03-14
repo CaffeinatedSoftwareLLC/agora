@@ -410,7 +410,7 @@ export async function botRoutes(app: FastifyInstance) {
 
     // POST /servers/:serverId/bots/:id/tokens → 201 { tokenId, token, name }
     app.post('/servers/:serverId/bots/:id/tokens', {
-        preHandler: [requireManageBots, requireBotOwnerOrAdmin],
+        preHandler: [requireBotOwnerOrAdmin],
         schema: {
             body: {
                 type: 'object',
@@ -444,7 +444,7 @@ export async function botRoutes(app: FastifyInstance) {
 
     // GET /servers/:serverId/bots/:id/tokens → 200 [{ id, name, lastUsedAt, createdAt, revokedAt }]
     app.get('/servers/:serverId/bots/:id/tokens', {
-        preHandler: [requireManageBots, requireBotOwnerOrAdmin],
+        preHandler: [requireBotOwnerOrAdmin],
     }, async (request, reply) => {
         const { id: botId } = request.params as any;
         const db = request.dbClient!;
@@ -472,7 +472,7 @@ export async function botRoutes(app: FastifyInstance) {
 
     // DELETE /servers/:serverId/bots/:id/tokens/:tokenId → 200 { revoked: true }
     app.delete('/servers/:serverId/bots/:id/tokens/:tokenId', {
-        preHandler: [requireManageBots, requireBotOwnerOrAdmin],
+        preHandler: [requireBotOwnerOrAdmin],
     }, async (request, reply) => {
         const { id: botId, tokenId } = request.params as any;
         const db = request.dbClient!;
@@ -535,6 +535,14 @@ export async function botRoutes(app: FastifyInstance) {
         if (result.rows.length === 0) {
             return reply.status(404).send({ error: 'Bot does not have access to this channel' });
         }
+
+        // Eject bot sockets from the channel room after commit
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
+            event: '_leaveRoom',
+            room: `user:${botId.trim()}`,
+            data: { channelId: channelId.trim() },
+        });
 
         return reply.status(200).send({ removed: true });
     });

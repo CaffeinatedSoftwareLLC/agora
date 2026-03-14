@@ -41,10 +41,12 @@ export function ThreadPanel() {
   const threadClosedAt = parentMessage?.threadClosedAt;
   const isClosed = !!threadClosedAt;
 
-  // Determine canClose from active threads or author check
+  // Determine canClose from active threads, author check, or closed-thread fallback.
+  // For closed threads (not in activeThreads), show the button — the backend enforces
+  // permissions on the PATCH endpoint, so unauthorized attempts are safely rejected.
   const threadSummary = (activeThreads.get(openThreadChannelId) ?? []).find(t => t.id === openThreadId);
   const isAuthor = parentMessage?.authorId === user?.id;
-  const canClose = threadSummary?.canClose || isAuthor;
+  const canClose = threadSummary?.canClose || isAuthor || isClosed;
 
   const handleToggleClose = async () => {
     if (isClosed) {

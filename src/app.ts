@@ -182,6 +182,17 @@ export async function buildApp(opts?: {
                             } catch { /* best-effort room join */ }
                         }
 
+                        // For _leaveRoom, eject sockets from a channel room (e.g. bot access revoked)
+                        if (evt.event === '_leaveRoom' && evt.data?.channelId) {
+                            try {
+                                const sockets = await io.in(evt.room).fetchSockets();
+                                for (const s of sockets) {
+                                    s.leave(`channel:${evt.data.channelId}`);
+                                }
+                            } catch { /* best-effort room leave */ }
+                            continue; // internal event, don't emit to clients
+                        }
+
                         io.to(evt.room).emit(evt.event, evt.data);
 
                         // Dispatch built-in assistant mentions via internal bus
