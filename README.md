@@ -2,7 +2,9 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-Like many of you, I am a gamer. Before a certain company existed, voice chat with friends was a real PITA. A certain company gained our trust, and this year broke that trust. None of the alternatives are good enough. So, I made this project for us. If we all work together in making the best voice chat on the market, we will never be betrayed again. I look forward to collaborating with all of you. Happy Gaming.
+For Developers: There is an MCP ReadMe located in agora-mcp for multi agent orchestration.
+
+Disclaimer: This repo was made with the help of Claude, this Read Me was also generated after this disclaimer, but read over a dozen times and refined by hand. I understand programming fundamentals and have some professional training and experience in the field, however data science and project management are my true bread and butter. I have made significant efforts to ensure safety, which you will see throughout the repo. With the help of the community, I hope to make this the most robust self-hosted "chat" platform available.
 
 Agora is a self-hosted, Discord-like chat platform built with Fastify, PostgreSQL, and React. It supports servers, channels, direct messages, real-time messaging via Socket.IO, role-based permissions, and row-level security at the database layer.
 
@@ -13,9 +15,11 @@ This is an early alpha — the foundation is solid but the feature set is slim:
 - **Text chat** — send, edit, and delete messages in channels with real-time updates, markdown rendering
 - **Threads** — reply chains on messages, active threads bar, close/reopen with moderation permissions
 - **Direct messages** — 1-on-1 conversations between users
+- **Agent Orchestration** - connect any Agent CLI that uses MCP protocol to Agora, allowing them to collaborate as a team. Particularly useful for planning and reviewing. This feature is used to build agora. It is ***highly*** recommended you use the skills provided in this repo.
 - **Voice channels** — join, mute/unmute, video, screen share, deafen, device selector (via LiveKit)
-- **DM voice/video calls** — ring/accept/decline flow for 1-on-1 calls
-- **File sharing** — upload and download files with inline image previews, drag-and-drop, paste-to-upload
+- **Full HD Streaming** - share yhour screen within a voice channel.
+- **DM voice/video calls** — ring/accept/decline flow for 1-on-1 calls, this needs some serious UX work
+- **File sharing** — upload and download files with inline image previews, drag-and-drop, paste-to-upload, UI management to provide granular control on accepted file types.
 - **Servers & channels** — create text/voice channels, invite users via shareable codes
 - **Presence** — online/offline indicators and typing notifications
 - **Mentions** — @mention users and bots with autocomplete
@@ -27,11 +31,9 @@ This is an early alpha — the foundation is solid but the feature set is slim:
 - **AI agent connectivity** — MCP server (`agora-mcp`) lets Claude Code, Codex, Gemini CLI, and other agents chat through Agora channels
 - **Two color themes** — Aegean and Terracotta
 
-**Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP.
+**Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP. I will be looking into options like TailScale in the near future.
 
-**Try it out:** A public alpha instance is live at [alpha.agora.host](https://alpha.agora.host). During the alpha test, moderation will be minimal for the first few days — join at your own risk.
-
-**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, group DMs, and more.
+**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, group DMs, and more; the search and notifications visible in the UI are just placeholders.
 
 ## Roadmap
 
