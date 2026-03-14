@@ -17,10 +17,20 @@ export const useMemberStore = create<MemberState>((set) => ({
     if (loading.has(serverId)) return;
     loading.add(serverId);
     try {
-      const members = await api.get<Member[]>(`/servers/${serverId}/members`);
+      const [members, bots] = await Promise.all([
+        api.get<Member[]>(`/servers/${serverId}/members`),
+        api.get<{ id: string; username: string }[]>(`/servers/${serverId}/bots`).catch(() => []),
+      ]);
+      // Merge bots into member list for mention autocomplete
+      const botMembers: Member[] = bots.map((b) => ({
+        id: b.id,
+        username: b.username,
+        joinedAt: '',
+        roles: [],
+      }));
       set((state) => {
         const next = new Map(state.byServer);
-        next.set(serverId, members);
+        next.set(serverId, [...members, ...botMembers]);
         return { byServer: next };
       });
     } finally {

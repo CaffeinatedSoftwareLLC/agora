@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { Server } from 'socket.io';
 import { verifyToken } from './auth/tokens';
 import { isTokenBlacklisted } from './auth/token-blacklist';
+import { parseBotToken, verifyBotSecret } from './auth/bot-tokens';
 import { config } from './config';
 
 // In-memory presence: userId → Set of socket IDs (supports multiple tabs/devices)
@@ -13,8 +14,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         cors: { origin: config.corsOrigin ?? false },
     });
 
-    const jwtSecret = (app as any).jwtSecret;
-    const db = (app as any).db;
+    const jwtSecret = app.jwtSecret;
+    const db = app.db;
 
     // Initialization gate — reject connections before instance is set up
     io.use(async (_socket, next) => {
@@ -31,12 +32,49 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         }
     });
 
-    // Auth middleware — verify JWT from handshake + check account_status
+    // Auth middleware — verify JWT or bot token from handshake
     io.use(async (socket, next) => {
         const token = socket.handshake.auth?.token;
+        const type = socket.handshake.auth?.type;
+
         if (!token) {
             return next(new Error('Authentication required'));
         }
+
+        // Bot auth path
+        if (type === 'bot') {
+            try {
+                const parsed = parseBotToken(token);
+                if (!parsed) {
+                    return next(new Error('Malformed bot token'));
+                }
+
+                const tokenRow = await db.query(
+                    'SELECT id, bot_id, secret_hash FROM bot_tokens WHERE id = $1 AND revoked_at IS NULL',
+                    [parsed.tokenId]
+                );
+                if (!tokenRow.rows[0]) {
+                    return next(new Error('Invalid bot token'));
+                }
+
+                const valid = await verifyBotSecret(parsed.secret, tokenRow.rows[0].secret_hash);
+                if (!valid) {
+                    return next(new Error('Invalid bot token'));
+                }
+
+                (socket as any).userId = tokenRow.rows[0].bot_id;
+                (socket as any).isBot = true;
+
+                // Update last_used_at (fire and forget)
+                db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
+
+                return next();
+            } catch {
+                return next(new Error('Invalid bot token'));
+            }
+        }
+
+        // Human JWT auth path
         try {
             const payload = verifyToken(token, jwtSecret);
             (socket as any).userId = payload.userId;
@@ -73,6 +111,33 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     io.on('connection', async (socket) => {
         const userId = (socket as any).userId;
 
+        // === BOT BRANCH — early return, skip human hydration ===
+        if ((socket as any).isBot) {
+            try {
+                // Join user:{id} room (for MessageMention delivery)
+                socket.join(`user:${userId.trim()}`);
+
+                // Join channel rooms from bot_channel_access
+                const channels = await db.query(
+                    'SELECT channel_id FROM bot_channel_access WHERE bot_id = $1',
+                    [userId]
+                );
+                for (const row of channels.rows) {
+                    socket.join(`channel:${row.channel_id.trim()}`);
+                }
+
+                // Emit simplified BotReady (not human Ready)
+                socket.emit('BotReady', {
+                    botId: userId.trim(),
+                    channels: channels.rows.map((r: any) => r.channel_id.trim()),
+                });
+            } catch {
+                socket.disconnect();
+            }
+            return;  // CRITICAL: skip human hydration below
+        }
+
+        // === HUMAN PATH — existing code unchanged ===
         try {
             // Join user-specific room for targeted events (e.g. ServerJoin)
             socket.join(`user:${userId.trim()}`);

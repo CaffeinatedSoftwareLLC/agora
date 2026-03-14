@@ -19,14 +19,20 @@ export interface Message {
   content: string | null;
   authorId: string;
   authorUsername: string;
+  authorBot?: boolean;
+  authorAvatarUrl?: string | null;
   channelId: string;
   createdAt: string;
   editedAt?: string;
   deletedAt?: string;
   pending?: boolean;
   failed?: boolean;
+  streaming?: boolean;
   systemEvent?: string;
   attachments?: Attachment[];
+  replyCount?: number;
+  lastReplyAt?: string;
+  threadClosedAt?: string;
 }
 
 interface MessageState {
@@ -42,6 +48,8 @@ interface MessageState {
   addMessage: (msg: MessagePayload) => void;
   updateMessage: (payload: MessageUpdatePayload) => void;
   removeMessage: (payload: MessageDeletePayload) => void;
+  updateThreadMetadata: (channelId: string, messageId: string, replyCount: number, lastReplyAt: string | null, threadClosedAt?: string | null) => void;
+  streamUpdate: (messageId: string, channelId: string, content: string, streaming: boolean) => void;
 
   clearChannel: (channelId: string) => void;
   clear: () => void;
@@ -62,12 +70,15 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       content: m.content,
       authorId: m.authorId,
       authorUsername: m.authorUsername ?? '',
+      authorBot: m.authorBot,
+      authorAvatarUrl: m.authorAvatarUrl,
       channelId: m.channelId,
       createdAt: m.createdAt,
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
       attachments: m.attachments,
+      ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -104,12 +115,15 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       content: m.content,
       authorId: m.authorId,
       authorUsername: m.authorUsername ?? '',
+      authorBot: m.authorBot,
+      authorAvatarUrl: m.authorAvatarUrl,
       channelId: m.channelId,
       createdAt: m.createdAt,
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
       attachments: m.attachments,
+      ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
     // Hydrate reaction store — always write so stale entries get cleared
     const reactionStore = useReactionStore.getState();
@@ -273,6 +287,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           content: msg.content,
           authorId: msg.authorId,
           authorUsername: msg.authorUsername,
+          authorBot: msg.authorBot,
+          authorAvatarUrl: msg.authorAvatarUrl,
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
@@ -290,6 +306,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           content: msg.content,
           authorId: msg.authorId,
           authorUsername: msg.authorUsername,
+          authorBot: msg.authorBot,
+          authorAvatarUrl: msg.authorAvatarUrl,
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
@@ -328,6 +346,37 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           ? { ...m, content: null, deletedAt: payload.deletedAt }
           : m
       ));
+      return { byChannel: nextByChannel };
+    });
+  },
+
+  updateThreadMetadata: (channelId, messageId, replyCount, lastReplyAt, threadClosedAt?) => {
+    set((state) => {
+      const nextByChannel = new Map(state.byChannel);
+      const current = nextByChannel.get(channelId);
+      if (!current) return state;
+
+      nextByChannel.set(channelId, current.map((m) =>
+        m.id === messageId
+          ? { ...m, replyCount, lastReplyAt: lastReplyAt ?? undefined, threadClosedAt: threadClosedAt ?? undefined }
+          : m
+      ));
+      return { byChannel: nextByChannel };
+    });
+  },
+
+  streamUpdate: (messageId, channelId, content, streaming) => {
+    set((state) => {
+      const nextByChannel = new Map(state.byChannel);
+      const current = nextByChannel.get(channelId);
+      if (!current) return state;
+
+      nextByChannel.set(channelId, current.map((m) => {
+        if (m.id !== messageId) return m;
+        // Ignore updates after stream has been finalized
+        if (m.streaming === false) return m;
+        return { ...m, content, streaming };
+      }));
       return { byChannel: nextByChannel };
     });
   },

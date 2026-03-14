@@ -9,7 +9,7 @@ export interface AdminStats {
 export interface AdminUser {
   id: string;
   username: string;
-  email: string;
+  email: string | null;
   accountStatus: 'active' | 'pending' | 'suspended';
   isInstanceAdmin: boolean;
   createdAt: string;

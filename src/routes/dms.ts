@@ -15,22 +15,25 @@ export async function dmRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { recipientId } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Can't DM yourself
         if (userId.trim() === recipientId.trim()) {
             return reply.status(400).send({ error: 'Cannot create DM with yourself' });
         }
 
-        // Verify recipient exists
+        // Verify recipient exists and is not a bot
         const recipientCheck = await db.query(
-            'SELECT id FROM users WHERE id = $1',
+            'SELECT id, bot FROM users WHERE id = $1',
             [recipientId]
         );
         if (recipientCheck.rows.length === 0) {
             return reply.status(404).send({ error: 'Recipient not found' });
+        }
+        if (recipientCheck.rows[0].bot) {
+            return reply.status(400).send({ error: 'Cannot create DM with a bot' });
         }
 
         // Normalize ordering: user_a < user_b (lexicographic on trimmed values)
@@ -79,7 +82,7 @@ export async function dmRoutes(app: FastifyInstance) {
 
                 // Queue DMCreated events so both users' sockets join the new channel room
                 const trimmedId = channelId.trim();
-                const pendingEvents = (request as any).pendingEvents = (request as any).pendingEvents || [];
+                const pendingEvents = request.pendingEvents = request.pendingEvents || [];
                 pendingEvents.push({
                     room: `user:${userA}`,
                     event: 'DMCreated',

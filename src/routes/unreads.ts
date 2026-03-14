@@ -16,9 +16,9 @@ export async function unreadRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { channelId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { messageId } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const isMember = await checkChannelMembership(db, channelId, userId);
         if (!isMember) {
@@ -52,8 +52,8 @@ export async function unreadRoutes(app: FastifyInstance) {
     // GET /channels/:channelId/unreads → 200 { channelId, lastReadId, mentionCount, unreadCount }
     app.get('/channels/:channelId/unreads', async (request, reply) => {
         const { channelId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const isMember = await checkChannelMembership(db, channelId, userId);
         if (!isMember) {
@@ -96,8 +96,8 @@ export async function unreadRoutes(app: FastifyInstance) {
 
     // GET /unreads → 200 [{ channelId, lastReadId, mentionCount, unreadCount }]
     app.get('/unreads', async (request, reply) => {
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Get all channels the user is a member of:
         // Server channels (via server_members) + DM/group channels (via channel_members)

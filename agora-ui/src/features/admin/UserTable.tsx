@@ -153,7 +153,7 @@ export function UserTable() {
               users.map((user) => (
                 <tr key={user.id} className="border-b border-border">
                   <td className="py-3 pr-4">{user.username}</td>
-                  <td className="py-3 pr-4 text-text-muted">{user.email}</td>
+                  <td className="py-3 pr-4 text-text-muted">{user.email ?? '—'}</td>
                   <td className="py-3 pr-4">
                     <StatusChip status={user.accountStatus} />
                   </td>

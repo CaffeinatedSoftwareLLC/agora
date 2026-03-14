@@ -24,6 +24,8 @@ export interface MessagePayload {
   content: string;
   authorId: string;
   authorUsername: string;
+  authorBot?: boolean;
+  authorAvatarUrl?: string | null;
   channelId: string;
   createdAt: string;
   editedAt?: string;
@@ -33,6 +35,10 @@ export interface MessagePayload {
   reactions?: { emoji: string; count: number; me: boolean }[];
   systemEvent?: string;
   attachments?: MessageAttachmentPayload[];
+  threadId?: string;
+  replyCount?: number;
+  lastReplyAt?: string;
+  threadClosedAt?: string;
 }
 
 export interface MessageUpdatePayload {
@@ -40,12 +46,22 @@ export interface MessageUpdatePayload {
   channelId: string;
   content: string;
   editedAt: string;
+  threadId?: string;
 }
 
 export interface MessageDeletePayload {
   id: string;
   channelId: string;
   deletedAt: string;
+  threadId?: string;
+}
+
+export interface ThreadMetadataUpdatePayload {
+  channelId: string;
+  messageId: string;
+  replyCount: number;
+  lastReplyAt: string | null;
+  threadClosedAt?: string | null;
 }
 
 export interface ServerJoinPayload {
@@ -96,3 +112,10 @@ export interface CallDeclinedPayload { callId: string; }
 export interface CallCancelledPayload { callId: string; }
 export interface CallTimeoutPayload { callId: string; }
 export interface CallEndedPayload { callId: string; duration?: number; }
+
+export interface BotMessageStreamPayload {
+    messageId: string;
+    channelId: string;
+    content: string;
+    streaming: boolean;
+}

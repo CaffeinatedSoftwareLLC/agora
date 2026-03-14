@@ -1,6 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
-import { checkChannelMembership } from './shared';
+import { checkChannelMembership, resolveMentions } from './shared';
+import { loadAndComputePermissions } from './bots';
+import { Permissions } from '../permissions';
+import { getRedis } from '../auth/token-blacklist';
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -25,19 +28,98 @@ export async function messageRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
+        const isBot = request.isBot;
         const { content: rawContent, attachments: attachmentIds } = request.body as any;
         const content = rawContent || null;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
 
+        // Fetch channel details (needed for mention resolution, loop guard, rate limiting)
+        const channelRow = await db.query(
+            'SELECT server_id, max_bot_hops, bot_rate_limit FROM channels WHERE id = $1',
+            [channelId]
+        );
+        const serverId = channelRow.rows[0]?.server_id?.trim() || null;
+        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 4;
+        const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
+
+        // ─── Bot rate limiting (per-bot, per-channel, Redis sliding window) ───
+        if (isBot) {
+            try {
+                const redis = getRedis();
+                const rateKey = `botrate:${userId}:${channelId}`;
+                const count = await redis.incr(rateKey);
+                if (count === 1) await redis.expire(rateKey, 60);
+
+                if (count > botRateLimit) {
+                    const retryAfter = await redis.ttl(rateKey);
+                    return reply.code(429).send({
+                        error: 'Rate limited',
+                        retryAfter,
+                    });
+                }
+            } catch { /* Redis failure is non-fatal */ }
+        }
+
+        // ─── Loop guard (per-channel, consecutive bot messages) ───
+        // maxBotHops === 0 means loop guard is disabled
+        if (isBot && maxBotHops > 0) {
+            try {
+                const redis = getRedis();
+                const guardKey = `loopguard:${channelId}`;
+                const count = await redis.incr(guardKey);
+                if (count === 1) await redis.expire(guardKey, 300);
+
+                if (count > maxBotHops) {
+                    await redis.del(guardKey);
+
+                    // Create system message
+                    const sysId = generateUlid();
+                    await db.query(
+                        `INSERT INTO messages (id, channel_id, author_id, content, system_event)
+                         VALUES ($1, $2, NULL, $3, 'loop_guard')`,
+                        [sysId, channelId,
+                         `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`]
+                    );
+
+                    request.pendingEvents ??= [];
+                    request.pendingEvents.push({
+                        room: `channel:${channelId.trim()}`,
+                        event: 'Message',
+                        data: {
+                            id: sysId.trim(),
+                            content: `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`,
+                            authorId: null,
+                            authorUsername: null,
+                            channelId: channelId.trim(),
+                            createdAt: new Date().toISOString(),
+                            systemEvent: 'loop_guard',
+                        },
+                    });
+                    request.pendingEvents.push({
+                        room: `channel:${channelId.trim()}`,
+                        event: 'ChannelLoopGuard',
+                        data: { channelId: channelId.trim(), paused: true },
+                    });
+
+                    return reply.status(429).send({ error: 'Loop guard triggered' });
+                }
+            } catch { /* Redis failure is non-fatal */ }
+        } else if (!isBot) {
+            // Human message resets loop guard counter
+            try {
+                await getRedis().del(`loopguard:${channelId}`);
+            } catch { /* non-fatal */ }
+        }
+
         const messageId = generateUlid();
 
-        // Parse @mentions from content
+        // Parse and resolve @mentions (shared helper)
         const mentionContent = content || '';
         const mentionMatches: string[] = mentionContent.match(/@(\w+)/g) || [];
         const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
@@ -49,84 +131,7 @@ export async function messageRoutes(app: FastifyInstance) {
             [messageId, channelId, userId, content, mentionsEveryone]
         );
 
-        // Look up the channel to determine how to check membership for mentioned users
-        const channelRow = await db.query(
-            'SELECT server_id FROM channels WHERE id = $1',
-            [channelId]
-        );
-        const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-
-        // Resolve mentioned usernames to user IDs (batch query)
-        const nonEveryoneUsernames = mentionedUsernames.filter((u: string) => u !== 'everyone');
-        let mentionedUserIds: string[] = [];
-
-        if (nonEveryoneUsernames.length > 0) {
-            // Find users that exist AND are members of this channel/server
-            let validMentions;
-            if (serverId) {
-                validMentions = await db.query(
-                    `SELECT u.id FROM users u
-                     INNER JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2
-                     WHERE u.username = ANY($1)`,
-                    [nonEveryoneUsernames, serverId]
-                );
-            } else {
-                validMentions = await db.query(
-                    `SELECT u.id FROM users u
-                     INNER JOIN channel_members cm ON cm.user_id = u.id AND cm.channel_id = $2
-                     WHERE u.username = ANY($1)`,
-                    [nonEveryoneUsernames, channelId]
-                );
-            }
-
-            mentionedUserIds = validMentions.rows.map((r: any) => r.id.trim());
-
-            // Insert into message_mentions
-            if (mentionedUserIds.length > 0) {
-                const mentionValues = mentionedUserIds
-                    .map((_: string, i: number) => `($1, $${i + 2})`)
-                    .join(', ');
-                await db.query(
-                    `INSERT INTO message_mentions (message_id, user_id) VALUES ${mentionValues}
-                     ON CONFLICT DO NOTHING`,
-                    [messageId, ...mentionedUserIds]
-                );
-
-                // Increment mention_count for each directly mentioned user
-                await db.query(
-                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
-                     SELECT $1, unnest($2::char(26)[]), 1
-                     ON CONFLICT (channel_id, user_id) DO UPDATE
-                        SET mention_count = channel_unreads.mention_count + 1`,
-                    [channelId, mentionedUserIds]
-                );
-            }
-        }
-
-        // If @everyone, increment mention_count for all channel members except the author
-        if (mentionsEveryone) {
-            if (serverId) {
-                await db.query(
-                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
-                     SELECT $1, sm.user_id, 1
-                     FROM server_members sm
-                     WHERE sm.server_id = $2 AND sm.user_id != $3
-                     ON CONFLICT (channel_id, user_id) DO UPDATE
-                        SET mention_count = channel_unreads.mention_count + 1`,
-                    [channelId, serverId, userId]
-                );
-            } else {
-                await db.query(
-                    `INSERT INTO channel_unreads (channel_id, user_id, mention_count)
-                     SELECT $1, cm.user_id, 1
-                     FROM channel_members cm
-                     WHERE cm.channel_id = $1 AND cm.user_id != $2
-                     ON CONFLICT (channel_id, user_id) DO UPDATE
-                        SET mention_count = channel_unreads.mention_count + 1`,
-                    [channelId, userId]
-                );
-            }
-        }
+        const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
 
         // Validate and bind attachments
         let resolvedAttachments: any[] = [];
@@ -184,15 +189,48 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         const userRow = await db.query(
-            'SELECT username FROM users WHERE id = $1',
+            'SELECT username, bot, avatar_url FROM users WHERE id = $1',
             [userId]
         );
+
+        const mentionedUserIds = mentionedUsers.map(u => u.id);
+
+        // Phase 2: Fire MessageMention events for bot mentions (post-commit via pendingEvents).
+        // Placed after all validation gates so events are only queued for successful creates.
+        if (serverId) {
+            const botMentions = mentionedUsers.filter(u => u.bot);
+            if (botMentions.length > 0 && !isBot) {
+                // Only human senders can trigger bot mentions; check UseBots permission
+                const senderPerms = await loadAndComputePermissions(db, userId, serverId);
+                const hasUseBots = !!(senderPerms & Permissions.UseBots) || !!(senderPerms & Permissions.Administrator);
+
+                if (hasUseBots) {
+                    request.pendingEvents ??= [];
+                    const timestamp = new Date().toISOString();
+                    for (const botMention of botMentions) {
+                        request.pendingEvents.push({
+                            room: `user:${botMention.id}`,
+                            event: 'MessageMention',
+                            data: {
+                                channelId: channelId.trim(),
+                                messageId: messageId.trim(),
+                                content,
+                                author: { id: userId.trim(), username: userRow.rows[0].username },
+                                timestamp,
+                            },
+                        });
+                    }
+                }
+            }
+        }
 
         const message = {
             id: messageId.trim(),
             content,
             authorId: userId.trim(),
             authorUsername: userRow.rows[0].username,
+            authorBot: userRow.rows[0].bot || false,
+            authorAvatarUrl: userRow.rows[0].avatar_url || null,
             channelId: channelId.trim(),
             createdAt: new Date().toISOString(),
             mentions: mentionedUserIds,
@@ -201,12 +239,17 @@ export async function messageRoutes(app: FastifyInstance) {
         };
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'Message',
             data: message,
         });
+
+        // Stash for idempotency cache (written in onResponse after COMMIT)
+        if (request.idempotencyKey) {
+            request.idempotencyResponseBody = message;
+        }
 
         return reply.status(201).send(message);
     });
@@ -214,11 +257,11 @@ export async function messageRoutes(app: FastifyInstance) {
     // GET /channels/:id/messages?limit&before → 200 [{ id, content, authorId, authorUsername, channelId, editedAt, deletedAt, createdAt }]
     app.get('/channels/:id/messages', async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { limit: rawLimit, before } = request.query as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
@@ -232,19 +275,21 @@ export async function messageRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username, m.system_event
+                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
+                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
-                     WHERE m.channel_id = $1 AND m.id < $2
+                     WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
                      ORDER BY m.id DESC
                      LIMIT $3`;
             params = [channelId, before, limit];
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            u.username AS author_username, m.system_event
+                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
+                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
-                     WHERE m.channel_id = $1
+                     WHERE m.channel_id = $1 AND m.thread_id IS NULL
                      ORDER BY m.id DESC
                      LIMIT $2`;
             params = [channelId, limit];
@@ -307,6 +352,8 @@ export async function messageRoutes(app: FastifyInstance) {
             content: row.content,
             authorId: row.author_id ? row.author_id.trim() : null,
             authorUsername: row.author_username ?? null,
+            authorBot: row.author_bot || false,
+            authorAvatarUrl: row.author_avatar_url || null,
             channelId: row.channel_id.trim(),
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,
@@ -314,6 +361,7 @@ export async function messageRoutes(app: FastifyInstance) {
             reactions: reactionsMap[row.id.trim()] || [],
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
+            ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at } : {}) } : {}),
         }));
 
         return reply.status(200).send(messages);
@@ -332,18 +380,18 @@ export async function messageRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { content } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
 
         // Find the message
         const msg = await db.query(
-            'SELECT id, author_id FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, author_id, thread_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (msg.rows.length === 0) {
@@ -362,13 +410,20 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const updated = result.rows[0];
+        const threadId = msg.rows[0].thread_id?.trim() || undefined;
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageUpdate',
-            data: { id: updated.id.trim(), channelId: channelId.trim(), content: updated.content, editedAt: updated.edited_at },
+            data: {
+                id: updated.id.trim(),
+                channelId: channelId.trim(),
+                content: updated.content,
+                editedAt: updated.edited_at,
+                ...(threadId ? { threadId } : {}),
+            },
         });
 
         return reply.status(200).send({
@@ -381,17 +436,17 @@ export async function messageRoutes(app: FastifyInstance) {
     // DELETE /channels/:id/messages/:msgId → 200 { id, deletedAt }
     app.delete('/channels/:id/messages/:msgId', async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
+        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
         if (!isMember) {
             return reply.status(403).send({ error: 'Not a member of this channel' });
         }
 
         // Find the message
         const msg = await db.query(
-            'SELECT id, author_id FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, author_id, thread_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (msg.rows.length === 0) {
@@ -410,13 +465,46 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const deleted = result.rows[0];
+        const threadId = msg.rows[0].thread_id?.trim() || undefined;
+
+        // If this was a thread reply, update the parent's metadata
+        if (threadId) {
+            const parentUpdate = await db.query(
+                `UPDATE messages SET
+                    reply_count = GREATEST(reply_count - 1, 0),
+                    last_reply_at = (SELECT m2.created_at FROM messages m2 WHERE m2.thread_id = $1 AND m2.deleted_at IS NULL AND m2.id != $2 ORDER BY m2.id DESC LIMIT 1)
+                 WHERE id = $1
+                 RETURNING reply_count, last_reply_at, thread_closed_at`,
+                [threadId, msgId]
+            );
+
+            if (parentUpdate.rows.length > 0) {
+                request.pendingEvents = request.pendingEvents || [];
+                request.pendingEvents.push({
+                    room: `channel:${channelId.trim()}`,
+                    event: 'ThreadMetadataUpdate',
+                    data: {
+                        channelId: channelId.trim(),
+                        messageId: threadId,
+                        replyCount: parentUpdate.rows[0].reply_count,
+                        lastReplyAt: parentUpdate.rows[0].last_reply_at,
+                        threadClosedAt: parentUpdate.rows[0].thread_closed_at ?? null,
+                    },
+                });
+            }
+        }
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageDelete',
-            data: { id: deleted.id.trim(), channelId: channelId.trim(), deletedAt: deleted.deleted_at },
+            data: {
+                id: deleted.id.trim(),
+                channelId: channelId.trim(),
+                deletedAt: deleted.deleted_at,
+                ...(threadId ? { threadId } : {}),
+            },
         });
 
         return reply.status(200).send({

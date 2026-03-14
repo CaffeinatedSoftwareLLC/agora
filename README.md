@@ -2,7 +2,9 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-Like many of you, I am a gamer. Before a certain company existed, voice chat with friends was a real PITA. A certain company gained our trust, and this year broke that trust. None of the alternatives are good enough. So, I made this project for us. If we all work together in making the best voice chat on the market, we will never be betrayed again. I look forward to collaborating with all of you. Happy Gaming.
+For Developers: There is an MCP ReadMe located in agora-mcp for multi agent orchestration.
+
+Disclaimer: This repo was made with the help of Claude, this Read Me was also generated after this disclaimer, but read over a dozen times and refined by hand. I understand programming fundamentals and have some professional training and experience in the field, however data science and project management are my true bread and butter. I have made significant efforts to ensure safety, which you will see throughout the repo. With the help of the community, I hope to make this the most robust self-hosted "chat" platform available.
 
 Agora is a self-hosted, Discord-like chat platform built with Fastify, PostgreSQL, and React. It supports servers, channels, direct messages, real-time messaging via Socket.IO, role-based permissions, and row-level security at the database layer.
 
@@ -10,36 +12,43 @@ Agora is a self-hosted, Discord-like chat platform built with Fastify, PostgreSQ
 
 This is an early alpha — the foundation is solid but the feature set is slim:
 
-- **Text chat** — send, edit, and delete messages in channels with real-time updates
+- **Text chat** — send, edit, and delete messages in channels with real-time updates, markdown rendering
+- **Threads** — reply chains on messages, active threads bar, close/reopen with moderation permissions
 - **Direct messages** — 1-on-1 conversations between users
+- **Agent Orchestration** - connect any Agent CLI that uses MCP protocol to Agora, allowing them to collaborate as a team. Particularly useful for planning and reviewing. This feature is used to build agora. It is ***highly*** recommended you use the skills provided in this repo.
 - **Voice channels** — join, mute/unmute, video, screen share, deafen, device selector (via LiveKit)
-- **DM voice/video calls** — ring/accept/decline flow for 1-on-1 calls
-- **File sharing** — upload and download files with inline image previews, drag-and-drop, paste-to-upload
+- **Full HD Streaming** - share yhour screen within a voice channel.
+- **DM voice/video calls** — ring/accept/decline flow for 1-on-1 calls, this needs some serious UX work
+- **File sharing** — upload and download files with inline image previews, drag-and-drop, paste-to-upload, UI management to provide granular control on accepted file types.
 - **Servers & channels** — create text/voice channels, invite users via shareable codes
 - **Presence** — online/offline indicators and typing notifications
-- **Mentions** — @mention users with autocomplete
+- **Mentions** — @mention users and bots with autocomplete
 - **Reactions** — emoji reactions on messages
 - **Unread tracking** — badge counts on channels and DMs
 - **Admin panel** — user management, storage settings, registration approval
+- **Server settings** — bot management, channel loop guard configuration, moderation tools
+- **Bot / agent infrastructure** — create bots with API tokens, avatars, @mention-based coordination, per-channel loop guard, rate limiting
+- **AI agent connectivity** — MCP server (`agora-mcp`) lets Claude Code, Codex, Gemini CLI, and other agents chat through Agora channels
 - **Two color themes** — Aegean and Terracotta
 
-**Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP.
+**Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP. I will be looking into options like TailScale in the near future.
 
-**Try it out:** A public alpha instance is live at [alpha.agora.host](https://alpha.agora.host). Note that you currently cannot see who is in a voice room until you join it. During the alpha test, moderation will be minimal for the first few days — join at your own risk.
-
-**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, server settings, and more.
+**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, group DMs, and more; the search and notifications visible in the UI are just placeholders.
 
 ## Roadmap
 
 Roughly in priority order. No ETAs — this is a community project, not a product launch.
 
-- [ ] Voice channel participant visibility (see who's in a room without joining)
+- [x] Voice channel participant visibility (see who's in a room without joining)
+- [x] Bot / agent infrastructure (tokens, channel access, rate limiting, loop guard)
+- [x] AI agent connectivity (MCP server for Claude Code, Codex, Gemini CLI)
+- [x] Message threads (reply chains, close/reopen, moderation)
+- [x] Server settings UI (bot management, channel config, moderation)
+- [x] Markdown rendering in messages
 - [ ] Roles and permissions UI (backend already supports this)
-- [ ] Server settings (name, icon, moderation options)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)
 - [ ] Notifications (desktop + in-app)
-- [ ] Message replies and threads
 - [ ] Group DMs
 - [ ] Custom emoji
 - [ ] Mobile-friendly / responsive UI
@@ -58,6 +67,7 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 | Auth | Argon2 password hashing, JWT tokens |
 | Real-time | Socket.IO 4 (WebSocket-only, no polling) |
 | Voice / video | LiveKit |
+| AI agent connectivity | agora-mcp (MCP server) |
 | IDs | ULID (26-char, chronologically sortable) |
 | Frontend framework | React 19 |
 | Build tool | Vite 7 |
@@ -77,55 +87,23 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 
 The entire stack runs in Docker. One command builds and starts everything.
 
-### 1. Clone and configure secrets
+### 1. Clone and configure
 
 ```bash
 git clone <repo-url> agora
 cd agora
-cp .env.prod.example .env.prod
+node scripts/setup-env.js --prod
 ```
 
-Edit `.env.prod` and set the required values:
+The setup script generates all secrets automatically and walks you through a few questions:
 
-| Variable | How to generate |
-|---|---|
-| `DB_PASSWORD` | Any strong password |
-| `JWT_SECRET` | `openssl rand -base64 32` |
-| `MINIO_ROOT_PASSWORD` | Any strong password |
-| `AGORA_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `LIVEKIT_API_KEY` | Must match `livekit.prod.yaml` (see voice setup below) |
-| `LIVEKIT_API_SECRET` | Must match `livekit.prod.yaml` (see voice setup below) |
-| `CORS_ORIGIN` | Your domain (e.g., `https://chat.example.com`) |
+- **Database password** — press Enter to accept the auto-generated default, or type your own
+- **Domain** — your server's domain (e.g., `chat.example.com`)
+- **LiveKit keys** — optional, for voice/video channels. Press Enter to skip (voice will be disabled but everything else works)
 
-### Voice chat setup (LiveKit)
+This creates `.env.prod` (and `livekit.prod.yaml` if you provided LiveKit keys). To regenerate, run with `--force`.
 
-Voice channels require [LiveKit](https://livekit.io/). The prod Docker stack includes a LiveKit container that reads its config from `livekit.prod.yaml` in the project root.
-
-1. Generate an API key and secret:
-
-```bash
-# Key (short identifier)
-openssl rand -hex 16
-
-# Secret (long random string)
-openssl rand -hex 32
-```
-
-2. Put them in `livekit.prod.yaml`:
-
-```yaml
-keys:
-  your-api-key: your-api-secret
-```
-
-3. Set the **same values** in `.env.prod`:
-
-```
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-```
-
-If you skip this, everything else works — voice channels will just return a "not configured" error.
+> **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `MINIO_ROOT_PASSWORD`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each.
 
 ### 2. Build and start
 
@@ -207,10 +185,10 @@ cd agora-ui && npm install && cd ..
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env
+node scripts/setup-env.js
 ```
 
-Defaults work out of the box for local development.
+This generates `.env` with random secrets from `.env.example`. No prompts — defaults work out of the box for local development.
 
 ### 3. Start infrastructure
 
@@ -370,21 +348,23 @@ agora/
 │   ├── index.ts                  # Entry point
 │   ├── app.ts                    # App builder — hooks, middleware, routes
 │   ├── config.ts                 # Environment variable configuration
-│   ├── gateway.ts                # Socket.IO WebSocket gateway
+│   ├── gateway.ts                # Socket.IO WebSocket gateway (human + bot auth)
 │   ├── permissions.ts            # Bitmask-based permission system
-│   ├── auth/                     # JWT auth, Argon2 passwords
+│   ├── auth/                     # JWT auth, Argon2 passwords, bot token auth
 │   ├── db/
 │   │   ├── migrate.ts            # Migration runner
-│   │   └── migrations/           # SQL migration files
+│   │   └── migrations/           # SQL migration files (001–020)
 │   ├── instance/                 # Instance setup and initialization
 │   ├── lib/                      # Shared utilities (MinIO, encryption, file validation)
-│   ├── routes/                   # All route handlers
+│   ├── routes/                   # All route handlers (servers, messages, bots, threads, etc.)
 │   └── workers/                  # Background workers (file cleanup)
 ├── test/                         # Unit and integration tests
 ├── agora-ui/                     # React frontend
-│   ├── src/features/             # Feature modules (auth, admin, messages, voice, etc.)
-│   ├── src/stores/               # Zustand state stores
+│   ├── src/features/             # Feature modules (auth, admin, messages, voice, settings, moderation, etc.)
+│   ├── src/stores/               # Zustand state stores (11 stores incl. threadStore)
 │   └── src/lib/                  # API client, Socket.IO, type contracts
+├── agora-mcp/                    # MCP server for AI agent connectivity
+├── scripts/                      # Utility scripts (setup-env.js)
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
 ├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + MinIO + LiveKit)
 ├── docker-compose.prod.yml       # Full production stack

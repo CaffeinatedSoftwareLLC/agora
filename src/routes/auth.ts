@@ -28,7 +28,7 @@ export async function authRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { username, email, password, inviteCode } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Read registration policy from instance_config
         const policyResult = await db.query(
@@ -148,7 +148,7 @@ export async function authRoutes(app: FastifyInstance) {
         }
 
         // For open and invite_only: return token
-        const token = generateToken({ userId: id }, (app as any).jwtSecret);
+        const token = generateToken({ userId: id }, app.jwtSecret);
 
         return reply.status(201).send({
             user: { id, username },
@@ -159,7 +159,7 @@ export async function authRoutes(app: FastifyInstance) {
     // POST /auth/login
     app.post('/auth/login', async (request, reply) => {
         const { email, password } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
         const ipKey = (app as any).ipEncryptionKey as Buffer;
         const clientIp = request.ip;
         const ipHmac = hmacIp(clientIp, ipKey);
@@ -204,7 +204,7 @@ export async function authRoutes(app: FastifyInstance) {
             [ipHmac, ipEncrypted, user.id.trim()]
         );
 
-        const token = generateToken({ userId: user.id.trim() }, (app as any).jwtSecret);
+        const token = generateToken({ userId: user.id.trim() }, app.jwtSecret);
 
         return reply.status(200).send({
             user: { id: user.id.trim(), username: user.username, isInstanceAdmin: user.is_instance_admin },
@@ -220,7 +220,7 @@ export async function authRoutes(app: FastifyInstance) {
         }
 
         try {
-            const payload = verifyToken(raw, (app as any).jwtSecret);
+            const payload = verifyToken(raw, app.jwtSecret);
             if (payload.jti && payload.exp) {
                 await blacklistToken(payload.jti, payload.exp);
             }

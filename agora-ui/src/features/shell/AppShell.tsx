@@ -9,6 +9,8 @@ import { DMSidebar } from './DMSidebar';
 import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
+import { ThreadPanel } from '../messages/ThreadPanel';
+import { useThreadStore } from '../../stores/threadStore';
 import { VoiceChannelProvider } from '../voice/VoiceChannelProvider';
 import { IncomingCallOverlay } from '../calls/IncomingCallOverlay';
 import { OutgoingCallOverlay } from '../calls/OutgoingCallOverlay';
@@ -23,6 +25,25 @@ export function AppShell() {
   const byServer = useChannelStore(s => s.byServer);
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
+  const openThreadId = useThreadStore(s => s.openThreadId);
+
+  // Sync palette → CSS custom properties so Tailwind classes follow the active theme
+  useEffect(() => {
+    const s = document.documentElement.style;
+    s.setProperty('--color-bg', P.bg);
+    s.setProperty('--color-surface', P.surface);
+    s.setProperty('--color-surface-hover', P.surfaceHover);
+    s.setProperty('--color-primary', P.primary);
+    s.setProperty('--color-primary-hover', P.primaryHover);
+    s.setProperty('--color-accent', P.accent);
+    s.setProperty('--color-text', P.text);
+    s.setProperty('--color-text-muted', P.muted);
+    s.setProperty('--color-text-dim', P.dim);
+    s.setProperty('--color-border', P.border);
+    s.setProperty('--color-online', P.online);
+    s.setProperty('--color-danger', P.danger);
+    s.setProperty('--color-warn', P.warn);
+  }, [P]);
 
   // URL: /app/dms/{channelId} or /app/{channelId} or /app
   const urlSegment1 = params['*']?.split('/')[0] || null;
@@ -94,6 +115,7 @@ export function AppShell() {
           {showDmSidebar ? <DMSidebar /> : <ArcChannelSidebar />}
           <ArcContentArea />
           {!isDm && membersOpen && <MembersSidebar />}
+          {openThreadId && <ThreadPanel />}
         </div>
       </div>
       <IncomingCallOverlay />

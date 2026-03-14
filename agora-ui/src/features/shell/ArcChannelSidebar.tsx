@@ -9,6 +9,7 @@ import { useVoiceStore } from '../../stores/voiceStore';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { usePalette, hexToRgb } from '../../theme';
+import { useServerAccess } from '../../hooks/useServerAccess';
 import { ArcUserPanel } from './ArcUserPanel';
 import { InviteModal } from '../servers/InviteModal';
 import { CreateChannelModal } from '../servers/CreateChannelModal';
@@ -250,6 +251,7 @@ export function ArcChannelSidebar() {
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
   const joinVoiceChannel = useVoiceStore(s => s.joinChannel);
   const voiceConnectionState = useVoiceStore(s => s.connectionState);
+  const { hasModerationAccess, hasServerAdminAccess } = useServerAccess(instanceServerId);
 
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(['Text Channels', 'Voice Channels']),
@@ -274,14 +276,13 @@ export function ArcChannelSidebar() {
     return byServer(instanceServerId).filter(c => c.channelType === 4);
   }, [instanceServerId, byServer]);
 
-  // Count online members for this server
+  // Count online members for this server (reactive to presence + member changes)
+  const members = useMemberStore(s => instanceServerId ? s.byServer.get(instanceServerId) : undefined);
+  const presenceMap = usePresenceStore(s => s.status);
   const onlineCount = useMemo(() => {
-    if (!instanceServerId) return 0;
-    const members = useMemberStore.getState().byServer.get(instanceServerId);
     if (!members) return 0;
-    const presenceStore = usePresenceStore.getState();
-    return members.filter(m => presenceStore.getStatus(m.id) === 'online').length;
-  }, [instanceServerId]);
+    return members.filter(m => presenceMap.get(m.id) === 'online').length;
+  }, [members, presenceMap]);
 
   const toggleCategory = (name: string) => {
     setExpandedCategories((prev) => {
@@ -391,26 +392,51 @@ export function ArcChannelSidebar() {
               </svg>
             </button>
 
-            {/* More menu button */}
-            <button
-              className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
-              style={{ color: P.dim }}
-              title="Options"
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+            {/* Moderation button (shield) */}
+            {hasModerationAccess && (
+              <button
+                onClick={() => navigate('/moderation')}
+                className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
+                style={{ color: P.dim }}
+                title="Moderation"
               >
-                <circle cx="12" cy="12" r="1" />
-                <circle cx="12" cy="5" r="1" />
-                <circle cx="12" cy="19" r="1" />
-              </svg>
-            </button>
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+              </button>
+            )}
+
+            {/* More menu button → Server Settings */}
+            {hasServerAdminAccess && (
+              <button
+                onClick={() => navigate('/settings')}
+                className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
+                style={{ color: P.dim }}
+                title="Server Settings"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="1" />
+                  <circle cx="12" cy="5" r="1" />
+                  <circle cx="12" cy="19" r="1" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
       </div>

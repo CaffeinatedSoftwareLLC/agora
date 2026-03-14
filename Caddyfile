@@ -1,4 +1,4 @@
-alpha.agora.host {
+{$DOMAIN:localhost} {
     # LiveKit WebSocket signaling (must be before the catch-all)
     handle /rtc* {
         reverse_proxy livekit:7880

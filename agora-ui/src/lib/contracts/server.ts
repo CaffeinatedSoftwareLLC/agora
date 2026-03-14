@@ -9,6 +9,7 @@ export interface Channel {
   name: string;
   channelType: number;
   serverId: string | null;
+  maxBotHops?: number;
 }
 
 export interface Member {
@@ -51,4 +52,11 @@ export interface UserSearchResult {
 export interface CreateDMResponse {
   id: string;
   channelType: number;
+}
+
+export interface ServerAccess {
+  permissions: string;
+  isInstanceAdmin: boolean;
+  hasModerationAccess: boolean;
+  hasServerAdminAccess: boolean;
 }

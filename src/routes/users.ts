@@ -15,12 +15,12 @@ export async function userRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { q } = request.query as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const result = await db.query(
             `SELECT id, username FROM users
-             WHERE username ILIKE $1 AND id != $2
+             WHERE username ILIKE $1 AND id != $2 AND bot = false
              LIMIT 20`,
             [q + '%', userId]
         );

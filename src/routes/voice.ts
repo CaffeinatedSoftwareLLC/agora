@@ -102,7 +102,7 @@ async function voiceAdminCheck(
 ): Promise<{ serverId: string; roomName: string } | null> {
     const actorId = request.userId;
     const { channelId } = request.body;
-    const db = request.dbClient;
+    const db = request.dbClient!;
 
     // Verify channel exists and is voice type (channel_type = 4)
     const channelResult = await db.query(
@@ -211,9 +211,9 @@ export async function voiceRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { channelId } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Verify channel exists and is voice type (channel_type = 4)
         const channelResult = await db.query(
@@ -301,9 +301,9 @@ export async function voiceRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { channelId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Verify channel exists and is voice type
         const channelResult = await db.query(
@@ -484,9 +484,9 @@ export async function voiceRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { channelId } = request.params as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         // Verify channel exists and is voice type
         const channelResult = await db.query(

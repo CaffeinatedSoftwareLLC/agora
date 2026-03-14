@@ -13,6 +13,16 @@ import { InstanceSettings } from './features/admin/InstanceSettings';
 import { StorageSettings } from './features/admin/StorageSettings';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
+import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
+import { ServerAdminGuard } from './features/settings/ServerAdminGuard';
+import { BotManagement } from './features/settings/BotManagement';
+import { AISettings } from './features/settings/AISettings';
+import { RoleManagement } from './features/settings/RoleManagement';
+import { RoleAssignment } from './features/settings/RoleAssignment';
+import { ChannelOverrides } from './features/settings/ChannelOverrides';
+import { ModerationGuard } from './features/moderation/ModerationGuard';
+import { ModerationLayout } from './features/moderation/ModerationLayout';
+import { MemberList } from './features/moderation/MemberList';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 
 export default function App() {
@@ -35,17 +45,52 @@ export default function App() {
                           <Route index element={<AdminDashboard />} />
                           <Route path="pending" element={<PendingQueue />} />
                           <Route path="users" element={<UserTable />} />
-                          <Route path="settings" element={<InstanceSettings />} />
-                          <Route path="storage" element={<StorageSettings />} />
+                          <Route path="settings" element={<Navigate to="/settings/instance" replace />} />
+                          <Route path="storage" element={<Navigate to="/settings/storage" replace />} />
                         </Routes>
                       </AdminLayout>
                     </AdminGuard>
                   </AuthGuard>
                 } />
+                {/* Shared SocketProvider for /app and /settings */}
                 <Route path="/app/*" element={
                   <AuthGuard>
                     <SocketProvider>
                       <AppShell />
+                    </SocketProvider>
+                  </AuthGuard>
+                } />
+                <Route path="/settings/*" element={
+                  <AuthGuard>
+                    <SocketProvider>
+                      <ServerAdminGuard>
+                        <ServerSettingsLayout>
+                          <Routes>
+                            <Route index element={<Navigate to="/settings/roles" replace />} />
+                            <Route path="roles" element={<RoleManagement />} />
+                            <Route path="role-assign" element={<RoleAssignment />} />
+                            <Route path="overrides" element={<ChannelOverrides />} />
+                            <Route path="bots" element={<BotManagement />} />
+                            <Route path="ai" element={<AISettings />} />
+                            <Route path="instance" element={<AdminGuard><InstanceSettings /></AdminGuard>} />
+                            <Route path="storage" element={<AdminGuard><StorageSettings /></AdminGuard>} />
+                          </Routes>
+                        </ServerSettingsLayout>
+                      </ServerAdminGuard>
+                    </SocketProvider>
+                  </AuthGuard>
+                } />
+                <Route path="/moderation/*" element={
+                  <AuthGuard>
+                    <SocketProvider>
+                      <ModerationGuard>
+                        <ModerationLayout>
+                          <Routes>
+                            <Route index element={<Navigate to="/moderation/members" replace />} />
+                            <Route path="members" element={<MemberList />} />
+                          </Routes>
+                        </ModerationLayout>
+                      </ModerationGuard>
                     </SocketProvider>
                   </AuthGuard>
                 } />

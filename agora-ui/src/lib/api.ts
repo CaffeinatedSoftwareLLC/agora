@@ -6,6 +6,7 @@ import type {
   JoinServerResponse,
   UserSearchResult,
   CreateDMResponse,
+  ServerAccess,
 } from './contracts/server';
 
 export class ApiError extends Error {
@@ -66,6 +67,9 @@ export const serverApi = {
 
   getChannels: (serverId: string) =>
     api.get<Channel[]>(`/servers/${serverId}/channels`),
+
+  getAccess: (serverId: string) =>
+    api.get<ServerAccess>(`/servers/${serverId}/access`),
 };
 
 export const userApi = {
@@ -131,6 +135,149 @@ export function getAuthHeaders(): Record<string, string> {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+// ─── Bot Management API ───
+
+export interface Bot {
+  id: string;
+  username: string;
+  ownerId: string | null;
+  createdAt: string;
+  avatarUrl?: string | null;
+}
+
+export interface BotDetail extends Bot {
+  canManageTokens: boolean;
+  channels: { id: string; name: string; channelType: number }[];
+}
+
+export interface BotToken {
+  id: string;
+  name: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export interface CreateTokenResponse {
+  tokenId: string;
+  token: string;
+  name: string | null;
+}
+
+export const botApi = {
+  list: (serverId: string) =>
+    api.get<Bot[]>(`/servers/${serverId}/bots`),
+
+  get: (serverId: string, botId: string) =>
+    api.get<BotDetail>(`/servers/${serverId}/bots/${botId}`),
+
+  create: (serverId: string, username: string) =>
+    api.post<Bot & { bot: true; serverId: string }>(`/servers/${serverId}/bots`, { username }),
+
+  update: (serverId: string, botId: string, data: { username?: string; avatarUrl?: string | null }) =>
+    api.patch<{ id: string; username: string; avatarUrl: string | null }>(`/servers/${serverId}/bots/${botId}`, data),
+
+  remove: (serverId: string, botId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/bots/${botId}`),
+
+  createToken: (serverId: string, botId: string, name?: string) =>
+    api.post<CreateTokenResponse>(`/servers/${serverId}/bots/${botId}/tokens`, { name }),
+
+  listTokens: (serverId: string, botId: string) =>
+    api.get<BotToken[]>(`/servers/${serverId}/bots/${botId}/tokens`),
+
+  revokeToken: (serverId: string, botId: string, tokenId: string) =>
+    api.delete<{ revoked: true }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}`),
+
+  grantChannel: (channelId: string, botId: string) =>
+    api.post<{ botId: string; channelId: string }>(`/channels/${channelId}/bots/${botId}`),
+
+  revokeChannel: (channelId: string, botId: string) =>
+    api.delete<{ removed: true }>(`/channels/${channelId}/bots/${botId}`),
+
+  updateChannelBotConfig: (channelId: string, data: { maxBotHops: number }) =>
+    api.patch<{ channelId: string; maxBotHops: number }>(`/channels/${channelId}/bot-config`, data),
+};
+
+// ─── AI Config API ───
+
+export interface AIConfig {
+  configured: boolean;
+  provider?: string;
+  model?: string;
+  botId?: string | null;
+  systemPrompt?: string | null;
+  maxContext?: number;
+  enabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AIUsageStats {
+  total_requests: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  avg_latency_ms: number;
+  error_count: number;
+}
+
+export const aiApi = {
+  getConfig: (serverId: string) =>
+    api.get<AIConfig>(`/servers/${serverId}/ai-config`),
+
+  updateConfig: (serverId: string, data: { provider: string; model: string; apiKey: string; systemPrompt?: string | null; maxContext?: number }) =>
+    api.put<AIConfig>(`/servers/${serverId}/ai-config`, data),
+
+  patchConfig: (serverId: string, data: { enabled: boolean }) =>
+    api.patch<{ enabled: boolean }>(`/servers/${serverId}/ai-config`, data),
+
+  testConnection: (serverId: string, data: { provider: string; model: string; apiKey: string }) =>
+    api.post<{ ok: boolean; error?: string }>(`/servers/${serverId}/ai-config/test`, data),
+
+  getUsage: (serverId: string, days?: number) =>
+    api.get<AIUsageStats>(`/servers/${serverId}/ai-config/usage${days ? `?days=${days}` : ''}`),
+};
+
+// ─── Role Management API ───
+
+import type { Role, ChannelOverrides as ChannelOverridesType } from './contracts/roles';
+
+export const roleApi = {
+  list: (serverId: string) =>
+    api.get<Role[]>(`/servers/${serverId}/roles`),
+
+  create: (serverId: string, data: { name: string; color?: string; hoist?: boolean; permissions?: string; mentionable?: boolean }) =>
+    api.post<Role>(`/servers/${serverId}/roles`, data),
+
+  update: (serverId: string, roleId: string, data: Record<string, unknown>) =>
+    api.patch<Role>(`/servers/${serverId}/roles/${roleId}`, data),
+
+  remove: (serverId: string, roleId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/roles/${roleId}`),
+
+  assignRole: (serverId: string, userId: string, roleId: string) =>
+    api.put<{ assigned: true }>(`/servers/${serverId}/members/${userId}/roles/${roleId}`),
+
+  removeRole: (serverId: string, userId: string, roleId: string) =>
+    api.delete<{ removed: true }>(`/servers/${serverId}/members/${userId}/roles/${roleId}`),
+
+  // Channel overrides
+  getOverrides: (channelId: string) =>
+    api.get<ChannelOverridesType>(`/channels/${channelId}/overrides`),
+
+  upsertRoleOverride: (channelId: string, roleId: string, data: { allow: string; deny: string }) =>
+    api.put(`/channels/${channelId}/overrides/roles/${roleId}`, data),
+
+  removeRoleOverride: (channelId: string, roleId: string) =>
+    api.delete(`/channels/${channelId}/overrides/roles/${roleId}`),
+
+  upsertMemberOverride: (channelId: string, userId: string, data: { allow: string; deny: string }) =>
+    api.put(`/channels/${channelId}/overrides/members/${userId}`, data),
+
+  removeMemberOverride: (channelId: string, userId: string) =>
+    api.delete(`/channels/${channelId}/overrides/members/${userId}`),
+};
 
 export const voiceApi = {
   getToken: (channelId: string) =>

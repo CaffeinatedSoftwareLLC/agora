@@ -14,10 +14,12 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Invites](#invites)
 - [Channels](#channels)
 - [Messages](#messages)
+- [Threads](#threads)
 - [Reactions](#reactions)
 - [Unreads](#unreads)
 - [Direct Messages](#direct-messages)
 - [Users](#users)
+- [Bots](#bots)
 - [Admin](#admin)
 - [WebSocket Gateway](#websocket-gateway)
 
@@ -25,13 +27,23 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 
 ## Authentication
 
-Most endpoints require a Bearer token in the `Authorization` header:
+Most endpoints require a token in the `Authorization` header. Two auth schemes are supported:
+
+### Human auth (Bearer)
 
 ```
 Authorization: Bearer <accessToken>
 ```
 
-Tokens are JWTs issued by `/auth/login`, `/auth/register`, or `/instance/setup`.
+Tokens are JWTs issued by `/auth/login`, `/auth/register`, or `/instance/setup`. Account status must be `active` -- accounts with `pending` or `suspended` status receive `403`.
+
+### Bot auth
+
+```
+Authorization: Bot bot_<tokenId>.<secret>
+```
+
+Bot tokens are created via the bot management API. Bot auth is restricted to an allowlist of routes: message endpoints, channel listing, cursor endpoints, and bot self-info (`/bots/@me`). Bot requests support an `Idempotency-Key` header for safe retries.
 
 **Unauthenticated routes** (no token required):
 - `GET /health`
@@ -40,7 +52,7 @@ Tokens are JWTs issued by `/auth/login`, `/auth/register`, or `/instance/setup`.
 - `POST /auth/register`
 - `POST /auth/login`
 
-All other routes require authentication. Account status must be `active` -- accounts with `pending` or `suspended` status receive `403`.
+All other routes require authentication.
 
 ---
 
@@ -562,6 +574,144 @@ Soft-delete a message. Sets `content` to `NULL` and records `deleted_at`. Only t
 
 ---
 
+## Threads
+
+### POST /channels/:id/messages/:msgId/replies
+
+Create a reply to a message, starting or continuing a thread.
+
+**Auth:** Required (must have access to the channel)
+
+**Request Body**
+```json
+{
+  "content": "This is a reply"
+}
+```
+
+| Field     | Type   | Required | Constraints      |
+|-----------|--------|----------|------------------|
+| `content` | string | yes      | 1-4000 characters |
+
+**Response** `201`
+```json
+{
+  "id": "01HYX...",
+  "content": "This is a reply",
+  "authorId": "01HYX...",
+  "authorUsername": "alice",
+  "channelId": "01HYX...",
+  "threadId": "01HYX...",
+  "createdAt": "2025-01-15T10:30:00.000Z",
+  "mentions": [],
+  "mentionsEveryone": false
+}
+```
+
+**Errors**
+
+| Status | Error                          | Cause                              |
+|--------|--------------------------------|------------------------------------|
+| 403    | `Not a member of this channel` | User lacks channel access          |
+| 404    | `Parent message not found`     | Message does not exist or is deleted |
+| 409    | `Thread is closed`             | Thread has been closed             |
+
+**Side effects:**
+- Broadcasts `Message` event with `threadId` to the channel room
+- Emits `ThreadMetadataUpdate` with updated `replyCount` and `lastReplyAt`
+
+---
+
+### GET /channels/:id/messages/:msgId/replies
+
+Fetch replies in a thread with cursor-based pagination. Returns oldest first.
+
+**Auth:** Required (must have access to the channel)
+
+**Query Parameters**
+
+| Param    | Type   | Required | Default | Constraints                   |
+|----------|--------|----------|---------|-------------------------------|
+| `limit`  | number | no       | 50      | 1-100                         |
+| `before` | string | no       | -       | ULID cursor                   |
+
+**Response** `200` — array of message objects with `threadId` field.
+
+---
+
+### GET /channels/:id/threads
+
+List active (non-closed) threads in a channel, ordered by most recent reply.
+
+**Auth:** Required (must have access to the channel)
+
+**Query Parameters**
+
+| Param    | Type   | Required | Default | Constraints |
+|----------|--------|----------|---------|-------------|
+| `limit`  | number | no       | 25      | 1-50        |
+| `before` | string | no       | -       | ISO timestamp cursor for pagination |
+
+**Response** `200`
+```json
+[
+  {
+    "id": "01HYX...",
+    "content": "Parent message content",
+    "authorId": "01HYX...",
+    "authorUsername": "alice",
+    "channelId": "01HYX...",
+    "replyCount": 5,
+    "lastReplyAt": "2025-01-15T12:00:00.000Z",
+    "threadClosedAt": null,
+    "canClose": true,
+    "preview": [
+      { "id": "01HYX...", "content": "Latest reply", "authorUsername": "bob" }
+    ]
+  }
+]
+```
+
+The `preview` contains up to 2 most recent replies (via LATERAL join). `canClose` indicates whether the requesting user has permission to close the thread.
+
+---
+
+### PATCH /channels/:id/messages/:msgId/thread
+
+Close or reopen a thread. Requires the message author, ManageMessages permission, or Administrator.
+
+**Auth:** Required
+
+**Request Body**
+```json
+{
+  "closed": true
+}
+```
+
+| Field    | Type    | Required | Description |
+|----------|---------|----------|-------------|
+| `closed` | boolean | yes      | `true` to close, `false` to reopen |
+
+**Response** `200`
+```json
+{
+  "messageId": "01HYX...",
+  "threadClosedAt": "2025-01-15T12:00:00.000Z"
+}
+```
+
+**Errors**
+
+| Status | Error                 | Cause                                |
+|--------|-----------------------|--------------------------------------|
+| 403    | `forbidden`           | User lacks permission to close/reopen |
+| 404    | `not_a_thread_parent` | Message is not a thread parent       |
+
+**Side effects:** Emits `ThreadMetadataUpdate` with updated `threadClosedAt`.
+
+---
+
 ## Reactions
 
 ### PUT /channels/:channelId/messages/:msgId/reactions
@@ -811,6 +961,112 @@ Returns up to 20 results. Matching is case-insensitive (`ILIKE`).
 
 ---
 
+## Bots
+
+Bot management endpoints. Most require `ManageBots` permission on the server. Token management routes additionally require the caller to be the bot's owner or a server administrator.
+
+### POST /servers/:id/bots
+
+Create a bot in a server. Returns the bot and an initial token (shown once).
+
+**Auth:** Required (ManageBots permission)
+
+**Request Body**
+```json
+{
+  "name": "my-bot",
+  "avatarUrl": "data:image/png;base64,..."
+}
+```
+
+| Field      | Type   | Required | Constraints                    |
+|------------|--------|----------|--------------------------------|
+| `name`     | string | yes      | 1-32 characters                |
+| `avatarUrl`| string | no       | data:image/* base64 URI, max 50KB |
+
+**Response** `201`
+```json
+{
+  "bot": {
+    "id": "01HYX...",
+    "username": "my-bot",
+    "serverId": "01HYX...",
+    "ownerId": "01HYX...",
+    "avatarUrl": "data:image/png;base64,..."
+  },
+  "token": {
+    "id": "01HYX...",
+    "fullToken": "bot_01HYX.a1b2c3..."
+  }
+}
+```
+
+The `fullToken` is shown only on creation.
+
+---
+
+### GET /servers/:id/bots
+
+List all bots in a server.
+
+**Auth:** Required (ManageBots permission)
+
+---
+
+### GET /bots/@me
+
+Get the authenticated bot's own info.
+
+**Auth:** Bot token required
+
+**Response** `200`
+```json
+{
+  "id": "01HYX...",
+  "username": "my-bot",
+  "serverId": "01HYX...",
+  "channels": [
+    { "id": "01HYX...", "name": "general" }
+  ]
+}
+```
+
+---
+
+### PUT /bots/@me/cursors/:channelId
+
+Update the bot's read cursor for a channel.
+
+**Auth:** Bot token required
+
+**Request Body**
+```json
+{
+  "lastReadId": "01HYX..."
+}
+```
+
+---
+
+### PATCH /channels/:id/bot-config
+
+Update per-channel bot configuration (loop guard limit).
+
+**Auth:** Required (ManageBots permission or server owner)
+
+**Request Body**
+```json
+{
+  "maxBotHops": 10
+}
+```
+
+| Field        | Type    | Required | Description                          |
+|--------------|---------|----------|--------------------------------------|
+| `maxBotHops` | integer | yes      | 0 = disabled, positive = limit       |
+
+---
+
 ## Admin
 
 All admin endpoints require the authenticated user to have `is_instance_admin = true`. The `requireInstanceAdmin` middleware checks this and returns `403 insufficient_permissions` if not satisfied.
@@ -1024,7 +1280,7 @@ const socket = io("http://localhost:3000", {
 });
 ```
 
-**Auth:** JWT token passed via `socket.handshake.auth.token`. The server verifies the token and checks that the user's account status is `active`.
+**Auth:** Token passed via `socket.handshake.auth.token`. Supports both JWT (human) and bot tokens (`Bot bot_<tokenId>.<secret>`). Human connections receive a `Ready` event; bot connections receive a `BotReady` event with a subset of data.
 
 **Connection errors:**
 - `instance_not_initialized` -- instance setup has not been completed
@@ -1087,7 +1343,10 @@ Broadcast to `channel:{channelId}` when a new message is sent.
   "content": "Hello world",
   "authorId": "01HYX...",
   "authorUsername": "alice",
+  "authorBot": false,
+  "authorAvatarUrl": null,
   "channelId": "01HYX...",
+  "threadId": null,
   "createdAt": "2025-01-15T10:30:00.000Z",
   "mentions": ["01HYX..."],
   "mentionsEveryone": false
@@ -1192,6 +1451,67 @@ Broadcast to all channel rooms when a user comes online or goes offline.
 | `status` | string | `"online"`, `"offline"` |
 
 Presence is tracked in-memory per socket. A user is considered online if they have at least one active socket connection. Going offline is broadcast only when the user's last socket disconnects.
+
+---
+
+#### BotReady
+
+Emitted to bot connections after successful authentication. Subset of Ready with only the bot's accessible channels.
+
+```json
+{
+  "user": { "id": "01HYX...", "username": "my-bot" },
+  "channels": [
+    { "id": "01HYX...", "name": "general", "channelType": 3, "serverId": "01HYX..." }
+  ]
+}
+```
+
+---
+
+#### MessageMention
+
+Emitted to the mentioned bot's socket when a message contains `@botname`. Gated by the `UseBots` permission on the channel.
+
+```json
+{
+  "messageId": "01HYX...",
+  "channelId": "01HYX...",
+  "authorId": "01HYX...",
+  "authorUsername": "alice",
+  "content": "Hey @my-bot, do something",
+  "mentionedUserId": "01HYX..."
+}
+```
+
+---
+
+#### ChannelLoopGuard
+
+Emitted to the channel room when bot-to-bot conversation exceeds the channel's `max_bot_hops` limit.
+
+```json
+{
+  "channelId": "01HYX...",
+  "message": "Loop guard triggered — bot conversation limit reached"
+}
+```
+
+---
+
+#### ThreadMetadataUpdate
+
+Emitted to the channel room when a thread's metadata changes (reply created/deleted, thread closed/reopened).
+
+```json
+{
+  "messageId": "01HYX...",
+  "channelId": "01HYX...",
+  "replyCount": 5,
+  "lastReplyAt": "2025-01-15T12:00:00.000Z",
+  "threadClosedAt": null
+}
+```
 
 ---
 

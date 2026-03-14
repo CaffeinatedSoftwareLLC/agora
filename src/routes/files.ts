@@ -84,12 +84,12 @@ export async function fileRoutes(app: FastifyInstance) {
             rateLimit: {
                 max: 20,
                 timeWindow: '1 minute',
-                keyGenerator: (request: any) => (request as any).userId,
+                keyGenerator: (request: any) => request.userId,
             },
         },
     }, async (request, reply) => {
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Parse multipart
         const data = await request.file();
@@ -181,7 +181,7 @@ export async function fileRoutes(app: FastifyInstance) {
         const expiresAt = retentionDays ? new Date(Date.now() + retentionDays * 86400000) : null;
 
         // Quota check using SEPARATE pool client
-        const pool = (app as any).db;
+        const pool = app.db;
         const quotaClient = await pool.connect();
         try {
             await quotaClient.query('BEGIN');
@@ -242,8 +242,8 @@ export async function fileRoutes(app: FastifyInstance) {
     // GET /files/:fileId → binary file content
     app.get('/files/:fileId', async (request, reply) => {
         const { fileId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Fetch file metadata
         const fileRes = await db.query(
@@ -303,8 +303,8 @@ export async function fileRoutes(app: FastifyInstance) {
     // DELETE /files/:fileId → 200 { deleted: true }
     app.delete('/files/:fileId', async (request, reply) => {
         const { fileId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         // Fetch file metadata
         const fileRes = await db.query(

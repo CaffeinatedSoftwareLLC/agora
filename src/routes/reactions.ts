@@ -16,9 +16,9 @@ export async function reactionRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
+        const userId = request.userId;
         const { emoji } = request.body as any;
-        const db = (request as any).dbClient;
+        const db = request.dbClient!;
 
         const isMember = await checkChannelMembership(db, channelId, userId);
         if (!isMember) {
@@ -47,8 +47,8 @@ export async function reactionRoutes(app: FastifyInstance) {
             [msgId, userId, emoji]
         );
 
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ReactionAdd',
             data: { messageId: msgId.trim(), channelId: channelId.trim(), userId: userId.trim(), emoji },
@@ -64,8 +64,8 @@ export async function reactionRoutes(app: FastifyInstance) {
     // DELETE /channels/:channelId/messages/:msgId/reactions/:emoji → 200 { messageId, emoji, userId }
     app.delete('/channels/:channelId/messages/:msgId/reactions/:emoji', async (request, reply) => {
         const { channelId, msgId, emoji: rawEmoji } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
         const emoji = decodeURIComponent(rawEmoji);
 
         const isMember = await checkChannelMembership(db, channelId, userId);
@@ -83,8 +83,8 @@ export async function reactionRoutes(app: FastifyInstance) {
             return reply.status(404).send({ error: 'Reaction not found' });
         }
 
-        (request as any).pendingEvents = (request as any).pendingEvents || [];
-        (request as any).pendingEvents.push({
+        request.pendingEvents = request.pendingEvents || [];
+        request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ReactionRemove',
             data: { messageId: msgId.trim(), channelId: channelId.trim(), userId: userId.trim(), emoji },
@@ -100,8 +100,8 @@ export async function reactionRoutes(app: FastifyInstance) {
     // GET /channels/:channelId/messages/:msgId/reactions → 200 [{ emoji, count, userIds, me }]
     app.get('/channels/:channelId/messages/:msgId/reactions', async (request, reply) => {
         const { channelId, msgId } = request.params as any;
-        const userId = (request as any).userId;
-        const db = (request as any).dbClient;
+        const userId = request.userId;
+        const db = request.dbClient!;
 
         const isMember = await checkChannelMembership(db, channelId, userId);
         if (!isMember) {

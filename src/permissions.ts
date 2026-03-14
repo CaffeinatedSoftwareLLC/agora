@@ -1,4 +1,4 @@
-export const ALL_PERMS_MASK = (1n << 27n) - 1n;
+export const ALL_PERMS_MASK = (1n << 29n) - 1n;
 
 export const Permissions = {
     Administrator:      1n << 0n,
@@ -27,6 +27,8 @@ export const Permissions = {
     VoiceDeafenMembers: 1n << 24n,
     VoiceMoveMembers:   1n << 25n,
     VoicePriority:      1n << 26n,
+    ManageBots:         1n << 27n,
+    UseBots:            1n << 28n,
 } as const;
 
 export const DEFAULT_EVERYONE_PERMS =

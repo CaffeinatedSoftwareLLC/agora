@@ -70,6 +70,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
     environment:
       DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
       REDIS_URL: redis://redis:6379

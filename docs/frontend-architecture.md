@@ -34,7 +34,7 @@ agora-ui/src/
 │       ├── admin.ts            # AdminStats, AdminUser, PendingUser, InstanceConfig
 │       └── ws-events.ts        # All WebSocket event payload types
 │
-├── stores/                     # Zustand state stores (10 stores)
+├── stores/                     # Zustand state stores (11 stores)
 │   ├── authStore.ts
 │   ├── serverStore.ts
 │   ├── channelStore.ts
@@ -44,6 +44,7 @@ agora-ui/src/
 │   ├── reactionStore.ts
 │   ├── typingStore.ts
 │   ├── presenceStore.ts
+│   ├── threadStore.ts
 │   └── uiStore.ts
 │
 ├── hooks/
@@ -63,7 +64,9 @@ agora-ui/src/
     ├── admin/                  # Admin dashboard, user management
     ├── shell/                  # App chrome: layout, socket lifecycle, sidebar
     ├── servers/                # Server/channel CRUD, invites, members
-    ├── messages/               # Message list, input, grouping, actions
+    ├── messages/               # Message list, input, grouping, actions, threads
+    ├── settings/               # Server settings: bot management, channel config
+    ├── moderation/             # Moderation tools: member list, guards
     └── live/                   # Real-time UI: typing, presence, reactions, unreads, mentions
 ```
 
@@ -84,7 +87,10 @@ BrowserRouter
     │   └── /admin/settings    ← InstanceSettings
     ├── /app/*                 ← AuthGuard → SocketProvider → AppShell
     │   ├── /app/:serverId/:channelId   ← Server channel view
-    │   └── /app/dms/:channelId         ← DM channel view
+    │   ├── /app/dms/:channelId         ← DM channel view
+    │   └── /app/:serverId/settings/*   ← ServerAdminGuard → ServerSettingsLayout
+    │       ├── bots                    ← BotManagement
+    │       └── moderation              ← ModerationLayout
     └── *                      ← Redirect to /login
 ```
 
@@ -112,7 +118,7 @@ Not a route guard per se, but wraps the entire `/app/*` subtree. Creates and man
 
 ## State Management (Zustand Stores)
 
-All application state lives in 10 Zustand stores. Stores are vanilla `create()` calls (no middleware). They use `Map` objects for indexed lookups and expose action methods directly on the store interface.
+All application state lives in 11 Zustand stores. Stores are vanilla `create()` calls (no middleware). They use `Map` objects for indexed lookups and expose action methods directly on the store interface.
 
 ### authStore
 
@@ -318,6 +324,41 @@ interface UIState {
 }
 ```
 
+### threadStore
+
+```typescript
+interface ThreadState {
+  activeThread: { messageId: string; channelId: string } | null;
+  replies: Map<string, Message[]>;           // parentMsgId → replies
+  hasMoreReplies: Map<string, boolean>;
+  activeThreads: Map<string, ThreadParent[]>; // channelId → active threads
+  hasMoreThreads: Map<string, boolean>;
+
+  openThread(messageId: string, channelId: string): void;
+  closeThread(): void;
+  loadReplies(channelId: string, messageId: string): Promise<void>;
+  loadOlderReplies(channelId: string, messageId: string): Promise<void>;
+  sendReply(channelId, messageId, content, authorId, authorUsername): Promise<void>;
+  loadActiveThreads(channelId: string): Promise<void>;
+  loadMoreThreads(channelId: string): Promise<void>;
+  closeThreadRemote(channelId: string, messageId: string): Promise<void>;
+  reopenThread(channelId: string, messageId: string): Promise<void>;
+  handleThreadMetadataUpdate(data): void;
+  addReply(msg: Message): void;
+  updateReply(payload): void;
+  removeReply(payload): void;
+  clear(): void;
+}
+```
+
+- `openThread()` / `closeThread()` manage the currently visible thread panel
+- `activeThreads` stores per-channel thread lists with pagination support
+- `handleThreadMetadataUpdate()` updates parent message metadata (reply count, closed state) in both the thread list and message store
+- Thread replies use the same optimistic send pattern as channel messages
+- Closed threads remain in `activeThreads` but are filtered at display time in `ActiveThreadsBar`
+
+---
+
 ## WebSocket Integration
 
 ### Socket Factory (`lib/socketFactory.ts`)
@@ -381,6 +422,7 @@ This makes reconnection safe -- the same Ready handler runs on initial connect a
 | `PresenceUpdate` | `presenceStore.setPresence()` | |
 | `ReactionAdd` | `reactionStore.addReaction()` | Computes `me` flag from current user ID |
 | `ReactionRemove` | `reactionStore.removeReaction()` | |
+| `ThreadMetadataUpdate` | `threadStore.handleThreadMetadataUpdate()` | Updates reply count, last reply time, closed state |
 
 **Fatal connection errors:**
 
@@ -670,13 +712,40 @@ The app chrome -- everything visible after login.
 | Component | Purpose |
 |---|---|
 | `MessageList` | Virtualized scrollable message list with pagination and scroll anchoring |
-| `MessageItem` | Single message row: avatar, username, timestamp, content, reactions. Handles grouped/ungrouped layout |
+| `MessageItem` | Single message row: avatar, username, timestamp, content, reactions. Handles grouped/ungrouped layout. Shows BOT badge for bot messages |
+| `MessageContent` | Renders message text as markdown (react-markdown with curated allowlist) |
 | `MessageInput` | Textarea with auto-resize, Enter-to-send, Shift+Enter for newlines, typing indicator emission, @mention detection |
-| `MessageActions` | Hover overlay with edit/delete buttons (own messages only) |
+| `FloatingMessageInput` | Contextual message input (used in thread panel) |
+| `MessageActions` | Hover overlay with edit/delete/reply buttons (own messages only for edit/delete) |
 | `EditMessageInput` | Inline edit textarea (replaces content when editing) |
+| `ThreadPanel` | Side panel showing a thread's replies with input, close/reopen button |
+| `ThreadIndicator` | Inline indicator on parent messages showing reply count and last reply time |
+| `ActiveThreadsBar` | Bar above messages showing active threads in the channel with pagination |
 | `EmptyChannel` | Empty state shown when a channel has no messages |
 | `NewMessagesPill` | Floating pill showing count of new messages below viewport |
 | `grouping.ts` | `shouldGroup()`, `estimateMessageHeight()`, `computePrependShift()`, `computeScrollCorrection()` |
+
+### `features/settings/`
+
+Server settings UI, accessible to server owners and admins.
+
+| Component | Purpose |
+|---|---|
+| `ServerSettingsLayout` | Sidebar layout with navigation for server settings pages |
+| `ServerAdminGuard` | Route guard checking server ownership or admin role |
+| `BotManagement` | Full bot CRUD UI: create/delete bots, manage tokens, assign channels, configure loop guard |
+| `CreateBotModal` | Form to create a new bot with name and optional avatar |
+| `CreateTokenModal` | Form to generate a new token for an existing bot |
+
+### `features/moderation/`
+
+Server moderation tools.
+
+| Component | Purpose |
+|---|---|
+| `ModerationGuard` | Route guard for moderation pages |
+| `ModerationLayout` | Layout wrapper for moderation sub-pages |
+| `MemberList` | Member list with management actions |
 
 ### `features/live/`
 
