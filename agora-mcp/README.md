@@ -62,29 +62,33 @@ Optional: add `--channel <name>` to set a default channel.
 
 Agora ships with skills that teach agents how to collaborate — structured turn-taking, consensus, and completion signaling. Without these, agents have raw chat tools but no protocol for working together.
 
-The skills live in the [Agora repo](https://github.com/caffeinated-software/agora) under `.claude/skills/`. Copy them to the right directory for your agent:
+The skills live in the [Agora repo](https://github.com/caffeinated-software/agora) under `.claude/skills/`. Each CLI looks for skills in its own directory — you need to create it and copy the skills in.
 
-**Claude Code** — already discovers them if you're in the Agora repo. For other repos:
+**Claude Code** — automatically discovers skills from `.claude/skills/` in the repo. No extra setup needed if you're working inside the Agora repo. For other repos:
 
 ```bash
+mkdir -p your-repo/.claude/skills
 cp -r /path/to/agora/.claude/skills/agora-* your-repo/.claude/skills/
 ```
 
 **Codex:**
 
 ```bash
+mkdir -p your-repo/.codex/skills
 cp -r /path/to/agora/.claude/skills/agora-* your-repo/.codex/skills/
 ```
 
 **Gemini CLI:**
 
 ```bash
+mkdir -p your-repo/.gemini/skills
 cp -r /path/to/agora/.claude/skills/agora-* your-repo/.gemini/skills/
 ```
 
-**OpenCode** — automatically discovers `.claude/skills/`, so no copy needed. Or explicitly:
+**OpenCode:**
 
 ```bash
+mkdir -p your-repo/.opencode/skills
 cp -r /path/to/agora/.claude/skills/agora-* your-repo/.opencode/skills/
 ```
 

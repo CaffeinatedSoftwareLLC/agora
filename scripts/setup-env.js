@@ -118,26 +118,15 @@ async function setupProd() {
     // --- Prompts ---
 
     const defaultDbPassword = strongPassword();
-    const dbPassword = (await rl.question(`  Database password [${defaultDbPassword}]: `)).trim() || defaultDbPassword;
+    const dbPassword = (await rl.question(`  Database password — hit Enter to accept or enter your own [${defaultDbPassword}]: `)).trim() || defaultDbPassword;
 
-    let domain = '';
-    while (!domain) {
-        domain = (await rl.question('  Your domain (e.g., chat.example.com): ')).trim();
-        if (!domain) console.log('  Domain is required.\n');
-    }
-    // Normalize: strip protocol if provided, we'll add https://
-    domain = domain.replace(/^https?:\/\//, '');
-    const corsOrigin = `https://${domain}`;
+    const domain = (await rl.question('  Domain — hit Enter to skip for local setup or enter your own (e.g., chat.example.com): ')).trim();
+    const corsOrigin = domain ? `https://${domain.replace(/^https?:\/\//, '')}` : '';
 
-    console.log(`\n  Voice channels require LiveKit. Leave blank to skip (voice will be disabled).\n`);
-    const livekitKey = (await rl.question('  LiveKit API key (Enter to skip): ')).trim();
-    let livekitSecret = '';
-    if (livekitKey) {
-        livekitSecret = (await rl.question('  LiveKit API secret: ')).trim();
-        if (!livekitSecret) {
-            console.log('  Warning: LiveKit key provided without secret — voice will not work.');
-        }
-    }
+    const defaultLivekitKey = crypto.randomBytes(16).toString('hex');
+    const defaultLivekitSecret = crypto.randomBytes(32).toString('hex');
+    const livekitKey = (await rl.question(`  LiveKit API key — hit Enter to accept or enter your own [${defaultLivekitKey}]: `)).trim() || defaultLivekitKey;
+    const livekitSecret = (await rl.question(`  LiveKit API secret — hit Enter to accept or enter your own [${defaultLivekitSecret}]: `)).trim() || defaultLivekitSecret;
 
     rl.close();
 
@@ -149,8 +138,8 @@ async function setupProd() {
         MINIO_ROOT_PASSWORD: strongPassword(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
         CORS_ORIGIN: corsOrigin,
-        LIVEKIT_API_KEY: livekitKey || 'your-livekit-api-key',
-        LIVEKIT_API_SECRET: livekitSecret || 'your-livekit-api-secret',
+        LIVEKIT_API_KEY: livekitKey,
+        LIVEKIT_API_SECRET: livekitSecret,
     };
 
     // --- Write .env.prod ---
@@ -180,34 +169,77 @@ async function setupProd() {
 
     // --- Write livekit.prod.yaml if keys were provided ---
 
-    if (livekitKey && livekitSecret) {
-        const yamlContent = [
-            '# LiveKit server configuration — keys must match .env.prod',
-            '# See https://docs.livekit.io/home/self-hosting/deployment/',
-            'port: 7880',
-            'rtc:',
-            '  use_external_ip: true',
-            'keys:',
-            `  ${livekitKey}: ${livekitSecret}`,
-            '',
-        ].join('\n');
-        fs.writeFileSync(LIVEKIT_YAML, yamlContent, 'utf8');
-        console.log('  Created livekit.prod.yaml');
-    }
+    const yamlContent = [
+        '# LiveKit server configuration — keys must match .env.prod',
+        '# See https://docs.livekit.io/home/self-hosting/deployment/',
+        'port: 7880',
+        'rtc:',
+        '  use_external_ip: true',
+        'keys:',
+        `  ${livekitKey}: ${livekitSecret}`,
+        '',
+    ].join('\n');
+    fs.writeFileSync(LIVEKIT_YAML, yamlContent, 'utf8');
+    console.log('  Created livekit.prod.yaml');
 
     // --- Summary ---
 
     console.log('\n  =====================================');
-    console.log('  Setup complete! Summary:\n');
-    console.log(`  Domain:          ${domain}`);
-    console.log(`  CORS origin:     ${corsOrigin}`);
-    console.log(`  Voice (LiveKit): ${livekitKey ? 'configured' : 'skipped (voice disabled)'}`);
+    console.log('  Config complete! Summary:\n');
+    console.log(`  Domain:          ${domain || '(none — local mode)'}`);
+    console.log(`  CORS origin:     ${corsOrigin || '(not set — same-origin only)'}`);
+    console.log(`  Voice (LiveKit): configured`);
     console.log(`\n  All secrets have been auto-generated and saved to .env.prod.`);
-    console.log('\n  Next steps:');
-    console.log('  1. Review .env.prod if you want to tweak anything');
-    console.log('  2. Point your DNS to your server');
-    console.log('  3. Run: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build');
-    console.log('');
+
+    // --- Build and start Docker ---
+
+    const { spawnSync, execSync } = require('node:child_process');
+
+    console.log('\n  Building and starting Docker containers...');
+    console.log('  This may take a few minutes on first run.\n');
+
+    const compose = spawnSync(
+        'docker', ['compose', '-f', 'docker-compose.prod.yml', '--env-file', '.env.prod', 'up', '-d', '--build'],
+        { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] }
+    );
+
+    if (compose.status !== 0) {
+        console.error('\n  Docker Compose failed. Check the output above.');
+        process.exit(1);
+    }
+
+    // --- Wait for API and grab setup token ---
+
+    console.log('\n  Waiting for API to start...');
+
+    const maxAttempts = 30;
+    let token = '';
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+            const logs = execSync('docker logs agora-api-1 2>&1', { cwd: ROOT, encoding: 'utf8' });
+            const match = logs.match(/AGORA SETUP TOKEN[^]*?\n\s+([a-f0-9]{64})/);
+            if (match) {
+                token = match[1];
+                break;
+            }
+        } catch { /* container not ready yet */ }
+    }
+
+    const url = domain ? `https://${domain}` : 'http://localhost';
+
+    console.log('\n  =====================================');
+    if (token) {
+        console.log('  Agora is running!\n');
+        console.log(`  Setup token: ${token}\n`);
+        console.log(`  Open ${url} and paste the token to complete setup.`);
+    } else {
+        console.log('  Agora is starting but the setup token was not found yet.');
+        console.log('  Check manually with: docker logs agora-api-1 2>&1 | grep -A 2 "SETUP TOKEN"');
+    }
+    console.log('  =====================================\n');
+
+    // --- Done — user opens browser themselves ---
 }
 
 // ---------------------------------------------------------------------------

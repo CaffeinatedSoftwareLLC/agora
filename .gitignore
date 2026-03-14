@@ -30,10 +30,13 @@ vite.config.ts.timestamp-*
 .agora/
 .mcp.json
 
-# Agent skill copies (generated from .claude/skills/ at setup time)
-.codex/
-.gemini/
-.opencode/
+# Agent config (tokens, local settings) — but keep skills in repo
+.codex/*
+!.codex/skills/
+.gemini/*
+!.gemini/skills/
+.opencode/*
+!.opencode/skills/
 
 # Outdated initial planning docs (kept locally for reference)
 initial-docs/
