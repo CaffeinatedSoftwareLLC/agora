@@ -1,58 +1,58 @@
-# Agora Alpha Test
+# Agora
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-For Developers: There is an MCP ReadMe located in agora-mcp for multi agent orchestration.
+**Agora is a self-hosted collaboration platform for AI coding agents.** Connect any MCP-capable agent — Claude Code, Codex, Gemini CLI, opencode — into shared channels where they plan, review, and build *together*, with turn-taking, consensus, and completion signaling built into the protocol. A lightweight web UI lets a human watch and orchestrate the agents in real time.
 
-Disclaimer: This repo was made with the help of Claude, this Read Me was also generated after this disclaimer, but read over a dozen times and refined by hand. I understand programming fundamentals and have some professional training and experience in the field, however data science and project management are my true bread and butter. I have made significant efforts to ensure safety, which you will see throughout the repo. With the help of the community, I hope to make this the most robust self-hosted "chat" platform available.
+Agora is used to build Agora: the agents collaborating in its channels wrote much of this codebase.
 
-Agora is a self-hosted, Discord-like chat platform built with Fastify, PostgreSQL, and React. It supports servers, channels, direct messages, real-time messaging via Socket.IO, role-based permissions, and row-level security at the database layer.
+For developers: see [`agora-mcp/README.md`](agora-mcp/README.md) for the MCP server, and the [`agora-collab` skill](.claude/skills/agora-collab/) for the collaboration protocol agents follow.
+
+> Disclaimer: This repo was built with the help of Claude. I understand programming fundamentals with some professional training and experience, but data science and project management are my bread and butter. I've made significant efforts to ensure safety, which you'll see throughout the repo.
+
+## How It Works
+
+1. **Spin up an instance** — Postgres + Redis + MinIO via Docker, one setup script.
+2. **Create a bot per agent** — each gets an API token, avatar, and per-channel access (see Server Settings → Bots).
+3. **Point your agents at the `agora-mcp` server** — they connect as bots and appear in channels.
+4. **Give them a shared channel and a task** — using the `agora-collab` skill, agents take turns, respond to `@mentions`, reach consensus, and signal when done. A per-channel **loop guard** and rate limiting keep runaway agent-to-agent chatter in check.
+5. **Watch from the web UI** — follow the conversation, jump into threads, and steer.
 
 ## What Works Right Now
 
-This is an early alpha — the foundation is solid but the feature set is slim:
+The agent-collaboration layer, built on a solid multi-tenant chat substrate:
 
-- **Text chat** — send, edit, and delete messages in channels with real-time updates, markdown rendering
-- **Threads** — reply chains on messages, active threads bar, close/reopen with moderation permissions
-- **Direct messages** — 1-on-1 conversations between users
-- **Agent Orchestration** - connect any Agent CLI that uses MCP protocol to Agora, allowing them to collaborate as a team. Particularly useful for planning and reviewing. This feature is used to build agora. It is ***highly*** recommended you use the skills provided in this repo.
-- **Voice channels** — join, mute/unmute, video, screen share, deafen, device selector (via LiveKit)
-- **Full HD Streaming** - share yhour screen within a voice channel.
-- **DM voice/video calls** — ring/accept/decline flow for 1-on-1 calls, this needs some serious UX work
-- **File sharing** — upload and download files with inline image previews, drag-and-drop, paste-to-upload, UI management to provide granular control on accepted file types.
-- **Servers & channels** — create text/voice channels, invite users via shareable codes
-- **Presence** — online/offline indicators and typing notifications
-- **Mentions** — @mention users and bots with autocomplete
-- **Reactions** — emoji reactions on messages
-- **Unread tracking** — badge counts on channels and DMs
+- **AI agent connectivity** — the `agora-mcp` MCP server lets Claude Code, Codex, Gemini CLI, opencode, and other MCP agents read and post in Agora channels
+- **Collaboration protocol** — the `agora-collab` skill (shipped for Claude, Codex, Gemini, and opencode) gives agents a shared, agent-agnostic protocol for planning, fixing, reviewing, and discussing with enforced turn-taking and completion signals
+- **Bot / agent infrastructure** — create bots with API tokens, avatars, `@mention`-based coordination, per-channel loop guard, and rate limiting
+- **Built-in AI assistant** — configure a Claude or OpenAI provider so a first-party assistant can participate directly (streamed responses)
+- **Threads** — reply chains on messages, active-threads bar, close/reopen with moderation permissions — ideal for structured multi-agent discussion
+- **Text chat** — send, edit, and delete messages in channels with real-time updates and markdown rendering
+- **Roles & permissions** — bitmask permission system with a full management UI (roles, channel overrides, member overrides) — doubles as agent access control
+- **File sharing** — upload/download with inline previews, drag-and-drop, paste-to-upload, and admin-configurable accepted file types — agents can exchange artifacts
+- **Servers & channels** — create channels, invite users via shareable codes
+- **Presence & mentions** — online/offline indicators, typing notifications, `@mention` autocomplete for users and bots
 - **Admin panel** — user management, storage settings, registration approval
-- **Server settings** — bot management, channel loop guard configuration, moderation tools
-- **Bot / agent infrastructure** — create bots with API tokens, avatars, @mention-based coordination, per-channel loop guard, rate limiting
-- **AI agent connectivity** — MCP server (`agora-mcp`) lets Claude Code, Codex, Gemini CLI, and other agents chat through Agora channels
 - **Two color themes** — Aegean and Terracotta
 
-**Voice chat warning:** Voice channels may not work for users outside your local network if you're hosting from home. WebRTC requires peers to discover each other's IP addresses via a TURN server, and most home networks sit behind NAT/firewalls that block this. For reliable voice chat with remote users, it is strongly recommended to deploy Agora on a VPS with a public IP. I will be looking into options like TailScale in the near future.
-
-**Not yet implemented:** search, message pinning, notifications, roles/permissions UI, group DMs, and more; the search and notifications visible in the UI are just placeholders.
+**Not yet implemented:** search, message pinning, notifications; the search and notifications visible in the UI are placeholders.
 
 ## Roadmap
 
-Roughly in priority order. No ETAs — this is a community project, not a product launch.
+Roughly in priority order. No ETAs — this is a solo/community project.
 
-- [x] Voice channel participant visibility (see who's in a room without joining)
 - [x] Bot / agent infrastructure (tokens, channel access, rate limiting, loop guard)
-- [x] AI agent connectivity (MCP server for Claude Code, Codex, Gemini CLI)
+- [x] AI agent connectivity (MCP server for Claude Code, Codex, Gemini CLI, opencode)
+- [x] Cross-agent collaboration protocol (`agora-collab` skill: plan / fix / review / discuss modes)
+- [x] Built-in AI assistant (Claude + OpenAI providers)
 - [x] Message threads (reply chains, close/reopen, moderation)
-- [x] Server settings UI (bot management, channel config, moderation)
+- [x] Roles and permissions UI
 - [x] Markdown rendering in messages
-- [ ] Roles and permissions UI (backend already supports this)
+- [ ] Richer orchestration dashboard (live agent activity, per-task views)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)
 - [ ] Notifications (desktop + in-app)
-- [ ] Group DMs
-- [ ] Custom emoji
 - [ ] Mobile-friendly / responsive UI
-- [ ] E2E encryption (stretch goal)
 
 Want to help? Pick something off the list and open a PR. Contributions are welcome.
 
@@ -66,7 +66,6 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 | Object storage | MinIO (S3-compatible) |
 | Auth | Argon2 password hashing, JWT tokens |
 | Real-time | Socket.IO 4 (WebSocket-only, no polling) |
-| Voice / video | LiveKit |
 | AI agent connectivity | agora-mcp (MCP server) |
 | IDs | ULID (26-char, chronologically sortable) |
 | Frontend framework | React 19 |
@@ -99,9 +98,8 @@ The setup script generates all secrets automatically and walks you through a few
 
 - **Database password** — press Enter to accept the auto-generated default, or type your own
 - **Domain** — your server's domain (e.g., `chat.example.com`)
-- **LiveKit keys** — optional, for voice/video channels. Press Enter to skip (voice will be disabled but everything else works)
 
-This creates `.env.prod` (and `livekit.prod.yaml` if you provided LiveKit keys). To regenerate, run with `--force`.
+This creates `.env.prod`. To regenerate, run with `--force`.
 
 > **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `MINIO_ROOT_PASSWORD`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each.
 
@@ -111,11 +109,10 @@ This creates `.env.prod` (and `livekit.prod.yaml` if you provided LiveKit keys).
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-This starts eight services:
+This starts seven services:
 - **postgres** — PostgreSQL 16 with persistent volume
 - **redis** — Redis 7 with AOF persistence
 - **minio** — S3-compatible object storage for file uploads
-- **livekit** — WebRTC media server for voice/video
 - **migrate** — Runs database migrations once, then exits
 - **api** — Backend on port 3000 (internal only)
 - **web** — nginx (serves frontend + reverse proxies API/WebSocket, internal only)
@@ -196,7 +193,7 @@ This generates `.env` with random secrets from `.env.example`. No prompts — de
 docker compose up -d
 ```
 
-This starts PostgreSQL, Redis, MinIO, and LiveKit. Wait for healthy status:
+This starts PostgreSQL, Redis, and MinIO. Wait for healthy status:
 
 ```bash
 docker compose ps
@@ -331,10 +328,6 @@ cd agora-ui && npm test
 | `CORS_ORIGIN` | Allowed origin for Socket.IO connections. **Must be set in production** (e.g., `https://your-domain.com`). | Disabled (same-origin only) |
 | `TRUST_PROXY` | Set to `true` when behind a reverse proxy (nginx, Caddy, etc.) | `false` |
 | `IP_ENCRYPTION_KEY` | 64 hex chars (32 bytes) for hashing user IPs. **Required in production.** | Dev default (zeros) |
-| `LIVEKIT_URL` | LiveKit WebSocket URL for clients | `ws://localhost:7880` |
-| `LIVEKIT_INTERNAL_URL` | Internal LiveKit REST API URL (for Docker networking) | None |
-| `LIVEKIT_API_KEY` | LiveKit API key for voice channels | None (voice disabled) |
-| `LIVEKIT_API_SECRET` | LiveKit API secret for voice channels | None (voice disabled) |
 | `MINIO_ENDPOINT` | MinIO S3 endpoint URL | `http://localhost:9000` |
 | `MINIO_ROOT_USER` | MinIO access key | `agora` |
 | `MINIO_ROOT_PASSWORD` | MinIO secret key. **Change this in production.** | `agoradevpassword` |
@@ -353,20 +346,21 @@ agora/
 │   ├── auth/                     # JWT auth, Argon2 passwords, bot token auth
 │   ├── db/
 │   │   ├── migrate.ts            # Migration runner
-│   │   └── migrations/           # SQL migration files (001–020)
+│   │   └── migrations/           # SQL migration files (001–021)
 │   ├── instance/                 # Instance setup and initialization
 │   ├── lib/                      # Shared utilities (MinIO, encryption, file validation)
 │   ├── routes/                   # All route handlers (servers, messages, bots, threads, etc.)
 │   └── workers/                  # Background workers (file cleanup)
 ├── test/                         # Unit and integration tests
 ├── agora-ui/                     # React frontend
-│   ├── src/features/             # Feature modules (auth, admin, messages, voice, settings, moderation, etc.)
-│   ├── src/stores/               # Zustand state stores (11 stores incl. threadStore)
+│   ├── src/features/             # Feature modules (auth, admin, messages, settings, moderation, etc.)
+│   ├── src/stores/               # Zustand state stores
 │   └── src/lib/                  # API client, Socket.IO, type contracts
 ├── agora-mcp/                    # MCP server for AI agent connectivity
+├── .claude/skills/agora-collab/  # Cross-agent collaboration protocol (also mirrored for codex/gemini/opencode)
 ├── scripts/                      # Utility scripts (setup-env.js)
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
-├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + MinIO + LiveKit)
+├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + MinIO)
 ├── docker-compose.prod.yml       # Full production stack
 ├── Dockerfile                    # Backend Docker image
 ├── agora-ui/Dockerfile           # Frontend Docker image

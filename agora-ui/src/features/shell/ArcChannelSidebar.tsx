@@ -5,7 +5,6 @@ import { useUnreadStore } from '../../stores/unreadStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useMemberStore } from '../../stores/memberStore';
-import { useVoiceStore } from '../../stores/voiceStore';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { usePalette, hexToRgb } from '../../theme';
@@ -13,8 +12,6 @@ import { useServerAccess } from '../../hooks/useServerAccess';
 import { ArcUserPanel } from './ArcUserPanel';
 import { InviteModal } from '../servers/InviteModal';
 import { CreateChannelModal } from '../servers/CreateChannelModal';
-import { VoiceControlBar } from '../voice/VoiceControlBar';
-import { VoiceChannelUsers } from '../voice/VoiceChannelUsers';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -69,65 +66,6 @@ function ChannelItem({
         </span>
       )}
     </button>
-  );
-}
-
-// ─── Voice Channel Item ─────────────────────────────────────────────────────
-
-function VoiceChannelItem({
-  channelId,
-  channelName,
-  accentColor,
-  serverId,
-  onClick,
-}: {
-  channelId: string;
-  channelName: string;
-  accentColor: string;
-  serverId: string;
-  onClick: () => void;
-}) {
-  const P = usePalette();
-  const currentChannel = useVoiceStore(s => s.currentChannel);
-  const connectionState = useVoiceStore(s => s.connectionState);
-  const isInChannel = currentChannel?.channelId === channelId;
-  const isConnected = isInChannel && connectionState === 'connected';
-  const accentRgb = hexToRgb(accentColor);
-  const onlineRgb = hexToRgb(P.online);
-
-  return (
-    <div>
-      <button
-        onClick={onClick}
-        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg mb-0.5 transition-all duration-150 text-sm"
-        style={{
-          background: isConnected ? `rgba(${onlineRgb}, 0.08)` : 'transparent',
-          boxShadow: isConnected ? `inset 2px 0 0 ${P.online}` : 'none',
-          color: isConnected ? P.text : P.muted,
-        }}
-      >
-        {/* Speaker icon */}
-        <svg
-          className="h-4 w-4 shrink-0"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ color: isConnected ? P.online : P.dim }}
-        >
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-          <path d="M15.54 8.46a5 5 0 010 7.07" />
-          <path d="M19.07 4.93a10 10 0 010 14.14" />
-        </svg>
-        <span className={isConnected ? 'font-medium truncate' : 'truncate'}>
-          {channelName}
-        </span>
-      </button>
-      {/* Show participants in this voice channel (for everyone, not just connected users) */}
-      <VoiceChannelUsers channelId={channelId} />
-    </div>
   );
 }
 
@@ -249,16 +187,13 @@ export function ArcChannelSidebar() {
   const byServer = useChannelStore(s => s.byServer);
   const activeChannelId = useChannelStore(s => s.activeChannelId);
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
-  const joinVoiceChannel = useVoiceStore(s => s.joinChannel);
-  const voiceConnectionState = useVoiceStore(s => s.connectionState);
   const { hasModerationAccess, hasServerAdminAccess } = useServerAccess(instanceServerId);
 
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
-    new Set(['Text Channels', 'Voice Channels']),
+    new Set(['Text Channels']),
   );
   const [showInvite, setShowInvite] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
-  const [createChannelDefaultType, setCreateChannelDefaultType] = useState<3 | 4>(3);
 
   const server = instanceServerId ? servers.get(instanceServerId) : null;
   const accentColor = server ? serverColor(server.name) : P.accent;
@@ -268,12 +203,6 @@ export function ArcChannelSidebar() {
   const textChannels = useMemo(() => {
     if (!instanceServerId) return [];
     return byServer(instanceServerId).filter(c => c.channelType === 3);
-  }, [instanceServerId, byServer]);
-
-  // Filter to voice channels (channelType 4)
-  const voiceChannels = useMemo(() => {
-    if (!instanceServerId) return [];
-    return byServer(instanceServerId).filter(c => c.channelType === 4);
   }, [instanceServerId, byServer]);
 
   // Count online members for this server (reactive to presence + member changes)
@@ -308,16 +237,6 @@ export function ArcChannelSidebar() {
     }
 
     navigate(`/app/${channelId}`);
-  };
-
-  const openCreateChannel = (defaultType: 3 | 4) => {
-    setCreateChannelDefaultType(defaultType);
-    setShowCreateChannel(true);
-  };
-
-  const handleVoiceChannelClick = (channelId: string, channelName: string) => {
-    if (!instanceServerId) return;
-    joinVoiceChannel(channelId, instanceServerId, channelName);
   };
 
   if (!instanceServerId || !server) return null;
@@ -451,32 +370,9 @@ export function ArcChannelSidebar() {
           activeChannelId={activeChannelId}
           accentColor={accentColor}
           onChannelClick={handleChannelClick}
-          onCreateChannel={() => openCreateChannel(3)}
-        />
-        <ChannelCategory
-          categoryName="Voice Channels"
-          channels={voiceChannels}
-          isExpanded={expandedCategories.has('Voice Channels')}
-          onToggle={() => toggleCategory('Voice Channels')}
-          activeChannelId={activeChannelId}
-          accentColor={accentColor}
-          onChannelClick={() => {}}
-          onCreateChannel={() => openCreateChannel(4)}
-          renderItem={(ch) => (
-            <VoiceChannelItem
-              key={ch.id}
-              channelId={ch.id}
-              channelName={ch.name}
-              accentColor={accentColor}
-              serverId={instanceServerId}
-              onClick={() => handleVoiceChannelClick(ch.id, ch.name)}
-            />
-          )}
+          onCreateChannel={() => setShowCreateChannel(true)}
         />
       </div>
-
-      {/* ── Voice control bar (when connected) ──────────────────────────── */}
-      {voiceConnectionState !== 'disconnected' && <VoiceControlBar />}
 
       {/* ── User panel (compact) ───────────────────────────────────────── */}
       <ArcUserPanel compact />
@@ -491,7 +387,6 @@ export function ArcChannelSidebar() {
         serverId={instanceServerId}
         isOpen={showCreateChannel}
         onClose={() => setShowCreateChannel(false)}
-        defaultType={createChannelDefaultType}
       />
     </div>
   );

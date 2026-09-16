@@ -25,10 +25,9 @@ src/
 │   ├── messages/   # Message list, input, threads, markdown rendering
 │   ├── settings/   # Server settings: bot management, channel config
 │   ├── moderation/ # Moderation tools: member list, guards
-│   ├── live/       # Real-time UI: typing, presence, reactions, unreads, mentions
-│   └── voice/      # Voice/video channels and DM calls
+│   └── live/       # Real-time UI: typing, presence, unreads, mentions
 ├── components/ui/  # Shared UI components
-├── stores/         # Zustand state stores (11 stores incl. threadStore)
+├── stores/         # Zustand state stores
 ├── hooks/          # Shared React hooks (useSocket, useInstance, useServerAccess)
 ├── lib/
 │   ├── api.ts      # API client (human + bot endpoints)

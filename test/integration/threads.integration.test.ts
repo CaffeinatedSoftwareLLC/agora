@@ -564,44 +564,6 @@ describe('Threads', () => {
         expect(res.status).toBe(403);
     });
 
-    test('DM: any participant can close thread and reply is blocked', async () => {
-        const user1 = await authedUser(ctx.request, 'dmthread1');
-        const user2 = await authedUser(ctx.request, 'dmthread2');
-
-        // Create DM
-        const dm = await ctx.request
-            .post('/channels/dm')
-            .set(user1.auth)
-            .send({ recipientId: user2.userId });
-        const dmChannelId = dm.body.id;
-
-        // Create parent + reply
-        const msg = await ctx.request
-            .post(`/channels/${dmChannelId}/messages`)
-            .set(user1.auth)
-            .send({ content: 'DM thread parent' });
-        const pid = msg.body.id;
-
-        await ctx.request
-            .post(`/channels/${dmChannelId}/messages/${pid}/replies`)
-            .set(user2.auth)
-            .send({ content: 'DM reply' });
-
-        // user2 (non-author) closes the thread
-        const closeRes = await ctx.request
-            .patch(`/channels/${dmChannelId}/messages/${pid}/thread`)
-            .set(user2.auth)
-            .send({ closed: true });
-        expect(closeRes.status).toBe(200);
-
-        // Reply blocked
-        const replyRes = await ctx.request
-            .post(`/channels/${dmChannelId}/messages/${pid}/replies`)
-            .set(user1.auth)
-            .send({ content: 'Should fail' });
-        expect(replyRes.status).toBe(409);
-    });
-
     test('closed threads excluded from GET active threads', async () => {
         const msg = await ctx.request
             .post(`/channels/${channelId}/messages`)

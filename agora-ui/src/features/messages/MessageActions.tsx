@@ -2,11 +2,10 @@ interface MessageActionsProps {
   isOwn: boolean;
   onEdit: () => void;
   onDelete: () => void;
-  onReact: () => void;
   onReply?: () => void;
 }
 
-export function MessageActions({ isOwn, onEdit, onDelete, onReact, onReply }: MessageActionsProps) {
+export function MessageActions({ isOwn, onEdit, onDelete, onReply }: MessageActionsProps) {
   return (
     <div className="absolute bottom-1 right-2 flex gap-0.5 bg-surface border border-border rounded shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-10">
       {onReply && (
@@ -20,15 +19,6 @@ export function MessageActions({ isOwn, onEdit, onDelete, onReact, onReply }: Me
           </svg>
         </button>
       )}
-      <button
-        onClick={onReact}
-        className={`px-2 py-1 text-text-muted hover:text-text hover:bg-surface-hover transition-colors ${isOwn || onReply ? '' : 'rounded-l'}`}
-        title="Add reaction"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      </button>
       {isOwn && (
         <>
           <button

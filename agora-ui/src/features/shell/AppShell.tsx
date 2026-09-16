@@ -5,15 +5,11 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import { usePalette } from '../../theme';
 import { TabBar } from './TabBar';
-import { DMSidebar } from './DMSidebar';
 import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 import { ThreadPanel } from '../messages/ThreadPanel';
 import { useThreadStore } from '../../stores/threadStore';
-import { VoiceChannelProvider } from '../voice/VoiceChannelProvider';
-import { IncomingCallOverlay } from '../calls/IncomingCallOverlay';
-import { OutgoingCallOverlay } from '../calls/OutgoingCallOverlay';
 
 export function AppShell() {
   const params = useParams();
@@ -45,12 +41,9 @@ export function AppShell() {
     s.setProperty('--color-warn', P.warn);
   }, [P]);
 
-  // URL: /app/dms/{channelId} or /app/{channelId} or /app
+  // URL: /app/{channelId} or /app
   const urlSegment1 = params['*']?.split('/')[0] || null;
-  const urlSegment2 = params['*']?.split('/')[1] || null;
-
-  const isDmRoute = urlSegment1 === 'dms';
-  const urlChannelId = isDmRoute ? urlSegment2 : urlSegment1;
+  const urlChannelId = urlSegment1;
 
   // Sync URL → store
   useEffect(() => {
@@ -98,28 +91,20 @@ export function AppShell() {
     );
   }
 
-  // Layout: DM view or channel view
-  const isDm = isDmRoute;
-  const showDmSidebar = isDmRoute;
-
   return (
-    <VoiceChannelProvider>
-      <div
-        className="h-screen flex flex-col overflow-hidden"
-        style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
-      >
-        <TabBar />
+    <div
+      className="h-screen flex flex-col overflow-hidden"
+      style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+    >
+      <TabBar />
 
-        {/* Main content area */}
-        <div className="flex flex-1 min-h-0">
-          {showDmSidebar ? <DMSidebar /> : <ArcChannelSidebar />}
-          <ArcContentArea />
-          {!isDm && membersOpen && <MembersSidebar />}
-          {openThreadId && <ThreadPanel />}
-        </div>
+      {/* Main content area */}
+      <div className="flex flex-1 min-h-0">
+        <ArcChannelSidebar />
+        <ArcContentArea />
+        {membersOpen && <MembersSidebar />}
+        {openThreadId && <ThreadPanel />}
       </div>
-      <IncomingCallOverlay />
-      <OutgoingCallOverlay />
-    </VoiceChannelProvider>
+    </div>
   );
 }

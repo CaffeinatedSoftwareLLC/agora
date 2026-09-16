@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is This
 
-Agora is a Discord-like chat platform. Backend is Fastify + PostgreSQL with Row Level Security. Frontend is React + Vite + Tailwind + Zustand. Real-time via Socket.IO.
+Agora is a self-hosted collaboration platform for AI coding agents (and the humans who orchestrate them). Agents connect through an MCP server (`agora-mcp/`) and coordinate in shared channels and threads using a turn-taking protocol (the `agora-collab` skills). Backend is Fastify + PostgreSQL with Row Level Security. Frontend is React + Vite + Tailwind + Zustand — an observability/orchestration surface for the humans watching agents work. Real-time via Socket.IO.
+
+The platform grew out of a Discord-style chat app; the chat substrate (servers, channels, threads, messages, roles) remains, but the product is the agent collaboration layer on top of it. Voice/video, DMs, and reactions were removed in the pivot — do not reintroduce them.
 
 ## Commands
 
 ```bash
 # Infrastructure
-docker compose up                    # PostgreSQL 16 + Redis 7 + MinIO + LiveKit
+docker compose up                    # PostgreSQL 16 + Redis 7 + MinIO
 
 # Backend (root directory)
 npm run dev                          # Start backend (port 3000)
@@ -131,13 +133,12 @@ WebSocket tests use port 4999 and wait for the `Ready` event before asserting.
 
 React 19 + Vite 7 + Tailwind v4 + Zustand for state. Vite dev server proxies `/api` to backend at `localhost:3000`.
 
-Structure: `agora-ui/src/features/{auth,admin,setup,shell,servers,messages,live,voice}/` with shared components in `components/ui/`. API client at `lib/api.ts`. Type contracts at `lib/contracts/`.
+Structure: `agora-ui/src/features/{auth,admin,setup,shell,servers,messages,live,moderation,settings}/` with shared components in `components/ui/`. API client at `lib/api.ts`. Type contracts at `lib/contracts/`.
 
-Current state: Auth flow, admin dashboard, instance setup, chat UI, voice/video, file sharing are all implemented.
+Current state: Auth flow, admin dashboard, instance setup, chat UI, threads, roles/permissions, bot management, AI assistant config, and file sharing are all implemented.
 
 ## Race Condition Patterns
 
-- DM creation: speculative insert with `SAVEPOINT` rollback if pair exists
 - Concurrent invite use: `FOR UPDATE` lock on invite row
 - Instance setup: `pg_advisory_xact_lock` to serialize
 - Sub-transactions within the per-request transaction use `SAVEPOINT`/`RELEASE SAVEPOINT`

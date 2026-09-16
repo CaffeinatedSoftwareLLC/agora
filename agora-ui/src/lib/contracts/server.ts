@@ -49,11 +49,6 @@ export interface UserSearchResult {
   username: string;
 }
 
-export interface CreateDMResponse {
-  id: string;
-  channelType: number;
-}
-
 export interface ServerAccess {
   permissions: string;
   isInstanceAdmin: boolean;

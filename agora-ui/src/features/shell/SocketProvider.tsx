@@ -9,9 +9,6 @@ import { useMessageStore } from '../../stores/messageStore';
 import { useTypingStore } from '../../stores/typingStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useUnreadStore } from '../../stores/unreadStore';
-import { useReactionStore } from '../../stores/reactionStore';
-import { useVoiceStore } from '../../stores/voiceStore';
-import { useCallStore } from '../../stores/callStore';
 import { useThreadStore } from '../../stores/threadStore';
 import type {
   ReadyPayload,
@@ -20,13 +17,9 @@ import type {
   MessageDeletePayload,
   TypingPayload,
   PresenceUpdatePayload,
-  ReactionAddPayload,
-  ReactionRemovePayload,
-  DMCreatedPayload,
   ThreadMetadataUpdatePayload,
   BotMessageStreamPayload,
 } from '../../lib/contracts/ws-events';
-import { api } from '../../lib/api';
 import { SocketContext } from './SocketContext';
 
 export function SocketProvider({ children }: { children: ReactNode }) {
@@ -62,21 +55,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       useMessageStore.getState().clear();
       useThreadStore.getState().clear();
       useTypingStore.getState().clear();
-      useReactionStore.getState().clear();
       useUnreadStore.getState().setUnreads(data.unreads || []);
       usePresenceStore.getState().setOnlineUsers(data.onlineUserIds || []);
-
-      // Fetch current voice participants for all voice channels
-      const voiceChannels = (data.channels || []).filter((c: any) => c.channelType === 4);
-      for (const vc of voiceChannels) {
-        api.get<{ identity: string; name: string }[]>(`/voice/participants/${vc.id}`)
-          .then((participants) => {
-            for (const p of participants) {
-              useVoiceStore.getState().addParticipant(vc.id, p.identity, p.name ?? p.identity);
-            }
-          })
-          .catch(() => {}); // best-effort
-      }
     });
 
     s.on('Message', (data: MessagePayload) => {
@@ -121,15 +101,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       useThreadStore.getState().updateParentMetadata(data);
     });
 
-    s.on('DMCreated', (data: DMCreatedPayload) => {
-      useChannelStore.getState().addChannel({
-        id: data.channelId,
-        name: data.name,
-        channelType: 1,
-        serverId: null,
-      });
-    });
-
     s.on('BotMessageStream', (data: BotMessageStreamPayload) => {
       useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming);
     });
@@ -141,37 +112,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('PresenceUpdate', (data: PresenceUpdatePayload) => {
       usePresenceStore.getState().setPresence(data.userId, data.status);
     });
-
-    s.on('ReactionAdd', (data: ReactionAddPayload) => {
-      const me = data.userId === useAuthStore.getState().user?.id;
-      useReactionStore.getState().addReaction(data.messageId, data.emoji, data.userId, me);
-    });
-
-    s.on('ReactionRemove', (data: ReactionRemovePayload) => {
-      const me = data.userId === useAuthStore.getState().user?.id;
-      useReactionStore.getState().removeReaction(data.messageId, data.emoji, data.userId, me);
-    });
-
-    // Voice participant events (track for ALL channels, not just current)
-    s.on('voice:participant_joined', (data: { channelId: string; userId: string; username: string }) => {
-      useVoiceStore.getState().addParticipant(data.channelId, data.userId, data.username);
-    });
-
-    s.on('voice:participant_left', (data: { channelId: string; userId: string }) => {
-      useVoiceStore.getState().removeParticipant(data.channelId, data.userId);
-    });
-
-    s.on('voice:room_finished', (data: { channelId: string }) => {
-      useVoiceStore.getState().clearChannelParticipants(data.channelId);
-    });
-
-    // Call events
-    s.on('call:incoming', (data) => useCallStore.getState().handleIncoming(data));
-    s.on('call:accepted', (data) => useCallStore.getState().handleAccepted(data));
-    s.on('call:declined', (data) => useCallStore.getState().handleDeclined(data));
-    s.on('call:cancelled', (data) => useCallStore.getState().handleCancelled(data));
-    s.on('call:timeout', (data) => useCallStore.getState().handleTimeout(data));
-    s.on('call:ended', (data) => useCallStore.getState().handleEnded(data));
 
     s.on('connect_error', (err) => {
       const fatal = [

@@ -585,31 +585,6 @@ describe('Bot integration', () => {
         });
     });
 
-    // ─── DM Bot Rejection ───
-    describe('DM bot rejection', () => {
-        test('cannot create DM with a bot', async () => {
-            const botRes = await ctx.request
-                .post(`/servers/${serverId}/bots`)
-                .set(owner.auth)
-                .send({ username: 'dm-target-bot' });
-
-            // Wait for bot creation COMMIT to settle so DM route can see the bot
-            for (let i = 0; i < 20; i++) {
-                const check = await ctx.db.query('SELECT 1 FROM users WHERE id = $1', [botRes.body.id]);
-                if (check.rows.length > 0) break;
-                await new Promise(r => setTimeout(r, 50));
-            }
-
-            const res = await ctx.request
-                .post('/channels/dm')
-                .set(owner.auth)
-                .send({ recipientId: botRes.body.id });
-
-            expect(res.status).toBe(400);
-            expect(res.body.error).toBe('Cannot create DM with a bot');
-        });
-    });
-
     // ─── Bot Deletion ───
     describe('Bot deletion', () => {
         test('delete bot cascades tokens', async () => {

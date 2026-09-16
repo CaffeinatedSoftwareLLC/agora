@@ -38,19 +38,6 @@ services:
         condition: service_healthy
     restart: "no"
 
-  livekit:
-    image: livekit/livekit-server:latest
-    command: --config /etc/livekit.yaml
-    restart: unless-stopped
-    ports:
-      - "3478:3478/udp"
-      - "50000-50100:50000-50100/udp"
-    volumes:
-      - ./livekit.prod.yaml:/etc/livekit.yaml
-    depends_on:
-      redis:
-        condition: service_healthy
-
   minio:
     image: quay.io/minio/minio:latest
     environment:
@@ -78,10 +65,6 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.prod}
       HOST: 0.0.0.0
       PORT: "3000"
-      LIVEKIT_URL: wss://${DOMAIN:-alpha.agora.host}
-      LIVEKIT_INTERNAL_URL: http://livekit:7880
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       CORS_ORIGIN: https://${DOMAIN:-alpha.agora.host}
       TRUST_PROXY: "true"
       MINIO_ENDPOINT: http://minio:9000
@@ -93,8 +76,6 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      livekit:
-        condition: service_started
       minio:
         condition: service_healthy
     restart: unless-stopped

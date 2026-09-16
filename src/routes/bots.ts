@@ -14,7 +14,7 @@ function isValidAvatarUrl(value: string): boolean {
 
 /**
  * Load permission context and compute permissions for a user in a server.
- * Same pattern used in voice.ts and files.ts.
+ * Same pattern used in files.ts.
  */
 export async function loadAndComputePermissions(db: any, userId: string, serverId: string): Promise<bigint> {
     // Check server ownership first

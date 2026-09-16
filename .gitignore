@@ -40,3 +40,4 @@ vite.config.ts.timestamp-*
 
 # Outdated initial planning docs (kept locally for reference)
 initial-docs/
+livekit.prod.yaml
