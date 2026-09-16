@@ -1,5 +1,3 @@
-import { useState } from 'react';
-
 /**
  * All permission flags, grouped by category.
  * Values must match src/permissions.ts bitmask positions.
@@ -33,22 +31,9 @@ const PERMISSION_GROUPS: { label: string; perms: { name: string; bit: bigint; de
       { name: 'ManageMessages', bit: 1n << 12n, desc: 'Delete or pin messages' },
       { name: 'EmbedLinks', bit: 1n << 13n, desc: 'Embed links in messages' },
       { name: 'UploadFiles', bit: 1n << 14n, desc: 'Attach files to messages' },
-      { name: 'AddReactions', bit: 1n << 15n, desc: 'Add reactions to messages' },
       { name: 'MentionEveryone', bit: 1n << 16n, desc: 'Use @everyone and @here' },
       { name: 'ReadMessageHistory', bit: 1n << 17n, desc: 'Read older messages' },
       { name: 'UseExternalEmoji', bit: 1n << 18n, desc: 'Use emoji from other servers' },
-    ],
-  },
-  {
-    label: 'Voice',
-    perms: [
-      { name: 'VoiceConnect', bit: 1n << 20n, desc: 'Join voice channels' },
-      { name: 'VoiceSpeak', bit: 1n << 21n, desc: 'Speak in voice channels' },
-      { name: 'VoiceVideo', bit: 1n << 22n, desc: 'Share video in voice channels' },
-      { name: 'VoiceMuteMembers', bit: 1n << 23n, desc: 'Mute other members' },
-      { name: 'VoiceDeafenMembers', bit: 1n << 24n, desc: 'Deafen other members' },
-      { name: 'VoiceMoveMembers', bit: 1n << 25n, desc: 'Move members between voice channels' },
-      { name: 'VoicePriority', bit: 1n << 26n, desc: 'Priority speaker mode' },
     ],
   },
   {

@@ -1,16 +1,12 @@
-import { useMemo } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useUIStore } from '../../stores/uiStore';
 import { useServerStore } from '../../stores/serverStore';
-import { useUnreadStore } from '../../stores/unreadStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { usePalette, hexToRgb } from '../../theme';
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function TabBar() {
   const navigate = useNavigate();
-  const location = useLocation();
   const P = usePalette();
 
   // UI store
@@ -21,33 +17,14 @@ export function TabBar() {
   const servers = useServerStore(s => s.servers);
   const instanceServerId = useServerStore(s => s.instanceServerId);
 
-  // Unread store
-  const byChannel = useUnreadStore(s => s.byChannel);
-
   // Derived
   const instanceServer = instanceServerId ? servers.get(instanceServerId) ?? null : null;
   const instanceName = instanceServer?.name ?? 'Agora';
-  const isDmView = location.pathname.startsWith('/app/dms');
-
-  // Derived: total unread across DM channels (shown on DMs button badge)
-  const dmUnread = useMemo(() => {
-    const dmChannels = useChannelStore.getState().dmChannels();
-    let total = 0;
-    for (const dm of dmChannels) {
-      const entry = byChannel.get(dm.id);
-      if (entry) total += entry.unreadCount + entry.mentionCount;
-    }
-    return total;
-  }, [byChannel]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleChannelsClick = () => {
     navigate('/app');
-  };
-
-  const handleDmsClick = () => {
-    navigate('/app/dms');
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -67,15 +44,11 @@ export function TabBar() {
         <button
           onClick={handleChannelsClick}
           className="relative flex items-center gap-2 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0"
-          style={
-            !isDmView
-              ? {
-                  background: `linear-gradient(180deg, rgba(${accentRgb}, 0.15) 0%, rgba(${accentRgb}, 0.04) 100%)`,
-                  boxShadow: `0 1px 0 0 rgba(${accentRgb}, 0.3), inset 0 1px 0 0 rgba(${accentRgb}, 0.12)`,
-                  color: P.text,
-                }
-              : { color: P.dim }
-          }
+          style={{
+            background: `linear-gradient(180deg, rgba(${accentRgb}, 0.15) 0%, rgba(${accentRgb}, 0.04) 100%)`,
+            boxShadow: `0 1px 0 0 rgba(${accentRgb}, 0.3), inset 0 1px 0 0 rgba(${accentRgb}, 0.12)`,
+            color: P.text,
+          }}
         >
           {/* Hash icon */}
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -87,54 +60,10 @@ export function TabBar() {
           {instanceName}
 
           {/* Active underline */}
-          {!isDmView && (
-            <span
-              className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
-              style={{ background: `linear-gradient(90deg, transparent, ${P.accent}, transparent)` }}
-            />
-          )}
-        </button>
-
-        {/* Separator */}
-        <div className="w-px h-5 mx-1" style={{ background: `${P.border}88` }} />
-
-        {/* ── DMs button ──────────────────────────────────────────────────── */}
-        <button
-          onClick={handleDmsClick}
-          className="relative flex items-center gap-2 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0"
-          style={
-            isDmView
-              ? {
-                  background: `linear-gradient(180deg, rgba(${accentRgb}, 0.15) 0%, rgba(${accentRgb}, 0.04) 100%)`,
-                  boxShadow: `0 1px 0 0 rgba(${accentRgb}, 0.3), inset 0 1px 0 0 rgba(${accentRgb}, 0.12)`,
-                  color: P.text,
-                }
-              : { color: P.dim }
-          }
-        >
-          {/* Chat bubble icon */}
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
-          </svg>
-          Messages
-
-          {/* DM unread badge */}
-          {dmUnread > 0 && !isDmView && (
-            <span
-              className="h-4 min-w-[16px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-              style={{ background: P.danger, color: P.text }}
-            >
-              {dmUnread}
-            </span>
-          )}
-
-          {/* Active underline */}
-          {isDmView && (
-            <span
-              className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
-              style={{ background: `linear-gradient(90deg, transparent, ${P.accent}, transparent)` }}
-            />
-          )}
+          <span
+            className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full"
+            style={{ background: `linear-gradient(90deg, transparent, ${P.accent}, transparent)` }}
+          />
         </button>
 
         {/* Spacer */}

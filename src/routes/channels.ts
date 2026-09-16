@@ -11,7 +11,7 @@ export async function channelRoutes(app: FastifyInstance) {
                 required: ['name', 'channelType'],
                 properties: {
                     name: { type: 'string', minLength: 1, maxLength: 100 },
-                    channelType: { type: 'integer', enum: [3, 4, 5] },
+                    channelType: { type: 'integer', enum: [3, 5] },
                 },
             },
         },

@@ -264,29 +264,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         const result = await db.query(query, params);
 
-        // Batch-fetch reactions
         const messageIds = result.rows.map((r: any) => r.id);
-        let reactionsMap: Record<string, { emoji: string; count: number; me: boolean }[]> = {};
-        if (messageIds.length > 0) {
-            const rxResult = await db.query(
-                `SELECT message_id, emoji_unicode,
-                        count(*)::int AS count,
-                        bool_or(user_id = $2) AS me
-                 FROM message_reactions
-                 WHERE message_id = ANY($1)
-                 GROUP BY message_id, emoji_unicode`,
-                [messageIds, userId]
-            );
-            for (const row of rxResult.rows) {
-                const mid = row.message_id.trim();
-                if (!reactionsMap[mid]) reactionsMap[mid] = [];
-                reactionsMap[mid].push({
-                    emoji: row.emoji_unicode,
-                    count: row.count,
-                    me: row.me,
-                });
-            }
-        }
 
         // Batch-fetch attachments
         let attachmentsMap: Record<string, any[]> = {};
@@ -326,7 +304,6 @@ export async function threadRoutes(app: FastifyInstance) {
             deletedAt: row.deleted_at,
             createdAt: row.created_at,
             threadId: row.thread_id?.trim() || null,
-            reactions: reactionsMap[row.id.trim()] || [],
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
         }));

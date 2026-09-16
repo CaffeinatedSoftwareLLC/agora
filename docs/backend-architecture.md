@@ -571,7 +571,7 @@ Two middleware functions run in sequence before `connection`, supporting both hu
 On successful connection, the gateway:
 
 1. Joins the `user:{userId}` room (for targeted events like `ServerJoin`)
-2. Fetches user info, servers, server channels, DM channels, unread state, and co-member IDs
+2. Fetches user info, servers, server channels, unread state, and co-member IDs
 3. Joins `channel:{channelId}` rooms for all channels
 4. Stores channel room IDs on the socket for disconnect cleanup
 5. Filters online users to only those sharing a server
@@ -581,7 +581,7 @@ On successful connection, the gateway:
 
 | Room pattern | Purpose |
 |-------------|---------|
-| `channel:{channelId}` | Broadcasting messages, reactions, typing indicators to channel participants |
+| `channel:{channelId}` | Broadcasting messages, typing indicators, and thread updates to channel participants |
 | `user:{userId}` | Sending targeted events to a specific user (e.g., ServerJoin after accepting an invite) |
 
 ### Presence tracking
@@ -604,9 +604,8 @@ Presence is tracked in an in-memory `Map<string, Set<string>>` mapping userId to
 | `ServerJoin` | `{ server: { id, name, ownerId }, channels[] }` | POST `/invites/:code` commits (new member only) |
 | `PresenceUpdate` | `{ userId, status: 'online' \| 'offline' }` | Socket connect/disconnect |
 | `Typing` | `{ channelId, userId, username }` | Client sends `Typing` event |
-| `ReactionAdd` | `{ messageId, channelId, userId, emoji }` | PUT `/channels/:channelId/messages/:msgId/reactions` commits |
-| `ReactionRemove` | `{ messageId, channelId, userId, emoji }` | DELETE `/channels/:channelId/messages/:msgId/reactions/:emoji` commits |
 | `BotReady` | `{ user, channels[] }` | Bot Socket.IO connect (subset of Ready) |
+| `BotMessageStream` | `{ messageId, channelId, content, streaming }` | Built-in AI assistant streams a response |
 | `MessageMention` | `{ messageId, channelId, mentionedUserId, ... }` | POST message with @bot mention (gated by UseBots permission) |
 | `ChannelLoopGuard` | `{ channelId, message }` | Bot-to-bot loop detected (exceeds max_bot_hops) |
 | `ThreadMetadataUpdate` | `{ messageId, channelId, replyCount, lastReplyAt, threadClosedAt }` | Reply created/deleted, or thread closed/reopened |
@@ -648,21 +647,6 @@ Presence is tracked in an in-memory `Map<string, Set<string>>` mapping userId to
 ---
 
 ## Race Condition Patterns
-
-### DM creation (SAVEPOINT rollback)
-
-**Source:** `src/routes/dms.ts`
-
-When two users simultaneously try to create a DM with each other:
-
-1. Normalize pair ordering: `user_a < user_b` (lexicographic on trimmed values)
-2. `SAVEPOINT dm_create`
-3. Speculatively insert a new channel
-4. Attempt `INSERT INTO dm_pairs ... ON CONFLICT DO NOTHING RETURNING channel_id`
-5. If `RETURNING` gives a row: we won the race, wire up channel members, `RELEASE SAVEPOINT`
-6. If `RETURNING` is empty: we lost the race, `ROLLBACK TO SAVEPOINT`, select existing pair
-
-The `SAVEPOINT`/`ROLLBACK TO SAVEPOINT` pattern cleanly discards the speculative channel without rolling back the outer per-request transaction.
 
 ### Concurrent invite use (FOR UPDATE)
 

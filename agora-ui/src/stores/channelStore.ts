@@ -10,7 +10,6 @@ interface ChannelState {
   addChannels: (channels: Channel[]) => void;
   removeChannelsByServer: (serverId: string) => void;
   byServer: (serverId: string) => Channel[];
-  dmChannels: () => Channel[];
   clear: () => void;
 }
 
@@ -40,9 +39,6 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
   }),
   byServer: (serverId) => {
     return Array.from(get().channels.values()).filter(c => c.serverId === serverId);
-  },
-  dmChannels: () => {
-    return Array.from(get().channels.values()).filter(c => c.serverId === null);
   },
   clear: () => set({ channels: new Map(), activeChannelId: null }),
 }));

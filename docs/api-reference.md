@@ -15,9 +15,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Channels](#channels)
 - [Messages](#messages)
 - [Threads](#threads)
-- [Reactions](#reactions)
 - [Unreads](#unreads)
-- [Direct Messages](#direct-messages)
 - [Users](#users)
 - [Bots](#bots)
 - [Admin](#admin)
@@ -76,12 +74,12 @@ Cursor-based pagination uses ULID-based `before` parameters. Offset-based pagina
 
 ### Channel Types
 
-| Value | Type           |
-|-------|----------------|
-| `1`   | DM             |
-| `3`   | Server Text    |
-| `4`   | Server Voice   |
-| `5`   | Server Category|
+| Value | Type            |
+|-------|-----------------|
+| `3`   | Server Text     |
+| `5`   | Server Category |
+
+> Types `1`/`2` (DM/group DM) and `4` (voice) exist in the schema for historical reasons but are no longer created or served — see the v1 platform release for those features.
 
 ---
 
@@ -492,10 +490,7 @@ Fetch messages from a channel with cursor-based pagination. Returns messages in 
     "channelId": "01HYX...",
     "editedAt": null,
     "deletedAt": null,
-    "createdAt": "2025-01-15T10:30:00.000Z",
-    "reactions": [
-      { "emoji": "\ud83d\udc4d", "count": 2, "me": true }
-    ]
+    "createdAt": "2025-01-15T10:30:00.000Z"
   }
 ]
 ```
@@ -712,104 +707,6 @@ Close or reopen a thread. Requires the message author, ManageMessages permission
 
 ---
 
-## Reactions
-
-### PUT /channels/:channelId/messages/:msgId/reactions
-
-Add a reaction to a message. Idempotent -- adding the same reaction twice is a no-op.
-
-**Auth:** Required (must have access to the channel)
-
-**Request Body**
-```json
-{
-  "emoji": "\ud83d\udc4d"
-}
-```
-
-| Field   | Type   | Required | Constraints      |
-|---------|--------|----------|------------------|
-| `emoji` | string | yes      | 1-32 characters  |
-
-**Response** `200`
-```json
-{
-  "messageId": "01HYX...",
-  "emoji": "\ud83d\udc4d",
-  "userId": "01HYX..."
-}
-```
-
-**Errors**
-
-| Status | Error                            | Cause                            |
-|--------|----------------------------------|----------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access        |
-| 404    | `Message not found`              | Message does not exist or is deleted |
-
-**Side effects:** Broadcasts `ReactionAdd` event to the channel's Socket.IO room.
-
----
-
-### DELETE /channels/:channelId/messages/:msgId/reactions/:emoji
-
-Remove a reaction from a message. The `:emoji` path parameter should be URI-encoded.
-
-**Auth:** Required (must have access to the channel)
-
-**Response** `200`
-```json
-{
-  "messageId": "01HYX...",
-  "emoji": "\ud83d\udc4d",
-  "userId": "01HYX..."
-}
-```
-
-**Errors**
-
-| Status | Error                            | Cause                                 |
-|--------|----------------------------------|---------------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access             |
-| 404    | `Reaction not found`             | User has not reacted with this emoji  |
-
-**Side effects:** Broadcasts `ReactionRemove` event to the channel's Socket.IO room.
-
----
-
-### GET /channels/:channelId/messages/:msgId/reactions
-
-Get all reactions on a message, grouped by emoji.
-
-**Auth:** Required (must have access to the channel)
-
-**Response** `200`
-```json
-[
-  {
-    "emoji": "\ud83d\udc4d",
-    "count": 3,
-    "userIds": ["01HYX...", "01HYX...", "01HYX..."],
-    "me": true
-  }
-]
-```
-
-| Field     | Type     | Description                                       |
-|-----------|----------|---------------------------------------------------|
-| `emoji`   | string   | The emoji character                               |
-| `count`   | number   | Total number of users who reacted with this emoji |
-| `userIds` | string[] | IDs of all users who reacted                      |
-| `me`      | boolean  | Whether the authenticated user has this reaction  |
-
-**Errors**
-
-| Status | Error                            | Cause                         |
-|--------|----------------------------------|-------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access     |
-
----
-
 ## Unreads
 
 ### PUT /channels/:channelId/ack
@@ -894,44 +791,6 @@ Get unread state for all channels the user is a member of (server channels + DM 
   }
 ]
 ```
-
----
-
-## Direct Messages
-
-### POST /channels/dm
-
-Create or retrieve a DM channel between the authenticated user and a recipient. Uses speculative insert with SAVEPOINT rollback to handle the race condition where two users create the same DM simultaneously.
-
-**Auth:** Required
-
-**Request Body**
-```json
-{
-  "recipientId": "01HYX..."
-}
-```
-
-| Field         | Type   | Required | Constraints |
-|---------------|--------|----------|-------------|
-| `recipientId` | string | yes      | minLength: 1 |
-
-**Response** `201`
-```json
-{
-  "id": "01HYX...",
-  "channelType": 1
-}
-```
-
-Returns `201` whether the DM channel was newly created or already existed.
-
-**Errors**
-
-| Status | Error                             | Cause                      |
-|--------|-----------------------------------|----------------------------|
-| 400    | `Cannot create DM with yourself`  | `recipientId` equals caller |
-| 404    | `Recipient not found`             | User ID does not exist     |
 
 ---
 
@@ -1402,36 +1261,6 @@ Emitted to `user:{userId}` when the user joins a new server (via invite).
 ```
 
 After emitting, the server also joins the user's socket(s) to the new channel rooms automatically.
-
----
-
-#### ReactionAdd
-
-Broadcast to `channel:{channelId}` when a reaction is added.
-
-```json
-{
-  "messageId": "01HYX...",
-  "channelId": "01HYX...",
-  "userId": "01HYX...",
-  "emoji": "\ud83d\udc4d"
-}
-```
-
----
-
-#### ReactionRemove
-
-Broadcast to `channel:{channelId}` when a reaction is removed.
-
-```json
-{
-  "messageId": "01HYX...",
-  "channelId": "01HYX...",
-  "userId": "01HYX...",
-  "emoji": "\ud83d\udc4d"
-}
-```
 
 ---
 

@@ -14,8 +14,7 @@
  * Prod mode auto-generates secrets and prompts for:
  *   - DB_PASSWORD (with auto-generated default)
  *   - CORS_ORIGIN / domain (required)
- *   - LiveKit API key + secret (optional — skip to disable voice)
- *   - Writes .env.prod + optionally livekit.prod.yaml
+ *   - Writes .env.prod
  */
 
 const fs = require('node:fs');
@@ -96,7 +95,6 @@ function setupDev() {
 async function setupProd() {
     const EXAMPLE = path.join(ROOT, '.env.prod.example');
     const OUT = path.join(ROOT, '.env.prod');
-    const LIVEKIT_YAML = path.join(ROOT, 'livekit.prod.yaml');
 
     if (fs.existsSync(OUT) && !force) {
         console.error('.env.prod already exists. Use --force to overwrite.');
@@ -123,11 +121,6 @@ async function setupProd() {
     const domain = (await rl.question('  Domain — hit Enter to skip for local setup or enter your own (e.g., chat.example.com): ')).trim();
     const corsOrigin = domain ? `https://${domain.replace(/^https?:\/\//, '')}` : '';
 
-    const defaultLivekitKey = crypto.randomBytes(16).toString('hex');
-    const defaultLivekitSecret = crypto.randomBytes(32).toString('hex');
-    const livekitKey = (await rl.question(`  LiveKit API key — hit Enter to accept or enter your own [${defaultLivekitKey}]: `)).trim() || defaultLivekitKey;
-    const livekitSecret = (await rl.question(`  LiveKit API secret — hit Enter to accept or enter your own [${defaultLivekitSecret}]: `)).trim() || defaultLivekitSecret;
-
     rl.close();
 
     // --- Auto-generated secrets ---
@@ -138,8 +131,6 @@ async function setupProd() {
         MINIO_ROOT_PASSWORD: strongPassword(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
         CORS_ORIGIN: corsOrigin,
-        LIVEKIT_API_KEY: livekitKey,
-        LIVEKIT_API_SECRET: livekitSecret,
     };
 
     // --- Write .env.prod ---
@@ -167,28 +158,12 @@ async function setupProd() {
     fs.writeFileSync(OUT, output.join('\n'), 'utf8');
     console.log(`\n  Created .env.prod`);
 
-    // --- Write livekit.prod.yaml if keys were provided ---
-
-    const yamlContent = [
-        '# LiveKit server configuration — keys must match .env.prod',
-        '# See https://docs.livekit.io/home/self-hosting/deployment/',
-        'port: 7880',
-        'rtc:',
-        '  use_external_ip: true',
-        'keys:',
-        `  ${livekitKey}: ${livekitSecret}`,
-        '',
-    ].join('\n');
-    fs.writeFileSync(LIVEKIT_YAML, yamlContent, 'utf8');
-    console.log('  Created livekit.prod.yaml');
-
     // --- Summary ---
 
     console.log('\n  =====================================');
     console.log('  Config complete! Summary:\n');
     console.log(`  Domain:          ${domain || '(none — local mode)'}`);
     console.log(`  CORS origin:     ${corsOrigin || '(not set — same-origin only)'}`);
-    console.log(`  Voice (LiveKit): configured`);
     console.log(`\n  All secrets have been auto-generated and saved to .env.prod.`);
 
     // --- Build and start Docker ---

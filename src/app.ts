@@ -8,14 +8,9 @@ import { authRoutes } from './routes/auth';
 import { serverRoutes } from './routes/servers';
 import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
-import { reactionRoutes } from './routes/reactions';
 import { unreadRoutes } from './routes/unreads';
-import { dmRoutes } from './routes/dms';
 import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
-import { voiceRoutes } from './routes/voice';
-import { voiceWebhookRoutes } from './routes/voice-webhooks';
-import { dmCallRoutes } from './routes/dm-calls';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
 import { threadRoutes } from './routes/threads';
@@ -33,7 +28,6 @@ export async function buildApp(opts?: {
     jwtSecret?: string;
     dbUrl?: string;
     rateLimit?: boolean;
-    callTimeoutMs?: number;
 }) {
     const app = Fastify({ logger: opts?.logger ?? false, trustProxy: config.trustProxy });
 
@@ -172,16 +166,6 @@ export async function buildApp(opts?: {
                             } catch { /* best-effort room join */ }
                         }
 
-                        // For DMCreated, join user's sockets to the new DM channel room
-                        if (evt.event === 'DMCreated' && evt.data?.channelId) {
-                            try {
-                                const sockets = await io.in(evt.room).fetchSockets();
-                                for (const s of sockets) {
-                                    s.join(`channel:${evt.data.channelId}`);
-                                }
-                            } catch { /* best-effort room join */ }
-                        }
-
                         // For _leaveRoom, eject sockets from a channel room (e.g. bot access revoked)
                         if (evt.event === '_leaveRoom' && evt.data?.channelId) {
                             try {
@@ -274,14 +258,9 @@ export async function buildApp(opts?: {
     await app.register(serverRoutes);
     await app.register(channelRoutes);
     await app.register(messageRoutes);
-    await app.register(reactionRoutes);
     await app.register(unreadRoutes);
-    await app.register(dmRoutes);
     await app.register(adminRoutes);
     await app.register(userRoutes);
-    await app.register(voiceRoutes);
-    await app.register(voiceWebhookRoutes);
-    await app.register(dmCallRoutes, { timeoutMs: opts?.callTimeoutMs });
     await app.register(fileRoutes);
     await app.register(botRoutes);
     await app.register(threadRoutes);

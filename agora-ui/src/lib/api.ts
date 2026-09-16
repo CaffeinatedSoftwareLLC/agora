@@ -5,7 +5,6 @@ import type {
   InviteResponse,
   JoinServerResponse,
   UserSearchResult,
-  CreateDMResponse,
   ServerAccess,
 } from './contracts/server';
 
@@ -77,35 +76,6 @@ export const userApi = {
     api.get<UserSearchResult[]>(`/users/search?q=${encodeURIComponent(query)}`),
 };
 
-export const dmApi = {
-  createDM: (recipientId: string) =>
-    api.post<CreateDMResponse>('/channels/dm', { recipientId }),
-};
-
-export interface VoicePermissions {
-  canMuteMembers: boolean;
-  canDeafenMembers: boolean;
-  canMoveMembers: boolean;
-}
-
-export interface VoiceParticipantInfo {
-  identity: string;
-  name: string;
-  permission?: { canPublish: boolean; canSubscribe: boolean };
-}
-
-export const callApi = {
-  initiate: (channelId: string, callType: 'voice' | 'video') =>
-    api.post<{ callId: string; token: string; url: string; callType: string }>('/calls/initiate', { channelId, callType }),
-  accept: (callId: string) =>
-    api.post<{ callId: string; token: string; url: string }>('/calls/accept', { callId }),
-  decline: (callId: string) =>
-    api.post<{ success: boolean }>('/calls/decline', { callId }),
-  cancel: (callId: string) =>
-    api.post<{ success: boolean }>('/calls/cancel', { callId }),
-  end: (callId: string) =>
-    api.post<{ success: boolean; duration: number }>('/calls/end', { callId }),
-};
 
 export async function uploadFile(channelId: string, file: File): Promise<{
   id: string; name: string; mime: string; size: number;
@@ -277,30 +247,4 @@ export const roleApi = {
 
   removeMemberOverride: (channelId: string, userId: string) =>
     api.delete(`/channels/${channelId}/overrides/members/${userId}`),
-};
-
-export const voiceApi = {
-  getToken: (channelId: string) =>
-    api.post<{ token: string; url: string }>('/voice/token', { channelId }),
-
-  getParticipants: (channelId: string) =>
-    api.get<VoiceParticipantInfo[]>(`/voice/participants/${channelId}`),
-
-  kick: (channelId: string, userId: string) =>
-    api.post('/voice/kick', { channelId, userId }),
-
-  mute: (channelId: string, userId: string) =>
-    api.post('/voice/mute', { channelId, userId }),
-
-  unmute: (channelId: string, userId: string) =>
-    api.post('/voice/unmute', { channelId, userId }),
-
-  deafen: (channelId: string, userId: string) =>
-    api.post('/voice/deafen', { channelId, userId }),
-
-  undeafen: (channelId: string, userId: string) =>
-    api.post('/voice/undeafen', { channelId, userId }),
-
-  getPermissions: (channelId: string) =>
-    api.get<VoicePermissions>(`/voice/permissions/${channelId}`),
 };

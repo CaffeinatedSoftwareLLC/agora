@@ -32,7 +32,6 @@ export interface MessagePayload {
   deletedAt?: string;
   mentions?: string[];
   mentionsEveryone?: boolean;
-  reactions?: { emoji: string; count: number; me: boolean }[];
   systemEvent?: string;
   attachments?: MessageAttachmentPayload[];
   threadId?: string;
@@ -80,38 +79,6 @@ export interface PresenceUpdatePayload {
   status: 'online' | 'idle' | 'offline';
 }
 
-export interface ReactionAddPayload {
-  messageId: string;
-  channelId: string;
-  userId: string;
-  emoji: string;
-}
-
-export interface ReactionRemovePayload {
-  messageId: string;
-  channelId: string;
-  userId: string;
-  emoji: string;
-}
-
-export interface DMCreatedPayload {
-  channelId: string;
-  name: string;
-}
-
-export interface CallIncomingPayload {
-  callId: string;
-  channelId: string;
-  callerId: string;
-  callerUsername: string;
-  callType: 'voice' | 'video';
-}
-
-export interface CallAcceptedPayload { callId: string; }
-export interface CallDeclinedPayload { callId: string; }
-export interface CallCancelledPayload { callId: string; }
-export interface CallTimeoutPayload { callId: string; }
-export interface CallEndedPayload { callId: string; duration?: number; }
 
 export interface BotMessageStreamPayload {
     messageId: string;

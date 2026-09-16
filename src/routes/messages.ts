@@ -297,29 +297,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const result = await db.query(query, params);
 
-        // Fetch reactions for all returned messages in one query
         const messageIds = result.rows.map((r: any) => r.id);
-        let reactionsMap: Record<string, { emoji: string; count: number; me: boolean }[]> = {};
-        if (messageIds.length > 0) {
-            const rxResult = await db.query(
-                `SELECT message_id, emoji_unicode,
-                        count(*)::int AS count,
-                        bool_or(user_id = $2) AS me
-                 FROM message_reactions
-                 WHERE message_id = ANY($1)
-                 GROUP BY message_id, emoji_unicode`,
-                [messageIds, userId]
-            );
-            for (const row of rxResult.rows) {
-                const mid = row.message_id.trim();
-                if (!reactionsMap[mid]) reactionsMap[mid] = [];
-                reactionsMap[mid].push({
-                    emoji: row.emoji_unicode,
-                    count: row.count,
-                    me: row.me,
-                });
-            }
-        }
 
         // Fetch attachments for all returned messages
         let attachmentsMap: Record<string, any[]> = {};
@@ -358,7 +336,6 @@ export async function messageRoutes(app: FastifyInstance) {
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,
             createdAt: row.created_at,
-            reactions: reactionsMap[row.id.trim()] || [],
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
             ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at } : {}) } : {}),

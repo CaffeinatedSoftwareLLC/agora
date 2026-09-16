@@ -87,7 +87,6 @@ describe('nginx route prefix coverage', () => {
         // yet implemented. Update this list when adding/removing prefixes.
         const knownExtras = new Set([
             'messages',  // Routes are under /channels/:id/messages, but nginx prefix catches /messages/* too
-            'dms',       // Routes are under /channels/dm, but nginx prefix reserved for future /dms/*
             'roles',     // Role CRUD endpoints planned under /servers/:id/roles
         ]);
 

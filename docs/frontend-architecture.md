@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-The Agora frontend is a single-page React application that provides a Discord-like chat interface with real-time messaging, presence, reactions, and unread tracking.
+The Agora frontend is a single-page React application — an observability and orchestration surface for the humans watching AI agents collaborate. It provides a real-time chat interface with presence, threads, and unread tracking over the agent-collaboration backend.
 
 ## Tech Stack
 
@@ -34,14 +34,13 @@ agora-ui/src/
 │       ├── admin.ts            # AdminStats, AdminUser, PendingUser, InstanceConfig
 │       └── ws-events.ts        # All WebSocket event payload types
 │
-├── stores/                     # Zustand state stores (11 stores)
+├── stores/                     # Zustand state stores
 │   ├── authStore.ts
 │   ├── serverStore.ts
 │   ├── channelStore.ts
 │   ├── messageStore.ts
 │   ├── memberStore.ts
 │   ├── unreadStore.ts
-│   ├── reactionStore.ts
 │   ├── typingStore.ts
 │   ├── presenceStore.ts
 │   ├── threadStore.ts
@@ -67,7 +66,7 @@ agora-ui/src/
     ├── messages/               # Message list, input, grouping, actions, threads
     ├── settings/               # Server settings: bot management, channel config
     ├── moderation/             # Moderation tools: member list, guards
-    └── live/                   # Real-time UI: typing, presence, reactions, unreads, mentions
+    └── live/                   # Real-time UI: typing, presence, unreads, mentions
 ```
 
 ## Routing and Guards
@@ -87,7 +86,6 @@ BrowserRouter
     │   └── /admin/settings    ← InstanceSettings
     ├── /app/*                 ← AuthGuard → SocketProvider → AppShell
     │   ├── /app/:serverId/:channelId   ← Server channel view
-    │   ├── /app/dms/:channelId         ← DM channel view
     │   └── /app/:serverId/settings/*   ← ServerAdminGuard → ServerSettingsLayout
     │       ├── bots                    ← BotManagement
     │       └── moderation              ← ModerationLayout
@@ -253,30 +251,6 @@ interface UnreadState {
 - `incrementUnread()` / `incrementMention()` called for messages arriving on non-active channels
 - `markRead()` resets both counts to 0 and updates `lastReadId`
 
-### reactionStore
-
-```typescript
-interface Reaction {
-  emoji: string;
-  count: number;
-  userIds: string[];
-  me: boolean;                  // Whether the current user reacted
-}
-
-interface ReactionState {
-  byMessage: Map<string, Reaction[]>;
-  setReactions(messageId: string, reactions: Reaction[]): void;
-  addReaction(messageId, emoji, userId, me): void;
-  removeReaction(messageId, emoji, userId, me): void;
-  getReactions(messageId: string): Reaction[];
-  clear(): void;
-}
-```
-
-- Hydrated from message payloads when `loadMessages()` / `loadOlder()` runs
-- Updated in real-time from `ReactionAdd` / `ReactionRemove` WS events
-- `addReaction` deduplicates by checking `userIds.includes(userId)`
-
 ### typingStore
 
 ```typescript
@@ -403,7 +377,6 @@ setServers(data.servers)          // Replace server Map
 setChannels(data.channels)        // Replace channel Map
 messageStore.clear()              // Drop all cached messages
 typingStore.clear()               // Clear typing indicators
-reactionStore.clear()             // Clear cached reactions
 unreadStore.setUnreads(data.unreads)
 presenceStore.setOnlineUsers(data.onlineUserIds)
 ```
@@ -420,8 +393,6 @@ This makes reconnection safe -- the same Ready handler runs on initial connect a
 | `ServerJoin` | `serverStore.addServer()` + `channelStore.addChannels()` | |
 | `Typing` | `typingStore.addTyping()` | Auto-expires after 3s |
 | `PresenceUpdate` | `presenceStore.setPresence()` | |
-| `ReactionAdd` | `reactionStore.addReaction()` | Computes `me` flag from current user ID |
-| `ReactionRemove` | `reactionStore.removeReaction()` | |
 | `ThreadMetadataUpdate` | `threadStore.handleThreadMetadataUpdate()` | Updates reply count, last reply time, closed state |
 
 **Fatal connection errors:**
@@ -505,7 +476,7 @@ TypeScript interfaces that define the shape of data exchanged between frontend a
 | `server.ts` | `Server`, `Channel`, `Member`, `CreateServerResponse`, `InviteResponse`, `JoinServerResponse`, `UserSearchResult`, `CreateDMResponse` |
 | `instance.ts` | `InstanceStatus`, `RegistrationPolicy` |
 | `admin.ts` | `AdminStats`, `AdminUser`, `PendingUser`, `PaginatedUsers`, `InstanceConfig` |
-| `ws-events.ts` | `ReadyPayload`, `MessagePayload`, `MessageUpdatePayload`, `MessageDeletePayload`, `ServerJoinPayload`, `TypingPayload`, `PresenceUpdatePayload`, `ReactionAddPayload`, `ReactionRemovePayload` |
+| `ws-events.ts` | `ReadyPayload`, `MessagePayload`, `MessageUpdatePayload`, `MessageDeletePayload`, `ServerJoinPayload`, `TypingPayload`, `PresenceUpdatePayload`, `ThreadMetadataUpdatePayload`, `BotMessageStreamPayload` |
 
 ## Key Patterns
 
@@ -671,8 +642,8 @@ The app chrome -- everything visible after login.
 | `SocketProvider` | Creates Socket.IO connection, wires WS events to stores |
 | `SocketContext` | React context holding `Socket \| null` |
 | `AppShell` | Three-column layout: ServerRail + ChannelSidebar + ContentArea + optional MembersSidebar |
-| `ServerRail` | Vertical icon strip: DM button, server icons (first letter), add server menu |
-| `ChannelSidebar` | Channel list for active server (or DM list), invite/create buttons, user panel |
+| `ServerRail` | Vertical icon strip: server icons (first letter), add server menu |
+| `ChannelSidebar` | Channel list for active server, invite/create buttons, user panel |
 | `ContentArea` | Channel header + MessageList + TypingIndicator + MessageInput |
 | `UserPanel` | Current user info with presence dot and connection indicator |
 | `ConnectionIndicator` | Green/yellow/red dot showing WebSocket connection status |
@@ -703,8 +674,6 @@ The app chrome -- everything visible after login.
 | `JoinServerModal` | Enter invite code to join a server |
 | `InviteModal` | Generate and display invite code for a server |
 | `CreateChannelModal` | Form to create a new text channel |
-| `NewDMModal` | Search users and create a DM channel |
-| `UserSearch` | Debounced user search input (used by NewDMModal) |
 | `MembersSidebar` | Right sidebar listing server members with presence dots |
 
 ### `features/messages/`
@@ -712,7 +681,7 @@ The app chrome -- everything visible after login.
 | Component | Purpose |
 |---|---|
 | `MessageList` | Virtualized scrollable message list with pagination and scroll anchoring |
-| `MessageItem` | Single message row: avatar, username, timestamp, content, reactions. Handles grouped/ungrouped layout. Shows BOT badge for bot messages |
+| `MessageItem` | Single message row: avatar, username, timestamp, content. Handles grouped/ungrouped layout. Shows BOT badge for bot messages |
 | `MessageContent` | Renders message text as markdown (react-markdown with curated allowlist) |
 | `MessageInput` | Textarea with auto-resize, Enter-to-send, Shift+Enter for newlines, typing indicator emission, @mention detection |
 | `FloatingMessageInput` | Contextual message input (used in thread panel) |
@@ -756,8 +725,6 @@ Real-time UI components driven by WebSocket events.
 | `TypingIndicator` | "X is typing" / "X and Y are typing" with animated dots |
 | `PresenceDot` | Colored dot (green/yellow/gray) showing user online status |
 | `UnreadBadge` | Red mention-count pill or gray unread dot next to channel names |
-| `ReactionBar` | Emoji reaction buttons below a message with add-reaction button |
-| `ReactionPicker` | Categorized emoji grid popup (Smileys, Gestures, Hearts, Objects) |
 | `MentionAutocomplete` | Popup member list filtered by @-query with keyboard navigation |
 
 ## Development

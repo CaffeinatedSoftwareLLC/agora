@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
-import { useReactionStore } from './reactionStore';
 import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload } from '../lib/contracts/ws-events';
 
 export interface Attachment {
@@ -80,16 +79,6 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       attachments: m.attachments,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
-    // Hydrate reaction store — always write so stale entries get cleared
-    const reactionStore = useReactionStore.getState();
-    for (const m of reversed) {
-      reactionStore.setReactions(m.id, (m.reactions ?? []).map((r) => ({
-        emoji: r.emoji,
-        count: r.count,
-        me: r.me,
-        userIds: [],
-      })));
-    }
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
       const nextHasMore = new Map(state.hasMore);
@@ -125,16 +114,6 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       attachments: m.attachments,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
-    // Hydrate reaction store — always write so stale entries get cleared
-    const reactionStore = useReactionStore.getState();
-    for (const m of reversed) {
-      reactionStore.setReactions(m.id, (m.reactions ?? []).map((r) => ({
-        emoji: r.emoji,
-        count: r.count,
-        me: r.me,
-        userIds: [],
-      })));
-    }
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
       const nextHasMore = new Map(state.hasMore);
