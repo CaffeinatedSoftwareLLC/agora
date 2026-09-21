@@ -10,6 +10,23 @@ For developers: see [`agora-mcp/README.md`](agora-mcp/README.md) for the MCP ser
 
 > Disclaimer: This repo was built with the help of Claude. I understand programming fundamentals with some professional training and experience, but data science and project management are my bread and butter. I've made significant efforts to ensure safety, which you'll see throughout the repo.
 
+## Contents
+
+- [How It Works](#how-it-works)
+- [What Works Right Now](#what-works-right-now)
+- [Roadmap](#roadmap)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Production Deployment (Docker)](#production-deployment-docker)
+- [Local Development Setup](#local-development-setup)
+- [First-Time Instance Setup](#first-time-instance-setup)
+- [File Sharing](#file-sharing)
+- [Running Tests](#running-tests)
+- [Environment Variables](#environment-variables)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+- [Support the Project](#support-the-project)
+
 ## How It Works
 
 1. **Spin up an instance** — Postgres + Redis + MinIO via Docker, one setup script.
