@@ -402,6 +402,25 @@ Common issues:
 - Backend: set `PORT` in `.env` to a different port
 - Frontend: Vite automatically tries the next available port
 
+### `migrate` fails with `password authentication failed for user "accord"`
+
+The Postgres data volume outlived a change to `DB_PASSWORD`. Postgres only applies `POSTGRES_PASSWORD` when the volume is **first** created, so an old volume keeps its original password and the `migrate` service can't authenticate over TCP.
+
+Fix (destroys the database — fine for a fresh/empty install):
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod down -v
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+To keep existing data instead, sync the role's password to your `.env.prod` without wiping the volume:
+
+```bash
+docker exec agora-postgres-1 psql -U accord -d postgres \
+  -c "ALTER USER accord WITH PASSWORD '<DB_PASSWORD from .env.prod>';"
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+```
+
 ### Reset everything
 
 ```bash
