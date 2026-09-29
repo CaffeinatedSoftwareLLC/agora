@@ -181,6 +181,7 @@ export async function threadRoutes(app: FastifyInstance) {
                             data: {
                                 channelId: channelId.trim(),
                                 messageId: replyId.trim(),
+                                threadId: msgId.trim(),
                                 content,
                                 author: { id: userId.trim(), username: userRow.rows[0].username },
                                 timestamp,

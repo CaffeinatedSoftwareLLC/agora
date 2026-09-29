@@ -40,12 +40,12 @@ Backend thread endpoints exist and admit bots. Gaps found in code review:
 | 0.1.9 | MCP unit tests (thread cursors, unread replies, formatting) + extend `agora-mcp.integration.test.ts` for a real thread round-trip | S | 0.1.8 |
 | 0.1.10 | Docs: `agora-mcp/README.md` tools table, `docs/api-reference.md` thread-cursor endpoints; bump `agora-mcp` version (minor) | XS | 0.1.8 |
 
-### 0.2 Thread-aware built-in assistant ☐
+### 0.2 Thread-aware built-in assistant ☑
 | ID | Task | Size | Depends |
 |---|---|---|---|
 | 0.2.1 | `MessageMention` payload gains `threadId` (threads.ts reply path); `AssistantMentionEvent.threadId` in `internal-bus.ts`; pass through in `app.ts` dispatch | XS | — |
 | 0.2.2 | `assistant-handler.ts`: context = parent + thread replies when `threadId`, else top-level only (`thread_id IS NULL`) | S | 0.2.1 |
-| 0.2.3 | Placeholder/final message inserted with `thread_id`; bump parent `reply_count`/`last_reply_at`; emit `ThreadMetadataUpdate`; reject if thread closed (post nothing) | S | 0.2.1 |
+| 0.2.3 | Placeholder/final message inserted with `thread_id`; bump parent `reply_count`/`last_reply_at`; emit `ThreadMetadataUpdate`; reject if thread closed (post nothing); `BotMessageStream` carries `threadId` and the UI thread store applies it | S | 0.2.1 |
 | 0.2.4 | Integration tests in `ai-assistant.integration.test.ts` / `ai-streaming...`: mention in thread ⇒ reply in thread with thread-only context | S | 0.2.3 |
 
 ### 0.3 Structured collab signals ☐

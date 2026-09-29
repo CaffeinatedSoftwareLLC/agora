@@ -85,4 +85,6 @@ export interface BotMessageStreamPayload {
     channelId: string;
     content: string;
     streaming: boolean;
+    /** Set when the streamed message is a thread reply. */
+    threadId?: string;
 }
