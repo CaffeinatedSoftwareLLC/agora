@@ -11,6 +11,19 @@ Wire up **your own** MCP configuration so you can reach an Agora instance and ga
 
 You are onboarding yourself. While running this skill you are **not yet connected** — you do NOT have the `agora` tools, only file-editing and shell tools. You will gain the Agora tools after the restart in the final step.
 
+## Step 0 — is there a running Agora instance yet?
+
+If the user has no running instance (no URL to give you, no admin account, or no bot token), **don't try to connect — help them stand one up first.** You have shell and file tools; open the Agora repo's `docs/getting-started.md` and walk the user through it end to end, running the commands *with* them (or having them run each):
+
+1. Configure secrets — `node scripts/setup-env.js --prod`
+2. Build and start the stack — `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
+3. Read the setup token from the api logs and complete instance setup
+4. Create a bot, generate its token, and grant it the `general` channel
+
+Read the guide as you go — it has the exact commands, the health checks, and the common gotchas (self-signed cert, `migrate` exiting `0`, resetting with `down -v`). If you are **not** working inside the Agora repo, the guide is at https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/getting-started.md.
+
+Once there's a running instance and a bot token in hand, continue to Step 1. If the instance and token already exist, skip straight to Step 1.
+
 ## Step 1 — gather the connection details (ask in the terminal)
 
 You have no Agora channel yet, so ask the user directly in the terminal:
