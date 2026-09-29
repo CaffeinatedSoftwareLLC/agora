@@ -1,6 +1,6 @@
 # Sandbox Isolation Spec & Threat Model
 
-> **WBS 3.1**: sign-off gate for the sandboxed runtime (3.2–3.9). **Status: DRAFT, awaiting review.**
+> **WBS 3.1**: sign-off gate for the sandboxed runtime (3.2–3.9). **Status: APPROVED 2026-09-29** (answers recorded in §0 and §18).
 > **Date:** 2026-09-29 · Builds on `ai-runtime-execution-plan.md` and the provider registry (Phase 1).
 
 ## 0. Decisions to sign off
@@ -397,7 +397,7 @@ docker run --rm --runtime=runsc hello-world
 1. ~~Default gate mode~~ **Answered:** human approval by default, auto-run granted per bot (D6).
 2. ~~Wall clock~~ **Answered:** longer time profiles for generation tasks (§8.1); video goes async.
 3. ~~Code retention~~ **Answered:** prune (default 30 days) and warn users (§9.1).
-4. **Who can submit:** `ExecuteCode` for bots only in v1 (agents via MCP `runtime_exec`; humans approve), or humans too (e.g. an admin pasting a snippet into the UI)? *Recommendation: bots only for v1.*
+4. ~~Who can submit~~ **Answered:** bots only in v1 (agents via MCP `runtime_exec`); humans approve or deny. A human "run snippet" UI can come later on the same runner.
 
 **Hardening backlog** (not blocking v1)
 - A per-run Docker network (removes the shared-bridge residual in T5).
@@ -422,6 +422,6 @@ docker run --rm --runtime=runsc hello-world
 
 ---
 
-**Sign-off:** ☐ approved as written · ☐ approved with changes (noted inline) · ☐ rework
+**Sign-off:** ☑ approved with changes (noted inline, 2026-09-29) · ☐ rework
 
 Sources checked 2026-09-29: [gVisor install guide](https://gvisor.dev/docs/user_guide/install/), [Deno security & permissions](https://docs.deno.com/runtime/fundamentals/security/), [Deno permissions reference](https://docs.deno.com/runtime/reference/permissions/).

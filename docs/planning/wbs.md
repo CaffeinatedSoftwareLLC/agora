@@ -110,7 +110,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## 3 · Sandboxed Runtime — `feat/runtime`
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 3.1 | ◐ **Isolation spec** + threat model drafted: `sandbox-isolation-spec.md`. Awaiting user sign-off (gate for 3.2+) | M | — |
+| 3.1 | ☑ **Isolation spec** + threat model: `sandbox-isolation-spec.md`, approved 2026-09-29 (bots-only submission, per-bot auto-approve, time profiles, 30-day code retention) | M | — |
 | 3.2 | `runner` service: BullMQ consumer, Docker socket (sole holder), gVisor launch, limits, scratch tmpfs; compose prod + dev (runc warning) | L | 3.1 |
 | 3.3 | Sandbox image: Deno, `agora:std` module, non-root, read-only rootfs | M | 3.1 |
 | 3.4 | Capability endpoint + per-run tokens + per-run call caps + cost ledger | M | 1.5 |
