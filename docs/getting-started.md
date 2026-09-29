@@ -136,3 +136,24 @@ docker compose -f docker-compose.yml -p agora-dev up -d
 ```
 
 Both files default to the same project name (the directory name), and without `-p` a `docker compose -f docker-compose.yml up` run from the same directory as the prod stack will recreate the prod `postgres`/`redis`/`minio` containers with the dev config — Compose happens to preserve the named volume by default so data usually survives, but it's not something to rely on. Keep them namespaced separately.
+
+## Sandbox runner (development)
+
+The sandboxed code runtime (see [`docs/planning/sandbox-isolation-spec.md`](planning/sandbox-isolation-spec.md)) runs agent code in throwaway containers. In development it needs three things on top of the dev infra:
+
+```bash
+docker network create --internal agora_sandbox                  # internal-only: no route out
+docker build -t agora/sandbox-deno:dev sandbox                   # sandbox image (Deno, distroless)
+docker compose -f docker-compose.yml -p agora-dev --profile sandbox up -d socket-proxy
+```
+
+The socket proxy publishes a restricted Docker API on `127.0.0.1:2375`. The runner can only create, start, inspect and remove `agora-run-*` containers, and bind mounts are rejected.
+
+Start the runner, and run its Docker-backed tests:
+
+```bash
+AGORA_SANDBOX_INSECURE_DEV=1 npm run runner
+npm run test:sandbox
+```
+
+`AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.

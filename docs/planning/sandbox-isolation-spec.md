@@ -96,8 +96,8 @@ Run request lifecycle:
    - `deny` → `denied`, reply in the thread.
    - `needs_approval` → post an Approve/Deny control in the thread and wait.
    - `auto_run` → continue.
-4. On clearance it mints a **run token** (§7), marks the run `queued` and enqueues `{ runId }` only. The code stays in the DB.
-5. `runner` dequeues and loads the run row. It passes the code over **stdin** to a container it builds from a fixed template with the run's clamped limits, then starts the container.
+4. On clearance it marks the run `queued` and enqueues `{ runId }` only. The code stays in the DB.
+5. `runner` dequeues and atomically claims the run (re-checking gate and approval, and per-server concurrency under an advisory lock). It mints the **run token** (§7), so the token exists only while the run is running and never passes through the queue. It then creates the container from a fixed template with the run's clamped limits and starts it.
 6. Code calls `agora:std` → `cap-gateway` with the run token. `postFile()` uploads artifacts, which are posted to the originating thread.
 7. On exit, timeout or kill: `runner` records the outcome, removes the container and revokes the token. `api` posts a result summary to the thread.
 
@@ -114,6 +114,8 @@ Each threat must be stopped by **at least two independent layers** (see §13).
 | L5 Resource limits | cgroup CPU/memory/PIDs, wall clock, output caps, per-run call caps, route budgets | exhaustion, cost abuse |
 | L6 Deno permissions | `--allow-net=cap-gateway:8080`, no read/write outside scratch, no env/run/ffi/sys, remote imports denied | defense-in-depth only: blocks accidental reach and most scripts |
 | L7 Decision gate | rules or external decider before anything runs; human approval by default | obviously malicious or unintended runs |
+
+> **Verified in 3.2 (runc, Deno 2.9.7):** `--deny-import` blocks both static and dynamic remote imports. `--allow-run` is enforced even for the Deno binary. With every Deno permission open, a container on the internal network still can't reach the internet (by name or IP), resolve `postgres` or public names, or reach the Docker host.
 
 > **Why L6 isn't the boundary:** Deno loads statically imported remote modules without consulting permissions, and by default allows imports from `deno.land`, `jsr.io`, `esm.sh`, `cdn.jsdelivr.net`, `raw.githubusercontent.com`, `gist.githubusercontent.com` and others. Attacker-hosted code, plus data encoded in an import URL, would bypass `--allow-net`. We still deny remote imports (`--deny-import`, cached std-lib only), but L3 is what actually guarantees there's no route out. *(Exact flag behavior to be verified against the pinned Deno version in 3.3.)*
 
@@ -136,21 +138,24 @@ docker run --rm -i \
   --memory=512m --memory-swap=512m \
   --cpus=1 \
   --ulimit nofile=256:256 \
-  --log-driver=none \
+  --log-driver=local --log-opt max-size=1m --log-opt max-file=1 --log-opt compress=false \
   --label agora.run=<runId> --label agora.server=<serverId> \
   -e AGORA_CAP_URL=http://cap-gateway:8080 \
   -e AGORA_RUN_TOKEN=<token> \
+  -e AGORA_CODE_0=<base64 chunk> [-e AGORA_CODE_1 …] \
+  -e DENO_DIR=/tmp/deno \
   agora/sandbox-deno@sha256:<pinned> \
-  deno run --no-prompt --cached-only --deny-import \
+  deno run --no-prompt --no-config --no-lock --cached-only --deny-import \
     --allow-net=cap-gateway:8080 \
+    --allow-env=AGORA_CAP_URL,AGORA_RUN_TOKEN,AGORA_CODE_0,AGORA_CODE_1,AGORA_CODE_2,AGORA_CODE_3 \
     --allow-read=/scratch,/opt/agora-std --allow-write=/scratch \
     --v8-flags=--max-old-space-size=384 \
-    /opt/agora-std/entry.ts   # reads user code from stdin, runs it with agora:std preloaded
+    /opt/agora-std/entry.ts   # reassembles code from AGORA_CODE_*, runs it with agora:std preloaded
 ```
 
 Notes:
-- **Code arrives on stdin.** No host path is ever bind-mounted.
-- **`--log-driver=none`:** `runner` reads stdout/stderr from the attach stream itself, capped at 64 KB each, so a chatty run can't fill the host's Docker log storage.
+- **Code arrives in env vars** (`AGORA_CODE_0..3`, base64, ≤ 90 KB of code each, well under Linux's 128 KiB per-string limit), and the entrypoint deletes them from the environment before importing the code. No host path is ever bind-mounted, and no stdin attach is needed, so the socket proxy never has to allow connection hijacking. *(Changed during 3.2 from "stdin": the proxy doesn't support attach.)*
+- **Output:** the `local` log driver is capped at a single uncompressed 1 MB file. The runner reads the logs API after exit, keeps at most `outputBytes` of each stream, then removes the container. So a chatty run can't fill the host's Docker log storage. *(Changed during 3.2 from `--log-driver=none`, which would disable the logs API.)*
 - **The image is pinned by digest.** It's rebuilt only through a reviewed image change.
 - **The V8 heap cap (384 MB) sits below the cgroup memory limit (512 MB),** so out-of-memory usually surfaces as a catchable error and not a SIGKILL.
 
@@ -322,7 +327,7 @@ interface Decider {
 | T6 | **Resource exhaustion** | fork bomb, memory, CPU spin, disk fill, log flood | L5 PIDs/mem/CPU, wall clock, tmpfs size, log driver none, output caps, concurrency caps | noisy neighbor up to the configured concurrency; accepted | fork bomb contained; `while(true)` killed at deadline; 1 GB write fails at 64 MB; 10 MB stdout truncated |
 | T7 | **Cost abuse** | loop calling paid capabilities | per-run call cap, route daily budgets (Phase 1), non-chat routes default off, tripwire auto-pause | budget up to the configured limit; by design | the 21st call is rejected; an exhausted budget rejects calls |
 | T8 | **Gate bypass** | calling the runner/queue directly, self-approval, replaying an approval | only `api` enqueues (Redis is on `agora_core`); the runner re-checks the run is `queued` with gate fields set; the submitter can't approve; approvals expire | Redis compromise, already a core compromise | a bot approving its own run gets 403; a job for an unapproved run is refused by the runner |
-| T9 | **Runner compromise → host** | malicious job payload exploiting the runner | the job carries only `runId`; code never touches runner memory beyond stdin streaming; the container spec comes from constants; **Docker socket proxy** exposes only the container create/start/attach/wait/kill/remove endpoints the runner needs, no exec into other containers, no images or volumes APIs | a proxy that allows container create can still create a privileged container if the runner itself is compromised. The runner stays tiny and reviewed. Rootless Docker is a hardening option (§18) | a job payload with extra fields is ignored; the runner never passes user strings into Docker API flags |
+| T9 | **Runner compromise → host** | malicious job payload exploiting the runner | the job carries only `runId`; the container spec comes from constants; **Docker socket proxy** (`wollomatic/socket-proxy`) allows only: `_ping`/`info`, container create, start/wait/kill/inspect/logs/delete **on `agora-run-*` names only**, container list, inspect of the sandbox network and images. No exec, no attach, no inspect of other containers (so no reading the DB container's env), no image/volume/network writes, and **bind mounts rejected on create** (verified in 3.2) | a proxy that allows container create can still create a privileged container if the runner itself is compromised. The runner stays tiny and reviewed. Rootless Docker is a hardening option (§18) | a job payload with extra fields is ignored; the runner never passes user strings into Docker API flags |
 | T10 | **Malicious artifacts** | HTML/SVG XSS, polyglots, oversize files | magic-byte validation, extension allowlist, HTML/SVG as attachments with `nosniff`, size limits | a file that's harmful when opened locally; users are warned via file type | an HTML artifact is served as an attachment; a mismatched magic number is rejected |
 | T11 | **Decider manipulation** | comments saying "safe", prompt injection | comments stripped, deciders can't loosen limits, default human approval, sandbox is the real boundary | an `auto_run` verdict for a harmful-but-contained run; contained by L1–L6 | a run with a comment-only difference gets the same decision; auto-run limits equal approved-run limits |
 | T12 | **Queue flooding** | many submissions | queued-runs-per-server cap, bot rate limits, loop guard | none significant | the 21st queued submission gets 429 |
