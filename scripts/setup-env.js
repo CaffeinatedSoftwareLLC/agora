@@ -28,6 +28,59 @@ const prod = process.argv.includes('--prod');
 const hexSecret = () => crypto.randomBytes(32).toString('hex');
 const strongPassword = () => crypto.randomBytes(18).toString('base64url');
 
+// Prompt for a secret without echoing it. On a TTY, typed characters are
+// masked with '*'; falls back to a plain line read when input isn't a TTY.
+function hiddenQuestion(query) {
+    return new Promise((resolve) => {
+        const stdin = process.stdin;
+        const stdout = process.stdout;
+        stdout.write(query);
+
+        if (!stdin.isTTY) {
+            let buf = '';
+            const onData = (d) => {
+                buf += d.toString('utf8');
+                const nl = buf.indexOf('\n');
+                if (nl !== -1) {
+                    stdin.removeListener('data', onData);
+                    stdin.pause();
+                    resolve(buf.slice(0, nl).replace(/\r$/, ''));
+                }
+            };
+            stdin.resume();
+            stdin.on('data', onData);
+            return;
+        }
+
+        let input = '';
+        const wasRaw = stdin.isRaw;
+        stdin.setRawMode(true);
+        stdin.resume();
+        const onData = (chunk) => {
+            for (const ch of chunk.toString('utf8')) {
+                if (ch === '\r' || ch === '\n') {          // Enter — done
+                    stdin.setRawMode(wasRaw);
+                    stdin.removeListener('data', onData);
+                    stdin.pause();
+                    stdout.write('\n');
+                    resolve(input);
+                    return;
+                } else if (ch === '\u0003') {              // Ctrl-C
+                    stdin.setRawMode(wasRaw);
+                    stdout.write('\n');
+                    process.exit(1);
+                } else if (ch === '\u007f' || ch === '\b') { // Backspace / DEL
+                    if (input.length > 0) { input = input.slice(0, -1); stdout.write('\b \b'); }
+                } else if (ch >= ' ') {                    // printable char
+                    input += ch;
+                    stdout.write('*');
+                }
+            }
+        };
+        stdin.on('data', onData);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Dev mode — zero prompts, same behavior as before
 // ---------------------------------------------------------------------------
@@ -105,23 +158,25 @@ async function setupProd() {
         process.exit(1);
     }
 
-    const { createInterface } = require('node:readline/promises');
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-
     console.log('\n  Agora — Production Environment Setup');
     console.log('  =====================================\n');
     console.log('  Auto-generated secrets will be created for you.');
-    console.log('  Press Enter to accept defaults shown in [brackets].\n');
+    console.log('  Press Enter at a prompt to accept the auto-generated / default value.\n');
 
     // --- Prompts ---
 
+    // Password is a secret: read it masked, and never echo the generated
+    // default to the console (it still gets written to .env.prod).
     const defaultDbPassword = strongPassword();
-    const dbPassword = (await rl.question(`  Database password — hit Enter to accept or enter your own [${defaultDbPassword}]: `)).trim() || defaultDbPassword;
+    const typedDbPassword = (await hiddenQuestion('  Database password — press Enter to auto-generate a strong one, or type your own (hidden): ')).trim();
+    const dbPassword = typedDbPassword || defaultDbPassword;
 
+    // Domain is not secret — a normal echoing prompt is fine.
+    const { createInterface } = require('node:readline/promises');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
     const domain = (await rl.question('  Domain — hit Enter to skip for local setup or enter your own (e.g., chat.example.com): ')).trim();
-    const corsOrigin = domain ? `https://${domain.replace(/^https?:\/\//, '')}` : '';
-
     rl.close();
+    const corsOrigin = domain ? `https://${domain.replace(/^https?:\/\//, '')}` : '';
 
     // --- Auto-generated secrets ---
 
