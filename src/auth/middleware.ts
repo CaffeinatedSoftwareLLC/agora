@@ -11,8 +11,11 @@ const BOT_ALLOWED_ROUTES = new Set([
     'POST /channels/:id/messages/:msgId/replies',
     'GET /channels/:id/messages/:msgId/replies',
     'GET /channels/:id/threads',
+    'PATCH /channels/:id/messages/:msgId/thread',
     'GET /bots/@me/cursors',
     'PUT /bots/@me/cursors/:channelId',
+    'GET /bots/@me/thread-cursors',
+    'PUT /bots/@me/thread-cursors/:threadId',
     'GET /bots/@me',
 ]);
 

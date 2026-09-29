@@ -1,7 +1,7 @@
 import { setupTestApp, authedUser, cleanDatabase } from '../helpers';
 import { AgoraApi } from '../../agora-mcp/src/api';
 import { CursorTracker } from '../../agora-mcp/src/cursor';
-import { fetchUnreadMessages, formatMessages } from '../../agora-mcp/src/tools';
+import { fetchUnreadMessages, fetchUnreadReplies, formatMessages } from '../../agora-mcp/src/tools';
 
 /**
  * Tests the actual agora-mcp package code (AgoraApi, CursorTracker,
@@ -429,6 +429,94 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
             expect(remaining.length).toBe(2);
             expect(remaining[0].content).toBe('Small page 2');
             expect(remaining[1].content).toBe('Small page 3');
+        });
+    });
+
+    // ─── Threads ───
+
+    describe('threads', () => {
+        let threadId: string;
+        let admin: Awaited<ReturnType<typeof authedUser>>;
+
+        beforeAll(async () => {
+            admin = await authedUser(ctx.request, 'pkgthreadhuman');
+            // Human needs to be in the server to reply; join via invite from the bot-owning admin is
+            // heavier than needed here, so the thread round-trip uses the bot plus direct replies.
+            const api = new AgoraApi(baseUrl, botToken);
+            const parent = await api.sendMessage(channelId, 'Thread parent', crypto.randomUUID());
+            threadId = parent.id;
+            await waitForRow('messages', 'id', threadId);
+        });
+
+        test('sendReply posts into the thread and getReplies returns it oldest-first', async () => {
+            const api = new AgoraApi(baseUrl, botToken);
+            const r1 = await api.sendReply(channelId, threadId, 'First reply', crypto.randomUUID());
+            await waitForRow('messages', 'id', r1.id);
+            const r2 = await api.sendReply(channelId, threadId, 'Second reply', crypto.randomUUID());
+            await waitForRow('messages', 'id', r2.id);
+
+            expect(r1.threadId).toBe(threadId);
+            const replies = await api.getReplies(channelId, threadId);
+            expect(replies.map(r => r.content)).toEqual(['First reply', 'Second reply']);
+
+            const after = await api.getReplies(channelId, threadId, { after: r1.id });
+            expect(after.map(r => r.content)).toEqual(['Second reply']);
+        });
+
+        test('channel reads show the parent with its reply count, not the replies', async () => {
+            const api = new AgoraApi(baseUrl, botToken);
+            const messages = await api.getMessages(channelId, { limit: 20 });
+
+            expect(messages.some(m => m.content === 'First reply')).toBe(false);
+            const parent = messages.find(m => m.id === threadId);
+            expect(parent?.replyCount).toBe(2);
+            expect(formatMessages([parent!])).toContain(`(${threadId})`);
+            expect(formatMessages([parent!])).toContain('[thread: 2 replies]');
+        });
+
+        test('listThreads includes the active thread', async () => {
+            const api = new AgoraApi(baseUrl, botToken);
+            const threads = await api.listThreads(channelId);
+            expect(threads.find(t => t.id === threadId)?.replyCount).toBe(2);
+        });
+
+        test('fetchUnreadReplies persists a thread cursor and returns only new replies', async () => {
+            const api = new AgoraApi(baseUrl, botToken);
+            const tracker = new CursorTracker(api);
+
+            const first = await fetchUnreadReplies(api, tracker, channelId, threadId, 50);
+            expect(first.map(r => r.content)).toEqual(['First reply', 'Second reply']);
+
+            const r3 = await api.sendReply(channelId, threadId, 'Third reply', crypto.randomUUID());
+            await waitForRow('messages', 'id', r3.id);
+
+            // Fresh tracker proves the cursor was persisted server-side
+            const fresh = new CursorTracker(api);
+            const next = await fetchUnreadReplies(api, fresh, channelId, threadId, 50);
+            expect(next.map(r => r.content)).toEqual(['Third reply']);
+
+            const cursors = await api.getThreadCursors();
+            expect(cursors.find(c => c.threadId === threadId)?.lastReadId).toBe(r3.id);
+        });
+
+        test('thread starter bot can close and reopen; closed threads reject replies', async () => {
+            const api = new AgoraApi(baseUrl, botToken);
+
+            const closed = await api.setThreadClosed(channelId, threadId, true);
+            expect(closed.threadClosedAt).toBeTruthy();
+            await expect(api.sendReply(channelId, threadId, 'Too late', crypto.randomUUID()))
+                .rejects.toThrow(/409/);
+
+            const threads = await api.listThreads(channelId);
+            expect(threads.find(t => t.id === threadId)).toBeUndefined();
+
+            const reopened = await api.setThreadClosed(channelId, threadId, false);
+            expect(reopened.threadClosedAt).toBeNull();
+        });
+
+        test('human token cannot use thread cursor endpoints', async () => {
+            const res = await ctx.request.get('/bots/@me/thread-cursors').set(admin.auth);
+            expect(res.status).toBe(403);
         });
     });
 

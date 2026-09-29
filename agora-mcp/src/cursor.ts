@@ -3,6 +3,8 @@ import type { AgoraApi } from './api.js';
 export class CursorTracker {
     private cursors = new Map<string, string>();
     private loaded = false;
+    private threadCursors = new Map<string, string>();
+    private threadsLoaded = false;
 
     constructor(private api: AgoraApi) {}
 
@@ -25,5 +27,26 @@ export class CursorTracker {
 
         await this.api.updateCursor(channelId, messageId);
         this.cursors.set(channelId, messageId);
+    }
+
+    async loadThreads(): Promise<void> {
+        if (this.threadsLoaded) return;
+        const cursors = await this.api.getThreadCursors();
+        for (const c of cursors) {
+            this.threadCursors.set(c.threadId, c.lastReadId);
+        }
+        this.threadsLoaded = true;
+    }
+
+    getThreadCursor(threadId: string): string | undefined {
+        return this.threadCursors.get(threadId);
+    }
+
+    async ackThread(threadId: string, messageId: string): Promise<void> {
+        const current = this.threadCursors.get(threadId);
+        if (current && current >= messageId) return;
+
+        await this.api.updateThreadCursor(threadId, messageId);
+        this.threadCursors.set(threadId, messageId);
     }
 }

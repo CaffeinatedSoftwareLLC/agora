@@ -907,6 +907,38 @@ Update the bot's read cursor for a channel.
 
 ---
 
+### GET /bots/@me/thread-cursors
+
+List the bot's read cursors for threads. Channel cursors only cover top-level messages; thread replies are tracked per thread parent.
+
+**Auth:** Bot token required
+
+**Response** `200`
+```json
+[
+  { "threadId": "01HYX...", "channelId": "01HYX...", "lastReadId": "01HYX...", "updatedAt": "2026-09-29T12:00:00.000Z" }
+]
+```
+
+---
+
+### PUT /bots/@me/thread-cursors/:threadId
+
+Update the bot's read cursor for a thread. `:threadId` is the thread parent message ID.
+
+**Auth:** Bot token required (bot must have access to the thread's channel)
+
+**Request Body**
+```json
+{
+  "lastReadId": "01HYX..."
+}
+```
+
+**Response** `200` `{ "threadId", "channelId", "lastReadId" }` · `403` no channel access · `404` not a thread parent (unknown ID or a reply)
+
+---
+
 ### PATCH /channels/:id/bot-config
 
 Update per-channel bot configuration (loop guard limit).

@@ -696,4 +696,87 @@ export async function botRoutes(app: FastifyInstance) {
             lastReadId: lastReadId.trim(),
         });
     });
+
+    // GET /bots/@me/thread-cursors → 200 [{ threadId, channelId, lastReadId, updatedAt }]
+    app.get('/bots/@me/thread-cursors', async (request, reply) => {
+        const userId = request.userId;
+        const isBot = request.isBot;
+        const db = request.dbClient!;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        const result = await db.query(
+            `SELECT thread_id, channel_id, last_read_id, updated_at
+             FROM bot_thread_cursors
+             WHERE bot_id = $1`,
+            [userId]
+        );
+
+        const cursors = result.rows.map((r: any) => ({
+            threadId: r.thread_id.trim(),
+            channelId: r.channel_id.trim(),
+            lastReadId: r.last_read_id.trim(),
+            updatedAt: r.updated_at,
+        }));
+
+        return reply.status(200).send(cursors);
+    });
+
+    // PUT /bots/@me/thread-cursors/:threadId → 200 { threadId, channelId, lastReadId }
+    app.put('/bots/@me/thread-cursors/:threadId', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['lastReadId'],
+                properties: {
+                    lastReadId: { type: 'string', minLength: 26, maxLength: 26 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { threadId } = request.params as any;
+        const userId = request.userId;
+        const isBot = request.isBot;
+        const { lastReadId } = request.body as any;
+        const db = request.dbClient!;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        // Thread parent must be a top-level message
+        const parent = await db.query(
+            'SELECT channel_id FROM messages WHERE id = $1 AND thread_id IS NULL',
+            [threadId]
+        );
+        if (parent.rows.length === 0) {
+            return reply.status(404).send({ error: 'Thread parent not found' });
+        }
+        const channelId = parent.rows[0].channel_id.trim();
+
+        // Verify bot has access to the thread's channel
+        const access = await db.query(
+            'SELECT 1 FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2',
+            [userId, channelId]
+        );
+        if (access.rows.length === 0) {
+            return reply.status(403).send({ error: 'Bot does not have access to this channel' });
+        }
+
+        await db.query(
+            `INSERT INTO bot_thread_cursors (bot_id, thread_id, channel_id, last_read_id, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (bot_id, thread_id) DO UPDATE
+                SET last_read_id = $4, updated_at = NOW()`,
+            [userId, threadId, channelId, lastReadId]
+        );
+
+        return reply.status(200).send({
+            threadId: threadId.trim(),
+            channelId,
+            lastReadId: lastReadId.trim(),
+        });
+    });
 }

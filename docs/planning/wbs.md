@@ -26,11 +26,11 @@ Backend thread endpoints exist and admit bots. Gaps found in code review:
 - Loop guard is per-channel (`loopguard:{channelId}`), shared by all threads in a channel — two agents collaborating in a thread will trip it after `max_bot_hops` (default 4) consecutive bot messages.
 - No bot pause mechanism.
 
-### 0.1 MCP thread support ◐
+### 0.1 MCP thread support ☑
 | ID | Task | Size | Depends |
 |---|---|---|---|
 | 0.1.1 | Migration `022_bot_thread_cursors.sql`: `bot_thread_cursors (bot_id, thread_id → messages, channel_id, last_read_id, updated_at, PK(bot_id, thread_id))` + grants | XS | — |
-| 0.1.2 | Routes `GET /bots/@me/thread-cursors`, `PUT /bots/@me/thread-cursors/:threadId` (bot-only; verifies parent is a top-level message in a channel the bot can access). New endpoints rather than changing `/bots/@me/cursors` shape, so published `agora-mcp@0.1.x` keeps working | S | 0.1.1 |
+| 0.1.2 | Routes `GET /bots/@me/thread-cursors`, `PUT /bots/@me/thread-cursors/:threadId` + bot route allowlist (also opens `PATCH .../thread` close/reopen to bots) (bot-only; verifies parent is a top-level message in a channel the bot can access). New endpoints rather than changing `/bots/@me/cursors` shape, so published `agora-mcp@0.1.x` keeps working | S | 0.1.1 |
 | 0.1.3 | Add `bot_thread_cursors` to `cleanDatabase` truncate list | XS | 0.1.1 |
 | 0.1.4 | Integration tests: thread cursor CRUD, access denied for non-access channel, human token rejected, reply-to-a-reply rejected as cursor target | S | 0.1.2 |
 | 0.1.5 | `agora-mcp/src/api.ts`: `Message` gains `threadId`, `replyCount`, `lastReplyAt`, `threadClosedAt`; methods `getReplies`, `sendReply`, `listThreads`, `setThreadClosed`, `getThreadCursors`, `updateThreadCursor` | S | 0.1.2 |
