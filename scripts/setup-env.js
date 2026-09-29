@@ -52,7 +52,7 @@ function setupDev() {
         AGORA_ENCRYPTION_KEY: hexSecret(),
     };
 
-    const lines = fs.readFileSync(EXAMPLE, 'utf8').split('\n');
+    const lines = fs.readFileSync(EXAMPLE, 'utf8').split(/\r?\n/);
     const output = [];
     let pgUser = 'accord';
     let pgDb = 'accord_test';
@@ -135,7 +135,7 @@ async function setupProd() {
 
     // --- Write .env.prod ---
 
-    const lines = fs.readFileSync(EXAMPLE, 'utf8').split('\n');
+    const lines = fs.readFileSync(EXAMPLE, 'utf8').split(/\r?\n/);
     const output = [];
 
     for (const line of lines) {

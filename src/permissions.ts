@@ -16,17 +16,9 @@ export const Permissions = {
     ManageMessages:     1n << 12n,
     EmbedLinks:         1n << 13n,
     UploadFiles:        1n << 14n,
-    AddReactions:       1n << 15n,
     MentionEveryone:    1n << 16n,
     ReadMessageHistory: 1n << 17n,
     UseExternalEmoji:   1n << 18n,
-    VoiceConnect:       1n << 20n,
-    VoiceSpeak:         1n << 21n,
-    VoiceVideo:         1n << 22n,
-    VoiceMuteMembers:   1n << 23n,
-    VoiceDeafenMembers: 1n << 24n,
-    VoiceMoveMembers:   1n << 25n,
-    VoicePriority:      1n << 26n,
     ManageBots:         1n << 27n,
     UseBots:            1n << 28n,
 } as const;
@@ -37,13 +29,9 @@ export const DEFAULT_EVERYONE_PERMS =
     Permissions.ReadMessageHistory |
     Permissions.EmbedLinks |
     Permissions.UploadFiles |
-    Permissions.AddReactions |
     Permissions.UseExternalEmoji |
     Permissions.CreateInvites |
-    Permissions.ChangeNickname |
-    Permissions.VoiceConnect |
-    Permissions.VoiceSpeak |
-    Permissions.VoiceVideo;
+    Permissions.ChangeNickname;
 
 export function computePermissions(params: {
     userId: string;
