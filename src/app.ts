@@ -15,6 +15,7 @@ import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
 import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
+import { aiProviderRoutes } from './routes/ai-providers';
 import { roleRoutes } from './routes/roles';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
@@ -266,6 +267,7 @@ export async function buildApp(opts?: {
     await app.register(botRoutes);
     await app.register(threadRoutes);
     await app.register(aiConfigRoutes);
+    await app.register(aiProviderRoutes);
     await app.register(roleRoutes);
 
     // Setup WebSocket gateway (Socket.IO)

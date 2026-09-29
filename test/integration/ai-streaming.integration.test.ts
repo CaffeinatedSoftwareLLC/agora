@@ -479,3 +479,81 @@ describe('AI Assistant in threads', () => {
         expect(botMsgs.rows.length).toBe(0);
     });
 });
+
+describe('AI Assistant uses the chat capability route', () => {
+    async function mentionAndWait(serverId: string, channelId: string, owner: { userId: string; auth: object }, botId: string) {
+        const msgRes = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'hey assistant' });
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM messages WHERE id = $1', [msgRes.body.id])).rows.length > 0);
+        internalBus.emit('assistantMention', {
+            channelId, messageId: msgRes.body.id, content: 'hey assistant',
+            author: { id: owner.userId, username: 'x' }, botId, timestamp: new Date().toISOString(),
+        });
+        return msgRes.body.id as string;
+    }
+
+    it('resolves provider, model, and decrypted key from the chat route; records cost', async () => {
+        const owner = await authedUser(ctx.request, 'airoute1');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIRouteServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+
+        // Switch the chat route to a new Gemini provider with prices
+        const prov = await ctx.request.post(`/servers/${serverId}/ai/providers`).set(owner.auth).send({ adapter: 'gemini', apiKey: 'gem-key' });
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_providers WHERE id = $1', [prov.body.id])).rows.length > 0);
+        await ctx.request.put(`/servers/${serverId}/ai/routes/chat`).set(owner.auth).send({
+            providerId: prov.body.id, model: 'gemini-3.8-flash',
+            inputPriceMicrosPerMtok: 2_000_000, outputPriceMicrosPerMtok: 8_000_000,
+        });
+        await waitFor(async () => (await ctx.db.query(
+            "SELECT 1 FROM ai_capability_routes WHERE server_id = $1 AND provider_id = $2", [serverId, prov.body.id])).rows.length > 0);
+
+        mockedStream.mockImplementation(async (_config, _messages, callbacks) => {
+            callbacks.onToken('hi');
+            await callbacks.onDone({ inputTokens: 1000, outputTokens: 500 });
+        });
+
+        await mentionAndWait(serverId, generalChannelId, owner, botId);
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_usage_events WHERE server_id = $1', [serverId])).rows.length > 0);
+
+        const [config] = mockedStream.mock.calls[0];
+        expect(config).toMatchObject({ provider: 'gemini', model: 'gemini-3.8-flash', apiKey: 'gem-key' });
+
+        const usage = await ctx.db.query('SELECT capability, provider_id, provider, cost_micros FROM ai_usage_events WHERE server_id = $1', [serverId]);
+        // 1000 in × $2/M + 500 out × $8/M = $0.006 = 6000 micro-USD
+        expect(usage.rows[0]).toMatchObject({ capability: 'chat', provider: 'gemini', cost_micros: '6000' });
+        expect(usage.rows[0].provider_id.trim()).toBe(prov.body.id);
+    });
+
+    it('over the daily request limit: posts a notice and does not call the provider', async () => {
+        const owner = await authedUser(ctx.request, 'airoute2');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIRouteServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+        await ctx.db.query("UPDATE ai_capability_routes SET daily_request_limit = 1 WHERE server_id = $1 AND capability = 'chat'", [serverId]);
+        await ctx.db.query(
+            `INSERT INTO ai_usage_events (id, server_id, provider, model, latency_ms, capability)
+             VALUES ('01BUDGETAAAAAAAAAAAAAAAAAA', $1, 'anthropic', 'm', 1, 'chat')`,
+            [serverId]
+        );
+
+        await mentionAndWait(serverId, generalChannelId, owner, botId);
+        await waitFor(async () => (await ctx.db.query(
+            "SELECT 1 FROM messages WHERE author_id = $1 AND content LIKE '⚠️%'", [botId])).rows.length > 0);
+
+        const notice = await ctx.db.query('SELECT content FROM messages WHERE author_id = $1', [botId]);
+        expect(notice.rows[0].content).toContain('Daily request limit reached for "chat" (1/day)');
+        expect(mockedStream).not.toHaveBeenCalled();
+    });
+
+    it('disabled chat route: assistant stays silent', async () => {
+        const owner = await authedUser(ctx.request, 'airoute3');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIRouteServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+        await ctx.db.query("UPDATE ai_capability_routes SET enabled = false WHERE server_id = $1", [serverId]);
+
+        await mentionAndWait(serverId, generalChannelId, owner, botId);
+        await new Promise(r => setTimeout(r, 300));
+
+        expect(mockedStream).not.toHaveBeenCalled();
+        const botMsgs = await ctx.db.query('SELECT 1 FROM messages WHERE author_id = $1', [botId]);
+        expect(botMsgs.rows.length).toBe(0);
+    });
+});

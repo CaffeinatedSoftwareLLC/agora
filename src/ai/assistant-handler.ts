@@ -3,8 +3,7 @@ import type { Server } from 'socket.io';
 import type { FastifyBaseLogger } from 'fastify';
 import { internalBus, AssistantMentionEvent } from './internal-bus';
 import { streamCompletion, ConversationMessage } from './providers';
-import { decryptString } from '../lib/encryption';
-import { config } from '../config';
+import { resolveRoute, checkBudget, recordUsage } from './routing';
 import { generateUlid } from '../utils/ulid';
 
 /** Fallback logger when Fastify logger is not available (e.g. tests with logger: false) */
@@ -78,14 +77,14 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
 
     const aiConfig = configRow.rows[0];
 
-    // 5. Decrypt API key
-    let apiKey: string;
-    try {
-        apiKey = decryptString(aiConfig.api_key_enc, config.encryptionKey, aiConfig.api_key_iv, aiConfig.api_key_tag);
-    } catch {
-        log.error({ serverId, botId, channelId, messageId }, 'Failed to decrypt API key');
+    // 5. Resolve the server's chat route (provider, model, credentials) and check its budget
+    const resolved = await resolveRoute(db, serverId, 'chat');
+    if (!resolved.ok) {
+        log.warn({ serverId, botId, channelId, messageId, reason: resolved.error }, 'Assistant has no usable chat route');
         return;
     }
+    const chat = resolved.value;
+    const budget = await checkBudget(db, chat.route);
 
     // 6. Fetch context messages — the thread (parent + latest replies) for thread
     // mentions, otherwise top-level channel messages only
@@ -183,15 +182,41 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
         });
     }
 
+    // Over budget: replace the placeholder with a notice, don't call the provider
+    if (!budget.ok) {
+        const notice = `⚠️ ${budget.error}. An admin can raise it in AI settings.`;
+        await db.query('UPDATE messages SET content = $1 WHERE id = $2', [notice, botMessageId]);
+        io.to(`channel:${channelId}`).emit('BotMessageStream', {
+            messageId: botMessageId.trim(),
+            channelId: channelId.trim(),
+            content: notice,
+            streaming: false,
+            ...threadField,
+        });
+        return;
+    }
+
     // 8. Stream completion
     let accumulated = '';
     const startTime = Date.now();
+    const usageBase = {
+        serverId,
+        capability: 'chat' as const,
+        providerId: chat.providerId,
+        adapter: chat.adapter.id,
+        model: chat.model,
+        route: chat.route,
+        channelId,
+        userId: author.id,
+        messageId: botMessageId,
+    };
 
     await streamCompletion(
         {
-            provider: aiConfig.provider,
-            model: aiConfig.model,
-            apiKey,
+            provider: chat.adapter.id,
+            model: chat.model,
+            apiKey: chat.credentials.apiKey,
+            baseUrl: chat.credentials.baseUrl,
             systemPrompt: aiConfig.system_prompt || undefined,
         },
         messages,
@@ -225,13 +250,7 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
                     ...threadField,
                 });
 
-                // Log usage
-                const usageId = generateUlid();
-                await db.query(
-                    `INSERT INTO ai_usage_events (id, server_id, channel_id, user_id, message_id, provider, model, input_tokens, output_tokens, latency_ms)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-                    [usageId, serverId, channelId, author.id, botMessageId, aiConfig.provider, aiConfig.model, usage.inputTokens, usage.outputTokens, latencyMs]
-                );
+                await recordUsage(db, { ...usageBase, usage, latencyMs });
             },
             async onError(err: Error) {
                 const latencyMs = Date.now() - startTime;
@@ -251,13 +270,12 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
                     ...threadField,
                 });
 
-                // Log error usage
-                const usageId = generateUlid();
-                await db.query(
-                    `INSERT INTO ai_usage_events (id, server_id, channel_id, user_id, message_id, provider, model, input_tokens, output_tokens, latency_ms, error)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, $8, $9)`,
-                    [usageId, serverId, channelId, author.id, botMessageId, aiConfig.provider, aiConfig.model, latencyMs, err.message]
-                );
+                await recordUsage(db, {
+                    ...usageBase,
+                    usage: { inputTokens: 0, outputTokens: 0 },
+                    latencyMs,
+                    error: err.message,
+                });
             },
         }
     );

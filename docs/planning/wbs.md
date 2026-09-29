@@ -82,15 +82,23 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ---
 
 ## 1 · Provider Registry — `feat/provider-registry`
+
+**Design decisions (2026-09-29)**
+- **Adapters are code, providers are rows.** `src/ai/adapters/{anthropic,openai,gemini}.ts` implement one interface and declare capabilities. `openai` takes an optional `base_url`, which covers OpenAI, Ollama, OpenRouter, Groq and vLLM.
+- **Gemini** uses `models/{model}:streamGenerateContent?alt=sse` (Google: "legacy, fully supported"; documented schema, stateless). The newer Interactions API is recommended for new projects but its streaming schema isn't documented yet, and it keeps server-side state we don't want. Swap later inside the adapter only. Default model `gemini-3.8-flash` (stable as of 2026-09-29).
+- **The assistant uses the `chat` capability route.** `ai_provider_config` keeps assistant-only settings (bot, prompt, context, enabled). Its provider/model/key columns become nullable legacy fields, migrated into `ai_providers` + a `chat` route.
+- **`/ai-config` stays working.** PUT upserts a provider plus the chat route, so existing clients and the current UI keep working until the new settings UI replaces it.
+- **SSRF guard on `base_url`:** http/https only. Private, loopback and link-local targets are rejected unless the instance setting `ai_allow_private_base_urls` is on (needed for local Ollama). Checked on save and again before each call.
+- **Budgets per capability route:** optional daily request/token limits, plus optional admin-entered prices that turn into `cost_micros` and a daily cost limit. Non-chat routes start disabled. Per-bot caps wait for Phase 3, when bots actually call capabilities.
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 1.1 | Migration: `ai_providers`, `ai_capability_routes`; `ai_provider_config.provider_id`; data migration of existing rows; drop provider CHECK; `ai_usage_events` nullable channel/message + `kind`, `provider_id`, `cost_micros`, `run_id`; grants | M | — |
-| 1.2 | Adapter interface + registry (`src/ai/adapters/`), capabilities enum, exhaustive dispatch | S | — |
-| 1.3 | Adapters: `anthropic` (port), `openai-compatible` (port + `base_url`: OpenAI/Ollama/OpenRouter/Groq/vLLM), `gemini` (verify API first) | M | 1.2 |
-| 1.4 | Routes: providers CRUD + test, capability routes CRUD, under `/servers/:id/ai/...`; assistant config references provider | M | 1.1, 1.2 |
-| 1.5 | Budgets: capability toggles (non-chat off by default), daily caps per server/bot, pre-call enforcement, usage ledger writes | M | 1.1 |
-| 1.6 | UI: provider list/add/test, capability routing table, usage + spend view | M | 1.4, 1.5 |
-| 1.7 | Tests: migration of legacy config, CRUD authz, routing resolution, budget enforcement, adapter SSE parsing fixtures | M | 1.3–1.5 |
+| 1.1 | ☑ Migration: `ai_providers`, `ai_capability_routes`; `ai_provider_config.provider_id`; data migration of existing rows; drop provider CHECK; `ai_usage_events` nullable channel/message + `kind`, `provider_id`, `cost_micros`, `run_id`; grants | M | — |
+| 1.2 | ☑ Adapter interface + registry (`src/ai/adapters/`), capabilities enum, exhaustive dispatch | S | — |
+| 1.3 | ☑ Adapters: `anthropic` (port), `openai-compatible` (port + `base_url`: OpenAI/Ollama/OpenRouter/Groq/vLLM), `gemini` (verify API first) | M | 1.2 |
+| 1.4 | ☑ Routes: providers CRUD + test, capability routes CRUD, under `/servers/:id/ai/...`; assistant config references provider | M | 1.1, 1.2 |
+| 1.5 | ☑ Budgets: capability toggles (non-chat off by default), daily caps per server/bot, pre-call enforcement, usage ledger writes | M | 1.1 |
+| 1.6 | ☑ UI: provider list/add/test, capability routing table, usage + spend view | M | 1.4, 1.5 |
+| 1.7 | ☑ Tests: migration of legacy config, CRUD authz, routing resolution, budget enforcement, adapter SSE parsing fixtures | M | 1.3–1.5 |
 
 ## 2 · Decision Seam — folds into Phase 1/3 branches
 | ID | Work package | Size | Depends |
@@ -128,6 +136,6 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 |---|---|---|---|
 | R1 | ☑ Per-thread guard, default off. UI visibility tracked in a GitHub issue | user | 0.4.4 |
 | R2 | `messages.protocol` JSONB vs side table | Claude (default JSONB) | 0.3.1 |
-| R3 | Gemini API surface verification | Claude | 1.3 |
+| R3 | ☑ Gemini API verified 2026-09-29 (generateContent/streamGenerateContent v1beta; live key-rejection response confirmed endpoint + auth header) | Claude | 1.3 |
 | R4 | gVisor compat on prod host kernel | user/Claude | 3.1 |
 | R5 | Jev API access (early access / Vercel AI Gateway) | user | 2.3 |

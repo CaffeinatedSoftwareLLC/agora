@@ -1,29 +1,27 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+const API = 'http://localhost:3000'
+
+// Same prefixes nginx proxies to the API (agora-ui/nginx.conf). Some overlap with SPA
+// routes (e.g. /admin/users), so browser page loads (Accept: text/html) fall through
+// to the SPA and only API requests are proxied.
+const API_PREFIXES = ['auth', 'servers', 'channels', 'invites', 'admin', 'users', 'health', 'instance',
+  'unreads', 'messages', 'roles', 'files', 'bots']
+
+const apiProxy: ProxyOptions = {
+  target: API,
+  bypass: (req) => (req.headers.accept?.includes('text/html') ? req.url : undefined),
+}
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/auth': 'http://localhost:3000',
-      '/instance': 'http://localhost:3000',
-      '/servers': 'http://localhost:3000',
-      '/channels': 'http://localhost:3000',
-      '/invites': 'http://localhost:3000',
-      '/admin/stats': 'http://localhost:3000',
-      '/admin/pending-users': 'http://localhost:3000',
-      '/admin/approve-user': 'http://localhost:3000',
-      '/admin/reject-user': 'http://localhost:3000',
-      '/admin/users': 'http://localhost:3000',
-      '/admin/ip-bans': 'http://localhost:3000',
-      '/admin/instance': 'http://localhost:3000',
-      '/users': 'http://localhost:3000',
-      '/health': 'http://localhost:3000',
-      '/voice': 'http://localhost:3000',
-      '/webhooks': 'http://localhost:3000',
+      ...Object.fromEntries(API_PREFIXES.map(p => [`/${p}`, apiProxy])),
       '/socket.io': {
-        target: 'http://localhost:3000',
+        target: API,
         ws: true,
       },
     }
