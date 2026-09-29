@@ -238,7 +238,7 @@ export async function botRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
 
         const result = await db.query(
-            `SELECT id, username, bot_owner_id, created_at, avatar_url
+            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_paused_at, bot_paused_reason
              FROM users
              WHERE bot = true AND server_id = $1
              ORDER BY created_at`,
@@ -251,6 +251,8 @@ export async function botRoutes(app: FastifyInstance) {
             ownerId: r.bot_owner_id?.trim() || null,
             createdAt: r.created_at,
             avatarUrl: r.avatar_url || null,
+            pausedAt: r.bot_paused_at,
+            pausedReason: r.bot_paused_reason,
         }));
 
         return reply.status(200).send(bots);
@@ -362,6 +364,51 @@ export async function botRoutes(app: FastifyInstance) {
             id: botId.trim(),
             username: username || botRow.rows[0].username,
             avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : (botRow.rows[0].avatar_url || null),
+        });
+    });
+
+    // PATCH /servers/:serverId/bots/:id/pause → 200 { id, pausedAt, pausedReason }
+    app.patch('/servers/:serverId/bots/:id/pause', {
+        preHandler: [requireManageBots],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['paused'],
+                additionalProperties: false,
+                properties: {
+                    paused: { type: 'boolean' },
+                    reason: { type: 'string', maxLength: 500 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const { paused, reason } = request.body as any;
+        const db = request.dbClient!;
+
+        const result = await db.query(
+            `UPDATE users
+             SET bot_paused_at = CASE WHEN $1::boolean THEN COALESCE(bot_paused_at, NOW()) ELSE NULL END,
+                 bot_paused_reason = CASE WHEN $1::boolean THEN $2 ELSE NULL END
+             WHERE id = $3 AND bot = true AND server_id = $4
+             RETURNING id, bot_paused_at, bot_paused_reason`,
+            [paused, reason ?? null, botId, serverId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        await db.query(
+            `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, reason)
+             VALUES ($1, $2, $3, $4, 'bot', $5, $6)`,
+            [generateUlid(), serverId, request.userId, paused ? 'bot_pause' : 'bot_resume', botId, reason ?? null]
+        );
+
+        const row = result.rows[0];
+        return reply.status(200).send({
+            id: row.id.trim(),
+            pausedAt: row.bot_paused_at,
+            pausedReason: row.bot_paused_reason,
         });
     });
 
@@ -613,7 +660,7 @@ export async function botRoutes(app: FastifyInstance) {
         }
 
         const botRow = await db.query(
-            'SELECT id, username, server_id, avatar_url FROM users WHERE id = $1 AND bot = true',
+            'SELECT id, username, server_id, avatar_url, bot_paused_at, bot_paused_reason FROM users WHERE id = $1 AND bot = true',
             [userId]
         );
         if (!botRow.rows[0]) {
@@ -634,6 +681,8 @@ export async function botRoutes(app: FastifyInstance) {
             serverId: botRow.rows[0].server_id?.trim() || null,
             bot: true,
             avatarUrl: botRow.rows[0].avatar_url || null,
+            paused: !!botRow.rows[0].bot_paused_at,
+            pausedReason: botRow.rows[0].bot_paused_reason || null,
             channels: channelsResult.rows.map((c: any) => ({
                 id: c.id.trim(),
                 name: c.name,

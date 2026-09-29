@@ -114,6 +114,9 @@ export interface Bot {
   ownerId: string | null;
   createdAt: string;
   avatarUrl?: string | null;
+  /** Set while an admin has paused the bot (read-only). */
+  pausedAt?: string | null;
+  pausedReason?: string | null;
 }
 
 export interface BotDetail extends Bot {
@@ -141,6 +144,12 @@ export const botApi = {
 
   get: (serverId: string, botId: string) =>
     api.get<BotDetail>(`/servers/${serverId}/bots/${botId}`),
+
+  setPaused: (serverId: string, botId: string, paused: boolean, reason?: string) =>
+    api.patch<{ id: string; pausedAt: string | null; pausedReason: string | null }>(
+      `/servers/${serverId}/bots/${botId}/pause`,
+      reason ? { paused, reason } : { paused },
+    ),
 
   create: (serverId: string, username: string) =>
     api.post<Bot & { bot: true; serverId: string }>(`/servers/${serverId}/bots`, { username }),

@@ -19,6 +19,12 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /bots/@me',
 ]);
 
+// Writes a paused bot may still make: read-cursor updates, so reading keeps working
+const BOT_PAUSED_ALLOWED_WRITES = new Set([
+    'PUT /bots/@me/cursors/:channelId',
+    'PUT /bots/@me/thread-cursors/:threadId',
+]);
+
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
     const authHeader = request.headers.authorization;
 
@@ -34,7 +40,10 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 
         // O(1) lookup by primary key
         const tokenRow = await db.query(
-            'SELECT id, bot_id, secret_hash FROM bot_tokens WHERE id = $1 AND revoked_at IS NULL',
+            `SELECT t.id, t.bot_id, t.secret_hash, u.bot_paused_at, u.bot_paused_reason
+             FROM bot_tokens t
+             JOIN users u ON u.id = t.bot_id
+             WHERE t.id = $1 AND t.revoked_at IS NULL`,
             [parsed.tokenId]
         );
         if (!tokenRow.rows[0]) {
@@ -50,6 +59,15 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         const routeKey = `${request.method} ${request.routeOptions.url}`;
         if (!BOT_ALLOWED_ROUTES.has(routeKey)) {
             return reply.status(403).send({ error: 'Bots cannot access this endpoint' });
+        }
+
+        // Paused bots are read-only until resumed
+        if (tokenRow.rows[0].bot_paused_at && request.method !== 'GET' && !BOT_PAUSED_ALLOWED_WRITES.has(routeKey)) {
+            return reply.status(423).send({
+                error: 'bot_paused',
+                reason: tokenRow.rows[0].bot_paused_reason || null,
+                pausedAt: tokenRow.rows[0].bot_paused_at,
+            });
         }
 
         request.userId = tokenRow.rows[0].bot_id;

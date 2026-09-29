@@ -3,6 +3,9 @@ export interface BotInfo {
     username: string;
     serverId: string;
     bot: boolean;
+    /** Paused bots can read but every write returns 423 until an admin resumes them. */
+    paused?: boolean;
+    pausedReason?: string | null;
     channels: { id: string; name: string; channelType: string }[];
 }
 
@@ -78,6 +81,14 @@ export class AgoraApi {
 
         if (!res.ok) {
             const text = await res.text();
+            if (res.status === 423) {
+                let reason: string | null = null;
+                try { reason = JSON.parse(text).reason ?? null; } catch { /* non-JSON body */ }
+                throw new Error(
+                    `This bot is paused by an Agora admin${reason ? ` (reason: ${reason})` : ''}. `
+                    + 'It can still read messages but cannot post until resumed. Stop and tell the user.',
+                );
+            }
             throw new Error(`Agora API ${res.status} ${method} ${path}: ${text}`);
         }
 

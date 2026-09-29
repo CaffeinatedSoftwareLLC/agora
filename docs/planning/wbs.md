@@ -59,14 +59,14 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 0.3.5 | ~~MCP `formatMessages` shows parsed state~~ — dropped: agents already see the header verbatim in content | XS | 0.3.4 |
 | 0.3.6 | UI: `ProtocolBadge` on messages (state, decision, → yieldTo; mode/participants on hover); session chip in thread panel header = latest state in the thread | M | 0.3.4 |
 
-### 0.4 Bot pause/resume + loop-guard scope ☐
+### 0.4 Bot pause/resume + loop-guard scope ☑
 | ID | Task | Size | Depends |
 |---|---|---|---|
-| 0.4.1 | Migration: `users.bot_paused_at TIMESTAMPTZ`, `bot_paused_reason TEXT` | XS | — |
-| 0.4.2 | `PATCH /servers/:serverId/bots/:botId/pause { paused, reason? }` — Administrator or new `ManageBots` bit; audit log entry | S | 0.4.1 |
-| 0.4.3 | Enforce: paused bot ⇒ 423 on message send, reply, thread close; `/bots/@me` exposes `paused` so MCP can report it | S | 0.4.1 |
+| 0.4.1 | Migration `025_bot_pause.sql`: `users.bot_paused_at`, `bot_paused_reason` | XS | — |
+| 0.4.2 | `PATCH /servers/:serverId/bots/:id/pause { paused, reason? }` — ManageBots/Administrator (existing bit); audit `bot_pause`/`bot_resume` | S | 0.4.1 |
+| 0.4.3 | Enforced centrally in bot auth: paused ⇒ 423 on every non-GET except read-cursor PUTs; `/bots/@me` + bot list expose pause; MCP turns 423 into a plain "you are paused, stop" error and `channel_list` shows it | S | 0.4.1 |
 | 0.4.4 | ☑ Per-thread loop guard: `loopguard:{channelId}:{threadId}`, `channels.max_thread_bot_hops` (default **0 = off**, per user), settable via `PATCH /channels/:id/bot-config`; channel guard no longer counts thread replies | S | — |
-| 0.4.5 | UI: pause toggle in bot management; paused indicator on bot messages/member list | S | 0.4.2 |
+| 0.4.5 | UI: Pause/Resume button + PAUSED badge in Bot Management (message/member-list indicator deferred) | S | 0.4.2 |
 | 0.4.6 | Integration tests: pause enforcement, permission checks, per-thread loop guard | S | 0.4.3, 0.4.4 |
 
 ### 0.5 `agora-collab` skill update ☐

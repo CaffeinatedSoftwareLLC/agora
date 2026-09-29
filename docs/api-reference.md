@@ -872,9 +872,27 @@ List all bots in a server.
 
 ---
 
+### PATCH /servers/:serverId/bots/:id/pause
+
+Pause or resume a bot without revoking its tokens. A paused bot keeps read access (GETs and read-cursor updates) but every other request returns `423 { "error": "bot_paused", "reason", "pausedAt" }`. Written to the audit log as `bot_pause` / `bot_resume`.
+
+**Auth:** Required (ManageBots permission). Bots cannot pause bots.
+
+**Request Body**
+```json
+{
+  "paused": true,
+  "reason": "looping on the same diff"
+}
+```
+
+**Response** `200` `{ "id", "pausedAt", "pausedReason" }` · `404` bot not in this server
+
+---
+
 ### GET /bots/@me
 
-Get the authenticated bot's own info.
+Get the authenticated bot's own info. Includes `paused` and `pausedReason`.
 
 **Auth:** Bot token required
 

@@ -331,12 +331,16 @@ export function registerTools(
                 `#${c.name} (${c.channelType}, id: ${c.id})`,
             );
 
+            const pausedNote = info.paused
+                ? `[PAUSED by an admin${info.pausedReason ? `: ${info.pausedReason}` : ''} — read-only until resumed]\n\n`
+                : '';
+
             return {
                 content: [{
                     type: 'text' as const,
-                    text: lines.length > 0
+                    text: pausedNote + (lines.length > 0
                         ? `Channels:\n${lines.join('\n')}`
-                        : 'No channels assigned. Ask an admin to grant channel access.',
+                        : 'No channels assigned. Ask an admin to grant channel access.'),
                 }],
             };
         },
