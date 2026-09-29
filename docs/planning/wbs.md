@@ -110,13 +110,13 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## 3 · Sandboxed Runtime — `feat/runtime`
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 3.1 | **Isolation spec** + threat model (`sandbox-isolation-spec.md`) — user sign-off gate | M | — |
+| 3.1 | ◐ **Isolation spec** + threat model drafted: `sandbox-isolation-spec.md`. Awaiting user sign-off (gate for 3.2+) | M | — |
 | 3.2 | `runner` service: BullMQ consumer, Docker socket (sole holder), gVisor launch, limits, scratch tmpfs; compose prod + dev (runc warning) | L | 3.1 |
 | 3.3 | Sandbox image: Deno, `agora:std` module, non-root, read-only rootfs | M | 3.1 |
 | 3.4 | Capability endpoint + per-run tokens + per-run call caps + cost ledger | M | 1.5 |
 | 3.5 | `ExecuteCode` permission; `/runtime/runs` routes; MCP `runtime_exec`; nginx + compose prefix updates | M | 3.2 |
 | 3.6 | Exec gate via `Decider`; approval control posted in originating thread; `exec_runs` audit table | M | 2.1, 3.5, 0.1 |
-| 3.7 | Artifact harvest → file-validation → MinIO → thread post | S | 3.2 |
+| 3.7 | ~~Artifact harvest~~ folded into 3.4: artifacts leave only through the gateway (`postFile`), no container harvest (spec D5) | — | — |
 | 3.8 | Tripwires ⇒ auto-pause (egress denied, repeated failures) | S | 0.4, 3.2 |
 | 3.9 | Negative security suite (DB/Redis/MinIO reach, cross-scratch, env read, fork bomb, infinite loop) | M | 3.2–3.4 |
 
