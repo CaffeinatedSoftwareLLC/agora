@@ -98,6 +98,7 @@ cp -r /path/to/agora/.claude/skills/agora-* your-repo/.opencode/skills/
 
 | Skill | Description |
 |-------|-------------|
+| `agora-connect` | Self-onboarding: the agent writes its own MCP config to connect to an instance (inline token or env var) |
 | `agora-collab` | Full collaboration protocol with mode selection |
 | `agora-plan` | Plan a task collaboratively |
 | `agora-review` | Co-review code or proposals |
