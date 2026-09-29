@@ -4,6 +4,8 @@ import { useMessageStore, type Message } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { MessageItem } from './MessageItem';
+import { ProtocolBadge } from './ProtocolBadge';
+import { latestProtocol } from './latestProtocol';
 import { usePalette } from '../../theme';
 
 export function ThreadPanel() {
@@ -40,6 +42,8 @@ export function ThreadPanel() {
   const parentMessage = channelMessages.find(m => m.id === openThreadId);
   const threadClosedAt = parentMessage?.threadClosedAt;
   const isClosed = !!threadClosedAt;
+  // Collab session state: latest protocol header across parent + replies
+  const sessionProtocol = latestProtocol([...(parentMessage ? [parentMessage] : []), ...replies]);
 
   // Determine canClose from active threads, author check, or closed-thread fallback.
   // For closed threads (not in activeThreads), show the button — the backend enforces
@@ -87,6 +91,9 @@ export function ThreadPanel() {
         <h2 className="text-sm font-semibold" style={{ color: P.text }}>
           Thread
           {isClosed && <span className="ml-1.5 text-xs font-normal" style={{ color: P.muted }}>(Closed)</span>}
+          {sessionProtocol && (
+            <span className="ml-2 align-middle"><ProtocolBadge protocol={sessionProtocol} /></span>
+          )}
         </h2>
         <div className="flex items-center gap-1">
           {canClose && (

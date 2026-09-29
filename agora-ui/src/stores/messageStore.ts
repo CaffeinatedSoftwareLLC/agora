@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
-import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload } from '../lib/contracts/ws-events';
+import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, ProtocolInfo } from '../lib/contracts/ws-events';
 
 export interface Attachment {
   id: string;
@@ -32,6 +32,7 @@ export interface Message {
   replyCount?: number;
   lastReplyAt?: string;
   threadClosedAt?: string;
+  protocol?: ProtocolInfo;
 }
 
 interface MessageState {
@@ -76,6 +77,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
+      protocol: m.protocol,
       attachments: m.attachments,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
@@ -111,6 +113,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
+      protocol: m.protocol,
       attachments: m.attachments,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
@@ -271,6 +274,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
+          protocol: msg.protocol,
           attachments: msg.attachments,
         };
         nextByChannel.set(msg.channelId, updated);
@@ -290,6 +294,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
+          protocol: msg.protocol,
           attachments: msg.attachments,
         };
         nextByChannel.set(msg.channelId, [...current, newMsg]);
@@ -307,7 +312,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
       nextByChannel.set(payload.channelId, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: payload.content, editedAt: payload.editedAt }
+          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined }
           : m
       ));
       return { byChannel: nextByChannel };

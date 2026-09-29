@@ -361,6 +361,174 @@ describe('Sprint B: Coordination Core', () => {
                 [generalChannelId]
             );
         });
+
+        describe('per-thread loop guard', () => {
+            let parentId: string;
+
+            async function botReply(content: string) {
+                return ctx.request
+                    .post(`/channels/${generalChannelId}/messages/${parentId}/replies`)
+                    .set({ Authorization: `Bot ${rawToken}` })
+                    .send({ content });
+            }
+
+            beforeEach(async () => {
+                const res = await ctx.request
+                    .post(`/channels/${generalChannelId}/messages`)
+                    .set(owner.auth)
+                    .send({ content: 'Thread for loop guard' });
+                parentId = res.body.id;
+                await waitForRow('messages', 'id', parentId);
+            });
+
+            afterEach(async () => {
+                await ctx.db.query(
+                    'UPDATE channels SET max_bot_hops = 4, max_thread_bot_hops = 0 WHERE id = $1',
+                    [generalChannelId]
+                );
+            });
+
+            test('disabled by default: bots can reply past the channel limit', async () => {
+                const cfg = await ctx.db.query('SELECT max_thread_bot_hops FROM channels WHERE id = $1', [generalChannelId]);
+                expect(cfg.rows[0].max_thread_bot_hops).toBe(0);
+
+                for (let i = 0; i < 6; i++) {
+                    const res = await botReply(`Unguarded reply ${i}`);
+                    expect(res.status).toBe(201);
+                }
+            });
+
+            test('thread replies do not count toward the channel guard', async () => {
+                await ctx.db.query('UPDATE channels SET max_bot_hops = 2 WHERE id = $1', [generalChannelId]);
+
+                for (let i = 0; i < 3; i++) {
+                    expect((await botReply(`Thread reply ${i}`)).status).toBe(201);
+                }
+                for (let i = 0; i < 2; i++) {
+                    const res = await ctx.request
+                        .post(`/channels/${generalChannelId}/messages`)
+                        .set({ Authorization: `Bot ${rawToken}` })
+                        .send({ content: `Top-level ${i}` });
+                    expect(res.status).toBe(201);
+                }
+            });
+
+            test('when enabled, triggers within the thread and posts the notice there', async () => {
+                await ctx.db.query('UPDATE channels SET max_thread_bot_hops = 2 WHERE id = $1', [generalChannelId]);
+
+                expect((await botReply('One')).status).toBe(201);
+                expect((await botReply('Two')).status).toBe(201);
+                const blocked = await botReply('Three');
+                expect(blocked.status).toBe(429);
+                expect(blocked.body.error).toBe('Loop guard triggered');
+
+                let notice: any;
+                for (let i = 0; i < 20 && !notice; i++) {
+                    const rows = await ctx.db.query(
+                        "SELECT content, thread_id FROM messages WHERE thread_id = $1 AND system_event = 'loop_guard'",
+                        [parentId]
+                    );
+                    notice = rows.rows[0];
+                    if (!notice) await new Promise(r => setTimeout(r, 50));
+                }
+                expect(notice.content).toContain('2 consecutive bot replies in this thread');
+            });
+
+            test('threads have independent counters', async () => {
+                await ctx.db.query('UPDATE channels SET max_thread_bot_hops = 2 WHERE id = $1', [generalChannelId]);
+                const firstParent = parentId;
+                expect((await botReply('A1')).status).toBe(201);
+                expect((await botReply('A2')).status).toBe(201);
+
+                const other = await ctx.request
+                    .post(`/channels/${generalChannelId}/messages`)
+                    .set(owner.auth)
+                    .send({ content: 'Second thread' });
+                await waitForRow('messages', 'id', other.body.id);
+                parentId = other.body.id;
+                expect((await botReply('B1')).status).toBe(201);
+                expect((await botReply('B2')).status).toBe(201);
+
+                parentId = firstParent;
+                expect((await botReply('A3')).status).toBe(429);
+            });
+
+            test('human reply in the thread resets its counter', async () => {
+                await ctx.db.query('UPDATE channels SET max_thread_bot_hops = 2 WHERE id = $1', [generalChannelId]);
+                expect((await botReply('One')).status).toBe(201);
+                expect((await botReply('Two')).status).toBe(201);
+
+                const human = await ctx.request
+                    .post(`/channels/${generalChannelId}/messages/${parentId}/replies`)
+                    .set(owner.auth)
+                    .send({ content: 'Human steps in' });
+                expect(human.status).toBe(201);
+
+                expect((await botReply('Three')).status).toBe(201);
+                expect((await botReply('Four')).status).toBe(201);
+            });
+        });
+
+        describe('PATCH /channels/:id/bot-config', () => {
+            afterEach(async () => {
+                await ctx.db.query(
+                    'UPDATE channels SET max_bot_hops = 4, max_thread_bot_hops = 0 WHERE id = $1',
+                    [generalChannelId]
+                );
+            });
+
+            test('updates the thread limit without touching the channel limit', async () => {
+                const res = await ctx.request
+                    .patch(`/channels/${generalChannelId}/bot-config`)
+                    .set(owner.auth)
+                    .send({ maxThreadBotHops: 7 });
+
+                expect(res.status).toBe(200);
+                expect(res.body).toEqual({ channelId: generalChannelId, maxBotHops: 4, maxThreadBotHops: 7 });
+            });
+
+            test('updates the channel limit alone (existing clients)', async () => {
+                const res = await ctx.request
+                    .patch(`/channels/${generalChannelId}/bot-config`)
+                    .set(owner.auth)
+                    .send({ maxBotHops: 9 });
+
+                expect(res.status).toBe(200);
+                expect(res.body.maxBotHops).toBe(9);
+                expect(res.body.maxThreadBotHops).toBe(0);
+            });
+
+            test('rejects empty and unknown bodies', async () => {
+                const empty = await ctx.request
+                    .patch(`/channels/${generalChannelId}/bot-config`)
+                    .set(owner.auth)
+                    .send({});
+                expect(empty.status).toBe(400);
+
+                const unknown = await ctx.request
+                    .patch(`/channels/${generalChannelId}/bot-config`)
+                    .set(owner.auth)
+                    .send({ maxThreadBotHops: -1 });
+                expect(unknown.status).toBe(400);
+            });
+
+            test('non-admin member is forbidden', async () => {
+                const res = await ctx.request
+                    .patch(`/channels/${generalChannelId}/bot-config`)
+                    .set(nonAdmin.auth)
+                    .send({ maxThreadBotHops: 3 });
+                expect(res.status).toBe(403);
+            });
+
+            test('channel listing exposes both limits', async () => {
+                const res = await ctx.request
+                    .get(`/servers/${serverId}/channels`)
+                    .set(owner.auth);
+                const general = res.body.find((c: any) => c.id === generalChannelId);
+                expect(general.maxBotHops).toBe(4);
+                expect(general.maxThreadBotHops).toBe(0);
+            });
+        });
     });
 
     // ─── Rate Limiting ───

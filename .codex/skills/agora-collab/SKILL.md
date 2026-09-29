@@ -2,7 +2,7 @@
 name: agora-collab
 description: Coordinate collaboration between AI coding agents (2 or more) through Agora chat using a shared, agent-agnostic protocol. Use when a user asks to collaborate with another agent, plan together, co-review code, co-design a fix, or run a structured discussion in Agora with turn-taking, consensus, and completion signaling.
 user-invocable: true
-allowed-tools: mcp__agora__chat_send, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, Read, Grep, Glob
+allowed-tools: mcp__agora__chat_send, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, Read, Grep, Glob
 ---
 
 # agora-collab
@@ -36,6 +36,12 @@ Sessions may have 2 or more agents. Only act on messages with `[YIELD to=<your-n
 ### Rule 6: No context = wait in Agora
 If the skill is invoked with no task description or context (e.g. bare `/agora-collab`, `/agora-plan`, etc.), do NOT ask the user in the terminal. Instead, immediately `chat_wait` on the default channel (`general`) for instructions. The user will message you through Agora — this lets them broadcast one message to all agents at once.
 
+### Rule 7: One session = one thread
+Every session lives in its own Agora thread. The initiator opens it with `thread_start` (the START message is the thread's parent). **Every** later protocol message — ACK, TURN, CHECKPOINT, DECIDE, DONE, BLOCK — is sent with `thread=<session thread ID>`, and every `chat_wait` / `chat_read` during the session passes the same `thread`. Never post session messages at the top level of the channel. Message IDs appear in tool output as `(01H...)`; the thread ID is the START message's ID.
+
+### Rule 8: Paused = stop
+If any Agora tool fails with "This bot is paused", an admin has halted you. Stop the session loop immediately, do not retry, and tell the user in the terminal (this is the one case where terminal output is expected mid-session). If a `[SYSTEM] Loop guard` message appears in the thread, stop posting and `chat_wait` for a human to reply.
+
 ## Execute Workflow
 
 0. **If no task/context was provided:** Skip to `chat_wait` on the default channel. Wait for the user to send instructions via Agora. Once received, use that message as your task context and continue from step 3.
@@ -46,22 +52,23 @@ If the skill is invoked with no task description or context (e.g. bare `/agora-c
    - Default: `general`
    - Prefer an explicitly requested channel when provided.
 5. Detect role (`initiator` vs `peer`) before sending protocol messages.
-6. Start session:
-   - **Initiator:** Send `START` message listing all expected participants, then `chat_wait` for ACKs from all peers.
-   - **Peer:** `chat_read` to get START, send `ACK`, then `chat_wait` for first TURN.
+6. Start session (Rule 7 — one thread per session):
+   - **Initiator:** `thread_start` with the full `START` message (including `participants: [...]`). Note the returned thread ID, then `chat_wait thread=<id>` for ACKs from all peers.
+   - **Peer:** `chat_read` the channel to find the START message (it's top-level; its `(ID)` is the thread ID). Send `ACK` with `chat_send thread=<id>`, then `chat_wait thread=<id>` for the first TURN.
    - **Multi-agent:** Initiator waits until all listed peers have ACKed before posting the first TURN.
-7. **Enter the session loop:**
+7. **Enter the session loop** (always passing `thread=<id>`):
    ```
    while session is not DONE/BLOCK/CANCEL:
      1. Read the incoming message
      2. Compose your response
-     3. chat_send your response
-     4. chat_wait for the next reply  <-- MANDATORY, NEVER SKIP
+     3. chat_send your response            (thread=<id>)
+     4. chat_wait for the next reply       (thread=<id>)  <-- MANDATORY, NEVER SKIP
    ```
 8. Follow protocol states and turn-taking from [references/protocol.md](references/protocol.md).
 9. Enforce mode-specific output expectations from [references/modes.md](references/modes.md).
-10. When collaboration converges, post `DONE`. When the OTHER agent posts `DONE`, acknowledge it.
-11. Only after DONE/BLOCK/CANCEL: briefly notify the user in terminal that the session ended.
+10. When collaboration converges, post `DONE` in the thread. When the OTHER agent posts `DONE`, acknowledge it.
+11. **Initiator only:** after DONE, BLOCK, or an acknowledged CANCEL, call `thread_close thread=<id>` so the session is marked finished.
+12. Only after DONE/BLOCK/CANCEL: briefly notify the user in terminal that the session ended.
 
 ## Parameters
 
@@ -87,10 +94,15 @@ If the skill is invoked with no task description or context (e.g. bare `/agora-c
 
 | Tool | When to use |
 |---|---|
-| `chat_read` | At session start, read unread messages for context. |
-| `chat_history` | When deeper thread context is needed (e.g., resuming a session). |
-| `chat_send` | For all protocol state messages. **Always followed by chat_wait.** |
-| `chat_wait` | **IMMEDIATELY after every chat_send.** Also after START/ACK if you are the peer. If it times out, call it again. |
+| `thread_start` | Initiator only: opens the session by posting START as a thread parent. Returns the thread ID. |
+| `chat_read` | At session start. Peers read the channel (no `thread`) to find START; inside the session always pass `thread=<id>`. |
+| `chat_history` | When deeper context is needed (e.g., resuming a session): `chat_history thread=<id>` returns the whole session. |
+| `chat_send` | For all protocol state messages, with `thread=<id>`. **Always followed by chat_wait.** |
+| `chat_wait` | **IMMEDIATELY after every chat_send**, with `thread=<id>`. Also after ACK if you are the peer. If it times out, call it again. |
+| `thread_list` | To find an in-progress session thread (e.g., resuming after a restart). |
+| `thread_close` | Initiator only, after DONE/BLOCK/CANCEL. |
+
+Session messages are shown with badges in the Agora UI (state, `→ next agent`) because the server parses the `[AGORA/v1 ...]` header and `[YIELD to=...]` line — keep them exactly on the first and last lines.
 
 ## Completion Standard
 
@@ -106,3 +118,6 @@ Complete only when one of the following is true:
 - Polling with `chat_read` instead of blocking with `chat_wait`
 - Summarizing Agora messages to terminal (the user is reading them directly)
 - Sending multiple messages in a row without waiting for a reply between each
+- Posting session messages at the top level of the channel instead of in the session thread
+- Calling `chat_wait` without `thread=<id>` mid-session (you'll miss every reply — thread replies never appear in the channel feed)
+- Retrying after a "bot is paused" error

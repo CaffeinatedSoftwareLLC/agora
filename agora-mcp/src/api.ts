@@ -3,6 +3,9 @@ export interface BotInfo {
     username: string;
     serverId: string;
     bot: boolean;
+    /** Paused bots can read but every write returns 423 until an admin resumes them. */
+    paused?: boolean;
+    pausedReason?: string | null;
     channels: { id: string; name: string; channelType: string }[];
 }
 
@@ -17,9 +20,34 @@ export interface Message {
     editedAt?: string | null;
     deletedAt?: string | null;
     systemEvent?: string;
+    /** Set on thread replies: the parent message ID. */
+    threadId?: string | null;
+    /** Set on thread parents with at least one reply. */
+    replyCount?: number;
+    lastReplyAt?: string | null;
+    threadClosedAt?: string | null;
+}
+
+export interface ThreadSummary {
+    id: string;
+    content: string | null;
+    authorId: string | null;
+    authorUsername: string | null;
+    authorBot: boolean;
+    channelId: string;
+    createdAt: string;
+    replyCount: number;
+    lastReplyAt: string;
 }
 
 export interface Cursor {
+    channelId: string;
+    lastReadId: string;
+    updatedAt: string;
+}
+
+export interface ThreadCursor {
+    threadId: string;
     channelId: string;
     lastReadId: string;
     updatedAt: string;
@@ -53,6 +81,14 @@ export class AgoraApi {
 
         if (!res.ok) {
             const text = await res.text();
+            if (res.status === 423) {
+                let reason: string | null = null;
+                try { reason = JSON.parse(text).reason ?? null; } catch { /* non-JSON body */ }
+                throw new Error(
+                    `This bot is paused by an Agora admin${reason ? ` (reason: ${reason})` : ''}. `
+                    + 'It can still read messages but cannot post until resumed. Stop and tell the user.',
+                );
+            }
             throw new Error(`Agora API ${res.status} ${method} ${path}: ${text}`);
         }
 
@@ -97,5 +133,60 @@ export class AgoraApi {
         lastReadId: string,
     ): Promise<{ channelId: string; lastReadId: string }> {
         return this.request('PUT', `/bots/@me/cursors/${channelId}`, { lastReadId });
+    }
+
+    /** Thread replies, oldest-first. `after` returns only replies newer than that ID. */
+    async getReplies(
+        channelId: string,
+        threadId: string,
+        opts?: { limit?: number; after?: string },
+    ): Promise<Message[]> {
+        const params = new URLSearchParams();
+        if (opts?.limit) params.set('limit', String(opts.limit));
+        if (opts?.after) params.set('after', opts.after);
+        const qs = params.toString();
+        return this.request('GET', `/channels/${channelId}/messages/${threadId}/replies${qs ? `?${qs}` : ''}`);
+    }
+
+    async sendReply(
+        channelId: string,
+        threadId: string,
+        content: string,
+        idempotencyKey?: string,
+    ): Promise<Message> {
+        const headers: Record<string, string> = {};
+        if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
+        return this.request('POST', `/channels/${channelId}/messages/${threadId}/replies`, { content }, headers);
+    }
+
+    /** Open threads in a channel, most recently active first. */
+    async listThreads(
+        channelId: string,
+        opts?: { limit?: number; before?: string },
+    ): Promise<ThreadSummary[]> {
+        const params = new URLSearchParams();
+        if (opts?.limit) params.set('limit', String(opts.limit));
+        if (opts?.before) params.set('before', opts.before);
+        const qs = params.toString();
+        return this.request('GET', `/channels/${channelId}/threads${qs ? `?${qs}` : ''}`);
+    }
+
+    async setThreadClosed(
+        channelId: string,
+        threadId: string,
+        closed: boolean,
+    ): Promise<{ id: string; threadClosedAt: string | null }> {
+        return this.request('PATCH', `/channels/${channelId}/messages/${threadId}/thread`, { closed });
+    }
+
+    async getThreadCursors(): Promise<ThreadCursor[]> {
+        return this.request('GET', '/bots/@me/thread-cursors');
+    }
+
+    async updateThreadCursor(
+        threadId: string,
+        lastReadId: string,
+    ): Promise<{ threadId: string; channelId: string; lastReadId: string }> {
+        return this.request('PUT', `/bots/@me/thread-cursors/${threadId}`, { lastReadId });
     }
 }

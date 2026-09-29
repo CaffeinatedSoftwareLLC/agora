@@ -36,7 +36,7 @@ export function startAssistantHandler(db: Pool, io: Server, logger?: FastifyBase
 }
 
 async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent): Promise<void> {
-    const { channelId, messageId, author, botId } = event;
+    const { channelId, messageId, author, botId, threadId } = event;
 
     // 1. Look up bot's server_id
     const botRow = await db.query(
@@ -60,6 +60,15 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
     );
     if (accessRow.rows.length === 0) return;
 
+    // 3b. Thread mentions: parent must be an open top-level message in this channel
+    if (threadId) {
+        const parentRow = await db.query(
+            'SELECT thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL',
+            [threadId, channelId]
+        );
+        if (parentRow.rows.length === 0 || parentRow.rows[0].thread_closed_at !== null) return;
+    }
+
     // 4. Idempotency check
     const dispatchResult = await db.query(
         'INSERT INTO ai_dispatch_log (message_id, bot_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
@@ -78,21 +87,44 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
         return;
     }
 
-    // 6. Fetch context messages
+    // 6. Fetch context messages — the thread (parent + latest replies) for thread
+    // mentions, otherwise top-level channel messages only
     const maxContext = aiConfig.max_context || 20;
-    const contextRows = await db.query(
-        `SELECT m.content, m.author_id, u.username, u.bot
-         FROM messages m
-         JOIN users u ON u.id = m.author_id
-         WHERE m.channel_id = $1 AND m.deleted_at IS NULL
-         ORDER BY m.created_at DESC
-         LIMIT $2`,
-        [channelId, maxContext]
-    );
+    let contextRows: any[];
+    if (threadId) {
+        const parent = await db.query(
+            `SELECT m.content, m.author_id, u.username, u.bot
+             FROM messages m
+             JOIN users u ON u.id = m.author_id
+             WHERE m.id = $1 AND m.deleted_at IS NULL`,
+            [threadId]
+        );
+        const replies = await db.query(
+            `SELECT m.content, m.author_id, u.username, u.bot
+             FROM messages m
+             JOIN users u ON u.id = m.author_id
+             WHERE m.thread_id = $1 AND m.deleted_at IS NULL
+             ORDER BY m.id DESC
+             LIMIT $2`,
+            [threadId, Math.max(maxContext - parent.rows.length, 1)]
+        );
+        contextRows = [...parent.rows, ...replies.rows.reverse()];
+    } else {
+        const result = await db.query(
+            `SELECT m.content, m.author_id, u.username, u.bot
+             FROM messages m
+             JOIN users u ON u.id = m.author_id
+             WHERE m.channel_id = $1 AND m.thread_id IS NULL AND m.deleted_at IS NULL
+             ORDER BY m.created_at DESC
+             LIMIT $2`,
+            [channelId, maxContext]
+        );
+        contextRows = result.rows.reverse();
+    }
 
-    // Build conversation (reverse to chronological order)
+    // Build conversation (chronological order)
     const messages: ConversationMessage[] = [];
-    for (const row of contextRows.rows.reverse()) {
+    for (const row of contextRows) {
         const role = row.author_id.trim() === botId.trim() ? 'assistant' : 'user';
         const prefix = role === 'user' ? `${row.username}: ` : '';
         messages.push({ role, content: `${prefix}${row.content}` });
@@ -108,10 +140,25 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
     const botAvatarUrl = botUserRow.rows[0]?.avatar_url || null;
 
     await db.query(
-        `INSERT INTO messages (id, channel_id, author_id, content, created_at)
-         VALUES ($1, $2, $3, $4, NOW())`,
-        [botMessageId, channelId, botId, '...']
+        `INSERT INTO messages (id, channel_id, author_id, content, created_at, thread_id)
+         VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        [botMessageId, channelId, botId, '...', threadId ?? null]
     );
+
+    // Thread reply: keep the parent's metadata in sync
+    let parentUpdate: { reply_count: number; last_reply_at: string } | undefined;
+    if (threadId) {
+        const updated = await db.query(
+            `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
+             WHERE id = $1
+             RETURNING reply_count, last_reply_at`,
+            [threadId]
+        );
+        parentUpdate = updated.rows[0];
+    }
+
+    // Spread into every emitted event so clients route thread replies to the thread view
+    const threadField = threadId ? { threadId: threadId.trim() } : {};
 
     // Emit placeholder to channel
     io.to(`channel:${channelId}`).emit('Message', {
@@ -123,7 +170,18 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
         authorAvatarUrl: botAvatarUrl,
         channelId: channelId.trim(),
         createdAt: new Date().toISOString(),
+        ...threadField,
     });
+
+    if (threadId && parentUpdate) {
+        io.to(`channel:${channelId}`).emit('ThreadMetadataUpdate', {
+            channelId: channelId.trim(),
+            messageId: threadId.trim(),
+            replyCount: parentUpdate.reply_count,
+            lastReplyAt: parentUpdate.last_reply_at,
+            threadClosedAt: null,
+        });
+    }
 
     // 8. Stream completion
     let accumulated = '';
@@ -145,6 +203,7 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
                     channelId: channelId.trim(),
                     content: accumulated,
                     streaming: true,
+                    ...threadField,
                 });
             },
             async onDone(usage: { inputTokens: number; outputTokens: number }) {
@@ -163,6 +222,7 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
                     channelId: channelId.trim(),
                     content: finalContent,
                     streaming: false,
+                    ...threadField,
                 });
 
                 // Log usage
@@ -188,6 +248,7 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
                     channelId: channelId.trim(),
                     content: errorContent,
                     streaming: false,
+                    ...threadField,
                 });
 
                 // Log error usage

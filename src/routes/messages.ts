@@ -4,6 +4,7 @@ import { checkChannelMembership, resolveMentions } from './shared';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
+import { parseProtocol } from '../lib/protocol';
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -124,11 +125,12 @@ export async function messageRoutes(app: FastifyInstance) {
         const mentionMatches: string[] = mentionContent.match(/@(\w+)/g) || [];
         const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
         const mentionsEveryone = mentionedUsernames.includes('everyone');
+        const protocol = parseProtocol(content);
 
         await db.query(
-            `INSERT INTO messages (id, channel_id, author_id, content, mentions_everyone)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [messageId, channelId, userId, content, mentionsEveryone]
+            `INSERT INTO messages (id, channel_id, author_id, content, mentions_everyone, protocol)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [messageId, channelId, userId, content, mentionsEveryone, protocol]
         );
 
         const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
@@ -236,6 +238,7 @@ export async function messageRoutes(app: FastifyInstance) {
             mentions: mentionedUserIds,
             mentionsEveryone,
             attachments: resolvedAttachments,
+            ...(protocol ? { protocol } : {}),
         };
 
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
@@ -276,7 +279,7 @@ export async function messageRoutes(app: FastifyInstance) {
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at
+                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
@@ -286,7 +289,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at
+                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.thread_id IS NULL
@@ -338,6 +341,7 @@ export async function messageRoutes(app: FastifyInstance) {
             createdAt: row.created_at,
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
+            ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),
             ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at } : {}) } : {}),
         }));
 
@@ -380,10 +384,10 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         const result = await db.query(
-            `UPDATE messages SET content = $1, edited_at = NOW()
+            `UPDATE messages SET content = $1, edited_at = NOW(), protocol = $3
              WHERE id = $2
-             RETURNING id, content, edited_at`,
-            [content, msgId]
+             RETURNING id, content, edited_at, protocol`,
+            [content, msgId, parseProtocol(content)]
         );
 
         const updated = result.rows[0];
@@ -399,6 +403,7 @@ export async function messageRoutes(app: FastifyInstance) {
                 channelId: channelId.trim(),
                 content: updated.content,
                 editedAt: updated.edited_at,
+                protocol: updated.protocol ?? null,
                 ...(threadId ? { threadId } : {}),
             },
         });
@@ -435,7 +440,7 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         const result = await db.query(
-            `UPDATE messages SET content = NULL, deleted_at = NOW()
+            `UPDATE messages SET content = NULL, deleted_at = NOW(), protocol = NULL
              WHERE id = $1
              RETURNING id, deleted_at`,
             [msgId]

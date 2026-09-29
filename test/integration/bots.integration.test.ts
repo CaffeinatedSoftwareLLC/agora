@@ -544,6 +544,76 @@ describe('Bot integration', () => {
 
             expect(res.status).toBe(403);
         });
+
+        describe('thread cursors', () => {
+            let replyId: string;
+
+            beforeAll(async () => {
+                const replyRes = await ctx.request
+                    .post(`/channels/${generalChannelId}/messages/${messageId}/replies`)
+                    .set(owner.auth)
+                    .send({ content: 'Thread reply' });
+                replyId = replyRes.body.id;
+                await waitForRow('messages', 'id', replyId);
+            });
+
+            test('get thread cursors returns empty initially', async () => {
+                const res = await ctx.request
+                    .get('/bots/@me/thread-cursors')
+                    .set({ Authorization: `Bot ${rawToken}` });
+
+                expect(res.status).toBe(200);
+                expect(res.body).toEqual([]);
+            });
+
+            test('update thread cursor', async () => {
+                const res = await ctx.request
+                    .put(`/bots/@me/thread-cursors/${messageId}`)
+                    .set({ Authorization: `Bot ${rawToken}` })
+                    .send({ lastReadId: replyId });
+
+                expect(res.status).toBe(200);
+                expect(res.body).toEqual({ threadId: messageId, channelId: generalChannelId, lastReadId: replyId });
+            });
+
+            test('get thread cursors returns updated cursor', async () => {
+                const res = await ctx.request
+                    .get('/bots/@me/thread-cursors')
+                    .set({ Authorization: `Bot ${rawToken}` });
+
+                expect(res.status).toBe(200);
+                expect(res.body.length).toBe(1);
+                expect(res.body[0].threadId).toBe(messageId);
+                expect(res.body[0].channelId).toBe(generalChannelId);
+                expect(res.body[0].lastReadId).toBe(replyId);
+            });
+
+            test('reply cannot be used as a thread parent', async () => {
+                const res = await ctx.request
+                    .put(`/bots/@me/thread-cursors/${replyId}`)
+                    .set({ Authorization: `Bot ${rawToken}` })
+                    .send({ lastReadId: replyId });
+
+                expect(res.status).toBe(404);
+            });
+
+            test('rejects malformed lastReadId', async () => {
+                const res = await ctx.request
+                    .put(`/bots/@me/thread-cursors/${messageId}`)
+                    .set({ Authorization: `Bot ${rawToken}` })
+                    .send({ lastReadId: 'short' });
+
+                expect(res.status).toBe(400);
+            });
+
+            test('human cannot use thread cursor endpoints', async () => {
+                const res = await ctx.request
+                    .get('/bots/@me/thread-cursors')
+                    .set(owner.auth);
+
+                expect(res.status).toBe(403);
+            });
+        });
     });
 
     // ─── Cross-Server Bot Rejection ───

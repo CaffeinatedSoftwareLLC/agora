@@ -238,7 +238,7 @@ export async function botRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
 
         const result = await db.query(
-            `SELECT id, username, bot_owner_id, created_at, avatar_url
+            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_paused_at, bot_paused_reason
              FROM users
              WHERE bot = true AND server_id = $1
              ORDER BY created_at`,
@@ -251,6 +251,8 @@ export async function botRoutes(app: FastifyInstance) {
             ownerId: r.bot_owner_id?.trim() || null,
             createdAt: r.created_at,
             avatarUrl: r.avatar_url || null,
+            pausedAt: r.bot_paused_at,
+            pausedReason: r.bot_paused_reason,
         }));
 
         return reply.status(200).send(bots);
@@ -362,6 +364,51 @@ export async function botRoutes(app: FastifyInstance) {
             id: botId.trim(),
             username: username || botRow.rows[0].username,
             avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : (botRow.rows[0].avatar_url || null),
+        });
+    });
+
+    // PATCH /servers/:serverId/bots/:id/pause → 200 { id, pausedAt, pausedReason }
+    app.patch('/servers/:serverId/bots/:id/pause', {
+        preHandler: [requireManageBots],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['paused'],
+                additionalProperties: false,
+                properties: {
+                    paused: { type: 'boolean' },
+                    reason: { type: 'string', maxLength: 500 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { serverId, id: botId } = request.params as any;
+        const { paused, reason } = request.body as any;
+        const db = request.dbClient!;
+
+        const result = await db.query(
+            `UPDATE users
+             SET bot_paused_at = CASE WHEN $1::boolean THEN COALESCE(bot_paused_at, NOW()) ELSE NULL END,
+                 bot_paused_reason = CASE WHEN $1::boolean THEN $2 ELSE NULL END
+             WHERE id = $3 AND bot = true AND server_id = $4
+             RETURNING id, bot_paused_at, bot_paused_reason`,
+            [paused, reason ?? null, botId, serverId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        await db.query(
+            `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, reason)
+             VALUES ($1, $2, $3, $4, 'bot', $5, $6)`,
+            [generateUlid(), serverId, request.userId, paused ? 'bot_pause' : 'bot_resume', botId, reason ?? null]
+        );
+
+        const row = result.rows[0];
+        return reply.status(200).send({
+            id: row.id.trim(),
+            pausedAt: row.bot_paused_at,
+            pausedReason: row.bot_paused_reason,
         });
     });
 
@@ -549,36 +596,54 @@ export async function botRoutes(app: FastifyInstance) {
 
     // ─── Channel Bot Config (human auth, requires ManageBots) ───
 
-    // PATCH /channels/:id/bot-config → 200 { channelId, maxBotHops }
+    // PATCH /channels/:id/bot-config → 200 { channelId, maxBotHops, maxThreadBotHops }
     app.patch('/channels/:id/bot-config', {
         preHandler: [requireManageBotsForChannelConfig],
         schema: {
             body: {
                 type: 'object',
-                required: ['maxBotHops'],
+                minProperties: 1,
+                additionalProperties: false,
                 properties: {
                     maxBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
+                    maxThreadBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
                 },
             },
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const { maxBotHops } = request.body as any;
+        const { maxBotHops, maxThreadBotHops } = request.body as any;
         const db = request.dbClient!;
 
-        await db.query(
-            'UPDATE channels SET max_bot_hops = $1 WHERE id = $2',
-            [maxBotHops, channelId]
+        const result = await db.query(
+            `UPDATE channels
+             SET max_bot_hops = COALESCE($1, max_bot_hops),
+                 max_thread_bot_hops = COALESCE($2, max_thread_bot_hops)
+             WHERE id = $3
+             RETURNING max_bot_hops, max_thread_bot_hops`,
+            [maxBotHops ?? null, maxThreadBotHops ?? null, channelId]
         );
 
-        // Clear stale Redis loop guard counter so new limit applies immediately
+        // Clear stale Redis loop guard counters so new limits apply immediately
         try {
-            await getRedis().del(`loopguard:${channelId}`);
+            const redis = getRedis();
+            if (maxBotHops !== undefined) {
+                await redis.del(`loopguard:${channelId}`);
+            }
+            if (maxThreadBotHops !== undefined) {
+                let cursor = '0';
+                do {
+                    const [next, keys] = await redis.scan(cursor, 'MATCH', `loopguard:${channelId}:*`, 'COUNT', 100);
+                    if (keys.length > 0) await redis.del(...keys);
+                    cursor = next;
+                } while (cursor !== '0');
+            }
         } catch { /* Redis failure is non-fatal */ }
 
         return reply.status(200).send({
             channelId: channelId.trim(),
-            maxBotHops,
+            maxBotHops: result.rows[0].max_bot_hops,
+            maxThreadBotHops: result.rows[0].max_thread_bot_hops,
         });
     });
 
@@ -595,7 +660,7 @@ export async function botRoutes(app: FastifyInstance) {
         }
 
         const botRow = await db.query(
-            'SELECT id, username, server_id, avatar_url FROM users WHERE id = $1 AND bot = true',
+            'SELECT id, username, server_id, avatar_url, bot_paused_at, bot_paused_reason FROM users WHERE id = $1 AND bot = true',
             [userId]
         );
         if (!botRow.rows[0]) {
@@ -616,6 +681,8 @@ export async function botRoutes(app: FastifyInstance) {
             serverId: botRow.rows[0].server_id?.trim() || null,
             bot: true,
             avatarUrl: botRow.rows[0].avatar_url || null,
+            paused: !!botRow.rows[0].bot_paused_at,
+            pausedReason: botRow.rows[0].bot_paused_reason || null,
             channels: channelsResult.rows.map((c: any) => ({
                 id: c.id.trim(),
                 name: c.name,
@@ -693,6 +760,89 @@ export async function botRoutes(app: FastifyInstance) {
 
         return reply.status(200).send({
             channelId: channelId.trim(),
+            lastReadId: lastReadId.trim(),
+        });
+    });
+
+    // GET /bots/@me/thread-cursors → 200 [{ threadId, channelId, lastReadId, updatedAt }]
+    app.get('/bots/@me/thread-cursors', async (request, reply) => {
+        const userId = request.userId;
+        const isBot = request.isBot;
+        const db = request.dbClient!;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        const result = await db.query(
+            `SELECT thread_id, channel_id, last_read_id, updated_at
+             FROM bot_thread_cursors
+             WHERE bot_id = $1`,
+            [userId]
+        );
+
+        const cursors = result.rows.map((r: any) => ({
+            threadId: r.thread_id.trim(),
+            channelId: r.channel_id.trim(),
+            lastReadId: r.last_read_id.trim(),
+            updatedAt: r.updated_at,
+        }));
+
+        return reply.status(200).send(cursors);
+    });
+
+    // PUT /bots/@me/thread-cursors/:threadId → 200 { threadId, channelId, lastReadId }
+    app.put('/bots/@me/thread-cursors/:threadId', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['lastReadId'],
+                properties: {
+                    lastReadId: { type: 'string', minLength: 26, maxLength: 26 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { threadId } = request.params as any;
+        const userId = request.userId;
+        const isBot = request.isBot;
+        const { lastReadId } = request.body as any;
+        const db = request.dbClient!;
+
+        if (!isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+
+        // Thread parent must be a top-level message
+        const parent = await db.query(
+            'SELECT channel_id FROM messages WHERE id = $1 AND thread_id IS NULL',
+            [threadId]
+        );
+        if (parent.rows.length === 0) {
+            return reply.status(404).send({ error: 'Thread parent not found' });
+        }
+        const channelId = parent.rows[0].channel_id.trim();
+
+        // Verify bot has access to the thread's channel
+        const access = await db.query(
+            'SELECT 1 FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2',
+            [userId, channelId]
+        );
+        if (access.rows.length === 0) {
+            return reply.status(403).send({ error: 'Bot does not have access to this channel' });
+        }
+
+        await db.query(
+            `INSERT INTO bot_thread_cursors (bot_id, thread_id, channel_id, last_read_id, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (bot_id, thread_id) DO UPDATE
+                SET last_read_id = $4, updated_at = NOW()`,
+            [userId, threadId, channelId, lastReadId]
+        );
+
+        return reply.status(200).send({
+            threadId: threadId.trim(),
+            channelId,
             lastReadId: lastReadId.trim(),
         });
     });

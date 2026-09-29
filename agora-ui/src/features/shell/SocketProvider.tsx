@@ -102,7 +102,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.on('BotMessageStream', (data: BotMessageStreamPayload) => {
-      useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming);
+      if (data.threadId) {
+        useThreadStore.getState().streamUpdate(data.threadId, data.messageId, data.content, data.streaming);
+      } else {
+        useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming);
+      }
     });
 
     s.on('Typing', (data: TypingPayload) => {

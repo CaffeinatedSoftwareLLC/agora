@@ -185,6 +185,7 @@ export async function buildApp(opts?: {
                             internalBus.emit('assistantMention', {
                                 channelId: evt.data.channelId,
                                 messageId: evt.data.messageId,
+                                ...(evt.data.threadId ? { threadId: evt.data.threadId } : {}),
                                 content: evt.data.content,
                                 author: evt.data.author,
                                 botId,

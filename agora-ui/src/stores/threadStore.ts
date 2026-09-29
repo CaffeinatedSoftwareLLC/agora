@@ -42,6 +42,7 @@ interface ThreadState {
   addReply: (msg: MessagePayload) => void;
   updateReply: (payload: MessageUpdatePayload) => void;
   removeReply: (payload: MessageDeletePayload) => void;
+  streamUpdate: (threadId: string, messageId: string, content: string, streaming: boolean) => void;
   loadActiveThreads: (channelId: string) => Promise<void>;
   loadMoreThreads: (channelId: string) => Promise<void>;
   closeThreadRemote: (channelId: string, messageId: string) => Promise<void>;
@@ -85,6 +86,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       attachments: m.attachments,
+      systemEvent: m.systemEvent,
+      protocol: m.protocol,
     }));
     set((state) => {
       const nextReplies = new Map(state.repliesByThread);
@@ -116,6 +119,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       attachments: m.attachments,
+      systemEvent: m.systemEvent,
+      protocol: m.protocol,
     }));
     set((state) => {
       const nextReplies = new Map(state.repliesByThread);
@@ -198,6 +203,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           attachments: msg.attachments,
+          systemEvent: msg.systemEvent,
+          protocol: msg.protocol,
         };
         nextReplies.set(threadId, updated);
       } else {
@@ -212,6 +219,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           attachments: msg.attachments,
+          systemEvent: msg.systemEvent,
+          protocol: msg.protocol,
         };
         nextReplies.set(threadId, [...current, newReply]);
       }
@@ -229,7 +238,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       nextReplies.set(payload.threadId!, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: payload.content, editedAt: payload.editedAt }
+          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined }
           : m
       ));
       return { repliesByThread: nextReplies };
@@ -245,9 +254,25 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       nextReplies.set(payload.threadId!, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: null, deletedAt: payload.deletedAt }
+          ? { ...m, content: null, deletedAt: payload.deletedAt, protocol: undefined }
           : m
       ));
+      return { repliesByThread: nextReplies };
+    });
+  },
+
+  streamUpdate: (threadId, messageId, content, streaming) => {
+    set((state) => {
+      const current = state.repliesByThread.get(threadId);
+      if (!current) return state;
+
+      const nextReplies = new Map(state.repliesByThread);
+      nextReplies.set(threadId, current.map((m) => {
+        if (m.id !== messageId) return m;
+        // Ignore updates after stream has been finalized
+        if (m.streaming === false) return m;
+        return { ...m, content, streaming };
+      }));
       return { repliesByThread: nextReplies };
     });
   },

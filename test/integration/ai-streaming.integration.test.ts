@@ -331,3 +331,151 @@ describe('AI Assistant streaming handler', () => {
         expect(usage.rows[0].output_tokens).toBe(0);
     });
 });
+
+describe('AI Assistant in threads', () => {
+    /** Post a top-level message and wait for its COMMIT. */
+    async function post(channelId: string, auth: object, content: string): Promise<string> {
+        const res = await ctx.request.post(`/channels/${channelId}/messages`).set(auth).send({ content });
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM messages WHERE id = $1', [res.body.id])).rows.length > 0);
+        return res.body.id;
+    }
+
+    /** Post a thread reply and wait for its COMMIT. */
+    async function reply(channelId: string, parentId: string, auth: object, content: string): Promise<string> {
+        const res = await ctx.request
+            .post(`/channels/${channelId}/messages/${parentId}/replies`)
+            .set(auth)
+            .send({ content });
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM messages WHERE id = $1', [res.body.id])).rows.length > 0);
+        return res.body.id;
+    }
+
+    function mention(fields: { channelId: string; messageId: string; threadId?: string; botId: string; owner: { userId: string } }) {
+        internalBus.emit('assistantMention', {
+            channelId: fields.channelId,
+            messageId: fields.messageId,
+            ...(fields.threadId ? { threadId: fields.threadId } : {}),
+            content: 'help',
+            author: { id: fields.owner.userId, username: 'threadowner' },
+            botId: fields.botId,
+            timestamp: new Date().toISOString(),
+        });
+    }
+
+    it('replies inside the thread with thread-only context', async () => {
+        const owner = await authedUser(ctx.request, 'aithread1');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIThreadServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+
+        mockedStream.mockImplementation(async (_config, _messages, callbacks) => {
+            callbacks.onToken('Thread answer');
+            await callbacks.onDone({ inputTokens: 3, outputTokens: 2 });
+        });
+
+        await post(generalChannelId, owner.auth, 'Unrelated channel chatter');
+        const parentId = await post(generalChannelId, owner.auth, 'Thread topic: database indexes');
+        await reply(generalChannelId, parentId, owner.auth, 'First thread reply');
+        const triggerId = await reply(generalChannelId, parentId, owner.auth, `@${'AI-Assistant'} what do you think?`);
+
+        mention({ channelId: generalChannelId, messageId: triggerId, threadId: parentId, botId, owner });
+
+        await waitFor(async () => {
+            const rows = await ctx.db.query(
+                "SELECT 1 FROM messages WHERE author_id = $1 AND content = 'Thread answer'",
+                [botId]
+            );
+            return rows.rows.length > 0;
+        });
+
+        const botMsg = await ctx.db.query(
+            "SELECT thread_id FROM messages WHERE author_id = $1 AND content = 'Thread answer'",
+            [botId]
+        );
+        expect(botMsg.rows[0].thread_id.trim()).toBe(parentId);
+
+        const [, passedMessages] = mockedStream.mock.calls[0];
+        const contents = passedMessages.map(m => m.content);
+        expect(contents[0]).toContain('Thread topic: database indexes');
+        expect(contents.some(c => c.includes('First thread reply'))).toBe(true);
+        expect(contents.some(c => c.includes('Unrelated channel chatter'))).toBe(false);
+
+        const parent = await ctx.db.query('SELECT reply_count FROM messages WHERE id = $1', [parentId]);
+        expect(parent.rows[0].reply_count).toBe(3);
+    });
+
+    it('channel mentions exclude thread replies from context', async () => {
+        const owner = await authedUser(ctx.request, 'aithread2');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIThreadServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+
+        mockedStream.mockImplementation(async (_config, _messages, callbacks) => {
+            callbacks.onToken('Channel answer');
+            await callbacks.onDone({ inputTokens: 3, outputTokens: 2 });
+        });
+
+        const parentId = await post(generalChannelId, owner.auth, 'Some thread parent');
+        await reply(generalChannelId, parentId, owner.auth, 'Hidden thread reply');
+        const triggerId = await post(generalChannelId, owner.auth, 'Top-level question');
+
+        mention({ channelId: generalChannelId, messageId: triggerId, botId, owner });
+
+        await waitFor(async () => mockedStream.mock.calls.length > 0);
+        const [, passedMessages] = mockedStream.mock.calls[0];
+        const contents = passedMessages.map(m => m.content);
+        expect(contents.some(c => c.includes('Top-level question'))).toBe(true);
+        expect(contents.some(c => c.includes('Hidden thread reply'))).toBe(false);
+
+        await waitFor(async () => {
+            const rows = await ctx.db.query(
+                "SELECT thread_id FROM messages WHERE author_id = $1 AND content = 'Channel answer'",
+                [botId]
+            );
+            return rows.rows.length > 0 && rows.rows[0].thread_id === null;
+        });
+    });
+
+    it('keeps the thread parent in context when the thread exceeds max_context', async () => {
+        const owner = await authedUser(ctx.request, 'aithread3');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIThreadServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+        await ctx.db.query('UPDATE ai_provider_config SET max_context = 3 WHERE server_id = $1', [serverId]);
+
+        mockedStream.mockImplementation(async (_config, _messages, callbacks) => {
+            callbacks.onToken('ok');
+            await callbacks.onDone({ inputTokens: 1, outputTokens: 1 });
+        });
+
+        const parentId = await post(generalChannelId, owner.auth, 'Long thread parent');
+        let lastId = '';
+        for (let i = 1; i <= 5; i++) {
+            lastId = await reply(generalChannelId, parentId, owner.auth, `Reply ${i}`);
+        }
+
+        mention({ channelId: generalChannelId, messageId: lastId, threadId: parentId, botId, owner });
+
+        await waitFor(async () => mockedStream.mock.calls.length > 0);
+        const [, passedMessages] = mockedStream.mock.calls[0];
+        const contents = passedMessages.map(m => m.content);
+        expect(contents).toHaveLength(3);
+        expect(contents[0]).toContain('Long thread parent');
+        expect(contents[1]).toContain('Reply 4');
+        expect(contents[2]).toContain('Reply 5');
+    });
+
+    it('ignores mentions in a closed thread', async () => {
+        const owner = await authedUser(ctx.request, 'aithread4');
+        const { serverId, generalChannelId } = await createServer(ctx.request, owner.auth, 'AIThreadServer');
+        const { botId } = await setupAssistant(serverId, generalChannelId, owner.auth);
+
+        const parentId = await post(generalChannelId, owner.auth, 'Soon closed');
+        const triggerId = await reply(generalChannelId, parentId, owner.auth, 'help please');
+        await ctx.db.query('UPDATE messages SET thread_closed_at = NOW() WHERE id = $1', [parentId]);
+
+        mention({ channelId: generalChannelId, messageId: triggerId, threadId: parentId, botId, owner });
+
+        await new Promise(r => setTimeout(r, 300));
+        expect(mockedStream).not.toHaveBeenCalled();
+        const botMsgs = await ctx.db.query('SELECT 1 FROM messages WHERE author_id = $1', [botId]);
+        expect(botMsgs.rows.length).toBe(0);
+    });
+});

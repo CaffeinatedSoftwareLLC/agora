@@ -19,6 +19,16 @@ export interface MessageAttachmentPayload {
   deletedAt?: string;
 }
 
+/** Parsed agora-collab protocol header (server: src/lib/protocol.ts). */
+export interface ProtocolInfo {
+  version: 1;
+  mode: 'plan' | 'review' | 'fix' | 'discuss';
+  state: 'START' | 'ACK' | 'TURN' | 'CHECKPOINT' | 'DECIDE' | 'DONE' | 'BLOCK' | 'CANCEL';
+  yieldTo?: string;
+  decision?: 'AGREE' | 'BLOCK';
+  participants?: string[];
+}
+
 export interface MessagePayload {
   id: string;
   content: string;
@@ -38,6 +48,7 @@ export interface MessagePayload {
   replyCount?: number;
   lastReplyAt?: string;
   threadClosedAt?: string;
+  protocol?: ProtocolInfo;
 }
 
 export interface MessageUpdatePayload {
@@ -46,6 +57,7 @@ export interface MessageUpdatePayload {
   content: string;
   editedAt: string;
   threadId?: string;
+  protocol?: ProtocolInfo | null;
 }
 
 export interface MessageDeletePayload {
@@ -85,4 +97,6 @@ export interface BotMessageStreamPayload {
     channelId: string;
     content: string;
     streaming: boolean;
+    /** Set when the streamed message is a thread reply. */
+    threadId?: string;
 }

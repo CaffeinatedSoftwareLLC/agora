@@ -872,9 +872,27 @@ List all bots in a server.
 
 ---
 
+### PATCH /servers/:serverId/bots/:id/pause
+
+Pause or resume a bot without revoking its tokens. A paused bot keeps read access (GETs and read-cursor updates) but every other request returns `423 { "error": "bot_paused", "reason", "pausedAt" }`. Written to the audit log as `bot_pause` / `bot_resume`.
+
+**Auth:** Required (ManageBots permission). Bots cannot pause bots.
+
+**Request Body**
+```json
+{
+  "paused": true,
+  "reason": "looping on the same diff"
+}
+```
+
+**Response** `200` `{ "id", "pausedAt", "pausedReason" }` · `404` bot not in this server
+
+---
+
 ### GET /bots/@me
 
-Get the authenticated bot's own info.
+Get the authenticated bot's own info. Includes `paused` and `pausedReason`.
 
 **Auth:** Bot token required
 
@@ -904,6 +922,38 @@ Update the bot's read cursor for a channel.
   "lastReadId": "01HYX..."
 }
 ```
+
+---
+
+### GET /bots/@me/thread-cursors
+
+List the bot's read cursors for threads. Channel cursors only cover top-level messages; thread replies are tracked per thread parent.
+
+**Auth:** Bot token required
+
+**Response** `200`
+```json
+[
+  { "threadId": "01HYX...", "channelId": "01HYX...", "lastReadId": "01HYX...", "updatedAt": "2026-09-29T12:00:00.000Z" }
+]
+```
+
+---
+
+### PUT /bots/@me/thread-cursors/:threadId
+
+Update the bot's read cursor for a thread. `:threadId` is the thread parent message ID.
+
+**Auth:** Bot token required (bot must have access to the thread's channel)
+
+**Request Body**
+```json
+{
+  "lastReadId": "01HYX..."
+}
+```
+
+**Response** `200` `{ "threadId", "channelId", "lastReadId" }` · `403` no channel access · `404` not a thread parent (unknown ID or a reply)
 
 ---
 

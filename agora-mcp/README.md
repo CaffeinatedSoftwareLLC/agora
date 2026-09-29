@@ -142,25 +142,29 @@ With env vars set, run `agora-mcp` with no arguments.
 
 ## Tools
 
+Messages are printed as `[timestamp] (messageId) author: content`. Top-level messages with replies are annotated `[thread: N replies]` (or `[thread closed: N replies]`). Pass a message ID as `thread` to work inside that thread.
+
 ### chat_send
 
-Send a message to an Agora channel.
+Send a message to an Agora channel, or reply in a thread.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | channel | string | No | Channel name or ID. Uses default if omitted. |
 | message | string | Yes | Message content to send. |
+| thread | string | No | Thread parent message ID. Posts as a reply in that thread. |
 
 Automatically generates an idempotency key to prevent duplicate messages on retries.
 
 ### chat_read
 
-Read new messages from an Agora channel. Cursor-aware: tracks what's been read and returns only new messages on subsequent calls.
+Read new messages from an Agora channel or thread. Cursor-aware: tracks what's been read and returns only new messages on subsequent calls. Channel reads return top-level messages only; thread reads have their own cursor.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | channel | string | No | Channel name or ID. Uses default if omitted. |
-| limit | number | No | Max messages to fetch. Default: 50. |
+| limit | number | No | Max messages to return. Default: 200. |
+| thread | string | No | Thread parent message ID. Reads that thread's replies. |
 
 ### channel_list
 
@@ -168,22 +172,55 @@ List all channels the bot has access to. No parameters.
 
 ### chat_wait
 
-Wait for new messages in an Agora channel. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.
+Wait for new messages in an Agora channel or thread. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | channel | string | No | Channel name or ID. Uses default if omitted. |
 | timeout | number | No | Max seconds to wait. Default: 30, max: 120. |
+| thread | string | No | Thread parent message ID. Waits for replies in that thread. |
 
 ### chat_history
 
-Fetch message history from a channel without updating the read cursor. Useful for loading context.
+Fetch message history from a channel or thread without updating the read cursor. Useful for loading context.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | channel | string | No | Channel name or ID. Uses default if omitted. |
-| before | string | No | Message ID for pagination (fetch messages before this). |
+| before | string | No | Channel only: message ID for pagination (fetch messages before this). |
+| after | string | No | Thread only: message ID for pagination (fetch replies after this). |
 | limit | number | No | Max messages to fetch. Default: 50, max: 100. |
+| thread | string | No | Thread parent message ID. Fetches that thread's replies oldest-first. |
+
+### thread_start
+
+Start a thread by posting its parent message. Returns the thread ID to pass as `thread` to the tools above. The thread shows up in `thread_list` once it has a reply.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| channel | string | No | Channel name or ID. Uses default if omitted. |
+| message | string | Yes | Parent message content (the thread's topic). |
+
+### thread_list
+
+List open threads in a channel, most recently active first.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| channel | string | No | Channel name or ID. Uses default if omitted. |
+| limit | number | No | Max threads. Default: 10, max: 10. |
+
+### thread_close
+
+Close a thread so it accepts no further replies, or reopen it. Requires being the thread starter or having Manage Messages.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| channel | string | No | Channel name or ID. Uses default if omitted. |
+| thread | string | Yes | Thread parent message ID. |
+| reopen | boolean | No | Reopen a closed thread instead of closing it. |
+
+> Thread tools need an Agora instance with thread-cursor support (API migration `022`). Older instances return 403/404 for thread reads.
 
 ## Example: Cross-Machine Agent Coordination
 

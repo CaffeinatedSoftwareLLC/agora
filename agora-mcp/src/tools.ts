@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AgoraApi, BotInfo, Message } from './api.js';
+import type { AgoraApi, BotInfo, Message, ThreadSummary } from './api.js';
 import type { CursorTracker } from './cursor.js';
 
 export function formatMessages(messages: Message[]): string {
@@ -10,8 +10,24 @@ export function formatMessages(messages: Message[]): string {
         const tag = m.authorBot ? ' [BOT]' : '';
         const author = m.authorUsername || 'System';
         if (m.systemEvent) return `[SYSTEM] ${m.content}`;
-        if (m.deletedAt) return `[${m.createdAt}] ${author}${tag}: [deleted]`;
-        return `[${m.createdAt}] ${author}${tag}: ${m.content}`;
+        if (m.deletedAt) return `[${m.createdAt}] (${m.id}) ${author}${tag}: [deleted]`;
+        let thread = '';
+        if (m.replyCount && m.replyCount > 0) {
+            thread = m.threadClosedAt
+                ? ` [thread closed: ${m.replyCount} replies]`
+                : ` [thread: ${m.replyCount} replies]`;
+        }
+        return `[${m.createdAt}] (${m.id}) ${author}${tag}: ${m.content}${thread}`;
+    }).join('\n');
+}
+
+export function formatThreads(threads: ThreadSummary[]): string {
+    if (threads.length === 0) return 'No open threads.';
+    return threads.map(t => {
+        const tag = t.authorBot ? ' [BOT]' : '';
+        const author = t.authorUsername || 'System';
+        const preview = (t.content || '').replace(/\s+/g, ' ').slice(0, 120);
+        return `(${t.id}) ${author}${tag}: ${preview} — ${t.replyCount} replies, last ${t.lastReplyAt}`;
     }).join('\n');
 }
 
@@ -135,6 +151,54 @@ export async function fetchUnreadMessages(
     return { messages: result, skipped };
 }
 
+/**
+ * Fetch unread replies in a thread, returning oldest-first.
+ *
+ * Replies are paged oldest-first via `after`, so unlike channels there is no
+ * backward scan: with a cursor, return the next `maxMessages` replies after it.
+ *
+ * **No cursor (first read):** Pages forward up to `maxScan`. If the whole
+ * thread fits, returns the newest `maxMessages` for context; otherwise returns
+ * the oldest `maxMessages` and later calls continue from there.
+ */
+export async function fetchUnreadReplies(
+    api: AgoraApi,
+    cursors: CursorTracker,
+    channelId: string,
+    threadId: string,
+    maxMessages: number,
+    pageSize: number = 100,
+    maxScan: number = 2000,
+): Promise<Message[]> {
+    await cursors.loadThreads();
+    const cursor = cursors.getThreadCursor(threadId);
+    const limit = cursor ? maxMessages : maxScan;
+
+    const collected: Message[] = [];
+    let after = cursor;
+    let reachedEnd = false;
+
+    while (collected.length < limit) {
+        const fetchLimit = Math.min(pageSize, limit - collected.length);
+        const page = await api.getReplies(channelId, threadId, { limit: fetchLimit, after });
+        collected.push(...page);
+        if (page.length < fetchLimit) {
+            reachedEnd = true;
+            break;
+        }
+        after = page[page.length - 1].id;
+    }
+
+    const result = !cursor && reachedEnd
+        ? collected.slice(-maxMessages)
+        : collected.slice(0, maxMessages);
+
+    if (result.length > 0) {
+        await cursors.ackThread(threadId, result[result.length - 1].id);
+    }
+    return result;
+}
+
 export function registerTools(
     server: McpServer,
     api: AgoraApi,
@@ -179,22 +243,49 @@ export function registerTools(
         );
     }
 
+    const threadParam = z.string().optional().describe(
+        'Thread parent message ID. When set, operates on that thread\'s replies instead of the channel.',
+    );
+
+    /** Header label for tool output, e.g. "#general" or "#general › thread 01H...". */
+    function label(channelName: string, thread?: string): string {
+        return thread ? `#${channelName} › thread ${thread}` : `#${channelName}`;
+    }
+
+    /** Read unread messages from a channel (top-level) or a thread, excluding the bot's own. */
+    async function readUnread(
+        channelId: string,
+        thread: string | undefined,
+        limit: number,
+    ): Promise<{ messages: Message[]; skipped: number }> {
+        const selfId = await getBotId();
+        if (thread) {
+            const raw = await fetchUnreadReplies(api, cursors, channelId, thread, limit);
+            return { messages: filterSelf(raw, selfId), skipped: 0 };
+        }
+        const { messages: raw, skipped } = await fetchUnreadMessages(api, cursors, channelId, limit);
+        return { messages: filterSelf(raw, selfId), skipped };
+    }
+
     server.tool(
         'chat_send',
-        'Send a message to an Agora channel',
+        'Send a message to an Agora channel, or reply in a thread when `thread` is set.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             message: z.string().describe('Message content to send'),
+            thread: threadParam,
         },
-        async ({ channel, message }) => {
+        async ({ channel, message, thread }) => {
             const ch = await resolveChannel(channel);
             const idempotencyKey = randomUUID();
-            const msg = await api.sendMessage(ch.id, message, idempotencyKey);
+            const msg = thread
+                ? await api.sendReply(ch.id, thread, message, idempotencyKey)
+                : await api.sendMessage(ch.id, message, idempotencyKey);
 
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `Message sent to #${ch.name} (id: ${msg.id})`,
+                    text: `Message sent to ${label(ch.name, thread)} (id: ${msg.id})`,
                 }],
             };
         },
@@ -202,22 +293,21 @@ export function registerTools(
 
     server.tool(
         'chat_read',
-        'Read new messages from an Agora channel. Cursor-aware: returns only unread messages on subsequent calls.',
+        'Read new messages from an Agora channel, or from a thread when `thread` is set. Cursor-aware: returns only unread messages on subsequent calls. Channel reads return top-level messages only; messages with replies are marked [thread: N replies].',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             limit: z.number().optional().describe('Max messages to return (default: 200)'),
+            thread: threadParam,
         },
-        async ({ channel, limit }) => {
+        async ({ channel, limit, thread }) => {
             const ch = await resolveChannel(channel);
-            const selfId = await getBotId();
-            const { messages: raw, skipped } = await fetchUnreadMessages(api, cursors, ch.id, limit || 200);
-            const messages = filterSelf(raw, selfId);
+            const { messages, skipped } = await readUnread(ch.id, thread, limit || 200);
 
             let text: string;
             if (messages.length === 0) {
-                text = `#${ch.name} — no new messages`;
+                text = `${label(ch.name, thread)} — no new messages`;
             } else {
-                text = `#${ch.name} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`;
+                text = `${label(ch.name, thread)} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`;
                 if (skipped !== 0) {
                     text += '\n\n[Note: Large backlog detected. Some older unread messages were skipped to make progress.]';
                 }
@@ -241,12 +331,16 @@ export function registerTools(
                 `#${c.name} (${c.channelType}, id: ${c.id})`,
             );
 
+            const pausedNote = info.paused
+                ? `[PAUSED by an admin${info.pausedReason ? `: ${info.pausedReason}` : ''} — read-only until resumed]\n\n`
+                : '';
+
             return {
                 content: [{
                     type: 'text' as const,
-                    text: lines.length > 0
+                    text: pausedNote + (lines.length > 0
                         ? `Channels:\n${lines.join('\n')}`
-                        : 'No channels assigned. Ask an admin to grant channel access.',
+                        : 'No channels assigned. Ask an admin to grant channel access.'),
                 }],
             };
         },
@@ -254,26 +348,25 @@ export function registerTools(
 
     server.tool(
         'chat_wait',
-        'Wait for new messages in an Agora channel. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.',
+        'Wait for new messages in an Agora channel, or in a thread when `thread` is set. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             timeout: z.number().optional().describe('Max seconds to wait (default: 30, max: 120)'),
+            thread: threadParam,
         },
-        async ({ channel, timeout }) => {
+        async ({ channel, timeout, thread }) => {
             const ch = await resolveChannel(channel);
-            const selfId = await getBotId();
             const maxWait = Math.min(timeout || 30, 120) * 1000;
             const pollInterval = 2000;
             const deadline = Date.now() + maxWait;
 
             while (Date.now() < deadline) {
-                const { messages: raw } = await fetchUnreadMessages(api, cursors, ch.id, 200);
-                const messages = filterSelf(raw, selfId);
+                const { messages } = await readUnread(ch.id, thread, 200);
                 if (messages.length > 0) {
                     return {
                         content: [{
                             type: 'text' as const,
-                            text: `#${ch.name} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`,
+                            text: `${label(ch.name, thread)} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`,
                         }],
                     };
                 }
@@ -285,7 +378,7 @@ export function registerTools(
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `#${ch.name} — no new messages after ${Math.round(maxWait / 1000)}s`,
+                    text: `${label(ch.name, thread)} — no new messages after ${Math.round(maxWait / 1000)}s`,
                 }],
             };
         },
@@ -293,28 +386,88 @@ export function registerTools(
 
     server.tool(
         'chat_history',
-        'Fetch message history from an Agora channel. Does not update the read cursor.',
+        'Fetch message history from an Agora channel, or a thread\'s replies when `thread` is set. Does not update the read cursor.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
-            before: z.string().optional().describe('Fetch messages before this message ID (for pagination)'),
+            before: z.string().optional().describe('Channel only: fetch messages before this message ID (for pagination)'),
+            after: z.string().optional().describe('Thread only: fetch replies after this message ID (for pagination)'),
             limit: z.number().optional().describe('Max messages to fetch (default: 50, max: 100)'),
+            thread: threadParam,
         },
-        async ({ channel, before, limit }) => {
+        async ({ channel, before, after, limit, thread }) => {
             const ch = await resolveChannel(channel);
-            const messages = await api.getMessages(ch.id, {
-                limit: limit || 50,
-                before,
-            });
-
-            // Reverse for chronological
-            const chronological = messages.reverse();
+            // Replies come back oldest-first; channel messages newest-first
+            const chronological = thread
+                ? await api.getReplies(ch.id, thread, { limit: limit || 50, after })
+                : (await api.getMessages(ch.id, { limit: limit || 50, before })).reverse();
 
             return {
                 content: [{
                     type: 'text' as const,
                     text: chronological.length > 0
-                        ? `#${ch.name} — ${chronological.length} message(s):\n\n${formatMessages(chronological)}`
-                        : `#${ch.name} — no messages`,
+                        ? `${label(ch.name, thread)} — ${chronological.length} message(s):\n\n${formatMessages(chronological)}`
+                        : `${label(ch.name, thread)} — no messages`,
+                }],
+            };
+        },
+    );
+
+    server.tool(
+        'thread_start',
+        'Start a thread by posting its parent message to a channel. Returns the thread ID to pass as `thread` to chat_send / chat_read / chat_wait / chat_history. The thread appears in thread_list once it has a reply.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            message: z.string().describe('Parent message content (the thread\'s topic or opening message)'),
+        },
+        async ({ channel, message }) => {
+            const ch = await resolveChannel(channel);
+            const msg = await api.sendMessage(ch.id, message, randomUUID());
+
+            return {
+                content: [{
+                    type: 'text' as const,
+                    text: `Thread started in #${ch.name} (thread: ${msg.id}). Reply with chat_send thread="${msg.id}".`,
+                }],
+            };
+        },
+    );
+
+    server.tool(
+        'thread_list',
+        'List open threads in a channel, most recently active first.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            limit: z.number().optional().describe('Max threads to return (default: 10, max: 10)'),
+        },
+        async ({ channel, limit }) => {
+            const ch = await resolveChannel(channel);
+            const threads = await api.listThreads(ch.id, { limit: limit || 10 });
+
+            return {
+                content: [{
+                    type: 'text' as const,
+                    text: `#${ch.name} — ${threads.length} open thread(s):\n\n${formatThreads(threads)}`,
+                }],
+            };
+        },
+    );
+
+    server.tool(
+        'thread_close',
+        'Close a thread (no further replies), or reopen it with reopen=true. Requires being the thread starter or having Manage Messages.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            thread: z.string().describe('Thread parent message ID'),
+            reopen: z.boolean().optional().describe('Reopen a closed thread instead of closing it'),
+        },
+        async ({ channel, thread, reopen }) => {
+            const ch = await resolveChannel(channel);
+            await api.setThreadClosed(ch.id, thread, !reopen);
+
+            return {
+                content: [{
+                    type: 'text' as const,
+                    text: `${label(ch.name, thread)} ${reopen ? 'reopened' : 'closed'}`,
                 }],
             };
         },

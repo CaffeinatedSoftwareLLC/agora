@@ -77,6 +77,7 @@ export function BotManagement() {
               isExpanded={expandedBotId === bot.id}
               onToggle={() => setExpandedBotId(expandedBotId === bot.id ? null : bot.id)}
               onDeleted={fetchBots}
+              onPauseChanged={fetchBots}
             />
           ))}
         </div>
@@ -207,24 +208,59 @@ function BotRow({
   isExpanded,
   onToggle,
   onDeleted,
+  onPauseChanged,
 }: {
   bot: Bot;
   serverId: string;
   isExpanded: boolean;
   onToggle: () => void;
   onDeleted: () => void;
+  onPauseChanged: () => void;
 }) {
+  const [pausing, setPausing] = useState(false);
+  const [pauseError, setPauseError] = useState('');
+  const isPaused = !!bot.pausedAt;
+
+  async function togglePause() {
+    setPausing(true);
+    setPauseError('');
+    try {
+      if (isPaused) {
+        await botApi.setPaused(serverId, bot.id, false);
+      } else {
+        const reason = prompt('Pause this bot? It will be read-only until resumed.\n\nReason (optional):');
+        if (reason === null) return;
+        await botApi.setPaused(serverId, bot.id, true, reason.trim() || undefined);
+      }
+      onPauseChanged();
+    } catch (err) {
+      setPauseError(err instanceof ApiError ? err.code : 'Failed to update pause state');
+    } finally {
+      setPausing(false);
+    }
+  }
+
   return (
     <div className="border border-border rounded-lg overflow-hidden">
+      <div className="flex items-center hover:bg-surface-hover">
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-hover text-left"
+        className="flex-1 flex items-center justify-between px-4 py-3 text-left"
       >
         <div>
           <span className="text-text font-medium">{bot.username}</span>
+          {isPaused && (
+            <span
+              className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none bg-warn/20 text-warn"
+              title={bot.pausedReason ? `Paused: ${bot.pausedReason}` : 'Paused'}
+            >
+              PAUSED
+            </span>
+          )}
           <span className="text-text-muted text-xs ml-2">
             {new Date(bot.createdAt).toLocaleDateString()}
           </span>
+          {pauseError && <span className="text-danger text-xs ml-2">{pauseError}</span>}
         </div>
         <svg
           className="h-4 w-4 text-text-muted transition-transform"
@@ -237,6 +273,12 @@ function BotRow({
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
+      <div className="pr-3">
+        <Button variant="secondary" onClick={togglePause} loading={pausing}>
+          {isPaused ? 'Resume' : 'Pause'}
+        </Button>
+      </div>
+      </div>
       {isExpanded && (
         <BotDetailPanel botId={bot.id} serverId={serverId} onDeleted={onDeleted} />
       )}
