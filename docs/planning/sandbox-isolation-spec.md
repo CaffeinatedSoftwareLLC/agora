@@ -14,9 +14,10 @@ Approving this document approves these decisions. Anything struck out or changed
 | D3 | **Sandboxes never hold provider keys or Agora secrets.** Capabilities (`search()`, `generateImage()`, …) are served by the gateway using a short-lived per-run token. | §7 |
 | D4 | A dedicated **`runner` service is the only holder of the Docker socket**. `api` never gets it. Untrusted code never executes inside `runner`. | §3, T9 |
 | D5 | **Artifacts leave only through the gateway** (`postFile()`), validated by the existing file pipeline. Nothing is copied out of the container filesystem. | §11 |
-| D6 | **Every run passes the decision gate first.** The default is `require_approval`; `auto` is per-bot and admin-granted. A model verdict (e.g. Jev) can never loosen limits. | §10, T11 |
-| D7 | Default limits: **1 vCPU · 512 MB RAM · 128 PIDs · 60 s wall clock · 64 MB scratch · 20 capability calls per run · 2 concurrent runs per server**. Instance admins can change them, up to hard ceilings. | §8 |
+| D6 | **Every run passes the decision gate first.** Human approval is the default; auto-run is granted **per bot** by an admin *(confirmed 2026-09-29)*. A model verdict (e.g. Jev) can never loosen limits. | §10, T11 |
+| D7 | Default limits: **1 vCPU · 512 MB RAM · 128 PIDs · 60 s wall clock · 64 MB scratch · 20 capability calls per run · 2 concurrent runs per server**. Runs that request generation capabilities get a longer time profile (§8.1) *(confirmed 2026-09-29)*. Instance admins can change them, up to hard ceilings. | §8 |
 | D8 | **Dev on Windows/macOS runs with `runc`** behind an explicit `AGORA_SANDBOX_INSECURE_DEV=1` flag, a loud log line and a UI banner. That is never acceptable for prod. | §15 |
+| D9 | **Submitted code is pruned** after a retention period (default 30 days) and only its hash and metadata are kept. Users are told the deletion date up front and warned before retention is shortened (§9.1) *(confirmed 2026-09-29)*. | §9.1 |
 
 ## 1. Scope
 
@@ -197,6 +198,21 @@ Notes:
 
 Defaults live in `instance_settings` (`runtime.*`). Per-run requests are clamped to the ceilings, and a submitter can only lower limits.
 
+### 8.1 Time profiles for long tasks
+
+Generation calls (speech, images, video) can take far longer than a data transform, so the wall-clock limit follows what the run **declares it will use**:
+
+| Profile | Applies when `requestedCapabilities` includes | Default | Ceiling |
+|---|---|---|---|
+| `standard` | only `chat`, `search`, `decide`, or none | 60 s | 300 s |
+| `generation` | `image` or `tts` | 180 s | 600 s |
+| `video` | `video` | deferred: video jobs are long-running async operations, handled as async capability calls in Phase 5, not a longer sandbox | n/a |
+
+- The profile is chosen by `api` from the declared capabilities. The gateway still rejects any capability the run didn't declare, so a run can't claim `tts` for more time and then do something else without it showing in the audit.
+- The profile applies only to wall clock. CPU, memory and call caps stay the same.
+- **Time spent waiting on a provider inside a capability call still counts.** If a single generation call needs more than the profile allows, the answer is an async capability (start, then poll) and not a longer sandbox. Tracked in §18.
+- Admins can change each profile's default and ceiling (`runtime.profiles.*`).
+
 ## 9. Run model
 
 `exec_runs` (audit record, never deleted by run cleanup):
@@ -207,7 +223,7 @@ Defaults live in `instance_settings` (`runtime.*`). Per-run requests are clamped
 | `server_id`, `channel_id`, `thread_id` | origin; results post back here |
 | `submitted_by` | bot or user ID |
 | `language` | `deno-ts` (only value in v1) |
-| `code` | stored for audit and approval review; size-capped |
+| `code` | stored for audit and approval review; size-capped; **pruned** after the retention period (§9.1) |
 | `code_sha256` | dedupe, audit |
 | `requested_capabilities` | declared by the submitter; the gateway rejects anything else |
 | `limits` | JSONB, clamped values actually applied |
@@ -216,7 +232,19 @@ Defaults live in `instance_settings` (`runtime.*`). Per-run requests are clamped
 | `status` | see the state machine below |
 | `exit_code`, `stdout_tail`, `stderr_tail` | truncated and redacted |
 | `capability_calls`, `cost_micros` | rolled up from `ai_usage_events.run_id` |
+| `code_pruned_at` | set when `code` is cleared by retention |
 | `created_at`, `started_at`, `finished_at` | |
+
+### 9.1 Code retention
+
+- **Default: 30 days** (`runtime.code_retention_days`, 1–3650, or `null` to keep forever). A daily cleanup job (alongside the file-cleanup worker) clears `code` and sets `code_pruned_at`. Metadata, hash, decision, outcome and usage stay for audit.
+- **Users are told up front:**
+  - the approval request and the run summary in the thread both end with *"Code for this run will be deleted on <date>."*
+  - `GET /runtime/runs/:id` returns `codeExpiresAt`, or `codePrunedAt` once it's gone.
+- **Warned before shortening:** lowering the retention in settings shows how many existing runs would lose their code at the next cleanup and asks for confirmation (e.g. "Code for 42 runs older than 7 days will be permanently deleted tonight"). The change is audit-logged.
+- **Keep a copy:** anyone who can see the run can download its code (`GET /runtime/runs/:id/code`) until it's pruned.
+
+### 9.2 State machine
 
 ```
 submitted ─► gated ─┬─► denied
@@ -366,10 +394,10 @@ docker run --rm --runtime=runsc hello-world
 ## 18. Open questions & hardening backlog
 
 **Questions for the reviewer**
-1. **Default gate mode:** are you comfortable with `require_approval` as the default, with `auto` granted per bot? The alternative is `auto` by default for bots with `ExecuteCode`.
-2. **Wall clock:** is 60 s default / 300 s max right for the visual-report MVP? Media generation (TTS, images) may need longer. Options: a raised ceiling per capability, or async capability calls that don't count against wall clock.
-3. **Code retention:** store full code in `exec_runs` indefinitely (audit), or prune after N days and keep only the hash?
-4. **Who can submit:** `ExecuteCode` for bots only in v1, or humans too (e.g. an admin running a snippet from the UI)?
+1. ~~Default gate mode~~ **Answered:** human approval by default, auto-run granted per bot (D6).
+2. ~~Wall clock~~ **Answered:** longer time profiles for generation tasks (§8.1); video goes async.
+3. ~~Code retention~~ **Answered:** prune (default 30 days) and warn users (§9.1).
+4. **Who can submit:** `ExecuteCode` for bots only in v1 (agents via MCP `runtime_exec`; humans approve), or humans too (e.g. an admin pasting a snippet into the UI)? *Recommendation: bots only for v1.*
 
 **Hardening backlog** (not blocking v1)
 - A per-run Docker network (removes the shared-bridge residual in T5).
@@ -377,6 +405,7 @@ docker run --rm --runtime=runsc hello-world
 - A seccomp profile tighter than the default, on top of gVisor.
 - Firecracker backend behind the runner interface for hosts with KVM.
 - A sandboxed HTML artifact viewer (iframe `sandbox` + separate origin).
+- Async capability calls (start, then poll) so a single slow generation doesn't need a long-lived sandbox (§8.1).
 
 ## 19. WBS mapping (updates §3 of `wbs.md`)
 
