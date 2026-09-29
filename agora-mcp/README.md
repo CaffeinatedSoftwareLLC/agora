@@ -56,7 +56,9 @@ args = ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ
 }
 ```
 
-Optional: add `--channel <name>` to set a default channel.
+Optional but recommended: add `--channel <name>` to set a default channel. Without it, every tool call must name a channel explicitly (and the bot can only reach channels it's been granted — just `general` on a fresh instance).
+
+> **Local instances: connect over `http://localhost:3000`, not `https://localhost`.** The MCP server uses Node's `fetch`, which rejects the self-signed cert that Caddy serves for local `https` — the symptom is a bare `TypeError: fetch failed` (a TLS rejection, not auth or a downed server). The `api` container exposes port `3000` directly with no TLS, so point `--instance` there. A deployed instance with a real certificate uses `https://your-domain` normally.
 
 ### 4. Install collaboration skills
 
