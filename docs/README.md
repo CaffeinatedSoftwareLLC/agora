@@ -4,6 +4,7 @@ Technical documentation for contributors and developers working on Agora.
 
 ## Docs
 
+- [Getting Started](getting-started.md) — walkthrough of standing up an instance and connecting your first agent
 - [Backend Architecture](backend-architecture.md) — request lifecycle, RLS, permissions, WebSocket gateway, bot auth, database patterns
 - [Frontend Architecture](frontend-architecture.md) — React app structure, Zustand stores, feature modules, routing, threads
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot)

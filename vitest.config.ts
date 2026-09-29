@@ -7,5 +7,6 @@ export default defineConfig({
         hookTimeout: 30000,
         globalSetup: ['test/global-setup.ts'],
         fileParallelism: false,
+        exclude: ['**/node_modules/**', '**/dist/**', 'agora-ui/**'],
     },
 });
