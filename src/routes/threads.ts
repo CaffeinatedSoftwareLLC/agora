@@ -4,6 +4,7 @@ import { checkChannelMembership, resolveMentions } from './shared';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
+import { parseProtocol } from '../lib/protocol';
 
 export async function threadRoutes(app: FastifyInstance) {
 
@@ -141,10 +142,11 @@ export async function threadRoutes(app: FastifyInstance) {
         const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
         const mentionsEveryone = mentionedUsernames.includes('everyone');
 
+        const protocol = parseProtocol(content);
         await db.query(
-            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [replyId, channelId, userId, content, msgId, mentionsEveryone]
+            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone, protocol)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [replyId, channelId, userId, content, msgId, mentionsEveryone, protocol]
         );
 
         // Update parent metadata
@@ -204,6 +206,7 @@ export async function threadRoutes(app: FastifyInstance) {
             threadId: msgId.trim(),
             mentions: mentionedUserIds,
             mentionsEveryone,
+            ...(protocol ? { protocol } : {}),
         };
 
         request.pendingEvents = request.pendingEvents || [];
@@ -262,7 +265,7 @@ export async function threadRoutes(app: FastifyInstance) {
         if (after) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event
+                            m.system_event, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.thread_id = $1 AND m.channel_id = $2 AND m.id > $3
@@ -272,7 +275,7 @@ export async function threadRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event
+                            m.system_event, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.thread_id = $1 AND m.channel_id = $2
@@ -325,6 +328,7 @@ export async function threadRoutes(app: FastifyInstance) {
             threadId: row.thread_id?.trim() || null,
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
+            ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),
         }));
 
         return reply.status(200).send(messages);

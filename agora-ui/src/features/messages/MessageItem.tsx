@@ -5,6 +5,7 @@ import { EditMessageInput } from './EditMessageInput';
 import { MessageContent } from './MessageContent';
 import { FileAttachment } from './FileAttachment';
 import { ThreadIndicator } from './ThreadIndicator';
+import { ProtocolBadge } from './ProtocolBadge';
 import { useThreadStore } from '../../stores/threadStore';
 import { usePalette } from '../../theme';
 
@@ -74,6 +75,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
     return (
       <div className={`group relative px-4 py-0.5 pl-[68px] hover:bg-surface-hover/30 ${opacity}`}>
         {!editing && <MessageActions isOwn={isOwn} onEdit={() => setEditing(true)} onDelete={() => onDelete(message.id)} onReply={handleReply} />}
+        {message.protocol && !editing && (
+          <div className="mb-0.5"><ProtocolBadge protocol={message.protocol} /></div>
+        )}
         {editing ? (
           <EditMessageInput
             message={message}
@@ -124,6 +128,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
           )}
           <span className="text-xs text-text-dim">{formatTimestamp(message.createdAt)}</span>
           {message.editedAt && <span className="text-xs text-text-dim">(edited)</span>}
+          {message.protocol && <ProtocolBadge protocol={message.protocol} />}
         </div>
         {editing ? (
           <EditMessageInput

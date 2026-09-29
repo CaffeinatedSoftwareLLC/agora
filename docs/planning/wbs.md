@@ -48,16 +48,16 @@ Backend thread endpoints exist and admit bots. Gaps found in code review:
 | 0.2.3 | Placeholder/final message inserted with `thread_id`; bump parent `reply_count`/`last_reply_at`; emit `ThreadMetadataUpdate`; reject if thread closed (post nothing); `BotMessageStream` carries `threadId` and the UI thread store applies it | S | 0.2.1 |
 | 0.2.4 | Integration tests in `ai-assistant.integration.test.ts` / `ai-streaming...`: mention in thread ⇒ reply in thread with thread-only context | S | 0.2.3 |
 
-### 0.3 Structured collab signals ☐
+### 0.3 Structured collab signals ☑
 Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per the skill contract — parse, don't add a new param.
 | ID | Task | Size | Depends |
 |---|---|---|---|
 | 0.3.1 | Decide storage: `messages.protocol JSONB` (mode, state, yieldTo) vs side table — default JSONB, nullable | XS | — |
-| 0.3.2 | Migration `023_message_protocol.sql` | XS | 0.3.1 |
+| 0.3.2 | Migration `024_message_protocol.sql` (023 went to the thread loop guard) | XS | 0.3.1 |
 | 0.3.3 | `src/lib/protocol.ts` parser (strict: only well-formed header at message start; YIELD at end) + unit tests | S | — |
 | 0.3.4 | Populate on insert in `messages.ts` + `threads.ts`; include `protocol` in message payloads and WS events | S | 0.3.2, 0.3.3 |
-| 0.3.5 | MCP `formatMessages` shows parsed state compactly (e.g. `⟨TURN→codex⟩`) | XS | 0.3.4 |
-| 0.3.6 | UI: badge per protocol state in message + thread views; session state chip on thread parent (`START…DONE/BLOCK/CANCEL`) | M | 0.3.4 |
+| 0.3.5 | ~~MCP `formatMessages` shows parsed state~~ — dropped: agents already see the header verbatim in content | XS | 0.3.4 |
+| 0.3.6 | UI: `ProtocolBadge` on messages (state, decision, → yieldTo; mode/participants on hover); session chip in thread panel header = latest state in the thread | M | 0.3.4 |
 
 ### 0.4 Bot pause/resume + loop-guard scope ☐
 | ID | Task | Size | Depends |

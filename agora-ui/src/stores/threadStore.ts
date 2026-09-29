@@ -86,6 +86,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       attachments: m.attachments,
+      systemEvent: m.systemEvent,
+      protocol: m.protocol,
     }));
     set((state) => {
       const nextReplies = new Map(state.repliesByThread);
@@ -117,6 +119,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       attachments: m.attachments,
+      systemEvent: m.systemEvent,
+      protocol: m.protocol,
     }));
     set((state) => {
       const nextReplies = new Map(state.repliesByThread);
@@ -199,6 +203,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           attachments: msg.attachments,
+          systemEvent: msg.systemEvent,
+          protocol: msg.protocol,
         };
         nextReplies.set(threadId, updated);
       } else {
@@ -213,6 +219,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           attachments: msg.attachments,
+          systemEvent: msg.systemEvent,
+          protocol: msg.protocol,
         };
         nextReplies.set(threadId, [...current, newReply]);
       }
@@ -230,7 +238,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       nextReplies.set(payload.threadId!, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: payload.content, editedAt: payload.editedAt }
+          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined }
           : m
       ));
       return { repliesByThread: nextReplies };
@@ -246,7 +254,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       nextReplies.set(payload.threadId!, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: null, deletedAt: payload.deletedAt }
+          ? { ...m, content: null, deletedAt: payload.deletedAt, protocol: undefined }
           : m
       ));
       return { repliesByThread: nextReplies };
