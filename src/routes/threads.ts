@@ -51,11 +51,11 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Fetch channel details for mention resolution, rate limiting, loop guard
         const channelRow = await db.query(
-            'SELECT server_id, max_bot_hops, bot_rate_limit FROM channels WHERE id = $1',
+            'SELECT server_id, max_thread_bot_hops, bot_rate_limit FROM channels WHERE id = $1',
             [channelId]
         );
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 4;
+        const maxThreadBotHops = channelRow.rows[0]?.max_thread_bot_hops ?? 0;
         const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
 
         // Bot rate limiting (same channel context as regular messages)
@@ -73,22 +73,28 @@ export async function threadRoutes(app: FastifyInstance) {
             } catch { /* Redis failure is non-fatal */ }
         }
 
-        // Loop guard (same channel context)
-        if (isBot && maxBotHops > 0) {
+        // Loop guard — per thread, independent of the channel guard; 0 = disabled
+        const guardKey = `loopguard:${channelId.trim()}:${msgId.trim()}`;
+        if (isBot && maxThreadBotHops > 0) {
             try {
                 const redis = getRedis();
-                const guardKey = `loopguard:${channelId}`;
                 const count = await redis.incr(guardKey);
                 if (count === 1) await redis.expire(guardKey, 300);
 
-                if (count > maxBotHops) {
+                if (count > maxThreadBotHops) {
                     await redis.del(guardKey);
                     const sysId = generateUlid();
+                    const sysContent = `Loop guard: ${maxThreadBotHops} consecutive bot replies in this thread. Human input required to continue.`;
                     await db.query(
-                        `INSERT INTO messages (id, channel_id, author_id, content, system_event)
-                         VALUES ($1, $2, NULL, $3, 'loop_guard')`,
-                        [sysId, channelId,
-                         `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`]
+                        `INSERT INTO messages (id, channel_id, author_id, content, system_event, thread_id)
+                         VALUES ($1, $2, NULL, $3, 'loop_guard', $4)`,
+                        [sysId, channelId, sysContent, msgId]
+                    );
+                    const guardParent = await db.query(
+                        `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
+                         WHERE id = $1
+                         RETURNING reply_count, last_reply_at`,
+                        [msgId]
                     );
                     request.pendingEvents ??= [];
                     request.pendingEvents.push({
@@ -96,23 +102,35 @@ export async function threadRoutes(app: FastifyInstance) {
                         event: 'Message',
                         data: {
                             id: sysId.trim(),
-                            content: `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`,
+                            content: sysContent,
                             authorId: null, authorUsername: null,
                             channelId: channelId.trim(),
                             createdAt: new Date().toISOString(),
+                            threadId: msgId.trim(),
                             systemEvent: 'loop_guard',
                         },
                     });
                     request.pendingEvents.push({
                         room: `channel:${channelId.trim()}`,
+                        event: 'ThreadMetadataUpdate',
+                        data: {
+                            channelId: channelId.trim(),
+                            messageId: msgId.trim(),
+                            replyCount: guardParent.rows[0].reply_count,
+                            lastReplyAt: guardParent.rows[0].last_reply_at,
+                            threadClosedAt: null,
+                        },
+                    });
+                    request.pendingEvents.push({
+                        room: `channel:${channelId.trim()}`,
                         event: 'ChannelLoopGuard',
-                        data: { channelId: channelId.trim(), paused: true },
+                        data: { channelId: channelId.trim(), threadId: msgId.trim(), paused: true },
                     });
                     return reply.status(429).send({ error: 'Loop guard triggered' });
                 }
             } catch { /* Redis failure is non-fatal */ }
         } else if (!isBot) {
-            try { await getRedis().del(`loopguard:${channelId}`); } catch { /* non-fatal */ }
+            try { await getRedis().del(guardKey); } catch { /* non-fatal */ }
         }
 
         const replyId = generateUlid();

@@ -549,36 +549,54 @@ export async function botRoutes(app: FastifyInstance) {
 
     // ─── Channel Bot Config (human auth, requires ManageBots) ───
 
-    // PATCH /channels/:id/bot-config → 200 { channelId, maxBotHops }
+    // PATCH /channels/:id/bot-config → 200 { channelId, maxBotHops, maxThreadBotHops }
     app.patch('/channels/:id/bot-config', {
         preHandler: [requireManageBotsForChannelConfig],
         schema: {
             body: {
                 type: 'object',
-                required: ['maxBotHops'],
+                minProperties: 1,
+                additionalProperties: false,
                 properties: {
                     maxBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
+                    maxThreadBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
                 },
             },
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const { maxBotHops } = request.body as any;
+        const { maxBotHops, maxThreadBotHops } = request.body as any;
         const db = request.dbClient!;
 
-        await db.query(
-            'UPDATE channels SET max_bot_hops = $1 WHERE id = $2',
-            [maxBotHops, channelId]
+        const result = await db.query(
+            `UPDATE channels
+             SET max_bot_hops = COALESCE($1, max_bot_hops),
+                 max_thread_bot_hops = COALESCE($2, max_thread_bot_hops)
+             WHERE id = $3
+             RETURNING max_bot_hops, max_thread_bot_hops`,
+            [maxBotHops ?? null, maxThreadBotHops ?? null, channelId]
         );
 
-        // Clear stale Redis loop guard counter so new limit applies immediately
+        // Clear stale Redis loop guard counters so new limits apply immediately
         try {
-            await getRedis().del(`loopguard:${channelId}`);
+            const redis = getRedis();
+            if (maxBotHops !== undefined) {
+                await redis.del(`loopguard:${channelId}`);
+            }
+            if (maxThreadBotHops !== undefined) {
+                let cursor = '0';
+                do {
+                    const [next, keys] = await redis.scan(cursor, 'MATCH', `loopguard:${channelId}:*`, 'COUNT', 100);
+                    if (keys.length > 0) await redis.del(...keys);
+                    cursor = next;
+                } while (cursor !== '0');
+            }
         } catch { /* Redis failure is non-fatal */ }
 
         return reply.status(200).send({
             channelId: channelId.trim(),
-            maxBotHops,
+            maxBotHops: result.rows[0].max_bot_hops,
+            maxThreadBotHops: result.rows[0].max_thread_bot_hops,
         });
     });
 

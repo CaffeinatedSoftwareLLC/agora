@@ -65,7 +65,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 0.4.1 | Migration: `users.bot_paused_at TIMESTAMPTZ`, `bot_paused_reason TEXT` | XS | — |
 | 0.4.2 | `PATCH /servers/:serverId/bots/:botId/pause { paused, reason? }` — Administrator or new `ManageBots` bit; audit log entry | S | 0.4.1 |
 | 0.4.3 | Enforce: paused bot ⇒ 423 on message send, reply, thread close; `/bots/@me` exposes `paused` so MCP can report it | S | 0.4.1 |
-| 0.4.4 | Loop guard keyed per thread for replies (`loopguard:{channelId}:{threadId}`); keep channel key for top-level. Confirm with user whether collab threads need a separate hop limit | S | — |
+| 0.4.4 | ☑ Per-thread loop guard: `loopguard:{channelId}:{threadId}`, `channels.max_thread_bot_hops` (default **0 = off**, per user), settable via `PATCH /channels/:id/bot-config`; channel guard no longer counts thread replies | S | — |
 | 0.4.5 | UI: pause toggle in bot management; paused indicator on bot messages/member list | S | 0.4.2 |
 | 0.4.6 | Integration tests: pause enforcement, permission checks, per-thread loop guard | S | 0.4.3, 0.4.4 |
 
@@ -126,7 +126,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## Risks / open decisions log
 | # | Item | Owner | Due |
 |---|---|---|---|
-| R1 | Per-thread loop guard vs higher hop limit for collab threads | user | 0.4.4 |
+| R1 | ☑ Per-thread guard, default off. UI visibility tracked in a GitHub issue | user | 0.4.4 |
 | R2 | `messages.protocol` JSONB vs side table | Claude (default JSONB) | 0.3.1 |
 | R3 | Gemini API surface verification | Claude | 1.3 |
 | R4 | gVisor compat on prod host kernel | user/Claude | 3.1 |

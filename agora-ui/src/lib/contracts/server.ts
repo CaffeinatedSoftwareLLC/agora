@@ -10,6 +10,8 @@ export interface Channel {
   channelType: number;
   serverId: string | null;
   maxBotHops?: number;
+  /** Per-thread loop guard limit; 0 = disabled. */
+  maxThreadBotHops?: number;
 }
 
 export interface Member {
