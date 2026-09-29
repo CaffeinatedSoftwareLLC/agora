@@ -82,6 +82,14 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ---
 
 ## 1 · Provider Registry — `feat/provider-registry`
+
+**Design decisions (2026-09-29)**
+- **Adapters are code, providers are rows.** `src/ai/adapters/{anthropic,openai,gemini}.ts` implement one interface and declare capabilities. `openai` takes an optional `base_url`, which covers OpenAI, Ollama, OpenRouter, Groq and vLLM.
+- **Gemini** uses `models/{model}:streamGenerateContent?alt=sse` (Google: "legacy, fully supported"; documented schema, stateless). The newer Interactions API is recommended for new projects but its streaming schema isn't documented yet, and it keeps server-side state we don't want. Swap later inside the adapter only. Default model `gemini-3.8-flash` (stable as of 2026-09-29).
+- **The assistant uses the `chat` capability route.** `ai_provider_config` keeps assistant-only settings (bot, prompt, context, enabled). Its provider/model/key columns become nullable legacy fields, migrated into `ai_providers` + a `chat` route.
+- **`/ai-config` stays working.** PUT upserts a provider plus the chat route, so existing clients and the current UI keep working until the new settings UI replaces it.
+- **SSRF guard on `base_url`:** http/https only. Private, loopback and link-local targets are rejected unless the instance setting `ai_allow_private_base_urls` is on (needed for local Ollama). Checked on save and again before each call.
+- **Budgets per capability route:** optional daily request/token limits, plus optional admin-entered prices that turn into `cost_micros` and a daily cost limit. Non-chat routes start disabled. Per-bot caps wait for Phase 3, when bots actually call capabilities.
 | ID | Work package | Size | Depends |
 |---|---|---|---|
 | 1.1 | Migration: `ai_providers`, `ai_capability_routes`; `ai_provider_config.provider_id`; data migration of existing rows; drop provider CHECK; `ai_usage_events` nullable channel/message + `kind`, `provider_id`, `cost_micros`, `run_id`; grants | M | — |
