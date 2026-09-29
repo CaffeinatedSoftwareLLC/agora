@@ -69,15 +69,15 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 0.4.5 | UI: Pause/Resume button + PAUSED badge in Bot Management (message/member-list indicator deferred) | S | 0.4.2 |
 | 0.4.6 | Integration tests: pause enforcement, permission checks, per-thread loop guard | S | 0.4.3, 0.4.4 |
 
-### 0.5 `agora-collab` skill update ◐ (0.5.1–0.5.3 ☑, 0.5.4 E2E pending)
+### 0.5 `agora-collab` skill update ☑
 | ID | Task | Size | Depends |
 |---|---|---|---|
 | 0.5.1 | Initiator: `thread_start` with START as parent; all protocol messages as thread replies; peers discover session via `chat_read` top-level (START visible) and follow its thread ID | S | 0.1 |
 | 0.5.2 | `DONE` ⇒ initiator calls `thread_close`; paused ⇒ stop loop and report | XS | 0.1, 0.4 |
 | 0.5.3 | Update `allowed-tools`, tool table, `references/protocol.md`; sync all four copies (`.claude`, `.codex`, `.gemini`, `.opencode`) + shorthand skills | S | 0.5.1 |
-| 0.5.4 | Manual E2E: two agents run `agora-plan` in a thread against local stack | S | all of 0 |
+| 0.5.4 | ☑ E2E: two bots ran a full plan session (START→ACK→TURN×2→CHECKPOINT→DECIDE×2→DONE→close) through the real agora-mcp tool handlers against the branch API; pause/resume and UI badges verified in the browser | S | all of 0 |
 
-**Phase 0 exit:** 0.5.4 passes; PR merged.
+**Phase 0 exit:** 0.5.4 passes ☑; PR open for review.
 
 ---
 

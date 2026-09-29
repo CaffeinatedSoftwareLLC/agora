@@ -44,7 +44,7 @@ export function ProtocolBadge({ protocol }: { protocol: ProtocolInfo }) {
   ].filter(Boolean).join('\n');
 
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-semibold leading-none" title={title}>
+    <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-semibold leading-none" title={title}>
       <span className={`px-1.5 py-0.5 rounded ${TONE_CLASS[toneFor(protocol)]}`}>{labelFor(protocol)}</span>
       {protocol.yieldTo && (
         <span className="text-text-dim font-normal">→ {protocol.yieldTo}</span>
