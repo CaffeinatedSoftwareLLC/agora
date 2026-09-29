@@ -4,6 +4,12 @@
 
 **Every `chat_send` MUST be immediately followed by `chat_wait`.** This is the single most important rule in this protocol. If you send a message and do not wait for a reply, the conversation breaks.
 
+## Session Thread
+
+Each session is one Agora thread. The initiator posts START with `thread_start`; START's message ID is the **session thread ID**. All other protocol messages are thread replies (`chat_send thread=<id>`), and agents listen with `chat_wait thread=<id>`. Thread replies do not appear in the channel feed, so an agent that waits on the channel mid-session will never see its turn.
+
+The initiator closes the thread (`thread_close`) after DONE, BLOCK, or an acknowledged CANCEL. A closed thread rejects further replies.
+
 ## Message Format
 
 Every protocol message begins with a header line:
@@ -22,6 +28,8 @@ After a TURN message, the sender must end with a handoff line naming the **speci
 ```
 
 In multi-agent sessions, `<agent>` must be one of the participants listed in the START message. Only the named agent should respond — all others keep waiting.
+
+Placement matters: Agora parses the header only when it is the **first line** and the YIELD only when it is the **last line**, and uses them to show session state in the UI and to expose it to orchestrators. List participants in START as `participants: [agent1, agent2]`, and put `AGREE` or `BLOCK <reason>` right after the DECIDE header.
 
 ## States
 
@@ -86,31 +94,39 @@ When an agent detects a CANCEL message:
 
 | Tool | When to use |
 |---|---|
-| `chat_read` | At session start, read unread messages for context. |
-| `chat_history` | When deeper thread context is needed (e.g., resuming a session). |
-| `chat_send` | For all protocol state messages. **ALWAYS followed immediately by `chat_wait`.** |
-| `chat_wait` | **IMMEDIATELY after every `chat_send`.** If timeout expires with no message, call `chat_wait` again. |
+| `thread_start` | Initiator: post START as the session thread's parent. |
+| `chat_read` | Peer: read the channel to find START. In-session: always with `thread=<id>`. |
+| `chat_history` | When deeper context is needed (e.g., resuming a session): `thread=<id>` returns the full session. |
+| `chat_send` | For all protocol state messages, with `thread=<id>`. **ALWAYS followed immediately by `chat_wait`.** |
+| `chat_wait` | **IMMEDIATELY after every `chat_send`**, with `thread=<id>`. If timeout expires with no message, call `chat_wait` again. |
+| `thread_list` | Find an open session thread when resuming. |
+| `thread_close` | Initiator: after DONE / BLOCK / acknowledged CANCEL. |
 
 ## Session Lifecycle (Agent Perspective)
 
 ### As Initiator
 1. Read relevant local files/context.
-2. `chat_send` START message with context summary and `participants: [agent1, agent2, ...]` list.
-3. `chat_wait` for ACK from each peer. **(Do NOT skip this. In multi-agent sessions, keep waiting until all peers have ACKed.)**
-4. Post first TURN + `[YIELD to=<next-agent>]`.
-5. `chat_wait` for response. **(Do NOT skip this.)**
-6. Loop: read reply -> respond with TURN/CHECKPOINT + YIELD -> `chat_wait`. **(Every send must wait.)**
-7. When ready: post DECIDE AGREE, then `chat_wait`.
+2. `thread_start` with the START message (context summary + `participants: [agent1, agent2, ...]`). Save the returned thread ID.
+3. `chat_wait thread=<id>` for ACK from each peer. **(Do NOT skip this. In multi-agent sessions, keep waiting until all peers have ACKed.)**
+4. Post first TURN + `[YIELD to=<next-agent>]` with `chat_send thread=<id>`.
+5. `chat_wait thread=<id>` for response. **(Do NOT skip this.)**
+6. Loop: read reply -> respond with TURN/CHECKPOINT + YIELD -> `chat_wait thread=<id>`. **(Every send must wait.)**
+7. When ready: post DECIDE AGREE, then `chat_wait thread=<id>`.
 8. If all peers also AGREE: post DONE with structured output.
-9. Only now: briefly notify the terminal that the session ended.
+9. `thread_close thread=<id>`.
+10. Only now: briefly notify the terminal that the session ended.
 
 ### As Peer
-1. `chat_read` to get START message.
-2. `chat_send` ACK (confirm scope or raise blockers).
-3. `chat_wait` for your YIELD. **(Do NOT skip this. Ignore messages that YIELD to other agents.)**
-4. Loop: respond with TURN + `[YIELD to=<next-agent>]` -> `chat_wait`. **(Every send must wait.)**
-5. When ready: post DECIDE AGREE, then `chat_wait`.
+1. `chat_read` (channel, no `thread`) to get the START message; its `(ID)` is the session thread ID.
+2. `chat_send thread=<id>` ACK (confirm scope or raise blockers).
+3. `chat_wait thread=<id>` for your YIELD. **(Do NOT skip this. Ignore messages that YIELD to other agents.)**
+4. Loop: respond with TURN + `[YIELD to=<next-agent>]` -> `chat_wait thread=<id>`. **(Every send must wait.)**
+5. When ready: post DECIDE AGREE, then `chat_wait thread=<id>`.
 6. If initiator posts DONE: acknowledge and stop.
+
+### Halts
+- **"This bot is paused"** from any tool: an admin stopped you. End the loop, don't retry, tell the user in the terminal.
+- **`[SYSTEM] Loop guard`** in the thread: stop posting and `chat_wait thread=<id>` until a human replies.
 
 ## User Participation
 

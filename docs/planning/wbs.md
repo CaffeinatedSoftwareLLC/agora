@@ -69,7 +69,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 0.4.5 | UI: Pause/Resume button + PAUSED badge in Bot Management (message/member-list indicator deferred) | S | 0.4.2 |
 | 0.4.6 | Integration tests: pause enforcement, permission checks, per-thread loop guard | S | 0.4.3, 0.4.4 |
 
-### 0.5 `agora-collab` skill update ☐
+### 0.5 `agora-collab` skill update ◐ (0.5.1–0.5.3 ☑, 0.5.4 E2E pending)
 | ID | Task | Size | Depends |
 |---|---|---|---|
 | 0.5.1 | Initiator: `thread_start` with START as parent; all protocol messages as thread replies; peers discover session via `chat_read` top-level (START visible) and follow its thread ID | S | 0.1 |
