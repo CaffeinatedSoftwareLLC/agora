@@ -183,8 +183,11 @@ export const botApi = {
 
 export interface AIConfig {
   configured: boolean;
-  provider?: string;
-  model?: string;
+  /** Legacy provider name ('claude' for Anthropic); prefer `adapter`. */
+  provider?: string | null;
+  adapter?: string | null;
+  providerId?: string | null;
+  model?: string | null;
   botId?: string | null;
   systemPrompt?: string | null;
   maxContext?: number;
@@ -201,6 +204,60 @@ export interface AIUsageStats {
   error_count: number;
 }
 
+export type AICapability = 'chat' | 'search' | 'image' | 'tts' | 'video' | 'decide';
+
+export interface AIAdapter {
+  id: string;
+  label: string;
+  capabilities: AICapability[];
+  requiresApiKey: boolean;
+  supportsBaseUrl: boolean;
+  defaultBaseUrl: string;
+  defaultModels: Partial<Record<AICapability, string>>;
+}
+
+export interface AIProvider {
+  id: string;
+  adapter: string;
+  label: string;
+  baseUrl: string | null;
+  hasApiKey: boolean;
+  enabled: boolean;
+  capabilities: AICapability[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AIRouteLimits {
+  dailyRequestLimit: number | null;
+  dailyTokenLimit: number | null;
+  dailyCostLimitMicros: number | null;
+  inputPriceMicrosPerMtok: number | null;
+  outputPriceMicrosPerMtok: number | null;
+}
+
+export interface AIRoute extends AIRouteLimits {
+  capability: AICapability;
+  providerId: string;
+  providerLabel: string;
+  adapter: string;
+  model: string;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+export interface AICapabilityUsage {
+  capability: AICapability;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  costMicros: number | null;
+  errors: number;
+  today: { requests: number; tokens: number; costMicros: number | null };
+}
+
+export type AIConnectionResult = { ok: boolean; error?: string };
+
 export const aiApi = {
   getConfig: (serverId: string) =>
     api.get<AIConfig>(`/servers/${serverId}/ai-config`),
@@ -208,14 +265,56 @@ export const aiApi = {
   updateConfig: (serverId: string, data: { provider: string; model: string; apiKey: string; systemPrompt?: string | null; maxContext?: number }) =>
     api.put<AIConfig>(`/servers/${serverId}/ai-config`, data),
 
-  patchConfig: (serverId: string, data: { enabled: boolean }) =>
-    api.patch<{ enabled: boolean }>(`/servers/${serverId}/ai-config`, data),
+  patchConfig: (serverId: string, data: { enabled?: boolean; systemPrompt?: string | null; maxContext?: number }) =>
+    api.patch<{ enabled: boolean; systemPrompt: string | null; maxContext: number }>(`/servers/${serverId}/ai-config`, data),
+
+  createAssistant: (serverId: string) =>
+    api.post<{ botId: string }>(`/servers/${serverId}/ai-config/assistant`),
 
   testConnection: (serverId: string, data: { provider: string; model: string; apiKey: string }) =>
-    api.post<{ ok: boolean; error?: string }>(`/servers/${serverId}/ai-config/test`, data),
+    api.post<AIConnectionResult>(`/servers/${serverId}/ai-config/test`, data),
 
   getUsage: (serverId: string, days?: number) =>
     api.get<AIUsageStats>(`/servers/${serverId}/ai-config/usage${days ? `?days=${days}` : ''}`),
+
+  // ─── Provider registry ───
+
+  listAdapters: (serverId: string) =>
+    api.get<AIAdapter[]>(`/servers/${serverId}/ai/adapters`),
+
+  listProviders: (serverId: string) =>
+    api.get<AIProvider[]>(`/servers/${serverId}/ai/providers`),
+
+  createProvider: (serverId: string, data: { adapter: string; label?: string; apiKey?: string; baseUrl?: string | null }) =>
+    api.post<AIProvider>(`/servers/${serverId}/ai/providers`, data),
+
+  updateProvider: (serverId: string, providerId: string, data: { label?: string; apiKey?: string | null; baseUrl?: string | null; enabled?: boolean }) =>
+    api.patch<AIProvider>(`/servers/${serverId}/ai/providers/${providerId}`, data),
+
+  deleteProvider: (serverId: string, providerId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/ai/providers/${providerId}`),
+
+  testProvider: (serverId: string, providerId: string, model?: string) =>
+    api.post<AIConnectionResult>(`/servers/${serverId}/ai/providers/${providerId}/test`, model ? { model } : {}),
+
+  listRoutes: (serverId: string) =>
+    api.get<AIRoute[]>(`/servers/${serverId}/ai/routes`),
+
+  putRoute: (serverId: string, capability: AICapability, data: { providerId: string; model: string; enabled?: boolean } & Partial<AIRouteLimits>) =>
+    api.put<AIRoute>(`/servers/${serverId}/ai/routes/${capability}`, data),
+
+  deleteRoute: (serverId: string, capability: AICapability) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/ai/routes/${capability}`),
+
+  getCapabilityUsage: (serverId: string, days = 30) =>
+    api.get<{ days: number; capabilities: AICapabilityUsage[] }>(`/servers/${serverId}/ai/usage?days=${days}`),
+
+  // Instance-admin setting
+  getInstanceAISettings: () =>
+    api.get<{ allowPrivateBaseUrls: boolean }>('/admin/settings/ai'),
+
+  setAllowPrivateBaseUrls: (allowPrivateBaseUrls: boolean) =>
+    api.patch<{ allowPrivateBaseUrls: boolean }>('/admin/settings/ai', { allowPrivateBaseUrls }),
 };
 
 // ─── Role Management API ───

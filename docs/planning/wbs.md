@@ -92,13 +92,13 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 - **Budgets per capability route:** optional daily request/token limits, plus optional admin-entered prices that turn into `cost_micros` and a daily cost limit. Non-chat routes start disabled. Per-bot caps wait for Phase 3, when bots actually call capabilities.
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 1.1 | Migration: `ai_providers`, `ai_capability_routes`; `ai_provider_config.provider_id`; data migration of existing rows; drop provider CHECK; `ai_usage_events` nullable channel/message + `kind`, `provider_id`, `cost_micros`, `run_id`; grants | M | — |
-| 1.2 | Adapter interface + registry (`src/ai/adapters/`), capabilities enum, exhaustive dispatch | S | — |
-| 1.3 | Adapters: `anthropic` (port), `openai-compatible` (port + `base_url`: OpenAI/Ollama/OpenRouter/Groq/vLLM), `gemini` (verify API first) | M | 1.2 |
-| 1.4 | Routes: providers CRUD + test, capability routes CRUD, under `/servers/:id/ai/...`; assistant config references provider | M | 1.1, 1.2 |
-| 1.5 | Budgets: capability toggles (non-chat off by default), daily caps per server/bot, pre-call enforcement, usage ledger writes | M | 1.1 |
-| 1.6 | UI: provider list/add/test, capability routing table, usage + spend view | M | 1.4, 1.5 |
-| 1.7 | Tests: migration of legacy config, CRUD authz, routing resolution, budget enforcement, adapter SSE parsing fixtures | M | 1.3–1.5 |
+| 1.1 | ☑ Migration: `ai_providers`, `ai_capability_routes`; `ai_provider_config.provider_id`; data migration of existing rows; drop provider CHECK; `ai_usage_events` nullable channel/message + `kind`, `provider_id`, `cost_micros`, `run_id`; grants | M | — |
+| 1.2 | ☑ Adapter interface + registry (`src/ai/adapters/`), capabilities enum, exhaustive dispatch | S | — |
+| 1.3 | ☑ Adapters: `anthropic` (port), `openai-compatible` (port + `base_url`: OpenAI/Ollama/OpenRouter/Groq/vLLM), `gemini` (verify API first) | M | 1.2 |
+| 1.4 | ☑ Routes: providers CRUD + test, capability routes CRUD, under `/servers/:id/ai/...`; assistant config references provider | M | 1.1, 1.2 |
+| 1.5 | ☑ Budgets: capability toggles (non-chat off by default), daily caps per server/bot, pre-call enforcement, usage ledger writes | M | 1.1 |
+| 1.6 | ☑ UI: provider list/add/test, capability routing table, usage + spend view | M | 1.4, 1.5 |
+| 1.7 | ☑ Tests: migration of legacy config, CRUD authz, routing resolution, budget enforcement, adapter SSE parsing fixtures | M | 1.3–1.5 |
 
 ## 2 · Decision Seam — folds into Phase 1/3 branches
 | ID | Work package | Size | Depends |
@@ -136,6 +136,6 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 |---|---|---|---|
 | R1 | ☑ Per-thread guard, default off. UI visibility tracked in a GitHub issue | user | 0.4.4 |
 | R2 | `messages.protocol` JSONB vs side table | Claude (default JSONB) | 0.3.1 |
-| R3 | Gemini API surface verification | Claude | 1.3 |
+| R3 | ☑ Gemini API verified 2026-09-29 (generateContent/streamGenerateContent v1beta; live key-rejection response confirmed endpoint + auth header) | Claude | 1.3 |
 | R4 | gVisor compat on prod host kernel | user/Claude | 3.1 |
 | R5 | Jev API access (early access / Vercel AI Gateway) | user | 2.3 |
