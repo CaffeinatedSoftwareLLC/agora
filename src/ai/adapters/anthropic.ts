@@ -1,5 +1,5 @@
 import type { Adapter, ChatRequest, ProviderCredentials, StreamCallbacks } from './types';
-import { joinUrl, sseJson } from './sse';
+import { apiError, joinUrl, networkError, sseJson } from './sse';
 
 const DEFAULT_BASE = 'https://api.anthropic.com';
 
@@ -36,8 +36,7 @@ export const anthropicAdapter: Adapter = {
         });
 
         if (!res.ok) {
-            const text = await res.text().catch(() => '');
-            await callbacks.onError(new Error(`Claude API ${res.status}: ${text}`));
+            await callbacks.onError(new Error(await apiError('Claude', res)));
             return;
         }
 
@@ -67,12 +66,11 @@ export const anthropicAdapter: Adapter = {
                 body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
             });
             if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                return { ok: false, error: `Claude API ${res.status}: ${text}` };
+                return { ok: false, error: await apiError('Claude', res) };
             }
             return { ok: true };
         } catch (err) {
-            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+            return { ok: false, error: networkError(err) };
         }
     },
 };

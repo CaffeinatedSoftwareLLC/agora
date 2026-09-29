@@ -68,7 +68,7 @@ export async function checkBaseUrl(
         return {
             ok: false,
             error: 'base_url points to a private or local network address. An instance admin can allow this '
-                + '(Admin → AI: allow private base URLs), e.g. for a local Ollama server.',
+                + 'in Settings → AI ("Allow private network base URLs"), e.g. for a local Ollama server.',
         };
     }
     return { ok: true, url: url.toString() };

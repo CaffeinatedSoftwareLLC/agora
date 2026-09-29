@@ -210,6 +210,36 @@ describe('providers', () => {
     });
 });
 
+describe('assistant setup without a key', () => {
+    test('POST ai-config/assistant creates the bot once (idempotent)', async () => {
+        const { serverId: sid } = await createServer(ctx.request, owner.auth, 'Assistant Server');
+        const first = await ctx.request.post(`/servers/${sid}/ai-config/assistant`).set(owner.auth);
+        expect(first.status).toBe(200);
+        expect(first.body.botId).toHaveLength(26);
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_provider_config WHERE server_id = $1', [sid])).rows.length > 0);
+
+        const second = await ctx.request.post(`/servers/${sid}/ai-config/assistant`).set(owner.auth);
+        expect(second.body.botId).toBe(first.body.botId);
+
+        const bots = await ctx.db.query('SELECT username FROM users WHERE server_id = $1 AND bot = true', [sid]);
+        expect(bots.rows).toEqual([{ username: 'AI-Assistant' }]);
+    });
+
+    test('PATCH ai-config updates prompt and context size', async () => {
+        const { serverId: sid } = await createServer(ctx.request, owner.auth, 'Assistant Server 2');
+        await ctx.request.post(`/servers/${sid}/ai-config/assistant`).set(owner.auth);
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_provider_config WHERE server_id = $1', [sid])).rows.length > 0);
+
+        const res = await ctx.request.patch(`/servers/${sid}/ai-config`).set(owner.auth)
+            .send({ systemPrompt: 'Answer in haiku.', maxContext: 12 });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: true, systemPrompt: 'Answer in haiku.', maxContext: 12 });
+
+        const empty = await ctx.request.patch(`/servers/${sid}/ai-config`).set(owner.auth).send({});
+        expect(empty.status).toBe(400);
+    });
+});
+
 describe('usage', () => {
     test('reports per-capability totals and today\'s totals', async () => {
         await ctx.db.query(

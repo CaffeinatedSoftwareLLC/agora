@@ -1,5 +1,5 @@
 import type { Adapter, ChatRequest, ProviderCredentials, StreamCallbacks } from './types';
-import { joinUrl, sseJson } from './sse';
+import { apiError, joinUrl, networkError, sseJson } from './sse';
 
 const DEFAULT_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -53,8 +53,7 @@ export const geminiAdapter: Adapter = {
         });
 
         if (!res.ok) {
-            const text = await res.text().catch(() => '');
-            await callbacks.onError(new Error(`Gemini API ${res.status}: ${text}`));
+            await callbacks.onError(new Error(await apiError('Gemini', res)));
             return;
         }
 
@@ -90,12 +89,11 @@ export const geminiAdapter: Adapter = {
                 body: JSON.stringify(buildBody({ model, messages: [{ role: 'user', content: 'ping' }] }, 1)),
             });
             if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                return { ok: false, error: `Gemini API ${res.status}: ${text}` };
+                return { ok: false, error: await apiError('Gemini', res) };
             }
             return { ok: true };
         } catch (err) {
-            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+            return { ok: false, error: networkError(err) };
         }
     },
 };

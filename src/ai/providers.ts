@@ -3,6 +3,7 @@
  * handler, config routes) depend on this module rather than on adapters directly.
  */
 import { getAdapter, LEGACY_PROVIDER_ADAPTER } from './adapters';
+import { networkError } from './adapters/sse';
 import type { ConnectionResult, ConversationMessage, StreamCallbacks } from './adapters';
 
 export type { ConversationMessage, StreamCallbacks } from './adapters';
@@ -35,11 +36,17 @@ export async function streamCompletion(
         await callbacks.onError(err as Error);
         return;
     }
-    return adapter.streamChat(
-        { apiKey: config.apiKey, baseUrl: config.baseUrl },
-        { model: config.model, messages, systemPrompt: config.systemPrompt, maxTokens: config.maxTokens },
-        callbacks,
-    );
+    try {
+        await adapter.streamChat(
+            { apiKey: config.apiKey, baseUrl: config.baseUrl },
+            { model: config.model, messages, systemPrompt: config.systemPrompt, maxTokens: config.maxTokens },
+            callbacks,
+        );
+    } catch (err) {
+        // Connection failures (e.g. a local server that's down) throw before any
+        // callback runs; route them to onError so callers can finalize their state
+        await callbacks.onError(new Error(networkError(err)));
+    }
 }
 
 export async function testConnection(config: AIProviderConfig): Promise<ConnectionResult> {

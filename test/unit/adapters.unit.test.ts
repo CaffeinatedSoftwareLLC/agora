@@ -143,3 +143,19 @@ describe('adapter registry', () => {
         expect(done).toHaveBeenCalled();
     });
 });
+
+describe('provider error messages', () => {
+    it('extracts error.message from JSON error bodies', async () => {
+        const body = JSON.stringify({ error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' } });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 400 })));
+        const result = await geminiAdapter.testConnection({ apiKey: 'bad' }, 'gemini-3.8-flash');
+        expect(result).toEqual({ ok: false, error: 'Gemini API 400: API key not valid. Please pass a valid API key.' });
+    });
+
+    it('names the network cause when a local server is down', async () => {
+        const err = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+        vi.stubGlobal('fetch', vi.fn(async () => { throw err; }));
+        const result = await openaiAdapter.testConnection({ baseUrl: 'http://localhost:11434/v1' }, 'qwen3:14b');
+        expect(result).toEqual({ ok: false, error: 'fetch failed (ECONNREFUSED)' });
+    });
+});

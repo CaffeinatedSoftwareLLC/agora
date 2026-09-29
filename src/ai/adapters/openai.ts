@@ -1,5 +1,5 @@
 import type { Adapter, ChatRequest, ProviderCredentials, StreamCallbacks } from './types';
-import { joinUrl, sseJson } from './sse';
+import { apiError, joinUrl, networkError, sseJson } from './sse';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
@@ -43,8 +43,7 @@ export const openaiAdapter: Adapter = {
         });
 
         if (!res.ok) {
-            const text = await res.text().catch(() => '');
-            await callbacks.onError(new Error(`OpenAI API ${res.status}: ${text}`));
+            await callbacks.onError(new Error(await apiError('OpenAI', res)));
             return;
         }
 
@@ -73,12 +72,11 @@ export const openaiAdapter: Adapter = {
                 body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
             });
             if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                return { ok: false, error: `OpenAI API ${res.status}: ${text}` };
+                return { ok: false, error: await apiError('OpenAI', res) };
             }
             return { ok: true };
         } catch (err) {
-            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+            return { ok: false, error: networkError(err) };
         }
     },
 };

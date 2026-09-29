@@ -68,26 +68,24 @@ describe('Claude provider streaming', () => {
         expect(onDone).not.toHaveBeenCalled();
     });
 
-    it('network error (fetch throws) propagates as rejected promise', async () => {
+    it('network error (fetch throws) is reported through onError', async () => {
         globalThis.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
 
         const onToken = vi.fn();
         const onDone = vi.fn();
         const onError = vi.fn();
 
-        // When fetch itself throws, the provider doesn't catch it —
-        // the error propagates to the caller (assistant-handler catches it)
-        await expect(
-            streamCompletion(baseConfig, [{ role: 'user', content: 'hi' }], {
-                onToken,
-                onDone,
-                onError,
-            })
-        ).rejects.toThrow('ECONNREFUSED');
+        // Callers rely on onError to finalize state (e.g. replace the "..." placeholder)
+        await streamCompletion(baseConfig, [{ role: 'user', content: 'hi' }], {
+            onToken,
+            onDone,
+            onError,
+        });
 
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onError.mock.calls[0][0].message).toContain('ECONNREFUSED');
         expect(onToken).not.toHaveBeenCalled();
         expect(onDone).not.toHaveBeenCalled();
-        expect(onError).not.toHaveBeenCalled();
     });
 
     it('valid SSE stream calls onToken for content deltas and onDone at end', async () => {

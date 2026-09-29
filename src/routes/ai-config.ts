@@ -44,6 +44,66 @@ function toAdapterId(provider: string): string {
     return LEGACY_PROVIDER_ADAPTER[provider] ?? provider;
 }
 
+type EnsureResult = { ok: true; botId: string } | { ok: false; error: string };
+
+/**
+ * Create (or update) the assistant settings row and its bot user. Idempotent:
+ * an existing bot is reused; a missing one (deleted) is recreated.
+ */
+async function ensureAssistant(
+    db: any,
+    serverId: string,
+    ownerId: string,
+    settings: { systemPrompt?: string | null; maxContext?: number },
+): Promise<EnsureResult> {
+    const existing = await db.query('SELECT bot_id FROM ai_provider_config WHERE server_id = $1', [serverId]);
+
+    if (existing.rows.length > 0 && existing.rows[0].bot_id) {
+        const botId = existing.rows[0].bot_id.trim();
+        if (settings.systemPrompt !== undefined || settings.maxContext !== undefined) {
+            await db.query(
+                `UPDATE ai_provider_config
+                 SET system_prompt = COALESCE($1, system_prompt), max_context = COALESCE($2, max_context), updated_at = NOW()
+                 WHERE server_id = $3`,
+                [settings.systemPrompt ?? null, settings.maxContext ?? null, serverId]
+            );
+        }
+        return { ok: true, botId };
+    }
+
+    const botId = generateUlid();
+    let botUsername = 'AI-Assistant';
+    for (let attempt = 1; ; attempt++) {
+        try {
+            await db.query('SAVEPOINT create_bot');
+            await db.query(
+                `INSERT INTO users (id, username, bot, bot_owner_id, server_id)
+                 VALUES ($1, $2, true, $3, $4)`,
+                [botId, botUsername, ownerId, serverId]
+            );
+            await db.query('RELEASE SAVEPOINT create_bot');
+            break;
+        } catch (err: any) {
+            await db.query('ROLLBACK TO SAVEPOINT create_bot');
+            if (err.code !== '23505') throw err;
+            if (attempt >= 5) return { ok: false, error: 'Could not create AI bot user — username conflicts' };
+            botUsername = `AI-Assistant-${attempt + 1}`;
+        }
+    }
+
+    await db.query(
+        `INSERT INTO ai_provider_config (server_id, bot_id, system_prompt, max_context)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (server_id) DO UPDATE
+            SET bot_id = EXCLUDED.bot_id,
+                system_prompt = COALESCE(EXCLUDED.system_prompt, ai_provider_config.system_prompt),
+                max_context = EXCLUDED.max_context,
+                updated_at = NOW()`,
+        [serverId, botId, settings.systemPrompt ?? null, settings.maxContext ?? 20]
+    );
+    return { ok: true, botId };
+}
+
 export async function aiConfigRoutes(app: FastifyInstance) {
 
     // GET /servers/:serverId/ai-config
@@ -147,67 +207,9 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         );
 
         // Assistant settings + bot user
-        const existing = await db.query(
-            'SELECT bot_id FROM ai_provider_config WHERE server_id = $1',
-            [serverId]
-        );
-
-        let botId: string;
-
-        if (existing.rows.length > 0 && existing.rows[0].bot_id) {
-            botId = existing.rows[0].bot_id.trim();
-            await db.query(
-                `UPDATE ai_provider_config
-                 SET system_prompt = $1, max_context = $2, updated_at = NOW()
-                 WHERE server_id = $3`,
-                [systemPrompt || null, maxContext || 20, serverId]
-            );
-        } else {
-            // Auto-create bot user
-            botId = generateUlid();
-            let botUsername = 'AI-Assistant';
-            let attempts = 0;
-
-            while (attempts < 5) {
-                try {
-                    await db.query('SAVEPOINT create_bot');
-                    await db.query(
-                        `INSERT INTO users (id, username, bot, bot_owner_id, server_id)
-                         VALUES ($1, $2, true, $3, $4)`,
-                        [botId, botUsername, userId, serverId]
-                    );
-                    await db.query('RELEASE SAVEPOINT create_bot');
-                    break;
-                } catch (err: any) {
-                    await db.query('ROLLBACK TO SAVEPOINT create_bot');
-                    if (err.code === '23505') {
-                        attempts++;
-                        botUsername = `AI-Assistant-${attempts + 1}`;
-                        if (attempts >= 5) {
-                            return reply.status(409).send({ error: 'Could not create AI bot user — username conflicts' });
-                        }
-                    } else {
-                        throw err;
-                    }
-                }
-            }
-
-            if (existing.rows.length > 0) {
-                // Row exists but bot_id was null (bot deleted) — attach the new bot
-                await db.query(
-                    `UPDATE ai_provider_config
-                     SET bot_id = $1, system_prompt = $2, max_context = $3, updated_at = NOW()
-                     WHERE server_id = $4`,
-                    [botId, systemPrompt || null, maxContext || 20, serverId]
-                );
-            } else {
-                await db.query(
-                    `INSERT INTO ai_provider_config (server_id, bot_id, system_prompt, max_context)
-                     VALUES ($1, $2, $3, $4)`,
-                    [serverId, botId, systemPrompt || null, maxContext || 20]
-                );
-            }
-        }
+        const assistant = await ensureAssistant(db, serverId, userId, { systemPrompt: systemPrompt || null, maxContext: maxContext || 20 });
+        if (!assistant.ok) return reply.status(409).send({ error: assistant.error });
+        const botId = assistant.botId;
 
         return reply.status(200).send({
             configured: true,
@@ -222,33 +224,58 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         });
     });
 
-    // PATCH /servers/:serverId/ai-config — enable/disable the assistant
+    // PATCH /servers/:serverId/ai-config — assistant settings (enabled, prompt, context size)
     app.patch('/servers/:serverId/ai-config', {
         preHandler: [requireAdmin],
         schema: {
             body: {
                 type: 'object',
-                required: ['enabled'],
+                minProperties: 1,
+                additionalProperties: false,
                 properties: {
                     enabled: { type: 'boolean' },
+                    systemPrompt: { type: ['string', 'null'], maxLength: 20000 },
+                    maxContext: { type: 'integer', minimum: 1, maximum: 100 },
                 },
             },
         },
     }, async (request, reply) => {
         const { serverId } = request.params as any;
         const db = request.dbClient!;
-        const { enabled } = request.body as any;
+        const body = request.body as any;
+
+        const sets: string[] = [];
+        const params: unknown[] = [];
+        const set = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+        if (body.enabled !== undefined) set('enabled', body.enabled);
+        if (body.systemPrompt !== undefined) set('system_prompt', body.systemPrompt || null);
+        if (body.maxContext !== undefined) set('max_context', body.maxContext);
+        params.push(serverId);
 
         const result = await db.query(
-            'UPDATE ai_provider_config SET enabled = $1, updated_at = NOW() WHERE server_id = $2 RETURNING enabled',
-            [enabled, serverId]
+            `UPDATE ai_provider_config SET ${sets.join(', ')}, updated_at = NOW() WHERE server_id = $${params.length}
+             RETURNING enabled, system_prompt, max_context`,
+            params
         );
 
         if (result.rows.length === 0) {
             return reply.status(404).send({ error: 'AI config not found' });
         }
 
-        return reply.status(200).send({ enabled: result.rows[0].enabled });
+        const row = result.rows[0];
+        return reply.status(200).send({ enabled: row.enabled, systemPrompt: row.system_prompt, maxContext: row.max_context });
+    });
+
+    // POST /servers/:serverId/ai-config/assistant — create the assistant bot (no key needed;
+    // it answers through the server's chat route). Idempotent.
+    app.post('/servers/:serverId/ai-config/assistant', {
+        preHandler: [requireAdmin],
+    }, async (request, reply) => {
+        const { serverId } = request.params as any;
+        const db = request.dbClient!;
+        const result = await ensureAssistant(db, serverId, request.userId, {});
+        if (!result.ok) return reply.status(409).send({ error: result.error });
+        return reply.status(200).send({ botId: result.botId });
     });
 
     // POST /servers/:serverId/ai-config/test — test unsaved credentials
