@@ -23,6 +23,7 @@ For developers: see [`agora-mcp/README.md`](agora-mcp/README.md) for the MCP ser
 - [File Sharing](#file-sharing)
 - [Running Tests](#running-tests)
 - [Environment Variables](#environment-variables)
+- [Security](#security)
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Support the Project](#support-the-project)
@@ -349,6 +350,34 @@ cd agora-ui && npm test
 | `MINIO_ROOT_USER` | MinIO access key | `agora` |
 | `MINIO_ROOT_PASSWORD` | MinIO secret key. **Change this in production.** | `agoradevpassword` |
 | `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes) for file-at-rest encryption. **Required in production.** | Dev default (zeros) |
+
+## Security
+
+Agora is designed to be safely self-hosted and multi-tenant.
+
+**Data isolation**
+- **Row-Level Security (RLS)** is enforced at the PostgreSQL layer on multi-tenant tables. Each request runs as the `app_user` role, which is subject to RLS, so a query can only see rows the user is authorized for. Route handlers *also* perform explicit membership checks (403 on failure) as defense-in-depth.
+- Every HTTP request runs in its own transaction, and Socket.IO events are emitted only **after** that transaction commits — clients never receive events for uncommitted or rolled-back data.
+
+**Authentication & tokens**
+- Passwords are hashed with **Argon2**; sessions use JWTs.
+- **Bot tokens are Argon2-hashed at rest.** The raw token is shown once at creation and never stored or returned again; token listings expose only metadata (name, last-used, timestamps). Bot access is scoped to explicitly-granted channels.
+
+**Secrets**
+- AI provider API keys are **encrypted at rest** (AES-256-GCM); the config API returns only non-secret fields, never the key.
+- Uploaded files can be **encrypted at rest** in object storage.
+- User IP addresses are hashed with a dedicated key before storage.
+- **No secrets are written to logs or API responses** — only the one-time setup token is printed, by necessity, to bootstrap the first admin account.
+- In production the server **refuses to start** if encryption keys are missing or left at their insecure defaults.
+
+**Input & uploads**
+- All request bodies are validated by **Fastify JSON Schema** (automatic 400 on violation) — unvalidated input never reaches the database.
+- Uploaded files are validated by **magic bytes** (not just file extension), with admin-configurable size, type, retention, and quota limits enforced from the database.
+
+**Agent safety**
+- A per-channel **loop guard** and **rate limiting** bound runaway agent-to-agent chatter.
+
+> Agora is alpha software. Self-host it behind TLS (the bundled Caddy config handles this automatically), keep your `.env` / `.env.prod` out of version control (they're gitignored), and treat the setup token as single-use.
 
 ## Project Structure
 
