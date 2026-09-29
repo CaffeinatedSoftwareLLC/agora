@@ -18,6 +18,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Unreads](#unreads)
 - [Users](#users)
 - [Bots](#bots)
+- [AI Providers](#ai-providers)
 - [Admin](#admin)
 - [WebSocket Gateway](#websocket-gateway)
 
@@ -973,6 +974,33 @@ Update per-channel bot configuration (loop guard limit).
 | Field        | Type    | Required | Description                          |
 |--------------|---------|----------|--------------------------------------|
 | `maxBotHops` | integer | yes      | 0 = disabled, positive = limit       |
+
+---
+
+## AI Providers
+
+Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`) to a provider and model. The built-in assistant uses the `chat` route.
+
+All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/servers/:serverId/ai/adapters` | Available adapters: `id`, `label`, `capabilities`, `requiresApiKey`, `supportsBaseUrl`, `defaultModels` |
+| GET | `/servers/:serverId/ai/providers` | Configured providers, with the capabilities each serves |
+| POST | `/servers/:serverId/ai/providers` | `{ adapter, label?, apiKey?, baseUrl? }` → `201`; `409` duplicate label |
+| PATCH | `/servers/:serverId/ai/providers/:providerId` | `{ label?, apiKey? (null clears), baseUrl?, enabled? }` |
+| DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it |
+| POST | `/servers/:serverId/ai/providers/:providerId/test` | `{ model? }` → `{ ok, error? }` using the stored key |
+| GET | `/servers/:serverId/ai/routes` | Capability routes |
+| PUT | `/servers/:serverId/ai/routes/:capability` | `{ providerId, model, enabled?, dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros?, inputPriceMicrosPerMtok?, outputPriceMicrosPerMtok? }`. `enabled` defaults to `true` for `chat`, `false` otherwise. `400` if the adapter can't serve the capability |
+| DELETE | `/servers/:serverId/ai/routes/:capability` | Remove a route |
+| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals |
+
+**Budgets:** daily limits are UTC-day totals per capability. Once one is reached, calls are refused and the assistant posts a notice instead of answering. Cost is recorded only when the route has prices set, in micro-USD per 1M tokens.
+
+**Base URLs** (the `openai` adapter: Ollama, OpenRouter, Groq, vLLM, …) must be http(s). Hosts that resolve to private, loopback or link-local addresses are rejected unless an instance admin enables `PATCH /admin/settings/ai { "allowPrivateBaseUrls": true }`, e.g. for a local Ollama server.
+
+The older `/servers/:serverId/ai-config` endpoints still work. `PUT` upserts a provider plus the `chat` route plus the assistant bot in one call, and accepts `provider` values `claude` (legacy), `anthropic`, `openai` or `gemini`.
 
 ---
 

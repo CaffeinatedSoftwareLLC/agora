@@ -560,6 +560,40 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.send({ success: true });
     });
 
+    // GET /admin/settings/ai — instance-wide AI settings
+    app.get('/admin/settings/ai', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const res = await db.query("SELECT value FROM instance_settings WHERE key = 'ai.allow_private_base_urls'");
+        return reply.send({ allowPrivateBaseUrls: res.rows[0]?.value === true });
+    });
+
+    // PATCH /admin/settings/ai
+    app.patch('/admin/settings/ai', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['allowPrivateBaseUrls'],
+                additionalProperties: false,
+                properties: {
+                    allowPrivateBaseUrls: { type: 'boolean' },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const { allowPrivateBaseUrls } = request.body as any;
+        await db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ('ai.allow_private_base_urls', $1)
+             ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+            [JSON.stringify(allowPrivateBaseUrls)]
+        );
+        await logAdminAction(db, request.userId, 'ai_settings_update', 'instance_settings', null, { allowPrivateBaseUrls });
+        return reply.send({ allowPrivateBaseUrls });
+    });
+
     // GET /admin/storage
     app.get('/admin/storage', {
         preHandler: [requireInstanceAdmin],
