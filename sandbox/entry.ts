@@ -25,6 +25,10 @@ for (const p of parts) {
 // Keep the code out of the environment the user code can read
 for (let i = 0; i < MAX_CHUNKS; i++) Deno.env.delete(`AGORA_CODE_${i}`);
 
+// agora:std is also available without an import, as the global `agora`
+import { agora } from 'agora:std';
+(globalThis as Record<string, unknown>).agora = agora;
+
 const path = '/scratch/main.ts';
 await Deno.writeFile(path, code);
 await import(`file://${path}`);

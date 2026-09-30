@@ -112,7 +112,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 |---|---|---|---|
 | 3.1 | ☑ **Isolation spec** + threat model: `sandbox-isolation-spec.md`, approved 2026-09-29 (bots-only submission, per-bot auto-approve, time profiles, 30-day code retention) | M | — |
 | 3.2 | ☑ `runner` (BullMQ `runtime` queue, atomic claim with gate re-check + per-server concurrency, runner-minted run tokens, reconcile + orphan cleanup), hardened container template, name-restricted socket proxy (dev compose profile `sandbox`), base sandbox image (Deno 2.9.7 distroless), `exec_runs`/`exec_run_tokens`. Prod compose wiring deferred to 3.5 | L | 3.1 |
-| 3.3 | Sandbox image: Deno, `agora:std` module, non-root, read-only rootfs | M | 3.1 |
+| 3.3 | ☑ `agora:std` (`call`, `chat`, `search`, `generateImage`, `tts`, `decide`, `postFile`, `postMessage`, `AgoraError`) via import map + global `agora`; bearer run token; tested against a production-shaped fake gateway (dual-homed forwarder) | M | 3.1 |
 | 3.4 | Capability endpoint + per-run tokens + per-run call caps + cost ledger | M | 1.5 |
 | 3.5 | `ExecuteCode` permission; `/runtime/runs` routes; MCP `runtime_exec`; nginx + compose prefix updates | M | 3.2 |
 | 3.6 | Exec gate via `Decider`; approval control posted in originating thread; `exec_runs` audit table | M | 2.1, 3.5, 0.1 |

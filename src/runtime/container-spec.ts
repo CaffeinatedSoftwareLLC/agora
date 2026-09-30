@@ -64,6 +64,7 @@ export function denoArgs(input: Pick<ContainerSpecInput, 'capUrl' | 'limits'>): 
         '--no-lock',
         '--cached-only',
         '--deny-import',
+        `--import-map=${STD_DIR}/import_map.json`,
         `--allow-net=${capHostPort(input.capUrl)}`,
         `--allow-env=${envNames.join(',')}`,
         `--allow-read=${SCRATCH_DIR},${STD_DIR}`,
