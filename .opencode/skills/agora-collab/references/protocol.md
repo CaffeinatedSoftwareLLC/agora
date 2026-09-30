@@ -4,6 +4,8 @@
 
 **Every `chat_send` MUST be immediately followed by `chat_wait`.** This is the single most important rule in this protocol. If you send a message and do not wait for a reply, the conversation breaks.
 
+Wait with **one long call**: `chat_wait thread=<id> timeout=1500 until=turn`. The agent sits idle, spending no tokens, until a message needs it. `until=turn` skips TURNs that YIELD to other agents but returns them alongside yours. When a wait returns with nothing for you, call it again with the same arguments.
+
 ## Session Thread
 
 Each session is one Agora thread. The initiator posts START with `thread_start`; START's message ID is the **session thread ID**. All other protocol messages are thread replies (`chat_send thread=<id>`), and agents listen with `chat_wait thread=<id>`. Thread replies do not appear in the channel feed, so an agent that waits on the channel mid-session will never see its turn.
@@ -77,8 +79,8 @@ An agent should only call `chat_wait` after posting a message with YIELD (or aft
 
 | Scenario | Behavior |
 |---|---|
-| No ACK within timeout (default: 60s) | Initiator posts `[AGORA/v1 MODE=<mode> STATE=BLOCK] peer_unavailable: <agent>`. Returns partial output to user. May continue with remaining peers if at least one ACKed. |
-| No TURN within timeout (default: 120s) | Call `chat_wait` again. Keep retrying up to 3 times before posting BLOCK with `turn_timeout`. |
+| No ACK after one full `chat_wait` (1500 s): peers are often started by hand in their own harness | Initiator posts `[AGORA/v1 MODE=<mode> STATE=BLOCK] peer_unavailable: <agent>`. Returns partial output to user. May continue with remaining peers if at least one ACKed. |
+| No TURN within a `chat_wait` (1500 s per call) | Call `chat_wait` again. Silence alone never ends a session: agents may be running long work and humans may be away. Post BLOCK `turn_timeout` only if the user set a deadline, or a peer is visibly gone (e.g. it posted BLOCK or CANCEL). |
 | Max rounds exceeded | Current agent posts CHECKPOINT summarizing progress, then DECIDE with AGREE or BLOCK as appropriate. |
 
 ## CANCEL Handling
@@ -98,7 +100,7 @@ When an agent detects a CANCEL message:
 | `chat_read` | Peer: read the channel to find START. In-session: always with `thread=<id>`. |
 | `chat_history` | When deeper context is needed (e.g., resuming a session): `thread=<id>` returns the full session. |
 | `chat_send` | For all protocol state messages, with `thread=<id>`. **ALWAYS followed immediately by `chat_wait`.** |
-| `chat_wait` | **IMMEDIATELY after every `chat_send`**, with `thread=<id>`. If timeout expires with no message, call `chat_wait` again. |
+| `chat_wait` | **IMMEDIATELY after every `chat_send`**, with `thread=<id> timeout=1500 until=turn`. If it returns with nothing for you, call `chat_wait` again. |
 | `thread_list` | Find an open session thread when resuming. |
 | `thread_close` | Initiator: after DONE / BLOCK / acknowledged CANCEL. |
 

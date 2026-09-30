@@ -31,6 +31,23 @@ export function formatThreads(threads: ThreadSummary[]): string {
     }).join('\n');
 }
 
+const YIELD_LINE_RE = /^\[YIELD\s+to=@?([^\]\s]+)\]$/i;
+
+/**
+ * For `chat_wait until="turn"`: should this message wake the agent named `self`?
+ * Everything wakes except a bot message whose last line YIELDs to a different
+ * agent. That is another participant's turn, so the waiter keeps sleeping.
+ */
+export function wakesAgent(m: Message, self: string): boolean {
+    if (m.systemEvent || !m.authorBot) return true;
+    const lines = (m.content ?? '').split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    const match = lines.length > 0 ? YIELD_LINE_RE.exec(lines[lines.length - 1]) : null;
+    return !match || match[1].toLowerCase() === self.toLowerCase();
+}
+
+/** Longest `chat_wait` allowed, in seconds. Harness MCP tool timeouts must be raised to match. */
+export const MAX_WAIT_SECONDS = 3600;
+
 export interface ReadResult {
     messages: Message[];
     /** Number of older unread messages skipped (backlog exceeded scan cap). */
@@ -348,39 +365,70 @@ export function registerTools(
 
     server.tool(
         'chat_wait',
-        'Wait for new messages in an Agora channel, or in a thread when `thread` is set. Blocks until at least one new message arrives or the timeout expires. Use this to "listen" for incoming messages.',
+        'Wait for new messages in an Agora channel, or in a thread when `thread` is set. Blocks until a new message arrives or the timeout expires. '
+        + 'Use this to "listen" for incoming messages: one long wait keeps the agent idle without spending tokens. '
+        + `Timeouts up to ${MAX_WAIT_SECONDS}s are allowed, but your MCP client must allow a tool call that long (see the agora-collab skill's setup notes).`,
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
-            timeout: z.number().optional().describe('Max seconds to wait (default: 30, max: 120)'),
+            timeout: z.number().optional().describe(`Max seconds to wait (default: 30, max: ${MAX_WAIT_SECONDS})`),
             thread: threadParam,
+            until: z.enum(['any', 'turn']).optional().describe(
+                '"any" (default): return on any new message. "turn": keep waiting through bot messages that '
+                + '[YIELD to=] a different agent; return on a YIELD to you, a human or system message, or any other '
+                + 'protocol message. Everything read while waiting is returned together.',
+            ),
         },
-        async ({ channel, timeout, thread }) => {
+        async ({ channel, timeout, thread, until }, extra) => {
             const ch = await resolveChannel(channel);
-            const maxWait = Math.min(timeout || 30, 120) * 1000;
-            const pollInterval = 2000;
-            const deadline = Date.now() + maxWait;
+            const maxWait = Math.min(Math.max(timeout || 30, 1), MAX_WAIT_SECONDS) * 1000;
+            const start = Date.now();
+            const deadline = start + maxWait;
+            if (!botInfo) botInfo = await api.getMe();
+            const self = botInfo.username;
 
-            while (Date.now() < deadline) {
+            // Clients that pass a progress token (e.g. OpenCode) reset their tool timeout on each progress notification.
+            const progressToken = extra._meta?.progressToken;
+            let lastProgress = start;
+            const keepAlive = async () => {
+                if (progressToken === undefined || Date.now() - lastProgress < 15_000) return;
+                lastProgress = Date.now();
+                const elapsed = Math.round((lastProgress - start) / 1000);
+                await extra.sendNotification({
+                    method: 'notifications/progress',
+                    params: { progressToken, progress: elapsed, total: maxWait / 1000, message: `waiting ${elapsed}s` },
+                }).catch(() => {});
+            };
+
+            const collected: Message[] = [];
+            const done = () => until === 'turn'
+                ? collected.some(m => wakesAgent(m, self))
+                : collected.length > 0;
+
+            while (Date.now() < deadline && !extra.signal.aborted) {
                 const { messages } = await readUnread(ch.id, thread, 200);
-                if (messages.length > 0) {
+                collected.push(...messages);
+                if (done()) {
                     return {
                         content: [{
                             type: 'text' as const,
-                            text: `${label(ch.name, thread)} — ${messages.length} new message(s):\n\n${formatMessages(messages)}`,
+                            text: `${label(ch.name, thread)} — ${collected.length} new message(s):\n\n${formatMessages(collected)}`,
                         }],
                     };
                 }
+                await keepAlive();
                 const remaining = deadline - Date.now();
                 if (remaining <= 0) break;
-                await new Promise(r => setTimeout(r, Math.min(pollInterval, remaining)));
+                // Poll briskly for the first minute, then ease off for long idle waits
+                const interval = Date.now() - start < 60_000 ? 2000 : 5000;
+                await new Promise(r => setTimeout(r, Math.min(interval, remaining)));
             }
 
-            return {
-                content: [{
-                    type: 'text' as const,
-                    text: `${label(ch.name, thread)} — no new messages after ${Math.round(maxWait / 1000)}s`,
-                }],
-            };
+            const waited = Math.round((Date.now() - start) / 1000);
+            // Messages consumed while waiting for a turn are still returned, or they'd be lost.
+            const text = collected.length > 0
+                ? `${label(ch.name, thread)} — not your turn yet after ${waited}s; ${collected.length} message(s) for other agents:\n\n${formatMessages(collected)}`
+                : `${label(ch.name, thread)} — no new messages after ${waited}s`;
+            return { content: [{ type: 'text' as const, text }] };
         },
     );
 
