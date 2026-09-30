@@ -42,6 +42,8 @@ async function main() {
                 capUrl: process.env.AGORA_CAP_URL ?? 'http://cap-gateway:8080',
                 perServerConcurrency: Number(process.env.RUNTIME_PER_SERVER_CONCURRENCY ?? 2),
                 capacityRetryMs: 2000,
+                // Gateway container to pin in each run's /etc/hosts (gVisor can't use Docker's DNS)
+                capContainer: process.env.AGORA_CAP_CONTAINER || undefined,
             },
             // Post the result summary into the run's thread (reaches clients via the event bridge)
             onFinished: async (runId) => {

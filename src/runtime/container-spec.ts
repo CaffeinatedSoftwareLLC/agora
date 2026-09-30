@@ -29,6 +29,24 @@ export interface ContainerSpecInput {
     runToken: string;
     capUrl: string;
     limits: RunLimits;
+    /**
+     * The gateway's IP on the sandbox network, pinned in /etc/hosts. gVisor's netstack
+     * doesn't apply Docker's DNS NAT rules, so `cap-gateway` doesn't resolve under runsc
+     * (google/gvisor#7469; gVisor FAQ: "use IPs instead of container names").
+     */
+    gatewayIp?: string;
+}
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+/** `/etc/hosts` entry mapping the gateway hostname to its sandbox-network IP, if one is needed. */
+export function gatewayHostEntry(capUrl: string, gatewayIp: string | undefined): string[] {
+    if (!gatewayIp) return [];
+    if (!IPV4.test(gatewayIp)) throw new Error(`Invalid gateway IP "${gatewayIp}"`);
+    const host = new URL(capUrl).hostname;
+    // A literal IP in the URL needs no mapping
+    if (IPV4.test(host) || host.startsWith('[')) return [];
+    return [`${host}:${gatewayIp}`];
 }
 
 export function containerName(runId: string): string {
@@ -133,7 +151,7 @@ export function buildContainerSpec(input: ContainerSpecInput): ContainerCreateOp
             IpcMode: 'private',
             PidMode: '',
             UsernsMode: '',
-            ExtraHosts: [],
+            ExtraHosts: gatewayHostEntry(input.capUrl, input.gatewayIp),
         },
     };
 }
