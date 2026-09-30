@@ -149,11 +149,23 @@ docker compose -f docker-compose.yml -p agora-dev --profile sandbox up -d socket
 
 The socket proxy publishes a restricted Docker API on `127.0.0.1:2375`. The runner can only create, start, inspect and remove `agora-run-*` containers, and bind mounts are rejected.
 
-Start the runner, and run its Docker-backed tests:
+Start the runner and the capability gateway, and run the Docker-backed tests:
 
 ```bash
 AGORA_SANDBOX_INSECURE_DEV=1 npm run runner
+npm run cap-gateway
 npm run test:sandbox
 ```
+
+Sandboxes reach the gateway as `cap-gateway:8080` on the internal network. In production the `cap-gateway` container is attached to that network. In development the gateway runs on your host, so attach a small forwarder under that name:
+
+```bash
+docker run -d --name agora-cap-forwarder --add-host=host.docker.internal:host-gateway alpine/socat TCP-LISTEN:8080,fork,reuseaddr TCP:host.docker.internal:8080
+docker network connect --alias cap-gateway agora_sandbox agora-cap-forwarder
+```
+
+To let a bot run code, set its **Code runs** option in Settings → Bots (`Need approval` or `Auto-run`). Agents submit code with the MCP `runtime_exec` tool. With `Need approval`, the run appears in the thread with View code / Approve / Deny.
+
+If you also run the production stack on the same machine, remove the dev network first (`docker network rm agora_sandbox`). The prod compose file creates its own `agora_sandbox`.
 
 `AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.

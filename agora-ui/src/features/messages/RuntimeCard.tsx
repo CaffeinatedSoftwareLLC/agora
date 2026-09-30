@@ -58,17 +58,19 @@ export function RuntimeCard({ message }: { message: Message }) {
         <svg className="h-4 w-4 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
           <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
         </svg>
-        <span className="text-sm font-semibold text-text">{isApproval ? 'Code run request' : 'Code run result'}</span>
+        <span className="text-sm font-semibold text-text whitespace-nowrap">{isApproval ? 'Code run request' : 'Code run result'}</span>
         {data.status && (
           <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none ${statusTone[data.status] ?? 'bg-surface-hover text-text-muted'}`}>
             {data.status.toUpperCase()}
           </span>
         )}
-        {runId && <span className="text-[11px] text-text-dim ml-auto font-mono">{runId}</span>}
       </div>
+      {runId && <div className="text-[11px] text-text-dim font-mono mb-1 break-all">{runId}</div>}
 
-      <div className="text-sm text-text-muted">
-        <MessageContent content={message.content ?? ''} />
+      <div className="text-sm text-text-muted space-y-1">
+        {splitFences(message.content ?? '').map((part, i) => part.code
+          ? <pre key={i} className="max-h-60 overflow-auto rounded bg-bg p-2 text-xs text-text font-mono whitespace-pre-wrap break-words">{part.text}</pre>
+          : <MessageContent key={i} content={part.text} />)}
       </div>
 
       {runId && (
@@ -91,4 +93,12 @@ export function RuntimeCard({ message }: { message: Message }) {
       )}
     </div>
   );
+}
+
+/** Split text on ``` fences so run output wraps instead of scrolling sideways. */
+function splitFences(text: string): { text: string; code: boolean }[] {
+  const parts = text.split(/```\n?/);
+  return parts
+    .map((t, i) => ({ text: i % 2 === 1 ? t.replace(/\n$/, '') : t.trim(), code: i % 2 === 1 }))
+    .filter(p => p.text.length > 0);
 }
