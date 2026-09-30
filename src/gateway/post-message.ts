@@ -19,6 +19,9 @@ export async function postBotMessage(db: Pool, input: {
     authorId: string;
     content: string;
     fileIds?: string[];
+    /** Structured card data the UI renders instead of plain content (e.g. a results card). */
+    systemEvent?: string;
+    systemData?: Record<string, unknown>;
 }): Promise<{ messageId: string; events: BridgedEvent[] }> {
     const channelId = input.channelId.trim();
     const threadId = input.threadId?.trim() || null;
@@ -43,8 +46,10 @@ export async function postBotMessage(db: Pool, input: {
     try {
         await client.query('BEGIN');
         await client.query(
-            `INSERT INTO messages (id, channel_id, author_id, content, thread_id) VALUES ($1, $2, $3, $4, $5)`,
-            [messageId, channelId, authorId, input.content, threadId]
+            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, system_event, system_data)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [messageId, channelId, authorId, input.content, threadId,
+             input.systemEvent ?? null, input.systemData ? JSON.stringify(input.systemData) : null]
         );
         if (input.fileIds?.length) {
             const bound = await client.query(
@@ -88,6 +93,7 @@ export async function postBotMessage(db: Pool, input: {
             channelId,
             createdAt: new Date().toISOString(),
             attachments,
+            ...(input.systemEvent ? { systemEvent: input.systemEvent, systemData: input.systemData ?? null } : {}),
             ...(threadId ? { threadId } : {}),
         },
     }];
