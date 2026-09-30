@@ -49,6 +49,8 @@ export interface AdapterInfo {
     defaultBaseUrl: string;
     /** Suggested model per capability; admins can enter any model ID. */
     defaultModels: Partial<Record<Capability, string>>;
+    /** When set for a capability, the only valid "model" values (e.g. Tavily's search depths). */
+    modelChoices?: Partial<Record<Capability, readonly string[]>>;
 }
 
 export interface SearchRequest {
@@ -90,6 +92,19 @@ export interface SpeechRequest {
     speakers?: { speaker: string; voice: string }[];
 }
 
+export interface VideoRequest {
+    model: string;
+    prompt: string;
+    aspectRatio?: '16:9' | '9:16';
+    durationSeconds?: 4 | 6 | 8;
+    resolution?: '720p' | '1080p' | '4k';
+    negativePrompt?: string;
+    /** Give up waiting for the provider after this long (the video may still bill). */
+    timeoutMs?: number;
+    /** How often to poll a long-running operation (tests shorten it). */
+    pollMs?: number;
+}
+
 export interface MediaResult {
     data: Buffer;
     mime: string;
@@ -107,5 +122,6 @@ export interface Adapter extends AdapterInfo {
     search?(creds: ProviderCredentials, req: SearchRequest): Promise<SearchResult>;
     generateImage?(creds: ProviderCredentials, req: ImageRequest): Promise<MediaResult>;
     tts?(creds: ProviderCredentials, req: SpeechRequest): Promise<MediaResult>;
+    generateVideo?(creds: ProviderCredentials, req: VideoRequest): Promise<MediaResult>;
     testConnection(creds: ProviderCredentials, model: string): Promise<ConnectionResult>;
 }

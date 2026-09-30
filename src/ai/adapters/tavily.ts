@@ -36,6 +36,7 @@ export const tavilyAdapter: Adapter = {
     supportsBaseUrl: false,
     defaultBaseUrl: DEFAULT_BASE,
     defaultModels: { search: 'basic' },
+    modelChoices: { search: TAVILY_DEPTHS },
 
     async search(creds: ProviderCredentials, req: SearchRequest): Promise<SearchResult> {
         const json = await tavilySearch(creds, req.model, req.query, req.maxResults ?? 5);

@@ -102,6 +102,25 @@ export function tts(
     return call('tts', { text, ...opts });
 }
 
+/**
+ * Video generation (Veo). Takes from ~10 s to several minutes. The gateway posts the
+ * MP4 into the run's thread (with `message`, if given) and returns its IDs; the
+ * video counts as one of the run's files. 1080p and 4k require 8 seconds.
+ */
+export function generateVideo(
+    prompt: string,
+    opts: {
+        aspectRatio?: '16:9' | '9:16';
+        durationSeconds?: 4 | 6 | 8;
+        resolution?: '720p' | '1080p' | '4k';
+        negativePrompt?: string;
+        message?: string;
+        filename?: string;
+    } = {},
+): Promise<{ fileId: string; url: string; messageId: string; mime: string; size: number }> {
+    return call('video', { prompt, ...opts });
+}
+
 /** Typed decision (e.g. a choice between options) through the server's decide route. */
 export function decide(input: Record<string, unknown>): Promise<unknown> {
     return call('decide', input);
@@ -214,4 +233,4 @@ export async function testReport(
     return postReport(card);
 }
 
-export const agora = { call, chat, search, generateImage, tts, decide, postFile, postMessage, postReport, testReport, parseTestResults, AgoraError };
+export const agora = { call, chat, search, generateImage, tts, generateVideo, decide, postFile, postMessage, postReport, testReport, parseTestResults, AgoraError };

@@ -6,6 +6,7 @@ import { config } from '../config';
 import { requireAdmin } from './ai-config';
 import { CAPABILITIES, adapterIds, getAdapter, listAdapters, type Capability } from '../ai/adapters';
 import { allowPrivateBaseUrls, decryptProviderKey } from '../ai/routing';
+import { auditAiChange, changedFields, providerSnapshot, recentAiChanges, routeSnapshot } from '../lib/ai-audit';
 
 const nullableInt = (minimum: number) => ({ type: ['integer', 'null'], minimum });
 
@@ -113,6 +114,10 @@ export async function aiProviderRoutes(app: FastifyInstance) {
                  key?.encrypted ?? null, key?.iv ?? null, key?.authTag ?? null]
             );
             await db.query('RELEASE SAVEPOINT create_provider');
+            await auditAiChange(db, request, {
+                serverId, action: 'ai_provider_create', targetType: 'ai_provider', targetId: id,
+                changes: { after: providerSnapshot(result.rows[0]) },
+            });
             return reply.status(201).send(providerDto(result.rows[0]));
         } catch (err: any) {
             await db.query('ROLLBACK TO SAVEPOINT create_provider');
@@ -175,6 +180,15 @@ export async function aiProviderRoutes(app: FastifyInstance) {
                 params
             );
             await db.query('RELEASE SAVEPOINT update_provider');
+            const before = providerSnapshot(current);
+            const after = providerSnapshot(result.rows[0]);
+            await auditAiChange(db, request, {
+                serverId, action: 'ai_provider_update', targetType: 'ai_provider', targetId: providerId,
+                changes: {
+                    before, after, changed: changedFields(before, after),
+                    ...(body.apiKey !== undefined ? { apiKey: body.apiKey ? 'replaced' : 'removed' } : {}),
+                },
+            });
             return reply.send(providerDto(result.rows[0]));
         } catch (err: any) {
             await db.query('ROLLBACK TO SAVEPOINT update_provider');
@@ -186,9 +200,14 @@ export async function aiProviderRoutes(app: FastifyInstance) {
     app.delete('/servers/:serverId/ai/providers/:providerId', { preHandler: [requireAdmin] }, async (request, reply) => {
         const { serverId, providerId } = request.params as any;
         const db = request.dbClient!;
+        const routes = await db.query('SELECT capability FROM ai_capability_routes WHERE provider_id = $1 ORDER BY capability', [providerId]);
         // Routes pointing at this provider cascade away
-        const result = await db.query('DELETE FROM ai_providers WHERE id = $1 AND server_id = $2 RETURNING id', [providerId, serverId]);
+        const result = await db.query('DELETE FROM ai_providers WHERE id = $1 AND server_id = $2 RETURNING *', [providerId, serverId]);
         if (result.rows.length === 0) return reply.status(404).send({ error: 'Provider not found' });
+        await auditAiChange(db, request, {
+            serverId, action: 'ai_provider_delete', targetType: 'ai_provider', targetId: providerId,
+            changes: { before: providerSnapshot(result.rows[0]), routesRemoved: routes.rows.map((r: any) => r.capability) },
+        });
         return reply.send({ deleted: true });
     });
 
@@ -281,6 +300,17 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         if (!adapter?.capabilities.includes(capability)) {
             return reply.status(400).send({ error: `${adapter?.label ?? provider.rows[0].adapter} does not support "${capability}"` });
         }
+        // Some adapters take a fixed set of "models" (Tavily: search depths); reject others before a run hits them
+        const choices = adapter.modelChoices?.[capability];
+        if (choices && !choices.includes(b.model)) {
+            return reply.status(400).send({ error: `For ${adapter.label}, the ${capability} model must be one of: ${choices.join(', ')}` });
+        }
+
+        const previous = await db.query(
+            `SELECT r.*, p.label FROM ai_capability_routes r JOIN ai_providers p ON p.id = r.provider_id
+             WHERE r.server_id = $1 AND r.capability = $2`,
+            [serverId, capability]
+        );
 
         // Chat is on by default; anything that can spend money beyond chat is opt-in
         const enabled = b.enabled ?? (capability === 'chat');
@@ -306,18 +336,43 @@ export async function aiProviderRoutes(app: FastifyInstance) {
              WHERE r.server_id = $1 AND r.capability = $2`,
             [serverId, capability]
         );
+        const before = routeSnapshot(previous.rows[0]);
+        const after = routeSnapshot(result.rows[0]);
+        const changed = changedFields(before, after);
+        if (changed.length > 0) {
+            await auditAiChange(db, request, {
+                serverId, action: 'ai_route_update', targetType: 'ai_route', targetId: b.providerId,
+                changes: { capability, before, after, changed },
+            });
+        }
         return reply.send(routeDto(result.rows[0]));
     });
 
     app.delete('/servers/:serverId/ai/routes/:capability', { preHandler: [requireAdmin] }, async (request, reply) => {
         const { serverId, capability } = request.params as any;
         const db = request.dbClient!;
+        const previous = await db.query(
+            `SELECT r.*, p.label FROM ai_capability_routes r JOIN ai_providers p ON p.id = r.provider_id
+             WHERE r.server_id = $1 AND r.capability = $2`,
+            [serverId, capability]
+        );
         const result = await db.query(
             'DELETE FROM ai_capability_routes WHERE server_id = $1 AND capability = $2 RETURNING capability',
             [serverId, capability]
         );
         if (result.rows.length === 0) return reply.status(404).send({ error: 'Route not found' });
+        await auditAiChange(db, request, {
+            serverId, action: 'ai_route_delete', targetType: 'ai_route', targetId: previous.rows[0]?.provider_id?.trim() ?? null,
+            changes: { capability, before: routeSnapshot(previous.rows[0]) },
+        });
         return reply.send({ deleted: true });
+    });
+
+    // GET /servers/:serverId/ai/changes → recent AI-settings changes (audit trail)
+    app.get('/servers/:serverId/ai/changes', { preHandler: [requireAdmin] }, async (request, reply) => {
+        const { serverId } = request.params as any;
+        const limit = Math.max(1, Math.min(200, parseInt((request.query as any).limit || '50', 10) || 50));
+        return reply.send(await recentAiChanges(request.dbClient!, serverId, limit));
     });
 
     // GET /servers/:serverId/ai/usage?days=N → per-capability totals, plus today's totals for budgets

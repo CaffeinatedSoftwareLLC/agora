@@ -163,10 +163,27 @@ describe('providers', () => {
         });
 
         test('rejects capabilities the adapter does not support', async () => {
-            const res = await ctx.request.put(`${base()}/routes/video`).set(owner.auth)
-                .send({ providerId: geminiId, model: 'veo-4' });
+            const res = await ctx.request.put(`${base()}/routes/decide`).set(owner.auth)
+                .send({ providerId: geminiId, model: 'gemini-3.8-flash' });
             expect(res.status).toBe(400);
             expect(res.body.error).toContain('does not support');
+        });
+
+        test('Tavily search routes only accept a search depth as the model', async () => {
+            const tav = await ctx.request.post(`${base()}/providers`).set(owner.auth).send({ adapter: 'tavily', apiKey: 'tvly-x' });
+            expect(tav.status).toBe(201);
+            await waitFor(providerExists(tav.body.id));
+            // The bug this guards: switching Search from Gemini to Tavily kept the Gemini model name
+            const bad = await ctx.request.put(`${base()}/routes/search`).set(owner.auth).send({ providerId: tav.body.id, model: 'gemini-3.8-flash', enabled: true });
+            expect(bad.status).toBe(400);
+            expect(bad.body.error).toBe('For Tavily (web search), the search model must be one of: basic, advanced, fast, ultra-fast');
+            const ok = await ctx.request.put(`${base()}/routes/search`).set(owner.auth).send({ providerId: tav.body.id, model: 'advanced', enabled: true });
+            expect(ok.status).toBe(200);
+            expect(ok.body.model).toBe('advanced');
+            await ctx.request.delete(`${base()}/routes/search`).set(owner.auth);
+            await waitFor(async () => (await ctx.db.query("SELECT 1 FROM ai_capability_routes WHERE server_id = $1 AND capability = 'search'", [serverId])).rows.length === 0);
+            await ctx.request.delete(`${base()}/providers/${tav.body.id}`).set(owner.auth);
+            await waitFor(async () => !(await providerExists(tav.body.id)()));
         });
 
         test('rejects unknown capabilities and invalid limits', async () => {

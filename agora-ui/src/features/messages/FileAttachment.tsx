@@ -22,7 +22,12 @@ export function FileAttachment({ attachment }: { attachment: Attachment }) {
   }
 
   if (attachment.mime.startsWith('audio/')) {
-    return <AudioAttachment attachment={attachment} />;
+    return <MediaAttachment attachment={attachment} kind="audio" />;
+  }
+
+  // Formats browsers play natively (not .mov)
+  if (attachment.mime === 'video/mp4' || attachment.mime === 'video/webm') {
+    return <MediaAttachment attachment={attachment} kind="video" />;
   }
 
   return <FileCard attachment={attachment} />;
@@ -111,8 +116,8 @@ function DownloadIcon({ color }: { color: string }) {
   );
 }
 
-/** Inline player; the file is fetched (with auth) on first play, not on render. */
-function AudioAttachment({ attachment }: { attachment: Attachment }) {
+/** Inline audio/video player; the file is fetched (with auth) on first play, not on render. */
+function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: 'audio' | 'video' }) {
   const P = usePalette();
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -146,6 +151,18 @@ function AudioAttachment({ attachment }: { attachment: Attachment }) {
     </button>
   );
 
+  if (kind === 'video' && blobUrl) {
+    return (
+      <div className="mt-1 max-w-lg">
+        <video controls autoPlay playsInline src={blobUrl} className="w-full max-h-96 rounded-lg bg-black" aria-label={attachment.name} />
+        <div className="flex items-center gap-2 mt-0.5 text-xs" style={{ color: P.dim }}>
+          <span className="truncate">{attachment.name} · {formatFileSize(attachment.size)}</span>
+          <span className="ml-auto">{download}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-1 max-w-md">
       <div
@@ -172,7 +189,7 @@ function AudioAttachment({ attachment }: { attachment: Attachment }) {
         )}
         {download}
       </div>
-      {error && <span className="text-xs text-danger">Couldn't load the audio.</span>}
+      {error && <span className="text-xs text-danger">Couldn't load the {kind}.</span>}
     </div>
   );
 }

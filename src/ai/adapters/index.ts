@@ -29,6 +29,6 @@ export function adapterSupports(id: string, capability: Capability): boolean {
 
 /** Public metadata for clients (no functions). */
 export function listAdapters(): AdapterInfo[] {
-    return ADAPTERS.map(({ id, label, capabilities, requiresApiKey, supportsBaseUrl, defaultBaseUrl, defaultModels }) =>
-        ({ id, label, capabilities, requiresApiKey, supportsBaseUrl, defaultBaseUrl, defaultModels }));
+    return ADAPTERS.map(({ id, label, capabilities, requiresApiKey, supportsBaseUrl, defaultBaseUrl, defaultModels, modelChoices }) =>
+        ({ id, label, capabilities, requiresApiKey, supportsBaseUrl, defaultBaseUrl, defaultModels, ...(modelChoices ? { modelChoices } : {}) }));
 }

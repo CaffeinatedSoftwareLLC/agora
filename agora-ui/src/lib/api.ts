@@ -215,6 +215,8 @@ export interface AIAdapter {
   supportsBaseUrl: boolean;
   defaultBaseUrl: string;
   defaultModels: Partial<Record<AICapability, string>>;
+  /** When set for a capability, the only valid "model" values (e.g. Tavily's search depths). */
+  modelChoices?: Partial<Record<AICapability, string[]>>;
 }
 
 export interface AIProvider {
@@ -258,6 +260,17 @@ export interface AICapabilityUsage {
 }
 
 export type AIConnectionResult = { ok: boolean; error?: string };
+
+/** One audited change to the server's AI settings (providers, routes, assistant). */
+export interface AIChange {
+  id: string;
+  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update';
+  targetType: string;
+  targetId: string | null;
+  changes: Record<string, any>;
+  createdAt: string;
+  actor: { id: string; username: string; bot: boolean } | null;
+}
 
 export const aiApi = {
   getConfig: (serverId: string) =>
@@ -306,6 +319,9 @@ export const aiApi = {
 
   deleteRoute: (serverId: string, capability: AICapability) =>
     api.delete<{ deleted: true }>(`/servers/${serverId}/ai/routes/${capability}`),
+
+  listChanges: (serverId: string, limit = 20) =>
+    api.get<AIChange[]>(`/servers/${serverId}/ai/changes?limit=${limit}`),
 
   getCapabilityUsage: (serverId: string, days = 30) =>
     api.get<{ days: number; capabilities: AICapabilityUsage[] }>(`/servers/${serverId}/ai/usage?days=${days}`),

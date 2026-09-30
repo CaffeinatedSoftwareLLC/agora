@@ -112,7 +112,7 @@ Each threat must be stopped by **at least two independent layers** (see §13).
 | L3 Network | `agora_sandbox` is `internal: true` (no gateway to the outside); the only other member is `cap-gateway`; no published ports | exfiltration, lateral movement, SSRF from sandbox |
 | L4 Credentials | per-run token only; env scrubbed; no provider keys, no Agora secrets | secret theft |
 | L5 Resource limits | cgroup CPU/memory/PIDs, wall clock, output caps, per-run call caps, route budgets | exhaustion, cost abuse |
-| L6 Deno permissions | `--allow-net=cap-gateway:8080`, no read/write outside scratch, no env/run/ffi/sys, remote imports denied | defense-in-depth only: blocks accidental reach and most scripts |
+| L6 Deno permissions | `--allow-net=cap-gateway:8080` (hostname only; the gateway's raw IP is refused), no read/write outside scratch, no env/run/ffi/sys, remote imports denied | defense-in-depth only: blocks accidental reach and most scripts |
 | L7 Decision gate | rules or external decider before anything runs; human approval by default | obviously malicious or unintended runs |
 
 > **Verified in 3.2 (runc, Deno 2.9.7):** `--deny-import` blocks both static and dynamic remote imports. `--allow-run` is enforced even for the Deno binary. With every Deno permission open, a container on the internal network still can't reach the internet (by name or IP), resolve `postgres` or public names, or reach the Docker host.
@@ -165,6 +165,13 @@ Notes:
 - **`agora_sandbox`** is new: `driver: bridge`, `internal: true`. Members are **cap-gateway plus sandbox containers only**.
   - `internal: true` means Docker creates no route to the outside world.
   - Docker's embedded DNS on this network only resolves members, so `postgres`, `minio` and `api` don't resolve.
+  - **Under gVisor there is no DNS at all** (found and verified 2026-09-30). Docker serves `127.0.0.11` through NAT rules inside the container's network namespace, and gVisor's netstack doesn't apply them ([google/gvisor#7469](https://github.com/google/gvisor/issues/7469), open since 2022). So `cap-gateway` doesn't resolve either. The fix follows gVisor's own FAQ advice to use IPs instead of container names:
+    - before each run, the runner reads the gateway's IP from `GET /networks/agora_sandbox`, an endpoint the socket proxy already allows (matching the container name, default the `AGORA_CAP_URL` hostname, override with `AGORA_CAP_CONTAINER`);
+    - it pins `cap-gateway:<ip>` in the run's `/etc/hosts` (`HostConfig.ExtraHosts`, IPv4-validated);
+    - the URL and Deno's `--allow-net=cap-gateway:8080` are unchanged. Deno still refuses the gateway's raw IP, `postgres`, and public hosts (`NotCapable`, verified under runsc).
+  - Under runsc, a missing gateway fails the run with a clear error; under runc (dev) Docker DNS works and the lookup is best-effort.
+  - Rejected alternatives: runsc `--network=host` (gVisor: "decreases the isolation to the host"), the default bridge with `--link` (it has an internet route), and a DNS proxy on the sandbox network (a resolver reachable from untrusted code, and a DNS exfiltration path).
+  - Side effect: sandboxes can't make DNS queries at all, which closes DNS tunneling (T3) at the network layer.
 - **Egress to AI providers happens only in `cap-gateway`,** through `agora_core`, with the Phase 1 SSRF guard applied to provider base URLs.
 - **Run-to-run traffic:** every run is on the same bridge, so the network layer doesn't separate runs from each other (ICC stays on because runs must reach the gateway). What stops a run reaching another:
   - Deno only allows connecting to `cap-gateway:8080`, and a sandbox can't listen on any port (no `--allow-net` for listening).

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolveLimits, timeProfileFor, DEFAULT_LIMITS, HARD_CEILINGS } from '../../src/runtime/limits';
-import { buildContainerSpec, chunkCode, capHostPort, containerName, MAX_CODE_BYTES } from '../../src/runtime/container-spec';
+import { buildContainerSpec, chunkCode, capHostPort, containerName, gatewayHostEntry, MAX_CODE_BYTES } from '../../src/runtime/container-spec';
 import { demuxLogs } from '../../src/runtime/docker';
 import { redact, statusFor, hashToken } from '../../src/runtime/runner';
 
@@ -16,6 +16,10 @@ describe('limits', () => {
         expect(timeProfileFor(['search', 'tts'])).toBe('generation');
         expect(timeProfileFor(['image'])).toBe('generation');
         expect(timeProfileFor([])).toBe('standard');
+        // Veo can take minutes: video gets its own, longer profile
+        expect(timeProfileFor(['image', 'video'])).toBe('video');
+        expect(resolveLimits('video').wallClockMs).toBe(480_000);
+        expect(resolveLimits('video', { wallClockMs: 900_000 }).wallClockMs).toBe(480_000);
     });
 
     it('submitters can lower limits but never raise them', () => {
@@ -80,6 +84,18 @@ describe('container spec', () => {
         expect(hc.LogConfig).toEqual({ Type: 'local', Config: { 'max-size': '1m', 'max-file': '1', compress: 'false' } });
         expect(spec.User).toBe('65532:65532');
         expect(spec.OpenStdin).toBe(false);
+        expect(hc.ExtraHosts).toEqual([]);
+    });
+
+    it('pins the gateway hostname in /etc/hosts when given its IP (gVisor has no Docker DNS)', () => {
+        expect(buildContainerSpec({ ...base, gatewayIp: '172.18.0.2' }).HostConfig!.ExtraHosts).toEqual(['cap-gateway:172.18.0.2']);
+        // Deno's allowlist still names the host, not the IP
+        expect(buildContainerSpec({ ...base, gatewayIp: '172.18.0.2' }).Cmd).toContain('--allow-net=cap-gateway:8080');
+        expect(gatewayHostEntry('http://10.0.0.5:8080', '10.0.0.5')).toEqual([]);
+        expect(gatewayHostEntry('http://cap-gateway:8080', undefined)).toEqual([]);
+        for (const bad of ['172.18.0.2 evil', '999.1.1.1', 'cap-gateway', '172.18.0.2\n1.1.1.1 x']) {
+            expect(() => gatewayHostEntry('http://cap-gateway:8080', bad), bad).toThrow('Invalid gateway IP');
+        }
     });
 
     it('names and labels the container for the socket proxy allowlist', () => {

@@ -129,7 +129,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## 5 · Media — later
 | 5.1 | ☑ Audio overview: mentioning the built-in assistant with "audio overview" / "podcast" makes the `chat` route write a two-host script (Alex and Sam) from the whole thread (or recent channel messages), the `tts` route voice it with two speakers, and posts an MP3 plus transcript as the assistant's reply, with progress in the placeholder. WAV → MP3 via `@breezystack/lamejs` (LGPL-3.0, pure JS) because `mp3` is allowed by default and `wav` isn't, and MP3 is ~6× smaller. Audio attachments get an inline player | M | 3 |
 | 5.2 | ☑ `image` capability (Gemini native image via `responseModalities: [TEXT, IMAGE]` + `imageConfig` aspect ratio/size; returns base64 for `postFile`) | S | 3 |
-| 5.3 | Video (deferred) | L | 3 |
+| 5.3 | ☑ `video` capability: Gemini adapter drives Veo (`predictLongRunning` → poll the operation → download; checked against Google's Veo REST example, 2026-09-17). The API key goes only to Google's API host; the storage redirect is followed without it. The gateway reserves an artifact slot before the (billed) call, stores the MP4, and posts it into the run's thread (`generateVideo()` returns IDs, not bytes). New `video` time profile (8 min default, 10 min ceiling; migration 030). MP4 attachments play inline. All Veo 3.1 models are preview; default `veo-3.1-fast-generate-preview`; no cost accounting yet (Veo bills per second, the ledger is per token) | L | 3 |
 
 ## Risks / open decisions log
 | # | Item | Owner | Due |

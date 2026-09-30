@@ -6,6 +6,7 @@ import { encryptString } from '../lib/encryption';
 import { testConnection } from '../ai/providers';
 import { getAdapter, LEGACY_PROVIDER_ADAPTER } from '../ai/adapters';
 import { config } from '../config';
+import { auditAiChange, changedFields, routeSnapshot } from '../lib/ai-audit';
 
 /**
  * Built-in assistant config. The assistant's provider/model come from the server's
@@ -198,6 +199,11 @@ export async function aiConfigRoutes(app: FastifyInstance) {
             );
         }
 
+        const previousChat = await db.query(
+            `SELECT r.*, p.label FROM ai_capability_routes r JOIN ai_providers p ON p.id = r.provider_id
+             WHERE r.server_id = $1 AND r.capability = 'chat'`,
+            [serverId]
+        );
         await db.query(
             `INSERT INTO ai_capability_routes (server_id, capability, provider_id, model, enabled)
              VALUES ($1, 'chat', $2, $3, true)
@@ -205,6 +211,18 @@ export async function aiConfigRoutes(app: FastifyInstance) {
                 SET provider_id = EXCLUDED.provider_id, model = EXCLUDED.model, enabled = true, updated_at = NOW()`,
             [serverId, providerId, model]
         );
+
+        const nextChat = await db.query(
+            `SELECT r.*, p.label FROM ai_capability_routes r JOIN ai_providers p ON p.id = r.provider_id
+             WHERE r.server_id = $1 AND r.capability = 'chat'`,
+            [serverId]
+        );
+        const before = routeSnapshot(previousChat.rows[0]);
+        const after = routeSnapshot(nextChat.rows[0]);
+        await auditAiChange(db, request, {
+            serverId, action: 'ai_route_update', targetType: 'ai_route', targetId: providerId,
+            changes: { capability: 'chat', before, after, changed: changedFields(before, after), apiKey: 'replaced', via: 'assistant setup' },
+        });
 
         // Assistant settings + bot user
         const assistant = await ensureAssistant(db, serverId, userId, { systemPrompt: systemPrompt || null, maxContext: maxContext || 20 });
@@ -263,6 +281,15 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         }
 
         const row = result.rows[0];
+        await auditAiChange(db, request, {
+            serverId, action: 'ai_assistant_update', targetType: 'ai_assistant', targetId: null,
+            changes: {
+                ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+                ...(body.maxContext !== undefined ? { maxContext: body.maxContext } : {}),
+                // The prompt itself can be long; record that it changed and its size
+                ...(body.systemPrompt !== undefined ? { systemPrompt: { length: (body.systemPrompt || '').length } } : {}),
+            },
+        });
         return reply.status(200).send({ enabled: row.enabled, systemPrompt: row.system_prompt, maxContext: row.max_context });
     });
 

@@ -223,6 +223,93 @@ describe('gemini media and search', () => {
     });
 });
 
+describe('gemini video (Veo)', () => {
+    const OP = 'models/veo-3.1-fast-generate-preview/operations/op123';
+    const VIDEO_URI = 'https://generativelanguage.googleapis.com/v1beta/files/abc:download?alt=media';
+    const mp4 = Buffer.from('....ftypisom-fake-mp4-bytes');
+
+    /** Scripted fetch: submit → N pending polls → done → 302 → storage bytes. */
+    function veoFetch(opts: { pending?: number; done?: any; redirect?: string | null; uri?: string } = {}) {
+        let polls = 0;
+        return vi.fn(async (url: string | URL, init?: RequestInit) => {
+            const u = String(url);
+            if (u.endsWith(':predictLongRunning')) return jsonResponse({ name: OP });
+            if (u.endsWith(`/${OP}`)) {
+                polls++;
+                if (polls <= (opts.pending ?? 1)) return jsonResponse({ name: OP, done: false });
+                return jsonResponse(opts.done ?? { name: OP, done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: opts.uri ?? VIDEO_URI } }] } } });
+            }
+            if (u === (opts.uri ?? VIDEO_URI)) {
+                if (opts.redirect === null) return new Response(mp4, { status: 200 });
+                return new Response(null, { status: 302, headers: { location: opts.redirect ?? 'https://storage.googleapis.com/veo/abc.mp4?sig=x' } });
+            }
+            if (u.startsWith('https://storage.googleapis.com/')) return new Response(mp4, { status: 200, headers: { 'content-length': String(mp4.length) } });
+            throw new Error(`unexpected fetch ${u} ${JSON.stringify(init?.headers)}`);
+        });
+    }
+
+    it('submits, polls until done, and downloads through the redirect without the API key', async () => {
+        const fetchMock = veoFetch({ pending: 2 });
+        vi.stubGlobal('fetch', fetchMock);
+        const res = await geminiAdapter.generateVideo!({ apiKey: 'veo-key' }, {
+            model: 'veo-3.1-fast-generate-preview', prompt: 'a fern unfurling, timelapse', aspectRatio: '9:16', durationSeconds: 8, resolution: '1080p', pollMs: 1,
+        });
+        expect(res.mime).toBe('video/mp4');
+        expect(res.data.equals(mp4)).toBe(true);
+
+        const calls = fetchMock.mock.calls as unknown as [string | URL, RequestInit | undefined][];
+        const [submitUrl, submitInit] = calls[0];
+        expect(String(submitUrl)).toBe('https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning');
+        expect(JSON.parse(submitInit!.body as string)).toEqual({
+            instances: [{ prompt: 'a fern unfurling, timelapse' }],
+            parameters: { aspectRatio: '9:16', durationSeconds: 8, resolution: '1080p' },
+        });
+        expect((submitInit!.headers as Record<string, string>)['x-goog-api-key']).toBe('veo-key');
+        // 3 polls (2 pending + done), then download + redirect
+        expect(calls.filter(([u]) => String(u).endsWith(`/${OP}`))).toHaveLength(3);
+        const download = calls.find(([u]) => String(u) === VIDEO_URI)!;
+        expect(download[1]!.redirect).toBe('manual');
+        expect((download[1]!.headers as Record<string, string>)['x-goog-api-key']).toBe('veo-key');
+        const storage = calls.find(([u]) => String(u).startsWith('https://storage.googleapis.com/'))!;
+        expect(JSON.stringify(storage[1] ?? {})).not.toContain('veo-key');
+    });
+
+    it('omits parameters when none are given and accepts a direct (non-redirect) download', async () => {
+        const fetchMock = veoFetch({ pending: 0, redirect: null });
+        vi.stubGlobal('fetch', fetchMock);
+        await geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'veo-3.1-generate-preview', prompt: 'x', pollMs: 1 });
+        const [, init] = (fetchMock.mock.calls as unknown as [string, RequestInit][])[0];
+        expect(JSON.parse(init.body as string)).toEqual({ instances: [{ prompt: 'x' }] });
+    });
+
+    it('reports operation errors, filtered videos, and timeouts', async () => {
+        vi.stubGlobal('fetch', veoFetch({ done: { name: OP, done: true, error: { code: 3, message: 'Prompt violates policy' } } }));
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 1 })).rejects.toThrow('Veo failed: Prompt violates policy');
+
+        vi.stubGlobal('fetch', veoFetch({ done: { name: OP, done: true, response: { generateVideoResponse: { raiMediaFilteredCount: 1, raiMediaFilteredReasons: ['Contains a real person'] } } } }));
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 1 })).rejects.toThrow('Veo filtered the video: Contains a real person');
+
+        vi.stubGlobal('fetch', veoFetch({ pending: 1000 }));
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 5, timeoutMs: 30 })).rejects.toThrow('Veo did not finish within 0 s');
+
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: { message: 'Model not found' } }, 404)));
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 1 })).rejects.toThrow('Veo API 404: Model not found');
+    });
+
+    it('refuses odd operation names and never sends the key to another host', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ name: '../../evil' })));
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 1 })).rejects.toThrow('invalid operation name');
+
+        const fetchMock = veoFetch({ pending: 0, uri: 'https://attacker.example/video.mp4' });
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 1 })).rejects.toThrow('unexpected download URL');
+        expect((fetchMock.mock.calls as unknown as [string][]).some(([u]) => String(u).includes('attacker'))).toBe(false);
+
+        vi.stubGlobal('fetch', veoFetch({ pending: 0, redirect: 'http://storage.googleapis.com/insecure.mp4' }));
+        await expect(geminiAdapter.generateVideo!({ apiKey: 'k' }, { model: 'm', prompt: 'x', pollMs: 1 })).rejects.toThrow('non-HTTPS');
+    });
+});
+
 describe('tavily adapter', () => {
     it('searches with the route model as depth and maps results to citations', async () => {
         const fetchMock = vi.fn(async () => jsonResponse({
@@ -264,8 +351,14 @@ describe('adapter registry', () => {
         }
     });
 
+    it('publishes fixed model choices only where they exist (Tavily search depths)', () => {
+        const list = listAdapters();
+        expect(list.find(a => a.id === 'tavily')!.modelChoices).toEqual({ search: ['basic', 'advanced', 'fast', 'ultra-fast'] });
+        expect(list.find(a => a.id === 'gemini')!.modelChoices).toBeUndefined();
+    });
+
     it('each adapter implements exactly the capabilities it lists', () => {
-        const methods = { chat: 'streamChat', search: 'search', image: 'generateImage', tts: 'tts' } as const;
+        const methods = { chat: 'streamChat', search: 'search', image: 'generateImage', tts: 'tts', video: 'generateVideo' } as const;
         for (const { id } of listAdapters()) {
             const adapter = getAdapter(id)! as unknown as Record<string, unknown>;
             for (const [capability, method] of Object.entries(methods)) {

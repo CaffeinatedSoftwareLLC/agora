@@ -100,6 +100,20 @@ export class SandboxDocker {
     }
 
     /**
+     * IPv4 of the capability gateway on the sandbox network, found by container name
+     * (e.g. `agora-cap-gateway-1` contains `cap-gateway`). Uses the network inspect
+     * endpoint the socket proxy already allows; it never inspects other containers.
+     * Looked up per run, so a restarted gateway with a new IP is picked up.
+     */
+    async gatewayAddress(network: string, containerName: string): Promise<string | null> {
+        const info = await this.docker.getNetwork(network).inspect() as { Containers?: Record<string, { Name?: string; IPv4Address?: string }> };
+        for (const c of Object.values(info.Containers ?? {})) {
+            if (c.Name?.includes(containerName) && c.IPv4Address) return c.IPv4Address.split('/')[0];
+        }
+        return null;
+    }
+
+    /**
      * Create, start, wait (with deadline), collect logs, remove. Always removes the container.
      * Every call after create addresses the container by name: the socket proxy only
      * allows container operations on `agora-run-*` names, so the runner can't inspect

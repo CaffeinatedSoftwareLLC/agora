@@ -27,6 +27,31 @@ export interface RunnerConfig {
     capacityRetryMs: number;
     /** How often to check whether the submitting bot was paused while a run executes. */
     stopPollMs?: number;
+    /** Name (substring) of the gateway container on the sandbox network; defaults to the capUrl hostname. */
+    capContainer?: string;
+}
+
+/**
+ * The gateway's sandbox-network IP, for the run's /etc/hosts. Under runsc, Docker's
+ * embedded DNS doesn't work (gVisor doesn't apply its NAT rules), so a run can only
+ * reach the gateway this way; failing here gives a clear error instead of a
+ * "fetch failed" inside the run. Under runc (dev) Docker's DNS works, so a missing
+ * gateway or a failed lookup is not fatal.
+ */
+async function resolveGatewayIp(sandbox: SandboxDocker, config: RunnerConfig): Promise<string | undefined> {
+    const host = new URL(config.capUrl).hostname;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return undefined;
+    const name = config.capContainer ?? host;
+    let ip: string | null = null;
+    try {
+        ip = await sandbox.gatewayAddress(config.network, name);
+    } catch (err) {
+        if (config.runtime === 'runsc') throw err;
+    }
+    if (!ip && config.runtime === 'runsc') {
+        throw new Error(`Capability gateway container "${name}" was not found on the "${config.network}" network`);
+    }
+    return ip ?? undefined;
 }
 
 export interface RunnerDeps {
@@ -148,6 +173,7 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
             runToken: token,
             capUrl: config.capUrl,
             limits,
+            gatewayIp: await resolveGatewayIp(sandbox, config),
         });
 
         outcome = await sandbox.run(spec, {
