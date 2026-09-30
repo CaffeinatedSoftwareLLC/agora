@@ -59,7 +59,7 @@ export async function loadAndComputePermissions(db: any, userId: string, serverI
 /**
  * PreHandler: require ManageBots permission for /servers/:serverId/bots/* routes
  */
-async function requireManageBots(request: FastifyRequest, reply: FastifyReply) {
+export async function requireManageBots(request: FastifyRequest, reply: FastifyReply) {
     if (request.isBot) {
         return reply.status(403).send({ error: 'Bots cannot manage other bots' });
     }
@@ -238,7 +238,7 @@ export async function botRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
 
         const result = await db.query(
-            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_paused_at, bot_paused_reason
+            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_paused_at, bot_paused_reason, runtime_access
              FROM users
              WHERE bot = true AND server_id = $1
              ORDER BY created_at`,
@@ -253,6 +253,7 @@ export async function botRoutes(app: FastifyInstance) {
             avatarUrl: r.avatar_url || null,
             pausedAt: r.bot_paused_at,
             pausedReason: r.bot_paused_reason,
+            runtimeAccess: r.runtime_access,
         }));
 
         return reply.status(200).send(bots);

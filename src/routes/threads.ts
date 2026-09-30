@@ -265,7 +265,7 @@ export async function threadRoutes(app: FastifyInstance) {
         if (after) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.protocol
+                            m.system_event, m.system_data, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.thread_id = $1 AND m.channel_id = $2 AND m.id > $3
@@ -275,7 +275,7 @@ export async function threadRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.protocol
+                            m.system_event, m.system_data, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.thread_id = $1 AND m.channel_id = $2
@@ -328,6 +328,7 @@ export async function threadRoutes(app: FastifyInstance) {
             threadId: row.thread_id?.trim() || null,
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
+            ...(row.system_data ? { systemData: row.system_data } : {}),
             ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),
         }));
 

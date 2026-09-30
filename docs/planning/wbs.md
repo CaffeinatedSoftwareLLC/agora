@@ -103,20 +103,20 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## 2 · Decision Seam — folds into Phase 1/3 branches
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 2.1 | `Decider` interface + `RulesDecider` (exec gate rules, tripwire escalation) | S | 0.4 |
+| 2.1 | ◐ `Decider` interface + `RulesDecider` done in 3.6 (exec gate); tripwire escalation pending with 3.8 | S | 0.4 |
 | 2.2 | `WebhookDecider` + contract doc (schema, auth/HMAC, timeout ⇒ rules fallback) | S | 2.1 |
 | 2.3 | `JevDecider` adapter (`typesafe`, `decide` capability) — optional, gated on API access | S | 1.3, 2.1 |
 
 ## 3 · Sandboxed Runtime — `feat/runtime`
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 3.1 | **Isolation spec** + threat model (`sandbox-isolation-spec.md`) — user sign-off gate | M | — |
-| 3.2 | `runner` service: BullMQ consumer, Docker socket (sole holder), gVisor launch, limits, scratch tmpfs; compose prod + dev (runc warning) | L | 3.1 |
-| 3.3 | Sandbox image: Deno, `agora:std` module, non-root, read-only rootfs | M | 3.1 |
-| 3.4 | Capability endpoint + per-run tokens + per-run call caps + cost ledger | M | 1.5 |
-| 3.5 | `ExecuteCode` permission; `/runtime/runs` routes; MCP `runtime_exec`; nginx + compose prefix updates | M | 3.2 |
-| 3.6 | Exec gate via `Decider`; approval control posted in originating thread; `exec_runs` audit table | M | 2.1, 3.5, 0.1 |
-| 3.7 | Artifact harvest → file-validation → MinIO → thread post | S | 3.2 |
+| 3.1 | ☑ **Isolation spec** + threat model: `sandbox-isolation-spec.md`, approved 2026-09-29 (bots-only submission, per-bot auto-approve, time profiles, 30-day code retention) | M | — |
+| 3.2 | ☑ `runner` (BullMQ `runtime` queue, atomic claim with gate re-check + per-server concurrency, runner-minted run tokens, reconcile + orphan cleanup), hardened container template, name-restricted socket proxy (dev compose profile `sandbox`), base sandbox image (Deno 2.9.7 distroless), `exec_runs`/`exec_run_tokens`. Prod compose wiring deferred to 3.5 | L | 3.1 |
+| 3.3 | ☑ `agora:std` (`call`, `chat`, `search`, `generateImage`, `tts`, `decide`, `postFile`, `postMessage`, `AgoraError`) via import map + global `agora`; bearer run token; tested against a production-shaped fake gateway (dual-homed forwarder) | M | 3.1 |
+| 3.4 | ☑ `cap-gateway` service (`npm run cap-gateway`): run-token auth, declared-capability check, atomic per-run call + artifact caps, route budgets, `chat` handler (others 501 until Phase 4), messages + files into the run's thread via shared `storeFile()`, Redis event bridge with allowlist. E2E sandbox → gateway → provider verified | M | 1.5 |
+| 3.5 | ☑ Per-bot **runtime access** (none / approval / auto) instead of a role bit; `/runtime/runs` API (submit, status, code download, approve/deny); MCP `runtime_exec` + `runtime_status` (agora-mcp 0.3.0); `/runtime` in nginx; prod compose (sandbox-image, socket-proxy, runner, cap-gateway, internal `agora_sandbox` network) | M | 3.2 |
+| 3.6 | ☑ `Decider` + `RulesDecider`; approval card in the thread (View code / Approve / Deny, 30-min expiry, audit); result summary card; code retention (30 days, confirm before shortening, pruning sweep). Verified live: bot → approval in UI → sandbox → gateway → local Ollama → file + result in thread | M | 2.1, 3.5, 0.1 |
+| 3.7 | ~~Artifact harvest~~ folded into 3.4: artifacts leave only through the gateway (`postFile`), no container harvest (spec D5) | — | — |
 | 3.8 | Tripwires ⇒ auto-pause (egress denied, repeated failures) | S | 0.4, 3.2 |
 | 3.9 | Negative security suite (DB/Redis/MinIO reach, cross-scratch, env read, fork bomb, infinite loop) | M | 3.2–3.4 |
 

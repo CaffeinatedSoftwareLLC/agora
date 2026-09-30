@@ -17,6 +17,9 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /bots/@me/thread-cursors',
     'PUT /bots/@me/thread-cursors/:threadId',
     'GET /bots/@me',
+    'POST /runtime/runs',
+    'GET /runtime/runs/:id',
+    'GET /runtime/runs/:id/code',
 ]);
 
 // Writes a paused bot may still make: read-cursor updates, so reading keeps working

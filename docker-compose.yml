@@ -42,5 +42,30 @@ services:
       retries: 6
     restart: unless-stopped
 
+  # Docker API for the sandbox runner (npm run runner), restricted to the calls it
+  # makes (sandbox-isolation-spec §3, T9). Container operations are limited to
+  # agora-run-* names; bind mounts are rejected. Published on localhost only.
+  socket-proxy:
+    image: wollomatic/socket-proxy:1.13.1
+    profiles: ["sandbox"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:2375:2375"
+    command:
+      - "-loglevel=info"
+      - "-listenip=0.0.0.0"
+      - "-allowfrom=0.0.0.0/0"
+      - "-allowbindmountfrom=/nonexistent-agora-no-bind-mounts"
+      - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
+      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/agora_sandbox[a-z0-9_]*|images/.+/json)"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(create|agora-run-[0-9a-z]{26}/(start|wait|kill))"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/containers/agora-run-[0-9a-z]{26}"
+
 volumes:
   minio-data:

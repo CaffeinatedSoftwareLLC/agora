@@ -279,7 +279,7 @@ export async function messageRoutes(app: FastifyInstance) {
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
+                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
@@ -289,7 +289,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
+                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.thread_id IS NULL
@@ -341,6 +341,7 @@ export async function messageRoutes(app: FastifyInstance) {
             createdAt: row.created_at,
             attachments: attachmentsMap[row.id.trim()] || [],
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
+            ...(row.system_data ? { systemData: row.system_data } : {}),
             ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),
             ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at } : {}) } : {}),
         }));

@@ -5,14 +5,11 @@ import { computePermissions, Permissions } from '../permissions';
 import { checkChannelMembership } from './shared';
 import { minioClient, BUCKET_NAME } from '../lib/minio';
 import { encryptFile, decryptFile } from '../lib/encryption';
-import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES, INLINE_SAFE_MIMES } from '../lib/file-validation';
+import { INLINE_SAFE_MIMES } from '../lib/file-validation';
+import { storeFile } from '../lib/file-store';
 import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 
-async function getFileSetting(db: any, key: string): Promise<any> {
-    const res = await db.query('SELECT value FROM instance_settings WHERE key = $1', [key]);
-    return res.rows[0]?.value;
-}
 
 async function streamToBuffer(stream: any): Promise<Buffer> {
     const chunks: Buffer[] = [];
@@ -110,133 +107,16 @@ export async function fileRoutes(app: FastifyInstance) {
             return reply.status(permCheck.status!).send({ error: permCheck.error });
         }
 
-        // Read file to buffer
-        const buffer = await data.toBuffer();
-        const originalName = data.filename;
-        const sanitizedName = sanitizeFilename(originalName);
-        const ext = path.extname(sanitizedName).slice(1).toLowerCase();
-
-        // Check file size against instance setting
-        const maxSizeBytes = await getFileSetting(db, 'files.max_size_bytes');
-        if (maxSizeBytes && buffer.length > maxSizeBytes) {
-            return reply.status(413).send({ error: 'File exceeds maximum allowed size' });
-        }
-
-        // Check extension against allowed list
-        const allowedExtRaw = await getFileSetting(db, 'files.allowed_extensions');
-        const allowedExtensions: string[] = allowedExtRaw ?? ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'txt', 'md', 'csv', 'json', 'zip', 'mp3', 'mp4', 'mov'];
-
-        // Validate magic bytes
-        let detectedMime: string;
-        try {
-            const result = await validateFileType(buffer, ext, allowedExtensions);
-            detectedMime = result.mime;
-        } catch (err) {
-            if (err instanceof FileValidationError) {
-                return reply.status(err.status).send({ error: err.message, details: err.details });
-            }
-            throw err;
-        }
-
-        // EXIF strip for images
-        let processedBuffer = buffer;
-        let width: number | undefined;
-        let height: number | undefined;
-
-        const exifStripEnabled = await getFileSetting(db, 'files.exif_strip');
-        if (IMAGE_MIMES.includes(detectedMime)) {
-            const sharp = (await import('sharp')).default;
-            const image = sharp(buffer);
-            const metadata = await image.metadata();
-            width = metadata.width;
-            height = metadata.height;
-
-            if (exifStripEnabled !== false) {
-                if (detectedMime === 'image/jpeg') {
-                    processedBuffer = await image.jpeg({ quality: 95 }).toBuffer();
-                } else if (detectedMime === 'image/png') {
-                    processedBuffer = await image.png().toBuffer();
-                } else if (detectedMime === 'image/webp') {
-                    processedBuffer = await image.webp({ quality: 95 }).toBuffer();
-                } else if (detectedMime === 'image/gif') {
-                    const pages = metadata.pages ?? 1;
-                    if (pages > 1) {
-                        processedBuffer = buffer; // Keep animated GIFs as-is
-                    } else {
-                        processedBuffer = await image.gif().toBuffer();
-                    }
-                }
-            }
-        }
-
-        // Encrypt
-        const { encrypted, iv, authTag } = encryptFile(processedBuffer, config.encryptionKey);
-
-        // Build storage key
-        const fileId = generateUlid();
-        const storageKey = `${channelId}/${fileId}/${sanitizedName}`;
-
-        // Expiry (optional setting)
-        const retentionDays = await getFileSetting(db, 'files.retention_days');
-        const expiresAt = retentionDays ? new Date(Date.now() + retentionDays * 86400000) : null;
-
-        // Quota check using SEPARATE pool client
-        const pool = app.db;
-        const quotaClient = await pool.connect();
-        try {
-            await quotaClient.query('BEGIN');
-            await quotaClient.query("SELECT pg_advisory_xact_lock(hashtext('storage_quota'))");
-
-            const quota = await getFileSetting(db, 'files.storage_quota_bytes');
-            if (quota) {
-                const totalRes = await quotaClient.query('SELECT COALESCE(SUM(size_bytes), 0) as total FROM files WHERE deleted_at IS NULL');
-                if ((Number(totalRes.rows[0].total) + processedBuffer.length) > quota) {
-                    await quotaClient.query('ROLLBACK');
-                    quotaClient.release();
-                    return reply.status(507).send({ error: 'Instance storage quota exceeded' });
-                }
-            }
-
-            // Insert metadata within quota transaction
-            await quotaClient.query(
-                `INSERT INTO files (id, uploader_id, channel_id, filename, content_type, mime_type, size_bytes, bucket, path, storage_key, encryption_iv, encryption_tag, width, height, expires_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-                [fileId, userId, channelId, sanitizedName, detectedMime, detectedMime, processedBuffer.length, BUCKET_NAME, storageKey, storageKey, iv, authTag, width ?? null, height ?? null, expiresAt]
-            );
-
-            await quotaClient.query('COMMIT');
-        } catch (err) {
-            await quotaClient.query('ROLLBACK').catch(() => {});
-            throw err;
-        } finally {
-            quotaClient.release();
-        }
-
-        // Upload encrypted blob to MinIO
-        try {
-            await minioClient.putObject(BUCKET_NAME, storageKey, encrypted, encrypted.length, {
-                'Content-Type': 'application/octet-stream',
-            });
-        } catch {
-            // Compensating cleanup: delete the metadata row if MinIO upload fails
-            const cleanupClient = await pool.connect();
-            try {
-                await cleanupClient.query('DELETE FROM files WHERE id = $1', [fileId]);
-            } finally {
-                cleanupClient.release();
-            }
-            return reply.status(502).send({ error: 'Failed to store file' });
-        }
-
-        return reply.status(201).send({
-            id: fileId,
-            name: sanitizedName,
-            mime: detectedMime,
-            size: processedBuffer.length,
-            width: width ?? null,
-            height: height ?? null,
-            url: `/files/${fileId}`,
+        const result = await storeFile(db, app.db, {
+            buffer: await data.toBuffer(),
+            filename: data.filename,
+            uploaderId: userId,
+            channelId,
         });
+        if (!result.ok) {
+            return reply.status(result.status).send({ error: result.error, ...(result.details ? { details: result.details } : {}) });
+        }
+        return reply.status(201).send(result.file);
     });
 
     // GET /files/:fileId → binary file content

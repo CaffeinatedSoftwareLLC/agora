@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "agora:std": "file:///opt/agora-std/std.ts"
+  }
+}

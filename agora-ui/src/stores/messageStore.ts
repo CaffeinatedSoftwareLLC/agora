@@ -28,6 +28,7 @@ export interface Message {
   failed?: boolean;
   streaming?: boolean;
   systemEvent?: string;
+  systemData?: Record<string, unknown>;
   attachments?: Attachment[];
   replyCount?: number;
   lastReplyAt?: string;
@@ -77,6 +78,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
+      systemData: m.systemData,
       protocol: m.protocol,
       attachments: m.attachments,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
@@ -113,6 +115,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       editedAt: m.editedAt,
       deletedAt: m.deletedAt,
       systemEvent: m.systemEvent,
+      systemData: m.systemData,
       protocol: m.protocol,
       attachments: m.attachments,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
@@ -274,6 +277,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
+          systemData: msg.systemData,
           protocol: msg.protocol,
           attachments: msg.attachments,
         };
@@ -294,6 +298,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           channelId: msg.channelId,
           createdAt: msg.createdAt,
           systemEvent: msg.systemEvent,
+          systemData: msg.systemData,
           protocol: msg.protocol,
           attachments: msg.attachments,
         };
@@ -312,7 +317,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
       nextByChannel.set(payload.channelId, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined }
+          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined, ...(payload.systemData ? { systemData: payload.systemData } : {}) }
           : m
       ));
       return { byChannel: nextByChannel };

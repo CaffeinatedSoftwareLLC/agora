@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AgoraApi, BotInfo, Message, ThreadSummary } from './api.js';
+import type { AgoraApi, BotInfo, Message, RuntimeRun, ThreadSummary } from './api.js';
 import type { CursorTracker } from './cursor.js';
 
 export function formatMessages(messages: Message[]): string {
@@ -472,4 +472,55 @@ export function registerTools(
             };
         },
     );
+
+    // ─── Sandboxed runtime ───
+
+    const TERMINAL = new Set(['succeeded', 'failed', 'timeout', 'killed', 'error', 'denied']);
+
+    server.tool(
+        'runtime_exec',
+        'Run TypeScript/JavaScript in Agora\'s sandbox (Deno). The code can call Agora capabilities via `import { chat, search, postFile, postMessage } from "agora:std"` (or the global `agora`), but has no other network or filesystem access. Declare every capability it uses. Depending on this bot\'s access, a human may need to approve the run in the thread first; this tool waits for that. Results (and any files it posts) land in the thread.',
+        {
+            code: z.string().describe('Deno TypeScript/JavaScript to run. Use console.log for output; top-level await is supported.'),
+            capabilities: z.array(z.enum(['chat', 'search', 'image', 'tts', 'video', 'decide'])).optional()
+                .describe('Capabilities the code calls through agora:std (undeclared calls are rejected)'),
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            thread: z.string().optional().describe('Thread parent message ID; approval requests and results are posted there'),
+            wait: z.boolean().optional().describe('Wait for the run to finish (default true)'),
+            timeout: z.number().optional().describe('Max seconds to wait, including human approval (default 300, max 900)'),
+        },
+        async ({ code, capabilities, channel, thread, wait, timeout }) => {
+            const ch = await resolveChannel(channel);
+            let run = await api.submitRun({ code, channelId: ch.id, ...(thread ? { threadId: thread } : {}), capabilities: capabilities ?? [] });
+
+            const deadline = Date.now() + Math.min(timeout ?? 300, 900) * 1000;
+            if (wait !== false) {
+                while (!TERMINAL.has(run.status) && Date.now() < deadline) {
+                    await new Promise(r => setTimeout(r, run.status === 'awaiting_approval' ? 3000 : 1000));
+                    run = await api.getRun(run.id);
+                }
+            }
+            return { content: [{ type: 'text' as const, text: formatRun(run) }] };
+        },
+    );
+
+    server.tool(
+        'runtime_status',
+        'Check a sandbox run started with runtime_exec (status, output, errors).',
+        { runId: z.string().describe('Run ID returned by runtime_exec') },
+        async ({ runId }) => ({ content: [{ type: 'text' as const, text: formatRun(await api.getRun(runId)) }] }),
+    );
+}
+
+export function formatRun(run: RuntimeRun): string {
+    const lines = [`Run ${run.id}: ${run.status}`];
+    if (run.status === 'denied') lines.push(`Denied: ${run.gate?.reason ?? 'no reason given'}`);
+    if (run.status === 'awaiting_approval') lines.push('Waiting for a human to approve it in the thread. Check again with runtime_status.');
+    if (run.status === 'queued' || run.status === 'running') lines.push('Still in progress. Check again with runtime_status.');
+    if (run.error) lines.push(`Error: ${run.error}`);
+    if (run.exitCode !== undefined && run.exitCode !== null) lines.push(`Exit code: ${run.exitCode}`);
+    if (run.capabilityCalls !== undefined) lines.push(`Capability calls: ${run.capabilityCalls} · files posted: ${run.artifacts ?? 0}`);
+    if (run.stdout) lines.push('', 'stdout:', run.stdout);
+    if (run.stderr) lines.push('', 'stderr:', run.stderr);
+    return lines.join('\n');
 }

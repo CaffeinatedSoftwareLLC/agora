@@ -6,6 +6,7 @@ import { MessageContent } from './MessageContent';
 import { FileAttachment } from './FileAttachment';
 import { ThreadIndicator } from './ThreadIndicator';
 import { ProtocolBadge } from './ProtocolBadge';
+import { RuntimeCard } from './RuntimeCard';
 import { useThreadStore } from '../../stores/threadStore';
 import { usePalette } from '../../theme';
 
@@ -44,6 +45,11 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   const openThread = useThreadStore(s => s.openThread);
   const canReply = !!(channelId && !message.deletedAt && !message.systemEvent);
   const handleReply = canReply ? () => openThread(channelId!, message.id) : undefined;
+
+  // Sandboxed runtime: approval request / result summary
+  if (message.systemEvent?.startsWith('runtime_')) {
+    return <RuntimeCard message={message} />;
+  }
 
   // System event message (e.g., call started, call ended)
   if (message.systemEvent) {

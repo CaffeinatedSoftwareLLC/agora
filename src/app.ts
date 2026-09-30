@@ -16,12 +16,14 @@ import { botRoutes } from './routes/bots';
 import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
 import { aiProviderRoutes } from './routes/ai-providers';
+import { runtimeRoutes } from './routes/runtime';
 import { roleRoutes } from './routes/roles';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
+import { startEventBridge } from './lib/event-bridge';
 import { getRedis } from './auth/token-blacklist';
 
 export async function buildApp(opts?: {
@@ -268,6 +270,7 @@ export async function buildApp(opts?: {
     await app.register(threadRoutes);
     await app.register(aiConfigRoutes);
     await app.register(aiProviderRoutes);
+    await app.register(runtimeRoutes);
     await app.register(roleRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
@@ -276,6 +279,10 @@ export async function buildApp(opts?: {
 
     // Start built-in AI assistant handler
     startAssistantHandler(db, io, app.log);
+
+    // Forward events published by other services (cap-gateway) to Socket.IO clients
+    const stopEventBridge = startEventBridge(io, config.redisUrl, app.log);
+    app.addHook('onClose', async () => { await stopEventBridge(); });
 
     return { app, db };
 }
