@@ -212,6 +212,19 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         }
     }
 
+    /** Reserve one of the run's artifact slots; released if storing the file fails. */
+    async function reserveArtifact(run: GatewayRun): Promise<boolean> {
+        const reserved = await db.query(
+            'UPDATE exec_runs SET artifact_count = artifact_count + 1 WHERE id = $1 AND artifact_count < $2 RETURNING artifact_count',
+            [run.runId, run.limits.artifacts ?? 10]
+        );
+        return reserved.rows.length > 0;
+    }
+
+    async function releaseArtifact(run: GatewayRun) {
+        await db.query('UPDATE exec_runs SET artifact_count = artifact_count - 1 WHERE id = $1', [run.runId]);
+    }
+
     /** Count a call against the run's cap; at the cap, pause the bot and reply 429. */
     async function consumeOrTrip(run: GatewayRun, reply: FastifyReply): Promise<boolean> {
         if (await consumeCall(db, run)) return true;
@@ -310,6 +323,99 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         }
     });
 
+    // ─── Results cards (WBS 4.1) ───
+    const countsSchema = {
+        type: 'object', required: ['passed', 'failed', 'skipped'], additionalProperties: false,
+        properties: {
+            passed: { type: 'integer', minimum: 0, maximum: 10_000_000 },
+            failed: { type: 'integer', minimum: 0, maximum: 10_000_000 },
+            skipped: { type: 'integer', minimum: 0, maximum: 10_000_000 },
+            durationMs: { type: 'integer', minimum: 0, maximum: 604_800_000 },
+        },
+    };
+    app.post('/v1/reports', {
+        preHandler: authenticate,
+        bodyLimit: 2 * 1024 * 1024,
+        schema: {
+            body: {
+                type: 'object', required: ['title', 'totals'], additionalProperties: false,
+                properties: {
+                    title: { type: 'string', minLength: 1, maxLength: 200 },
+                    summary: { type: 'string', maxLength: 4000 },
+                    summarySource: { type: 'string', enum: ['model', 'computed'] },
+                    totals: countsSchema,
+                    suites: {
+                        type: 'array', maxItems: 50,
+                        items: { ...countsSchema, required: ['name', ...countsSchema.required], properties: { ...countsSchema.properties, name: { type: 'string', minLength: 1, maxLength: 300 } } },
+                    },
+                    failures: {
+                        type: 'array', maxItems: 20,
+                        items: {
+                            type: 'object', required: ['name', 'message'], additionalProperties: false,
+                            properties: {
+                                name: { type: 'string', minLength: 1, maxLength: 500 },
+                                suite: { type: 'string', maxLength: 300 },
+                                message: { type: 'string', maxLength: 2000 },
+                            },
+                        },
+                    },
+                    attachment: {
+                        type: 'object', required: ['name', 'content'], additionalProperties: false,
+                        properties: {
+                            name: { type: 'string', minLength: 1, maxLength: 255 },
+                            content: { type: 'string', minLength: 1, maxLength: 1_100_000 },
+                        },
+                    },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const run = request.run!;
+        if (!run.channelId) return fail(reply, 409, 'no_channel', 'This run has no channel to post to');
+        const body = request.body as {
+            title: string; summary?: string; summarySource?: 'model' | 'computed';
+            totals: Record<string, number>; suites?: unknown[]; failures?: unknown[];
+            attachment?: { name: string; content: string };
+        };
+        if (!(await consumeOrTrip(run, reply))) return reply;
+
+        let fileId: string | undefined;
+        if (body.attachment) {
+            if (!(await reserveArtifact(run))) return fail(reply, 429, 'artifact_limit', `Artifact limit reached (${run.limits.artifacts ?? 10} per run)`);
+            const stored = await storeFile(db, db, {
+                buffer: Buffer.from(body.attachment.content, 'utf8'), filename: body.attachment.name,
+                uploaderId: run.submittedBy, channelId: run.channelId,
+            });
+            if (!stored.ok) {
+                await releaseArtifact(run);
+                return reply.status(stored.status).send({ error: stored.error, code: 'file_rejected', ...(stored.details ? { details: stored.details } : {}) });
+            }
+            fileId = stored.file.id;
+        }
+
+        const { passed, failed, skipped } = body.totals;
+        const systemData = {
+            kind: 'runtime_report', runId: run.runId, title: body.title,
+            summary: body.summary ?? null, summarySource: body.summarySource ?? null,
+            totals: body.totals, suites: body.suites ?? [], failures: body.failures ?? [],
+        };
+        // Plain-text fallback for clients that don't render cards (e.g. agents reading chat)
+        const content = `${failed ? '❌' : '✅'} ${body.title}: ${passed} passed, ${failed} failed, ${skipped} skipped`
+            + (body.summary ? `\n\n${body.summary}` : '');
+        try {
+            const { messageId, events } = await postBotMessage(db, {
+                channelId: run.channelId, threadId: run.threadId, authorId: run.submittedBy,
+                content: content.slice(0, 4000), fileIds: fileId ? [fileId] : undefined,
+                systemEvent: 'runtime_report', systemData,
+            });
+            await publishEvents(redis, events);
+            return reply.status(201).send({ id: messageId, ...(fileId ? { fileId } : {}) });
+        } catch (err) {
+            if (err instanceof PostError) return fail(reply, err.status, err.code, err.message);
+            throw err;
+        }
+    });
+
     // ─── Files (raw body; any content type) ───
     await app.register(async (files) => {
         files.removeAllContentTypeParsers();
@@ -331,16 +437,11 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
             }
             if (!filename || filename.length > 255) return fail(reply, 400, 'bad_filename', 'X-Agora-Filename is required (max 255 chars)');
 
-            // Reserve an artifact slot; released if storage fails
-            const reserved = await db.query(
-                'UPDATE exec_runs SET artifact_count = artifact_count + 1 WHERE id = $1 AND artifact_count < $2 RETURNING artifact_count',
-                [run.runId, run.limits.artifacts ?? 10]
-            );
-            if (reserved.rows.length === 0) return fail(reply, 429, 'artifact_limit', `Artifact limit reached (${run.limits.artifacts ?? 10} per run)`);
+            if (!(await reserveArtifact(run))) return fail(reply, 429, 'artifact_limit', `Artifact limit reached (${run.limits.artifacts ?? 10} per run)`);
 
             const stored = await storeFile(db, db, { buffer: body, filename, uploaderId: run.submittedBy, channelId: run.channelId });
             if (!stored.ok) {
-                await db.query('UPDATE exec_runs SET artifact_count = artifact_count - 1 WHERE id = $1', [run.runId]);
+                await releaseArtifact(run);
                 return reply.status(stored.status).send({ error: stored.error, code: 'file_rejected', ...(stored.details ? { details: stored.details } : {}) });
             }
 

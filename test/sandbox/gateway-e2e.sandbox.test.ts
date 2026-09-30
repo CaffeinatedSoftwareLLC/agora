@@ -125,3 +125,48 @@ test('agent code composes chat + postFile + postMessage through the real gateway
     const tokens = await ctx.db.query('SELECT revoked_at FROM exec_run_tokens WHERE run_id = $1', [runId]);
     expect(tokens.rows[0].revoked_at).toBeTruthy();
 });
+
+test('testReport turns JUnit XML into a results card with a model summary and a Markdown report (4.1)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+        new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'One of three tests failed: test_create got a 500.' }] } }] })}\n\n`)));
+
+    const code = [
+        'import { testReport } from "agora:std";',
+        'const xml = `<testsuites><testsuite name="api">',
+        '  <testcase name="test_list" time="0.2"/>',
+        '  <testcase name="test_create" time="0.3"><failure message="assert 500 == 201">trace</failure></testcase>',
+        '  <testcase name="test_skip"><skipped/></testcase>',
+        '</testsuite><testsuite name="util"><testcase name="test_ok" time="0.1"/></testsuite></testsuites>`;',
+        'const res = await testReport(xml, { title: "CI #7" });',
+        'console.log("card", res.id, res.fileId);',
+    ].join('\n');
+    const runId = generateUlid();
+    await ctx.db.query(
+        `INSERT INTO exec_runs (id, server_id, channel_id, thread_id, submitted_by, code, code_sha256, limits, gate_decision, status, requested_capabilities)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'auto_run', 'queued', $9)`,
+        [runId, serverId, channelId, threadId, botId, code, createHash('sha256').update(code).digest('hex'), JSON.stringify(resolveLimits('standard')), ['chat']]
+    );
+
+    const result = await processRun(deps, runId);
+    const run = (await ctx.db.query('SELECT * FROM exec_runs WHERE id = $1', [runId])).rows[0];
+    expect(result, run.stderr_tail).toEqual({ kind: 'ran', status: 'succeeded' });
+    expect(run.capability_calls).toBe(2);   // chat summary + report
+    expect(run.artifact_count).toBe(1);
+
+    const card = (await ctx.db.query(
+        `SELECT m.author_id, m.system_data, f.filename, f.size_bytes FROM messages m LEFT JOIN files f ON f.message_id = m.id
+         WHERE m.system_event = 'runtime_report' AND m.system_data->>'runId' = $1`,
+        [runId]
+    )).rows[0];
+    expect(card.author_id.trim()).toBe(botId);
+    expect(card.filename).toBe('ci-7.md');
+    expect(Number(card.size_bytes)).toBeGreaterThan(100);
+    expect(card.system_data).toMatchObject({
+        title: 'CI #7',
+        summary: 'One of three tests failed: test_create got a 500.',
+        summarySource: 'model',
+        totals: { passed: 2, failed: 1, skipped: 1, durationMs: 600 },
+        failures: [{ name: 'test_create', suite: 'api', message: 'assert 500 == 201\ntrace' }],
+    });
+    expect(card.system_data.suites.map((s: any) => s.name)).toEqual(['api', 'util']);
+});

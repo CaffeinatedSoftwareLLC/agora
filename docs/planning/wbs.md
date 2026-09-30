@@ -123,7 +123,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## 4 · First Value — `feat/visual-reports`, `feat/search`
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 4.1 | Visual test report (MVP): payload → routed capability → chart/HTML card → thread | M | 3 |
+| 4.1 | ☑ Visual test report (MVP): `agora:std` `testReport()` parses JUnit XML / Vitest-Jest JSON / Agora's `{totals, suites, failures}` (`sandbox/report.ts`), gets a summary from the routed `chat` capability (computed fallback), and posts through gateway `POST /v1/reports` a bot-authored `runtime_report` card (UI-drawn pass-rate bar, per-suite bars, collapsible failures) plus the full report as Markdown. The card is native UI rather than a generated HTML file because HTML/SVG uploads aren't allowed (T10); charts come from the data, not an image model, so the numbers can't be wrong | M | 3 |
 | 4.2 | ☑ `search()`: routed `search` capability. **Gemini** (Google Search grounding via `generateContent` + `tools: [{googleSearch: {}}]`): per Google's terms the gateway posts the answer unmodified with Google's Search Suggestions into the thread (`runtime_search` card, suggestions in a script-less sandboxed iframe) and returns `{answer, citations, displayedIn}` to the run. **Tavily** adapter (agent-oriented terms; route "model" = search depth) returns `{answer, citations}` without posting. See R6 | M | 3, 1.3 |
 
 ## 5 · Media — later

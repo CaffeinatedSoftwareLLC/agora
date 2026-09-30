@@ -380,6 +380,108 @@ describe('search, image, and tts (Phase 4)', () => {
     });
 });
 
+describe('results cards (4.1)', () => {
+    const card = {
+        title: 'CI #42',
+        summary: '4 of 5 passed; test_create returned 500.',
+        summarySource: 'model',
+        totals: { passed: 4, failed: 1, skipped: 0, durationMs: 1234 },
+        suites: [{ name: 'tests.test_api', passed: 3, failed: 1, skipped: 0, durationMs: 1000 }, { name: 'tests.test_util', passed: 1, failed: 0, skipped: 0 }],
+        failures: [{ name: 'test_create', suite: 'tests.test_api', message: 'assert 500 == 201' }],
+    };
+    const post = (auth: Record<string, string>, payload: unknown) =>
+        gw.inject({ method: 'POST', url: '/v1/reports', headers: auth, payload: payload as any });
+
+    test('posts a bot-authored card with the attachment into the run\'s thread', async () => {
+        published.length = 0;
+        const { runId, auth } = await makeRun();
+        const res = await post(auth, { ...card, attachment: { name: 'ci-42.md', content: '# CI #42\n\nfull report' } });
+        expect(res.statusCode).toBe(201);
+        const { id, fileId } = res.json();
+        expect(fileId).toBeTruthy();
+
+        const msg = (await ctx.db.query('SELECT author_id, thread_id, content, system_event, system_data FROM messages WHERE id = $1', [id])).rows[0];
+        expect(msg.author_id.trim()).toBe(botId);
+        expect(msg.thread_id.trim()).toBe(threadId);
+        expect(msg.system_event).toBe('runtime_report');
+        expect(msg.system_data).toEqual({
+            kind: 'runtime_report', runId, title: 'CI #42', summary: card.summary, summarySource: 'model',
+            totals: card.totals, suites: card.suites, failures: card.failures,
+        });
+        expect(msg.content).toBe('❌ CI #42: 4 passed, 1 failed, 0 skipped\n\n4 of 5 passed; test_create returned 500.');
+
+        const file = (await ctx.db.query('SELECT message_id, filename FROM files WHERE id = $1', [fileId])).rows[0];
+        expect(file.message_id.trim()).toBe(id);
+        expect(file.filename).toBe('ci-42.md');
+        const run = (await ctx.db.query('SELECT capability_calls, artifact_count FROM exec_runs WHERE id = $1', [runId])).rows[0];
+        expect(run).toEqual({ capability_calls: 1, artifact_count: 1 });
+
+        await waitFor(async () => published.some(e => e.event === 'Message' && e.data.id === id));
+        const event = published.find(e => e.event === 'Message' && e.data.id === id);
+        expect(event.data).toMatchObject({ systemEvent: 'runtime_report', authorId: botId, threadId });
+        expect(event.data.systemData.totals).toEqual(card.totals);
+        expect(event.data.attachments).toHaveLength(1);
+    });
+
+    test('a card without an attachment and a passing run', async () => {
+        const { auth } = await makeRun();
+        const res = await post(auth, { title: 'Nightly', totals: { passed: 10, failed: 0, skipped: 2 } });
+        expect(res.statusCode).toBe(201);
+        expect(res.json().fileId).toBeUndefined();
+        const msg = (await ctx.db.query('SELECT content, system_data FROM messages WHERE id = $1', [res.json().id])).rows[0];
+        expect(msg.content).toBe('✅ Nightly: 10 passed, 0 failed, 2 skipped');
+        expect(msg.system_data).toMatchObject({ suites: [], failures: [], summary: null });
+    });
+
+    test('the message API returns the card data to clients', async () => {
+        const { auth } = await makeRun();
+        const { id } = (await post(auth, { title: 'API check', totals: { passed: 1, failed: 0, skipped: 0 } })).json();
+        const res = await ctx.request.get(`/channels/${channelId}/messages/${threadId}/replies`).set(owner.auth);
+        const found = (res.body.messages ?? res.body).find((m: any) => m.id === id);
+        expect(found).toMatchObject({ systemEvent: 'runtime_report', systemData: { title: 'API check' } });
+    });
+
+    test('invalid cards are 400 and consume no call', async () => {
+        const { runId, auth } = await makeRun();
+        const bad = [
+            { totals: card.totals },
+            { title: 'x', totals: { passed: 1, failed: 0 } },
+            { title: 'x', totals: { passed: -1, failed: 0, skipped: 0 } },
+            { title: 'x', totals: card.totals, failures: Array.from({ length: 21 }, (_, i) => ({ name: `t${i}`, message: 'm' })) },
+            { title: 'x', totals: card.totals, summarySource: 'human' },
+        ];
+        for (const payload of bad) expect((await post(auth, payload)).statusCode, JSON.stringify(payload).slice(0, 80)).toBe(400);
+        expect((await ctx.db.query('SELECT capability_calls FROM exec_runs WHERE id = $1', [runId])).rows[0].capability_calls).toBe(0);
+    });
+
+    test('unknown fields are stripped, never stored', async () => {
+        const { auth } = await makeRun();
+        const res = await post(auth, { title: 'x', totals: card.totals, html: '<script>', suites: [{ name: 'a', passed: 1, failed: 0, skipped: 0, color: 'red' }] });
+        expect(res.statusCode).toBe(201);
+        const data = (await ctx.db.query('SELECT system_data FROM messages WHERE id = $1', [res.json().id])).rows[0].system_data;
+        expect(data.html).toBeUndefined();
+        expect(data.suites).toEqual([{ name: 'a', passed: 1, failed: 0, skipped: 0 }]);
+    });
+
+    test('a rejected attachment returns file_rejected, releases the slot, and posts nothing', async () => {
+        const { runId, auth } = await makeRun();
+        const res = await post(auth, { ...card, attachment: { name: 'report.html', content: '<h1>hi</h1>' } });
+        expect(res.statusCode).toBe(415);
+        expect(res.json().code).toBe('file_rejected');
+        expect((await ctx.db.query('SELECT artifact_count FROM exec_runs WHERE id = $1', [runId])).rows[0].artifact_count).toBe(0);
+        const posted = await ctx.db.query("SELECT 1 FROM messages WHERE system_event = 'runtime_report' AND system_data->>'runId' = $1", [runId]);
+        expect(posted.rows).toHaveLength(0);
+    });
+
+    test('attachments count against the artifact limit', async () => {
+        const { auth } = await makeRun({ limits: { artifacts: 1 } });
+        expect((await post(auth, { ...card, attachment: { name: 'a.md', content: 'a' } })).statusCode).toBe(201);
+        const second = await post(auth, { ...card, attachment: { name: 'b.md', content: 'b' } });
+        expect(second.statusCode).toBe(429);
+        expect(second.json().code).toBe('artifact_limit');
+    });
+});
+
 describe('messages and files', () => {
     test('postMessage lands in the run\'s thread as the submitting bot and publishes events', async () => {
         published.length = 0;

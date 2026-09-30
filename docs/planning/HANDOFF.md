@@ -10,13 +10,14 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | 1 Provider registry (Anthropic / OpenAI-compatible incl. Ollama / Gemini), capability routes, budgets, SSRF guard, AI settings UI | merged | #25 |
 | 3.1–3.6 Sandboxed runtime: runner, `agora:std`, cap-gateway, run API, decision gate + approvals, result cards, retention, MCP `runtime_exec` | merged | #26 |
 | 3.8 Tripwires: auto-pause on repeated failures / token misuse / call cap; pause kills running containers | merged | #27 |
-| 4.2 / 5.1 / 5.2 capabilities: `search` (Gemini grounding with compliant display, Tavily), `image`, `tts` | **open, awaiting review/merge** | `feat/capabilities` |
+| 4.2 / 5.1 / 5.2 capabilities: `search` (Gemini grounding with compliant display, Tavily), `image`, `tts` | merged | #28 |
+| 4.1 Visual test report: `testReport()` in `agora:std` → `/v1/reports` → results card + Markdown report | **open, awaiting review/merge** | `feat/visual-reports` |
 
 ## Next up (in order)
-1. **Merge the capabilities PR** (`feat/capabilities`), then branch from `main`. Before relying on it, smoke-test each capability once with real Gemini and Tavily keys (only mocked responses were tested; API shapes were checked against Google's generateContent reference and Tavily's docs on 2026-09-30).
+1. **Merge the visual-reports PR** (`feat/visual-reports`), then branch from `main`. Still owed from #28: smoke-test `search` / `image` / `tts` once with real Gemini and Tavily keys (only mocked responses were tested).
 2. *(Hardening, optional)* **Bind run tokens to the container IP.** Today a *live* token replayed from another sandbox is indistinguishable from its own run; only dead-token use trips. The runner could record the container's `agora_sandbox` IP on `exec_run_tokens` and the gateway compare `request.ip` (needs a trusted-proxy setting for the dev forwarder).
 3. **3.9 Negative suite on gVisor:** the spec §14 list. Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` on a Linux host/CI runner that has `runsc`. None exists yet.
-4. **4.1 Visual test report MVP:** results payload → routed `image`/`chat` capability → chart + HTML card → thread. Capabilities it needs are in place. Still open from Phase 4/5: `decide`/`video` (501), and the audio-overview flow on top of `tts`.
+4. **Phase 5 next:** the audio-overview flow (thread → 2-host script via `chat` → multi-speaker `tts` → audio file in the thread). `decide` and `video` still return 501. Possible 4.1 follow-ups: an MCP tool that takes a results file path so agents don't have to inline large payloads into code (code is capped at 360 KB), and a JUnit/Vitest reporter recipe for CI.
    - Google's docs now lead with the Interactions API (`/v1beta/interactions`); `generateContent` is still documented with no deprecation notice. Adapters use `generateContent` for everything.
 5. **Decision seam 2.2/2.3:** `WebhookDecider` + optional `JevDecider` behind `src/runtime/decider.ts` (they may only tighten decisions; see spec §10).
 6. **Open GitHub issue #23:** loop guard UI visibility.
@@ -25,6 +26,7 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 - `ai-assistant.integration.test.ts`: expects bot name `AI Assistant`, but code creates `AI-Assistant`.
 - `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; as of 2026-09-30 (3.8 work) it had **not** landed on `main`.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
+- Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
 - **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file (a background task was suggested to fix it).
 
 ## Local environment gotchas (this machine)

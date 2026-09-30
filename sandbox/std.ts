@@ -7,10 +7,15 @@
  *
  *   import { search, postFile } from "agora:std";
  *   const res = await search("latest deno release");
- *   await postFile("report.html", html, { mime: "text/html" });
+ *   await postFile("notes.md", res.answer);
+ *   await testReport(junitXml, { title: "CI #42" });   // results card in the thread
  *
  * The same functions are available on the global `agora` object.
  */
+
+import { computedSummary, parseTestResults, reportMarkdown, summaryPrompt, type TestResults } from './report.ts';
+
+export { parseTestResults, type TestResults } from './report.ts';
 
 export class AgoraError extends Error {
     constructor(message: string, readonly status: number, readonly code: string) {
@@ -138,4 +143,75 @@ export function postMessage(content: string): Promise<{ id: string }> {
     }) as Promise<{ id: string }>;
 }
 
-export const agora = { call, chat, search, generateImage, tts, decide, postFile, postMessage, AgoraError };
+export interface ReportCard extends TestResults {
+    title: string;
+    summary?: string;
+    /** Whether the summary was written by the chat model or computed from the counts. */
+    summarySource?: 'model' | 'computed';
+    /** A text file attached to the card (validated against the instance's file rules). */
+    attachment?: { name: string; content: string };
+}
+
+/**
+ * Post a results card into the run's thread. The card is drawn by Agora's UI from
+ * this data (at most 50 suites and 20 failures are shown).
+ */
+export function postReport(card: ReportCard): Promise<{ id: string; fileId?: string }> {
+    return request('/v1/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(card),
+    }) as Promise<{ id: string; fileId?: string }>;
+}
+
+const MAX_ATTACHMENT_CHARS = 1_000_000;
+
+/**
+ * Turn test results into a results card with a Markdown report attached.
+ * `input` is JUnit XML, Vitest/Jest JSON (object or string), or `{ totals, suites, failures }`.
+ * If the run declared `chat`, the model writes the summary; otherwise it's computed.
+ */
+export async function testReport(
+    input: unknown,
+    opts: { title?: string; summarize?: boolean; attach?: boolean } = {},
+): Promise<{ id: string; fileId?: string }> {
+    const results = parseTestResults(input);
+    const title = (opts.title ?? 'Test report').slice(0, 200);
+
+    let summary = computedSummary(results);
+    let summarySource: 'model' | 'computed' = 'computed';
+    if (opts.summarize !== false) {
+        try {
+            const res = await chat(summaryPrompt(results, title), { maxTokens: 400 });
+            if (res.text.trim()) {
+                summary = res.text.trim().slice(0, 4000);
+                summarySource = 'model';
+            }
+        } catch (err) {
+            // chat not declared, not routed, or over budget: keep the computed summary
+            if (!(err instanceof AgoraError)) throw err;
+        }
+    }
+
+    const card: ReportCard = {
+        title, summary, summarySource,
+        totals: results.totals,
+        suites: results.suites.slice(0, 50),
+        failures: results.failures.slice(0, 20),
+    };
+    if (opts.attach !== false) {
+        const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'test-report';
+        let content = reportMarkdown(results, title, summary);
+        if (content.length > MAX_ATTACHMENT_CHARS) content = `${content.slice(0, MAX_ATTACHMENT_CHARS)}\n\n[report truncated]\n`;
+        try {
+            return await postReport({ ...card, attachment: { name: `${slug}.md`, content } });
+        } catch (err) {
+            // The instance's file rules can reject the attachment; the card still goes out
+            if (!(err instanceof AgoraError) || err.code !== 'file_rejected') throw err;
+            console.warn(`Report attachment rejected (${err.message}); posting the card without it`);
+        }
+    }
+    return postReport(card);
+}
+
+export const agora = { call, chat, search, generateImage, tts, decide, postFile, postMessage, postReport, testReport, parseTestResults, AgoraError };
