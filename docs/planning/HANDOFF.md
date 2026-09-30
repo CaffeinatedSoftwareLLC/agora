@@ -32,7 +32,8 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
 ## Next up (in order)
-1. **Fix #33** (multi-speaker TTS: one text part per line with `speechMetadata.speaker`), then one real audio overview.
+1. **Fix #33** (multi-speaker TTS: one text part per line with `speechMetadata.speaker`, or per-line single-voice synthesis stitched together), then one real audio overview.
+   - Potential enhancement **#35**: free local TTS with Kokoro (reusing Thoth's `kokoro-onnx` engine) as an OpenAI-compatible Speech provider.
 2. **Retry video** once Veo is back: the agent prompt with `generateVideo("…", { durationSeconds: 4 })`, capability `video`.
 3. **Remaining live checks:** Gemini search (expect the "Web search" card), `image`, single-voice `tts`, `testReport`.
 4. **MinIO images are gone** from quay.io/Docker Hub. Issue **#32**; a task chip for picking a replacement was also offered. The WSL stack uses a copy `docker save`d from Docker Desktop (image ID `14cea493d9a3`).
