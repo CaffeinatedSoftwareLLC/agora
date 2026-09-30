@@ -35,11 +35,19 @@ declare module 'fastify' {
 
 const MAX_FILE_BODY = 100 * 1024 * 1024; // hard cap; the instance file limit is checked by storeFile
 
-type HandlerCtx = { run: GatewayRun; route: ResolvedRoute; input: any; db: Pool; publish: (events: BridgedEvent[]) => Promise<void> };
+type HandlerCtx = {
+    run: GatewayRun; route: ResolvedRoute; input: any; db: Pool;
+    publish: (events: BridgedEvent[]) => Promise<void>;
+    /** Veo operation polling interval (tests shorten it). */
+    videoPollMs?: number;
+};
 type Handler = (ctx: HandlerCtx) => Promise<{ status?: number; body: unknown }>;
 
 export const IMAGE_ASPECT_RATIOS = ['1:1', '1:4', '4:1', '1:8', '8:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'];
 export const IMAGE_SIZES = ['512', '1K', '2K', '4K'];
+export const VIDEO_ASPECT_RATIOS = ['16:9', '9:16'];
+export const VIDEO_DURATIONS = [4, 6, 8];
+export const VIDEO_RESOLUTIONS = ['720p', '1080p', '4k'];
 
 /** Shared shape checks: a plain object with only `allowed` keys. */
 function objectWith(input: any, allowed: string[]): string | null {
@@ -97,7 +105,38 @@ const VALIDATORS: Partial<Record<Capability, (input: any) => string | null>> = {
         }
         return null;
     },
+    video: (input) => {
+        const shape = objectWith(input, ['prompt', 'aspectRatio', 'durationSeconds', 'resolution', 'negativePrompt', 'message', 'filename']);
+        if (shape) return shape;
+        if (!isText(input.prompt, 4000)) return 'prompt must be a non-empty string up to 4000 chars';
+        if (input.aspectRatio !== undefined && !VIDEO_ASPECT_RATIOS.includes(input.aspectRatio)) return `aspectRatio must be one of ${VIDEO_ASPECT_RATIOS.join(', ')}`;
+        if (input.durationSeconds !== undefined && !VIDEO_DURATIONS.includes(input.durationSeconds)) return `durationSeconds must be one of ${VIDEO_DURATIONS.join(', ')}`;
+        if (input.resolution !== undefined && !VIDEO_RESOLUTIONS.includes(input.resolution)) return `resolution must be one of ${VIDEO_RESOLUTIONS.join(', ')}`;
+        // Veo: 1080p and 4k only come as 8-second videos
+        if ((input.resolution === '1080p' || input.resolution === '4k') && input.durationSeconds !== undefined && input.durationSeconds !== 8) {
+            return `${input.resolution} videos must be 8 seconds long`;
+        }
+        if (input.negativePrompt !== undefined && (typeof input.negativePrompt !== 'string' || input.negativePrompt.length > 1000)) return 'negativePrompt must be a string up to 1000 chars';
+        if (input.message !== undefined && (typeof input.message !== 'string' || input.message.length > 4000)) return 'message must be a string up to 4000 chars';
+        if (input.filename !== undefined && (typeof input.filename !== 'string' || !/^[\w .-]{1,100}\.mp4$/i.test(input.filename))) return 'filename must end in .mp4 (letters, digits, spaces, dots, dashes)';
+        return null;
+    },
 };
+
+/** Reserve one of the run's artifact slots; released if producing or storing the file fails. */
+async function reserveArtifactSlot(db: Pool, run: GatewayRun): Promise<boolean> {
+    const reserved = await db.query(
+        'UPDATE exec_runs SET artifact_count = artifact_count + 1 WHERE id = $1 AND artifact_count < $2 RETURNING artifact_count',
+        [run.runId, run.limits.artifacts ?? 10]
+    );
+    return reserved.rows.length > 0;
+}
+
+async function releaseArtifactSlot(db: Pool, run: GatewayRun) {
+    await db.query('UPDATE exec_runs SET artifact_count = artifact_count - 1 WHERE id = $1', [run.runId]);
+}
+
+const artifactLimit = (run: GatewayRun) => ({ status: 429, body: { error: `Artifact limit reached (${run.limits.artifacts ?? 10} per run)`, code: 'artifact_limit' } });
 
 /** Run a provider call and record usage (success or failure) against the run. */
 async function metered<T extends { usage: Usage }>(ctx: HandlerCtx, capability: Capability, call: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
@@ -120,7 +159,7 @@ async function metered<T extends { usage: Usage }>(ctx: HandlerCtx, capability: 
 
 const providerError = (error: string) => ({ status: 502, body: { error, code: 'provider_error' } });
 
-/** Capability implementations. `decide` and `video` come later. */
+/** Capability implementations. `decide` comes later. */
 const HANDLERS: Partial<Record<Capability, Handler>> = {
     chat: async (ctx) => {
         const { route, input } = ctx;
@@ -182,6 +221,46 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
         const { data, mime, usage } = result.value;
         return { body: { data: data.toString('base64'), mime, usage } };
     },
+
+    /**
+     * Videos are large, so the gateway stores the MP4 and posts it into the run's
+     * thread itself; the run gets the file and message IDs back, not the bytes.
+     * The artifact slot is reserved before the (billed) provider call.
+     */
+    video: async (ctx) => {
+        const { run, route, input, db } = ctx;
+        if (!run.channelId) return { status: 409, body: { error: 'This run has no channel to post the video to', code: 'no_channel' } };
+        if (!(await reserveArtifactSlot(db, run))) return artifactLimit(run);
+
+        const result = await metered(ctx, 'video', () => route.adapter.generateVideo!(route.credentials, {
+            model: route.model, prompt: input.prompt, aspectRatio: input.aspectRatio, durationSeconds: input.durationSeconds,
+            resolution: input.resolution, negativePrompt: input.negativePrompt,
+            // Stop waiting shortly before the run's own deadline
+            timeoutMs: Math.max(30_000, run.limits.wallClockMs - 15_000),
+            pollMs: ctx.videoPollMs,
+        }));
+        if (!result.ok) {
+            await releaseArtifactSlot(db, run);
+            return providerError(result.error);
+        }
+
+        const stored = await storeFile(db, db, { buffer: result.value.data, filename: input.filename ?? 'video.mp4', uploaderId: run.submittedBy, channelId: run.channelId });
+        if (!stored.ok) {
+            await releaseArtifactSlot(db, run);
+            return { status: stored.status, body: { error: stored.error, code: 'file_rejected', ...(stored.details ? { details: stored.details } : {}) } };
+        }
+        try {
+            const { messageId, events } = await postBotMessage(db, {
+                channelId: run.channelId, threadId: run.threadId, authorId: run.submittedBy,
+                content: input.message ?? '', fileIds: [stored.file.id],
+            });
+            await ctx.publish(events);
+            return { status: 201, body: { fileId: stored.file.id, url: stored.file.url, messageId, mime: stored.file.mime, size: stored.file.size } };
+        } catch (err) {
+            if (err instanceof PostError) return { status: err.status, body: { error: err.message, code: err.code } };
+            throw err;
+        }
+    },
 };
 
 function fail(reply: FastifyReply, status: number, code: string, error: string) {
@@ -198,7 +277,7 @@ async function consumeCall(db: Pool, run: GatewayRun): Promise<boolean> {
     return res.rows.length > 0;
 }
 
-export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: boolean }): Promise<FastifyInstance> {
+export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: boolean; videoPollMs?: number }): Promise<FastifyInstance> {
     const { db, redis } = opts;
     const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1024 * 1024 });
 
@@ -212,18 +291,8 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         }
     }
 
-    /** Reserve one of the run's artifact slots; released if storing the file fails. */
-    async function reserveArtifact(run: GatewayRun): Promise<boolean> {
-        const reserved = await db.query(
-            'UPDATE exec_runs SET artifact_count = artifact_count + 1 WHERE id = $1 AND artifact_count < $2 RETURNING artifact_count',
-            [run.runId, run.limits.artifacts ?? 10]
-        );
-        return reserved.rows.length > 0;
-    }
-
-    async function releaseArtifact(run: GatewayRun) {
-        await db.query('UPDATE exec_runs SET artifact_count = artifact_count - 1 WHERE id = $1', [run.runId]);
-    }
+    const reserveArtifact = (run: GatewayRun) => reserveArtifactSlot(db, run);
+    const releaseArtifact = (run: GatewayRun) => releaseArtifactSlot(db, run);
 
     /** Count a call against the run's cap; at the cap, pause the bot and reply 429. */
     async function consumeOrTrip(run: GatewayRun, reply: FastifyReply): Promise<boolean> {
@@ -293,7 +362,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         const budget = await checkBudget(db, resolved.value.route);
         if (!budget.ok) return fail(reply, 429, 'budget_exceeded', budget.error);
 
-        const result = await handler({ run, route: resolved.value, input: request.body ?? {}, db, publish: events => publishEvents(redis, events) });
+        const result = await handler({ run, route: resolved.value, input: request.body ?? {}, db, publish: events => publishEvents(redis, events), videoPollMs: opts.videoPollMs });
         return reply.status(result.status ?? 200).send(result.body);
     });
 

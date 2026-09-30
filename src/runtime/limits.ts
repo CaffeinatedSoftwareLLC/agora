@@ -16,7 +16,7 @@ export interface RunLimits {
     artifacts: number;
 }
 
-export type TimeProfile = 'standard' | 'generation';
+export type TimeProfile = 'standard' | 'generation' | 'video';
 
 export const DEFAULT_LIMITS: Omit<RunLimits, 'wallClockMs'> = {
     cpus: 1,
@@ -42,11 +42,14 @@ export const HARD_CEILINGS: Omit<RunLimits, 'wallClockMs'> = {
 export const TIME_PROFILES: Record<TimeProfile, { defaultMs: number; ceilingMs: number }> = {
     standard: { defaultMs: 60_000, ceilingMs: 300_000 },
     generation: { defaultMs: 180_000, ceilingMs: 600_000 },
+    // Veo takes 11 s to 6 min per video (Google's docs, 2026-09); leave room for the download
+    video: { defaultMs: 480_000, ceilingMs: 600_000 },
 };
 
 const GENERATION_CAPABILITIES = new Set(['image', 'tts']);
 
 export function timeProfileFor(capabilities: readonly string[]): TimeProfile {
+    if (capabilities.includes('video')) return 'video';
     return capabilities.some(c => GENERATION_CAPABILITIES.has(c)) ? 'generation' : 'standard';
 }
 

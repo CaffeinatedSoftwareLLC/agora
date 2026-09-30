@@ -16,6 +16,10 @@ describe('limits', () => {
         expect(timeProfileFor(['search', 'tts'])).toBe('generation');
         expect(timeProfileFor(['image'])).toBe('generation');
         expect(timeProfileFor([])).toBe('standard');
+        // Veo can take minutes: video gets its own, longer profile
+        expect(timeProfileFor(['image', 'video'])).toBe('video');
+        expect(resolveLimits('video').wallClockMs).toBe(480_000);
+        expect(resolveLimits('video', { wallClockMs: 900_000 }).wallClockMs).toBe(480_000);
     });
 
     it('submitters can lower limits but never raise them', () => {

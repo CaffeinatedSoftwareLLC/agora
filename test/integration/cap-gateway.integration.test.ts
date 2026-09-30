@@ -482,6 +482,111 @@ describe('results cards (4.1)', () => {
     });
 });
 
+describe('video (5.3)', () => {
+    const OP = 'models/veo-3.1-fast-generate-preview/operations/op1';
+    const URI = 'https://generativelanguage.googleapis.com/v1beta/files/v1:download?alt=media';
+    // Minimal ISO BMFF header: file-type recognizes it as video/mp4
+    const MP4 = Buffer.concat([
+        Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.from([0, 0, 2, 0]), Buffer.from('isomiso2'),
+        Buffer.from([0, 0, 0, 0x10]), Buffer.from('mdat'), Buffer.alloc(8, 1),
+    ]);
+    let vidGw: Awaited<ReturnType<typeof buildCapGateway>>;
+    const post = (auth: Record<string, string>, payload: unknown) =>
+        vidGw.inject({ method: 'POST', url: '/v1/capabilities/video', headers: auth, payload: payload as any });
+
+    function veo(opts: { fail?: boolean } = {}) {
+        const fetchMock = vi.fn(async (url: string | URL) => {
+            const u = String(url);
+            if (u.endsWith(':predictLongRunning')) {
+                return opts.fail
+                    ? new Response(JSON.stringify({ error: { message: 'Quota exceeded for veo' } }), { status: 429 })
+                    : new Response(JSON.stringify({ name: OP }));
+            }
+            if (u.endsWith(`/${OP}`)) return new Response(JSON.stringify({ name: OP, done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: URI } }] } } }));
+            if (u === URI) return new Response(null, { status: 302, headers: { location: 'https://storage.googleapis.com/v/1.mp4' } });
+            if (u.startsWith('https://storage.googleapis.com/')) return new Response(MP4);
+            throw new Error(`unexpected ${u}`);
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        return fetchMock;
+    }
+
+    beforeAll(async () => {
+        vidGw = await buildCapGateway({ db: ctx.db, redis, videoPollMs: 1 });
+        const gem = (await ctx.db.query("SELECT id FROM ai_providers WHERE server_id = $1 AND adapter = 'gemini'", [serverId])).rows[0].id.trim();
+        const res = await ctx.request.put(`/servers/${serverId}/ai/routes/video`).set(owner.auth).send({ providerId: gem, model: 'veo-3.1-fast-generate-preview', enabled: true });
+        expect(res.status).toBe(200);
+        await waitFor(async () => (await ctx.db.query("SELECT 1 FROM ai_capability_routes WHERE server_id = $1 AND capability = 'video'", [serverId])).rows.length > 0);
+    });
+    afterAll(async () => { await vidGw.close(); });
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    test('generates, stores, and posts the MP4 into the run\'s thread as the bot', async () => {
+        const fetchMock = veo();
+        published.length = 0;
+        const { runId, auth } = await makeRun({ capabilities: ['video'] });
+        const res = await post(auth, { prompt: 'a monstera leaf unfurling, timelapse', aspectRatio: '9:16', durationSeconds: 6, message: 'Here is your clip', filename: 'monstera.mp4' });
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        expect(body).toMatchObject({ mime: 'video/mp4', size: MP4.length });
+
+        const msg = (await ctx.db.query('SELECT author_id, thread_id, content FROM messages WHERE id = $1', [body.messageId])).rows[0];
+        expect(msg.author_id.trim()).toBe(botId);
+        expect(msg.thread_id.trim()).toBe(threadId);
+        expect(msg.content).toBe('Here is your clip');
+        const file = (await ctx.db.query('SELECT message_id, filename, mime_type FROM files WHERE id = $1', [body.fileId])).rows[0];
+        expect(file).toMatchObject({ filename: 'monstera.mp4', mime_type: 'video/mp4' });
+        expect(file.message_id.trim()).toBe(body.messageId);
+
+        const run = (await ctx.db.query('SELECT capability_calls, artifact_count FROM exec_runs WHERE id = $1', [runId])).rows[0];
+        expect(run).toEqual({ capability_calls: 1, artifact_count: 1 });
+        const usage = await ctx.db.query('SELECT capability, model, error FROM ai_usage_events WHERE run_id = $1', [runId]);
+        expect(usage.rows).toEqual([{ capability: 'video', model: 'veo-3.1-fast-generate-preview', error: null }]);
+        const submit = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+        expect(submit).toEqual({ instances: [{ prompt: 'a monstera leaf unfurling, timelapse' }], parameters: { aspectRatio: '9:16', durationSeconds: 6 } });
+        await waitFor(async () => published.some(e => e.event === 'Message' && e.data.id === body.messageId));
+    });
+
+    test('invalid input is 400 before any provider call or artifact slot', async () => {
+        const fetchMock = veo();
+        const { runId, auth } = await makeRun({ capabilities: ['video'] });
+        for (const payload of [
+            { prompt: '' },
+            { prompt: 'x', durationSeconds: 5 },
+            { prompt: 'x', resolution: '1080p', durationSeconds: 4 },
+            { prompt: 'x', aspectRatio: '1:1' },
+            { prompt: 'x', filename: 'clip.mov' },
+            { prompt: 'x', filename: '../clip.mp4' },
+        ]) {
+            const res = await post(auth, payload);
+            expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+        }
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect((await ctx.db.query('SELECT capability_calls, artifact_count FROM exec_runs WHERE id = $1', [runId])).rows[0]).toEqual({ capability_calls: 0, artifact_count: 0 });
+    });
+
+    test('a provider failure is 502, recorded, and releases the artifact slot', async () => {
+        veo({ fail: true });
+        const { runId, auth } = await makeRun({ capabilities: ['video'] });
+        const res = await post(auth, { prompt: 'x' });
+        expect(res.statusCode).toBe(502);
+        expect(res.json()).toEqual({ error: 'Veo API 429: Quota exceeded for veo', code: 'provider_error' });
+        expect((await ctx.db.query('SELECT artifact_count FROM exec_runs WHERE id = $1', [runId])).rows[0].artifact_count).toBe(0);
+        const usage = await ctx.db.query('SELECT error FROM ai_usage_events WHERE run_id = $1', [runId]);
+        expect(usage.rows).toEqual([{ error: 'Veo API 429: Quota exceeded for veo' }]);
+    });
+
+    test('with no artifact slot left, Veo is never called', async () => {
+        const fetchMock = veo();
+        const { runId, auth } = await makeRun({ capabilities: ['video'], limits: { artifacts: 1 } });
+        await ctx.db.query('UPDATE exec_runs SET artifact_count = 1 WHERE id = $1', [runId]);
+        const res = await post(auth, { prompt: 'x' });
+        expect(res.statusCode).toBe(429);
+        expect(res.json().code).toBe('artifact_limit');
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+});
+
 describe('messages and files', () => {
     test('postMessage lands in the run\'s thread as the submitting bot and publishes events', async () => {
         published.length = 0;

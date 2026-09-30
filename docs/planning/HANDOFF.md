@@ -1,4 +1,4 @@
-# Handoff — AI Runtime Initiative (updated 2026-09-30, after 3.8)
+# Handoff — AI Runtime Initiative (updated 2026-09-30, after 5.3)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model).
 
@@ -12,13 +12,18 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | 3.8 Tripwires: auto-pause on repeated failures / token misuse / call cap; pause kills running containers | merged | #27 |
 | 4.2 / 5.1 / 5.2 capabilities: `search` (Gemini grounding with compliant display, Tavily), `image`, `tts` | merged | #28 |
 | 4.1 Visual test report: `testReport()` in `agora:std` → `/v1/reports` → results card + Markdown report | merged | #29 |
-| 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | **open, awaiting review/merge** | `feat/audio-overview` |
+| 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | merged | #30 |
+| 5.3 Video: `generateVideo()` → Veo (long-running) → MP4 posted in the thread; `video` time profile; inline video player | **open, awaiting review/merge** | `feat/video` |
 
 ## Next up (in order)
-1. **Merge the audio-overview PR** (`feat/audio-overview`), then branch from `main`. **Real-key smoke tests are now the top risk:** `search` / `image` / `tts` (#28) and the audio overview have only run against mocked provider responses. For the overview, check how long Gemini TTS takes for a ~4-minute script and whether it hits an output limit (unknown; the script is capped at 6,000 chars).
+1. **Real-key smoke tests (Eryk, planned).** Everything from #28 on has only run against mocked provider responses: `search` (Gemini + Tavily), `image`, `tts`, the audio overview, and `video`. Things to watch:
+   - audio overview: how long Gemini TTS takes for a script near the 6,000-char cap, and whether it hits an output limit;
+   - video: that `durationSeconds` is accepted as a number (Google's table lists the values in quotes; the SDKs send numbers), that the download redirect works without the key, and real latency against the 8-minute run default;
+   - `personGeneration` is left unset; Google says EU/UK/CH/MENA only allow `allow_adult`.
+   Then merge the video PR (`feat/video`).
 2. *(Hardening, optional)* **Bind run tokens to the container IP.** Today a *live* token replayed from another sandbox is indistinguishable from its own run; only dead-token use trips. The runner could record the container's `agora_sandbox` IP on `exec_run_tokens` and the gateway compare `request.ip` (needs a trusted-proxy setting for the dev forwarder).
 3. **3.9 Negative suite on gVisor:** the spec §14 list. Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` on a Linux host/CI runner that has `runsc`. None exists yet.
-4. **Remaining Phase 5:** `video` (Veo; deferred in the plan) and `decide` still return 501. Audio-overview follow-ups: admin-configurable host names/voices (fixed to Alex/Kore and Sam/Puck today), and an agent-facing trigger (today it's a mention of the built-in assistant). 4.1 follow-ups: an MCP tool that takes a results file path (code is capped at 360 KB), and a CI reporter recipe.
+4. **Remaining:** `decide` still returns 501 (pairs with the decision seam below). Video follow-ups: image-to-video (Veo accepts a first frame), per-second cost accounting (the ledger is per token today), and an assistant trigger ("@assistant make a video of …"). Audio-overview follow-ups: admin-configurable host names/voices (fixed to Alex/Kore and Sam/Puck today), and an agent-facing trigger (today it's a mention of the built-in assistant). 4.1 follow-ups: an MCP tool that takes a results file path (code is capped at 360 KB), and a CI reporter recipe.
    - Google's docs now lead with the Interactions API (`/v1beta/interactions`); `generateContent` is still documented with no deprecation notice. Adapters use `generateContent` for everything.
 5. **Decision seam 2.2/2.3:** `WebhookDecider` + optional `JevDecider` behind `src/runtime/decider.ts` (they may only tighten decisions; see spec §10).
 6. **Open GitHub issue #23:** loop guard UI visibility.
@@ -28,6 +33,7 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 - `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; as of 2026-09-30 (3.8 work) it had **not** landed on `main`.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
 - Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
+- Rare one-off: `admin` "IP ban creates ip_bans row and suspends active user" failed once in a full run (2026-09-30, video branch), then the admin file passed 3× alone. Same read-before-COMMIT pattern as `threads`.
 - **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file (a background task was suggested to fix it).
 
 ## Local environment gotchas (this machine)

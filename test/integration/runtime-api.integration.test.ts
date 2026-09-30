@@ -110,6 +110,16 @@ describe('submission and the decision gate', () => {
         expect(res.status).toBe(202);
         expect(res.body.timeProfile).toBe('generation');
         expect(res.body.limits.wallClockMs).toBe(180_000);
+
+        // Video (Veo) gets its own profile, stored through the widened DB check (migration 030)
+        await ctx.db.query(
+            `INSERT INTO ai_capability_routes (server_id, capability, provider_id, model, enabled) VALUES ($1, 'video', '01PROVIDERAAAAAAAAAAAAAAAA', 'm', true)`, [serverId]);
+        const video = await submit({ capabilities: ['video'] });
+        expect(video.status).toBe(202);
+        expect(video.body.timeProfile).toBe('video');
+        expect(video.body.limits.wallClockMs).toBe(480_000);
+        const row = await ctx.db.query('SELECT time_profile FROM exec_runs WHERE id = $1', [video.body.id]);
+        expect(row.rows[0].time_profile).toBe('video');
     });
 
     test('limits can only be lowered', async () => {

@@ -163,8 +163,8 @@ describe('providers', () => {
         });
 
         test('rejects capabilities the adapter does not support', async () => {
-            const res = await ctx.request.put(`${base()}/routes/video`).set(owner.auth)
-                .send({ providerId: geminiId, model: 'veo-4' });
+            const res = await ctx.request.put(`${base()}/routes/decide`).set(owner.auth)
+                .send({ providerId: geminiId, model: 'gemini-3.8-flash' });
             expect(res.status).toBe(400);
             expect(res.body.error).toContain('does not support');
         });
