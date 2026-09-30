@@ -42,7 +42,7 @@ interface ThreadState {
   addReply: (msg: MessagePayload) => void;
   updateReply: (payload: MessageUpdatePayload) => void;
   removeReply: (payload: MessageDeletePayload) => void;
-  streamUpdate: (threadId: string, messageId: string, content: string, streaming: boolean) => void;
+  streamUpdate: (threadId: string, messageId: string, content: string, streaming: boolean, attachments?: Message['attachments']) => void;
   loadActiveThreads: (channelId: string) => Promise<void>;
   loadMoreThreads: (channelId: string) => Promise<void>;
   closeThreadRemote: (channelId: string, messageId: string) => Promise<void>;
@@ -265,7 +265,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     });
   },
 
-  streamUpdate: (threadId, messageId, content, streaming) => {
+  streamUpdate: (threadId, messageId, content, streaming, attachments) => {
     set((state) => {
       const current = state.repliesByThread.get(threadId);
       if (!current) return state;
@@ -275,7 +275,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         if (m.id !== messageId) return m;
         // Ignore updates after stream has been finalized
         if (m.streaming === false) return m;
-        return { ...m, content, streaming };
+        return { ...m, content, streaming, ...(attachments ? { attachments } : {}) };
       }));
       return { repliesByThread: nextReplies };
     });

@@ -16,6 +16,7 @@
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts"
   },
   "dependencies": {
+    "@breezystack/lamejs": "1.2.7",
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
     "argon2": "^0.41.0",

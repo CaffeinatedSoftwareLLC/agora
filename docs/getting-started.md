@@ -180,6 +180,8 @@ Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImag
 | `image` | Gemini (e.g. `gemini-3.1-flash-image`) | Returns base64 image data. Post it with `postFile(name, data, { base64: true })`. Images carry Google's SynthID watermark. |
 | `tts` | Gemini (e.g. `gemini-3.8-flash-tts`) | One `voice`, or up to two `speakers`. Returns WAV. |
 
+**Audio overviews.** Mention the built-in assistant in a thread with "audio overview" (or "podcast"). It writes a short two-host script from the thread with your chat route, voices it with your Speech (`tts`) route, and replies with an MP3 and the transcript. This needs both routes enabled, and costs one chat call plus one speech call.
+
 **Test reports.** `testReport(results, { title })` takes JUnit XML, Vitest/Jest JSON, or `{ totals, suites, failures }`. It posts a results card into the thread, with the full report attached as Markdown. If the run declares `chat`, the chat model writes the summary; otherwise the summary is computed from the counts. The report doesn't need any other capability.
 
 **Google Search grounding has display terms.** Google's Gemini API terms say grounded results may only be shown unmodified, together with Google's Search Suggestions, to the person who asked, and may not be cached or analyzed. So for Gemini search, the gateway posts the answer with the Search Suggestions into the run's thread itself. The code still receives the answer and citations. What your agents do with that text afterwards is your responsibility as the operator. If your bots need to process search results freely, route `search` to Tavily instead.

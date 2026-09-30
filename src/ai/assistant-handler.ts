@@ -5,6 +5,8 @@ import { internalBus, AssistantMentionEvent } from './internal-bus';
 import { streamCompletion, ConversationMessage } from './providers';
 import { resolveRoute, checkBudget, recordUsage } from './routing';
 import { generateUlid } from '../utils/ulid';
+import { storeFile, type StoredFile } from '../lib/file-store';
+import { createAudioOverview, isAudioOverviewRequest, overviewMessage, OVERVIEW_MAX_MESSAGES, type TranscriptRow } from './audio-overview';
 
 /** Fallback logger when Fastify logger is not available (e.g. tests with logger: false) */
 const noopLogger: FastifyBaseLogger = {
@@ -77,6 +79,12 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
 
     const aiConfig = configRow.rows[0];
 
+    // 4b. "@assistant make an audio overview of this thread" (WBS 5.1)
+    if (isAudioOverviewRequest(event.content)) {
+        await handleAudioOverview(db, io, { serverId, channelId, threadId, botId, author, content: event.content });
+        return;
+    }
+
     // 5. Resolve the server's chat route (provider, model, credentials) and check its budget
     const resolved = await resolveRoute(db, serverId, 'chat');
     if (!resolved.ok) {
@@ -130,57 +138,9 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
     }
 
     // 7. Create placeholder message
-    const botMessageId = generateUlid();
-    const botUserRow = await db.query(
-        'SELECT username, avatar_url FROM users WHERE id = $1',
-        [botId]
-    );
-    const botUsername = botUserRow.rows[0]?.username || 'AI-Assistant';
-    const botAvatarUrl = botUserRow.rows[0]?.avatar_url || null;
-
-    await db.query(
-        `INSERT INTO messages (id, channel_id, author_id, content, created_at, thread_id)
-         VALUES ($1, $2, $3, $4, NOW(), $5)`,
-        [botMessageId, channelId, botId, '...', threadId ?? null]
-    );
-
-    // Thread reply: keep the parent's metadata in sync
-    let parentUpdate: { reply_count: number; last_reply_at: string } | undefined;
-    if (threadId) {
-        const updated = await db.query(
-            `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
-             WHERE id = $1
-             RETURNING reply_count, last_reply_at`,
-            [threadId]
-        );
-        parentUpdate = updated.rows[0];
-    }
-
-    // Spread into every emitted event so clients route thread replies to the thread view
-    const threadField = threadId ? { threadId: threadId.trim() } : {};
-
-    // Emit placeholder to channel
-    io.to(`channel:${channelId}`).emit('Message', {
-        id: botMessageId.trim(),
-        content: '...',
-        authorId: botId.trim(),
-        authorUsername: botUsername,
-        authorBot: true,
-        authorAvatarUrl: botAvatarUrl,
-        channelId: channelId.trim(),
-        createdAt: new Date().toISOString(),
-        ...threadField,
-    });
-
-    if (threadId && parentUpdate) {
-        io.to(`channel:${channelId}`).emit('ThreadMetadataUpdate', {
-            channelId: channelId.trim(),
-            messageId: threadId.trim(),
-            replyCount: parentUpdate.reply_count,
-            lastReplyAt: parentUpdate.last_reply_at,
-            threadClosedAt: null,
-        });
-    }
+    const placeholder = await createPlaceholder(db, io, { channelId, botId, threadId }, '...');
+    const botMessageId = placeholder.id;
+    const threadField = placeholder.threadField;
 
     // Over budget: replace the placeholder with a notice, don't call the provider
     if (!budget.ok) {
@@ -279,4 +239,145 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
             },
         }
     );
+}
+
+interface Placeholder {
+    id: string;
+    /** Spread into every emitted event so clients route thread replies to the thread view. */
+    threadField: { threadId?: string };
+    /** Emit a stream update for the placeholder (content, and files on the final update). */
+    stream(content: string, streaming: boolean, attachments?: object[]): void;
+}
+
+/** Insert the bot's "..." reply (keeping thread metadata in sync) and announce it. */
+async function createPlaceholder(
+    db: Pool, io: Server, ctx: { channelId: string; botId: string; threadId?: string }, content: string,
+): Promise<Placeholder> {
+    const { channelId, botId, threadId } = ctx;
+    const id = generateUlid();
+    const botUserRow = await db.query('SELECT username, avatar_url FROM users WHERE id = $1', [botId]);
+    const botUsername = botUserRow.rows[0]?.username || 'AI-Assistant';
+    const botAvatarUrl = botUserRow.rows[0]?.avatar_url || null;
+    await db.query(
+        `INSERT INTO messages (id, channel_id, author_id, content, created_at, thread_id)
+         VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        [id, channelId, botId, content, threadId ?? null]
+    );
+
+    let parentUpdate: { reply_count: number; last_reply_at: string } | undefined;
+    if (threadId) {
+        const updated = await db.query(
+            `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
+             WHERE id = $1
+             RETURNING reply_count, last_reply_at`,
+            [threadId]
+        );
+        parentUpdate = updated.rows[0];
+    }
+
+    const threadField = threadId ? { threadId: threadId.trim() } : {};
+    const room = `channel:${channelId}`;
+    io.to(room).emit('Message', {
+        id: id.trim(),
+        content,
+        authorId: botId.trim(),
+        authorUsername: botUsername,
+        authorBot: true,
+        authorAvatarUrl: botAvatarUrl,
+        channelId: channelId.trim(),
+        createdAt: new Date().toISOString(),
+        ...threadField,
+    });
+    if (threadId && parentUpdate) {
+        io.to(room).emit('ThreadMetadataUpdate', {
+            channelId: channelId.trim(),
+            messageId: threadId.trim(),
+            replyCount: parentUpdate.reply_count,
+            lastReplyAt: parentUpdate.last_reply_at,
+            threadClosedAt: null,
+        });
+    }
+
+    return {
+        id,
+        threadField,
+        stream(text, streaming, attachments) {
+            io.to(room).emit('BotMessageStream', {
+                messageId: id.trim(),
+                channelId: channelId.trim(),
+                content: text,
+                streaming,
+                ...threadField,
+                ...(attachments ? { attachments } : {}),
+            });
+        },
+    };
+}
+
+/** The conversation an overview covers: the whole thread, or the channel's recent top-level messages. */
+async function overviewRows(db: Pool, channelId: string, threadId: string | undefined, exclude: string): Promise<TranscriptRow[]> {
+    if (threadId) {
+        const res = await db.query(
+            `SELECT username, content FROM (
+                 SELECT m.id, u.username, m.content FROM messages m JOIN users u ON u.id = m.author_id
+                 WHERE (m.id = $1 OR m.thread_id = $1) AND m.deleted_at IS NULL AND m.id <> $2
+                 ORDER BY m.id DESC LIMIT $3
+             ) t ORDER BY id`,
+            [threadId, exclude, OVERVIEW_MAX_MESSAGES]
+        );
+        return res.rows;
+    }
+    const res = await db.query(
+        `SELECT username, content FROM (
+             SELECT m.id, u.username, m.content FROM messages m JOIN users u ON u.id = m.author_id
+             WHERE m.channel_id = $1 AND m.thread_id IS NULL AND m.deleted_at IS NULL AND m.id <> $2
+             ORDER BY m.id DESC LIMIT $3
+         ) t ORDER BY id`,
+        [channelId, exclude, OVERVIEW_MAX_MESSAGES]
+    );
+    return res.rows;
+}
+
+async function handleAudioOverview(
+    db: Pool, io: Server,
+    ctx: { serverId: string; channelId: string; threadId?: string; botId: string; author: { id: string }; content: string },
+): Promise<void> {
+    const { serverId, channelId, threadId, botId, author, content } = ctx;
+    const placeholder = await createPlaceholder(db, io, { channelId, botId, threadId }, '🎙️ Writing an audio overview script…');
+    const setContent = async (text: string, streaming: boolean, attachments?: object[]) => {
+        await db.query('UPDATE messages SET content = $1 WHERE id = $2', [text, placeholder.id]);
+        placeholder.stream(text, streaming, attachments);
+    };
+
+    try {
+        const rows = await overviewRows(db, channelId, threadId, placeholder.id);
+        const result = await createAudioOverview(db, {
+            serverId, channelId, botId, requesterId: author.id, request: content, rows,
+            onProgress: (status) => setContent(status, true),
+        });
+        if (!result.ok) {
+            await setContent(`⚠️ Couldn't make an audio overview: ${result.error}`, false);
+            return;
+        }
+
+        const stored = await storeFile(db, db, {
+            buffer: result.mp3,
+            filename: `audio-overview-${new Date().toISOString().slice(0, 10)}.mp3`,
+            uploaderId: botId,
+            channelId,
+        });
+        if (!stored.ok) {
+            await setContent(`⚠️ The audio overview was recorded but couldn't be saved: ${stored.error}`, false);
+            return;
+        }
+        await db.query('UPDATE files SET message_id = $1 WHERE id = $2', [placeholder.id, stored.file.id]);
+        const file: StoredFile = stored.file;
+        await setContent(overviewMessage(result.durationSec, result.script, !!threadId), false, [
+            { id: file.id, name: file.name, mime: file.mime, size: file.size, width: null, height: null, url: file.url },
+        ]);
+    } catch (err) {
+        log.error({ err, botId, channelId }, 'Audio overview failed');
+        await setContent(`⚠️ Couldn't make an audio overview: ${err instanceof Error ? err.message : String(err)}`, false)
+            .catch(() => { /* already logged */ });
+    }
 }

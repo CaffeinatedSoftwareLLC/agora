@@ -11,13 +11,14 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | 3.1–3.6 Sandboxed runtime: runner, `agora:std`, cap-gateway, run API, decision gate + approvals, result cards, retention, MCP `runtime_exec` | merged | #26 |
 | 3.8 Tripwires: auto-pause on repeated failures / token misuse / call cap; pause kills running containers | merged | #27 |
 | 4.2 / 5.1 / 5.2 capabilities: `search` (Gemini grounding with compliant display, Tavily), `image`, `tts` | merged | #28 |
-| 4.1 Visual test report: `testReport()` in `agora:std` → `/v1/reports` → results card + Markdown report | **open, awaiting review/merge** | `feat/visual-reports` |
+| 4.1 Visual test report: `testReport()` in `agora:std` → `/v1/reports` → results card + Markdown report | merged | #29 |
+| 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | **open, awaiting review/merge** | `feat/audio-overview` |
 
 ## Next up (in order)
-1. **Merge the visual-reports PR** (`feat/visual-reports`), then branch from `main`. Still owed from #28: smoke-test `search` / `image` / `tts` once with real Gemini and Tavily keys (only mocked responses were tested).
+1. **Merge the audio-overview PR** (`feat/audio-overview`), then branch from `main`. **Real-key smoke tests are now the top risk:** `search` / `image` / `tts` (#28) and the audio overview have only run against mocked provider responses. For the overview, check how long Gemini TTS takes for a ~4-minute script and whether it hits an output limit (unknown; the script is capped at 6,000 chars).
 2. *(Hardening, optional)* **Bind run tokens to the container IP.** Today a *live* token replayed from another sandbox is indistinguishable from its own run; only dead-token use trips. The runner could record the container's `agora_sandbox` IP on `exec_run_tokens` and the gateway compare `request.ip` (needs a trusted-proxy setting for the dev forwarder).
 3. **3.9 Negative suite on gVisor:** the spec §14 list. Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` on a Linux host/CI runner that has `runsc`. None exists yet.
-4. **Phase 5 next:** the audio-overview flow (thread → 2-host script via `chat` → multi-speaker `tts` → audio file in the thread). `decide` and `video` still return 501. Possible 4.1 follow-ups: an MCP tool that takes a results file path so agents don't have to inline large payloads into code (code is capped at 360 KB), and a JUnit/Vitest reporter recipe for CI.
+4. **Remaining Phase 5:** `video` (Veo; deferred in the plan) and `decide` still return 501. Audio-overview follow-ups: admin-configurable host names/voices (fixed to Alex/Kore and Sam/Puck today), and an agent-facing trigger (today it's a mention of the built-in assistant). 4.1 follow-ups: an MCP tool that takes a results file path (code is capped at 360 KB), and a CI reporter recipe.
    - Google's docs now lead with the Interactions API (`/v1beta/interactions`); `generateContent` is still documented with no deprecation notice. Adapters use `generateContent` for everything.
 5. **Decision seam 2.2/2.3:** `WebhookDecider` + optional `JevDecider` behind `src/runtime/decider.ts` (they may only tighten decisions; see spec §10).
 6. **Open GitHub issue #23:** loop guard UI visibility.

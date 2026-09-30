@@ -127,7 +127,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 4.2 | ☑ `search()`: routed `search` capability. **Gemini** (Google Search grounding via `generateContent` + `tools: [{googleSearch: {}}]`): per Google's terms the gateway posts the answer unmodified with Google's Search Suggestions into the thread (`runtime_search` card, suggestions in a script-less sandboxed iframe) and returns `{answer, citations, displayedIn}` to the run. **Tavily** adapter (agent-oriented terms; route "model" = search depth) returns `{answer, citations}` without posting. See R6 | M | 3, 1.3 |
 
 ## 5 · Media — later
-| 5.1 | ◐ `tts` capability done (Gemini `speechConfig`, one voice or 2 speakers, raw PCM wrapped as WAV); the audio-overview flow itself is pending | M | 3 |
+| 5.1 | ☑ Audio overview: mentioning the built-in assistant with "audio overview" / "podcast" makes the `chat` route write a two-host script (Alex and Sam) from the whole thread (or recent channel messages), the `tts` route voice it with two speakers, and posts an MP3 plus transcript as the assistant's reply, with progress in the placeholder. WAV → MP3 via `@breezystack/lamejs` (LGPL-3.0, pure JS) because `mp3` is allowed by default and `wav` isn't, and MP3 is ~6× smaller. Audio attachments get an inline player | M | 3 |
 | 5.2 | ☑ `image` capability (Gemini native image via `responseModalities: [TEXT, IMAGE]` + `imageConfig` aspect ratio/size; returns base64 for `postFile`) | S | 3 |
 | 5.3 | Video (deferred) | L | 3 |
 
