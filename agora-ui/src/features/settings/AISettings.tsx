@@ -8,6 +8,7 @@ import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
 import { AssistantSection } from './ai/AssistantSection';
 import { UsageSection } from './ai/UsageSection';
+import { ChangesSection } from './ai/ChangesSection';
 
 const USAGE_DAYS = 30;
 
@@ -132,6 +133,7 @@ export function AISettings() {
             onChanged={reload}
           />
           <UsageSection usage={state.usage} days={USAGE_DAYS} />
+          <ChangesSection serverId={instanceServerId} version={version} />
         </>
       )}
     </div>
