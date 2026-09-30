@@ -170,7 +170,34 @@ If you also run the production stack on the same machine, remove the dev network
 
 `AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.
 
-**Running the prod stack with gVisor on Linux or WSL2.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`; the id differs between hosts (for example 986 or 999). On Windows, gVisor works in a regular WSL2 distro (not Docker Desktop's) running its own Docker Engine. This was verified on 2026-09-30 with WSL 2.6 (kernel 6.6) and `runsc` release-20260928.0: containers report the `4.19.0-gvisor` kernel. Install with Docker's and gVisor's apt repositories, then run `sudo runsc install`. Keep the checkout inside the distro (`~/agora`), not under `/mnt/c`.
+**Running the prod stack with gVisor on Linux.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`. The id differs between hosts (for example 986 or 999).
+
+### Local stack on Windows with gVisor (WSL2)
+
+Docker Desktop can't run gVisor, so on Docker Desktop the runner only works with the insecure dev flag. To run the real sandbox on a Windows machine, run the stack in a regular WSL2 distro with its own Docker Engine instead. This was verified on 2026-09-30 with WSL 2.6 (kernel 6.6), Ubuntu, Docker Engine 29 and `runsc` release-20260928.0: sandbox containers report the `4.19.0-gvisor` kernel.
+
+1. **Install a distro.** In Windows: `wsl --install -d Ubuntu`, then create your Linux user. Docker Desktop's own `docker-desktop` distro can't be customized, so it won't work.
+2. **Turn off Docker Desktop's WSL integration for that distro:** Docker Desktop → Settings → Resources → WSL integration → uncheck Ubuntu. Otherwise its `docker` command takes over inside Ubuntu.
+3. **Install Docker Engine and gVisor inside Ubuntu** from their official apt repositories: [Docker for Ubuntu](https://docs.docker.com/engine/install/ubuntu/) (`docker-ce`, `docker-compose-plugin`) and [gVisor](https://gvisor.dev/docs/user_guide/install/) (`runsc`). Then register gVisor and let your user run Docker:
+   ```bash
+   sudo runsc install && sudo systemctl restart docker && sudo usermod -aG docker "$USER"
+   ```
+   Restart the distro (`wsl --terminate Ubuntu` from Windows) for the group change to apply. Check it works: `docker run --rm --runtime=runsc alpine uname -r` should print a `-gvisor` kernel.
+4. **Clone inside the distro, not under `/mnt/c`** (Windows-mounted files are very slow for containers): `git clone https://github.com/CaffeinatedSoftwareLLC/agora.git ~/agora`. Copy your `.env.prod` in, and set `DOCKER_GID` to `getent group docker | cut -d: -f3`.
+5. **Stop any Agora stack on Docker Desktop first.** Both want ports 80/443. Then, in `~/agora`:
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+   ```
+   The runner should log `runtime=runsc` with no dev flag.
+6. **Connect from Windows.**
+   - Browser: `https://localhost`. WSL forwards `localhost`; Caddy uses a local certificate, so expect a warning.
+   - Agents/MCP: `http://localhost:3000`, which goes straight to the API. Node rejects Caddy's local certificate, see #22.
+   - The published `agora-mcp` on npm is older than the repo and lacks `runtime_exec`. Until it's republished, install it from the repo: in `agora-mcp/`, run `npm install`, `npm run build`, then `npm install -g .`.
+
+**Known issues:**
+- **MinIO's images can no longer be pulled anonymously** (#32). If `up` fails on `quay.io/minio/minio`, copy an existing image from another engine: `docker save` it there and `docker load` it in WSL.
+- **Under gVisor, sandboxes have no DNS.** That's expected; the runner pins the gateway's address in each run's `/etc/hosts` (spec §6).
+- Leave long builds running in a terminal that stays open. Closing the last WSL window can stop a running `compose up`.
 
 ### Capabilities for run code
 

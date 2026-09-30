@@ -1,4 +1,4 @@
-# Handoff — AI Runtime Initiative (updated 2026-09-30, after 5.3)
+# Handoff — AI Runtime Initiative (updated 2026-09-30, after live testing)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model).
 
@@ -12,36 +12,62 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | 3.8 Tripwires: auto-pause on repeated failures / token misuse / call cap; pause kills running containers | merged | #27 |
 | 4.2 / 5.1 / 5.2 capabilities: `search` (Gemini grounding with compliant display, Tavily), `image`, `tts` | merged | #28 |
 | 4.1 Visual test report: `testReport()` in `agora:std` → `/v1/reports` → results card + Markdown report | merged | #29 |
-| 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | merged | #30 |
-| 5.3 Video: `generateVideo()` → Veo (long-running) → MP4 posted in the thread; `video` time profile; inline video player | **open, awaiting review/merge** | `feat/video` |
+| 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | merged, **broken live, see #33** | #30 |
+| 5.3 Video (Veo) + four fixes found in live testing: socket-proxy docker group, gVisor gateway DNS, route model reset / Tavily depths, AI settings audit trail | merged | #31 |
+
+## Live test results (2026-09-30, WSL2 + gVisor stack, real provider keys)
+
+| Feature | Result |
+|---|---|
+| gVisor sandbox end to end: agent `runtime_exec` → approval card → runsc container → cap-gateway → result card | ✅ verified |
+| `search` via **Tavily** | ✅ verified (run `01M3T162YXNR25QFTPZ9AVHASN`, NC State Extension results) |
+| Socket proxy on native Linux Docker (`DOCKER_GID`) | ✅ fixed and verified |
+| Sandbox → gateway name resolution under gVisor (`/etc/hosts` pin) | ✅ fixed and verified |
+| Route provider switch resets model; Tavily depth dropdown + server validation | ✅ fixed and verified |
+| AI settings audit trail ("Recent changes") | ✅ verified: first live entry recorded actor, change, client |
+| **Audio overview / multi-speaker TTS** | ❌ **fails**: Gemini now requires `speechMetadata.speaker` on each text part. Issue **#33** |
+| `video` (Veo) | ⏸ not tested: Veo was down. Route is on `veo-3.1-fast-generate-preview` (~$0.40 per 4 s) with a 2/day request cap |
+| `search` via Gemini (Search Suggestions card), `image`, single-voice `tts`, `testReport` | ☐ not yet tested live |
+
+Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
 ## Next up (in order)
-1. **Real-key smoke tests (Eryk, planned).** Everything from #28 on has only run against mocked provider responses: `search` (Gemini + Tavily), `image`, `tts`, the audio overview, and `video`. Things to watch:
-   - audio overview: how long Gemini TTS takes for a script near the 6,000-char cap, and whether it hits an output limit;
-   - video: that `durationSeconds` is accepted as a number (Google's table lists the values in quotes; the SDKs send numbers), that the download redirect works without the key, and real latency against the 8-minute run default;
-   - `personGeneration` is left unset; Google says EU/UK/CH/MENA only allow `allow_adult`.
-   Then merge the video PR (`feat/video`).
-2. *(Hardening, optional)* **Bind run tokens to the container IP.** Today a *live* token replayed from another sandbox is indistinguishable from its own run; only dead-token use trips. The runner could record the container's `agora_sandbox` IP on `exec_run_tokens` and the gateway compare `request.ip` (needs a trusted-proxy setting for the dev forwarder).
-3. **3.9 Negative suite on gVisor:** the spec §14 list. Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` on a Linux host/CI runner that has `runsc`. None exists yet.
-4. **Remaining:** `decide` still returns 501 (pairs with the decision seam below). Video follow-ups: image-to-video (Veo accepts a first frame), per-second cost accounting (the ledger is per token today), and an assistant trigger ("@assistant make a video of …"). Audio-overview follow-ups: admin-configurable host names/voices (fixed to Alex/Kore and Sam/Puck today), and an agent-facing trigger (today it's a mention of the built-in assistant). 4.1 follow-ups: an MCP tool that takes a results file path (code is capped at 360 KB), and a CI reporter recipe.
-   - Google's docs now lead with the Interactions API (`/v1beta/interactions`); `generateContent` is still documented with no deprecation notice. Adapters use `generateContent` for everything.
-5. **Decision seam 2.2/2.3:** `WebhookDecider` + optional `JevDecider` behind `src/runtime/decider.ts` (they may only tighten decisions; see spec §10).
-6. **Open GitHub issue #23:** loop guard UI visibility.
+1. **Fix #33** (multi-speaker TTS: one text part per line with `speechMetadata.speaker`, or per-line single-voice synthesis stitched together), then one real audio overview.
+   - Potential enhancement **#35**: free local TTS with Kokoro (reusing Thoth's `kokoro-onnx` engine) as an OpenAI-compatible Speech provider.
+2. **Retry video** once Veo is back: the agent prompt with `generateVideo("…", { durationSeconds: 4 })`, capability `video`.
+3. **Remaining live checks:** Gemini search (expect the "Web search" card), `image`, single-voice `tts`, `testReport`.
+4. **MinIO images are gone** from quay.io/Docker Hub. Issue **#32**; a task chip for picking a replacement was also offered. The WSL stack uses a copy `docker save`d from Docker Desktop (image ID `14cea493d9a3`).
+5. **3.9 Negative suite on gVisor:** the spec §14 list. **No CI runner needed any more:** the WSL2 Ubuntu here has `runsc` (release-20260928.0). Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` against the WSL engine.
+6. **Hardening:**
+   - bind the API's published port to `127.0.0.1:3000:3000` in `docker-compose.prod.yml`. It is currently on all interfaces in plain HTTP, bypassing Caddy. Local agents use `http://localhost:3000`, remote ones should use `https://<domain>`.
+   - optionally bind run tokens to the container IP (a live token replayed from another sandbox is indistinguishable today; only dead-token use trips).
+7. **Remaining:**
+   - `decide` still returns 501 (pairs with the decision seam: `WebhookDecider` + optional `JevDecider` behind `src/runtime/decider.ts`, which may only tighten decisions; spec §10).
+   - Video follow-ups: image-to-video, per-second cost accounting (the ledger is per token; Veo reports no tokens, so only the request limit caps spend), an assistant trigger.
+   - Audio overview: configurable host names/voices, an agent-facing trigger.
+   - 4.1: an MCP tool taking a results file path (code is capped at 360 KB), a CI reporter recipe.
+   - Google's docs now lead with the Interactions API; adapters still use `generateContent` (no deprecation notice).
+8. **Open issues:** #23 (loop guard UI), #22 (agora-mcp + self-signed `https://localhost`).
 
 ## Known pre-existing test failures (not caused by this work)
 - `ai-assistant.integration.test.ts`: expects bot name `AI Assistant`, but code creates `AI-Assistant`.
-- `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; as of 2026-09-30 (3.8 work) it had **not** landed on `main`.
+- `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; as of 2026-09-30 it had **not** landed on `main`.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
 - Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
 - Rare one-off: `admin` "IP ban creates ip_bans row and suspends active user" failed once in a full run (2026-09-30, video branch), then the admin file passed 3× alone. Same read-before-COMMIT pattern as `threads`.
-- **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file (a background task was suggested to fix it).
+- **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file (a task chip was offered to fix it).
 
-## Local environment gotchas (this machine)
-- **The prod stack runs locally** (compose project `agora`: postgres DB `agora`, no published 5432). **Never** `docker compose up` the dev file without `-p`; it recreates prod containers.
+## Local environment (this machine)
+- **The prod stack runs in WSL2 Ubuntu** at `~/agora` (checkout of `main`), on its own Docker Engine 29.x with gVisor `runsc`. The runner starts with `runtime=runsc`, no dev flag. `.env.prod` there has `DOCKER_GID=986`.
+  - Run commands in the distro via `wsl.exe -d Ubuntu -- bash -s <<'EOF' … EOF` (stdin scripts; PowerShell 5.1 and inline `bash -lc` mangle quotes).
+  - Run long `compose up --build` as a background task, or it dies when the `wsl.exe` session closes.
+  - Deploy: `git pull` in `~/agora`, then `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build <services>`.
+  - Browser: `https://localhost` (Caddy, local cert). Agents/MCP: `http://localhost:3000` (Node rejects Caddy's local cert).
+- **Docker Desktop (Windows)** still has the **stopped** old prod stack (compose project `agora`, disposable test data; fallback only) and the test infra. **Never** `docker compose up` the dev file there without `-p agora-test`.
 - Test infra: `docker compose -p agora-test -f docker-compose.yml up -d postgres redis minio`, plus `--profile sandbox up -d socket-proxy` for runtime work.
 - Use an **isolated test DB** so parallel agent sessions don't truncate each other: DB `accord_test_threads`, Redis DB 1. Env via the scratchpad `testenv.sh`, or set `DATABASE_URL` / `TEST_DATABASE_URL` (both!) and `REDIS_URL=redis://localhost:6379/1`.
-- Exclude agent worktrees from vitest: the default config now excludes `.claude/**` and `test/sandbox/**`. Docker suite: `npm run test:sandbox`.
-- Sandbox dev prerequisites: `docker network create --internal agora_sandbox`, `docker build -t agora/sandbox-deno:dev sandbox`, runner with `AGORA_SANDBOX_INSECURE_DEV=1` (Docker Desktop has no gVisor). Gateway dev forwarder: see `docs/getting-started.md` → Sandbox runner.
+- Exclude agent worktrees from vitest: the default config excludes `.claude/**` and `test/sandbox/**`. Docker suite: `npm run test:sandbox` (Docker Desktop, runc, needs `agora_sandbox` network + `agora/sandbox-deno:dev` image).
+- **agora-mcp:** the global `agora-mcp` is **0.3.0 linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`), since npm only has 0.1.2, which lacks `runtime_exec`. Rebuilding that folder changes the installed MCP. This Claude session's own Agora MCP config still has a dead token.
 - Local Ollama is at `localhost:11434` (qwen3:14b, qwen3:32b, gpt-oss:20b, deepseek-r1:14b, …). Testing against it loads models into the 5070 Ti.
 - Windows/Git Bash: `ln -s` copies instead of linking; Python heredocs in Bash mangle `\n` and `\\`. Write scripts to files with the Write tool instead.
 
@@ -49,7 +75,9 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 - Bots get **one per-bot "Code runs" setting** (`users.runtime_access`: none / approval / auto) instead of an `ExecuteCode` role bit.
 - The **runner mints run tokens** at run start (never in the queue); only SHA-256 hashes are stored.
 - Code enters containers via **base64 env chunks** and output comes back via **capped `local` log driver + logs API**: no bind mounts, no attach (the socket proxy doesn't support hijack).
-- The **socket proxy** only allows operations on `agora-run-*` container names and rejects bind mounts (verified).
-- Artifacts leave only via the gateway (`postFile`) through the shared `src/lib/file-store.ts`.
+- The **socket proxy** only allows operations on `agora-run-*` container names and rejects bind mounts (verified). It needs the host's docker group (`DOCKER_GID`) on native Linux.
+- **Under gVisor, sandboxes have no DNS.** The runner pins `cap-gateway:<ip>` in each run's `/etc/hosts` (spec §6). This also closes DNS tunneling.
+- Artifacts leave only via the gateway (`postFile`, `/v1/reports`, video) through the shared `src/lib/file-store.ts`.
 - Cross-process Socket.IO events go through the Redis **event bridge** (`src/lib/event-bridge.ts`) with an allowlist.
 - The Docker host env var is `AGORA_DOCKER_HOST` (not `DOCKER_HOST`, so a sourced `.env` never hijacks the docker CLI).
+- **AI settings changes are audited** (`src/lib/ai-audit.ts`, `GET /servers/:id/ai/changes`, "Recent changes" in the UI), recording actor, client, and before/after; key material never.
