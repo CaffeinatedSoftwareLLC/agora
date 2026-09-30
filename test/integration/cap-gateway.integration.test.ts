@@ -47,6 +47,15 @@ async function makeRun(opts: { capabilities?: string[]; limits?: Record<string, 
     return { runId, token, auth: { authorization: `Bearer ${token}` } };
 }
 
+async function pausedReason(): Promise<string | null> {
+    const row = (await ctx.db.query('SELECT bot_paused_at, bot_paused_reason FROM users WHERE id = $1', [botId])).rows[0];
+    return row.bot_paused_at ? row.bot_paused_reason : null;
+}
+
+async function resumeBot() {
+    await ctx.db.query('UPDATE users SET bot_paused_at = NULL, bot_paused_reason = NULL WHERE id = $1', [botId]);
+}
+
 function sse(events: unknown[]) {
     return new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200 });
 }
@@ -95,13 +104,17 @@ describe('authentication', () => {
         expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/chat' })).statusCode).toBe(401);
         expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: { authorization: 'Bearer nope' } })).statusCode).toBe(401);
         expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: { authorization: `Bearer art_${'x'.repeat(43)}` } })).statusCode).toBe(401);
+        // Unknown tokens belong to no run, so no bot is tripped
+        expect(await pausedReason()).toBeNull();
     });
 
-    test('rejects revoked, expired, and finished-run tokens', async () => {
+    test('rejects revoked, expired, and finished-run tokens and trips the leaking run bot', async () => {
         for (const opts of [{ revoked: true }, { expired: true }, { status: 'succeeded' }]) {
-            const { auth } = await makeRun(opts);
+            const { runId, auth } = await makeRun(opts);
             const res = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {} });
             expect(res.statusCode, JSON.stringify(opts)).toBe(401);
+            expect(await pausedReason(), JSON.stringify(opts)).toBe(`Tripwire: a run token was used outside its run (run ${runId})`);
+            await resumeBot();
         }
     });
 
@@ -167,16 +180,46 @@ describe('capabilities', () => {
     test('per-run call cap', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => sse([])));
         try {
-            const { auth } = await makeRun({ limits: { capabilityCalls: 2 } });
+            const { runId, auth } = await makeRun({ limits: { capabilityCalls: 2 } });
             const call = () => gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: { messages: [{ role: 'user', content: 'x' }] } });
             expect((await call()).statusCode).toBe(200);
             expect((await call()).statusCode).toBe(200);
+            published.length = 0;
             const third = await call();
             expect(third.statusCode).toBe(429);
             expect(third.json().code).toBe('call_limit');
+
+            // Tripwire: the bot is paused, the thread gets a notice, and further calls are 423
+            expect(await pausedReason()).toMatch(/^Tripwire: a run hit its capability-call limit/);
+            const notice = await ctx.db.query(
+                "SELECT thread_id, author_id, system_data FROM messages WHERE system_event = 'runtime_tripwire' AND system_data->>'runId' = $1",
+                [runId]
+            );
+            expect(notice.rows).toHaveLength(1);
+            expect(notice.rows[0].thread_id.trim()).toBe(threadId);
+            expect(notice.rows[0].author_id).toBeNull();
+            expect(notice.rows[0].system_data).toMatchObject({ kind: 'runtime_tripwire', trigger: 'call_cap', status: 'paused', botId });
+            await waitFor(async () => published.some(e => e.event === 'Message' && e.data.systemEvent === 'runtime_tripwire'));
+            expect((await call()).statusCode).toBe(423);
+
+            const audit = await ctx.db.query("SELECT actor_id FROM audit_log WHERE action = 'bot_pause_tripwire' AND target_id = $1", [botId]);
+            expect(audit.rows.length).toBeGreaterThan(0);
         } finally {
             vi.unstubAllGlobals();
+            await resumeBot();
         }
+    });
+
+    test('a second trip on an already-paused bot posts no second notice', async () => {
+        const { runId } = await makeRun();
+        const { tripBot } = await import('../../src/runtime/tripwires');
+        expect((await tripBot(ctx.db, runId, 'call_cap')).paused).toBe(true);
+        const again = await tripBot(ctx.db, runId, 'token_misuse');
+        expect(again).toEqual({ paused: false, events: [] });
+        expect(await pausedReason()).toMatch(/capability-call limit/);
+        const notices = await ctx.db.query("SELECT 1 FROM messages WHERE system_event = 'runtime_tripwire' AND system_data->>'runId' = $1", [runId]);
+        expect(notices.rows).toHaveLength(1);
+        await resumeBot();
     });
 
     test('route budget and disabled routes', async () => {

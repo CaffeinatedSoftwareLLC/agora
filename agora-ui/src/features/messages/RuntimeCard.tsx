@@ -5,8 +5,8 @@ import { Button } from '../../components/ui/Button';
 import { MessageContent } from './MessageContent';
 
 /**
- * System messages from the sandboxed runtime: the approval request for a run, and
- * the result summary when it finishes. The server enforces who may approve; the
+ * System messages from the sandboxed runtime: the approval request for a run, the
+ * result summary when it finishes, and the notice when a tripwire pauses the bot. The server enforces who may approve; the
  * buttons are shown to everyone who can see the thread and fail with a message if
  * the viewer lacks Manage Bots.
  */
@@ -49,7 +49,7 @@ export function RuntimeCard({ message }: { message: Message }) {
   const statusTone: Record<string, string> = {
     pending: 'bg-warn/20 text-warn', approved: 'bg-online/20 text-online', denied: 'bg-danger/20 text-danger',
     succeeded: 'bg-online/20 text-online', failed: 'bg-danger/20 text-danger', timeout: 'bg-warn/20 text-warn',
-    killed: 'bg-danger/20 text-danger', error: 'bg-danger/20 text-danger',
+    killed: 'bg-danger/20 text-danger', error: 'bg-danger/20 text-danger', paused: 'bg-danger/20 text-danger',
   };
 
   return (
@@ -58,7 +58,9 @@ export function RuntimeCard({ message }: { message: Message }) {
         <svg className="h-4 w-4 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
           <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
         </svg>
-        <span className="text-sm font-semibold text-text whitespace-nowrap">{isApproval ? 'Code run request' : 'Code run result'}</span>
+        <span className="text-sm font-semibold text-text whitespace-nowrap">
+          {isApproval ? 'Code run request' : data.kind === 'runtime_tripwire' ? 'Bot paused by tripwire' : 'Code run result'}
+        </span>
         {data.status && (
           <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none ${statusTone[data.status] ?? 'bg-surface-hover text-text-muted'}`}>
             {data.status.toUpperCase()}

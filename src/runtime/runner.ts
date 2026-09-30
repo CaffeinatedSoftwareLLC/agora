@@ -4,6 +4,8 @@ import { Worker, DelayedError, type Job, type ConnectionOptions } from 'bullmq';
 import { buildContainerSpec } from './container-spec';
 import type { SandboxDocker, RunOutcome } from './docker';
 import type { RunLimits } from './limits';
+import type { BridgedEvent } from '../lib/event-bridge';
+import { checkFailureTripwire, isSubmitterPaused } from './tripwires';
 
 /**
  * Sandbox runner (WBS 3.2). Consumes `{ runId }` jobs from the `runtime` queue,
@@ -23,6 +25,8 @@ export interface RunnerConfig {
     perServerConcurrency: number;
     /** How long to wait before retrying a run whose server is at capacity. */
     capacityRetryMs: number;
+    /** How often to check whether the submitting bot was paused while a run executes. */
+    stopPollMs?: number;
 }
 
 export interface RunnerDeps {
@@ -31,7 +35,9 @@ export interface RunnerDeps {
     config: RunnerConfig;
     log?: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void; error: (...a: unknown[]) => void };
     /** Called after a run reaches a terminal state (the API posts results to the thread). */
-    onFinished?: (runId: string, status: FinalStatus) => Promise<void>;
+    onFinished?: (runId: string, status: FinalStatus | 'denied') => Promise<void>;
+    /** Publishes Socket.IO events (tripwire notices) through the event bridge. */
+    publish?: (events: BridgedEvent[]) => Promise<void>;
 }
 
 export type FinalStatus = 'succeeded' | 'failed' | 'timeout' | 'killed' | 'error';
@@ -48,6 +54,7 @@ export function redact(text: string, secrets: string[]): string {
 }
 
 export function statusFor(outcome: RunOutcome): { status: FinalStatus; error: string | null } {
+    if (outcome.stopped) return { status: 'killed', error: 'Run stopped because the submitting bot was paused' };
     if (outcome.timedOut) return { status: 'timeout', error: 'Run exceeded its time limit' };
     if (outcome.oomKilled) return { status: 'killed', error: 'Run exceeded its memory limit' };
     if (outcome.exitCode === 0) return { status: 'succeeded', error: null };
@@ -57,9 +64,10 @@ export function statusFor(outcome: RunOutcome): { status: FinalStatus; error: st
 /**
  * Atomically move a cleared run from `queued` to `running`, respecting the per-server
  * concurrency limit. Returns null if the run isn't claimable (wrong state, not
- * approved) or 'full' if the server is at capacity.
+ * approved), 'full' if the server is at capacity, or 'paused' if the submitting bot
+ * is paused (the run is then denied).
  */
-async function claimRun(db: Pool, runId: string, perServer: number): Promise<any | null | 'full'> {
+async function claimRun(db: Pool, runId: string, perServer: number): Promise<any | null | 'full' | 'paused'> {
     const client = await db.connect();
     try {
         await client.query('BEGIN');
@@ -74,6 +82,16 @@ async function claimRun(db: Pool, runId: string, perServer: number): Promise<any
             [serverId]
         );
         if (running.rows[0].n >= perServer) { await client.query('ROLLBACK'); return 'full'; }
+
+        // A bot paused after its run was queued or approved (manually or by a tripwire) doesn't get to run it
+        const refused = await client.query(
+            `UPDATE exec_runs r SET status = 'denied', error = 'The submitting bot is paused', finished_at = NOW()
+             FROM users u
+             WHERE r.id = $1 AND r.status = 'queued' AND u.id = r.submitted_by AND u.bot_paused_at IS NOT NULL
+             RETURNING r.id`,
+            [runId]
+        );
+        if (refused.rows.length > 0) { await client.query('COMMIT'); return 'paused'; }
 
         // Defense in depth (T8): only runs the gate cleared, and approved if approval was required
         const claimed = await client.query(
@@ -98,6 +116,10 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
 
     const run = await claimRun(db, runId, config.perServerConcurrency);
     if (run === 'full') return { kind: 'deferred' };
+    if (run === 'paused') {
+        await deps.onFinished?.(runId, 'denied').catch(e => deps.log?.error({ err: e, runId }, 'onFinished hook failed'));
+        return { kind: 'skipped', reason: 'bot paused' };
+    }
     if (!run) {
         deps.log?.warn({ runId }, 'Run is not claimable (not queued or not cleared by the gate); skipping');
         return { kind: 'skipped', reason: 'not claimable' };
@@ -134,6 +156,8 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
             onStarted: async (containerId) => {
                 await db.query('UPDATE exec_runs SET container_id = $1 WHERE id = $2', [containerId, runId]);
             },
+            shouldStop: () => isSubmitterPaused(db, runId),
+            stopPollMs: config.stopPollMs,
         });
         final = statusFor(outcome);
     } catch (err) {
@@ -160,6 +184,16 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
     );
 
     await deps.onFinished?.(runId, final.status).catch(e => deps.log?.error({ err: e, runId }, 'onFinished hook failed'));
+
+    // Tripwire (3.8): repeated failures pause the bot; posted after the result card
+    if (final.status === 'failed' || final.status === 'timeout') {
+        try {
+            const trip = await checkFailureTripwire(db, runId);
+            if (trip.events.length) await deps.publish?.(trip.events);
+        } catch (e) {
+            deps.log?.error({ err: e, runId }, 'Failure tripwire check failed');
+        }
+    }
     return { kind: 'ran', status: final.status };
 }
 

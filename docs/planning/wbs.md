@@ -103,7 +103,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 ## 2 · Decision Seam — folds into Phase 1/3 branches
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| 2.1 | ◐ `Decider` interface + `RulesDecider` done in 3.6 (exec gate); tripwire escalation pending with 3.8 | S | 0.4 |
+| 2.1 | ☑ `Decider` interface + `RulesDecider` done in 3.6 (exec gate); tripwires (3.8) pause the bot, which the decider already denies | S | 0.4 |
 | 2.2 | `WebhookDecider` + contract doc (schema, auth/HMAC, timeout ⇒ rules fallback) | S | 2.1 |
 | 2.3 | `JevDecider` adapter (`typesafe`, `decide` capability) — optional, gated on API access | S | 1.3, 2.1 |
 
@@ -117,7 +117,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 3.5 | ☑ Per-bot **runtime access** (none / approval / auto) instead of a role bit; `/runtime/runs` API (submit, status, code download, approve/deny); MCP `runtime_exec` + `runtime_status` (agora-mcp 0.3.0); `/runtime` in nginx; prod compose (sandbox-image, socket-proxy, runner, cap-gateway, internal `agora_sandbox` network) | M | 3.2 |
 | 3.6 | ☑ `Decider` + `RulesDecider`; approval card in the thread (View code / Approve / Deny, 30-min expiry, audit); result summary card; code retention (30 days, confirm before shortening, pruning sweep). Verified live: bot → approval in UI → sandbox → gateway → local Ollama → file + result in thread | M | 2.1, 3.5, 0.1 |
 | 3.7 | ~~Artifact harvest~~ folded into 3.4: artifacts leave only through the gateway (`postFile`), no container harvest (spec D5) | — | — |
-| 3.8 | Tripwires ⇒ auto-pause (egress denied, repeated failures) | S | 0.4, 3.2 |
+| 3.8 | ☑ Tripwires ⇒ auto-pause (`src/runtime/tripwires.ts`, spec §12): 3 failed/timed-out runs in 10 min (count resets on resume), a real run token used outside its run, a run hitting its call cap. Pausing posts a notice card in the thread, audits `bot_pause_tripwire`, kills the bot's running containers (runner polls), and denies its queued runs at claim. "Egress denied" dropped: the internal network drops egress, so nothing observes it | S | 0.4, 3.2 |
 | 3.9 | Negative security suite (DB/Redis/MinIO reach, cross-scratch, env read, fork bomb, infinite loop) | M | 3.2–3.4 |
 
 ## 4 · First Value — `feat/visual-reports`, `feat/search`
