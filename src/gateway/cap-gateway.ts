@@ -4,9 +4,10 @@ import type Redis from 'ioredis';
 import { CAPABILITIES, type Capability, type ConversationMessage } from '../ai/adapters';
 import { resolveRoute, checkBudget, recordUsage, type ResolvedRoute } from '../ai/routing';
 import { storeFile } from '../lib/file-store';
-import { publishEvents } from '../lib/event-bridge';
+import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { hashToken } from '../runtime/runner';
 import type { RunLimits } from '../runtime/limits';
+import { tripBot, checkTokenMisuse } from '../runtime/tripwires';
 import { postBotMessage, PostError } from './post-message';
 
 /**
@@ -104,6 +105,24 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
     const { db, redis } = opts;
     const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1024 * 1024 });
 
+    /** Tripwires (3.8) must never turn a rejection into a 500; log and carry on. */
+    async function trip(action: () => Promise<{ events: BridgedEvent[] } | null>) {
+        try {
+            const result = await action();
+            if (result?.events.length) await publishEvents(redis, result.events);
+        } catch (err) {
+            app.log.error({ err }, 'Tripwire failed');
+        }
+    }
+
+    /** Count a call against the run's cap; at the cap, pause the bot and reply 429. */
+    async function consumeOrTrip(run: GatewayRun, reply: FastifyReply): Promise<boolean> {
+        if (await consumeCall(db, run)) return true;
+        await trip(() => tripBot(db, run.runId, 'call_cap'));
+        fail(reply, 429, 'call_limit', `Capability call limit reached (${run.limits.capabilityCalls} per run)`);
+        return false;
+    }
+
     app.get('/health', async () => ({ status: 'ok' }));
 
     async function authenticate(request: FastifyRequest, reply: FastifyReply) {
@@ -111,6 +130,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
         if (!token.startsWith('art_')) return fail(reply, 401, 'unauthorized', 'Missing or malformed run token');
 
+        const tokenHash = hashToken(token);
         const res = await db.query(
             `SELECT t.capabilities, r.id, r.server_id, r.channel_id, r.thread_id, r.submitted_by, r.limits,
                     u.bot_paused_at
@@ -118,10 +138,14 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
              JOIN exec_runs r ON r.id = t.run_id
              LEFT JOIN users u ON u.id = r.submitted_by
              WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND t.expires_at > NOW() AND r.status = 'running'`,
-            [hashToken(token)]
+            [tokenHash]
         );
         const row = res.rows[0];
-        if (!row) return fail(reply, 401, 'unauthorized', 'Run token is invalid, expired, or the run has ended');
+        if (!row) {
+            // A real token outside its run's lifetime was leaked by that run: trip its bot
+            await trip(() => checkTokenMisuse(db, tokenHash));
+            return fail(reply, 401, 'unauthorized', 'Run token is invalid, expired, or the run has ended');
+        }
         if (row.bot_paused_at) return fail(reply, 423, 'bot_paused', 'The bot that submitted this run is paused');
         if (!row.submitted_by) return fail(reply, 403, 'no_submitter', 'The run has no submitting bot');
 
@@ -152,9 +176,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         const invalid = VALIDATORS[capability]?.(request.body);
         if (invalid) return fail(reply, 400, 'invalid_input', invalid);
 
-        if (!(await consumeCall(db, run))) {
-            return fail(reply, 429, 'call_limit', `Capability call limit reached (${run.limits.capabilityCalls} per run)`);
-        }
+        if (!(await consumeOrTrip(run, reply))) return reply;
 
         const resolved = await resolveRoute(db, run.serverId, capability);
         if (!resolved.ok) return fail(reply, 503, 'capability_unavailable', resolved.error);
@@ -177,9 +199,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
     }, async (request, reply) => {
         const run = request.run!;
         if (!run.channelId) return fail(reply, 409, 'no_channel', 'This run has no channel to post to');
-        if (!(await consumeCall(db, run))) {
-            return fail(reply, 429, 'call_limit', `Capability call limit reached (${run.limits.capabilityCalls} per run)`);
-        }
+        if (!(await consumeOrTrip(run, reply))) return reply;
         try {
             const { messageId, events } = await postBotMessage(db, {
                 channelId: run.channelId, threadId: run.threadId, authorId: run.submittedBy,

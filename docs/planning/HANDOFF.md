@@ -1,4 +1,4 @@
-# Handoff — AI Runtime Initiative (2026-09-30)
+# Handoff — AI Runtime Initiative (updated 2026-09-30, after 3.8)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model).
 
@@ -8,11 +8,12 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 |---|---|---|
 | 0 Agent threads, thread-aware assistant, protocol badges, bot pause | merged | #24 |
 | 1 Provider registry (Anthropic / OpenAI-compatible incl. Ollama / Gemini), capability routes, budgets, SSRF guard, AI settings UI | merged | #25 |
-| 3.1–3.6 Sandboxed runtime: runner, `agora:std`, cap-gateway, run API, decision gate + approvals, result cards, retention, MCP `runtime_exec` | **open, awaiting review/merge** | #26 (`feat/runtime`) |
+| 3.1–3.6 Sandboxed runtime: runner, `agora:std`, cap-gateway, run API, decision gate + approvals, result cards, retention, MCP `runtime_exec` | merged | #26 |
+| 3.8 Tripwires: auto-pause on repeated failures / token misuse / call cap; pause kills running containers | **open, awaiting review/merge** | `feat/runtime-tripwires` |
 
 ## Next up (in order)
-1. **Merge #26**, then branch from `main`.
-2. **3.8 Tripwires:** auto-pause the submitting bot (reuse `users.bot_paused_at`) on 3 failed/timed-out runs in 10 min, on gateway auth with another run's token, and on hitting the call cap. Post a notice in the thread. Hook points: `processRun` outcome in `src/runtime/runner.ts`, and the auth/`consumeCall` paths in `src/gateway/cap-gateway.ts`.
+1. **Merge the 3.8 PR** (`feat/runtime-tripwires`), then branch from `main`.
+2. *(Hardening, optional)* **Bind run tokens to the container IP.** Today a *live* token replayed from another sandbox is indistinguishable from its own run; only dead-token use trips. The runner could record the container's `agora_sandbox` IP on `exec_run_tokens` and the gateway compare `request.ip` (needs a trusted-proxy setting for the dev forwarder).
 3. **3.9 Negative suite on gVisor:** the spec §14 list. Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` on a Linux host/CI runner that has `runsc`. None exists yet.
 4. **Phase 4 capabilities:** add `search` (Gemini Google Search grounding), `image`, and `tts` to the adapters and `HANDLERS` in cap-gateway (they return 501 today), then build the **visual test report** MVP. Verify Gemini grounding/TTS/image API shapes against current docs first; Google now recommends the "Interactions API", but we use `generateContent` (reason in `wbs.md` Phase 1 notes).
 5. **Decision seam 2.2/2.3:** `WebhookDecider` + optional `JevDecider` behind `src/runtime/decider.ts` (they may only tighten decisions; see spec §10).
@@ -20,7 +21,7 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 
 ## Known pre-existing test failures (not caused by this work)
 - `ai-assistant.integration.test.ts`: expects bot name `AI Assistant`, but code creates `AI-Assistant`.
-- `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; check whether it landed.
+- `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; as of 2026-09-30 (3.8 work) it had **not** landed on `main`.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
 
 ## Local environment gotchas (this machine)

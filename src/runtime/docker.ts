@@ -11,6 +11,8 @@ import type { ContainerCreateOptions } from 'dockerode';
 export interface RunOutcome {
     exitCode: number | null;
     timedOut: boolean;
+    /** Killed because `shouldStop` returned true (e.g. the submitting bot was paused). */
+    stopped: boolean;
     oomKilled: boolean;
     stdout: string;
     stderr: string;
@@ -103,7 +105,14 @@ export class SandboxDocker {
      * allows container operations on `agora-run-*` names, so the runner can't inspect
      * or touch other containers (e.g. read the database container's env).
      */
-    async run(spec: ContainerCreateOptions, opts: { timeoutMs: number; outputBytes: number; onStarted?: (containerId: string) => Promise<void> }): Promise<RunOutcome> {
+    async run(spec: ContainerCreateOptions, opts: {
+        timeoutMs: number;
+        outputBytes: number;
+        onStarted?: (containerId: string) => Promise<void>;
+        /** Polled every `stopPollMs` while the container runs; true kills it. */
+        shouldStop?: () => Promise<boolean>;
+        stopPollMs?: number;
+    }): Promise<RunOutcome> {
         if (!spec.name) throw new Error('Sandbox containers must be named');
         const created = await this.docker.createContainer(spec);
         const container = this.docker.getContainer(spec.name);
@@ -112,13 +121,23 @@ export class SandboxDocker {
             await opts.onStarted?.(created.id);
 
             let timer: NodeJS.Timeout | undefined;
+            let poll: NodeJS.Timeout | undefined;
             const deadline = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), opts.timeoutMs); });
+            const stop = new Promise<'stopped'>(resolve => {
+                const shouldStop = opts.shouldStop;
+                if (!shouldStop) return;
+                poll = setInterval(() => {
+                    shouldStop().then(s => { if (s) resolve('stopped'); }, () => { /* keep running; retry next tick */ });
+                }, opts.stopPollMs ?? 1000);
+            });
             const waited = container.wait().then(() => 'exited' as const);
-            const result = await Promise.race([waited, deadline]);
+            const result = await Promise.race([waited, deadline, stop]);
             clearTimeout(timer);
+            clearInterval(poll);
 
             const timedOut = result === 'timeout';
-            if (timedOut) {
+            const stopped = result === 'stopped';
+            if (timedOut || stopped) {
                 await container.kill({ signal: 'SIGKILL' }).catch(() => { /* already exited */ });
                 await waited.catch(() => { /* ignore */ });
             }
@@ -128,8 +147,9 @@ export class SandboxDocker {
             const output = demuxLogs(Buffer.isBuffer(logs) ? logs : Buffer.from(logs as unknown as string), opts.outputBytes);
 
             return {
-                exitCode: timedOut ? null : state.ExitCode,
+                exitCode: timedOut || stopped ? null : state.ExitCode,
                 timedOut,
+                stopped,
                 oomKilled: !!state.OOMKilled,
                 ...output,
                 containerId: created.id,

@@ -47,6 +47,7 @@ async function main() {
             onFinished: async (runId) => {
                 await postRunResult(db, runId, events => publishEvents(publisher, events));
             },
+            publish: events => publishEvents(publisher, events),
             log: {
                 info: (...a) => console.log('[runner]', ...a),
                 warn: (...a) => console.warn('[runner]', ...a),

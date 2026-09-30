@@ -122,6 +122,28 @@ describe('running code', () => {
         expect(leftovers).toHaveLength(0);
     });
 
+    test('pausing the submitting bot kills its running container (3.8)', async () => {
+        const botId = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO users (id, username, bot, server_id) VALUES ($1, $2, true, $3)`,
+            [botId, `pausebot${botId.slice(-6).toLowerCase()}`, serverId]
+        );
+        const id = await insertRun('while (true) {}', { limits: { wallClockMs: 30_000 } });
+        await ctx.db.query('UPDATE exec_runs SET submitted_by = $1 WHERE id = $2', [botId, id]);
+
+        const started = Date.now();
+        const pending = processRun({ ...deps, config: { ...deps.config, stopPollMs: 200 } }, id);
+        for (let i = 0; i < 100 && !(await getRun(id)).container_id; i++) await new Promise(r => setTimeout(r, 100));
+        await ctx.db.query('UPDATE users SET bot_paused_at = NOW() WHERE id = $1', [botId]);
+
+        expect(await pending).toEqual({ kind: 'ran', status: 'killed' });
+        expect(Date.now() - started).toBeLessThan(20_000);
+        expect((await getRun(id)).error).toContain('bot was paused');
+        const leftovers = await dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375')
+            .listContainers({ all: true, filters: { label: [`agora.run=${id}`] } });
+        expect(leftovers).toHaveLength(0);
+    });
+
     test('output is truncated to the limit', async () => {
         const id = await insertRun('console.log("x".repeat(200_000))', { limits: { outputBytes: 1024 } });
         await processRun(deps, id);
