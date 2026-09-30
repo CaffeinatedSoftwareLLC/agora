@@ -170,6 +170,8 @@ If you also run the production stack on the same machine, remove the dev network
 
 `AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.
 
+**Running the prod stack with gVisor on Linux or WSL2.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`; the id differs between hosts (for example 986 or 999). On Windows, gVisor works in a regular WSL2 distro (not Docker Desktop's) running its own Docker Engine. This was verified on 2026-09-30 with WSL 2.6 (kernel 6.6) and `runsc` release-20260928.0: containers report the `4.19.0-gvisor` kernel. Install with Docker's and gVisor's apt repositories, then run `sudo runsc install`. Keep the checkout inside the distro (`~/agora`), not under `/mnt/c`.
+
 ### Capabilities for run code
 
 Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImage`, `tts`). Each one uses the provider and model you route it to in Settings → AI. Everything except chat is off until you enable its route.

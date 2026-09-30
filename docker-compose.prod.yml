@@ -97,6 +97,10 @@ services:
   socket-proxy:
     image: wollomatic/socket-proxy:1.13.1
     restart: unless-stopped
+    # The image runs as nobody (65534). On Linux the Docker socket is root:docker 0660,
+    # so the proxy needs the host's docker group (the GID differs per host)
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID in .env.prod to the host's docker group id: getent group docker | cut -d: -f3}"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges]
