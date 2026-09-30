@@ -12,6 +12,8 @@ export interface RunLimits {
     /** Bytes of stdout and of stderr kept (each). */
     outputBytes: number;
     capabilityCalls: number;
+    /** Files a run may post through the gateway. */
+    artifacts: number;
 }
 
 export type TimeProfile = 'standard' | 'generation';
@@ -23,6 +25,7 @@ export const DEFAULT_LIMITS: Omit<RunLimits, 'wallClockMs'> = {
     scratchMb: 64,
     outputBytes: 64 * 1024,
     capabilityCalls: 20,
+    artifacts: 10,
 };
 
 export const HARD_CEILINGS: Omit<RunLimits, 'wallClockMs'> = {
@@ -32,6 +35,7 @@ export const HARD_CEILINGS: Omit<RunLimits, 'wallClockMs'> = {
     scratchMb: 256,
     outputBytes: 256 * 1024,
     capabilityCalls: 200,
+    artifacts: 50,
 };
 
 /** Wall clock follows what the run declares it will use (§8.1). */

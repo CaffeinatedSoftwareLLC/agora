@@ -304,6 +304,19 @@ interface Decider {
 - **HTML artifacts are never rendered inline** in the Agora UI (stored XSS). They are served as downloads with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`, and opened in a sandboxed viewer if we add one later. Images use the existing preview path.
 - **The run summary** (status, duration, capability calls, cost, truncated stdout/stderr) is posted to the thread when the run finishes.
 
+### 11.1 Gateway API (implemented in 3.4)
+
+All endpoints need `Authorization: Bearer <run token>`. A token is valid only while its run is `running`, isn't revoked and hasn't expired. A paused submitting bot gets `423`.
+
+| Endpoint | Behavior |
+|---|---|
+| `POST /v1/capabilities/:name` | `404` unknown · `403 not_declared` if the run didn't declare it · `400 invalid_input` · `429 call_limit` (per-run cap, counted atomically) · `503 capability_unavailable` (no/disabled route, unsupported adapter) · `429 budget_exceeded` · `501 not_implemented` (search/image/tts/decide until Phase 4). `chat` → `{ text, usage }`, usage recorded with `run_id` |
+| `POST /v1/messages` | `{ content }` (≤ 4000) → posted in the run's thread as the submitting bot; counts as a call |
+| `POST /v1/files` | raw body, `X-Agora-Filename`, optional `X-Agora-Message` (URI-encoded) → the same `storeFile()` pipeline as user uploads (size, extension allowlist, magic bytes, EXIF strip, quota, encryption) → attached to a thread message; `429 artifact_limit` |
+| `GET /health` | no auth |
+
+Posted messages reach clients through a Redis pub/sub **event bridge**. The API process re-emits only allowlisted events (`Message`, `ThreadMetadataUpdate`, `MessageUpdate`) to `channel:<id>` rooms, so a compromised gateway can't push arbitrary events.
+
 ## 12. Audit & observability
 
 - **`exec_runs`:** every run, including denied ones.

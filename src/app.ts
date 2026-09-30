@@ -22,6 +22,7 @@ import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
+import { startEventBridge } from './lib/event-bridge';
 import { getRedis } from './auth/token-blacklist';
 
 export async function buildApp(opts?: {
@@ -276,6 +277,10 @@ export async function buildApp(opts?: {
 
     // Start built-in AI assistant handler
     startAssistantHandler(db, io, app.log);
+
+    // Forward events published by other services (cap-gateway) to Socket.IO clients
+    const stopEventBridge = startEventBridge(io, config.redisUrl, app.log);
+    app.addHook('onClose', async () => { await stopEventBridge(); });
 
     return { app, db };
 }

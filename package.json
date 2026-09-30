@@ -12,6 +12,7 @@
     "start": "node dist/src/index.js",
     "migrate": "tsx src/db/migrate.ts",
     "runner": "tsx src/runner-main.ts",
+    "cap-gateway": "tsx src/gateway-main.ts",
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts"
   },
   "dependencies": {

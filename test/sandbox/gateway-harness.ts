@@ -35,24 +35,29 @@ export async function startGatewayHarness(network: string, handler: Handler | ht
     });
     await new Promise<void>(resolve => server.listen(0, '0.0.0.0', resolve));
     const port = (server.address() as AddressInfo).port;
-
-    docker(['rm', '-f', FORWARDER], true);
-    docker([
-        'run', '-d', '--name', FORWARDER,
-        '--add-host=host.docker.internal:host-gateway',
-        'alpine/socat:latest',
-        'TCP-LISTEN:8080,fork,reuseaddr', `TCP:host.docker.internal:${port}`,
-    ]);
-    docker(['network', 'connect', '--alias', 'cap-gateway', network, FORWARDER]);
+    const forwarder = startForwarder(network, port);
 
     return {
         port,
         requests,
         async stop() {
-            docker(['rm', '-f', FORWARDER], true);
+            forwarder.stop();
             await new Promise<void>(resolve => server.close(() => resolve()));
         },
     };
+}
+
+/** Expose a host port to sandboxes as cap-gateway:8080 (dual-homed forwarder container). */
+export function startForwarder(network: string, hostPort: number) {
+    docker(['rm', '-f', FORWARDER], true);
+    docker([
+        'run', '-d', '--name', FORWARDER,
+        '--add-host=host.docker.internal:host-gateway',
+        'alpine/socat:latest',
+        'TCP-LISTEN:8080,fork,reuseaddr', `TCP:host.docker.internal:${hostPort}`,
+    ]);
+    docker(['network', 'connect', '--alias', 'cap-gateway', network, FORWARDER]);
+    return { stop: () => docker(['rm', '-f', FORWARDER], true) };
 }
 
 function docker(args: string[], ignoreErrors = false) {
