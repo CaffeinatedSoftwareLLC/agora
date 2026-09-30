@@ -183,7 +183,6 @@ async function setupProd() {
     const generated = {
         DB_PASSWORD: dbPassword,
         JWT_SECRET: hexSecret(),
-        MINIO_ROOT_PASSWORD: strongPassword(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
         CORS_ORIGIN: corsOrigin,
     };

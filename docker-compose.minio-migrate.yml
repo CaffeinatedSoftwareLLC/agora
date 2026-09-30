@@ -1,0 +1,48 @@
+# One-time move of uploaded files from the old MinIO container to the disk volume (#32).
+# Only needed for installs that ran MinIO; new installs skip this. Needs the MinIO
+# image already on this machine (it can no longer be pulled anonymously) and the
+# MINIO_ROOT_PASSWORD still in .env.prod.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.minio-migrate.yml --env-file .env.prod run --rm storage-migrate
+#   docker compose -f docker-compose.prod.yml -f docker-compose.minio-migrate.yml --env-file .env.prod rm -sf minio
+#
+# Safe to re-run. Once files open in the app, the old volume can go:
+#   docker volume rm <project>_minio-data
+services:
+  minio:
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:latest}
+    pull_policy: never
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agora}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env.prod (the old MinIO password)}
+    volumes:
+      - minio-data:/data
+    command: server /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  storage-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/tools/migrate-storage-from-s3.js"]
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-agora}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      STORAGE_DIR: /data/files
+    volumes:
+      - files-data:/data/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  minio-data:

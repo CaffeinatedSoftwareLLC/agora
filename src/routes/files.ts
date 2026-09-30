@@ -3,21 +3,13 @@ import path from 'path';
 import { generateUlid } from '../utils/ulid';
 import { computePermissions, Permissions } from '../permissions';
 import { checkChannelMembership } from './shared';
-import { minioClient, BUCKET_NAME } from '../lib/minio';
+import { storage } from '../lib/storage';
 import { encryptFile, decryptFile } from '../lib/encryption';
 import { INLINE_SAFE_MIMES } from '../lib/file-validation';
 import { storeFile } from '../lib/file-store';
 import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 
-
-async function streamToBuffer(stream: any): Promise<Buffer> {
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
-}
 
 async function checkFilePermissions(
     db: any,
@@ -145,18 +137,11 @@ export async function fileRoutes(app: FastifyInstance) {
             return reply.status(permCheck.status!).send({ error: permCheck.error });
         }
 
-        // Fetch encrypted blob from MinIO
-        let encryptedBuffer: Buffer;
-        try {
-            const stream = await minioClient.getObject(BUCKET_NAME, file.storage_key.trim());
-            encryptedBuffer = await streamToBuffer(stream);
-        } catch (err: any) {
-            if (err.code === 'NoSuchKey') {
-                // Orphan row: soft-delete metadata
-                await db.query('UPDATE files SET deleted_at = NOW() WHERE id = $1', [fileId]);
-                return reply.status(404).send({ error: 'File not found' });
-            }
-            throw err;
+        const encryptedBuffer = await storage.get(file.storage_key.trim());
+        if (!encryptedBuffer) {
+            // Keep the row: the blob may still be on its way (e.g. an upgrade that hasn't
+            // run the MinIO migration yet); failed uploads already delete their own rows
+            return reply.status(404).send({ error: 'File not found' });
         }
 
         // Decrypt (encryption_iv and encryption_tag are BYTEA → pg returns Buffer)
@@ -214,9 +199,9 @@ export async function fileRoutes(app: FastifyInstance) {
         // Soft-delete
         await db.query('UPDATE files SET deleted_at = NOW() WHERE id = $1', [fileId]);
 
-        // Delete from MinIO (best-effort)
+        // Delete the blob (best-effort)
         try {
-            await minioClient.removeObject(BUCKET_NAME, file.storage_key.trim());
+            await storage.remove(file.storage_key.trim());
         } catch {
             // Log but don't fail — cleanup worker can handle orphaned objects
         }

@@ -2,7 +2,7 @@ import { buildApp } from './app';
 import { config } from './config';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { getSetupToken } from './instance/setup-token';
-import { ensureBucket, minioClient, BUCKET_NAME } from './lib/minio';
+import { storage } from './lib/storage';
 import { startFileCleanupWorker } from './workers/file-cleanup';
 
 async function main() {
@@ -17,15 +17,14 @@ async function main() {
     await app.listen({ port: config.port, host });
     console.log(`Agora listening on ${host}:${config.port}`);
 
-    // Ensure MinIO bucket exists for file uploads
-    await ensureBucket();
+    // Create the file store's directory or bucket
+    await storage.init();
 
     // Start file cleanup worker (runs hourly, non-blocking)
     startFileCleanupWorker({
         redisUrl: config.redisUrl,
         dbUrl: config.dbUrl,
-        minioClient,
-        bucketName: BUCKET_NAME,
+        store: storage,
     }).catch(err => {
         console.error('Failed to start file cleanup worker:', err);
     });

@@ -13,6 +13,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "runner": "tsx src/runner-main.ts",
     "cap-gateway": "tsx src/gateway-main.ts",
+    "storage:migrate-from-s3": "tsx src/tools/migrate-storage-from-s3.ts",
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts"
   },
   "dependencies": {

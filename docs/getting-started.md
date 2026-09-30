@@ -12,7 +12,7 @@ Internet/localhost → Caddy (ports 80/443, auto TLS)
                               ├── static files (React SPA)
                               ├── /auth, /servers, /channels, /files, etc. → api:3000
                               └── /socket.io (WebSocket) → api:3000
-                    postgres, redis, minio (internal only — not reachable from your host)
+                    postgres, redis (internal only — not reachable from your host)
 ```
 
 `migrate` runs once at startup to apply database migrations, then exits — seeing it in `Exited (0)` status is correct, not a failure.
@@ -25,7 +25,7 @@ cd agora
 node scripts/setup-env.js --prod
 ```
 
-This prompts for a database password (Enter accepts a generated one) and a domain (Enter skips it — fine for local/personal use, where Caddy will serve over `localhost`). It writes `.env.prod` with freshly generated `DB_PASSWORD`, `JWT_SECRET`, `MINIO_ROOT_PASSWORD`, and `AGORA_ENCRYPTION_KEY`.
+This prompts for a database password (Enter accepts a generated one) and a domain (Enter skips it — fine for local/personal use, where Caddy will serve over `localhost`). It writes `.env.prod` with freshly generated `DB_PASSWORD`, `JWT_SECRET`, and `AGORA_ENCRYPTION_KEY`. Uploaded files are stored on the `files-data` Docker volume; there's no storage service to configure.
 
 **If you're on Windows and this generates a `.env`/`.env.prod` where the database connection mysteriously fails** (`getaddrinfo ENOTFOUND accord` or similar) — that was a real bug in `setup-env.js`: it split `.env.example` on `\n` only, which left a stray `\r` glued onto `POSTGRES_USER`'s value on files with CRLF line endings, corrupting the generated `DATABASE_URL` mid-string. This is fixed as of the cleanup in this repo (the script now splits on `\r?\n`), but if you ever see a connection string that looks truncated or has a control character in the middle, that's the failure signature — regenerate with `--force` after pulling the fix.
 
@@ -41,7 +41,7 @@ First run builds three images (`api`, `migrate`, `web`) and starts seven contain
 docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 ```
 
-You want `postgres`, `redis`, `minio` **healthy**, and `api`, `web`, `caddy` **Up**. `migrate` should show `Exited (0)`.
+You want `postgres`, `redis` **healthy**, and `api`, `web`, `caddy` **Up**. `migrate` should show `Exited (0)`.
 
 ## 3. Get your setup token
 
@@ -135,7 +135,7 @@ If you also have the local dev infra (`docker-compose.yml`) running at the same 
 docker compose -f docker-compose.yml -p agora-dev up -d
 ```
 
-Both files default to the same project name (the directory name), and without `-p` a `docker compose -f docker-compose.yml up` run from the same directory as the prod stack will recreate the prod `postgres`/`redis`/`minio` containers with the dev config — Compose happens to preserve the named volume by default so data usually survives, but it's not something to rely on. Keep them namespaced separately.
+Both files default to the same project name (the directory name), and without `-p` a `docker compose -f docker-compose.yml up` run from the same directory as the prod stack will recreate the prod `postgres`/`redis` containers with the dev config — Compose happens to preserve the named volume by default so data usually survives, but it's not something to rely on. Keep them namespaced separately.
 
 ## Sandbox runner (development)
 
@@ -204,7 +204,12 @@ Docker Desktop can't run gVisor, so on Docker Desktop the runner only works with
    `-ExecutionTimeLimit 0` matters: by default Task Scheduler kills tasks after 72 hours. If your distro has systemd on (`[boot] systemd=true` in `/etc/wsl.conf`) with `docker` enabled, the stack's `restart: unless-stopped` services come back by themselves when the distro starts, so Agora is up after every login. Turn it off with `Disable-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)'`.
 
 **Known issues:**
-- **MinIO's images can no longer be pulled anonymously** (#32). If `up` fails on `quay.io/minio/minio`, copy an existing image from another engine: `docker save` it there and `docker load` it in WSL.
+- **Upgrading an install that used MinIO** (before #32): files now live on the `files-data` volume. Before starting the new stack, copy them over once (needs the MinIO image still on the machine and `MINIO_ROOT_PASSWORD` still in `.env.prod`):
+  ```bash
+  docker compose -f docker-compose.prod.yml -f docker-compose.minio-migrate.yml --env-file .env.prod run --rm storage-migrate
+  docker compose -f docker-compose.prod.yml -f docker-compose.minio-migrate.yml --env-file .env.prod rm -sf minio
+  ```
+  It prints how many files it copied and is safe to re-run. Once files open in the app, remove the old volume (`docker volume rm <project>_minio-data`).
 - **Under gVisor, sandboxes have no DNS.** That's expected; the runner pins the gateway's address in each run's `/etc/hosts` (spec §6).
 - **API or site suddenly unreachable** (`fetch failed` from agents, nothing on `localhost:3000`): check `wsl -l -v`. If Ubuntu shows `Stopped`, the last session closed; see step 7.
 - Leave long builds running in a terminal that stays open, or rely on the step 7 task. Without either, closing the last WSL window can stop a running `compose up`.

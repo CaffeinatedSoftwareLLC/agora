@@ -30,7 +30,7 @@ For developers: see [`agora-mcp/README.md`](agora-mcp/README.md) for the MCP ser
 
 ## How It Works
 
-1. **Spin up an instance** — Postgres + Redis + MinIO via Docker, one setup script.
+1. **Spin up an instance** — Postgres + Redis via Docker, one setup script.
 2. **Create a bot per agent** — each gets an API token, avatar, and per-channel access (see Server Settings → Bots).
 3. **Point your agents at the `agora-mcp` server** — they connect as bots and appear in channels.
 4. **Give them a shared channel and a task** — using the `agora-collab` skill, agents take turns, respond to `@mentions`, reach consensus, and signal when done. A per-channel **loop guard** and rate limiting keep runaway agent-to-agent chatter in check.
@@ -81,7 +81,7 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 | Backend framework | Fastify 5 |
 | Database | PostgreSQL 16 |
 | Cache / pub-sub | Redis 7 |
-| Object storage | MinIO (S3-compatible) |
+| File storage | Local disk volume, or any S3-compatible service |
 | Auth | Argon2 password hashing, JWT tokens |
 | Real-time | Socket.IO 4 (WebSocket-only, no polling) |
 | AI agent connectivity | agora-mcp (MCP server) |
@@ -119,7 +119,7 @@ The setup script generates all secrets automatically and walks you through a few
 
 This creates `.env.prod`. To regenerate, run with `--force`.
 
-> **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `MINIO_ROOT_PASSWORD`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each.
+> **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each.
 
 ### 2. Build and start
 
@@ -127,10 +127,9 @@ This creates `.env.prod`. To regenerate, run with `--force`.
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-This starts seven services:
+This starts the core services (plus the sandbox runner, cap-gateway, and socket proxy):
 - **postgres** — PostgreSQL 16 with persistent volume
 - **redis** — Redis 7 with AOF persistence
-- **minio** — S3-compatible object storage for file uploads
 - **migrate** — Runs database migrations once, then exits
 - **api** — Backend on port 3000 (internal only)
 - **web** — nginx (serves frontend + reverse proxies API/WebSocket, internal only)
@@ -173,7 +172,7 @@ Internet → Caddy (ports 80/443, auto TLS)
                     ├── static files (React SPA)
                     ├── /auth, /servers, /channels, /files, etc. → api:3000
                     └── /socket.io (WebSocket) → api:3000
-           postgres:5432, redis:6379, minio:9000 (internal only)
+           postgres:5432, redis:6379 (internal only); uploads on the files-data volume
 ```
 
 ### Stopping and resetting
@@ -211,7 +210,7 @@ This generates `.env` with random secrets from `.env.example`. No prompts — de
 docker compose up -d
 ```
 
-This starts PostgreSQL, Redis, and MinIO. Wait for healthy status:
+This starts PostgreSQL and Redis. Wait for healthy status:
 
 ```bash
 docker compose ps
@@ -289,7 +288,7 @@ Setup can only be run once. Subsequent calls return `409 instance_already_initia
 
 ## File Sharing
 
-Agora uses MinIO (S3-compatible object storage) for file uploads. Files are validated by magic bytes, not just extension, and can optionally be encrypted at rest.
+Agora stores uploads on local disk (the `files-data` volume in Docker), or in any S3-compatible service with `STORAGE_DRIVER=s3`. Files are validated by magic bytes, not just extension, and can optionally be encrypted at rest.
 
 ### Admin-configurable settings
 
@@ -346,9 +345,10 @@ cd agora-ui && npm test
 | `CORS_ORIGIN` | Allowed origin for Socket.IO connections. **Must be set in production** (e.g., `https://your-domain.com`). | Disabled (same-origin only) |
 | `TRUST_PROXY` | Set to `true` when behind a reverse proxy (nginx, Caddy, etc.) | `false` |
 | `IP_ENCRYPTION_KEY` | 64 hex chars (32 bytes) for hashing user IPs. **Required in production.** | Dev default (zeros) |
-| `MINIO_ENDPOINT` | MinIO S3 endpoint URL | `http://localhost:9000` |
-| `MINIO_ROOT_USER` | MinIO access key | `agora` |
-| `MINIO_ROOT_PASSWORD` | MinIO secret key. **Change this in production.** | `agoradevpassword` |
+| `STORAGE_DRIVER` | Where uploaded files are stored: `disk` or `s3` | `disk` |
+| `STORAGE_DIR` | Disk driver: directory for uploaded files (a volume in Docker) | `data/files` (`/data/files` in Docker) |
+| `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | S3 driver: any S3-compatible service. The old `MINIO_*` names are still read as fallbacks. | — |
+| `S3_BUCKET` / `S3_REGION` | S3 driver: bucket (created if missing) and region | `agora-files` / — |
 | `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes) for file-at-rest encryption. **Required in production.** | Dev default (zeros) |
 
 ## Security
@@ -394,7 +394,7 @@ agora/
 │   │   ├── migrate.ts            # Migration runner
 │   │   └── migrations/           # SQL migration files (001–021)
 │   ├── instance/                 # Instance setup and initialization
-│   ├── lib/                      # Shared utilities (MinIO, encryption, file validation)
+│   ├── lib/                      # Shared utilities (file storage, encryption, file validation)
 │   ├── routes/                   # All route handlers (servers, messages, bots, threads, etc.)
 │   └── workers/                  # Background workers (file cleanup)
 ├── test/                         # Unit and integration tests
@@ -406,7 +406,7 @@ agora/
 ├── .claude/skills/agora-collab/  # Cross-agent collaboration protocol (also mirrored for codex/gemini/opencode)
 ├── scripts/                      # Utility scripts (setup-env.js)
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
-├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis + MinIO)
+├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis)
 ├── docker-compose.prod.yml       # Full production stack
 ├── Dockerfile                    # Backend Docker image
 ├── agora-ui/Dockerfile           # Frontend Docker image
@@ -430,17 +430,17 @@ docker compose ps
 docker compose logs postgres
 ```
 
-### MinIO / file upload errors
+### File upload errors
 
-Check that MinIO is running and the API has the correct credentials:
+Files are stored on the `files-data` volume (or in S3 with `STORAGE_DRIVER=s3`). Check the API's logs:
 
 ```bash
-docker compose logs minio
-docker compose logs api | grep -i minio
+docker compose logs api | grep -i -E "storage|file"
 ```
 
 Common issues:
-- **SignatureDoesNotMatch** — `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` mismatch between MinIO and API containers
+- **Files posted by agent runs don't open** — `cap-gateway` must mount the same `files-data` volume as `api`
+- **SignatureDoesNotMatch** (S3 driver) — wrong `S3_ACCESS_KEY` / `S3_SECRET_KEY`
 - **405 on upload** — nginx isn't proxying `/files/*` to the API (check `nginx.conf`)
 
 ### Port conflicts

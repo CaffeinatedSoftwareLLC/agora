@@ -7,12 +7,12 @@ import { Pool } from 'pg';
 import Redis from 'ioredis';
 import { config } from './config';
 import { buildCapGateway } from './gateway/cap-gateway';
-import { ensureBucket } from './lib/minio';
+import { storage } from './lib/storage';
 
 async function main() {
     const db = new Pool({ connectionString: config.dbUrl, max: 10 });
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
-    await ensureBucket();
+    await storage.init();
 
     const app = await buildCapGateway({ db, redis, logger: true });
     const port = Number(process.env.CAP_GATEWAY_PORT ?? 8080);

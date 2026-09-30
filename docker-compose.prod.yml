@@ -38,21 +38,6 @@ services:
         condition: service_healthy
     restart: "no"
 
-  minio:
-    image: quay.io/minio/minio:latest
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agora}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env.prod}
-    volumes:
-      - minio-data:/data
-    command: server /data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-    restart: unless-stopped
-
   api:
     build:
       context: .
@@ -67,16 +52,14 @@ services:
       PORT: "3000"
       CORS_ORIGIN: https://${DOMAIN:-alpha.agora.host}
       TRUST_PROXY: "true"
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agora}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env.prod}
+      STORAGE_DIR: /data/files
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+    volumes:
+      - files-data:/data/files
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     restart: unless-stopped
 
@@ -155,18 +138,17 @@ services:
     environment:
       DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agora}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env.prod}
+      # Same volume as the API: files posted by runs are served by the API
+      STORAGE_DIR: /data/files
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
       IP_ENCRYPTION_KEY: ${IP_ENCRYPTION_KEY:-}
+    volumes:
+      - files-data:/data/files
     networks: [default, sandbox]
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     restart: unless-stopped
 
@@ -199,6 +181,7 @@ networks:
 
 volumes:
   caddy_data:
-  minio-data:
+  # Uploaded files (encrypted at rest). Replaces MinIO (#32); back this up with pgdata
+  files-data:
   pgdata:
   redisdata:
