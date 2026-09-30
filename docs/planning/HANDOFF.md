@@ -25,7 +25,7 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | Sandbox → gateway name resolution under gVisor (`/etc/hosts` pin) | ✅ fixed and verified |
 | Route provider switch resets model; Tavily depth dropdown + server validation | ✅ fixed and verified |
 | AI settings audit trail ("Recent changes") | ✅ verified: first live entry recorded actor, change, client |
-| **Audio overview / multi-speaker TTS** | ✅ #33 fix verified live 2026-09-30 (branch `claude/amazing-johnson-q35x5f`): two voices, no 400. That run exposed a second bug: the script was cut off after 3 lines (0:23) because Gemini 3.x thinking tokens count against the script step's 2048-token cap. Raised to 8192 and an unfinished last line is dropped; **needs one more live overview** |
+| **Audio overview / multi-speaker TTS** | ✅ #33 fix verified live 2026-09-30 (branch `claude/amazing-johnson-q35x5f`): two voices, no 400. That run exposed a second bug: the script was cut off after 3 lines (0:23) because Gemini 3.x thinking tokens count against the script step's 2048-token cap. Raised to 8192 and an unfinished last line is dropped; ✅ verified live (full-length overview). Channel overviews still skip thread replies: **#40** |
 | `video` (Veo) | ✅ verified (2026-09-30, after Veo came back). Route is on `veo-3.1-fast-generate-preview` (~$0.40 per 4 s) with a 2/day request cap |
 | `image` | ✅ verified (2026-09-30) |
 | `search` via Gemini (Search Suggestions card), single-voice `tts`, `testReport` | ☐ not yet tested live |
@@ -33,7 +33,7 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
 ## Next up (in order)
-1. **#33 fix verified live; re-run one audio overview for the script-length fix, then merge.** Branch `claude/amazing-johnson-q35x5f`:
+1. **#33 fix and the script-length fix verified live; merge the PR.** Then **#40** (channel overviews ignore threads) and **#39** (agents can use each other's bot tokens). Branch `claude/amazing-johnson-q35x5f`:
    - Multi-speaker speech goes through `synthesizeDialogue()` in `src/ai/speech.ts`. Adapters with native multi-speaker implement `ttsDialogue`; Gemini now sends one text part per line with `speechMetadata: { speaker }`, plus `multiSpeakerVoiceConfig`, and no preamble. Adapters without it (e.g. a future Kokoro/OpenAI-compatible speech provider) get each line voiced with `tts` and the WAVs joined with a 0.3 s pause. One speaker used → a single-voice call.
    - `agora:std` `tts(text, { speakers })`: the gateway parses `Name: …` turns (`parseDialogue`), rejecting undeclared labels and unlabelled openings with a 400.
    - **The request shape was written from the API reference only** (ai.google.dev is blocked from the cloud session). Live check: one "@assistant audio overview" in a thread, and one run with `tts("Joe: hi\nJane: hello", { speakers: [{ speaker: "Joe", voice: "Kore" }, { speaker: "Jane", voice: "Puck" }] })`. If Gemini still rejects it, the quick fallback is deleting `ttsDialogue` from `src/ai/adapters/gemini.ts`, which makes Gemini voice line by line (one call per line: watch the TTS preview RPM limits).
