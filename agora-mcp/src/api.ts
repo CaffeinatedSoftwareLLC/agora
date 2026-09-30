@@ -46,6 +46,22 @@ export interface Cursor {
     updatedAt: string;
 }
 
+export interface RuntimeRun {
+    id: string;
+    status: 'submitted' | 'gated' | 'awaiting_approval' | 'queued' | 'running' | 'succeeded' | 'failed' | 'timeout' | 'killed' | 'error' | 'denied';
+    gate: { decision: string | null; reason: string | null; source?: string | null };
+    capabilities?: string[];
+    timeProfile?: string;
+    limits?: Record<string, number>;
+    exitCode?: number | null;
+    error?: string | null;
+    stdout?: string | null;
+    stderr?: string | null;
+    capabilityCalls?: number;
+    artifacts?: number;
+    codeExpiresAt?: string | null;
+}
+
 export interface ThreadCursor {
     threadId: string;
     channelId: string;
@@ -188,5 +204,26 @@ export class AgoraApi {
         lastReadId: string,
     ): Promise<{ threadId: string; channelId: string; lastReadId: string }> {
         return this.request('PUT', `/bots/@me/thread-cursors/${threadId}`, { lastReadId });
+    }
+
+    /** Submit code to the sandboxed runtime. Denied runs come back as 403 with the run body. */
+    async submitRun(body: { code: string; channelId: string; threadId?: string; capabilities?: string[] }): Promise<RuntimeRun> {
+        const url = `${this.baseUrl}/runtime/runs`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bot ${this.token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        let json: any = null;
+        try { json = JSON.parse(text); } catch { /* not JSON */ }
+        if (res.status === 403 && json?.status === 'denied') return json as RuntimeRun;
+        if (res.status === 423) throw new Error('This bot is paused by an Agora admin. Stop and tell the user.');
+        if (!res.ok) throw new Error(`Agora API ${res.status} POST /runtime/runs: ${text}`);
+        return json as RuntimeRun;
+    }
+
+    async getRun(runId: string): Promise<RuntimeRun> {
+        return this.request('GET', `/runtime/runs/${runId}`);
     }
 }

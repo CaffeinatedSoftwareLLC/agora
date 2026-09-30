@@ -100,3 +100,74 @@ export async function postBotMessage(db: Pool, input: {
     }
     return { messageId, events };
 }
+
+/**
+ * Post a system message (no author) into a channel or thread, carrying structured
+ * `system_data` for the UI (e.g. the run approval card). Returns events to emit.
+ */
+export async function postSystemMessage(db: Pool, input: {
+    channelId: string;
+    threadId: string | null;
+    content: string;
+    systemEvent: string;
+    systemData: Record<string, unknown>;
+}): Promise<{ messageId: string; events: BridgedEvent[] }> {
+    const channelId = input.channelId.trim();
+    let threadId = input.threadId?.trim() || null;
+    if (threadId) {
+        // Closed or missing thread: fall back to the channel so the notice isn't lost
+        const parent = await db.query(
+            'SELECT thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL',
+            [threadId, channelId]
+        );
+        if (parent.rows.length === 0 || parent.rows[0].thread_closed_at) threadId = null;
+    }
+
+    const messageId = generateUlid();
+    await db.query(
+        `INSERT INTO messages (id, channel_id, author_id, content, thread_id, system_event, system_data)
+         VALUES ($1, $2, NULL, $3, $4, $5, $6)`,
+        [messageId, channelId, input.content, threadId, input.systemEvent, JSON.stringify(input.systemData)]
+    );
+    const room = `channel:${channelId}`;
+    const events: BridgedEvent[] = [{
+        room,
+        event: 'Message',
+        data: {
+            id: messageId, content: input.content, authorId: null, authorUsername: null,
+            channelId, createdAt: new Date().toISOString(),
+            systemEvent: input.systemEvent, systemData: input.systemData,
+            ...(threadId ? { threadId } : {}),
+        },
+    }];
+    if (threadId) {
+        const updated = await db.query(
+            'UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW() WHERE id = $1 RETURNING reply_count, last_reply_at',
+            [threadId]
+        );
+        events.push({
+            room, event: 'ThreadMetadataUpdate',
+            data: { channelId, messageId: threadId, replyCount: updated.rows[0].reply_count, lastReplyAt: updated.rows[0].last_reply_at, threadClosedAt: null },
+        });
+    }
+    return { messageId, events };
+}
+
+/** Update a system message's content and data (e.g. approval card → approved). */
+export async function updateSystemMessage(db: Pool, messageId: string, content: string, systemData: Record<string, unknown>): Promise<BridgedEvent[]> {
+    const res = await db.query(
+        `UPDATE messages SET content = $1, system_data = $2, edited_at = NOW() WHERE id = $3
+         RETURNING channel_id, thread_id, edited_at`,
+        [content, JSON.stringify(systemData), messageId]
+    );
+    const row = res.rows[0];
+    if (!row) return [];
+    return [{
+        room: `channel:${row.channel_id.trim()}`,
+        event: 'MessageUpdate',
+        data: {
+            id: messageId, channelId: row.channel_id.trim(), content, editedAt: row.edited_at, systemData,
+            ...(row.thread_id ? { threadId: row.thread_id.trim() } : {}),
+        },
+    }];
+}

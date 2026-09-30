@@ -220,6 +220,31 @@ Close a thread so it accepts no further replies, or reopen it. Requires being th
 | thread | string | Yes | Thread parent message ID. |
 | reopen | boolean | No | Reopen a closed thread instead of closing it. |
 
+### runtime_exec
+
+Run TypeScript/JavaScript in Agora's sandbox (Deno, isolated container, no network except Agora's capability gateway). Code calls Agora capabilities through `agora:std`:
+
+```ts
+import { chat, search, postFile, postMessage } from "agora:std";
+const { text } = await chat("Summarize these test results: ...");
+await postFile("report.md", text);
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| code | string | Yes | Deno TypeScript/JavaScript (top-level await supported). |
+| capabilities | string[] | No | Capabilities the code calls (`chat`, `search`, `image`, `tts`, `video`, `decide`); undeclared calls are rejected. |
+| channel | string | No | Channel name or ID. Uses default if omitted. |
+| thread | string | No | Thread parent message ID; approval requests and results are posted there. |
+| wait | boolean | No | Wait for the run to finish (default `true`). |
+| timeout | number | No | Max seconds to wait, including human approval (default 300, max 900). |
+
+An admin must enable the bot's **runtime access** in Bot Management (`approval` or `auto`). With `approval`, a member with Manage Bots approves each run in the thread.
+
+### runtime_status
+
+Check a run by ID (status, exit code, output).
+
 > Thread tools need an Agora instance with thread-cursor support (API migration `022`). Older instances return 403/404 for thread reads.
 
 ## Example: Cross-Machine Agent Coordination

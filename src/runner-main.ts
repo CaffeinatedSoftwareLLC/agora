@@ -6,7 +6,10 @@ import 'dotenv/config';
 import { Pool } from 'pg';
 import { config } from './config';
 import { dockerFromEnv, SandboxDocker } from './runtime/docker';
+import Redis from 'ioredis';
 import { reconcileInterruptedRuns, startRunnerWorker } from './runtime/runner';
+import { postRunResult, runtimeMaintenance } from './runtime/service';
+import { publishEvents } from './lib/event-bridge';
 
 async function main() {
     const insecureDev = process.env.AGORA_SANDBOX_INSECURE_DEV === '1';
@@ -27,6 +30,7 @@ async function main() {
         + `removed ${orphans} orphan container(s), marked ${interrupted} interrupted run(s) as error`);
 
     const redisUrl = new URL(config.redisUrl);
+    const publisher = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
     const worker = startRunnerWorker(
         {
             db,
@@ -38,6 +42,10 @@ async function main() {
                 capUrl: process.env.AGORA_CAP_URL ?? 'http://cap-gateway:8080',
                 perServerConcurrency: Number(process.env.RUNTIME_PER_SERVER_CONCURRENCY ?? 2),
                 capacityRetryMs: 2000,
+            },
+            // Post the result summary into the run's thread (reaches clients via the event bridge)
+            onFinished: async (runId) => {
+                await postRunResult(db, runId, events => publishEvents(publisher, events));
             },
             log: {
                 info: (...a) => console.log('[runner]', ...a),
@@ -55,7 +63,21 @@ async function main() {
         Number(process.env.RUNTIME_INSTANCE_CONCURRENCY ?? 4),
     );
 
+    // Code retention + approval expiry, hourly (and once at startup)
+    const sweep = async () => {
+        try {
+            const { pruned, expired } = await runtimeMaintenance(db);
+            if (pruned || expired) console.log(`[runner] maintenance: pruned code of ${pruned} run(s), expired ${expired} approval(s)`);
+        } catch (err) {
+            console.error('[runner] maintenance failed', err);
+        }
+    };
+    await sweep();
+    const sweepTimer = setInterval(sweep, 60 * 60 * 1000);
+
     const shutdown = async () => {
+        clearInterval(sweepTimer);
+        publisher.disconnect();
         await worker.close();
         await db.end();
         process.exit(0);

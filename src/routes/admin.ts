@@ -3,6 +3,7 @@ import { requireInstanceAdmin } from '../auth/middleware';
 import { generateUlid } from '../utils/ulid';
 import { hmacIp, encryptIp, decryptIp } from '../auth/crypto';
 import { getFileSettings, invalidateSettingsCache } from '../lib/settings';
+import { codeRetentionDays, countRunsPrunedBy } from '../runtime/service';
 
 async function logAdminAction(
     db: any,
@@ -592,6 +593,51 @@ export async function adminRoutes(app: FastifyInstance) {
         );
         await logAdminAction(db, request.userId, 'ai_settings_update', 'instance_settings', null, { allowPrivateBaseUrls });
         return reply.send({ allowPrivateBaseUrls });
+    });
+
+    // GET /admin/settings/runtime — sandbox code retention
+    app.get('/admin/settings/runtime', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        const days = await codeRetentionDays(app.db);
+        return reply.send({ codeRetentionDays: days });
+    });
+
+    // PATCH /admin/settings/runtime — shortening retention needs confirm=true once the
+    // caller has seen how many runs would lose their code (spec §9.1)
+    app.patch('/admin/settings/runtime', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object', required: ['codeRetentionDays'], additionalProperties: false,
+                properties: {
+                    codeRetentionDays: { oneOf: [{ type: 'null' }, { type: 'integer', minimum: 1, maximum: 3650 }] },
+                    confirm: { type: 'boolean' },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const { codeRetentionDays: days, confirm } = request.body as { codeRetentionDays: number | null; confirm?: boolean };
+        const current = await codeRetentionDays(app.db);
+        const shortening = days !== null && (current === null || days < current);
+        if (shortening) {
+            const affected = await countRunsPrunedBy(app.db, days);
+            if (affected > 0 && !confirm) {
+                return reply.status(409).send({
+                    error: 'confirmation_required',
+                    affectedRuns: affected,
+                    message: `Code for ${affected} run(s) older than ${days} day(s) will be permanently deleted at the next cleanup. Resend with confirm: true to proceed.`,
+                });
+            }
+        }
+        await db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ('runtime.code_retention_days', $1)
+             ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+            [JSON.stringify(days)]
+        );
+        await logAdminAction(db, request.userId, 'runtime_settings_update', 'instance_settings', null, { codeRetentionDays: days, previous: current });
+        return reply.send({ codeRetentionDays: days });
     });
 
     // GET /admin/storage
