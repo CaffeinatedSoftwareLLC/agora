@@ -279,7 +279,7 @@ if (member.rows.length === 0) {
 }
 ```
 
-For channels, a shared utility handles both server and DM channels:
+For channels, a shared utility checks access (bots via `bot_channel_access`; the DM branch is a pre-pivot leftover, since DM channels are no longer created):
 
 ```typescript
 // src/routes/shared.ts
@@ -300,32 +300,28 @@ Even if a route-level check were accidentally skipped, the RLS policies on `serv
 
 **Source:** `src/permissions.ts`
 
-Permissions use a **bigint bitmask** with 27 defined permission types:
+Permissions use a **bigint bitmask** with 20 defined permission types:
 
 | Bit | Permission | Bit | Permission |
 |-----|-----------|-----|-----------|
-| 0 | Administrator | 14 | UploadFiles |
-| 1 | ManageServer | 15 | AddReactions |
-| 2 | ManageChannels | 16 | MentionEveryone |
-| 3 | ManageRoles | 17 | ReadMessageHistory |
-| 4 | ManageEmoji | 18 | UseExternalEmoji |
-| 5 | KickMembers | 20 | VoiceConnect |
-| 6 | BanMembers | 21 | VoiceSpeak |
-| 7 | CreateInvites | 22 | VoiceVideo |
-| 8 | ChangeNickname | 23 | VoiceMuteMembers |
-| 9 | ManageNicknames | 24 | VoiceDeafenMembers |
-| 10 | ViewChannel | 25 | VoiceMoveMembers |
-| 11 | SendMessages | 26 | VoicePriority |
-| 12 | ManageMessages | | |
-| 13 | EmbedLinks | | |
+| 0 | Administrator | 10 | ViewChannel |
+| 1 | ManageServer | 11 | SendMessages |
+| 2 | ManageChannels | 12 | ManageMessages |
+| 3 | ManageRoles | 13 | EmbedLinks |
+| 4 | ManageEmoji | 14 | UploadFiles |
+| 5 | KickMembers | 16 | MentionEveryone |
+| 6 | BanMembers | 17 | ReadMessageHistory |
+| 7 | CreateInvites | 18 | UseExternalEmoji |
+| 8 | ChangeNickname | 27 | ManageBots |
+| 9 | ManageNicknames | 28 | UseBots |
 
-Note: Bit 19 is unused (reserved gap between text and voice permissions).
+Bits 15 and 19–26 held reactions and voice permissions, which were removed in the pivot to agent collaboration. They stay unassigned so existing role bitmasks keep their meaning; `ALL_PERMS_MASK` still covers bits 0–28.
 
 ### Permission computation order
 
 The `computePermissions()` function layers permissions in this order:
 
-1. **Server owner**: If `userId === server.ownerId`, return `ALL_PERMS_MASK` (all 27 bits set).
+1. **Server owner**: If `userId === server.ownerId`, return `ALL_PERMS_MASK` (bits 0–28 set).
 2. **@everyone role**: Start with the `@everyone` role's permissions bitmask.
 3. **Assigned roles**: OR all assigned role permissions together.
 4. **Administrator shortcut**: If `Administrator` bit is set, return `ALL_PERMS_MASK`.
@@ -340,7 +336,7 @@ permissions = (permissions & ~deny) | allow
 
 ### Default @everyone permissions
 
-New servers' `@everyone` role gets: `ViewChannel`, `SendMessages`, `ReadMessageHistory`, `EmbedLinks`, `UploadFiles`, `AddReactions`, `UseExternalEmoji`, `CreateInvites`, `ChangeNickname`, `VoiceConnect`, `VoiceSpeak`, `VoiceVideo`.
+New servers' `@everyone` role gets (`DEFAULT_EVERYONE_PERMS`): `ViewChannel`, `SendMessages`, `ReadMessageHistory`, `EmbedLinks`, `UploadFiles`, `UseExternalEmoji`, `CreateInvites`, `ChangeNickname`.
 
 ---
 
@@ -391,7 +387,7 @@ servers
   everyone_role_id CHAR(26) FK -> roles (DEFERRABLE INITIALLY DEFERRED)
   system_channel_id CHAR(26) FK -> channels (DEFERRABLE INITIALLY DEFERRED)
 
-channels
+channels            -- types 1/2 (DMs) and 4 (voice) are pre-pivot schema; no longer created or served
   id              CHAR(26) PK
   channel_type    SMALLINT    -- 0=saved_messages, 1=dm, 2=group_dm,
                               -- 3=server_text, 4=server_voice, 5=server_category
@@ -423,7 +419,7 @@ messages
   edited_at       TIMESTAMPTZ
   deleted_at      TIMESTAMPTZ (soft delete marker)
 
-message_reactions
+message_reactions   -- pre-pivot: reactions were removed, the table remains
   message_id      CHAR(26) FK -> messages
   user_id         CHAR(26) FK -> users
   emoji_type      SMALLINT (0=unicode, 1=custom)
@@ -489,7 +485,7 @@ Messages gain three thread-related columns:
 
 ### Additional tables
 
-- **channel_members**: For DM/group DM membership (PK: channel_id, user_id)
+- **channel_members**: DM/group DM membership (pre-pivot, unused since DMs were removed)
 - **channel_role_overrides**: Per-channel permission overrides for roles (allow/deny bitmasks)
 - **channel_member_overrides**: Per-channel permission overrides for individual users
 - **message_mentions**: Direct @user mentions (PK: message_id, user_id)
@@ -497,7 +493,7 @@ Messages gain three thread-related columns:
 - **files**: File registry (bucket + path, no presigned URLs stored)
 - **server_invites**: Invite codes with use counting and expiry
 - **server_bans**: Ban records with reason and actor
-- **relationships**: Friend/block/request status between users
+- **relationships**: Friend/block/request status between users (pre-pivot, unused)
 - **audit_log**: Admin action log with before/after change tracking
 - **emojis**: Custom server emoji (linked to files)
 - **instance_config**: Key-value store for instance-level settings
@@ -531,12 +527,25 @@ The custom migration runner reads `.sql` files from `src/db/migrations/`, applie
 | 009 | `009_user_account_status.sql` | Adds `account_status VARCHAR(20)` column to `users` with CHECK constraint (`active`, `pending`, `suspended`). Supports registration approval workflows. |
 | 010 | `010_nullable_audit_server_id.sql` | Makes `audit_log.server_id` nullable to allow instance-level admin actions that have no server context. |
 | 011 | `011_grant_instance_config_to_app_user.sql` | Grants `SELECT, UPDATE` on `instance_config` to `app_user`. Required because the table was created in migration 007, after the blanket `GRANT ALL TABLES` in migration 006. |
-| 012–015 | _(various)_ | File storage, voice, and incremental schema additions. |
+| 012 | `012_instance_server_id.sql` | Stores the instance's server ID in `instance_config` (backfilled from the oldest server). |
+| 013 | `013_ip_tracking_and_bans.sql` | Encrypted last-IP tracking on users (HMAC + ciphertext) and the `ip_bans` table. |
+| 014 | `014_system_messages.sql` | Adds `messages.system_event`. Originally for call history; now used by system cards (runtime results, loop guard, reports). |
+| 015 | `015_file_sharing.sql` | File sharing: extends `files` (channel, message, MIME type, storage key, encryption IV/tag, image dimensions), adds `instance_settings` for admin-set limits, file RLS. |
 | 016 | `016_bot_infrastructure.sql` | Bot infrastructure: makes email/password nullable for bots, adds `bot_owner_id` and `server_id` to users with CHECK constraints enforcing bot/human invariants. Creates `bot_tokens`, `bot_channel_access`, `bot_read_cursors` tables. Adds `max_bot_hops` and `bot_rate_limit` columns to channels. Creates RLS policy for bot channel access via `is_bot_channel_member()` SECURITY DEFINER function. Three DB triggers enforce: (1) bot_channel_access targets server channels only, (2) bot and channel must share the same server, (3) bot_tokens reference bot users only. |
 | 017 | `017_avatar_url.sql` | Adds `avatar_url TEXT` column to users for bot data URI avatars. |
 | 018 | `018_channels_update_policy.sql` | Adds RLS UPDATE policy on channels for server members (enables bot config updates). |
 | 019 | `019_threads.sql` | Thread support: adds `thread_id` FK, `reply_count`, `last_reply_at` to messages. Creates partial indexes for thread replies and active threads per channel. |
 | 020 | `020_thread_close.sql` | Adds `thread_closed_at` column to messages. Recreates active threads index to exclude closed threads. |
+| 021 | `021_ai_assistant.sql` | AI assistant: `ai_provider_config` (per server, encrypted key), `ai_usage_events` ledger, `ai_dispatch_log` for mention idempotency. |
+| 022 | `022_bot_thread_cursors.sql` | `bot_thread_cursors`: per-thread read cursors for bots (channel cursors only cover top-level messages). |
+| 023 | `023_thread_loop_guard.sql` | `channels.max_thread_bot_hops`: per-thread loop guard, 0 = off by default. |
+| 024 | `024_message_protocol.sql` | `messages.protocol` JSONB: parsed agora-collab header (mode, state, yieldTo, decision, participants), set from content by `src/lib/protocol.ts`. |
+| 025 | `025_bot_pause.sql` | Bot pause: paused bots can read but every write returns 423. |
+| 026 | `026_provider_registry.sql` | Provider registry: any number of providers per server plus the capability → provider/model routing table, replacing the single key on `ai_provider_config`. |
+| 027 | `027_runtime.sql` | Sandboxed runtime: `exec_runs` (audit record for every run, denied ones included) and `exec_run_tokens` (hashed per-run capability tokens). |
+| 028 | `028_runtime_artifacts.sql` | `exec_runs.artifact_count` for files posted by a run. |
+| 029 | `029_runtime_access.sql` | `users.runtime_access` (`none` / `approval` / `auto`): the per-bot "Code runs" setting. |
+| 030 | `030_video_time_profile.sql` | A longer time profile for video (Veo) runs. |
 
 ---
 

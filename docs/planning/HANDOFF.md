@@ -1,4 +1,4 @@
-# Handoff — AI Runtime Initiative (updated 2026-09-30, after live testing)
+# Handoff — AI Runtime Initiative (updated 2026-09-30, after live testing + long chat_wait)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model).
 
@@ -14,6 +14,8 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | 4.1 Visual test report: `testReport()` in `agora:std` → `/v1/reports` → results card + Markdown report | merged | #29 |
 | 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | merged, **broken live, see #33** | #30 |
 | 5.3 Video (Veo) + four fixes found in live testing: socket-proxy docker group, gVisor gateway DNS, route model reset / Tavily depths, AI settings audit trail | merged | #31 |
+| Agent collab: long, turn-aware `chat_wait` (up to 3600 s, `until="turn"`, progress keep-alive), skills for all four harnesses wait with one `timeout=1500 until=turn` call. `agora-mcp` 0.4.0 | merged | #36 |
+| Docs: WSL2 local-stack guide and keep-alive task (#34, #37); architecture docs synced with the code; flaky `threads` / stale `ai-assistant` tests fixed | merged / this PR | #34, #37 |
 
 ## Live test results (2026-09-30, WSL2 + gVisor stack, real provider keys)
 
@@ -27,7 +29,9 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | AI settings audit trail ("Recent changes") | ✅ verified: first live entry recorded actor, change, client |
 | **Audio overview / multi-speaker TTS** | ❌ **fails**: Gemini now requires `speechMetadata.speaker` on each text part. Issue **#33** |
 | `video` (Veo) | ⏸ not tested: Veo was down. Route is on `veo-3.1-fast-generate-preview` (~$0.40 per 4 s) with a 2/day request cap |
-| `search` via Gemini (Search Suggestions card), `image`, single-voice `tts`, `testReport` | ☐ not yet tested live |
+| `search` via **Gemini** | ◐ API path works: run `01M3T1RBHQFEWZDN70CAN2TFGR` returned grounded results (`vertexaisearch` redirect links, ncsu.edu/uconn.edu). The "Web search" Search Suggestions card in the UI wasn't checked |
+| Long `chat_wait` across harnesses | ✅ verified: Codex (Sol, `tool_timeout_sec = 3600`) held one wait 394.5 s, past Codex's 300 s default; Claude Code held 380 s with no config change; `until=turn` slept through a TURN for another agent and returned both together |
+| `image`, single-voice `tts`, `testReport` | ☐ not yet tested live |
 
 Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
@@ -35,7 +39,7 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 1. **Fix #33** (multi-speaker TTS: one text part per line with `speechMetadata.speaker`, or per-line single-voice synthesis stitched together), then one real audio overview.
    - Potential enhancement **#35**: free local TTS with Kokoro (reusing Thoth's `kokoro-onnx` engine) as an OpenAI-compatible Speech provider.
 2. **Retry video** once Veo is back: the agent prompt with `generateVideo("…", { durationSeconds: 4 })`, capability `video`.
-3. **Remaining live checks:** Gemini search (expect the "Web search" card), `image`, single-voice `tts`, `testReport`.
+3. **Remaining live checks:** the Gemini "Web search" card in the UI, `image`, single-voice `tts`, `testReport`. Also connect **Gemini CLI** and **OpenCode** to Agora and confirm a long `chat_wait` holds there (settings in the agora-collab skill's "Harness setup").
 4. **MinIO images are gone** from quay.io/Docker Hub. Issue **#32**; a task chip for picking a replacement was also offered. The WSL stack uses a copy `docker save`d from Docker Desktop (image ID `14cea493d9a3`).
 5. **3.9 Negative suite on gVisor:** the spec §14 list. **No CI runner needed any more:** the WSL2 Ubuntu here has `runsc` (release-20260928.0). Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` against the WSL engine.
 6. **Hardening:**
@@ -48,10 +52,11 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
    - 4.1: an MCP tool taking a results file path (code is capped at 360 KB), a CI reporter recipe.
    - Google's docs now lead with the Interactions API; adapters still use `generateContent` (no deprecation notice).
 8. **Open issues:** #23 (loop guard UI), #22 (agora-mcp + self-signed `https://localhost`).
+9. **Cleanup leftovers:** dead pre-Arc frontend components (`ContentArea`, `UserPanel`, `ConnectionIndicator`, `UserSearch`, nothing imports them) and pre-pivot DB leftovers (DM/voice channel types, `channel_members`, `message_reactions`, `relationships`, the DM branch of `checkChannelMembership`). Both are documented as leftovers in the architecture docs; removing the tables needs a migration.
 
 ## Known pre-existing test failures (not caused by this work)
-- `ai-assistant.integration.test.ts`: expects bot name `AI Assistant`, but code creates `AI-Assistant`.
-- `threads.integration.test.ts` (2–3 tests) and occasionally one admin audit test: they read the DB before the request's COMMIT lands. They need `waitFor`-style polling. A separate agent session was started to fix these; as of 2026-09-30 it had **not** landed on `main`.
+- **Fixed 2026-09-30:** `ai-assistant` (expected `AI Assistant`, code creates `AI-Assistant`) and `threads` (read the DB before the request's COMMIT landed; now polls). Recovered from an uncommitted agent worktree; 3 clean runs.
+- Occasionally one `admin` audit test: same read-before-COMMIT pattern, not yet fixed.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
 - Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
 - Rare one-off: `admin` "IP ban creates ip_bans row and suspends active user" failed once in a full run (2026-09-30, video branch), then the admin file passed 3× alone. Same read-before-COMMIT pattern as `threads`.
@@ -68,7 +73,8 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 - Test infra: `docker compose -p agora-test -f docker-compose.yml up -d postgres redis minio`, plus `--profile sandbox up -d socket-proxy` for runtime work.
 - Use an **isolated test DB** so parallel agent sessions don't truncate each other: DB `accord_test_threads`, Redis DB 1. Env via the scratchpad `testenv.sh`, or set `DATABASE_URL` / `TEST_DATABASE_URL` (both!) and `REDIS_URL=redis://localhost:6379/1`.
 - Exclude agent worktrees from vitest: the default config excludes `.claude/**` and `test/sandbox/**`. Docker suite: `npm run test:sandbox` (Docker Desktop, runc, needs `agora_sandbox` network + `agora/sandbox-deno:dev` image).
-- **agora-mcp:** the global `agora-mcp` is **0.3.0 linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`), since npm only has 0.1.2, which lacks `runtime_exec`. Rebuilding that folder changes the installed MCP. This Claude session's own Agora MCP config still has a dead token.
+- **agora-mcp:** the global `agora-mcp` is **0.4.0 linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`), since npm only has 0.1.2, which lacks `runtime_exec` and the long `chat_wait`. Rebuilding that folder changes the installed MCP, but running agents keep the old code until their MCP server restarts (check process start times against `agora-mcp/dist` if unsure).
+- **Agents on Agora:** Claude Code (project entry in `~/.claude.json`) and **Sol** (Codex, project `.codex/config.toml`, gitignored, with `tool_timeout_sec = 3600`). Gemini CLI and OpenCode have no Agora server configured today.
 - Local Ollama is at `localhost:11434` (qwen3:14b, qwen3:32b, gpt-oss:20b, deepseek-r1:14b, …). Testing against it loads models into the 5070 Ti.
 - Windows/Git Bash: `ln -s` copies instead of linking; Python heredocs in Bash mangle `\n` and `\\`. Write scripts to files with the Write tool instead.
 

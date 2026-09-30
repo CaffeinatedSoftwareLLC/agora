@@ -1,6 +1,6 @@
 # Planning Brief — Multi-Model Capabilities & Sandboxed Runtime
 
-> **Status:** brainstorm → ready for planning. Nothing here is committed to the design yet.
+> **Status (2026-09-30): historical.** This brief became `ai-runtime-execution-plan.md` and `sandbox-isolation-spec.md`; phases 0–5 are merged (#24–#31). Current state lives in `HANDOFF.md`.
 > **Audience:** a planning agent with no prior context. This document is self-contained.
 > **Scope:** how Agora gains generative-media, grounded-search, and code-execution capabilities without marrying a single model — and the sandbox/decision layers that make that safe.
 

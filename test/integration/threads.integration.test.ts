@@ -15,6 +15,22 @@ beforeAll(async () => {
 });
 afterAll(async () => { await ctx.close(); });
 
+/**
+ * Poll a messages column until it satisfies `matches`, returning the final value.
+ * The Fastify onResponse hook COMMITs the transaction after the response is
+ * sent, so a direct ctx.db query right after a request can see pre-commit state.
+ */
+async function waitForMessageColumn(id: string, column: string, matches: (value: any) => boolean) {
+    let last: any;
+    for (let i = 0; i < 20; i++) {
+        const res = await ctx.db.query(`SELECT ${column} FROM messages WHERE id = $1`, [id]);
+        last = res.rows[0]?.[column];
+        if (res.rows.length > 0 && matches(last)) return last;
+        await new Promise(r => setTimeout(r, 50));
+    }
+    return last;
+}
+
 describe('Threads', () => {
     let parentMsgId: string;
 
@@ -42,12 +58,8 @@ describe('Threads', () => {
 
     test('parent reply_count increments correctly', async () => {
         // Check parent in DB
-        const dbRes = await ctx.db.query(
-            'SELECT reply_count, last_reply_at FROM messages WHERE id = $1',
-            [parentMsgId]
-        );
-        expect(dbRes.rows[0].reply_count).toBe(1);
-        expect(dbRes.rows[0].last_reply_at).toBeTruthy();
+        expect(await waitForMessageColumn(parentMsgId, 'reply_count', v => v === 1)).toBe(1);
+        expect(await waitForMessageColumn(parentMsgId, 'last_reply_at', v => v !== null)).toBeTruthy();
     });
 
     test('second reply increments count to 2', async () => {
@@ -56,11 +68,7 @@ describe('Threads', () => {
             .set(owner.auth)
             .send({ content: 'Second reply' });
 
-        const dbRes = await ctx.db.query(
-            'SELECT reply_count FROM messages WHERE id = $1',
-            [parentMsgId]
-        );
-        expect(dbRes.rows[0].reply_count).toBe(2);
+        expect(await waitForMessageColumn(parentMsgId, 'reply_count', v => v === 2)).toBe(2);
     });
 
     test('reply to non-existent message returns 404', async () => {
@@ -208,8 +216,7 @@ describe('Threads', () => {
             .send({ content: 'Delete reply 2' });
 
         // Verify count = 2
-        let dbRes = await ctx.db.query('SELECT reply_count FROM messages WHERE id = $1', [pid]);
-        expect(dbRes.rows[0].reply_count).toBe(2);
+        expect(await waitForMessageColumn(pid, 'reply_count', v => v === 2)).toBe(2);
 
         // Delete first reply
         const del = await ctx.request
@@ -218,8 +225,7 @@ describe('Threads', () => {
         expect(del.status).toBe(200);
 
         // Count should be 1
-        dbRes = await ctx.db.query('SELECT reply_count FROM messages WHERE id = $1', [pid]);
-        expect(dbRes.rows[0].reply_count).toBe(1);
+        expect(await waitForMessageColumn(pid, 'reply_count', v => v === 1)).toBe(1);
     });
 
     test('edit reply sets editedAt', async () => {
@@ -405,11 +411,7 @@ describe('Threads', () => {
         expect(res.body.threadClosedAt).toBeTruthy();
 
         // Verify in DB
-        const dbRes = await ctx.db.query(
-            'SELECT thread_closed_at FROM messages WHERE id = $1',
-            [pid]
-        );
-        expect(dbRes.rows[0].thread_closed_at).toBeTruthy();
+        expect(await waitForMessageColumn(pid, 'thread_closed_at', v => v !== null)).toBeTruthy();
     });
 
     test('reply to closed thread returns 409', async () => {
