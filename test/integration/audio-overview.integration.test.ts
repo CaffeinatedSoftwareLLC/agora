@@ -156,8 +156,20 @@ describe('audio overview', () => {
         expect(chatBody.systemInstruction.parts[0].text).toContain('Alex and Sam');
         expect(ttsCall[0]).toContain('/models/gemini-3.8-flash-tts:generateContent');
         const ttsBody = JSON.parse(ttsCall[1].body as string);
-        expect(ttsBody.contents[0].parts[0].text.startsWith('TTS the following conversation between Alex and Sam:\nAlex: Welcome')).toBe(true);
-        expect(ttsBody.generationConfig.speechConfig.multiSpeakerVoiceConfig.speakerVoiceConfigs.map((s: any) => s.speaker)).toEqual(['Alex', 'Sam']);
+        // #33: one part per line, each tagged with its speaker, and no untagged preamble
+        expect(ttsBody.contents).toEqual([{
+            role: 'user',
+            parts: [
+                { text: 'Welcome to the overview of the release thread.', speechMetadata: { speaker: 'Alex' } },
+                { text: 'The team agreed to ship on Friday if QA signs off.', speechMetadata: { speaker: 'Sam' } },
+                { text: 'Ben still owes the migration notes.', speechMetadata: { speaker: 'Alex' } },
+                { text: 'That is the one open item.', speechMetadata: { speaker: 'Sam' } },
+            ],
+        }]);
+        expect(ttsBody.generationConfig.speechConfig.multiSpeakerVoiceConfig.speakerVoiceConfigs).toEqual([
+            { speaker: 'Alex', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+            { speaker: 'Sam', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+        ]);
 
         // MP3 stored and attached to the reply
         const file = (await ctx.db.query('SELECT id, filename, mime_type, size_bytes FROM files WHERE message_id = $1', [reply.id])).rows[0];

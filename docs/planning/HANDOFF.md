@@ -1,4 +1,4 @@
-# Handoff — AI Runtime Initiative (updated 2026-09-30, after live testing)
+# Handoff — AI Runtime Initiative (updated 2026-09-30, after live testing and the #33 fix)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model).
 
@@ -25,17 +25,21 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | Sandbox → gateway name resolution under gVisor (`/etc/hosts` pin) | ✅ fixed and verified |
 | Route provider switch resets model; Tavily depth dropdown + server validation | ✅ fixed and verified |
 | AI settings audit trail ("Recent changes") | ✅ verified: first live entry recorded actor, change, client |
-| **Audio overview / multi-speaker TTS** | ❌ **fails**: Gemini now requires `speechMetadata.speaker` on each text part. Issue **#33** |
-| `video` (Veo) | ⏸ not tested: Veo was down. Route is on `veo-3.1-fast-generate-preview` (~$0.40 per 4 s) with a 2/day request cap |
-| `search` via Gemini (Search Suggestions card), `image`, single-voice `tts`, `testReport` | ☐ not yet tested live |
+| **Audio overview / multi-speaker TTS** | ❌ failed: Gemini now requires `speechMetadata.speaker` on each text part (issue **#33**). **Fix on branch `claude/amazing-johnson-q35x5f`, needs one live audio overview** (see Next up 1) |
+| `video` (Veo) | ✅ verified (2026-09-30, after Veo came back). Route is on `veo-3.1-fast-generate-preview` (~$0.40 per 4 s) with a 2/day request cap |
+| `image` | ✅ verified (2026-09-30) |
+| `search` via Gemini (Search Suggestions card), single-voice `tts`, `testReport` | ☐ not yet tested live |
 
 Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
 ## Next up (in order)
-1. **Fix #33** (multi-speaker TTS: one text part per line with `speechMetadata.speaker`, or per-line single-voice synthesis stitched together), then one real audio overview.
-   - Potential enhancement **#35**: free local TTS with Kokoro (reusing Thoth's `kokoro-onnx` engine) as an OpenAI-compatible Speech provider.
-2. **Retry video** once Veo is back: the agent prompt with `generateVideo("…", { durationSeconds: 4 })`, capability `video`.
-3. **Remaining live checks:** Gemini search (expect the "Web search" card), `image`, single-voice `tts`, `testReport`.
+1. **Verify the #33 fix live**, then merge. Branch `claude/amazing-johnson-q35x5f`:
+   - Multi-speaker speech goes through `synthesizeDialogue()` in `src/ai/speech.ts`. Adapters with native multi-speaker implement `ttsDialogue`; Gemini now sends one text part per line with `speechMetadata: { speaker }`, plus `multiSpeakerVoiceConfig`, and no preamble. Adapters without it (e.g. a future Kokoro/OpenAI-compatible speech provider) get each line voiced with `tts` and the WAVs joined with a 0.3 s pause. One speaker used → a single-voice call.
+   - `agora:std` `tts(text, { speakers })`: the gateway parses `Name: …` turns (`parseDialogue`), rejecting undeclared labels and unlabelled openings with a 400.
+   - **The request shape was written from the API reference only** (ai.google.dev is blocked from the cloud session). Live check: one "@assistant audio overview" in a thread, and one run with `tts("Joe: hi\nJane: hello", { speakers: [{ speaker: "Joe", voice: "Kore" }, { speaker: "Jane", voice: "Puck" }] })`. If Gemini still rejects it, the quick fallback is deleting `ttsDialogue` from `src/ai/adapters/gemini.ts`, which makes Gemini voice line by line (one call per line: watch the TTS preview RPM limits).
+   - Potential enhancement **#35**: free local TTS with Kokoro as an OpenAI-compatible Speech provider. It only needs single-voice `tts` on the OpenAI-compatible adapter; the line-by-line path already handles two hosts.
+2. ~~Retry video~~: ✅ verified live 2026-09-30.
+3. **Remaining live checks:** Gemini search (expect the "Web search" card), single-voice `tts`, `testReport`. (`image` ✅.)
 4. **MinIO images are gone** from quay.io/Docker Hub. Issue **#32**; a task chip for picking a replacement was also offered. The WSL stack uses a copy `docker save`d from Docker Desktop (image ID `14cea493d9a3`).
 5. **3.9 Negative suite on gVisor:** the spec §14 list. **No CI runner needed any more:** the WSL2 Ubuntu here has `runsc` (release-20260928.0). Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` against the WSL engine.
 6. **Hardening:**
@@ -56,6 +60,11 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 - Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
 - Rare one-off: `admin` "IP ban creates ip_bans row and suspends active user" failed once in a full run (2026-09-30, video branch), then the admin file passed 3× alone. Same read-before-COMMIT pattern as `threads`.
 - **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file (a task chip was offered to fix it).
+
+## Cloud sessions (claude.ai/code)
+- Used for code work when local usage runs out; Codex on the local machine runs the live checks.
+- No MinIO image is reachable (quay.io, Docker Hub, cgr.dev all blocked or gone). For the file-storing integration tests, run moto as an S3 stand-in on :9000 and create the bucket: `python3 -m venv s3env && s3env/bin/pip install "moto[server]"`, `s3env/bin/moto_server -H 127.0.0.1 -p 9000 &`, `curl -X PUT http://127.0.0.1:9000/agora-files`.
+- Docker needs `dockerd &` first. Create `accord_test_runner` by hand, and set `IP_ENCRYPTION_KEY` / `AGORA_ENCRYPTION_KEY` in `.env` (register fails with "Invalid key length" otherwise).
 
 ## Local environment (this machine)
 - **The prod stack runs in WSL2 Ubuntu** at `~/agora` (checkout of `main`), on its own Docker Engine 29.x with gVisor `runsc`. The runner starts with `runtime=runsc`, no dev flag. `.env.prod` there has `DOCKER_GID=986`.

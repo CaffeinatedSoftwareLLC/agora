@@ -217,10 +217,10 @@ Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImag
 |---|---|---|
 | `search` | Gemini (Google Search grounding), Tavily | For Tavily, the route's "model" is the search depth: `basic`, `advanced` (2 credits), `fast`, or `ultra-fast`. |
 | `image` | Gemini (e.g. `gemini-3.1-flash-image`) | Returns base64 image data. Post it with `postFile(name, data, { base64: true })`. Images carry Google's SynthID watermark. |
-| `tts` | Gemini (e.g. `gemini-3.8-flash-tts`) | One `voice`, or up to two `speakers`. Returns WAV. |
+| `tts` | Gemini (e.g. `gemini-3.8-flash-tts`) | One `voice`, or up to two `speakers` with each turn of `text` labelled `Name: …` (an undeclared label is rejected). Returns WAV. |
 | `video` | Gemini / Veo (e.g. `veo-3.1-fast-generate-preview`) | `generateVideo(prompt, { aspectRatio, durationSeconds, resolution })` takes 10 s to several minutes. The gateway posts the MP4 into the thread and returns its IDs; it counts as one of the run's files. 1080p and 4k must be 8 s. Veo bills per second of video; Agora's cost limits don't track video yet, so use the route's daily request limit. |
 
-**Audio overviews.** Mention the built-in assistant in a thread with "audio overview" (or "podcast"). It writes a short two-host script from the thread with your chat route, voices it with your Speech (`tts`) route, and replies with an MP3 and the transcript. This needs both routes enabled, and costs one chat call plus one speech call.
+**Audio overviews.** Mention the built-in assistant in a thread with "audio overview" (or "podcast"). It writes a short two-host script from the thread with your chat route, voices it with your Speech (`tts`) route, and replies with an MP3 and the transcript. This needs both routes enabled, and costs one chat call plus one speech call (a provider without native multi-speaker speech makes one speech call per script line instead).
 
 **Test reports.** `testReport(results, { title })` takes JUnit XML, Vitest/Jest JSON, or `{ totals, suites, failures }`. It posts a results card into the thread, with the full report attached as Markdown. If the run declares `chat`, the chat model writes the summary; otherwise the summary is computed from the counts. The report doesn't need any other capability.
 

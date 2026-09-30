@@ -84,12 +84,28 @@ export interface ImageRequest {
     imageSize?: string;
 }
 
+/** Single-voice speech. */
 export interface SpeechRequest {
     model: string;
     text: string;
     voice?: string;
-    /** Multi-speaker: names must match the speaker labels used in `text`. */
-    speakers?: { speaker: string; voice: string }[];
+}
+
+export interface SpeechSpeaker {
+    speaker: string;
+    voice: string;
+}
+
+export interface SpeechLine {
+    speaker: string;
+    text: string;
+}
+
+/** Multi-speaker speech: one entry per turn; every line's `speaker` is in `speakers`. */
+export interface DialogueRequest {
+    model: string;
+    lines: SpeechLine[];
+    speakers: SpeechSpeaker[];
 }
 
 export interface VideoRequest {
@@ -122,6 +138,11 @@ export interface Adapter extends AdapterInfo {
     search?(creds: ProviderCredentials, req: SearchRequest): Promise<SearchResult>;
     generateImage?(creds: ProviderCredentials, req: ImageRequest): Promise<MediaResult>;
     tts?(creds: ProviderCredentials, req: SpeechRequest): Promise<MediaResult>;
+    /**
+     * Native multi-speaker speech in one call (optional, needs `tts`). Without it,
+     * `synthesizeDialogue` voices each line with `tts` and joins the audio.
+     */
+    ttsDialogue?(creds: ProviderCredentials, req: DialogueRequest): Promise<MediaResult>;
     generateVideo?(creds: ProviderCredentials, req: VideoRequest): Promise<MediaResult>;
     testConnection(creds: ProviderCredentials, model: string): Promise<ConnectionResult>;
 }

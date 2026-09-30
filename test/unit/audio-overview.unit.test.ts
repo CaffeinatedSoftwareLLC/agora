@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    isAudioOverviewRequest, formatTranscript, parseScript, speechText, overviewMessage, formatClock, scriptRequest,
+    isAudioOverviewRequest, formatTranscript, parseScript, overviewMessage, formatClock, scriptRequest,
     MAX_SCRIPT_CHARS,
 } from '../../src/ai/audio-overview';
 
@@ -67,11 +67,6 @@ describe('parseScript', () => {
 });
 
 describe('script and message text', () => {
-    it('speech text uses the multi-speaker preamble with the configured hosts', () => {
-        expect(speechText([{ speaker: 'Alex', text: 'Hi.' }, { speaker: 'Sam', text: 'Hey.' }]))
-            .toBe('TTS the following conversation between Alex and Sam:\nAlex: Hi.\nSam: Hey.');
-    });
-
     it('script request carries the transcript and the listener\'s ask without mentions', () => {
         const [msg] = scriptRequest('ana: hi', '<@01ABC> audio overview, focus on the release date');
         expect(msg.role).toBe('user');
