@@ -281,6 +281,11 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         if (!adapter?.capabilities.includes(capability)) {
             return reply.status(400).send({ error: `${adapter?.label ?? provider.rows[0].adapter} does not support "${capability}"` });
         }
+        // Some adapters take a fixed set of "models" (Tavily: search depths); reject others before a run hits them
+        const choices = adapter.modelChoices?.[capability];
+        if (choices && !choices.includes(b.model)) {
+            return reply.status(400).send({ error: `For ${adapter.label}, the ${capability} model must be one of: ${choices.join(', ')}` });
+        }
 
         // Chat is on by default; anything that can spend money beyond chat is opt-in
         const enabled = b.enabled ?? (capability === 'chat');

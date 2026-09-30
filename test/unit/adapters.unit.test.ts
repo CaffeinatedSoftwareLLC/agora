@@ -351,6 +351,12 @@ describe('adapter registry', () => {
         }
     });
 
+    it('publishes fixed model choices only where they exist (Tavily search depths)', () => {
+        const list = listAdapters();
+        expect(list.find(a => a.id === 'tavily')!.modelChoices).toEqual({ search: ['basic', 'advanced', 'fast', 'ultra-fast'] });
+        expect(list.find(a => a.id === 'gemini')!.modelChoices).toBeUndefined();
+    });
+
     it('each adapter implements exactly the capabilities it lists', () => {
         const methods = { chat: 'streamChat', search: 'search', image: 'generateImage', tts: 'tts', video: 'generateVideo' } as const;
         for (const { id } of listAdapters()) {

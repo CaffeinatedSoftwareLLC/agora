@@ -215,6 +215,8 @@ export interface AIAdapter {
   supportsBaseUrl: boolean;
   defaultBaseUrl: string;
   defaultModels: Partial<Record<AICapability, string>>;
+  /** When set for a capability, the only valid "model" values (e.g. Tavily's search depths). */
+  modelChoices?: Partial<Record<AICapability, string[]>>;
 }
 
 export interface AIProvider {

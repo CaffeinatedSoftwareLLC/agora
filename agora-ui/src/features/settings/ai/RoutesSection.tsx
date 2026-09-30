@@ -53,13 +53,20 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
   onChanged: () => void;
 }) {
   const info = CAPABILITY_INFO[capability];
-  const defaultModel = (providerId: string) => {
-    const adapterId = eligible.find(p => p.id === providerId)?.adapter;
-    return adapters.find(a => a.id === adapterId)?.defaultModels[capability] ?? '';
-  };
+  const adapterOf = (id: string) => adapters.find(a => a.id === eligible.find(p => p.id === id)?.adapter);
+  const defaultModel = (id: string) => adapterOf(id)?.defaultModels[capability] ?? '';
+  const choicesFor = (id: string) => adapterOf(id)?.modelChoices?.[capability];
 
-  const [providerId, setProviderId] = useState(route?.providerId ?? eligible[0]?.id ?? '');
-  const [model, setModel] = useState(route?.model ?? defaultModel(route?.providerId ?? eligible[0]?.id ?? ''));
+  const initialProvider = route?.providerId ?? eligible[0]?.id ?? '';
+  const initialChoices = choicesFor(initialProvider);
+  // A saved value outside the adapter's fixed choices (e.g. an LLM name left on a Tavily route) can't work
+  const savedModelInvalid = !!(route && initialChoices && !initialChoices.includes(route.model));
+
+  const [providerId, setProviderId] = useState(initialProvider);
+  const [model, setModel] = useState(
+    route?.model && !savedModelInvalid ? route.model : defaultModel(initialProvider),
+  );
+  const choices = choicesFor(providerId);
   const [enabled, setEnabled] = useState(route?.enabled ?? capability === 'chat');
   const [showLimits, setShowLimits] = useState(false);
   const [requests, setRequests] = useState(route?.dailyRequestLimit?.toString() ?? '');
@@ -98,12 +105,13 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
     setSaving(true);
     setError('');
     try {
+      const value = choices && !choices.includes(model) ? choices[0] : model.trim();
       await aiApi.putRoute(serverId, capability, {
-        providerId, model: model.trim(), enabled, ...(limits as Record<string, number | null>),
+        providerId, model: value, enabled, ...(limits as Record<string, number | null>),
       });
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.code : 'Failed to save');
+      setError(err instanceof ApiError ? (err.message || err.code) : 'Failed to save');
       setSaving(false);
     }
   }
@@ -128,6 +136,9 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
       <div className="flex items-center gap-3 flex-wrap">
         <CapabilityName label={info.label} description={info.description} />
         {!route && <span className="text-xs text-text-dim">Not set</span>}
+        {savedModelInvalid && (
+          <span className="text-xs text-danger">Saved model “{route!.model}” isn’t valid here; pick one and save</span>
+        )}
         {route && !route.enabled && <span className="text-xs text-warn">Off</span>}
         {limitsSummary && <span className="text-xs text-text-dim">{limitsSummary}</span>}
       </div>
@@ -138,19 +149,32 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
           value={providerId}
           aria-label={`${info.label} provider`}
           onChange={e => {
-            setProviderId(e.target.value);
-            if (!model.trim()) setModel(defaultModel(e.target.value));
+            const next = e.target.value;
+            // A different provider type means different model names: start from its default
+            if (!model.trim() || adapterOf(next)?.id !== adapterOf(providerId)?.id) setModel(defaultModel(next));
+            setProviderId(next);
           }}
         >
           {eligible.map(p => <option key={p.id} value={p.id}>{p.label}{p.enabled ? '' : ' (disabled)'}</option>)}
         </select>
-        <input
-          className={`${inputClass} py-1 text-sm w-56`}
-          value={model}
-          onChange={e => setModel(e.target.value)}
-          placeholder="model"
-          aria-label={`${info.label} model`}
-        />
+        {choices ? (
+          <select
+            className={`${inputClass} py-1 text-sm w-56`}
+            value={choices.includes(model) ? model : choices[0]}
+            onChange={e => setModel(e.target.value)}
+            aria-label={`${info.label} model`}
+          >
+            {choices.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        ) : (
+          <input
+            className={`${inputClass} py-1 text-sm w-56`}
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            placeholder="model"
+            aria-label={`${info.label} model`}
+          />
+        )}
         <label className="flex items-center gap-1 text-sm text-text-muted cursor-pointer">
           <input type="checkbox" className="accent-primary" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
           On

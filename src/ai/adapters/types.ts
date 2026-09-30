@@ -49,6 +49,8 @@ export interface AdapterInfo {
     defaultBaseUrl: string;
     /** Suggested model per capability; admins can enter any model ID. */
     defaultModels: Partial<Record<Capability, string>>;
+    /** When set for a capability, the only valid "model" values (e.g. Tavily's search depths). */
+    modelChoices?: Partial<Record<Capability, readonly string[]>>;
 }
 
 export interface SearchRequest {
