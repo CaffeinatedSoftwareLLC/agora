@@ -117,6 +117,7 @@ export interface Bot {
   /** Set while an admin has paused the bot (read-only). */
   pausedAt?: string | null;
   pausedReason?: string | null;
+  runtimeAccess?: RuntimeAccess;
 }
 
 export interface BotDetail extends Bot {
@@ -315,6 +316,44 @@ export const aiApi = {
 
   setAllowPrivateBaseUrls: (allowPrivateBaseUrls: boolean) =>
     api.patch<{ allowPrivateBaseUrls: boolean }>('/admin/settings/ai', { allowPrivateBaseUrls }),
+};
+
+// ─── Sandboxed runtime API ───
+
+export type RuntimeAccess = 'none' | 'approval' | 'auto';
+
+export interface RuntimeRunInfo {
+  id: string;
+  status: string;
+  capabilities: string[];
+  timeProfile: string;
+  limits: Record<string, number>;
+  gate: { decision: string | null; reason: string | null; source: string | null };
+  stdout: string | null;
+  stderr: string | null;
+  codeExpiresAt: string | null;
+  codePrunedAt: string | null;
+}
+
+export const runtimeApi = {
+  get: (runId: string) => api.get<RuntimeRunInfo>(`/runtime/runs/${runId}`),
+
+  /** Plain-text code download (410 once pruned by retention). */
+  code: async (runId: string): Promise<string> => {
+    const token = getToken();
+    const res = await fetch(`/runtime/runs/${runId}/code`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data.error || 'unknown_error');
+    }
+    return res.text();
+  },
+
+  approve: (runId: string) => api.post<{ id: string; status: string }>(`/runtime/runs/${runId}/approve`),
+  deny: (runId: string) => api.post<{ id: string; status: string }>(`/runtime/runs/${runId}/deny`),
+
+  setBotAccess: (serverId: string, botId: string, access: RuntimeAccess) =>
+    api.patch<{ id: string; runtimeAccess: RuntimeAccess }>(`/servers/${serverId}/bots/${botId}/runtime`, { access }),
 };
 
 // ─── Role Management API ───

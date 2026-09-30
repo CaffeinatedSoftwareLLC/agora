@@ -80,6 +80,92 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ─── Sandboxed runtime (docs/planning/sandbox-isolation-spec.md) ───
+  # Requires gVisor (runsc) on the host; without it the runner refuses to start.
+
+  # Build-only: produces the sandbox image the runner launches per run
+  sandbox-image:
+    build:
+      context: ./sandbox
+    image: agora/sandbox-deno:local
+    entrypoint: ["deno", "--version"]
+    network_mode: none
+    restart: "no"
+
+  # Restricted Docker API: only reachable by the runner; container operations
+  # limited to agora-run-* names; bind mounts rejected
+  socket-proxy:
+    image: wollomatic/socket-proxy:1.13.1
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - "-loglevel=info"
+      - "-listenip=0.0.0.0"
+      - "-allowfrom=runner"
+      - "-allowbindmountfrom=/nonexistent-agora-no-bind-mounts"
+      - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
+      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/agora_sandbox[a-z0-9_]*|images/.+/json)"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(create|agora-run-[0-9a-z]{26}/(start|wait|kill))"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/containers/agora-run-[0-9a-z]{26}"
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/runner-main.js"]
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      REDIS_URL: redis://redis:6379
+      AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+      IP_ENCRYPTION_KEY: ${IP_ENCRYPTION_KEY:-}
+      AGORA_DOCKER_HOST: http://socket-proxy:2375
+      AGORA_SANDBOX_IMAGE: ${AGORA_SANDBOX_IMAGE:-agora/sandbox-deno:local}
+      AGORA_SANDBOX_NETWORK: agora_sandbox
+      AGORA_CAP_URL: http://cap-gateway:8080
+      RUNTIME_PER_SERVER_CONCURRENCY: ${RUNTIME_PER_SERVER_CONCURRENCY:-2}
+      RUNTIME_INSTANCE_CONCURRENCY: ${RUNTIME_INSTANCE_CONCURRENCY:-4}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_started
+      sandbox-image:
+        condition: service_completed_successfully
+      cap-gateway:
+        condition: service_started
+    restart: unless-stopped
+
+  # The only service on both networks: sandboxes reach it as cap-gateway:8080.
+  # Never exposed through Caddy/nginx.
+  cap-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/gateway-main.js"]
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agora}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env.prod}
+      AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+      IP_ENCRYPTION_KEY: ${IP_ENCRYPTION_KEY:-}
+    networks: [default, sandbox]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: ./agora-ui
@@ -99,6 +185,13 @@ services:
       - caddy_data:/data
     depends_on:
       - web
+
+networks:
+  default: {}
+  # Internal-only: no route out. Members: cap-gateway + per-run sandbox containers.
+  sandbox:
+    name: agora_sandbox
+    internal: true
 
 volumes:
   caddy_data:

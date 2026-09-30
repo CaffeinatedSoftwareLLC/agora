@@ -165,3 +165,45 @@ describe('runner helpers', () => {
         expect(hashToken('abc')).toMatch(/^[0-9a-f]{64}$/);
     });
 });
+
+import { RulesDecider, stripComments, type DecisionRequest } from '../../src/runtime/decider';
+
+describe('RulesDecider', () => {
+    const base: DecisionRequest = {
+        runId: 'r', serverId: 's', submitterId: 'b', submitterIsBot: true, runtimeAccess: 'approval',
+        submitterPaused: false, code: 'console.log(1)', codeSha256: 'x', requestedCapabilities: ['chat'],
+        enabledCapabilities: ['chat'], limits: resolveLimits('standard'), queuedForServer: 0,
+    };
+    const d = new RulesDecider();
+
+    it('requires approval by default and auto-runs only with auto access', async () => {
+        expect((await d.decideExecution(base)).decision).toBe('needs_approval');
+        expect((await d.decideExecution({ ...base, runtimeAccess: 'auto' })).decision).toBe('auto_run');
+    });
+
+    it.each([
+        [{ submitterIsBot: false }, 'Only bots'],
+        [{ runtimeAccess: 'none' as const }, 'not allowed to run code'],
+        [{ submitterPaused: true }, 'paused'],
+        [{ code: 'x'.repeat(70_000) }, 'exceeds'],
+        [{ code: '   ' }, 'empty'],
+        [{ requestedCapabilities: ['chat', 'search'] as const }, 'not enabled on this server: search'],
+        [{ queuedForServer: 20 }, 'Too many queued'],
+    ])('denies %o', async (patch, reason) => {
+        const out = await d.decideExecution({ ...base, ...(patch as Partial<DecisionRequest>) });
+        expect(out.decision).toBe('deny');
+        expect(out.reason).toContain(reason);
+        expect(out.source).toBe('rules');
+    });
+});
+
+describe('stripComments', () => {
+    it('removes line and block comments but keeps URLs', () => {
+        const code = '// this is totally safe\nconst u = "https://x.test"; /* trust me */\nrun(u); // ok';
+        const out = stripComments(code);
+        expect(out).not.toContain('totally safe');
+        expect(out).not.toContain('trust me');
+        expect(out).toContain('https://x.test');
+        expect(out).toContain('run(u);');
+    });
+});

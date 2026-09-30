@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
-import { botApi, serverApi, ApiError } from '../../lib/api';
-import type { Bot, BotDetail, BotToken } from '../../lib/api';
+import { botApi, serverApi, runtimeApi, ApiError } from '../../lib/api';
+import type { Bot, BotDetail, BotToken, RuntimeAccess } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
 import { CreateBotModal } from './CreateBotModal';
@@ -219,7 +219,22 @@ function BotRow({
 }) {
   const [pausing, setPausing] = useState(false);
   const [pauseError, setPauseError] = useState('');
+  const [savingAccess, setSavingAccess] = useState(false);
   const isPaused = !!bot.pausedAt;
+
+  async function changeAccess(access: RuntimeAccess) {
+    if (access === 'auto' && !confirm(`Let ${bot.username} run code without approval? Runs still execute in the sandbox with its limits.`)) return;
+    setSavingAccess(true);
+    setPauseError('');
+    try {
+      await runtimeApi.setBotAccess(serverId, bot.id, access);
+      onPauseChanged();
+    } catch (err) {
+      setPauseError(err instanceof ApiError ? err.code : 'Failed to update code run access');
+    } finally {
+      setSavingAccess(false);
+    }
+  }
 
   async function togglePause() {
     setPausing(true);
@@ -273,6 +288,20 @@ function BotRow({
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
+      <label className="flex items-center gap-1 pr-3 text-xs text-text-muted" title="Whether this bot may run code in the sandbox">
+        Code runs
+        <select
+          className="bg-surface border border-border rounded px-1.5 py-1 text-xs text-text"
+          value={bot.runtimeAccess ?? 'none'}
+          disabled={savingAccess}
+          onChange={e => changeAccess(e.target.value as RuntimeAccess)}
+          aria-label={`Code run access for ${bot.username}`}
+        >
+          <option value="none">Off</option>
+          <option value="approval">Need approval</option>
+          <option value="auto">Auto-run</option>
+        </select>
+      </label>
       <div className="pr-3">
         <Button variant="secondary" onClick={togglePause} loading={pausing}>
           {isPaused ? 'Resume' : 'Pause'}

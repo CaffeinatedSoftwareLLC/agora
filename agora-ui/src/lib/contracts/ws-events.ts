@@ -49,6 +49,8 @@ export interface MessagePayload {
   lastReplyAt?: string;
   threadClosedAt?: string;
   protocol?: ProtocolInfo;
+  /** Structured data for system messages (e.g. runtime approval / result cards). */
+  systemData?: Record<string, unknown>;
 }
 
 export interface MessageUpdatePayload {
@@ -58,6 +60,7 @@ export interface MessageUpdatePayload {
   editedAt: string;
   threadId?: string;
   protocol?: ProtocolInfo | null;
+  systemData?: Record<string, unknown>;
 }
 
 export interface MessageDeletePayload {

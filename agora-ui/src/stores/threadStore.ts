@@ -87,6 +87,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       deletedAt: m.deletedAt,
       attachments: m.attachments,
       systemEvent: m.systemEvent,
+      systemData: m.systemData,
       protocol: m.protocol,
     }));
     set((state) => {
@@ -120,6 +121,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       deletedAt: m.deletedAt,
       attachments: m.attachments,
       systemEvent: m.systemEvent,
+      systemData: m.systemData,
       protocol: m.protocol,
     }));
     set((state) => {
@@ -204,6 +206,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           createdAt: msg.createdAt,
           attachments: msg.attachments,
           systemEvent: msg.systemEvent,
+          systemData: msg.systemData,
           protocol: msg.protocol,
         };
         nextReplies.set(threadId, updated);
@@ -220,6 +223,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           createdAt: msg.createdAt,
           attachments: msg.attachments,
           systemEvent: msg.systemEvent,
+          systemData: msg.systemData,
           protocol: msg.protocol,
         };
         nextReplies.set(threadId, [...current, newReply]);
@@ -238,7 +242,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       nextReplies.set(payload.threadId!, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined }
+          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined, ...(payload.systemData ? { systemData: payload.systemData } : {}) }
           : m
       ));
       return { repliesByThread: nextReplies };
