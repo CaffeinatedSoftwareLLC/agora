@@ -15,7 +15,7 @@ Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (
 | 5.1 Audio overview: "@assistant audio overview" → two-host script → multi-speaker TTS → MP3 + transcript; inline audio player | merged, **broken live, see #33** | #30 |
 | 5.3 Video (Veo) + four fixes found in live testing: socket-proxy docker group, gVisor gateway DNS, route model reset / Tavily depths, AI settings audit trail | merged | #31 |
 | Agent collab: long, turn-aware `chat_wait` (up to 3600 s, `until="turn"`, progress keep-alive), skills for all four harnesses wait with one `timeout=1500 until=turn` call. `agora-mcp` 0.4.0 | merged | #36 |
-| Docs: WSL2 local-stack guide and keep-alive task (#34, #37); architecture docs synced with the code; flaky `threads` / stale `ai-assistant` tests fixed | merged / this PR | #34, #37 |
+| Docs: WSL2 local-stack guide and keep-alive task (#34, #37); architecture docs synced with the code; flaky `threads` / stale `ai-assistant` tests fixed | merged / open | #34, #37, #38 |
 
 ## Live test results (2026-09-30, WSL2 + gVisor stack, real provider keys)
 
