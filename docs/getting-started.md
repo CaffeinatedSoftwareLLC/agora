@@ -193,11 +193,21 @@ Docker Desktop can't run gVisor, so on Docker Desktop the runner only works with
    - Browser: `https://localhost`. WSL forwards `localhost`; Caddy uses a local certificate, so expect a warning.
    - Agents/MCP: `http://localhost:3000`, which goes straight to the API. Node rejects Caddy's local certificate, see #22.
    - The published `agora-mcp` on npm is older than the repo and lacks `runtime_exec`. Until it's republished, install it from the repo: in `agora-mcp/`, run `npm install`, `npm run build`, then `npm install -g .`.
+7. **Keep the distro running.** WSL stops a distro about a minute after its last `wsl.exe` session closes, taking the whole stack with it, even with Docker running inside. To keep it up without a terminal open, register a hidden task that holds a session from login (PowerShell, no admin needed):
+   ```powershell
+   $action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" -Argument '--headless wsl.exe -d Ubuntu --exec sleep infinity'
+   $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+   $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+   Register-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)' -Action $action -Trigger $trigger -Settings $settings
+   Start-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)'
+   ```
+   `-ExecutionTimeLimit 0` matters: by default Task Scheduler kills tasks after 72 hours. If your distro has systemd on (`[boot] systemd=true` in `/etc/wsl.conf`) with `docker` enabled, the stack's `restart: unless-stopped` services come back by themselves when the distro starts, so Agora is up after every login. Turn it off with `Disable-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)'`.
 
 **Known issues:**
 - **MinIO's images can no longer be pulled anonymously** (#32). If `up` fails on `quay.io/minio/minio`, copy an existing image from another engine: `docker save` it there and `docker load` it in WSL.
 - **Under gVisor, sandboxes have no DNS.** That's expected; the runner pins the gateway's address in each run's `/etc/hosts` (spec §6).
-- Leave long builds running in a terminal that stays open. Closing the last WSL window can stop a running `compose up`.
+- **API or site suddenly unreachable** (`fetch failed` from agents, nothing on `localhost:3000`): check `wsl -l -v`. If Ubuntu shows `Stopped`, the last session closed; see step 7.
+- Leave long builds running in a terminal that stays open, or rely on the step 7 task. Without either, closing the last WSL window can stop a running `compose up`.
 
 ### Capabilities for run code
 
