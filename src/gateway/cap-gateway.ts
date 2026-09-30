@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import type Redis from 'ioredis';
 import { CAPABILITIES, type Capability, type ConversationMessage, type Usage } from '../ai/adapters';
 import { resolveRoute, checkBudget, recordUsage, type ResolvedRoute } from '../ai/routing';
+import { parseDialogue, synthesizeDialogue } from '../ai/speech';
 import { storeFile } from '../lib/file-store';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { hashToken } from '../runtime/runner';
@@ -102,6 +103,8 @@ const VALIDATORS: Partial<Record<Capability, (input: any) => string | null>> = {
             for (const s of input.speakers) {
                 if (!s || !isName(s.speaker) || !isName(s.voice) || Object.keys(s).length !== 2) return 'each speaker must be { speaker, voice }';
             }
+            const dialogue = parseDialogue(input.text, input.speakers);
+            if (!dialogue.ok) return dialogue.error;
         }
         return null;
     },
@@ -215,8 +218,11 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
 
     tts: async (ctx) => {
         const { route, input } = ctx;
-        const result = await metered(ctx, 'tts', () =>
-            route.adapter.tts!(route.credentials, { model: route.model, text: input.text, voice: input.voice, speakers: input.speakers }));
+        // Validated above: with speakers, the text parses as "Name: …" dialogue
+        const dialogue = input.speakers ? parseDialogue(input.text, input.speakers) : null;
+        const result = await metered(ctx, 'tts', () => dialogue?.ok
+            ? synthesizeDialogue(route.adapter, route.credentials, { model: route.model, lines: dialogue.lines, speakers: input.speakers })
+            : route.adapter.tts!(route.credentials, { model: route.model, text: input.text, voice: input.voice }));
         if (!result.ok) return providerError(result.error);
         const { data, mime, usage } = result.value;
         return { body: { data: data.toString('base64'), mime, usage } };

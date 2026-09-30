@@ -93,7 +93,9 @@ export function generateImage(
 
 /**
  * Text-to-speech; returns base64 WAV audio. One `voice`, or up to two `speakers`
- * whose names match the labels in `text` (e.g. lines starting "Joe:" and "Jane:").
+ * for dialogue: every turn in `text` starts with a declared speaker's label
+ * ("Joe: …" / "Jane: …"), unlabelled lines continue the current turn, and an
+ * undeclared label (e.g. "Bob: …") is rejected.
  */
 export function tts(
     text: string,

@@ -308,17 +308,23 @@ describe('search, image, and tts (Phase 4)', () => {
         expect(JSON.parse(init.body as string).generationConfig.imageConfig).toEqual({ aspectRatio: '4:3', imageSize: '1K' });
     });
 
-    test('tts returns WAV audio', async () => {
-        vi.stubGlobal('fetch', vi.fn(async () => json({
+    test('tts returns WAV audio; speaker-labelled text becomes tagged dialogue parts', async () => {
+        const fetchMock = vi.fn(async () => json({
             candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: Buffer.alloc(100).toString('base64') } }] } }],
-        })));
+        }));
+        vi.stubGlobal('fetch', fetchMock);
         const { auth } = await makeRun({ capabilities: ['tts'] });
-        const res = await cap('tts', auth, { text: 'Joe: hi\nJane: hello', speakers: [{ speaker: 'Joe', voice: 'Kore' }, { speaker: 'Jane', voice: 'Puck' }] });
+        const res = await cap('tts', auth, { text: 'Joe: hi\nthere\nJane: hello', speakers: [{ speaker: 'Joe', voice: 'Kore' }, { speaker: 'Jane', voice: 'Puck' }] });
         expect(res.statusCode).toBe(200);
         const audio = Buffer.from(res.json().data, 'base64');
         expect(res.json().mime).toBe('audio/wav');
         expect(audio.subarray(0, 4).toString('ascii')).toBe('RIFF');
         expect(audio.length).toBe(144);
+        const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+        expect(body.contents[0].parts).toEqual([
+            { text: 'hi there', speechMetadata: { speaker: 'Joe' } },
+            { text: 'hello', speechMetadata: { speaker: 'Jane' } },
+        ]);
     });
 
     test('invalid inputs are 400 and consume no call', async () => {
@@ -334,6 +340,8 @@ describe('search, image, and tts (Phase 4)', () => {
             ['tts', { text: 'x', voice: 'Kore', speakers: [{ speaker: 'A', voice: 'Puck' }] }],
             ['tts', { text: 'x', speakers: [{ speaker: 'A', voice: 'P' }, { speaker: 'B', voice: 'Q' }, { speaker: 'C', voice: 'R' }] }],
             ['tts', { text: 'x', voice: '<script>' }],
+            ['tts', { text: 'Joe: hi\nBob: hey', speakers: [{ speaker: 'Joe', voice: 'Kore' }, { speaker: 'Jane', voice: 'Puck' }] }],
+            ['tts', { text: 'no labels here', speakers: [{ speaker: 'Joe', voice: 'Kore' }, { speaker: 'Jane', voice: 'Puck' }] }],
         ];
         for (const [name, payload] of bad) {
             const res = await cap(name, auth, payload);

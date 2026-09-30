@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    isAudioOverviewRequest, formatTranscript, parseScript, speechText, overviewMessage, formatClock, scriptRequest,
+    isAudioOverviewRequest, formatTranscript, parseScript, overviewMessage, formatClock, scriptRequest,
     MAX_SCRIPT_CHARS,
 } from '../../src/ai/audio-overview';
 
@@ -57,6 +57,15 @@ describe('parseScript', () => {
         ]);
     });
 
+    it('drops a last line cut off mid-sentence (reply hit the token limit)', () => {
+        const raw = 'Alex: Welcome back.\nSam: It started with a weather question!\nAlex: It pointed them to the National Weather Service in';
+        expect(parseScript(raw)).toEqual([
+            { speaker: 'Alex', text: 'Welcome back.' },
+            { speaker: 'Sam', text: 'It started with a weather question!' },
+        ]);
+        expect(parseScript('Alex: Done.\nSam: "That\'s all."')).toHaveLength(2);
+    });
+
     it('stops at the script size cap', () => {
         const raw = Array.from({ length: 200 }, (_, i) => `${i % 2 ? 'Sam' : 'Alex'}: ${'word '.repeat(20)}`).join('\n');
         const lines = parseScript(raw);
@@ -67,11 +76,6 @@ describe('parseScript', () => {
 });
 
 describe('script and message text', () => {
-    it('speech text uses the multi-speaker preamble with the configured hosts', () => {
-        expect(speechText([{ speaker: 'Alex', text: 'Hi.' }, { speaker: 'Sam', text: 'Hey.' }]))
-            .toBe('TTS the following conversation between Alex and Sam:\nAlex: Hi.\nSam: Hey.');
-    });
-
     it('script request carries the transcript and the listener\'s ask without mentions', () => {
         const [msg] = scriptRequest('ana: hi', '<@01ABC> audio overview, focus on the release date');
         expect(msg.role).toBe('user');

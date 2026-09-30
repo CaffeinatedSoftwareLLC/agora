@@ -1,5 +1,5 @@
 import type {
-    Adapter, ChatRequest, ImageRequest, MediaResult, ProviderCredentials, SearchRequest, SearchResult,
+    Adapter, ChatRequest, DialogueRequest, ImageRequest, MediaResult, ProviderCredentials, SearchRequest, SearchResult,
     SpeechRequest, StreamCallbacks, Usage, VideoRequest,
 } from './types';
 import { apiError, joinUrl, networkError, sseJson } from './sse';
@@ -142,6 +142,18 @@ async function downloadVideo(uri: string, creds: ProviderCredentials): Promise<B
     return readCapped(res, MAX_VIDEO_BYTES);
 }
 
+const prebuiltVoice = (name: string) => ({ prebuiltVoiceConfig: { voiceName: name } });
+
+/** TTS models return raw PCM; wrap it as WAV. */
+async function speech(creds: ProviderCredentials, model: string, contents: unknown, speechConfig: unknown): Promise<MediaResult> {
+    const json = await generate(creds, model, { contents, generationConfig: { responseModalities: ['AUDIO'], speechConfig } });
+    const media = inlineMedia(json, 'audio/');
+    const rate = pcmRate(media.mime);
+    return rate
+        ? { data: pcmToWav(media.data, rate), mime: 'audio/wav', usage: usageOf(json) }
+        : { data: media.data, mime: media.mime.split(';')[0], usage: usageOf(json) };
+}
+
 /**
  * Google Gemini via generateContent / streamGenerateContent (v1beta). Field names
  * verified against the API reference on 2026-09-30 (GenerationConfig.speechConfig /
@@ -243,19 +255,19 @@ export const geminiAdapter: Adapter = {
     },
 
     async tts(creds: ProviderCredentials, req: SpeechRequest): Promise<MediaResult> {
-        const voice = (name: string) => ({ prebuiltVoiceConfig: { voiceName: name } });
-        const speechConfig = req.speakers?.length
-            ? { multiSpeakerVoiceConfig: { speakerVoiceConfigs: req.speakers.map(s => ({ speaker: s.speaker, voiceConfig: voice(s.voice) })) } }
-            : { voiceConfig: voice(req.voice ?? 'Kore') };
-        const json = await generate(creds, req.model, {
-            contents: userText(req.text),
-            generationConfig: { responseModalities: ['AUDIO'], speechConfig },
+        return speech(creds, req.model, userText(req.text), { voiceConfig: prebuiltVoice(req.voice ?? 'Kore') });
+    },
+
+    /**
+     * Multi-speaker requests must tag every text part with `speechMetadata.speaker`
+     * (Part.speechMetadata, API reference checked 2026-09-30; issue #33), so each
+     * line is its own part and there is no free-text preamble.
+     */
+    async ttsDialogue(creds: ProviderCredentials, req: DialogueRequest): Promise<MediaResult> {
+        const contents = [{ role: 'user', parts: req.lines.map(l => ({ text: l.text, speechMetadata: { speaker: l.speaker } })) }];
+        return speech(creds, req.model, contents, {
+            multiSpeakerVoiceConfig: { speakerVoiceConfigs: req.speakers.map(s => ({ speaker: s.speaker, voiceConfig: prebuiltVoice(s.voice) })) },
         });
-        const media = inlineMedia(json, 'audio/');
-        const rate = pcmRate(media.mime);
-        return rate
-            ? { data: pcmToWav(media.data, rate), mime: 'audio/wav', usage: usageOf(json) }
-            : { data: media.data, mime: media.mime.split(';')[0], usage: usageOf(json) };
     },
 
     async streamChat(creds: ProviderCredentials, req: ChatRequest, callbacks: StreamCallbacks) {
