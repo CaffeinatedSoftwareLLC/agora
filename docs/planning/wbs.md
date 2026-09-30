@@ -124,11 +124,11 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | ID | Work package | Size | Depends |
 |---|---|---|---|
 | 4.1 | Visual test report (MVP): payload → routed capability → chart/HTML card → thread | M | 3 |
-| 4.2 | `search()`: routed `search` capability, citation rendering per provider terms | M | 3, 1.3 |
+| 4.2 | ☑ `search()`: routed `search` capability. **Gemini** (Google Search grounding via `generateContent` + `tools: [{googleSearch: {}}]`): per Google's terms the gateway posts the answer unmodified with Google's Search Suggestions into the thread (`runtime_search` card, suggestions in a script-less sandboxed iframe) and returns `{answer, citations, displayedIn}` to the run. **Tavily** adapter (agent-oriented terms; route "model" = search depth) returns `{answer, citations}` without posting. See R6 | M | 3, 1.3 |
 
 ## 5 · Media — later
-| 5.1 | Audio overview (script → multi-speaker TTS) | M | 3 |
-| 5.2 | Image generation | S | 3 |
+| 5.1 | ◐ `tts` capability done (Gemini `speechConfig`, one voice or 2 speakers, raw PCM wrapped as WAV); the audio-overview flow itself is pending | M | 3 |
+| 5.2 | ☑ `image` capability (Gemini native image via `responseModalities: [TEXT, IMAGE]` + `imageConfig` aspect ratio/size; returns base64 for `postFile`) | S | 3 |
 | 5.3 | Video (deferred) | L | 3 |
 
 ## Risks / open decisions log
@@ -139,3 +139,4 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | R3 | ☑ Gemini API verified 2026-09-29 (generateContent/streamGenerateContent v1beta; live key-rejection response confirmed endpoint + auth header) | Claude | 1.3 |
 | R4 | gVisor compat on prod host kernel | user/Claude | 3.1 |
 | R5 | Jev API access (early access / Vercel AI Gateway) | user | 2.3 |
+| R6 | ☑ Google grounding terms (updated 2026-04-28): results only with Search Suggestions, unmodified, to the prompt's submitter; no caching/analysis. Decision 2026-09-30: build both a compliant-display Gemini path and a Tavily adapter. Residual: grounded answers appear in a shared thread and run code still receives them; operators are responsible for derived use (docs/getting-started.md) | user | 4.2 |

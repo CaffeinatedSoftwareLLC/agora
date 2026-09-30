@@ -36,6 +36,10 @@ export async function streamCompletion(
         await callbacks.onError(err as Error);
         return;
     }
+    if (!adapter.streamChat) {
+        await callbacks.onError(new Error(`${adapter.label} does not support chat`));
+        return;
+    }
     try {
         await adapter.streamChat(
             { apiKey: config.apiKey, baseUrl: config.baseUrl },

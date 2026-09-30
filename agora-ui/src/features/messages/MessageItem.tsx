@@ -7,6 +7,7 @@ import { FileAttachment } from './FileAttachment';
 import { ThreadIndicator } from './ThreadIndicator';
 import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
+import { SearchCard } from './SearchCard';
 import { useThreadStore } from '../../stores/threadStore';
 import { usePalette } from '../../theme';
 
@@ -46,7 +47,10 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   const canReply = !!(channelId && !message.deletedAt && !message.systemEvent);
   const handleReply = canReply ? () => openThread(channelId!, message.id) : undefined;
 
-  // Sandboxed runtime: approval request / result summary
+  // Sandboxed runtime: grounded search display, approval request, result summary, tripwire
+  if (message.systemEvent === 'runtime_search') {
+    return <SearchCard message={message} />;
+  }
   if (message.systemEvent?.startsWith('runtime_')) {
     return <RuntimeCard message={message} />;
   }

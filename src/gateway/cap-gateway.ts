@@ -1,14 +1,14 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type Redis from 'ioredis';
-import { CAPABILITIES, type Capability, type ConversationMessage } from '../ai/adapters';
+import { CAPABILITIES, type Capability, type ConversationMessage, type Usage } from '../ai/adapters';
 import { resolveRoute, checkBudget, recordUsage, type ResolvedRoute } from '../ai/routing';
 import { storeFile } from '../lib/file-store';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { hashToken } from '../runtime/runner';
 import type { RunLimits } from '../runtime/limits';
 import { tripBot, checkTokenMisuse } from '../runtime/tripwires';
-import { postBotMessage, PostError } from './post-message';
+import { postBotMessage, postSystemMessage, PostError } from './post-message';
 
 /**
  * Capability gateway (WBS 3.4, sandbox-isolation-spec §3, §7, §11). The only service
@@ -35,15 +35,27 @@ declare module 'fastify' {
 
 const MAX_FILE_BODY = 100 * 1024 * 1024; // hard cap; the instance file limit is checked by storeFile
 
-type Handler = (ctx: { run: GatewayRun; route: ResolvedRoute; input: any; db: Pool }) => Promise<{ status?: number; body: unknown }>;
+type HandlerCtx = { run: GatewayRun; route: ResolvedRoute; input: any; db: Pool; publish: (events: BridgedEvent[]) => Promise<void> };
+type Handler = (ctx: HandlerCtx) => Promise<{ status?: number; body: unknown }>;
+
+export const IMAGE_ASPECT_RATIOS = ['1:1', '1:4', '4:1', '1:8', '8:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'];
+export const IMAGE_SIZES = ['512', '1K', '2K', '4K'];
+
+/** Shared shape checks: a plain object with only `allowed` keys. */
+function objectWith(input: any, allowed: string[]): string | null {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return 'Body must be an object';
+    const extra = Object.keys(input).find(k => !allowed.includes(k));
+    return extra ? `Unknown field "${extra}"` : null;
+}
+
+const isText = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
+const isName = (v: unknown) => typeof v === 'string' && /^[A-Za-z0-9_ .-]{1,40}$/.test(v);
 
 /** Input validation per capability; returns an error message or null. */
 const VALIDATORS: Partial<Record<Capability, (input: any) => string | null>> = {
     chat: (input) => {
-        if (!input || typeof input !== 'object' || Array.isArray(input)) return 'Body must be an object';
-        const allowed = new Set(['messages', 'system', 'maxTokens']);
-        const extra = Object.keys(input).find(k => !allowed.has(k));
-        if (extra) return `Unknown field "${extra}"`;
+        const shape = objectWith(input, ['messages', 'system', 'maxTokens']);
+        if (shape) return shape;
         const { messages, system, maxTokens } = input;
         if (!Array.isArray(messages) || messages.length < 1 || messages.length > 50) return 'messages must be an array of 1–50 items';
         for (const m of messages) {
@@ -54,17 +66,69 @@ const VALIDATORS: Partial<Record<Capability, (input: any) => string | null>> = {
         if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4096)) return 'maxTokens must be an integer 1–4096';
         return null;
     },
+    search: (input) => {
+        const shape = objectWith(input, ['query', 'maxResults']);
+        if (shape) return shape;
+        if (!isText(input.query, 2000)) return 'query must be a non-empty string up to 2000 chars';
+        if (input.maxResults !== undefined && (!Number.isInteger(input.maxResults) || input.maxResults < 1 || input.maxResults > 20)) {
+            return 'maxResults must be an integer 1–20';
+        }
+        return null;
+    },
+    image: (input) => {
+        const shape = objectWith(input, ['prompt', 'aspectRatio', 'imageSize']);
+        if (shape) return shape;
+        if (!isText(input.prompt, 8000)) return 'prompt must be a non-empty string up to 8000 chars';
+        if (input.aspectRatio !== undefined && !IMAGE_ASPECT_RATIOS.includes(input.aspectRatio)) return `aspectRatio must be one of ${IMAGE_ASPECT_RATIOS.join(', ')}`;
+        if (input.imageSize !== undefined && !IMAGE_SIZES.includes(input.imageSize)) return `imageSize must be one of ${IMAGE_SIZES.join(', ')}`;
+        return null;
+    },
+    tts: (input) => {
+        const shape = objectWith(input, ['text', 'voice', 'speakers']);
+        if (shape) return shape;
+        if (!isText(input.text, 8000)) return 'text must be a non-empty string up to 8000 chars';
+        if (input.voice !== undefined && !isName(input.voice)) return 'voice must be a voice name';
+        if (input.speakers !== undefined) {
+            if (input.voice !== undefined) return 'Use either voice or speakers, not both';
+            if (!Array.isArray(input.speakers) || input.speakers.length < 1 || input.speakers.length > 2) return 'speakers must be an array of 1–2 items';
+            for (const s of input.speakers) {
+                if (!s || !isName(s.speaker) || !isName(s.voice) || Object.keys(s).length !== 2) return 'each speaker must be { speaker, voice }';
+            }
+        }
+        return null;
+    },
 };
 
-/** Capability implementations. Phase 4 adds search / image / tts / decide. */
+/** Run a provider call and record usage (success or failure) against the run. */
+async function metered<T extends { usage: Usage }>(ctx: HandlerCtx, capability: Capability, call: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+    const { run, route, db } = ctx;
+    const started = Date.now();
+    let value: T | null = null;
+    let error: string | null = null;
+    try {
+        value = await call();
+    } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+    }
+    await recordUsage(db, {
+        serverId: run.serverId, capability, providerId: route.providerId, adapter: route.adapter.id,
+        model: route.model, route: route.route, usage: value?.usage ?? { inputTokens: 0, outputTokens: 0 },
+        latencyMs: Date.now() - started, channelId: run.channelId, userId: run.submittedBy, runId: run.runId, error,
+    });
+    return value ? { ok: true, value } : { ok: false, error: error ?? 'Provider call failed' };
+}
+
+const providerError = (error: string) => ({ status: 502, body: { error, code: 'provider_error' } });
+
+/** Capability implementations. `decide` and `video` come later. */
 const HANDLERS: Partial<Record<Capability, Handler>> = {
-    chat: async ({ run, route, input, db }) => {
-        const started = Date.now();
-        let text = '';
-        let failure: Error | null = null;
-        let usage = { inputTokens: 0, outputTokens: 0 };
-        try {
-            await route.adapter.streamChat(
+    chat: async (ctx) => {
+        const { route, input } = ctx;
+        const result = await metered(ctx, 'chat', async () => {
+            let text = '';
+            let failure: Error | null = null;
+            let usage: Usage = { inputTokens: 0, outputTokens: 0 };
+            await route.adapter.streamChat!(
                 route.credentials,
                 { model: route.model, messages: input.messages as ConversationMessage[], systemPrompt: input.system, maxTokens: input.maxTokens ?? 1024 },
                 {
@@ -73,17 +137,50 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
                     onError: async (e) => { failure = e; },
                 },
             );
-        } catch (err) {
-            failure = err instanceof Error ? err : new Error(String(err));
-        }
-        await recordUsage(db, {
-            serverId: run.serverId, capability: 'chat', providerId: route.providerId, adapter: route.adapter.id,
-            model: route.model, route: route.route, usage, latencyMs: Date.now() - started,
-            channelId: run.channelId, userId: run.submittedBy, runId: run.runId,
-            error: failure ? (failure as Error).message : null,
+            if (failure) throw failure;
+            return { text, usage };
         });
-        if (failure) return { status: 502, body: { error: (failure as Error).message, code: 'provider_error' } };
-        return { body: { text, usage } };
+        return result.ok ? { body: result.value } : providerError(result.error);
+    },
+
+    search: async (ctx) => {
+        const { run, route, input, db } = ctx;
+        const result = await metered(ctx, 'search', () =>
+            route.adapter.search!(route.credentials, { model: route.model, query: input.query, maxResults: input.maxResults }));
+        if (!result.ok) return providerError(result.error);
+        const { answer, citations, display, usage } = result.value;
+        if (!display) return { body: { answer, citations, usage } };
+
+        // Gemini grounding terms: show the answer unmodified with Google's Search
+        // Suggestions. The gateway posts that display into the run's thread itself.
+        if (!run.channelId) return { status: 409, body: { error: 'This run has no channel to show grounded results in', code: 'no_channel' } };
+        const { messageId, events } = await postSystemMessage(db, {
+            channelId: run.channelId,
+            threadId: run.threadId,
+            systemEvent: 'runtime_search',
+            systemData: { kind: 'runtime_search', runId: run.runId, query: input.query, citations, suggestionsHtml: display.html, queries: display.queries },
+            content: answer,
+        });
+        await ctx.publish(events);
+        return { body: { answer, citations, usage, displayedIn: messageId } };
+    },
+
+    image: async (ctx) => {
+        const { route, input } = ctx;
+        const result = await metered(ctx, 'image', () =>
+            route.adapter.generateImage!(route.credentials, { model: route.model, prompt: input.prompt, aspectRatio: input.aspectRatio, imageSize: input.imageSize }));
+        if (!result.ok) return providerError(result.error);
+        const { data, mime, text, usage } = result.value;
+        return { body: { data: data.toString('base64'), mime, ...(text ? { text } : {}), usage } };
+    },
+
+    tts: async (ctx) => {
+        const { route, input } = ctx;
+        const result = await metered(ctx, 'tts', () =>
+            route.adapter.tts!(route.credentials, { model: route.model, text: input.text, voice: input.voice, speakers: input.speakers }));
+        if (!result.ok) return providerError(result.error);
+        const { data, mime, usage } = result.value;
+        return { body: { data: data.toString('base64'), mime, usage } };
     },
 };
 
@@ -183,7 +280,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         const budget = await checkBudget(db, resolved.value.route);
         if (!budget.ok) return fail(reply, 429, 'budget_exceeded', budget.error);
 
-        const result = await handler({ run, route: resolved.value, input: request.body ?? {}, db });
+        const result = await handler({ run, route: resolved.value, input: request.body ?? {}, db, publish: events => publishEvents(redis, events) });
         return reply.status(result.status ?? 200).send(result.body);
     });
 
