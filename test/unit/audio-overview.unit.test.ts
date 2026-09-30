@@ -57,6 +57,15 @@ describe('parseScript', () => {
         ]);
     });
 
+    it('drops a last line cut off mid-sentence (reply hit the token limit)', () => {
+        const raw = 'Alex: Welcome back.\nSam: It started with a weather question!\nAlex: It pointed them to the National Weather Service in';
+        expect(parseScript(raw)).toEqual([
+            { speaker: 'Alex', text: 'Welcome back.' },
+            { speaker: 'Sam', text: 'It started with a weather question!' },
+        ]);
+        expect(parseScript('Alex: Done.\nSam: "That\'s all."')).toHaveLength(2);
+    });
+
     it('stops at the script size cap', () => {
         const raw = Array.from({ length: 200 }, (_, i) => `${i % 2 ? 'Sam' : 'Alex'}: ${'word '.repeat(20)}`).join('\n');
         const lines = parseScript(raw);

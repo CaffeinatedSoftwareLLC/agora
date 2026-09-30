@@ -92,6 +92,9 @@ export function parseScript(raw: string): ScriptLine[] {
         lines.push({ speaker, text });
         size += line.length + 1;
     }
+    // A reply cut off at the token limit ends mid-sentence; don't voice the fragment
+    const last = lines[lines.length - 1];
+    if (last && !/[.!?…]["'”’)]*$/.test(last.text)) lines.pop();
     return lines;
 }
 
@@ -138,7 +141,8 @@ export async function createAudioOverview(db: Queryable, input: OverviewInput): 
         {
             provider: chat.value.adapter.id, model: chat.value.model,
             apiKey: chat.value.credentials.apiKey, baseUrl: chat.value.credentials.baseUrl,
-            systemPrompt: SCRIPT_SYSTEM_PROMPT, maxTokens: 2048,
+            // Thinking models (Gemini 3.x) spend part of this on reasoning; 2048 cut scripts off mid-line
+            systemPrompt: SCRIPT_SYSTEM_PROMPT, maxTokens: 8192,
         },
         scriptRequest(transcript, input.request),
         {
