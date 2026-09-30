@@ -169,3 +169,15 @@ To let a bot run code, set its **Code runs** option in Settings → Bots (`Need 
 If you also run the production stack on the same machine, remove the dev network first (`docker network rm agora_sandbox`). The prod compose file creates its own `agora_sandbox`.
 
 `AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.
+
+### Capabilities for run code
+
+Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImage`, `tts`). Each one uses the provider and model you route it to in Settings → AI. Everything except chat is off until you enable its route.
+
+| Capability | Providers | Notes |
+|---|---|---|
+| `search` | Gemini (Google Search grounding), Tavily | For Tavily, the route's "model" is the search depth: `basic`, `advanced` (2 credits), `fast`, or `ultra-fast`. |
+| `image` | Gemini (e.g. `gemini-3.1-flash-image`) | Returns base64 image data. Post it with `postFile(name, data, { base64: true })`. Images carry Google's SynthID watermark. |
+| `tts` | Gemini (e.g. `gemini-3.8-flash-tts`) | One `voice`, or up to two `speakers`. Returns WAV. |
+
+**Google Search grounding has display terms.** Google's Gemini API terms say grounded results may only be shown unmodified, together with Google's Search Suggestions, to the person who asked, and may not be cached or analyzed. So for Gemini search, the gateway posts the answer with the Search Suggestions into the run's thread itself. The code still receives the answer and citations. What your agents do with that text afterwards is your responsibility as the operator. If your bots need to process search results freely, route `search` to Tavily instead.

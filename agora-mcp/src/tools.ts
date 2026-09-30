@@ -479,7 +479,7 @@ export function registerTools(
 
     server.tool(
         'runtime_exec',
-        'Run TypeScript/JavaScript in Agora\'s sandbox (Deno). The code can call Agora capabilities via `import { chat, search, postFile, postMessage } from "agora:std"` (or the global `agora`), but has no other network or filesystem access. Declare every capability it uses. Depending on this bot\'s access, a human may need to approve the run in the thread first; this tool waits for that. Results (and any files it posts) land in the thread.',
+        'Run TypeScript/JavaScript in Agora\'s sandbox (Deno). The code can call Agora capabilities via `import { chat, search, generateImage, tts, postFile, postMessage } from "agora:std"` (or the global `agora`), but has no other network or filesystem access. Declare every capability it uses. Depending on this bot\'s access, a human may need to approve the run in the thread first; this tool waits for that. Results (and any files it posts) land in the thread.',
         {
             code: z.string().describe('Deno TypeScript/JavaScript to run. Use console.log for output; top-level await is supported.'),
             capabilities: z.array(z.enum(['chat', 'search', 'image', 'tts', 'video', 'decide'])).optional()

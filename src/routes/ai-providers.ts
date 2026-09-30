@@ -213,7 +213,7 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         const adapter = getAdapter(row.adapter);
         if (!adapter) return reply.send({ ok: false, error: `Unknown adapter "${row.adapter}"` });
 
-        const testModel = model ?? adapter.defaultModels.chat;
+        const testModel = model ?? adapter.defaultModels.chat ?? Object.values(adapter.defaultModels)[0];
         if (!testModel) return reply.status(400).send({ error: 'model is required for this provider' });
         if (row.base_url) {
             const urlError = await validateBaseUrl(db, row.adapter, row.base_url);

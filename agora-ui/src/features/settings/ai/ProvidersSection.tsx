@@ -157,7 +157,7 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
   testModel?: string;
   onChanged: () => void;
 }) {
-  const [model, setModel] = useState(testModel ?? adapter?.defaultModels.chat ?? '');
+  const [model, setModel] = useState(testModel ?? adapter?.defaultModels.chat ?? Object.values(adapter?.defaultModels ?? {})[0] ?? '');
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<AIConnectionResult | null>(null);
   const [newKey, setNewKey] = useState('');

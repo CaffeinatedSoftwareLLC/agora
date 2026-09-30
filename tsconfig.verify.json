@@ -1,0 +1,1 @@
+{ "extends": "./tsconfig.json", "exclude": ["node_modules", "dist", "test/integration/agora-mcp-package.integration.test.ts"] }

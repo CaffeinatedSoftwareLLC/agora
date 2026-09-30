@@ -51,7 +51,61 @@ export interface AdapterInfo {
     defaultModels: Partial<Record<Capability, string>>;
 }
 
+export interface SearchRequest {
+    model: string;
+    query: string;
+    maxResults?: number;
+}
+
+export interface SearchCitation {
+    url: string;
+    title?: string;
+    snippet?: string;
+}
+
+export interface SearchResult {
+    answer: string;
+    citations: SearchCitation[];
+    /**
+     * Set when the provider's terms dictate how results are shown. Gemini grounding:
+     * the answer must be displayed unmodified alongside Google's Search Suggestions
+     * (`html`), so the gateway posts it into the run's thread.
+     */
+    display?: { kind: 'google_search_suggestions'; html: string; queries: string[] };
+    usage: Usage;
+}
+
+export interface ImageRequest {
+    model: string;
+    prompt: string;
+    aspectRatio?: string;
+    imageSize?: string;
+}
+
+export interface SpeechRequest {
+    model: string;
+    text: string;
+    voice?: string;
+    /** Multi-speaker: names must match the speaker labels used in `text`. */
+    speakers?: { speaker: string; voice: string }[];
+}
+
+export interface MediaResult {
+    data: Buffer;
+    mime: string;
+    /** Any text the model returned alongside the media. */
+    text?: string;
+    usage: Usage;
+}
+
+/**
+ * Each capability method is present exactly when the adapter lists that capability;
+ * `resolveRoute` refuses routes an adapter can't serve, so callers may assert them.
+ */
 export interface Adapter extends AdapterInfo {
-    streamChat(creds: ProviderCredentials, req: ChatRequest, callbacks: StreamCallbacks): Promise<void>;
+    streamChat?(creds: ProviderCredentials, req: ChatRequest, callbacks: StreamCallbacks): Promise<void>;
+    search?(creds: ProviderCredentials, req: SearchRequest): Promise<SearchResult>;
+    generateImage?(creds: ProviderCredentials, req: ImageRequest): Promise<MediaResult>;
+    tts?(creds: ProviderCredentials, req: SpeechRequest): Promise<MediaResult>;
     testConnection(creds: ProviderCredentials, model: string): Promise<ConnectionResult>;
 }

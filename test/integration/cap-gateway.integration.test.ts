@@ -136,10 +136,10 @@ describe('authentication', () => {
 
 describe('capabilities', () => {
     test('unknown capability 404, undeclared 403, unimplemented 501', async () => {
-        const { auth } = await makeRun({ capabilities: ['chat', 'search'] });
+        const { auth } = await makeRun({ capabilities: ['chat', 'decide'] });
         expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/teleport', headers: auth, payload: {} })).statusCode).toBe(404);
         expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/image', headers: auth, payload: {} })).json().code).toBe('not_declared');
-        expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/search', headers: auth, payload: {} })).statusCode).toBe(501);
+        expect((await gw.inject({ method: 'POST', url: '/v1/capabilities/decide', headers: auth, payload: {} })).statusCode).toBe(501);
     });
 
     test('chat calls the routed provider with the server key and records usage against the run', async () => {
@@ -237,6 +237,146 @@ describe('capabilities', () => {
         expect(off.statusCode).toBe(503);
         expect(off.json().code).toBe('capability_unavailable');
         await ctx.db.query("UPDATE ai_capability_routes SET enabled = true WHERE server_id = $1", [serverId]);
+    });
+});
+
+describe('search, image, and tts (Phase 4)', () => {
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const cap = (name: string, auth: Record<string, string>, payload: unknown) =>
+        gw.inject({ method: 'POST', url: `/v1/capabilities/${name}`, headers: auth, payload: payload as any });
+
+    beforeAll(async () => {
+        const gem = (await ctx.db.query("SELECT id FROM ai_providers WHERE server_id = $1 AND adapter = 'gemini'", [serverId])).rows[0].id.trim();
+        for (const [capability, model] of [['search', 'gemini-3.8-flash'], ['image', 'gemini-3.1-flash-image'], ['tts', 'gemini-3.8-flash-tts']]) {
+            const res = await ctx.request.put(`/servers/${serverId}/ai/routes/${capability}`).set(owner.auth).send({ providerId: gem, model, enabled: true });
+            expect(res.status).toBe(200);
+        }
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_capability_routes WHERE server_id = $1 AND capability = $2', [serverId, 'tts'])).rows.length > 0);
+    });
+
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    test('gemini search: the grounded answer is posted verbatim with Search Suggestions, and returned to the run', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => json({
+            candidates: [{
+                content: { parts: [{ text: 'Deno 2.9 shipped in September.' }] },
+                groundingMetadata: {
+                    webSearchQueries: ['deno latest release'],
+                    searchEntryPoint: { renderedContent: '<style>.c{}</style><div class="c"><a href="https://www.google.com/search?q=deno">deno</a></div>' },
+                    groundingChunks: [{ web: { uri: 'https://deno.com/blog', title: 'deno.com' } }],
+                },
+            }],
+            usageMetadata: { promptTokenCount: 8, toolUsePromptTokenCount: 30, candidatesTokenCount: 9 },
+        })));
+        published.length = 0;
+        const { runId, auth } = await makeRun({ capabilities: ['search'] });
+        const res = await cap('search', auth, { query: 'latest deno release' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body).toMatchObject({
+            answer: 'Deno 2.9 shipped in September.',
+            citations: [{ url: 'https://deno.com/blog', title: 'deno.com' }],
+            usage: { inputTokens: 38, outputTokens: 9 },
+        });
+
+        const msg = (await ctx.db.query('SELECT id, content, thread_id, author_id, system_event, system_data FROM messages WHERE id = $1', [body.displayedIn])).rows[0];
+        expect(msg.system_event).toBe('runtime_search');
+        expect(msg.content).toBe('Deno 2.9 shipped in September.');
+        expect(msg.thread_id.trim()).toBe(threadId);
+        expect(msg.author_id).toBeNull();
+        expect(msg.system_data).toMatchObject({
+            kind: 'runtime_search', runId, query: 'latest deno release', queries: ['deno latest release'],
+            citations: [{ url: 'https://deno.com/blog', title: 'deno.com' }],
+        });
+        expect(msg.system_data.suggestionsHtml).toContain('google.com/search');
+        await waitFor(async () => published.some(e => e.event === 'Message' && e.data.systemEvent === 'runtime_search'));
+
+        const usage = await ctx.db.query('SELECT capability, input_tokens, output_tokens, error FROM ai_usage_events WHERE run_id = $1', [runId]);
+        expect(usage.rows).toEqual([{ capability: 'search', input_tokens: 38, output_tokens: 9, error: null }]);
+    });
+
+    test('image returns base64 bytes and MIME type', async () => {
+        const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const fetchMock = vi.fn(async () => json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }] } }] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const { auth } = await makeRun({ capabilities: ['image'] });
+        const res = await cap('image', auth, { prompt: 'a monstera under grow lights', aspectRatio: '4:3', imageSize: '1K' });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ data: png.toString('base64'), mime: 'image/png' });
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toContain('/models/gemini-3.1-flash-image:generateContent');
+        expect(JSON.parse(init.body as string).generationConfig.imageConfig).toEqual({ aspectRatio: '4:3', imageSize: '1K' });
+    });
+
+    test('tts returns WAV audio', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => json({
+            candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: Buffer.alloc(100).toString('base64') } }] } }],
+        })));
+        const { auth } = await makeRun({ capabilities: ['tts'] });
+        const res = await cap('tts', auth, { text: 'Joe: hi\nJane: hello', speakers: [{ speaker: 'Joe', voice: 'Kore' }, { speaker: 'Jane', voice: 'Puck' }] });
+        expect(res.statusCode).toBe(200);
+        const audio = Buffer.from(res.json().data, 'base64');
+        expect(res.json().mime).toBe('audio/wav');
+        expect(audio.subarray(0, 4).toString('ascii')).toBe('RIFF');
+        expect(audio.length).toBe(144);
+    });
+
+    test('invalid inputs are 400 and consume no call', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        const { runId, auth } = await makeRun({ capabilities: ['search', 'image', 'tts'] });
+        const bad: [string, unknown][] = [
+            ['search', { query: '' }],
+            ['search', { query: 'x', maxResults: 50 }],
+            ['search', { query: 'x', region: 'us' }],
+            ['image', { prompt: 'x', aspectRatio: 'wide' }],
+            ['image', { prompt: 'x', imageSize: '8K' }],
+            ['tts', { text: 'x', voice: 'Kore', speakers: [{ speaker: 'A', voice: 'Puck' }] }],
+            ['tts', { text: 'x', speakers: [{ speaker: 'A', voice: 'P' }, { speaker: 'B', voice: 'Q' }, { speaker: 'C', voice: 'R' }] }],
+            ['tts', { text: 'x', voice: '<script>' }],
+        ];
+        for (const [name, payload] of bad) {
+            const res = await cap(name, auth, payload);
+            expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+            expect(res.json().code).toBe('invalid_input');
+        }
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect((await ctx.db.query('SELECT capability_calls FROM exec_runs WHERE id = $1', [runId])).rows[0].capability_calls).toBe(0);
+    });
+
+    test('provider failure is 502 and recorded against the run', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => json({ error: { message: 'quota exceeded' } }, 429)));
+        const { runId, auth } = await makeRun({ capabilities: ['image'] });
+        const res = await cap('image', auth, { prompt: 'x' });
+        expect(res.statusCode).toBe(502);
+        expect(res.json()).toEqual({ error: 'Gemini API 429: quota exceeded', code: 'provider_error' });
+        const usage = await ctx.db.query('SELECT error FROM ai_usage_events WHERE run_id = $1', [runId]);
+        expect(usage.rows).toEqual([{ error: 'Gemini API 429: quota exceeded' }]);
+    });
+
+    test('tavily search returns results to the run without posting', async () => {
+        const prov = await ctx.request.post(`/servers/${serverId}/ai/providers`).set(owner.auth).send({ adapter: 'tavily', apiKey: 'tvly-test' });
+        expect(prov.status).toBe(201);
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_providers WHERE id = $1', [prov.body.id])).rows.length > 0);
+        const route = await ctx.request.put(`/servers/${serverId}/ai/routes/search`).set(owner.auth).send({ providerId: prov.body.id, model: 'basic', enabled: true });
+        expect(route.status).toBe(200);
+        await waitFor(async () => (await ctx.db.query('SELECT 1 FROM ai_capability_routes WHERE server_id = $1 AND provider_id = $2', [serverId, prov.body.id])).rows.length > 0);
+
+        const fetchMock = vi.fn(async () => json({ answer: 'Use a well-draining mix.', results: [{ title: 'NC State Extension', url: 'https://plants.ces.ncsu.edu/x', content: 'Soil…' }] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const { runId, auth } = await makeRun({ capabilities: ['search'] });
+        const res = await cap('search', auth, { query: 'monstera soil', maxResults: 3 });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({
+            answer: 'Use a well-draining mix.',
+            citations: [{ url: 'https://plants.ces.ncsu.edu/x', title: 'NC State Extension', snippet: 'Soil…' }],
+            usage: { inputTokens: 0, outputTokens: 0 },
+        });
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe('https://api.tavily.com/search');
+        expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tvly-test');
+        const posted = await ctx.db.query("SELECT 1 FROM messages WHERE system_event = 'runtime_search' AND system_data->>'runId' = $1", [runId]);
+        expect(posted.rows).toHaveLength(0);
     });
 });
 

@@ -62,18 +62,38 @@ export function chat(prompt: string | ChatMessage[], opts: { system?: string; ma
     return call('chat', { messages, ...opts });
 }
 
-/** Grounded web search with citations. */
-export function search(query: string, opts: Record<string, unknown> = {}): Promise<{ answer: string; citations: { title?: string; url: string }[] }> {
+export interface SearchResponse {
+    answer: string;
+    citations: { url: string; title?: string; snippet?: string }[];
+    /**
+     * Set when the provider's terms require its own display (Google grounding): the
+     * gateway already posted the answer with Google's Search Suggestions into the
+     * thread, as this message. Don't repost or rewrite Google-grounded answers.
+     */
+    displayedIn?: string;
+}
+
+/** Web search through the server's search route (Gemini grounding or Tavily). */
+export function search(query: string, opts: { maxResults?: number } = {}): Promise<SearchResponse> {
     return call('search', { query, ...opts });
 }
 
-/** Image generation; returns base64 image data and its MIME type. */
-export function generateImage(prompt: string, opts: Record<string, unknown> = {}): Promise<{ data: string; mime: string }> {
+/** Image generation; returns base64 image data and its MIME type (post it with `postFile(name, data, { base64: true })`). */
+export function generateImage(
+    prompt: string,
+    opts: { aspectRatio?: string; imageSize?: '512' | '1K' | '2K' | '4K' } = {},
+): Promise<{ data: string; mime: string; text?: string }> {
     return call('image', { prompt, ...opts });
 }
 
-/** Text-to-speech; returns base64 audio data and its MIME type. */
-export function tts(text: string, opts: Record<string, unknown> = {}): Promise<{ data: string; mime: string }> {
+/**
+ * Text-to-speech; returns base64 WAV audio. One `voice`, or up to two `speakers`
+ * whose names match the labels in `text` (e.g. lines starting "Joe:" and "Jane:").
+ */
+export function tts(
+    text: string,
+    opts: { voice?: string; speakers?: { speaker: string; voice: string }[] } = {},
+): Promise<{ data: string; mime: string }> {
     return call('tts', { text, ...opts });
 }
 
