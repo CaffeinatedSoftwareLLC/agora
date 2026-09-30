@@ -102,4 +102,6 @@ export interface BotMessageStreamPayload {
     streaming: boolean;
     /** Set when the streamed message is a thread reply. */
     threadId?: string;
+    /** Files attached when the stream finishes (e.g. an audio overview). */
+    attachments?: MessagePayload['attachments'];
 }

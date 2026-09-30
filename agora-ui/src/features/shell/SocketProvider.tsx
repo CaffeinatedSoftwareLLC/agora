@@ -103,9 +103,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     s.on('BotMessageStream', (data: BotMessageStreamPayload) => {
       if (data.threadId) {
-        useThreadStore.getState().streamUpdate(data.threadId, data.messageId, data.content, data.streaming);
+        useThreadStore.getState().streamUpdate(data.threadId, data.messageId, data.content, data.streaming, data.attachments);
       } else {
-        useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming);
+        useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming, data.attachments);
       }
     });
 

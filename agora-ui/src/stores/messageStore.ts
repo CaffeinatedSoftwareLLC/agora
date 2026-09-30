@@ -50,7 +50,7 @@ interface MessageState {
   updateMessage: (payload: MessageUpdatePayload) => void;
   removeMessage: (payload: MessageDeletePayload) => void;
   updateThreadMetadata: (channelId: string, messageId: string, replyCount: number, lastReplyAt: string | null, threadClosedAt?: string | null) => void;
-  streamUpdate: (messageId: string, channelId: string, content: string, streaming: boolean) => void;
+  streamUpdate: (messageId: string, channelId: string, content: string, streaming: boolean, attachments?: Message['attachments']) => void;
 
   clearChannel: (channelId: string) => void;
   clear: () => void;
@@ -354,7 +354,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
   },
 
-  streamUpdate: (messageId, channelId, content, streaming) => {
+  streamUpdate: (messageId, channelId, content, streaming, attachments) => {
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
       const current = nextByChannel.get(channelId);
@@ -364,7 +364,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         if (m.id !== messageId) return m;
         // Ignore updates after stream has been finalized
         if (m.streaming === false) return m;
-        return { ...m, content, streaming };
+        return { ...m, content, streaming, ...(attachments ? { attachments } : {}) };
       }));
       return { byChannel: nextByChannel };
     });

@@ -10,14 +10,19 @@ function formatFileSize(bytes: number): string {
 }
 
 export function FileAttachment({ attachment }: { attachment: Attachment }) {
+  const P = usePalette();
   const isImage = attachment.mime.startsWith('image/');
 
   if (attachment.deletedAt) {
-    return <span className="text-sm italic" style={{ color: usePalette().dim }}>[file deleted]</span>;
+    return <span className="text-sm italic" style={{ color: P.dim }}>[file deleted]</span>;
   }
 
   if (isImage) {
     return <ImageAttachment attachment={attachment} />;
+  }
+
+  if (attachment.mime.startsWith('audio/')) {
+    return <AudioAttachment attachment={attachment} />;
   }
 
   return <FileCard attachment={attachment} />;
@@ -87,19 +92,95 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
   );
 }
 
+async function downloadAttachment(attachment: Attachment) {
+  const res = await fetch(attachment.url, { headers: getAuthHeaders() });
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = attachment.name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function DownloadIcon({ color }: { color: string }) {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke={color} strokeWidth="2" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+    </svg>
+  );
+}
+
+/** Inline player; the file is fetched (with auth) on first play, not on render. */
+function AudioAttachment({ attachment }: { attachment: Attachment }) {
+  const P = usePalette();
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  useEffect(() => () => { if (blobUrl) URL.revokeObjectURL(blobUrl); }, [blobUrl]);
+
+  async function load() {
+    setLoading(true);
+    setError(false);
+    try {
+      const res = await fetch(attachment.url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(String(res.status));
+      setBlobUrl(URL.createObjectURL(await res.blob()));
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const download = (
+    <button
+      type="button"
+      onClick={() => downloadAttachment(attachment)}
+      className="p-1 rounded hover:opacity-80 shrink-0"
+      title={`Download ${attachment.name}`}
+      aria-label={`Download ${attachment.name}`}
+    >
+      <DownloadIcon color={P.dim} />
+    </button>
+  );
+
+  return (
+    <div className="mt-1 max-w-md">
+      <div
+        className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+        style={{ backgroundColor: P.surface, border: `1px solid ${P.border}` }}
+      >
+        {blobUrl ? (
+          <audio controls autoPlay src={blobUrl} className="flex-1 min-w-0 h-9" aria-label={attachment.name} />
+        ) : (
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="flex flex-1 min-w-0 items-center gap-2 text-left hover:opacity-80 disabled:opacity-60"
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: P.primary }}>
+              <svg className="w-4 h-4 ml-0.5" viewBox="0 0 24 24" fill="white" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium truncate" style={{ color: P.primary }}>{loading ? 'Loading…' : attachment.name}</span>
+              <span className="block text-xs" style={{ color: P.dim }}>{formatFileSize(attachment.size)}</span>
+            </span>
+          </button>
+        )}
+        {download}
+      </div>
+      {error && <span className="text-xs text-danger">Couldn't load the audio.</span>}
+    </div>
+  );
+}
+
 function FileCard({ attachment }: { attachment: Attachment }) {
   const P = usePalette();
 
-  const handleDownload = async () => {
-    const res = await fetch(attachment.url, { headers: getAuthHeaders() });
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = attachment.name;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const handleDownload = () => downloadAttachment(attachment);
 
   return (
     <div
@@ -116,9 +197,7 @@ function FileCard({ attachment }: { attachment: Attachment }) {
         <div className="text-sm font-medium truncate" style={{ color: P.primary }}>{attachment.name}</div>
         <div className="text-xs" style={{ color: P.dim }}>{formatFileSize(attachment.size)}</div>
       </div>
-      <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke={P.dim} strokeWidth="2">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-      </svg>
+      <DownloadIcon color={P.dim} />
     </div>
   );
 }
