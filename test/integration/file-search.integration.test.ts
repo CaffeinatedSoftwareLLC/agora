@@ -436,6 +436,101 @@ describe('sandboxed runs (C.8)', () => {
     });
 });
 
+describe('reading a file\'s text', () => {
+    const read = (fileId: string, auth: object = owner.auth, query: Record<string, unknown> = {}) =>
+        ctx.request.get(`/files/${fileId}/text`).query(query).set(auth);
+
+    test('a member reads a text file and a PDF; the answer says whether the text was checked', async () => {
+        const md = await read(files['collab-protocol.md']);
+        expect(md.status).toBe(200);
+        expect(md.body).toEqual({
+            id: files['collab-protocol.md'], name: 'collab-protocol.md', mime: 'text/markdown',
+            text: DOCS['collab-protocol.md'], offset: 0, totalChars: DOCS['collab-protocol.md'].length,
+            hasMore: false, truncated: false, injectionWarning: false, injectionChecked: true,
+        });
+        const pdf = await read(files['plan.pdf']);
+        expect(pdf.status).toBe(200);
+        expect(pdf.body.text).toContain('Milestone: beta in March');
+    });
+
+    test('a file that tries to instruct an AI is returned with a warning', async () => {
+        const res = await read(files['poisoned-notes.txt']);
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ injectionWarning: true, injectionChecked: true });
+    });
+
+    test('long files come in pages', async () => {
+        const first = await read(files['collab-protocol.md'], owner.auth, { limit: 20 });
+        expect(first.body).toMatchObject({ text: DOCS['collab-protocol.md'].slice(0, 20), offset: 0, hasMore: true });
+        const second = await read(files['collab-protocol.md'], owner.auth, { offset: 20, limit: 50000 });
+        expect(second.body).toMatchObject({ text: DOCS['collab-protocol.md'].slice(20), offset: 20, hasMore: false });
+        expect((await read(files['collab-protocol.md'], owner.auth, { limit: 50001 })).status).toBe(400);
+        expect((await read(files['collab-protocol.md'], owner.auth, { offset: -1 })).status).toBe(400);
+    });
+
+    test('a bot reads files in channels it has access to, still cannot download them, and learns nothing about other channels', async () => {
+        const get = vi.spyOn(storage, 'get');
+        const ok = await read(files['collab-protocol.md'], botAuth);
+        expect(ok.status).toBe(200);
+        expect(ok.body.text).toBe(DOCS['collab-protocol.md']);
+        expect((await ctx.request.get(`/files/${files['collab-protocol.md']}`).set(botAuth)).status).toBe(403);
+
+        get.mockClear();
+        // Another channel's file looks exactly like a file that does not exist, and is never decrypted
+        const hidden = await read(files['secret.md'], botAuth);
+        const missing = await read(generateUlid(), botAuth);
+        expect(hidden.status).toBe(404);
+        expect(hidden.body).toEqual(missing.body);
+        expect((await read(files['secret.md'], outsider.auth)).status).toBe(404);
+        expect((await ctx.request.get(`/files/${files['collab-protocol.md']}/text`)).status).toBe(401);
+        expect(get).not.toHaveBeenCalled();
+    });
+
+    test('files with no readable text, deleted files and unattached uploads cannot be read', async () => {
+        const sharp = (await import('sharp')).default;
+        const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#336699' } }).png().toBuffer();
+        const image = await share(ctx.request, owner.auth, channelId, 'chart.png', png);
+        const res = await read(image);
+        expect(res.status).toBe(415);
+        expect(res.body.error).toBe('Text cannot be read from image/png files');
+
+        const loose = await upload(ctx.request, owner.auth, channelId, 'loose.md', 'never posted');
+        expect((await read(loose)).status).toBe(404);
+
+        const gone = await share(ctx.request, owner.auth, channelId, 'gone.md', 'soon deleted');
+        await ctx.request.delete(`/files/${gone}`).set(owner.auth);
+        expect((await read(gone)).status).toBe(404);
+        await ctx.request.delete(`/files/${image}`).set(owner.auth);
+    });
+
+    test('a sandboxed run reads files of its own channel only, and each read counts against the run', async () => {
+        const runId = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO exec_runs (id, server_id, channel_id, submitted_by, code, code_sha256, limits, gate_decision, status, requested_capabilities)
+             VALUES ($1, $2, $3, $4, 'x', $5, $6, 'auto_run', 'running', '{}')`,
+            [runId, serverId, channelId, botId, 'a'.repeat(64), JSON.stringify(resolveLimits('standard'))]
+        );
+        const token = `art_${randomBytes(32).toString('base64url')}`;
+        await ctx.db.query(
+            `INSERT INTO exec_run_tokens (token_hash, run_id, server_id, capabilities, expires_at) VALUES ($1, $2, $3, '{}', NOW() + interval '300 seconds')`,
+            [hashToken(token), runId, serverId]
+        );
+        const gwRead = (payload: unknown) => gw.inject({ method: 'POST', url: '/v1/files/read', headers: { authorization: `Bearer ${token}` }, payload: payload as any });
+
+        const ok = await gwRead({ fileId: files['release-plan.txt'], limit: 12 });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json()).toMatchObject({ name: 'release-plan.txt', text: 'Release plan', hasMore: true });
+
+        const other = await gwRead({ fileId: files['secret.md'] });
+        expect(other.statusCode).toBe(404);
+        expect(other.json().code).toBe('not_found');
+        expect((await gwRead({ fileId: 'short' })).statusCode).toBe(400);
+        expect((await gwRead({})).statusCode).toBe(400);
+        expect((await gw.inject({ method: 'POST', url: '/v1/files/read', payload: { fileId: files['release-plan.txt'] } })).statusCode).toBe(401);
+        expect((await ctx.db.query('SELECT capability_calls FROM exec_runs WHERE id = $1', [runId])).rows[0].capability_calls).toBe(2);
+    });
+});
+
 describe('tags on files in messages (C.6)', () => {
     const attachmentsOf = async (channel: string, auth: object = owner.auth) => {
         const res = await ctx.request.get(`/channels/${channel}/messages`).query({ limit: 100 }).set(auth);

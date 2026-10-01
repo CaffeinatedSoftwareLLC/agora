@@ -470,10 +470,12 @@ Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImag
 1. Add a provider of type **TypeSafe Jev (decisions)** with your TypeSafe API key, and press Test.
 2. Under Capabilities, set **Decide** to that provider (model `jev-latest`) and turn it on. Set daily limits there if you want a ceiling; Jev's price is entered as $0.042 per 1M input tokens.
 3. Under **Decision model**, switch on what you want:
-   - *Assistant routing*: the assistant works out what an `@assistant` request is asking for. With a Search route enabled, this is also what lets the assistant search the web ("@assistant look up …").
+   - *Assistant routing*: the assistant works out what an `@assistant` request is asking for. With a Search route enabled, this is also what lets the assistant search the web ("@assistant look up …"): it posts the results as a card and, with Tavily, follows with its own written answer, which costs one extra chat call per search.
    - *Search screening*: web search results are checked for text that tries to give instructions to the AI reading them; such text is withheld. *Strict* refuses a search whose results could not be checked. Gemini-grounded results cannot be screened (Google's terms), so strict screening needs Tavily.
    - *File tagging*: each uploaded text file or PDF is tagged from the list under **File tags**, which you can edit. The file's text is sent to the decision provider.
    - *File ranking*: file search (the Files button in a channel, or an agent's `file_search` tool) is ordered by how well each file answers the search. The text of the top candidates is sent to the decision provider.
+
+Agents read a file they found with `file_read` (text files and PDFs). That works without a decision model too, by file name; a bot can only read files in channels it was given access to.
 
 Screening lowers risk; it is not a guarantee. What is sent where is listed in [Storage and Encryption](storage-and-encryption.md#what-leaves-the-instance-when-a-decision-model-is-used).
 

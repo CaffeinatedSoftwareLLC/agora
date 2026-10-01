@@ -8,6 +8,7 @@ import { encryptFile, decryptFile } from '../lib/encryption';
 import { INLINE_SAFE_MIMES } from '../lib/file-validation';
 import { storeFile } from '../lib/file-store';
 import { searchChannelFiles, MAX_LIMIT } from '../lib/file-search';
+import { readFileText, READ_MAX_CHARS } from '../lib/file-read';
 import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 
@@ -87,6 +88,39 @@ export async function fileRoutes(app: FastifyInstance) {
         const result = await searchChannelFiles(
             { db: app.db, store: storage, encryptionKey: config.encryptionKey },
             { channelId, userId: request.userId, isBot: !!request.isBot, query: q, tag, limit },
+        );
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return reply.send(result.body);
+    });
+
+    // GET /files/:fileId/text?offset=&limit= → the readable text of a text file or PDF, in pages.
+    // For members who can see the file's channel, and for bots with access to it: this is how an
+    // agent reads a file it found with file search. Bots still cannot download the file itself.
+    app.get('/files/:fileId/text', {
+        config: {
+            rateLimit: {
+                max: 30,
+                timeWindow: '1 minute',
+                keyGenerator: (request: any) => request.userId,
+            },
+        },
+        schema: {
+            querystring: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    offset: { type: 'integer', minimum: 0 },
+                    limit: { type: 'integer', minimum: 1, maximum: READ_MAX_CHARS },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { fileId } = request.params as any;
+        const { offset, limit } = request.query as { offset?: number; limit?: number };
+        // Authorization happens inside, before anything is decrypted (see searchChannelFiles above for why the pool)
+        const result = await readFileText(
+            { db: app.db, store: storage, encryptionKey: config.encryptionKey },
+            { fileId, userId: request.userId, isBot: !!request.isBot, offset, limit },
         );
         if (!result.ok) return reply.status(result.status).send({ error: result.error });
         return reply.send(result.body);

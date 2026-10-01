@@ -7,6 +7,7 @@ import { parseDialogue, synthesizeDialogue } from '../ai/speech';
 import { screeningPrecheck, screenSearchResult } from '../ai/search-screening';
 import { storeFile } from '../lib/file-store';
 import { searchChannelFiles, MAX_LIMIT as FILE_SEARCH_MAX_LIMIT } from '../lib/file-search';
+import { readFileText, READ_MAX_CHARS } from '../lib/file-read';
 import { storage } from '../lib/storage';
 import { config } from '../config';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
@@ -456,6 +457,32 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
             { channelId: run.channelId, userId: run.submittedBy, isBot: true, query, tag, limit, runId: run.runId },
         );
         if (!result.ok) return fail(reply, result.status, result.status === 404 ? 'not_found' : 'forbidden', result.error);
+        return reply.send(result.body);
+    });
+
+    // A run can read the text of a file in its own channel (text files and PDFs), in pages.
+    app.post('/v1/files/read', {
+        preHandler: authenticate,
+        schema: {
+            body: {
+                type: 'object', required: ['fileId'], additionalProperties: false,
+                properties: {
+                    fileId: { type: 'string', minLength: 26, maxLength: 26 },
+                    offset: { type: 'integer', minimum: 0 },
+                    limit: { type: 'integer', minimum: 1, maximum: READ_MAX_CHARS },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const run = request.run!;
+        if (!run.channelId) return fail(reply, 409, 'no_channel', 'This run has no channel whose files it could read');
+        if (!(await consumeOrTrip(run, reply))) return reply;
+        const { fileId, offset, limit } = request.body as { fileId: string; offset?: number; limit?: number };
+        const result = await readFileText(
+            { db, store: storage, encryptionKey: config.encryptionKey },
+            { fileId, userId: run.submittedBy, isBot: true, offset, limit, channelId: run.channelId },
+        );
+        if (!result.ok) return fail(reply, result.status, result.status === 404 ? 'not_found' : 'unreadable', result.error);
         return reply.send(result.body);
     });
 

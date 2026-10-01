@@ -86,6 +86,19 @@ export interface FileSearchResult {
     ranking: { status: 'ranked' | 'coarse'; reason?: string; model?: string; questionVersion?: string };
 }
 
+export interface FileText {
+    id: string;
+    name: string;
+    mime: string;
+    text: string;
+    offset: number;
+    totalChars: number;
+    hasMore: boolean;
+    truncated: boolean;
+    injectionWarning: boolean;
+    injectionChecked: boolean;
+}
+
 export interface ThreadCursor {
     threadId: string;
     channelId: string;
@@ -255,6 +268,15 @@ export class AgoraApi {
         if (opts.limit) params.set('limit', String(opts.limit));
         const qs = params.toString();
         return this.request('GET', `/channels/${channelId}/files/search${qs ? `?${qs}` : ''}`);
+    }
+
+    /** The readable text of a file (text files and PDFs), one page at a time. */
+    async readFileText(fileId: string, opts: { offset?: number; limit?: number } = {}): Promise<FileText> {
+        const params = new URLSearchParams();
+        if (opts.offset) params.set('offset', String(opts.offset));
+        if (opts.limit) params.set('limit', String(opts.limit));
+        const qs = params.toString();
+        return this.request('GET', `/files/${fileId}/text${qs ? `?${qs}` : ''}`);
     }
 
     async getRun(runId: string): Promise<RuntimeRun> {

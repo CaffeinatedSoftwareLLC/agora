@@ -10,7 +10,7 @@
 J0, A.1–A.3, B and C are implemented, on four stacked local branches that are **not pushed and have no PRs**: `feat/jev-foundation` → `feat/jev-routing` → `feat/jev-search-screening` → `feat/jev-file-tags`. The last one holds everything.
 
 **Verified**
-- Backend suite on an isolated database: 884 passed (6 live checks skipped by default). `agora-mcp`: 56 passed. UI: `vite build` clean, no new lint or type errors (17 lint and 7 type errors were there before).
+- Backend suite on an isolated database: all passing (see the PR for the count; 6 live checks are skipped by default). `agora-mcp` tests pass. UI: `vite build` clean, no new lint or type errors (17 lint and 7 type errors were there before).
 - Live contract checks against TypeSafe (`JEV_LIVE=1 JEV_KEY=… npx vitest run test/live`): 6 of 6. They cover the response contract and the golden inputs for every question (injection, intent, tagging, tag relevance, ranking).
 - End to end on a dev instance (API on Windows, real TypeSafe key, local Ollama for chat): provider test, 7 files tagged in 4 s (including a PDF), an injected file flagged and kept out of ranking, 5 searches ranked correctly in about 0.4 s each, a tag edit re-asking only that tag (7 requests), and two `@assistant` requests routed (one to chat, one to search). 51 decision requests cost about $0.0015.
 
@@ -21,10 +21,10 @@ J0, A.1–A.3, B and C are implemented, on four stacked local branches that are 
 - The Docker image has not been built with the new `unpdf` dependency.
 
 **Decisions taken during implementation** (not in the plan as agreed; say if any should change)
-- The assistant's search posts the provider's answer and sources as a search card. It does not pass results through the chat model to write a reply.
+- The assistant's search posts the provider's answer and sources as a search card, and then (Eryk, 2026-10-01: "both") writes its own answer with the chat model from the results that passed screening. That is one extra chat call per Tavily search. Gemini-grounded results get the card only: the grounded answer is already model-written and must stay unmodified.
 - Search has no keyword trigger: without routing switched on, the assistant never searches.
-- `agora-mcp` gained `file_search` but its version is still `0.4.0`, because the docs, the skill and the pending npm publish all name `0.4.0`.
-- Bots can search files but still cannot download them (`GET /files/:fileId` is not on the bot allowlist). An agent can find a file and cannot read it. See "Open questions".
+- `agora-mcp` gained `file_search` and `file_read`; its version stays `0.4.0` (Eryk, 2026-10-01), so the pending npm publish carries them.
+- Bots can read the text of files in channels they have access to (Eryk, 2026-10-01: yes): `GET /files/:fileId/text`, `file_read` in `agora-mcp`, `readFileText()` in `agora:std`. They still cannot download the file itself.
 - The default for a `decide` route is off, and every use is off, until switched on.
 
 ## What this adds
@@ -159,8 +159,11 @@ Settled during implementation:
 - PDF extractor: `unpdf` 1.8.1 (MIT), run in a worker thread. Limits: 20 MB, 50 pages, 192,000 characters, 20 s.
 - Search screening stays off until switched on.
 
-Still open, for Eryk:
-- **Should agents be able to read a file they found?** Bots can search files and cannot download them. A read tool that returns a file's extracted text (bounded, with the injection warning) would complete this, and it widens what a bot can access, so it was not added without asking.
-- **The default tag set**: `protocol`, `specification`, `plan`, `test report`, `meeting notes`, `data`, `code`, `reference`. Edit them in AI settings, or say what the defaults should be.
-- **`agora-mcp` version**: publish the pending `0.4.0` with `file_search` in it, or bump to `0.5.0` (the docs and the skill then need the new number).
-- **Should the assistant write its own answer from search results** (search, then the chat model)? Today it posts the provider's answer and sources as they come back, screened.
+Answered by Eryk on 2026-10-01, and built:
+- Agents can read a file they found: yes (`file_read`).
+- The default tag set stays: `protocol`, `specification`, `plan`, `test report`, `meeting notes`, `data`, `code`, `reference`.
+- `agora-mcp` stays at `0.4.0`.
+- The assistant does both after a search: the card, then its own written answer (Tavily only; see "Decisions taken during implementation").
+
+Still open:
+- Whether the extra chat call per Tavily search should be switchable. It always runs today when a chat route is usable.

@@ -76,9 +76,13 @@ A decision model is optional and every use is off by default. When a use is swit
 | File tagging | The text of each uploaded text file or PDF, up to 192,000 characters, plus the server's tag names and criteria |
 | File ranking | The search text, the tag names and criteria, and the first 24,000 characters of up to 8 candidate files per search |
 
+The assistant's written answer to a web search sends the screened results to the chat provider, as any assistant reply sends the conversation.
+
 File tagging and file ranking have separate switches because both send file contents out. Files are decrypted in memory for this and nothing decrypted is written anywhere. Agora stores the answers (probabilities), not the text.
 
 **Screening is not a security boundary.** Search screening and the injection check on files lower the chance that text aimed at an AI reaches one. A model can be wrong, and text that passes is still untrusted. Strict screening refuses a search whose results could not be checked; it does not make checked results safe.
+
+**Bots can read file text.** A bot with access to a channel can read the text of text files and PDFs shared there (`GET /files/:fileId/text`), which then goes wherever that agent's own model runs. It cannot download the files themselves, and channel access is still an admin's explicit grant per bot.
 
 ## File storage
 

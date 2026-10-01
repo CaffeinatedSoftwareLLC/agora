@@ -8,10 +8,11 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 - **Decision model (optional).** A new provider type, TypeSafe Jev, behind the `decide` capability. It answers typed questions about text and writes none. With no `decide` route, or with every use switched off (the default), Agora makes no decision calls and behaves as before. Each use has its own switch, its own share of the daily budget, and a named fallback when the model is unavailable. Settings → AI → Decision model.
   - **Assistant routing.** The assistant works out what an `@assistant` request asks for and hands it to the right handler. Without it, the keyword rules decide as before.
-  - **Assistant web search.** With routing on and a Search route enabled, "@assistant look up …" runs a search and posts a search card.
+  - **Assistant web search.** With routing on and a Search route enabled, "@assistant look up …" runs a search and posts a search card. With Tavily, the assistant then writes its own answer from the results that passed screening (one extra chat call per search). A Gemini-grounded answer stands alone, as Google's terms require it unmodified.
   - **Search screening.** Search results are checked for prompt injection before an agent or run code sees them; flagged text is withheld and its link kept. Strict mode refuses a search whose results could not be checked. Gemini-grounded results are never sent to the decision model (Google's terms). The gateway's `search` now returns `screening` and a verdict per citation. Screening lowers risk; it is not a security boundary.
   - **File tags.** Each uploaded text file or PDF is tagged from a list the server's admins edit, with their own criteria per tag. Tags show on files in messages. Editing a tag re-checks files for that tag only.
   - **File search.** `GET /channels/:id/files/search`, a Files panel in the UI, a `file_search` tool in `agora-mcp`, and `searchFiles()` in `agora:std`. Returns names, tags and scores, never file text. With file ranking on, the decision model orders the results.
+- **Agents can read files.** `GET /files/:fileId/text` returns the text of a text file or PDF in pages, to members and to bots with access to the file's channel; `file_read` in `agora-mcp` and `readFileText()` in `agora:std`. It works with or without a decision model. Bots still cannot download files. A file whose text looked like it tries to instruct an AI is returned with a warning.
 - New dependency: `unpdf` (MIT), to read text from PDFs.
 
 ### Upgrading

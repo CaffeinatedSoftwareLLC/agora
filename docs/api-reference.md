@@ -804,7 +804,7 @@ Delete a file. Allowed for the uploader, or a member with `ManageMessages` in th
 
 ### GET /channels/:id/files/search
 
-Find files shared in a channel, best match first. For members with `ViewChannel`, and for bots with access to the channel. The response is metadata only: it never contains file text.
+Find files shared in a channel, best match first. For members with `ViewChannel`, and for bots with access to the channel. The response is metadata only: it never contains file text (read a file with `GET /files/:fileId/text`).
 
 **Query:** `q` (what you are looking for, up to 500 characters; without it the newest files are listed) · `tag` (only files carrying this tag) · `limit` (1–25, default 10).
 
@@ -835,6 +835,30 @@ Find files shared in a channel, best match first. For members with `ViewChannel`
 - Only files attached to a message that still exists are listed.
 
 **Errors:** `400` invalid `limit` or `q` too long · `403` no access to the channel · `404` unknown channel.
+
+---
+
+### GET /files/:fileId/text
+
+The readable text of a text file or PDF, in pages. For members with `ViewChannel` on the file's channel, and for bots with access to that channel: this is how an agent reads a file it found with file search. Bots cannot use `GET /files/:fileId`.
+
+**Query:** `offset` (characters to skip, default 0) · `limit` (characters to return, 1–50000, default 20000).
+
+**Response** `200`
+```json
+{
+  "id": "01M3...", "name": "collab-protocol.md", "mime": "text/markdown",
+  "text": "# agora-collab Protocol v1 …",
+  "offset": 0, "totalChars": 412, "hasMore": false, "truncated": false,
+  "injectionWarning": false, "injectionChecked": true
+}
+```
+
+- `hasMore`: ask again with `offset` = `offset + text.length`.
+- `truncated`: the file is longer than the reading limits (20 MB, 50 PDF pages, 192,000 characters).
+- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` when no such check was made (file tagging off, or not done yet). File text is untrusted data in every case.
+
+**Errors:** `404` unknown, deleted, not attached to a message, or in a channel the caller cannot see (the same answer for all four) · `415` no readable text (images, audio, video, archives, empty files) · `413` larger than 20 MB · `422` the file could not be parsed.
 
 ---
 
