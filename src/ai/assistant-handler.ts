@@ -6,7 +6,9 @@ import { streamCompletion, ConversationMessage } from './providers';
 import { resolveRoute, checkBudget, recordUsage } from './routing';
 import { generateUlid } from '../utils/ulid';
 import { storeFile, type StoredFile } from '../lib/file-store';
-import { createAudioOverview, isAudioOverviewRequest, overviewMessage, OVERVIEW_MAX_MESSAGES, type TranscriptRow } from './audio-overview';
+import { createAudioOverview, overviewMessage, OVERVIEW_MAX_MESSAGES, type TranscriptRow } from './audio-overview';
+import { classifyIntent, intentByRules } from './intent-routing';
+import type { AssistantIntent } from './decision-questions';
 
 /** Fallback logger when Fastify logger is not available (e.g. tests with logger: false) */
 const noopLogger: FastifyBaseLogger = {
@@ -79,8 +81,11 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
 
     const aiConfig = configRow.rows[0];
 
-    // 4b. "@assistant make an audio overview of this thread" (WBS 5.1)
-    if (isAudioOverviewRequest(event.content)) {
+    // 4b. Which handler takes the request. A decision model classifies it when routing
+    // is switched on; otherwise (and on any failure) the keyword rules do, as before.
+    const intent = await routeMention(db, { serverId, channelId, messageId, botId, author, content: event.content });
+    if (intent === 'audio_overview') {
+        // "@assistant make an audio overview of this thread" (WBS 5.1)
         await handleAudioOverview(db, io, { serverId, channelId, threadId, botId, author, content: event.content });
         return;
     }
@@ -239,6 +244,38 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
             },
         }
     );
+}
+
+/** Handlers that could run for this server right now. Only these are offered to the decision model. */
+async function availableIntents(db: Pool, serverId: string): Promise<AssistantIntent[]> {
+    const res = await db.query(
+        `SELECT r.capability FROM ai_capability_routes r JOIN ai_providers p ON p.id = r.provider_id
+         WHERE r.server_id = $1 AND r.enabled AND p.enabled AND r.capability = 'tts'`,
+        [serverId]
+    );
+    const enabled = new Set(res.rows.map((r: { capability: string }) => r.capability));
+    return ['chat', ...(enabled.has('tts') ? ['audio_overview' as const] : [])];
+}
+
+async function routeMention(
+    db: Pool,
+    ctx: { serverId: string; channelId: string; messageId: string; botId: string; author: { id: string }; content: string },
+): Promise<AssistantIntent> {
+    try {
+        const decision = await classifyIntent(db, {
+            serverId: ctx.serverId, content: ctx.content, available: await availableIntents(db, ctx.serverId),
+            channelId: ctx.channelId, userId: ctx.author.id,
+        });
+        if (decision.source === 'model' || decision.fallback) {
+            log.info({ serverId: ctx.serverId, messageId: ctx.messageId, intent: decision.intent, source: decision.source,
+                confidence: decision.confidence, fallback: decision.fallback }, 'Assistant request routed');
+        }
+        return decision.intent;
+    } catch (err) {
+        // Routing must never cost the person their reply
+        log.error({ err, botId: ctx.botId, messageId: ctx.messageId }, 'Intent routing failed; using keyword rules');
+        return intentByRules(ctx.content);
+    }
 }
 
 interface Placeholder {

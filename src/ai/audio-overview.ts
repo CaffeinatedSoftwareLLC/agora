@@ -21,7 +21,7 @@ const MAX_TRANSCRIPT_CHARS = 60_000;
 export const OVERVIEW_MAX_MESSAGES = 300;
 
 /** Remove `<@id>` and `@name` mentions. */
-const stripMentions = (text: string) => text.replace(/<@!?[^>\s]+>/g, ' ').replace(/@\S+/g, ' ');
+export const stripMentions = (text: string) => text.replace(/<@!?[^>\s]+>/g, ' ').replace(/@\S+/g, ' ');
 
 /** A mention asks for an overview when it says "audio overview/summary/recap" or "podcast". */
 export function isAudioOverviewRequest(content: string): boolean {
