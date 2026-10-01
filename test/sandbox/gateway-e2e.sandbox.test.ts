@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import Redis from 'ioredis';
 import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
@@ -8,7 +8,7 @@ import { dockerFromEnv, SandboxDocker } from '../../src/runtime/docker';
 import { processRun, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits } from '../../src/runtime/limits';
 import { buildCapGateway } from '../../src/gateway/cap-gateway';
-import { startForwarder } from './gateway-harness';
+import { startForwarder, FORWARDER } from './gateway-harness';
 
 /**
  * WBS 3.4 end to end: agent code in a real sandbox → cap-gateway (real service) →
@@ -63,7 +63,7 @@ beforeAll(async () => {
 
     const sandbox = new SandboxDocker(dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375'));
     const { runtime } = await sandbox.preflight({ image: IMAGE, network: NETWORK, requireGvisor: false });
-    deps = { db: ctx.db, sandbox, config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100 } };
+    deps = { db: ctx.db, sandbox, config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER } };
 });
 
 afterAll(async () => {
@@ -169,4 +169,51 @@ test('testReport turns JUnit XML into a results card with a model summary and a 
         failures: [{ name: 'test_create', suite: 'api', message: 'assert 500 == 201\ntrace' }],
     });
     expect(card.system_data.suites.map((s: any) => s.name)).toEqual(['api', 'util']);
+});
+
+test('a run cannot use another run\'s token: the gateway refuses it and pauses the leaking bot (spec §14 item 12)', async () => {
+    vi.unstubAllGlobals();
+    // A second bot with a live run of its own, whose token is bound to another sandbox's address
+    const otherBot = generateUlid();
+    await ctx.db.query('INSERT INTO users (id, username, bot, server_id) VALUES ($1, $2, true, $3)', [otherBot, `victim${otherBot.slice(-6).toLowerCase()}`, serverId]);
+    const victimRun = generateUlid();
+    await ctx.db.query(
+        `INSERT INTO exec_runs (id, server_id, channel_id, thread_id, submitted_by, code, code_sha256, limits, gate_decision, status, requested_capabilities)
+         VALUES ($1, $2, $3, $4, $5, 'x', $6, $7, 'auto_run', 'running', $8)`,
+        [victimRun, serverId, channelId, threadId, otherBot, 'a'.repeat(64), JSON.stringify(resolveLimits('standard')), ['chat']]
+    );
+    const stolen = `art_${randomBytes(32).toString('base64url')}`;
+    await ctx.db.query(
+        `INSERT INTO exec_run_tokens (token_hash, run_id, server_id, capabilities, expires_at, bound_ip)
+         VALUES ($1, $2, $3, $4, NOW() + interval '5 minutes', '10.255.255.1')`,
+        [createHash('sha256').update(stolen).digest('hex'), victimRun, serverId, ['chat']]
+    );
+
+    // The attacker's run presents the stolen token to the gateway
+    const code = `
+        const res = await fetch(Deno.env.get("AGORA_CAP_URL") + "/v1/messages", {
+            method: "POST",
+            headers: { authorization: "Bearer ${stolen}", "content-type": "application/json" },
+            body: JSON.stringify({ content: "posted with a stolen token" }),
+        });
+        console.log("STATUS", res.status, (await res.json()).error);
+    `;
+    const runId = generateUlid();
+    await ctx.db.query(
+        `INSERT INTO exec_runs (id, server_id, channel_id, thread_id, submitted_by, code, code_sha256, limits, gate_decision, status, requested_capabilities)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'auto_run', 'queued', $9)`,
+        [runId, serverId, channelId, threadId, botId, code, createHash('sha256').update(code).digest('hex'), JSON.stringify(resolveLimits('standard')), ['chat']]
+    );
+    const result = await processRun(deps, runId);
+    const run = (await ctx.db.query('SELECT * FROM exec_runs WHERE id = $1', [runId])).rows[0];
+    expect(result, run.stderr_tail).toEqual({ kind: 'ran', status: 'succeeded' });
+    expect(run.stdout_tail).toContain('STATUS 401');
+    expect(run.stdout_tail).toContain('different address');
+
+    // Nothing was posted, and the bot whose token leaked is paused
+    const posted = await ctx.db.query("SELECT 1 FROM messages WHERE content = 'posted with a stolen token'");
+    expect(posted.rows).toHaveLength(0);
+    const victim = (await ctx.db.query('SELECT bot_paused_at, bot_paused_reason FROM users WHERE id = $1', [otherBot])).rows[0];
+    expect(victim.bot_paused_at).toBeTruthy();
+    expect(victim.bot_paused_reason).toContain('run token was used outside its run');
 });

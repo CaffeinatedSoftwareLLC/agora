@@ -69,23 +69,28 @@ export async function storeFile(
     let height: number | undefined;
     const exifStripEnabled = await getFileSetting(db, 'files.exif_strip');
     if (IMAGE_MIMES.includes(detectedMime)) {
-        const sharp = (await import('sharp')).default;
-        const image = sharp(buffer);
-        const metadata = await image.metadata();
-        width = metadata.width;
-        height = metadata.height;
+        // A file with an image's magic bytes but a broken body is a bad upload, not a server error
+        try {
+            const sharp = (await import('sharp')).default;
+            const image = sharp(buffer);
+            const metadata = await image.metadata();
+            width = metadata.width;
+            height = metadata.height;
 
-        if (exifStripEnabled !== false) {
-            if (detectedMime === 'image/jpeg') {
-                processedBuffer = await image.jpeg({ quality: 95 }).toBuffer();
-            } else if (detectedMime === 'image/png') {
-                processedBuffer = await image.png().toBuffer();
-            } else if (detectedMime === 'image/webp') {
-                processedBuffer = await image.webp({ quality: 95 }).toBuffer();
-            } else if (detectedMime === 'image/gif') {
-                const pages = metadata.pages ?? 1;
-                processedBuffer = pages > 1 ? buffer : await image.gif().toBuffer(); // keep animated GIFs as-is
+            if (exifStripEnabled !== false) {
+                if (detectedMime === 'image/jpeg') {
+                    processedBuffer = await image.jpeg({ quality: 95 }).toBuffer();
+                } else if (detectedMime === 'image/png') {
+                    processedBuffer = await image.png().toBuffer();
+                } else if (detectedMime === 'image/webp') {
+                    processedBuffer = await image.webp({ quality: 95 }).toBuffer();
+                } else if (detectedMime === 'image/gif') {
+                    const pages = metadata.pages ?? 1;
+                    processedBuffer = pages > 1 ? buffer : await image.gif().toBuffer(); // keep animated GIFs as-is
+                }
             }
+        } catch {
+            return { ok: false, status: 415, error: 'Image could not be read; it may be corrupt' };
         }
     }
 

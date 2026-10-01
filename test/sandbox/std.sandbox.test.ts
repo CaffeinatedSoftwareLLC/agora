@@ -4,7 +4,7 @@ import { generateUlid } from '../../src/utils/ulid';
 import { dockerFromEnv, SandboxDocker } from '../../src/runtime/docker';
 import { processRun, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits } from '../../src/runtime/limits';
-import { startGatewayHarness, type RecordedRequest } from './gateway-harness';
+import { startGatewayHarness, FORWARDER, type RecordedRequest } from './gateway-harness';
 
 /** WBS 3.3: agora:std inside a real sandbox, talking to a fake gateway. */
 
@@ -47,7 +47,7 @@ beforeAll(async () => {
     deps = {
         db: ctx.db,
         sandbox,
-        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100 },
+        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER },
     };
     gateway = await startGatewayHarness(NETWORK, respond);
 });

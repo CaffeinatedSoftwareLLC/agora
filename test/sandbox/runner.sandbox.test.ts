@@ -5,6 +5,7 @@ import { generateUlid } from '../../src/utils/ulid';
 import { dockerFromEnv, SandboxDocker } from '../../src/runtime/docker';
 import { processRun, reconcileInterruptedRuns, startRunnerWorker, RUNTIME_QUEUE, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits, type RunLimits } from '../../src/runtime/limits';
+import { startGatewayHarness, FORWARDER } from './gateway-harness';
 
 /**
  * WBS 3.2: the runner against real containers (through the socket proxy).
@@ -19,6 +20,7 @@ let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let serverId: string;
 let sandbox: SandboxDocker;
 let deps: RunnerDeps;
+let gateway: Awaited<ReturnType<typeof startGatewayHarness>>;
 const finished: { runId: string; status: string }[] = [];
 
 async function insertRun(code: string, opts: { limits?: Partial<RunLimits>; gate?: 'auto_run' | 'needs_approval'; approved?: boolean; status?: string } = {}) {
@@ -48,12 +50,15 @@ beforeAll(async () => {
     deps = {
         db: ctx.db,
         sandbox,
-        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 2, capacityRetryMs: 100 },
+        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 2, capacityRetryMs: 100, capContainer: FORWARDER },
         onFinished: async (runId, status) => { finished.push({ runId, status }); },
     };
+    // Under gVisor the runner pins the gateway's address into each run, so one has to exist
+    gateway = await startGatewayHarness(NETWORK, () => ({ status: 404, body: { error: 'not found', code: 'not_found' } }));
 });
 
 afterAll(async () => {
+    await gateway?.stop();
     await ctx.close();
 });
 

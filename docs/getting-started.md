@@ -206,6 +206,14 @@ If you also run the production stack on the same machine, remove the dev network
 
 `AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.
 
+**Running the sandbox tests on gVisor.** `npm run test:sandbox` uses whatever your Docker has, which on Docker Desktop is `runc`. To run the same suite, including the negative security tests, against real gVisor containers, use a Linux Docker engine with `runsc` (a WSL2 distro set up as below works) and run, from the repo root:
+
+```bash
+scripts/test-sandbox-gvisor.sh
+```
+
+It needs only Docker on that machine: it starts its own Postgres, Redis, socket proxy and internal network, runs the tests in a Node container, and removes everything afterwards. It refuses to start while a real code run is in progress on the same engine, because the suite removes every `agora-run-*` container.
+
 **Running the prod stack with gVisor on Linux.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`. The id differs between hosts (for example 986 or 999).
 
 ### Local stack on Windows with gVisor (WSL2)

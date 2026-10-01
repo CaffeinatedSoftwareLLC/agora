@@ -358,7 +358,14 @@ Posted messages reach clients through a Redis pub/sub **event bridge**. The API 
 
 ## 14. Negative test suite (3.9)
 
-These are automated integration tests against a real `runsc` runner. CI needs a Linux runner with gVisor. Every test asserts the attack fails **and** that the run ends in the expected status.
+These are automated integration tests against a real `runsc` runner. Every test asserts the attack fails **and** that the run ends in the expected status.
+
+> **Status (0.2.0): written and passing under gVisor.** `test/sandbox/negative.sandbox.test.ts` holds items 1–7 and a table saying where each of the 15 items is tested. `scripts/test-sandbox-gvisor.sh` runs the whole `test/sandbox` suite on any Linux Docker engine with `runsc` (it needs only Docker on the host; no CI runner). Last run 2026-10-01 on WSL2 Ubuntu, Docker 29.8.1, `runsc` release-20260928.0: 37 of 37, with containers reporting kernel `4.19.0-gvisor`.
+>
+> How three items are met in practice:
+> - **Item 1** ("checked with Deno perms relaxed in a test-only image") is done without a special image: a plain container with a shell is started on the sandbox network under the same runtime and must fail to reach a service on another network, the host and the internet, while a control container on the default bridge reaches them.
+> - **Item 4:** `Deno.env.toObject()` is denied outright; the two allowed names are readable one by one and nothing else is.
+> - **Item 14:** HTML is refused by the extension allowlist; a file is typed by its content, so a JPEG named `.png` is stored as `image/jpeg` rather than rejected, a program named `.png` is rejected, and HTML inside a `.txt` is served as a `text/plain` attachment with `nosniff`.
 
 1. `fetch("http://postgres:5432")`, `redis:6379`, `api:3000` → rejected (Deno) and unreachable (network, checked with Deno perms relaxed in a test-only image). Reading `/data/files` fails: the file volume is not mounted. *(amended #32)*
 2. `fetch("https://example.com")`, raw TCP to `1.1.1.1:53`, and DNS lookup of a public name → fail.
@@ -444,7 +451,7 @@ docker run --rm --runtime=runsc hello-world
 | 3.6 | Decider interface + `RulesDecider`, approvals in the thread, `exec_runs` + audit | §9, §10, §12 |
 | 3.7 | *(folded into 3.4: artifacts go through the gateway, no container harvest)* | §11 |
 | 3.8 | Tripwires → auto-pause | §12 |
-| 3.9 | Negative test suite on a gVisor CI runner | §14 |
+| 3.9 | Negative test suite, run on gVisor with `scripts/test-sandbox-gvisor.sh` | §14 |
 
 ---
 

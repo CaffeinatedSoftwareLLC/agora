@@ -694,6 +694,46 @@ describe('messages and files', () => {
         expect(noName.json().code).toBe('bad_filename');
     });
 
+    test('spec §14 item 14: an artifact is typed by its content, never by the name it claims', async () => {
+        const { auth } = await makeRun({ limits: { maxArtifacts: 10 } });
+        const post = (name: string, body: Buffer, type = 'application/octet-stream') => gw.inject({
+            method: 'POST', url: '/v1/files',
+            headers: { ...auth, 'content-type': type, 'x-agora-filename': encodeURIComponent(name) },
+            payload: body,
+        });
+        const sharp = (await import('sharp')).default;
+        const JPEG = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#cc0000' } }).jpeg().toBuffer();
+        const BROKEN_JPEG = Buffer.from('ffd8ffe000104a46494600010100000100010000ffdb004300' + '08'.repeat(64) + 'ffd9', 'hex');
+        const EXE = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(64), Buffer.from('PE\0\0')]);
+
+        // An HTML file is refused outright: the extension is not on the allowlist
+        const html = await post('report.html', Buffer.from('<script>alert(1)</script>'), 'text/html');
+        expect(html.statusCode).toBe(415);
+
+        // A program calling itself an image is refused: its bytes are not an allowed type
+        const exe = await post('logo.png', EXE);
+        expect(exe.statusCode).toBe(415);
+
+        // An image with the right magic bytes but a broken body is a bad upload (415), not a server error
+        const broken = await post('broken.jpg', BROKEN_JPEG, 'image/jpeg');
+        expect(broken.statusCode).toBe(415);
+
+        // A JPEG calling itself a PNG is stored as what it is, not what it claims
+        const jpeg = await post('photo.png', JPEG, 'image/png');
+        expect(jpeg.statusCode).toBe(201);
+        expect(jpeg.json().mime).toBe('image/jpeg');
+
+        // HTML smuggled in a .txt is stored as plain text and can only be downloaded, never rendered
+        const smuggled = await post('notes.txt', Buffer.from('<html><script>alert(1)</script></html>'), 'text/html');
+        expect(smuggled.statusCode).toBe(201);
+        expect(smuggled.json().mime).toBe('text/plain');
+        const download = await ctx.request.get(`/files/${smuggled.json().id}`).set(owner.auth);
+        expect(download.status).toBe(200);
+        expect(download.headers['content-type']).toContain('text/plain');
+        expect(download.headers['content-disposition']).toMatch(/^attachment;/);
+        expect(download.headers['x-content-type-options']).toBe('nosniff');
+    });
+
     test('closed thread rejects posts', async () => {
         const parent = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'soon closed' });
         await waitFor(async () => (await ctx.db.query('SELECT 1 FROM messages WHERE id = $1', [parent.body.id])).rows.length > 0);
