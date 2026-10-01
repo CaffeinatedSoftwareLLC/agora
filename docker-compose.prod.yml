@@ -56,6 +56,8 @@ services:
       TRUST_PROXY: "true"
       STORAGE_DIR: /data/files
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+      # Set to 1 for one start to record a different key (data under the old key is lost)
+      AGORA_ACCEPT_NEW_ENCRYPTION_KEY: ${AGORA_ACCEPT_NEW_ENCRYPTION_KEY:-}
     volumes:
       - files-data:/data/files
     depends_on:
@@ -142,6 +144,7 @@ services:
       # Same volume as the API: files posted by runs are served by the API
       STORAGE_DIR: /data/files
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+      AGORA_ACCEPT_NEW_ENCRYPTION_KEY: ${AGORA_ACCEPT_NEW_ENCRYPTION_KEY:-}
     volumes:
       - files-data:/data/files
     networks: [default, sandbox]

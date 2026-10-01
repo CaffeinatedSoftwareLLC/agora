@@ -7,11 +7,14 @@ import { Pool } from 'pg';
 import Redis from 'ioredis';
 import { config } from './config';
 import { buildCapGateway } from './gateway/cap-gateway';
+import { verifyEncryptionKeyAtStartup } from './lib/key-fingerprint';
 import { storage } from './lib/storage';
 
 async function main() {
     const db = new Pool({ connectionString: config.dbUrl, max: 10 });
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
+    // The gateway encrypts files the API later decrypts: both must hold the same key
+    await verifyEncryptionKeyAtStartup(db, config.encryptionKey);
     await storage.init();
 
     const app = await buildCapGateway({ db, redis, logger: true });

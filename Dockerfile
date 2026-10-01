@@ -14,6 +14,9 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
+# Turns on the startup checks in src/config.ts (refuse a missing or default key)
+ENV NODE_ENV=production
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

@@ -138,7 +138,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 6.2 | ◐ Publish the API's plain-HTTP port on `127.0.0.1` only (`API_BIND` to override). Code is on the branch; **not tested or deployed** | XS | — |
 | 6.3 | ☑ Docs for 6.1–6.2 and an encryption audit: `docs/storage-and-encryption.md`, README security section rewritten to match the code | S | 6.1 |
 | 6.4 | ☑ Remove IP tracking and IP bans outright (decision 2026-10-01) instead of wiring `IP_ENCRYPTION_KEY` into production: migration `031` drops `ip_bans` and `users.last_ip_*`; the ban routes, the admin UI option, `src/auth/crypto.ts` and the key are gone. Closes audit finding A. Branch `chore/remove-ip-tracking` | S | — |
-| 6.5 | ☐ Set `NODE_ENV=production` in the runtime image so the startup key checks run; reject an all-zero `AGORA_ENCRYPTION_KEY` and the placeholder `JWT_SECRET` (finding B). Add a startup fingerprint check so an accidentally changed `AGORA_ENCRYPTION_KEY` stops the server instead of breaking every file | XS | — |
+| 6.5 | ☑ `NODE_ENV=production` in the runtime image so the startup checks run; an all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET` are refused; startup fingerprint check (`src/lib/key-fingerprint.ts`) refuses a changed encryption key, with `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` as the explicit override. Closes audit finding B. Branch `fix/production-key-checks`; not deployed | S | — |
 | 6.6 | ☐ Make the setup script's domain take effect: write `DOMAIN`, pass it to `caddy` (finding C). Verify on a real domain | S | — |
 | 6.7 | ☐ Optional hardening: storage keys without the filename (finding D); run backend containers as non-root (finding E); key rotation tool; bind run tokens to the container IP | M | 6.1 |
 

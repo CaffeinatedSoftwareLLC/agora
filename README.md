@@ -408,7 +408,8 @@ cd agora-ui && npm test
 | `STORAGE_DIR` | Disk driver: directory for uploaded files (a volume in Docker) | `data/files` (`/data/files` in Docker) |
 | `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | S3 driver: any S3-compatible service. The old `MINIO_ENDPOINT` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` names are still read as fallbacks. | — |
 | `S3_BUCKET` / `S3_REGION` | S3 driver: bucket (created if missing) and region | `agora-files` / — |
-| `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered or rotated.** | Dev default (zeros) |
+| `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered or rotated.** The server refuses to start if it changes | Dev default (zeros) |
+| `AGORA_ACCEPT_NEW_ENCRYPTION_KEY` | Set to `1` for one start to record a different encryption key. Data encrypted with the old key stays unreadable. | — |
 | `API_BIND` | Production compose: host address the API's plain-HTTP port 3000 is published on. `0.0.0.0` opens it to the network. | `127.0.0.1` |
 | `DOMAIN` | Production compose: your domain, used for the API's allowed origin | `alpha.agora.host` |
 | `DOCKER_GID` | Production compose: the host's docker group id, for the sandbox's socket proxy | — (required) |
@@ -437,10 +438,8 @@ Details, key handling and backups: [Storage and Encryption](docs/storage-and-enc
 
 **Secrets**
 - **No secrets are written to logs or API responses** — only the one-time setup token is printed, by necessity, to bootstrap the first admin account.
-- The production compose file **refuses to start** without `JWT_SECRET` and `AGORA_ENCRYPTION_KEY`, and the server rejects an encryption key that isn't 64 hex characters.
-
-**Known gap** (open; found in the 2026-10-01 audit)
-- The server's stricter production check (refuse to start on a default key) only runs when `NODE_ENV=production`, which the Docker image does not set. Generate your keys with the setup script rather than copying `.env.prod.example` by hand.
+- The server **refuses to start** in production (the Docker image) with a missing or all-zero `AGORA_ENCRYPTION_KEY`, a key that isn't 64 hex characters, or a placeholder `JWT_SECRET`.
+- The server **refuses to start if `AGORA_ENCRYPTION_KEY` has changed** since the instance was set up. It records a fingerprint of the key (not the key) on first start and checks it on every later one, so a mistyped or regenerated key is caught at startup instead of silently breaking every file. `docker logs agora-api-1` says which key is wrong and what to do.
 
 **Keeping people out**
 - **Registration policy** is the gate: `invite_only` or `approval` decides who gets an account. On `open`, anyone who can reach the instance can register, limited to 5 registrations per hour per address.
