@@ -36,7 +36,7 @@ Three things to know about that file:
 
 - **Copy it somewhere safe.** `AGORA_ENCRYPTION_KEY` encrypts every uploaded file and every stored AI provider key. It cannot be recovered or rotated; lose it and those are unreadable.
 - **Set `DOCKER_GID`** to the host's docker group id (`getent group docker | cut -d: -f3`). The example value `999` is only right on some hosts; with the wrong one, code runs fail because the socket proxy can't reach Docker.
-- **The domain you typed isn't applied yet.** For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain. For `localhost` there is nothing to do.
+- **`DOMAIN` is the domain you typed** (empty for `localhost`). Caddy and the API both read it; to change it later, edit the line and run the `up -d` command again.
 
 **If you're on Windows and this generates a `.env`/`.env.prod` where the database connection mysteriously fails** (`getaddrinfo ENOTFOUND accord` or similar) — that was a real bug in `setup-env.js`: it split `.env.example` on `\n` only, which left a stray `\r` glued onto `POSTGRES_USER`'s value on files with CRLF line endings, corrupting the generated `DATABASE_URL` mid-string. This is fixed as of the cleanup in this repo (the script now splits on `\r?\n`), but if you ever see a connection string that looks truncated or has a control character in the middle, that's the failure signature — regenerate with `--force` after pulling the fix.
 
@@ -205,6 +205,14 @@ To let a bot run code, set its **Code runs** option in Settings → Bots (`Need 
 If you also run the production stack on the same machine, remove the dev network first (`docker network rm agora_sandbox`). The prod compose file creates its own `agora_sandbox`.
 
 `AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.
+
+**Running the sandbox tests on gVisor.** `npm run test:sandbox` uses whatever your Docker has, which on Docker Desktop is `runc`. To run the same suite, including the negative security tests, against real gVisor containers, use a Linux Docker engine with `runsc` (a WSL2 distro set up as below works) and run, from the repo root:
+
+```bash
+scripts/test-sandbox-gvisor.sh
+```
+
+It needs only Docker on that machine: it starts its own Postgres, Redis, socket proxy and internal network, runs the tests in a Node container, and removes everything afterwards. It refuses to start while a real code run is in progress on the same engine, because the suite removes every `agora-run-*` container.
 
 **Running the prod stack with gVisor on Linux.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`. The id differs between hosts (for example 986 or 999).
 

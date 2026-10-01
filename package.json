@@ -1,6 +1,6 @@
 {
   "name": "agora",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "test": "vitest run",
@@ -14,6 +14,8 @@
     "runner": "tsx src/runner-main.ts",
     "cap-gateway": "tsx src/gateway-main.ts",
     "storage:migrate-from-s3": "tsx src/tools/migrate-storage-from-s3.ts",
+    "storage:strip-filenames": "tsx src/tools/strip-storage-filenames.ts",
+    "key:rotate": "tsx src/tools/rotate-encryption-key.ts",
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts"
   },
   "dependencies": {

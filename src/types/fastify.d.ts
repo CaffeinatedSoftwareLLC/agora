@@ -10,6 +10,8 @@ declare module 'fastify' {
         isBot: boolean;
         /** True when the user has instance admin privileges. Set by requireInstanceAdmin. */
         isInstanceAdmin: boolean;
+        /** Set when the request's transaction ends: true after COMMIT, false if the COMMIT failed. */
+        txCommitted?: boolean;
         /** Socket.IO events queued during the request, flushed after COMMIT. */
         pendingEvents: Array<{ event: string; room: string; data: any }>;
         /** User IDs to force-disconnect after COMMIT (e.g. suspended users). */

@@ -19,6 +19,7 @@ What Agora stores, where it lives, what is encrypted, and what is not. This page
 - [The MinIO change (#32)](#the-minio-change-32)
 - [Upgrading an install that used MinIO](#upgrading-an-install-that-used-minio)
 - [Keys](#keys)
+- [Rotating the encryption key](#rotating-the-encryption-key)
 - [Backups](#backups)
 - [Encryption in transit](#encryption-in-transit)
 - [What the host must provide](#what-the-host-must-provide)
@@ -56,7 +57,7 @@ Files are decrypted in the API process when a member with `ViewChannel` on the f
 Be clear-eyed about this when deciding where to host:
 
 - **Message content and everything else in Postgres** except the items in the table above. Anyone with the database has the conversations.
-- **File names and sizes.** The storage path is `<channelId>/<fileId>/<filename>`, so a directory listing of the volume (or an object listing of the bucket) shows the original file names and how large each file is. Names are also in the `files` table. The same was true of the MinIO object keys.
+- **File sizes, and the names of files stored before 0.2.0.** New files are stored as `<channelId>/<fileId>/blob`, so a listing of the volume or bucket shows how many files a channel has and how large each is, but not what they are called. Files stored before 0.2.0 still carry their original name in the path until you run the one-off rename (see [File storage](#file-storage)). File names are always in the `files` table in Postgres.
 - **Data in memory and in transit between containers.** Containers talk to each other over the Docker network in plain text.
 - **Redis.**
 
@@ -77,6 +78,14 @@ Properties of the disk driver:
 - **Keys can't escape the root.** Empty segments, `.`, `..`, backslashes and NUL bytes are rejected.
 - **Tidy deletes.** Removing a blob also removes its now-empty per-file and per-channel directories.
 
+**Storage names.** A file is stored as `<channelId>/<fileId>/blob`; after a key rotation the last part becomes `blob-<8 hex characters>`. The original file name is not part of the path. Installs that stored files before 0.2.0 can rename the old blobs once, with the API and cap-gateway stopped (the blobs stay encrypted; it is safe to re-run):
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps api node dist/src/tools/strip-storage-filenames.js
+```
+
+**Who owns the files.** The backend containers run as the image's unprivileged `node` user (uid 1000), not root. A one-shot `files-perms` service hands an older, root-owned `files-data` volume over to that user on the first start after upgrading, and does nothing afterwards.
+
 With the S3 driver the provider sees ciphertext only, plus object names and sizes. No provider-side encryption setting is required or assumed.
 
 Limits (size, allowed extensions, retention, quota, EXIF stripping) live in the `instance_settings` table and are set from **Admin → Storage**. They apply the same way to both drivers. A background worker (`src/workers/file-cleanup.ts`) deletes expired files, orphaned uploads and old soft-deleted rows every hour.
@@ -95,7 +104,7 @@ MinIO stopped publishing images that can be pulled anonymously, so `docker compo
 | Access control to blobs | MinIO root user and password over the Docker network | Filesystem access to the volume |
 | Secrets to manage | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | None for storage |
 | Encryption of file contents | AES-256-GCM in Agora before upload | **Unchanged** |
-| File names visible in storage | Yes (object keys) | Yes (paths) |
+| File names visible in storage | Yes (object keys) | No for new files (0.2.0); older files until renamed |
 | A blob that is missing | The row was soft-deleted on first access | A plain 404; the row is kept, so a file opened before the migration isn't lost |
 | Services in the stack | one more (`minio`) | one fewer |
 
@@ -150,8 +159,26 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   - The fix is to restore the original key in `.env.prod`.
   - If the original key is gone for good, start once with `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` in `.env.prod`, then remove it. This only records the new key: files and provider keys written under the old one stay unreadable.
 - **In production the server also refuses** a missing or all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET`. The Docker image runs in production mode.
-- **There is no key rotation tool.** Changing the key makes existing files and provider keys undecryptable. Rotation would mean decrypting and re-encrypting every blob and row; that tool does not exist yet.
+- **Rotating the key** re-encrypts every file and every stored provider key. See [Rotating the encryption key](#rotating-the-encryption-key).
 - Keys live in `.env.prod` on the host and in the environment of the `api`, `runner` and `cap-gateway` containers. Sandbox containers receive no keys: only the gateway's address, a per-run token and the run's own code.
+
+## Rotating the encryption key
+
+Do this when the key may have been exposed, or on a schedule if your policy asks for one.
+
+1. Back up the database, the file store and `.env.prod` ([Backups](#backups)).
+2. Generate the new key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+3. Stop the services that use the key, and run the tool with the current key still in `.env.prod`:
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env.prod stop api cap-gateway runner
+   docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps \
+     -e AGORA_NEW_ENCRYPTION_KEY=<new key> api node dist/src/tools/rotate-encryption-key.js
+   ```
+4. When it reports success, put the new key in `AGORA_ENCRYPTION_KEY` in `.env.prod` and start the stack. Keep the old key until you have opened a few files.
+
+What it does: each file is decrypted with the current key, encrypted with the new one, written under a new storage name, and only then is its row updated and the old blob deleted. Provider keys and the key fingerprint switch together at the end, in one transaction. If the run is interrupted, run it again with the same two keys; it skips the files it already did. Until it finishes, the instance still belongs to the old key. After it finishes, the server refuses to start with the old key.
+
+Outside Docker: `AGORA_NEW_ENCRYPTION_KEY=<new key> npm run key:rotate`.
 
 ## Backups
 
@@ -187,8 +214,7 @@ Agora's part is narrow: keep stored files unreadable without the key, enforce wh
 
 Found in the 2026-10-01 audit. None was introduced by the MinIO change. Tracked in [`planning/HANDOFF.md`](planning/HANDOFF.md).
 
-Two earlier gaps are closed. Production running with a default IP key was closed by removing IP tracking and IP bans altogether (migration `031`): there is no stored IP left to protect and no `IP_ENCRYPTION_KEY`. The production startup check not running in Docker was closed by setting `NODE_ENV=production` in the image and adding the key fingerprint check described under [Keys](#keys).
+Earlier gaps, now closed: file names in storage paths (new files), backend containers running as root, and the missing key rotation tool were all addressed in 0.2.0. Production running with a default IP key was closed by removing IP tracking and IP bans altogether (migration `031`): there is no stored IP left to protect and no `IP_ENCRYPTION_KEY`. The production startup check not running in Docker was closed by setting `NODE_ENV=production` in the image and adding the key fingerprint check described under [Keys](#keys).
 
-1. **File names are visible in storage** (see [What is not encrypted](#what-is-not-encrypted)).
-2. **Backend containers run as root**, so the files on `files-data` are owned by root.
-3. **No key rotation and no built-in backup.**
+1. **No built-in backup.** See [Backups](#backups) for what to copy.
+2. **Files stored before 0.2.0 keep their name in the storage path** until the one-off rename is run (see [File storage](#file-storage)).

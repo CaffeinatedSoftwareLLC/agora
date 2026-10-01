@@ -344,7 +344,7 @@ Posted messages reach clients through a Redis pub/sub **event bridge**. The API 
 | T2 | **Lateral movement** to postgres/redis/api or the file volume | direct connection, DNS, mounts | L3 separate internal network, L6 Deno net allowlist, no mounts (the socket proxy rejects bind mounts and the container spec declares no volumes) | none known | connecting to `postgres:5432`, `redis:6379`, `api:3000` and the host gateway IP fails; DNS doesn't resolve them; `/data/files` doesn't exist in the sandbox *(amended #32)* |
 | T3 | **Exfiltration** to the internet | fetch, DNS tunneling, remote import URLs, capability abuse | L3 `internal: true` (no route), L6 `--deny-import`, L4 capability inputs logged | an allowed capability as a covert channel (e.g. a search query carrying data): accepted, logged, rate-capped | outbound HTTP/HTTPS/DNS to public IPs fails; `import "https://esm.sh/…"` fails |
 | T4 | **Secret theft** | env, `/proc`, files, gateway responses | L4 env allowlist, no mounts, keys only in the gateway, token redaction | gateway compromise exposes keys (gateway is medium trust, minimal surface) | env contains only the two vars; `/proc/1/environ` shows nothing extra; gateway responses never include keys |
-| T5 | **Cross-run access** | reach another run, reuse its token | unique tokens, gateway run binding, no listeners, gVisor | shared bridge (see §6 hardening option) | run A's token rejected for run B's resources; connecting to another run's IP fails |
+| T5 | **Cross-run access** | reach another run, reuse its token | unique tokens, gateway run binding, **token bound to the first address that uses it** *(added 0.2.0)*, no listeners, gVisor | shared bridge (see §6 hardening option) | run A's token rejected for run B's resources; connecting to another run's IP fails |
 | T6 | **Resource exhaustion** | fork bomb, memory, CPU spin, disk fill, log flood | L5 PIDs/mem/CPU, wall clock, tmpfs size, log driver none, output caps, concurrency caps | noisy neighbor up to the configured concurrency; accepted | fork bomb contained; `while(true)` killed at deadline; 1 GB write fails at 64 MB; 10 MB stdout truncated |
 | T7 | **Cost abuse** | loop calling paid capabilities | per-run call cap, route daily budgets (Phase 1), non-chat routes default off, tripwire auto-pause | budget up to the configured limit; by design | the 21st call is rejected; an exhausted budget rejects calls |
 | T8 | **Gate bypass** | calling the runner/queue directly, self-approval, replaying an approval | only `api` enqueues (Redis is on `agora_core`); the runner re-checks the run is `queued` with gate fields set; the submitter can't approve; approvals expire | Redis compromise, already a core compromise | a bot approving its own run gets 403; a job for an unapproved run is refused by the runner |
@@ -353,12 +353,19 @@ Posted messages reach clients through a Redis pub/sub **event bridge**. The API 
 | T11 | **Decider manipulation** | comments saying "safe", prompt injection | comments stripped, deciders can't loosen limits, default human approval, sandbox is the real boundary | an `auto_run` verdict for a harmful-but-contained run; contained by L1–L6 | a run with a comment-only difference gets the same decision; auto-run limits equal approved-run limits |
 | T12 | **Queue flooding** | many submissions | queued-runs-per-server cap, bot rate limits, loop guard | none significant | the 21st queued submission gets 429 |
 | T13 | **Supply chain** | tampered image or std-lib | image pinned by digest, built in CI from a reviewed Dockerfile, std-lib vendored into the image, `--cached-only` | compromise of Deno upstream releases; pinned and updated deliberately | image digest check at runner startup |
-| T14 | **Token replay** | token used after the run or leaked in logs | revoked on exit, expiry, redaction | window between leak and run end (≤ 5 min) | a token rejected after run end |
+| T14 | **Token replay** | token used after the run or leaked in logs | revoked on exit, expiry, redaction; while the run is live the token is refused from any address but the sandbox's, and the attempt pauses the bot *(added 0.2.0)* | a replay from the same address within the run's lifetime (≤ 5 min) | a token rejected after run end |
 | T15 | **Gateway SSRF** | capability with an attacker-influenced URL | Phase 1 URL guard on provider base URLs; capabilities never fetch arbitrary URLs from run input in v1 | future capabilities that fetch URLs must reuse the guard | covered by the url-guard unit tests plus capability tests |
 
 ## 14. Negative test suite (3.9)
 
-These are automated integration tests against a real `runsc` runner. CI needs a Linux runner with gVisor. Every test asserts the attack fails **and** that the run ends in the expected status.
+These are automated integration tests against a real `runsc` runner. Every test asserts the attack fails **and** that the run ends in the expected status.
+
+> **Status (0.2.0): written and passing under gVisor.** `test/sandbox/negative.sandbox.test.ts` holds items 1–7 and a table saying where each of the 15 items is tested. `scripts/test-sandbox-gvisor.sh` runs the whole `test/sandbox` suite on any Linux Docker engine with `runsc` (it needs only Docker on the host; no CI runner). Last run 2026-10-01 on WSL2 Ubuntu, Docker 29.8.1, `runsc` release-20260928.0: 37 of 37, with containers reporting kernel `4.19.0-gvisor`.
+>
+> How three items are met in practice:
+> - **Item 1** ("checked with Deno perms relaxed in a test-only image") is done without a special image: a plain container with a shell is started on the sandbox network under the same runtime and must fail to reach a service on another network, the host and the internet, while a control container on the default bridge reaches them.
+> - **Item 4:** `Deno.env.toObject()` is denied outright; the two allowed names are readable one by one and nothing else is.
+> - **Item 14:** HTML is refused by the extension allowlist; a file is typed by its content, so a JPEG named `.png` is stored as `image/jpeg` rather than rejected, a program named `.png` is rejected, and HTML inside a `.txt` is served as a `text/plain` attachment with `nosniff`.
 
 1. `fetch("http://postgres:5432")`, `redis:6379`, `api:3000` → rejected (Deno) and unreachable (network, checked with Deno perms relaxed in a test-only image). Reading `/data/files` fails: the file volume is not mounted. *(amended #32)*
 2. `fetch("https://example.com")`, raw TCP to `1.1.1.1:53`, and DNS lookup of a public name → fail.
@@ -444,7 +451,7 @@ docker run --rm --runtime=runsc hello-world
 | 3.6 | Decider interface + `RulesDecider`, approvals in the thread, `exec_runs` + audit | §9, §10, §12 |
 | 3.7 | *(folded into 3.4: artifacts go through the gateway, no container harvest)* | §11 |
 | 3.8 | Tripwires → auto-pause | §12 |
-| 3.9 | Negative test suite on a gVisor CI runner | §14 |
+| 3.9 | Negative test suite, run on gVisor with `scripts/test-sandbox-gvisor.sh` | §14 |
 
 ---
 

@@ -44,7 +44,7 @@ async function main() {
     await db.end();
 
     console.log(`Done: ${copied} copied, ${present} already on disk, ${missing.length} missing from S3.`);
-    // Missing blobs were already unreadable; the API soft-deletes such rows on first access
+    // Missing blobs were already unreadable; their rows are left alone (the API answers 404 for them)
     for (const key of missing) console.log(`  missing: ${key}`);
 }
 

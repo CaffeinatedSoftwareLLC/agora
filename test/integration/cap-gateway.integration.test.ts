@@ -118,6 +118,33 @@ describe('authentication', () => {
         }
     });
 
+    test('a token is bound to the first address that uses it', async () => {
+        const { auth } = await makeRun();
+        const boundIp = async () => (await ctx.db.query('SELECT bound_ip FROM exec_run_tokens WHERE token_hash = $1', [hashToken(auth.authorization.slice(7))])).rows[0].bound_ip;
+        expect(await boundIp()).toBeNull();
+
+        // First use binds (the request itself is rejected later, as invalid input: auth passed)
+        const first = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.5' });
+        expect(first.statusCode).toBe(400);
+        expect(await boundIp()).toBe('172.30.0.5');
+
+        // The same sandbox keeps working
+        const again = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.5' });
+        expect(again.statusCode).toBe(400);
+        expect(await pausedReason()).toBeNull();
+    });
+
+    test('a live token replayed from another address is refused and trips the bot', async () => {
+        const { runId, auth } = await makeRun();
+        await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.5' });
+
+        const replay = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.9' });
+        expect(replay.statusCode).toBe(401);
+        expect(replay.json().message ?? replay.body).toContain('different address');
+        expect(await pausedReason()).toBe(`Tripwire: a run token was used outside its run (run ${runId})`);
+        await resumeBot();
+    });
+
     test('a paused submitting bot is 423', async () => {
         const { auth } = await makeRun();
         await ctx.db.query('UPDATE users SET bot_paused_at = NOW() WHERE id = $1', [botId]);
@@ -665,6 +692,46 @@ describe('messages and files', () => {
         const { auth: auth2 } = await makeRun();
         const noName = await gw.inject({ method: 'POST', url: '/v1/files', headers: { ...auth2, 'content-type': 'text/plain' }, payload: Buffer.from('x') });
         expect(noName.json().code).toBe('bad_filename');
+    });
+
+    test('spec §14 item 14: an artifact is typed by its content, never by the name it claims', async () => {
+        const { auth } = await makeRun({ limits: { maxArtifacts: 10 } });
+        const post = (name: string, body: Buffer, type = 'application/octet-stream') => gw.inject({
+            method: 'POST', url: '/v1/files',
+            headers: { ...auth, 'content-type': type, 'x-agora-filename': encodeURIComponent(name) },
+            payload: body,
+        });
+        const sharp = (await import('sharp')).default;
+        const JPEG = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#cc0000' } }).jpeg().toBuffer();
+        const BROKEN_JPEG = Buffer.from('ffd8ffe000104a46494600010100000100010000ffdb004300' + '08'.repeat(64) + 'ffd9', 'hex');
+        const EXE = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(64), Buffer.from('PE\0\0')]);
+
+        // An HTML file is refused outright: the extension is not on the allowlist
+        const html = await post('report.html', Buffer.from('<script>alert(1)</script>'), 'text/html');
+        expect(html.statusCode).toBe(415);
+
+        // A program calling itself an image is refused: its bytes are not an allowed type
+        const exe = await post('logo.png', EXE);
+        expect(exe.statusCode).toBe(415);
+
+        // An image with the right magic bytes but a broken body is a bad upload (415), not a server error
+        const broken = await post('broken.jpg', BROKEN_JPEG, 'image/jpeg');
+        expect(broken.statusCode).toBe(415);
+
+        // A JPEG calling itself a PNG is stored as what it is, not what it claims
+        const jpeg = await post('photo.png', JPEG, 'image/png');
+        expect(jpeg.statusCode).toBe(201);
+        expect(jpeg.json().mime).toBe('image/jpeg');
+
+        // HTML smuggled in a .txt is stored as plain text and can only be downloaded, never rendered
+        const smuggled = await post('notes.txt', Buffer.from('<html><script>alert(1)</script></html>'), 'text/html');
+        expect(smuggled.statusCode).toBe(201);
+        expect(smuggled.json().mime).toBe('text/plain');
+        const download = await ctx.request.get(`/files/${smuggled.json().id}`).set(owner.auth);
+        expect(download.status).toBe(200);
+        expect(download.headers['content-type']).toContain('text/plain');
+        expect(download.headers['content-disposition']).toMatch(/^attachment;/);
+        expect(download.headers['x-content-type-options']).toBe('nosniff');
     });
 
     test('closed thread rejects posts', async () => {

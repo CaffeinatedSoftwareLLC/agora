@@ -1269,9 +1269,9 @@ Reject and permanently delete a pending user account.
 
 ---
 
-### POST /admin/users/:id/suspend
+### POST /admin/users/:id/ban
 
-Suspend an active user account. Cannot suspend yourself or other admins.
+Ban (suspend) an active user account. Cannot ban yourself or other admins. The older `/admin/users/:id/suspend` path was removed in 0.2.0.
 
 **Auth:** Required (instance admin)
 

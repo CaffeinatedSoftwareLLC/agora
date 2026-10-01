@@ -9,7 +9,8 @@ import type { AddressInfo } from 'node:net';
  * relays to the host. Uses the host Docker CLI (not the restricted socket proxy).
  */
 
-const FORWARDER = 'agora-test-cap-forwarder';
+/** Container name of the forwarder. Under gVisor the runner pins its address (RunnerConfig.capContainer). */
+export const FORWARDER = 'agora-test-cap-forwarder';
 
 export interface RecordedRequest {
     method: string;

@@ -6,6 +6,7 @@
  *   node scripts/setup-env.js            # Dev: creates .env (no prompts)
  *   node scripts/setup-env.js --prod     # Prod: creates .env.prod (interactive)
  *   node scripts/setup-env.js --force    # Overwrite existing files
+ *   node scripts/setup-env.js --prod --no-start   # Write .env.prod only, don't start Docker
  *
  * Dev mode generates random values for:
  *   - POSTGRES_PASSWORD, JWT_SECRET, AGORA_ENCRYPTION_KEY
@@ -13,7 +14,7 @@
  *
  * Prod mode auto-generates secrets and prompts for:
  *   - DB_PASSWORD (with auto-generated default)
- *   - CORS_ORIGIN / domain (required)
+ *   - DOMAIN (Enter for localhost)
  *   - Writes .env.prod
  */
 
@@ -24,6 +25,7 @@ const crypto = require('node:crypto');
 const ROOT = path.resolve(__dirname, '..');
 const force = process.argv.includes('--force');
 const prod = process.argv.includes('--prod');
+const noStart = process.argv.includes('--no-start');
 
 const hexSecret = () => crypto.randomBytes(32).toString('hex');
 const strongPassword = () => crypto.randomBytes(18).toString('base64url');
@@ -166,16 +168,31 @@ async function setupProd() {
 
     // Password is a secret: read it masked, and never echo the generated
     // default to the console (it still gets written to .env.prod).
+    const PASSWORD_PROMPT = '  Database password — press Enter to auto-generate a strong one, or type your own (hidden): ';
+    const DOMAIN_PROMPT = '  Domain — hit Enter to skip for local setup or enter your own (e.g., chat.example.com): ';
     const defaultDbPassword = strongPassword();
-    const typedDbPassword = (await hiddenQuestion('  Database password — press Enter to auto-generate a strong one, or type your own (hidden): ')).trim();
-    const dbPassword = typedDbPassword || defaultDbPassword;
+    let typedDbPassword;
+    let typedDomain;
 
-    // Domain is not secret — a normal echoing prompt is fine.
-    const { createInterface } = require('node:readline/promises');
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const domain = (await rl.question('  Domain — hit Enter to skip for local setup or enter your own (e.g., chat.example.com): ')).trim();
-    rl.close();
-    const corsOrigin = domain ? `https://${domain.replace(/^https?:\/\//, '')}` : '';
+    if (process.stdin.isTTY) {
+        typedDbPassword = (await hiddenQuestion(PASSWORD_PROMPT)).trim();
+
+        // Domain is not secret — a normal echoing prompt is fine.
+        const { createInterface } = require('node:readline/promises');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        typedDomain = (await rl.question(DOMAIN_PROMPT)).trim();
+        rl.close();
+    } else {
+        // Piped input (scripts, CI): one answer per line, read up front. Two separate
+        // readers on a pipe would lose the second answer to the first reader's buffer.
+        let lines = [];
+        try { lines = fs.readFileSync(0, 'utf8').split(/\r?\n/); } catch { /* no input: take the defaults */ }
+        typedDbPassword = (lines[0] ?? '').trim();
+        typedDomain = (lines[1] ?? '').trim();
+    }
+    const dbPassword = typedDbPassword || defaultDbPassword;
+    // Bare host name: Caddy and the compose file both build https://<DOMAIN> from it
+    const domain = typedDomain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 
     // --- Auto-generated secrets ---
 
@@ -183,7 +200,7 @@ async function setupProd() {
         DB_PASSWORD: dbPassword,
         JWT_SECRET: hexSecret(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
-        CORS_ORIGIN: corsOrigin,
+        DOMAIN: domain,
     };
 
     // --- Write .env.prod ---
@@ -215,9 +232,14 @@ async function setupProd() {
 
     console.log('\n  =====================================');
     console.log('  Config complete! Summary:\n');
-    console.log(`  Domain:          ${domain || '(none — local mode)'}`);
-    console.log(`  CORS origin:     ${corsOrigin || '(not set — same-origin only)'}`);
+    console.log(`  Domain:          ${domain || '(none — local mode, https://localhost)'}`);
     console.log(`\n  All secrets have been auto-generated and saved to .env.prod.`);
+
+    if (noStart) {
+        console.log('\n  --no-start: not starting Docker. Start it with:');
+        console.log('  docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build\n');
+        return;
+    }
 
     // --- Build and start Docker ---
 
@@ -254,7 +276,7 @@ async function setupProd() {
         } catch { /* container not ready yet */ }
     }
 
-    const url = domain ? `https://${domain}` : 'http://localhost';
+    const url = domain ? `https://${domain}` : 'https://localhost';
 
     console.log('\n  =====================================');
     if (token) {

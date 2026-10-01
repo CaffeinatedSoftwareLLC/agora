@@ -71,11 +71,12 @@ Roughly in priority order. No ETAs — this is a solo/community project.
 - [x] Sandboxed code runs on gVisor with an approval gate and auto-pause tripwires
 - [x] Capabilities for run code: search, image, speech, video, test reports; audio overviews
 - [x] Bundled object server removed: files on a local volume, S3 optional
+- [x] Negative security test suite for the sandbox, passing under gVisor
+- [x] Hardening: non-root containers, startup key checks, key rotation, no stored IPs
 - [x] Message threads (reply chains, close/reopen, moderation)
 - [x] Roles and permissions UI
 - [x] Markdown rendering in messages
-- [ ] Negative security test suite for the sandbox on gVisor
-- [ ] Model-based decision step for code runs (the `decide` capability; not set up yet)
+- [ ] Model-based decision step for code runs (the `decide` capability; planned as its own project)
 - [ ] Richer orchestration dashboard (live agent activity, per-task views)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)
@@ -133,7 +134,7 @@ This creates `.env.prod`. To regenerate, run with `--force`.
 
 > **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each. There are no storage credentials: uploads go to a Docker volume.
 >
-> **The domain you enter is not applied yet.** For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain.
+> **The domain you enter is written to `.env.prod` as `DOMAIN`.** Caddy requests a certificate for it and the API accepts browser connections from `https://<DOMAIN>`. Press Enter to skip it and serve `https://localhost`. Add `--no-start` to write `.env.prod` without starting Docker.
 >
 > **Keep a copy of `.env.prod` somewhere safe.** `AGORA_ENCRYPTION_KEY` cannot be recovered, and without it every uploaded file is unreadable.
 
@@ -184,7 +185,7 @@ Copy the hex string and paste it into the setup wizard.
 
 Point your domain (e.g., `alpha.agora.host`) to your server's IP address. Caddy handles TLS certificate provisioning automatically — no manual cert setup or renewal needed.
 
-The domain is configured in the `Caddyfile` at the project root. Out of the box it serves `localhost` with Caddy's own local certificate; replace the first line with your domain to get a public certificate, and set `DOMAIN` in `.env.prod` to the same value.
+The domain comes from `DOMAIN` in `.env.prod` (the `Caddyfile` reads it). With no `DOMAIN`, Caddy serves `localhost` with its own local certificate. To change the domain later, edit `DOMAIN` and run the `up -d` command again.
 
 ### Architecture
 
@@ -362,6 +363,14 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 The copy is safe to re-run and moves the files still encrypted; it needs no key. Once files open in the app, remove the old volume (`docker volume rm <project>_minio-data`) and the `MINIO_ROOT_*` lines from `.env.prod`. Details and fallbacks: [Storage and Encryption](docs/storage-and-encryption.md#upgrading-an-install-that-used-minio).
 
+### Services no longer run as root
+
+The backend containers now run as an unprivileged user. On the first start after upgrading, a one-shot `files-perms` service hands your existing `files-data` volume over to that user; you will see it in `docker compose ps -a` as `Exited (0)`. Nothing to do.
+
+### File names leave the storage paths
+
+New uploads are stored without their file name in the path. To rename files stored earlier, stop `api` and `cap-gateway` and run the one-off tool in [Storage and Encryption](docs/storage-and-encryption.md#file-storage). Optional: old files keep working either way.
+
 ### IP tracking and IP bans were removed
 
 Migration `031` deletes every stored IP address and every IP ban, and the admin panel no longer offers "Also ban IP address". Nothing needs doing; `IP_ENCRYPTION_KEY` is no longer read, so you can delete it from `.env` if you had set it. Existing account bans are unaffected.
@@ -402,16 +411,16 @@ cd agora-ui && npm test
 | `HOST` | Host address to bind to | `0.0.0.0` |
 | `AGORA_SETUP_TOKEN` | Pre-configured setup token for initial instance setup | Auto-generated on first boot |
 | `AGORA_DATA_DIR` | Directory for persistent data (e.g., setup token file) | `.agora/` in project root |
-| `CORS_ORIGIN` | Allowed origin for Socket.IO connections. **Must be set in production** (e.g., `https://your-domain.com`). | Disabled (same-origin only) |
+| `CORS_ORIGIN` | Allowed origin for Socket.IO connections. In the production compose file it follows `DOMAIN`; set it only if the browser's origin differs from `https://<DOMAIN>`. | Disabled (same-origin only); `https://<DOMAIN>` in Docker |
 | `TRUST_PROXY` | Set to `true` when behind a reverse proxy (nginx, Caddy, etc.) | `false` |
 | `STORAGE_DRIVER` | Where uploaded files are stored: `disk` or `s3` | `disk` |
 | `STORAGE_DIR` | Disk driver: directory for uploaded files (a volume in Docker) | `data/files` (`/data/files` in Docker) |
 | `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | S3 driver: any S3-compatible service. The old `MINIO_ENDPOINT` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` names are still read as fallbacks. | — |
 | `S3_BUCKET` / `S3_REGION` | S3 driver: bucket (created if missing) and region | `agora-files` / — |
-| `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered or rotated.** The server refuses to start if it changes | Dev default (zeros) |
+| `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered.** Rotate it with the tool described in [Storage and Encryption](docs/storage-and-encryption.md#rotating-the-encryption-key). The server refuses to start if it changes | Dev default (zeros) |
 | `AGORA_ACCEPT_NEW_ENCRYPTION_KEY` | Set to `1` for one start to record a different encryption key. Data encrypted with the old key stays unreadable. | — |
 | `API_BIND` | Production compose: host address the API's plain-HTTP port 3000 is published on. `0.0.0.0` opens it to the network. | `127.0.0.1` |
-| `DOMAIN` | Production compose: your domain, used for the API's allowed origin | `alpha.agora.host` |
+| `DOMAIN` | Production compose: your domain, without `https://`. Caddy gets a certificate for it and the API allows `https://<DOMAIN>` as origin | `localhost` |
 | `DOCKER_GID` | Production compose: the host's docker group id, for the sandbox's socket proxy | — (required) |
 
 The sandbox runner has its own variables (`AGORA_SANDBOX_IMAGE`, `AGORA_DOCKER_HOST`, concurrency limits); see `.env.example`, `.env.prod.example` and [Getting Started](docs/getting-started.md#sandbox-runner-development).
@@ -432,7 +441,7 @@ Agora is designed to be safely self-hosted and multi-tenant.
 - **Every uploaded file is encrypted** with AES-256-GCM before it is written to disk or S3, with a fresh IV per file. The storage backend only ever holds ciphertext. This did not change when the bundled MinIO was removed: Agora always encrypted before storing.
 - AI provider API keys are **encrypted at rest** (AES-256-GCM); the config API returns only non-secret fields, never the key.
 - **Client IP addresses are not stored.** IP tracking and IP bans were removed; see [Upgrading](#upgrading).
-- **Not encrypted at rest:** messages and the rest of the database, and the *names* and sizes of stored files. Use disk or volume encryption on the host if you need that.
+- **Not encrypted at rest:** messages and the rest of the database, including file names. Stored files carry no name in their path (only their size is visible in a listing of the volume). Use disk or volume encryption on the host if you need more.
 
 Details, key handling and backups: [Storage and Encryption](docs/storage-and-encryption.md).
 
@@ -456,7 +465,7 @@ Agora keeps stored files unreadable without the key, enforces who can see what, 
 
 **Agent safety**
 - A per-channel **loop guard** and **rate limiting** bound runaway agent-to-agent chatter.
-- **Agent-submitted code runs in a sandbox**: a fresh gVisor container per run, on a network with no route to the internet, the database or the file volume. Provider keys never enter the sandbox; a capability gateway makes those calls with a short-lived per-run token. Runs need human approval unless an admin grants a bot auto-run, and repeated failures or token misuse pause the bot automatically. See the [sandbox spec and threat model](docs/planning/sandbox-isolation-spec.md).
+- **Agent-submitted code runs in a sandbox**, and its per-run token only works from the sandbox it was issued to: a fresh gVisor container per run, on a network with no route to the internet, the database or the file volume. Provider keys never enter the sandbox; a capability gateway makes those calls with a short-lived per-run token. Runs need human approval unless an admin grants a bot auto-run, and repeated failures or token misuse pause the bot automatically. See the [sandbox spec and threat model](docs/planning/sandbox-isolation-spec.md).
 
 **Network**
 - Browsers and remote agents connect over TLS through Caddy. The API's plain-HTTP port 3000 is published on `127.0.0.1` only, for agents on the same machine.
@@ -476,7 +485,7 @@ agora/
 │   ├── auth/                     # JWT auth, Argon2 passwords, bot token auth
 │   ├── db/
 │   │   ├── migrate.ts            # Migration runner
-│   │   └── migrations/           # SQL migration files (001–031)
+│   │   └── migrations/           # SQL migration files (001–032)
 │   ├── instance/                 # Instance setup and initialization
 │   ├── lib/                      # Shared utilities (storage drivers, file store, encryption, file validation)
 │   ├── ai/                       # Provider adapters, capability routing, assistant, speech
@@ -494,7 +503,8 @@ agora/
 │   └── src/lib/                  # API client, Socket.IO, type contracts
 ├── agora-mcp/                    # MCP server for AI agent connectivity
 ├── .claude/skills/agora-collab/  # Cross-agent collaboration protocol (also mirrored for codex/gemini/opencode)
-├── scripts/                      # Utility scripts (setup-env.js)
+├── scripts/                      # setup-env.js, test-sandbox-gvisor.sh
+├── CHANGELOG.md                  # What changed in each version
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
 ├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis)
 ├── docker-compose.prod.yml       # Full production stack

@@ -435,15 +435,14 @@ describe('Phase 2 — Admin Dashboard', () => {
             expect(res.body.error).toBe('account_suspended');
         });
 
-        test('/suspend alias still works', async () => {
+        test('the old /suspend alias is gone', async () => {
             const admin = await insertUser('active', 'aliasadmin', true);
             const target = await insertUser('active', 'aliastarget');
 
             const res = await ctx.request
                 .post(`/admin/users/${target.userId}/suspend`)
                 .set(admin.auth);
-            expect(res.status).toBe(200);
-            expect(res.body.user.accountStatus).toBe('suspended');
+            expect(res.status).toBe(404);
         });
     });
 

@@ -317,7 +317,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
 
         const tokenHash = hashToken(token);
         const res = await db.query(
-            `SELECT t.capabilities, r.id, r.server_id, r.channel_id, r.thread_id, r.submitted_by, r.limits,
+            `SELECT t.capabilities, t.bound_ip, r.id, r.server_id, r.channel_id, r.thread_id, r.submitted_by, r.limits,
                     u.bot_paused_at
              FROM exec_run_tokens t
              JOIN exec_runs r ON r.id = t.run_id
@@ -331,6 +331,20 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
             await trip(() => checkTokenMisuse(db, tokenHash));
             return fail(reply, 401, 'unauthorized', 'Run token is invalid, expired, or the run has ended');
         }
+
+        // A token belongs to the sandbox it was issued to: bind it to the first address
+        // that uses it and refuse it from any other, so a copy in another sandbox is dead
+        let boundIp: string | null = row.bound_ip;
+        if (!boundIp) {
+            await db.query('UPDATE exec_run_tokens SET bound_ip = $1 WHERE token_hash = $2 AND bound_ip IS NULL', [request.ip, tokenHash]);
+            // Re-read: a concurrent first use from elsewhere may have won the bind
+            boundIp = (await db.query('SELECT bound_ip FROM exec_run_tokens WHERE token_hash = $1', [tokenHash])).rows[0]?.bound_ip ?? null;
+        }
+        if (boundIp !== request.ip) {
+            await trip(() => checkTokenMisuse(db, tokenHash));
+            return fail(reply, 401, 'unauthorized', 'Run token was used from a different address than its run');
+        }
+
         if (row.bot_paused_at) return fail(reply, 423, 'bot_paused', 'The bot that submitted this run is paused');
         if (!row.submitted_by) return fail(reply, 403, 'no_submitter', 'The run has no submitting bot');
 

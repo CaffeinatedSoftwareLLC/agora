@@ -2,12 +2,13 @@ import path from 'path';
 import type { Pool } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import { storage, BUCKET_NAME } from './storage';
+import { BLOB_LEAF } from './storage-maintenance';
 import { encryptFile } from './encryption';
 import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES } from './file-validation';
 import { config } from '../config';
 
 /**
- * Validate, process, encrypt, and store a file (metadata in Postgres, blob in MinIO).
+ * Validate, process, encrypt, and store a file (metadata in Postgres, blob in the file store).
  * Shared by user uploads (POST /files/upload) and sandbox artifacts (cap-gateway),
  * so both go through the same limits: size, extension allowlist, magic bytes, EXIF
  * stripping, storage quota. Callers do their own authorization first.
@@ -68,29 +69,35 @@ export async function storeFile(
     let height: number | undefined;
     const exifStripEnabled = await getFileSetting(db, 'files.exif_strip');
     if (IMAGE_MIMES.includes(detectedMime)) {
-        const sharp = (await import('sharp')).default;
-        const image = sharp(buffer);
-        const metadata = await image.metadata();
-        width = metadata.width;
-        height = metadata.height;
+        // A file with an image's magic bytes but a broken body is a bad upload, not a server error
+        try {
+            const sharp = (await import('sharp')).default;
+            const image = sharp(buffer);
+            const metadata = await image.metadata();
+            width = metadata.width;
+            height = metadata.height;
 
-        if (exifStripEnabled !== false) {
-            if (detectedMime === 'image/jpeg') {
-                processedBuffer = await image.jpeg({ quality: 95 }).toBuffer();
-            } else if (detectedMime === 'image/png') {
-                processedBuffer = await image.png().toBuffer();
-            } else if (detectedMime === 'image/webp') {
-                processedBuffer = await image.webp({ quality: 95 }).toBuffer();
-            } else if (detectedMime === 'image/gif') {
-                const pages = metadata.pages ?? 1;
-                processedBuffer = pages > 1 ? buffer : await image.gif().toBuffer(); // keep animated GIFs as-is
+            if (exifStripEnabled !== false) {
+                if (detectedMime === 'image/jpeg') {
+                    processedBuffer = await image.jpeg({ quality: 95 }).toBuffer();
+                } else if (detectedMime === 'image/png') {
+                    processedBuffer = await image.png().toBuffer();
+                } else if (detectedMime === 'image/webp') {
+                    processedBuffer = await image.webp({ quality: 95 }).toBuffer();
+                } else if (detectedMime === 'image/gif') {
+                    const pages = metadata.pages ?? 1;
+                    processedBuffer = pages > 1 ? buffer : await image.gif().toBuffer(); // keep animated GIFs as-is
+                }
             }
+        } catch {
+            return { ok: false, status: 415, error: 'Image could not be read; it may be corrupt' };
         }
     }
 
     const { encrypted, iv, authTag } = encryptFile(processedBuffer, config.encryptionKey);
     const fileId = generateUlid();
-    const storageKey = `${channelId}/${fileId}/${sanitizedName}`;
+    // No file name in the key: the name lives only in the database row
+    const storageKey = `${channelId}/${fileId}/${BLOB_LEAF}`;
     const retentionDays = await getFileSetting(db, 'files.retention_days');
     const expiresAt = retentionDays ? new Date(Date.now() + retentionDays * 86400000) : null;
 

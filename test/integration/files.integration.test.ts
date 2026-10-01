@@ -22,7 +22,7 @@ afterAll(async () => { await ctx.close(); });
 
 // ─── Helpers ───
 
-/** Insert a file row directly into DB, bypassing MinIO upload. */
+/** Insert a file row directly into DB, without storing a blob. */
 async function insertTestFile(opts: {
     id?: string;
     uploaderId: string;

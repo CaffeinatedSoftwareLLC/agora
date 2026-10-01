@@ -1,20 +1,23 @@
-# Handoff — AI Runtime Initiative (updated 2026-10-01, after #42 and #43 merged and deployed, and the startup key checks)
+# Handoff — AI Runtime Initiative (updated 2026-10-01, release 0.2.0)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
 
 ## Branch state (read this first)
 
-`main` has everything up to #43 and **is what the WSL stack runs** (deployed 2026-10-01, `b450743`).
+**`release/0.2.0` is the 0.2.0 release branch** (root package version `0.2.0`, `CHANGELOG.md`). It finishes every open WBS item except 6.9. **The WSL stack still runs `main` at `e18ff4b` (#44): nothing on `release/0.2.0` has been deployed to it.** After the release PR merges, tag the merge commit `v0.2.0`.
 
 | PR | What | State |
 |---|---|---|
 | #42 | `main` through #41, MinIO → disk store (#32), API port on `127.0.0.1`, the recovered #38 (docs sync, Vite `runtime` proxy, `threads` / `ai-assistant` test fixes), `docs/storage-and-encryption.md` | merged, deployed |
 | #43 | IP tracking and IP bans removed: migration `031`, the ban routes, the IP checks in register/login, `src/auth/crypto.ts`, `IP_ENCRYPTION_KEY`, the admin UI option | merged, deployed. Migration `031` ran on the live DB (31 migrations; `ip_bans` and the `last_ip_*` columns are gone) |
-| `fix/production-key-checks` | `NODE_ENV=production` in the image, refusal of default secrets, startup fingerprint check for `AGORA_ENCRYPTION_KEY` | PR open, **not deployed** |
+| #44 | `NODE_ENV=production` in the image, refusal of default secrets, startup fingerprint check for `AGORA_ENCRYPTION_KEY` | merged, deployed. `api`, `cap-gateway` and `runner` run in production mode with 0 restarts; the live key's fingerprint is recorded |
+| release/0.2.0 | **6.8** commit before the reply (fixes the flaky tests) · **6.6** the setup script's domain takes effect · **6.7** file names out of storage paths, non-root containers, key rotation tool, run tokens bound to the sandbox's address · **3.9** negative security suite, passing under gVisor · `/suspend` alias removed · WBS review, changelog, version bump | PR open, **not deployed** |
 
-A database dump from just before migration `031` is in WSL at `~/agora-backups/agora-20261001-125611-pre-031.sql.gz`. It holds one stored IP under the old default key; delete it once the deploy has settled.
+**What deploying 0.2.0 will do on an existing stack** (first start): run migration `032`; the one-shot `files-perms` service hands the uploads volume to uid 1000; the services start as that user. Verified on an isolated stack built from the release image, starting from a root-owned volume. Remember to restart `web` if `https://localhost` returns 502 afterwards (WBS 6.9).
 
-Leftover remote branches, all merged and safe to delete **after checking no open PR is based on them**: `claude/handoff-next`, `chore/remove-ip-tracking`, `claude/amazing-johnson-q35x5f`.
+A database dump from just before migration `031` is in WSL at `~/agora-backups/agora-20261001-125611-pre-031.sql.gz`.
+
+The merged branches (`claude/handoff-next`, `chore/remove-ip-tracking`, `fix/production-key-checks`, `claude/amazing-johnson-q35x5f`) were deleted on 2026-10-01, after checking each was merged and no open PR used it as a base.
 
 **What went wrong on 2026-09-30.** PR #38 was pushed at 22:08 UTC and its branch `chore/cleanup-after-36` was deleted at 22:13 UTC, in the same sweep that removed the merged feature branches. GitHub closes a PR when its branch is deleted, so #38 was closed **unmerged** and its work never reached `main`. The handoff on `main` then described a state that didn't match the code (it said the flaky-test fix hadn't landed and `agora-mcp` was 0.3.0). The commits were recovered from `refs/pull/38/head`.
 
@@ -24,20 +27,20 @@ Leftover remote branches, all merged and safe to delete **after checking no open
 
 1. **Docs first** (done on this branch): README, getting started, architecture, API reference, sandbox spec, this handoff, and the new storage and encryption page.
 2. **Then code changes**, starting with the gaps the audit found (next section). The first one is done: Eryk decided to **remove IP tracking and IP bans outright** rather than repair them. IP bans are easy to evade, can hit unrelated people behind one address, and would hit every local agent at once (they all arrive from the same local address). Registration policy, account bans and bot pause / token revocation are the controls.
-3. **`decide` / Jev is unblocked but not set up.** Jev can be added at any time. It has not happened only because nobody asked Eryk for an API key or walked him through setup, so the capability still returns 501 and nothing is configured. Whoever picks up WBS 2.3 (`JevDecider`) starts by **asking Eryk for the Jev API key and setting up the provider with him**; do not report it as waiting on a decision. It sits after the audit fixes in the order below.
+3. **Jev is its own project now.** Decided 2026-10-01: the Jev decision layer (WBS 2.2, 2.3, the `decide` capability) leaves this initiative. Its WBS will be written and worked by agents in Agora. Do not build it from this handoff. The rules decider stays the gate in use and `decide` stays at 501.
 
 ## Audit findings (2026-10-01): what the docs promised vs what runs
 
-File encryption came through the MinIO change intact. Two older gaps in the production setup did not hold up; A has since been closed by removing the feature, B is open. Full detail in `../storage-and-encryption.md`.
+File encryption came through the MinIO change intact. Two older gaps in the production setup did not hold up. All findings (A–E) are now closed; F (stale comments) was fixed along the way. Full detail in `../storage-and-encryption.md`.
 
 | # | Finding | Evidence | Fix (code phase) |
 |---|---|---|---|
 | A | ~~The production API runs with the default (all-zero) `IP_ENCRYPTION_KEY`~~, so stored IPs were encrypted with a publicly known key. | Live WSL stack logged `WARNING: Using default IP_ENCRYPTION_KEY`. Older than #32. | **Closed by removal** (#43, deployed 2026-10-01): no IPs are stored, the key is gone, and the live API no longer logs the default-key warning. |
-| B | ~~The "refuses to start in production" guard never runs in Docker~~: `src/config.ts` only hard-fails when `NODE_ENV=production`, and nothing set it. | `NODE_ENV` was empty in the live `api` container. | **Fixed on `fix/production-key-checks`**: the image sets `NODE_ENV=production`; an all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET` are refused; a startup fingerprint check refuses a *changed* encryption key (`src/lib/key-fingerprint.ts`, override `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1`). Not deployed yet. |
-| C | **The setup script's domain prompt has no effect.** It writes `CORS_ORIGIN`, but compose builds the API's origin from `DOMAIN` (default `alpha.agora.host`), and the `caddy` service gets no `DOMAIN` at all, so the `Caddyfile` always falls back to `localhost`. A real domain only gets a certificate if the `Caddyfile` is edited by hand. | Read from `docker-compose.prod.yml`, `Caddyfile`, `scripts/setup-env.js`. Not reproduced on a real domain. | Write `DOMAIN` from the setup script and pass it to `caddy`; confirm on a host with a real domain. |
-| D | Stored blobs are ciphertext, but **the storage path contains the original filename** (`<channelId>/<fileId>/<filename>`), as the MinIO object keys did. Anyone who can list the volume or bucket sees names and sizes. | `src/lib/file-store.ts`; names on the live volume. | Optional: store under `<channelId>/<fileId>` only. Needs a move of existing blobs. |
-| E | All backend containers run as **root** (no `USER` in the `Dockerfile`), so `files-data` is root-owned. | `id -u` is 0 in the live `api` container. | Optional hardening: run as `node` and `chown` the volume path in the image. |
-| F | Stale code comments from the MinIO era: `src/lib/file-store.ts` ("blob in MinIO"), `src/tools/migrate-storage-from-s3.ts` ("the API soft-deletes such rows on first access", no longer true: a missing blob is now a plain 404), `test/integration/files.integration.test.ts`. | grep | Fix with the next code change. |
+| B | ~~The "refuses to start in production" guard never runs in Docker~~: `src/config.ts` only hard-fails when `NODE_ENV=production`, and nothing set it. | `NODE_ENV` was empty in the live `api` container. | **Fixed (#44, deployed 2026-10-01)**: the image sets `NODE_ENV=production`; an all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET` are refused; a startup fingerprint check refuses a *changed* encryption key (`src/lib/key-fingerprint.ts`, override `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1`). |
+| C | ~~The setup script's domain prompt has no effect~~: it wrote `CORS_ORIGIN`, compose built the API's origin from `DOMAIN` (default `alpha.agora.host`), and `caddy` got no `DOMAIN`, so the `Caddyfile` always fell back to `localhost`. | Read from the compose file, `Caddyfile` and setup script; `caddy adapt` without `DOMAIN` gives host `localhost`. | **Fixed (WBS 6.6, 0.2.0):** the script writes `DOMAIN`; compose passes it to `caddy` and derives the API origin from it (an explicit `CORS_ORIGIN` still wins). Checked by running the real script (`--no-start`) and `caddy adapt`. **Not checked: certificate issuance on a real domain.** |
+| D | ~~The storage path contains the original filename~~ (`<channelId>/<fileId>/<filename>`), as the MinIO object keys did. | `src/lib/file-store.ts`; names on the live volume. | **Fixed (WBS 6.7, 0.2.0):** new files are stored as `<channelId>/<fileId>/blob`. Older files keep their name until `strip-storage-filenames` is run. |
+| E | ~~All backend containers run as root~~ (no `USER` in the `Dockerfile`). | `id -u` was 0 in the live `api` container. | **Fixed (WBS 6.7, 0.2.0):** the image runs as `node` (uid 1000); a one-shot `files-perms` service hands an existing root-owned `files-data` volume over. Verified on an isolated stack built from the release image. |
+| F | ~~Stale code comments from the MinIO era~~ in `src/lib/file-store.ts`, `src/tools/migrate-storage-from-s3.ts` and `test/integration/files.integration.test.ts`. | grep | **Fixed (0.2.0).** |
 
 Verified on the live stack on 2026-10-01: six blobs on `files-data`, none starting with its file type's magic bytes (PNG, JPG, MP4, TXT, MP3 all read as random bytes), so encryption at rest is doing its job on disk.
 
@@ -59,7 +62,8 @@ Verified on the live stack on 2026-10-01: six blobs on `files-data`, none starti
 | Hardening: API port on `127.0.0.1` only | merged, deployed, verified from this machine | #42 |
 | Architecture docs synced with the code; Vite dev proxy `runtime`; `threads` / `ai-assistant` test fixes (recovered from closed #38) | merged | #42 |
 | IP tracking and IP bans removed | merged, deployed | #43 |
-| Startup key checks (finding B) | PR open, not deployed | `fix/production-key-checks` |
+| Startup key checks (finding B) | merged, deployed | #44 |
+| Commit before the reply; domain setting; storage paths without file names; non-root containers; key rotation; bound run tokens; negative suite on gVisor | on `release/0.2.0`, not deployed | release PR |
 
 ## Live test results (WSL2 + gVisor stack, real provider keys)
 
@@ -73,6 +77,7 @@ Verified on the live stack on 2026-10-01: six blobs on `files-data`, none starti
 | `video` (Veo) | ✅ verified 2026-09-30. Route is on `veo-3.1-fast-generate-preview` (~$0.40 per 4 s) with a 2/day request cap |
 | `image` | ✅ verified 2026-09-30 |
 | **Disk file store (MinIO replacement, #32)** | ✅ works (Eryk, 2026-10-01). WSL stack runs `5af0f43` with no `minio` container; blobs on `files-data` are ciphertext |
+| **Stored files still open** after the storage change and the three deploys | ✅ Eryk opened files in the app (2026-10-01). After #42–#44 were deployed, all 6 stored files (MP4, JPEG, 2 MP3, text, PNG) were decrypted inside the live `api` container with the live key: each decrypts, matches its recorded size and starts with its type's magic bytes |
 | Socket proxy on native Linux Docker (`DOCKER_GID`) | ✅ fixed and verified |
 | Sandbox → gateway name resolution under gVisor (`/etc/hosts` pin) | ✅ fixed and verified |
 | Route provider switch resets model; Tavily depth dropdown + server validation | ✅ fixed and verified |
@@ -80,27 +85,28 @@ Verified on the live stack on 2026-10-01: six blobs on `files-data`, none starti
 | Long `chat_wait` across harnesses | ✅ verified: Codex (Sol, `tool_timeout_sec = 3600`) held one wait 394.5 s, past Codex's 300 s default; Claude Code held 380 s with no config change; `until=turn` slept through a TURN for another agent and returned both together |
 | **API port on `127.0.0.1` only** | ✅ verified 2026-10-01 from this machine: `docker ps` shows `127.0.0.1:3000->3000`; from Windows, `http://localhost:3000` and `https://localhost` answer; the WSL address (`172.19.74.12:3000`), which answered before, now refuses. ☐ Not checked from a second device. In WSL's default NAT mode port 3000 was never reachable from the LAN without a port proxy, so that check matters for a real Linux host, not this setup |
 | **Migration `031`** on the live DB | ✅ 2026-10-01: applied; 4 users and 6 files intact; `health` ok; runner on `runsc` |
+| **Sandbox suite under gVisor** (incl. the §14 negative suite) | ✅ 2026-10-01: 37 of 37 on the WSL engine via `scripts/test-sandbox-gvisor.sh` (`runsc` release-20260928.0; containers report kernel `4.19.0-gvisor`). Test containers only: the live stack was not touched |
+| **Release image, isolated stack** (Docker Desktop, project `agora-rel-test`, own ports) | ✅ 2026-10-01: services run as uid 1000 in production mode; a root-owned uploads volume is handed over; upload stores `<channel>/<file>/blob` as ciphertext; download through nginx + Caddy; key rotation in Docker, after which the old key is refused. No gVisor there, so no code runs |
 | `testReport` | ☐ not yet tested live |
 
 Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
 ## Next up (in order)
 
-1. **Merge and deploy `fix/production-key-checks`** (finding B). On deploy, the API's first start records the live key's fingerprint; check `docker logs agora-api-1` for `Recorded the encryption key fingerprint`. Then finding C (the setup script's domain prompt).
-2. **Clean up on the WSL stack**, once Eryk confirms files open: the old `agora_minio-data` volume, the `MINIO_ROOT_*` lines in `.env.prod`, and the pre-`031` dump in `~/agora-backups`. All three are deletions: ask first.
+1. **WBS 6.9: make nginx re-resolve the API address**, so a deploy that recreates `api` without `web` stops returning 502.
+2. **Nothing to clean on the WSL stack.** Eryk will wipe that instance before recording the Agora video, so its leftovers (old `agora_minio-data` volume, `MINIO_ROOT_*` lines, the pre-`031` dump, the bot token from #39) don't need attention. Note for the wipe: `docker compose down -v` only removes volumes the compose file declares, so `agora_minio-data` and `~/agora-backups` have to be removed by hand.
 3. **#40** (channel audio overviews ignore threads) and **#39** (agents can read and use each other's bot tokens from local MCP config). For #39, Eryk's idea (2026-10-01): let the **decision handler** take part of that job. Notes on what it can and can't see are in a comment on #39.
-4. **Remaining live checks:** `testReport`. Also connect **Gemini CLI** and **OpenCode** to Agora and confirm a long `chat_wait` holds there (settings in the agora-collab skill's "Harness setup").
-5. **3.9 Negative suite on gVisor:** the spec §14 list. **No CI runner needed any more:** the WSL2 Ubuntu here has `runsc` (release-20260928.0). Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` against the WSL engine. The `minio:9000` probe is gone with the service; the storage check is now "the sandbox has no mount of `files-data`".
-6. **Optional hardening:** bind run tokens to the container IP (a live token replayed from another sandbox is indistinguishable today; only dead-token use trips). Audit findings D and E.
-7. **Remaining:**
-   - **`decide` returns 501: not set up yet.** Pairs with the decision seam: `JevDecider` (WBS 2.3) and `WebhookDecider` (2.2) behind `src/runtime/decider.ts`, which may only tighten decisions (spec §10). First step is asking Eryk for the Jev API key; see "Order of work" above.
+4. **Remaining live checks:** `testReport`; certificate issuance on a real domain through `DOMAIN`. Also connect **Gemini CLI** and **OpenCode** to Agora and confirm a long `chat_wait` holds there (settings in the agora-collab skill's "Harness setup").
+5. **Hardening backlog** (spec §18): a per-run Docker network, rootless Docker for the sandbox daemon, a tighter seccomp profile. (Run tokens are now bound to the sandbox's address; findings D and E are fixed.)
+6. **Remaining:**
+   - `decide` returns 501: belongs to the separate Jev project (see "Order of work").
    - Video follow-ups: image-to-video, per-second cost accounting (the ledger is per token; Veo reports no tokens, so only the request limit caps spend), an assistant trigger.
    - Audio overview: configurable host names/voices, an agent-facing trigger.
    - Potential enhancement **#35**: free local TTS with Kokoro as an OpenAI-compatible Speech provider. It only needs single-voice `tts` on the OpenAI-compatible adapter; the line-by-line path in `src/ai/speech.ts` already handles two hosts.
    - 4.1: an MCP tool taking a results file path (code is capped at 360 KB), a CI reporter recipe.
    - Google's docs now lead with the Interactions API; adapters still use `generateContent` (no deprecation notice).
-8. **Open issues:** #23 (loop guard UI), #22 (agora-mcp + self-signed `https://localhost`).
-9. **Cleanup leftovers:** dead pre-Arc frontend components (`ContentArea`, `UserPanel`, `ConnectionIndicator`, `UserSearch`, nothing imports them) and pre-pivot DB leftovers (DM/voice channel types, `channel_members`, `message_reactions`, `relationships`, the DM branch of `checkChannelMembership`). Both are documented as leftovers in the architecture docs; removing the tables needs a migration. The `minio` npm package stays: it is the S3 client behind `STORAGE_DRIVER=s3` and the migration tool.
+7. **Open issues:** #23 (loop guard UI), #22 (agora-mcp + self-signed `https://localhost`).
+8. **Cleanup leftovers:** dead pre-Arc frontend components (`ContentArea`, `UserPanel`, `ConnectionIndicator`, `UserSearch`, nothing imports them) and pre-pivot DB leftovers (DM/voice channel types, `channel_members`, `message_reactions`, `relationships`, the DM branch of `checkChannelMembership`). Both are documented as leftovers in the architecture docs; removing the tables needs a migration. The `minio` npm package stays: it is the S3 client behind `STORAGE_DRIVER=s3` and the migration tool.
 
 ## How multi-speaker speech works (#41)
 
@@ -109,12 +115,12 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 - If Gemini changes the contract again, the quick fallback is deleting `ttsDialogue` from `src/ai/adapters/gemini.ts`, which makes Gemini voice line by line (one call per line: watch the TTS preview RPM limits).
 
 ## Known test failures (not caused by this work)
-- **Root cause of the flaky tests: the response is sent before the transaction commits.** `src/app.ts` commits in Fastify's `onResponse` hook, which runs *after* the reply has gone out. A client that acts on a response straight away (uses a token it was just issued, reads back what it just wrote) can arrive before the COMMIT. Tests do exactly that, so under load whole files fail: on 2026-10-01 one full run on `fix/production-key-checks` had 21 failures out of 670 (`roles` 17, mostly `createServer` getting 401 for a user registered one request earlier; `auth-phase1` 2; `admin` 1; `ai-streaming` 1) and the next run, with nothing changed, was 670 of 670. Real clients can hit the same window. Polling in individual tests hides it; the fix is to commit before the reply is sent (e.g. in `onSend`, turning a failed commit into a 500) and keep emitting socket events after the commit. Not done; it changes the request lifecycle and needs its own PR.
-- **Fixed on this branch** (from #38): `ai-assistant` (expected `AI Assistant`, code creates `AI-Assistant`) and `threads` (read the DB before the request's COMMIT landed; now polls).
-- **`admin.integration.test.ts` was flaky before #43.** On 2026-10-01 the full suite ran 460 of 461 green, with one `admin` failure; eight runs of that file gave 1, 10, 17, 0, 1, 0, 0, 0 failures out of 50. The failures inspected were tests that read the DB straight after a request (the read-before-COMMIT pattern `threads` had), most of them IP ban and "records IP" tests. #43 deleted those IP tests (the file is now 40 tests). The audit-log tests in that file still read right after the request and still need the polling helper.
-- `auth-phase1` "register with valid inviteCode returns 201, user added to server" failed once in the full run on `chore/remove-ip-tracking` (658 of 659 green, 2026-10-01), then the file passed 5× alone. It queries `server_members` straight after the register request: read-before-COMMIT again.
-- Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
-- Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
+- **The flaky tests are fixed at the cause (WBS 6.8, 0.2.0).** The request transaction used to commit in `onResponse`, after the reply had gone out, so a test acting on a response could arrive before the data was saved (one full run on 2026-10-01: 21 failures of 670; the next, unchanged: 0). The commit now happens in `onSend`, before the reply. `test/integration/request-lifecycle.integration.test.ts` fails on the old code and passes on the new; the full suite then ran 673 of 673 three times in a row. The entries below describe the old behaviour and should not recur. The `waitForRow` polling left in some test files is now unnecessary but harmless.
+- **Fixed in #42** (from #38): `ai-assistant` (expected `AI Assistant`, code creates `AI-Assistant`) and `threads` (read the DB before the request's COMMIT landed; now polls).
+- *History:* `admin.integration.test.ts` was flaky before #43. On 2026-10-01 the full suite ran 460 of 461 green, with one `admin` failure; eight runs of that file gave 1, 10, 17, 0, 1, 0, 0, 0 failures out of 50. The failures inspected were tests that read the DB straight after a request (the read-before-COMMIT pattern `threads` had), most of them IP ban and "records IP" tests. #43 deleted those IP tests (the file is now 40 tests). The audit-log tests in that file still read right after the request and still need the polling helper.
+- *History:* `auth-phase1` "register with valid inviteCode returns 201, user added to server" failed once in the full run on `chore/remove-ip-tracking` (658 of 659 green, 2026-10-01), then the file passed 5× alone. It queries `server_members` straight after the register request: read-before-COMMIT again.
+- *History:* `ai-streaming` happy path failed once in a full run, then passed 4×.
+- *History:* `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
 - **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file.
 
 ## Cloud sessions (claude.ai/code)
@@ -128,12 +134,14 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
   - Run long `compose up --build` as a background task, or it dies when the `wsl.exe` session closes.
   - **The distro stops about a minute after its last `wsl.exe` session closes**, taking the stack down (happened 2026-09-30 when a shared terminal was closed). A logon scheduled task, **"WSL Ubuntu keep-alive (Agora stack)"** (`conhost --headless wsl.exe -d Ubuntu --exec sleep infinity`), now holds it open. Docker is systemd-enabled and services are `restart: unless-stopped`, so the stack comes back on its own. If `localhost:3000` is dead, check `wsl -l -v` and that task first. Setup: `docs/getting-started.md` step 7.
   - Deploy: `git pull` in `~/agora`, then `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build <services>`.
+  - **After every deploy, check `curl -sk https://localhost/health`.** nginx in `web` resolves `api` once at startup; if `api` was recreated and `web` wasn't, the site returns 502 while `http://localhost:3000` works. Fix: `docker compose -f docker-compose.prod.yml --env-file .env.prod restart web` (WBS 6.9 removes the need).
+  - The image runs with `NODE_ENV=production`. If `api` restarts in a loop after an env change, read `docker logs agora-api-1` first: it refuses a default or changed `AGORA_ENCRYPTION_KEY` and says so.
   - Browser: `https://localhost` (Caddy, local cert). Agents/MCP: `http://localhost:3000` (Node rejects Caddy's local cert).
   - Volumes: `agora_files-data` (uploads, in use), `agora_minio-data` (old, safe to remove once files open), `agora_pgdata`, `agora_redisdata`, `agora_caddy_data`.
 - **Docker Desktop (Windows)** still has the **stopped** old prod stack (compose project `agora`, disposable test data; fallback only) and the test infra. **Never** `docker compose up` the dev file there without `-p agora-test`. A standalone `agora-minio` container is also running there; nothing on this branch uses it.
 - Test infra: `docker compose -p agora-test -f docker-compose.yml up -d postgres redis`, plus `--profile sandbox up -d socket-proxy` for runtime work. No storage service: tests write blobs to a temp directory.
 - Use an **isolated test DB** so parallel agent sessions don't truncate each other: DB `accord_test_threads`, Redis DB 1. A branch with a **new migration** needs its own database (`chore/remove-ip-tracking` used `accord_test_noip`): migrations are not reversible, so running it against a shared test DB breaks every other branch's tests there. Env via the scratchpad `testenv.sh`, or set `DATABASE_URL` / `TEST_DATABASE_URL` (both!) and `REDIS_URL=redis://localhost:6379/1`.
-- Exclude agent worktrees from vitest: the default config excludes `.claude/**` and `test/sandbox/**`. Docker suite: `npm run test:sandbox` (Docker Desktop, runc, needs `agora_sandbox` network + `agora/sandbox-deno:dev` image).
+- Exclude agent worktrees from vitest: the default config excludes `.claude/**` and `test/sandbox/**`. **On gVisor:** `scripts/test-sandbox-gvisor.sh` from WSL (`cd /mnt/c/Users/miste/life-manager/Git_Projects/agora && bash scripts/test-sandbox-gvisor.sh`); it brings its own Postgres, Redis, socket proxy and network, runs the tests in a Node container, cleans up, and refuses to start while a real `agora-run-*` container is running (the suite removes them). Docker suite under runc: `npm run test:sandbox` (Docker Desktop, runc, needs `agora_sandbox` network + `agora/sandbox-deno:dev` image).
 - **agora-mcp:** the global `agora-mcp` is **0.4.0 linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`), since npm only has 0.1.2, which lacks `runtime_exec` and the long `chat_wait`. Rebuilding that folder changes the installed MCP, but running agents keep the old code until their MCP server restarts (check process start times against `agora-mcp/dist` if unsure).
 - **Agents on Agora:** Claude Code (project entry in `~/.claude.json`) and **Sol** (Codex, project `.codex/config.toml`, gitignored, with `tool_timeout_sec = 3600`). Gemini CLI and OpenCode have no Agora server configured today. Codex also keeps a worktree at `~/.codex/worktrees/4acd/agora` (clean, detached at the old `main`).
 - Local Ollama is at `localhost:11434` (qwen3:14b, qwen3:32b, gpt-oss:20b, deepseek-r1:14b, …). Testing against it loads models into the 5070 Ti.
