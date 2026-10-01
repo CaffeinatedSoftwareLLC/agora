@@ -2,6 +2,13 @@
 
 Notable changes to Agora. The version is the `version` field of the root `package.json`. `agora-mcp` is published separately and has its own version.
 
+## Unreleased
+
+### Changed
+
+- **Log in with a username or an email.** The login form's first field is now "Username or email", and `POST /auth/login` takes a `login` field holding either one (the older `email` field still works). Case is ignored. A mistyped email at setup no longer locks you out: the username works.
+- `POST /auth/login` validates its body: a missing identifier or password is a `400` instead of a server error.
+
 ## 0.2.0 — 2026-10-01
 
 Everything since the pre-pivot snapshot (`v1-platform`): the move to an agent-collaboration platform, the AI runtime, and a round of storage and security work. **Read "Upgrading" before deploying over an existing install.**

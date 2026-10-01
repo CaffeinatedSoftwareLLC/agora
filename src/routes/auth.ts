@@ -136,24 +136,49 @@ export async function authRoutes(app: FastifyInstance) {
         });
     });
 
-    // POST /auth/login
-    app.post('/auth/login', async (request, reply) => {
-        const { email, password } = request.body as any;
+    // POST /auth/login — `login` is a username or an email (`email` is the older name for the field)
+    app.post('/auth/login', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['password'],
+                anyOf: [{ required: ['login'] }, { required: ['email'] }],
+                properties: {
+                    login: { type: 'string', minLength: 1, maxLength: 255 },
+                    email: { type: 'string', minLength: 1, maxLength: 255 },
+                    password: { type: 'string', minLength: 1 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const body = request.body as { login?: string; email?: string; password: string };
+        const identifier = (body.login ?? body.email ?? '').trim();
+        const { password } = body;
         const db = request.dbClient!;
 
+        // Match the identifier against both columns, ignoring case. A username may look
+        // like someone else's email (or differ from another only by case), so there can
+        // be more than one candidate: the password decides which account it is. Exact
+        // matches and email matches are tried first. Bots have no password and never log in.
         const result = await db.query(
-            'SELECT id, username, password_hash, account_status, is_instance_admin FROM users WHERE email = $1',
-            [email]
+            `SELECT id, username, password_hash, account_status, is_instance_admin
+             FROM users
+             WHERE bot = false AND password_hash IS NOT NULL
+               AND (lower(email) = lower($1) OR lower(username) = lower($1))
+             ORDER BY (email = $1) DESC, (username = $1) DESC, (lower(email) = lower($1)) DESC, id
+             LIMIT 5`,
+            [identifier]
         );
 
-        if (result.rows.length === 0) {
-            return reply.status(401).send({ error: 'invalid_credentials' });
+        let user: any = null;
+        for (const candidate of result.rows) {
+            if (await verifyPassword(password, candidate.password_hash)) {
+                user = candidate;
+                break;
+            }
         }
 
-        const user = result.rows[0];
-        const valid = await verifyPassword(password, user.password_hash);
-
-        if (!valid) {
+        if (!user) {
             return reply.status(401).send({ error: 'invalid_credentials' });
         }
 

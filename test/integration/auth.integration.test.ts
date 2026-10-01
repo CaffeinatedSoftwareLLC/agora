@@ -1,4 +1,4 @@
-import { setupTestApp, cleanDatabase } from '../helpers';
+import { setupTestApp, cleanDatabase, authedUser, createServer } from '../helpers';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 
@@ -83,5 +83,61 @@ describe('POST /auth/login', () => {
         expect(wrong.body.error).toBe(ghost.body.error);
         // Full body shape must be identical to prevent enumeration via other fields
         expect(Object.keys(wrong.body).sort()).toEqual(Object.keys(ghost.body).sort());
+    });
+
+    test('accepts the username in place of the email', async () => {
+        const res = await ctx.request.post('/auth/login').send({ login: 'loginuser', password: 'SecurePass123!' });
+        expect(res.status).toBe(200);
+        expect(res.body.user.username).toBe('loginuser');
+        expect(res.body).toHaveProperty('accessToken');
+    });
+
+    test('accepts the email in the `login` field, and either one whatever the case', async () => {
+        for (const login of ['login@test.com', 'LOGIN@Test.com', 'LoginUser', '  loginuser  ']) {
+            const res = await ctx.request.post('/auth/login').send({ login, password: 'SecurePass123!' });
+            expect(res.status, login).toBe(200);
+            expect(res.body.user.username, login).toBe('loginuser');
+        }
+    });
+
+    test('a username with the wrong password is 401, the same as an unknown one', async () => {
+        const wrong = await ctx.request.post('/auth/login').send({ login: 'loginuser', password: 'WrongPassword!' });
+        const ghost = await ctx.request.post('/auth/login').send({ login: 'nobodyhere', password: 'Whatever!' });
+        expect(wrong.status).toBe(401);
+        expect(ghost.status).toBe(401);
+        expect(wrong.body).toEqual(ghost.body);
+    });
+
+    test('a username that is somebody else\'s email cannot get in the way of that person', async () => {
+        // The squatter registers a username equal to the victim's email address
+        await ctx.request.post('/auth/register').send({ username: 'victim', email: 'victim@test.com', password: 'VictimPass123!' });
+        await ctx.request.post('/auth/register').send({ username: 'victim@test.com', email: 'squatter@test.com', password: 'SquatterPass123!' });
+
+        const victim = await ctx.request.post('/auth/login').send({ login: 'victim@test.com', password: 'VictimPass123!' });
+        expect(victim.status).toBe(200);
+        expect(victim.body.user.username).toBe('victim');
+
+        // The same identifier with the squatter's password is the squatter's own account, never the victim's
+        const squatter = await ctx.request.post('/auth/login').send({ login: 'victim@test.com', password: 'SquatterPass123!' });
+        expect(squatter.status).toBe(200);
+        expect(squatter.body.user.username).toBe('victim@test.com');
+    });
+
+    test('a bot cannot log in by username', async () => {
+        const owner = await authedUser(ctx.request, 'botloginowner');
+        const { serverId } = await createServer(ctx.request, owner.auth, 'Bot Login');
+        const bot = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: 'loginbot' });
+        expect(bot.status).toBe(201);
+
+        for (const password of ['', ' ', 'anything']) {
+            const res = await ctx.request.post('/auth/login').send({ login: 'loginbot', password });
+            expect([400, 401], JSON.stringify(password)).toContain(res.status);
+        }
+    });
+
+    test('a missing identifier or password is a 400, not a server error', async () => {
+        expect((await ctx.request.post('/auth/login').send({ password: 'x' })).status).toBe(400);
+        expect((await ctx.request.post('/auth/login').send({ login: 'loginuser' })).status).toBe(400);
+        expect((await ctx.request.post('/auth/login').send({})).status).toBe(400);
     });
 });

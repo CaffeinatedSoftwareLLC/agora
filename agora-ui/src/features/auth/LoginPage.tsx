@@ -11,7 +11,7 @@ export function LoginPage() {
   const { data: instance } = useInstance();
   const { login, status } = useAuthStore();
 
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
@@ -20,7 +20,7 @@ export function LoginPage() {
     setError('');
 
     try {
-      await login(email, password);
+      await login(identifier.trim(), password);
       const currentStatus = useAuthStore.getState().status;
       if (currentStatus === 'pending') {
         navigate('/pending');
@@ -32,7 +32,7 @@ export function LoginPage() {
         if (err.code === 'account_suspended') {
           setError('Your account has been suspended. Contact an administrator.');
         } else if (err.code === 'invalid_credentials') {
-          setError('Invalid email or password.');
+          setError('Wrong username, email or password.');
         } else {
           setError(err.code);
         }
@@ -51,12 +51,14 @@ export function LoginPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            label="Username or email"
+            type="text"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             required
-            autoComplete="email"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
           />
 
           <Input
