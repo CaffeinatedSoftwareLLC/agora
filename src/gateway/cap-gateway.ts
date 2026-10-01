@@ -4,6 +4,7 @@ import type Redis from 'ioredis';
 import { CAPABILITIES, type Capability, type ConversationMessage, type Usage } from '../ai/adapters';
 import { resolveRoute, checkBudget, recordUsage, type ResolvedRoute } from '../ai/routing';
 import { parseDialogue, synthesizeDialogue } from '../ai/speech';
+import { screeningPrecheck, screenSearchResult } from '../ai/search-screening';
 import { storeFile } from '../lib/file-store';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { hashToken } from '../runtime/runner';
@@ -161,6 +162,7 @@ async function metered<T extends { usage: Usage }>(ctx: HandlerCtx, capability: 
 }
 
 const providerError = (error: string) => ({ status: 502, body: { error, code: 'provider_error' } });
+const screeningRequired = (error: string) => ({ status: 503, body: { error, code: 'screening_required' } });
 
 /** Capability implementations. `decide` comes later. */
 const HANDLERS: Partial<Record<Capability, Handler>> = {
@@ -187,11 +189,24 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
 
     search: async (ctx) => {
         const { run, route, input, db } = ctx;
+        // Strict screening: refuse before spending a search whose results could not be delivered
+        const precheck = await screeningPrecheck(db, run.serverId, route.adapter);
+        if (!precheck.ok) return screeningRequired(precheck.error);
+
         const result = await metered(ctx, 'search', () =>
             route.adapter.search!(route.credentials, { model: route.model, query: input.query, maxResults: input.maxResults }));
         if (!result.ok) return providerError(result.error);
-        const { answer, citations, display, usage } = result.value;
-        if (!display) return { body: { answer, citations, usage } };
+        const { display, usage } = result.value;
+
+        // Text an agent will read is checked for prompt injection first (when switched on).
+        // Results under display terms (Gemini grounding) are never sent to another model.
+        const screened = await screenSearchResult(db, {
+            serverId: run.serverId, adapter: route.adapter, result: result.value,
+            channelId: run.channelId, userId: run.submittedBy, runId: run.runId,
+        });
+        if (!screened.ok) return screeningRequired(screened.error);
+        const { answer, citations, screening } = screened.result;
+        if (!display) return { body: { answer, citations, usage, screening } };
 
         // Gemini grounding terms: show the answer unmodified with Google's Search
         // Suggestions. The gateway posts that display into the run's thread itself.
@@ -204,7 +219,7 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
             content: answer,
         });
         await ctx.publish(events);
-        return { body: { answer, citations, usage, displayedIn: messageId } };
+        return { body: { answer, citations, usage, screening, displayedIn: messageId } };
     },
 
     image: async (ctx) => {

@@ -406,6 +406,8 @@ describe('search, image, and tts (Phase 4)', () => {
             answer: 'Use a well-draining mix.',
             citations: [{ url: 'https://plants.ces.ncsu.edu/x', title: 'NC State Extension', snippet: 'Soil…' }],
             usage: { inputTokens: 0, outputTokens: 0 },
+            // No decision model on this server: results are untouched and say so
+            screening: { status: 'off' },
         });
         const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
         expect(url).toBe('https://api.tavily.com/search');

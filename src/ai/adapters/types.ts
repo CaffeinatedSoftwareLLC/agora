@@ -202,6 +202,12 @@ export interface Adapter extends AdapterInfo {
      */
     ttsDialogue?(creds: ProviderCredentials, req: DialogueRequest): Promise<MediaResult>;
     generateVideo?(creds: ProviderCredentials, req: VideoRequest): Promise<MediaResult>;
+    /**
+     * True when the provider's terms require search results to be shown unmodified and
+     * forbid passing them to another model (Gemini grounding). Such results are never
+     * sent to a decision model for screening.
+     */
+    restrictedSearchResults?: boolean;
     /** Typed decisions. Throws `DecideError`; callers go through `src/ai/decide.ts`, never here directly. */
     decide?(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult>;
     /** Present exactly when the adapter lists `decide`. */

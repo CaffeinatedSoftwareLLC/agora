@@ -6,7 +6,10 @@ import { streamCompletion, ConversationMessage } from './providers';
 import { resolveRoute, checkBudget, recordUsage } from './routing';
 import { generateUlid } from '../utils/ulid';
 import { storeFile, type StoredFile } from '../lib/file-store';
-import { createAudioOverview, overviewMessage, OVERVIEW_MAX_MESSAGES, type TranscriptRow } from './audio-overview';
+import { createAudioOverview, overviewMessage, stripMentions, OVERVIEW_MAX_MESSAGES, type TranscriptRow } from './audio-overview';
+import { screeningPrecheck, screenSearchResult } from './search-screening';
+import { postSystemMessage } from '../gateway/post-message';
+import type { SearchResult } from './adapters';
 import { classifyIntent, intentByRules } from './intent-routing';
 import type { AssistantIntent } from './decision-questions';
 
@@ -87,6 +90,10 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
     if (intent === 'audio_overview') {
         // "@assistant make an audio overview of this thread" (WBS 5.1)
         await handleAudioOverview(db, io, { serverId, channelId, threadId, botId, author, content: event.content });
+        return;
+    }
+    if (intent === 'search') {
+        await handleSearch(db, io, { serverId, channelId, threadId, botId, author, messageId, content: event.content });
         return;
     }
 
@@ -250,11 +257,16 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
 async function availableIntents(db: Pool, serverId: string): Promise<AssistantIntent[]> {
     const res = await db.query(
         `SELECT r.capability FROM ai_capability_routes r JOIN ai_providers p ON p.id = r.provider_id
-         WHERE r.server_id = $1 AND r.enabled AND p.enabled AND r.capability = 'tts'`,
+         WHERE r.server_id = $1 AND r.enabled AND p.enabled AND r.capability IN ('tts', 'search')`,
         [serverId]
     );
     const enabled = new Set(res.rows.map((r: { capability: string }) => r.capability));
-    return ['chat', ...(enabled.has('tts') ? ['audio_overview' as const] : [])];
+    return [
+        'chat',
+        ...(enabled.has('tts') ? ['audio_overview' as const] : []),
+        // Search has no keyword trigger: it is reached only through the decision model
+        ...(enabled.has('search') ? ['search' as const] : []),
+    ];
 }
 
 async function routeMention(
@@ -349,6 +361,70 @@ async function createPlaceholder(
             });
         },
     };
+}
+
+/** The longest search query taken from a request. */
+const MAX_SEARCH_QUERY_CHARS = 400;
+
+/**
+ * "@assistant look up …" (docs/planning/jev-wbs.md, A.3): run the server's search
+ * route and post the result as a search card. Results are screened for prompt
+ * injection first when screening is on (src/ai/search-screening.ts). Gemini-grounded
+ * results are shown unmodified with Google's Search Suggestions and are never screened.
+ */
+async function handleSearch(
+    db: Pool, io: Server,
+    ctx: { serverId: string; channelId: string; threadId?: string; botId: string; author: { id: string }; messageId: string; content: string },
+): Promise<void> {
+    const { serverId, channelId, threadId, botId, author, messageId } = ctx;
+    const query = stripMentions(ctx.content).replace(/\s+/g, ' ').trim().slice(0, MAX_SEARCH_QUERY_CHARS);
+    const fail = async (text: string) => { await createPlaceholder(db, io, { channelId, botId, threadId }, `⚠️ ${text}`); };
+
+    if (!query) return fail('Tell me what to search for.');
+
+    const resolved = await resolveRoute(db, serverId, 'search');
+    if (!resolved.ok) return fail(`Couldn't search: ${resolved.error}`);
+    const route = resolved.value;
+    const budget = await checkBudget(db, route.route);
+    if (!budget.ok) return fail(`${budget.error}. An admin can raise it in AI settings.`);
+
+    // Strict screening: refuse before spending a search whose results could not be shown
+    const precheck = await screeningPrecheck(db, serverId, route.adapter);
+    if (!precheck.ok) return fail(precheck.error);
+
+    const usageBase = {
+        serverId, capability: 'search' as const, providerId: route.providerId, adapter: route.adapter.id,
+        model: route.model, route: route.route, channelId, userId: author.id, messageId,
+    };
+    const started = Date.now();
+    let result: SearchResult;
+    try {
+        result = await route.adapter.search!(route.credentials, { model: route.model, query, maxResults: 5 });
+        await recordUsage(db, { ...usageBase, usage: result.usage, latencyMs: Date.now() - started });
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await recordUsage(db, { ...usageBase, usage: { inputTokens: 0, outputTokens: 0 }, latencyMs: Date.now() - started, error: message });
+        return fail(`Search failed: ${message}`);
+    }
+
+    const screened = await screenSearchResult(db, { serverId, adapter: route.adapter, result, channelId, userId: author.id });
+    if (!screened.ok) return fail(screened.error);
+    const { answer, citations, screening } = screened.result;
+
+    const { events } = await postSystemMessage(db, {
+        channelId,
+        threadId: threadId ?? null,
+        systemEvent: 'runtime_search',
+        systemData: {
+            kind: 'runtime_search', query, citations, screening,
+            ...(result.display ? { suggestionsHtml: result.display.html, queries: result.display.queries } : {}),
+        },
+        // An answer that was withheld is replaced by a note, never by the flagged text
+        content: answer || (screening.answer === 'flagged' || screening.answer === 'suspect'
+            ? 'The search answer was withheld: it contained text that tried to give instructions to an AI. The sources are listed below.'
+            : 'No summary came back for this search. The sources are listed below.'),
+    });
+    for (const e of events) io.to(e.room).emit(e.event, e.data);
 }
 
 /** The conversation an overview covers: the whole thread, or the channel's recent top-level messages. */
