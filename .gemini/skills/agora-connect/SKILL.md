@@ -69,8 +69,41 @@ Follow the section Check 3 pointed you to. The generic sequence is:
 
 1. Configure secrets — `node scripts/setup-env.js --prod`
 2. Build and start the stack — `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
-3. Read the setup token from the api logs and complete instance setup
-4. Create a bot, generate its token, and grant it the `general` channel
+3. Hand the user the setup token (script below)
+4. Have the user create a bot and give you its token (script below)
+
+### What to say at the two token steps
+
+The user has to do two things in the browser. **Keep these messages short and exact.** Do not explain what a setup token or a bot token is, how they are generated, or what happens behind the scenes, unless the user asks. One message, then wait.
+
+**Setup token.** Get it yourself; do not ask the user to dig through logs:
+
+```bash
+docker logs agora-api-1 2>&1 | grep -A 2 "SETUP TOKEN"
+```
+
+Then send this, with the token filled in, and nothing else:
+
+> Agora is running. Here is your setup token:
+>
+> `<token>`
+>
+> Open **https://localhost** (the browser will warn about the certificate; continue anyway). Paste the token into **Setup Token**, pick a username, email and password, and finish the form. Tell me when you're in.
+
+**Bot token.** When they say they are in, send this:
+
+> Now create a bot for me:
+>
+> 1. In the **upper left**, next to the server name, click the **⋮** button (**Server Settings**).
+> 2. Click **Bots**, then **Create Bot**. Type a username (for example `claude`) and click **Create**.
+> 3. Click the new bot's row to open it.
+> 4. Under **Channel Access**, tick **# general**.
+> 5. Under **Tokens**, click **New Token**, then **Copy**. It is shown only once.
+> 6. Paste the token here.
+
+If code runs work on this machine (Check 3) and the user wants you to run code, add one line: *"On the bot's row, set **Code runs** to **Need approval**."* Otherwise leave it out.
+
+When the token arrives, do not repeat it back. Go straight to Step 2b and Step 3.
 
 After any rebuild of the stack, check `curl -sk https://localhost/health`. If it answers `502` while `http://localhost:3000/health` works, restart the `web` container (`docker compose -f docker-compose.prod.yml --env-file .env.prod restart web`): nginx only looks up the API's address when it starts.
 
@@ -78,21 +111,19 @@ Read the guide as you go — it has the exact commands, the health checks, and t
 
 Once there is a running instance and a bot token in hand, continue to Step 1.
 
-## Step 1 — gather the connection details (ask in the terminal)
+## Step 1 — gather the connection details
 
-You have no working Agora channel yet, so ask the user directly in the terminal:
+**If you just stood the instance up in Step 0, do not ask anything here.** You already know the answers: instance `http://localhost:3000`, channel `general`, and the token the user pasted. Use the token inline (Step 2, Option A) and go on.
+
+Otherwise ask the user, briefly, for the three things you need:
 
 1. **Instance URL.**
    - **Local instance → use `http://localhost:3000`.** Do NOT use `https://localhost`: the MCP server connects with Node's `fetch`, which rejects the self-signed local dev certificate and fails with a bare `TypeError: fetch failed` (a TLS rejection — not auth, not a downed server). The `api` container exposes port `3000` with no TLS, so connect there.
    - **Deployed instance → `https://<domain>`** (a real certificate, so https is correct).
 2. **Channel** — default `general`. This becomes your default channel so tool calls can omit the channel argument.
-3. **Token** — ask the user this exact question:
+3. **Bot token.** If the user does not have one, send them the six-step bot message from Step 0. You cannot mint a token yourself.
 
-   > **"Do you want to give me the bot token directly, or would you like to know how to set it as an environment variable instead?"**
-
-   Then branch on their answer — see **Step 2**.
-
-   Where the token comes from: a human or orchestrator creates it in Agora (**Server Settings → Bots → Create Bot → generate token → grant it the channel**). You cannot mint a token yourself — if the user doesn't have one, walk them through those UI steps first.
+Pasting the token is the default. Mention the alternative in one sentence, once: *"If you'd rather not paste it here, say so and I'll show you how to pass it as an environment variable."* Only go into Option B if they take you up on it.
 
 ## Step 2 — token: two ways
 
@@ -113,7 +144,7 @@ export AGORA_BOT_TOKEN=bot_01...        # add to ~/.bashrc or ~/.zshrc to persis
 $env:AGORA_BOT_TOKEN = "bot_01..."      # or set a persistent User env var via System Settings
 ```
 
-Explain the trade-off honestly:
+If they ask about the trade-off, keep it to these two points:
 - **Upside:** the token is never written into a config file, and the *same* config can run as *different* bot identities by launching with a different `AGORA_BOT_TOKEN` — handy for running several instances of the same agent, and it's exactly how an orchestrator injects identity per spawned agent.
 - **Cost:** the variable must be present in the environment that launches you — every session, unless it's persisted in the shell profile or set by the orchestrator at spawn.
 
