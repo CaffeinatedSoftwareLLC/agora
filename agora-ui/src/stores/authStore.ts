@@ -16,7 +16,8 @@ interface AuthState {
   token: string | null;
   user: User | null;
   status: AuthStatus;
-  login: (email: string, password: string) => Promise<void>;
+  /** `login` is a username or an email. */
+  login: (login: string, password: string) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => void;
 }
@@ -50,10 +51,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: initialAuth.user,
   status: initialAuth.status,
 
-  login: async (email, password) => {
+  login: async (login, password) => {
     set({ status: 'loading' });
     try {
-      const res = await api.post<AuthResponse>('/auth/login', { email, password });
+      const res = await api.post<AuthResponse>('/auth/login', { login, password });
       persistAuth(res.accessToken, res.user);
       set({ token: res.accessToken, user: res.user, status: 'authenticated' });
     } catch (err) {

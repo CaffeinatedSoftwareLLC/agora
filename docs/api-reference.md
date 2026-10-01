@@ -214,17 +214,25 @@ No token is returned for pending accounts.
 
 ### POST /auth/login
 
-Authenticate with email and password.
+Authenticate with a username or an email, and a password.
 
 **Auth:** None
 
 **Request Body**
 ```json
 {
-  "email": "alice@example.com",
+  "login": "alice",
   "password": "securepassword"
 }
 ```
+
+| Field      | Type   | Required | Notes |
+|------------|--------|----------|-------|
+| `login`    | string | Yes*     | The account's username or its email. Case does not matter. |
+| `email`    | string | Yes*     | Older name for the same field; still accepted. Send one of the two. |
+| `password` | string | Yes      | |
+
+Bots cannot log in this way; they authenticate with a bot token.
 
 **Response** `200`
 ```json
@@ -238,7 +246,8 @@ Authenticate with email and password.
 
 | Status | Error                | Cause                                     |
 |--------|----------------------|-------------------------------------------|
-| 401    | `invalid_credentials`| Email not found or password does not match |
+| 400    | (validation)         | `password` or the identifier is missing    |
+| 401    | `invalid_credentials`| No such username or email, or the password does not match |
 | 403    | `account_pending`    | Account exists but has not been approved   |
 | 403    | `account_suspended`  | Account has been suspended by an admin     |
 
