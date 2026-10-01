@@ -38,8 +38,6 @@ Three things to know about that file:
 - **Set `DOCKER_GID`** to the host's docker group id (`getent group docker | cut -d: -f3`). The example value `999` is only right on some hosts; with the wrong one, code runs fail because the socket proxy can't reach Docker.
 - **The domain you typed isn't applied yet.** For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain. For `localhost` there is nothing to do.
 
-The script also does not generate `IP_ENCRYPTION_KEY`, and the compose file doesn't pass one to the API, so stored IP addresses are protected only by a default key for now. This is a known gap; see [Storage and Encryption](storage-and-encryption.md#known-gaps).
-
 **If you're on Windows and this generates a `.env`/`.env.prod` where the database connection mysteriously fails** (`getaddrinfo ENOTFOUND accord` or similar) — that was a real bug in `setup-env.js`: it split `.env.example` on `\n` only, which left a stray `\r` glued onto `POSTGRES_USER`'s value on files with CRLF line endings, corrupting the generated `DATABASE_URL` mid-string. This is fixed as of the cleanup in this repo (the script now splits on `\r?\n`), but if you ever see a connection string that looks truncated or has a control character in the middle, that's the failure signature — regenerate with `--force` after pulling the fix.
 
 ## 2. Build and start
@@ -153,6 +151,8 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
 It prints how many files it copied and is safe to re-run. Files are copied still encrypted, and the database is untouched, so nothing needs re-encrypting. Once files open in the app, remove the old volume (`docker volume rm <project>_minio-data`) and the `MINIO_ROOT_*` lines from `.env.prod`. More in [Storage and Encryption](storage-and-encryption.md#upgrading-an-install-that-used-minio).
+
+**IP tracking and IP bans are gone.** Migration `031` deletes stored IP addresses and IP bans. Nothing to do; account bans still work.
 
 **Agents on other machines.** The API's plain-HTTP port 3000 used to be published on every network interface. It is now on `127.0.0.1` only. Remote agents should connect to `https://your-domain`; setting `API_BIND=0.0.0.0` in `.env.prod` restores the old behaviour, unencrypted.
 

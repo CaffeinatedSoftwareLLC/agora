@@ -3,7 +3,6 @@ import { hashPassword, verifyPassword } from '../auth/passwords';
 import { generateToken, verifyToken, extractToken } from '../auth/tokens';
 import { blacklistToken } from '../auth/token-blacklist';
 import { generateUlid } from '../utils/ulid';
-import { hmacIp, encryptIp } from '../auth/crypto';
 
 export async function authRoutes(app: FastifyInstance) {
     // POST /auth/register — policy-aware registration
@@ -35,18 +34,6 @@ export async function authRoutes(app: FastifyInstance) {
             "SELECT value FROM instance_config WHERE key = 'registration_policy'"
         );
         const policy = policyResult.rows[0]?.value ?? 'open';
-
-        // ─── IP ban check ───
-        const ipKey = (app as any).ipEncryptionKey as Buffer;
-        const clientIp = request.ip;
-        const ipHmac = hmacIp(clientIp, ipKey);
-        const ipBanCheck = await db.query(
-            'SELECT 1 FROM ip_bans WHERE ip_hmac = $1 AND (expires_at IS NULL OR expires_at > NOW())',
-            [ipHmac]
-        );
-        if (ipBanCheck.rows.length > 0) {
-            return reply.status(403).send({ error: 'ip_banned' });
-        }
 
         // invite_only requires an invite code
         if (policy === 'invite_only' && !inviteCode) {
@@ -98,13 +85,6 @@ export async function authRoutes(app: FastifyInstance) {
             }
             throw err;
         }
-
-        // Record IP
-        const ipEncrypted = encryptIp(clientIp, ipKey);
-        await db.query(
-            'UPDATE users SET last_ip_hmac = $1, last_ip_encrypted = $2 WHERE id = $3',
-            [ipHmac, ipEncrypted, id]
-        );
 
         // For open policy: auto-join the instance server
         if (policy === 'open') {
@@ -160,9 +140,6 @@ export async function authRoutes(app: FastifyInstance) {
     app.post('/auth/login', async (request, reply) => {
         const { email, password } = request.body as any;
         const db = request.dbClient!;
-        const ipKey = (app as any).ipEncryptionKey as Buffer;
-        const clientIp = request.ip;
-        const ipHmac = hmacIp(clientIp, ipKey);
 
         const result = await db.query(
             'SELECT id, username, password_hash, account_status, is_instance_admin FROM users WHERE email = $1',
@@ -180,15 +157,6 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(401).send({ error: 'invalid_credentials' });
         }
 
-        // IP ban check
-        const ipBanCheck = await db.query(
-            'SELECT 1 FROM ip_bans WHERE ip_hmac = $1 AND (expires_at IS NULL OR expires_at > NOW())',
-            [ipHmac]
-        );
-        if (ipBanCheck.rows.length > 0) {
-            return reply.status(403).send({ error: 'ip_banned' });
-        }
-
         // Check account status after credential verification
         if (user.account_status === 'pending') {
             return reply.status(403).send({ error: 'account_pending' });
@@ -196,13 +164,6 @@ export async function authRoutes(app: FastifyInstance) {
         if (user.account_status === 'suspended') {
             return reply.status(403).send({ error: 'account_suspended' });
         }
-
-        // Record IP
-        const ipEncrypted = encryptIp(clientIp, ipKey);
-        await db.query(
-            'UPDATE users SET last_ip_hmac = $1, last_ip_encrypted = $2 WHERE id = $3',
-            [ipHmac, ipEncrypted, user.id.trim()]
-        );
 
         const token = generateToken({ userId: user.id.trim() }, app.jwtSecret);
 

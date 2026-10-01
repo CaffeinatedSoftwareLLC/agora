@@ -8,7 +8,7 @@
  *   node scripts/setup-env.js --force    # Overwrite existing files
  *
  * Dev mode generates random values for:
- *   - POSTGRES_PASSWORD, JWT_SECRET, IP_ENCRYPTION_KEY, AGORA_ENCRYPTION_KEY
+ *   - POSTGRES_PASSWORD, JWT_SECRET, AGORA_ENCRYPTION_KEY
  *   - DATABASE_URL and TEST_DATABASE_URL are built from POSTGRES_* vars
  *
  * Prod mode auto-generates secrets and prompts for:
@@ -101,7 +101,6 @@ function setupDev() {
     const generated = {
         POSTGRES_PASSWORD: strongPassword(),
         JWT_SECRET: hexSecret(),
-        IP_ENCRYPTION_KEY: hexSecret(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
     };
 

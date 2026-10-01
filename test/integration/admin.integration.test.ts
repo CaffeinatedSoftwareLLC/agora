@@ -447,168 +447,6 @@ describe('Phase 2 — Admin Dashboard', () => {
         });
     });
 
-    // ─── POST /admin/users/:id/ip-ban ───
-    describe('POST /admin/users/:id/ip-ban', () => {
-
-        beforeEach(async () => { await cleanDatabase(ctx.db); });
-
-        test('IP ban creates ip_bans row and suspends active user', async () => {
-            const admin = await insertUser('active', 'ipbanadmin', true);
-            const target = await insertUser('active', 'ipbantarget');
-
-            // Give target a recorded IP
-            await ctx.db.query(
-                "UPDATE users SET last_ip_hmac = 'testhash', last_ip_encrypted = 'testenc' WHERE id = $1",
-                [target.userId]
-            );
-
-            const res = await ctx.request
-                .post(`/admin/users/${target.userId}/ip-ban`)
-                .set(admin.auth);
-            expect(res.status).toBe(200);
-            expect(res.body.accountBanned).toBe(true);
-            expect(res.body.ipBanned).toBe(true);
-            expect(res.body.user.accountStatus).toBe('suspended');
-
-            // Verify ip_bans row
-            const bans = await ctx.db.query('SELECT * FROM ip_bans WHERE ip_hmac = $1', ['testhash']);
-            expect(bans.rows).toHaveLength(1);
-        });
-
-        test('IP ban with no recorded IP returns 400', async () => {
-            const admin = await insertUser('active', 'ipban400admin', true);
-            const target = await insertUser('active', 'ipban400target');
-
-            const res = await ctx.request
-                .post(`/admin/users/${target.userId}/ip-ban`)
-                .set(admin.auth);
-            expect(res.status).toBe(400);
-            expect(res.body.error).toBe('no_ip_recorded');
-        });
-
-        test('IP ban on pending user does not change account status', async () => {
-            const admin = await insertUser('active', 'ipbanpendadmin', true);
-            const target = await insertUser('pending', 'ipbanpendtarget');
-
-            await ctx.db.query(
-                "UPDATE users SET last_ip_hmac = 'pendhash', last_ip_encrypted = 'pendenc' WHERE id = $1",
-                [target.userId]
-            );
-
-            const res = await ctx.request
-                .post(`/admin/users/${target.userId}/ip-ban`)
-                .set(admin.auth);
-            expect(res.status).toBe(200);
-            expect(res.body.accountBanned).toBe(false);
-            expect(res.body.ipBanned).toBe(true);
-            expect(res.body.user.accountStatus).toBe('pending');
-        });
-
-        test('re-banning an IP after expiration makes ban active again', async () => {
-            const admin = await insertUser('active', 'rebanadmin', true);
-            const target = await insertUser('active', 'rebantarget');
-
-            // Give target a recorded IP
-            await ctx.db.query(
-                "UPDATE users SET last_ip_hmac = 'rebanhash', last_ip_encrypted = 'rebanenc' WHERE id = $1",
-                [target.userId]
-            );
-
-            // Insert an expired IP ban directly
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-            await ctx.db.query(
-                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, banned_by, expires_at)
-                 VALUES ($1, $2, $3, $4, NOW() - INTERVAL '1 hour')`,
-                [genId(), 'rebanhash', 'rebanenc', admin.userId]
-            );
-
-            // Re-ban via admin endpoint — should upsert and clear expires_at
-            const res = await ctx.request
-                .post(`/admin/users/${target.userId}/ip-ban`)
-                .set(admin.auth);
-            expect(res.status).toBe(200);
-            expect(res.body.ipBanned).toBe(true);
-
-            // Verify the ban is now active (expires_at cleared)
-            const ban = await ctx.db.query(
-                "SELECT expires_at FROM ip_bans WHERE ip_hmac = 'rebanhash'"
-            );
-            expect(ban.rows).toHaveLength(1);
-            expect(ban.rows[0].expires_at).toBeNull();
-        });
-    });
-
-    // ─── GET /admin/ip-bans ───
-    describe('GET /admin/ip-bans', () => {
-
-        beforeEach(async () => { await cleanDatabase(ctx.db); });
-
-        test('lists IP bans', async () => {
-            const admin = await insertUser('active', 'listipbanadmin', true);
-
-            // Insert an IP ban directly
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-            await ctx.db.query(
-                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, reason, banned_by)
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [genId(), 'somehash', 'someenc', 'test reason', admin.userId]
-            );
-
-            const res = await ctx.request
-                .get('/admin/ip-bans')
-                .set(admin.auth);
-            expect(res.status).toBe(200);
-            expect(res.body.bans).toHaveLength(1);
-            expect(res.body.bans[0].reason).toBe('test reason');
-            expect(res.body.total).toBe(1);
-        });
-    });
-
-    // ─── DELETE /admin/ip-bans/:id ───
-    describe('DELETE /admin/ip-bans/:id', () => {
-
-        beforeEach(async () => { await cleanDatabase(ctx.db); });
-
-        test('removes an IP ban', async () => {
-            const admin = await insertUser('active', 'delipbanadmin', true);
-
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-            const banId = genId();
-            await ctx.db.query(
-                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, banned_by)
-                 VALUES ($1, $2, $3, $4)`,
-                [banId, 'delhash', 'delenc', admin.userId]
-            );
-
-            const res = await ctx.request
-                .delete(`/admin/ip-bans/${banId}`)
-                .set(admin.auth);
-            expect(res.status).toBe(200);
-            expect(res.body.success).toBe(true);
-
-            // Verify removed
-            const check = await ctx.db.query('SELECT 1 FROM ip_bans WHERE id = $1', [banId]);
-            expect(check.rows).toHaveLength(0);
-
-            // Check audit log
-            const log = await ctx.db.query(
-                "SELECT * FROM audit_log WHERE action = 'ip_ban_remove'"
-            );
-            expect(log.rows).toHaveLength(1);
-        });
-
-        test('returns 404 for nonexistent IP ban', async () => {
-            const admin = await insertUser('active', 'del404ipbanadmin', true);
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-
-            const res = await ctx.request
-                .delete(`/admin/ip-bans/${genId()}`)
-                .set(admin.auth);
-            expect(res.status).toBe(404);
-            expect(res.body.error).toBe('ip_ban_not_found');
-        });
-    });
-
     // ─── PATCH /admin/instance ───
     describe('PATCH /admin/instance', () => {
 
@@ -814,143 +652,36 @@ describe('Phase 2 — Admin Dashboard', () => {
         });
     });
 
-    // ─── Auth IP ban integration ───
-    describe('auth IP ban checks', () => {
+    // ─── No IP tracking (removed in migration 031) ───
+    describe('no IP tracking', () => {
 
         beforeEach(async () => { await cleanDatabase(ctx.db); });
 
-        test('IP-banned IP is rejected on register', async () => {
-            const admin = await insertUser('active', 'authipbanadmin', true);
-
-            // Register a user first (to record their IP), then IP-ban them
-            const regRes = await ctx.request.post('/auth/register').send({
-                username: 'ipbanned',
-                email: 'ipbanned@test.com',
-                password: 'TestPass123!',
-            });
-            expect(regRes.status).toBe(201);
-
-            // Get the user's IP HMAC
-            const userRow = await ctx.db.query(
-                'SELECT last_ip_hmac, last_ip_encrypted FROM users WHERE id = $1',
-                [regRes.body.user.id]
+        test('the schema has no IP columns or ip_bans table', async () => {
+            const cols = await ctx.db.query(
+                `SELECT column_name FROM information_schema.columns
+                 WHERE table_name = 'users' AND column_name IN ('last_ip_hmac', 'last_ip_encrypted')`
             );
+            expect(cols.rows).toEqual([]);
 
-            // Insert IP ban with that HMAC
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-            await ctx.db.query(
-                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, banned_by)
-                 VALUES ($1, $2, $3, $4)`,
-                [genId(), userRow.rows[0].last_ip_hmac, userRow.rows[0].last_ip_encrypted, admin.userId]
-            );
-
-            // Try to register from same IP — should be blocked
-            const res = await ctx.request.post('/auth/register').send({
-                username: 'newuser',
-                email: 'newuser@test.com',
-                password: 'TestPass123!',
-            });
-            expect(res.status).toBe(403);
-            expect(res.body.error).toBe('ip_banned');
+            const table = await ctx.db.query("SELECT to_regclass('public.ip_bans') AS t");
+            expect(table.rows[0].t).toBeNull();
         });
 
-        test('IP-banned IP is rejected on login', async () => {
-            const admin = await insertUser('active', 'authipbanadmin2', true);
+        test('the user list exposes no IP, and the IP ban routes are gone', async () => {
+            const admin = await insertUser('active', 'noipadmin', true);
+            const target = await insertUser('active', 'noiptarget');
 
-            // Register a user and login to record IP
-            const regRes = await ctx.request.post('/auth/register').send({
-                username: 'loginipbanned',
-                email: 'loginipbanned@test.com',
-                password: 'TestPass123!',
-            });
-            expect(regRes.status).toBe(201);
+            const list = await ctx.request.get('/admin/users').set(admin.auth);
+            expect(list.status).toBe(200);
+            for (const user of list.body.users) {
+                expect(user).not.toHaveProperty('lastIp');
+            }
 
-            // Get IP HMAC
-            const userRow = await ctx.db.query(
-                'SELECT last_ip_hmac, last_ip_encrypted FROM users WHERE id = $1',
-                [regRes.body.user.id]
-            );
-
-            // Insert IP ban
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-            await ctx.db.query(
-                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, banned_by)
-                 VALUES ($1, $2, $3, $4)`,
-                [genId(), userRow.rows[0].last_ip_hmac, userRow.rows[0].last_ip_encrypted, admin.userId]
-            );
-
-            // Try to login — should be blocked
-            const res = await ctx.request.post('/auth/login').send({
-                email: 'loginipbanned@test.com',
-                password: 'TestPass123!',
-            });
-            expect(res.status).toBe(403);
-            expect(res.body.error).toBe('ip_banned');
-        });
-
-        test('successful register records IP', async () => {
-            const res = await ctx.request.post('/auth/register').send({
-                username: 'iprecord',
-                email: 'iprecord@test.com',
-                password: 'TestPass123!',
-            });
-            expect(res.status).toBe(201);
-
-            const user = await ctx.db.query(
-                'SELECT last_ip_hmac, last_ip_encrypted FROM users WHERE id = $1',
-                [res.body.user.id]
-            );
-            expect(user.rows[0].last_ip_hmac).toBeTruthy();
-            expect(user.rows[0].last_ip_encrypted).toBeTruthy();
-        });
-
-        test('successful login records IP', async () => {
-            await insertUser('active', 'loginiprecord');
-
-            const res = await ctx.request.post('/auth/login').send({
-                email: 'loginiprecord@test.com',
-                password: 'TestPass123!',
-            });
-            expect(res.status).toBe(200);
-
-            const user = await ctx.db.query(
-                'SELECT last_ip_hmac, last_ip_encrypted FROM users WHERE username = $1',
-                ['loginiprecord']
-            );
-            expect(user.rows[0].last_ip_hmac).toBeTruthy();
-            expect(user.rows[0].last_ip_encrypted).toBeTruthy();
-        });
-
-        test('expired IP ban is ignored', async () => {
-            const admin = await insertUser('active', 'expipbanadmin', true);
-
-            // Register a user to get their IP
-            const regRes = await ctx.request.post('/auth/register').send({
-                username: 'expiptest',
-                email: 'expiptest@test.com',
-                password: 'TestPass123!',
-            });
-
-            const userRow = await ctx.db.query(
-                'SELECT last_ip_hmac, last_ip_encrypted FROM users WHERE id = $1',
-                [regRes.body.user.id]
-            );
-
-            // Insert EXPIRED IP ban
-            const { generateUlid: genId } = await import('../../src/utils/ulid');
-            await ctx.db.query(
-                `INSERT INTO ip_bans (id, ip_hmac, ip_encrypted, banned_by, expires_at)
-                 VALUES ($1, $2, $3, $4, NOW() - INTERVAL '1 hour')`,
-                [genId(), userRow.rows[0].last_ip_hmac, userRow.rows[0].last_ip_encrypted, admin.userId]
-            );
-
-            // Register should succeed (ban is expired)
-            const res = await ctx.request.post('/auth/register').send({
-                username: 'afterexpiry',
-                email: 'afterexpiry@test.com',
-                password: 'TestPass123!',
-            });
-            expect(res.status).toBe(201);
+            const ban = await ctx.request.post(`/admin/users/${target.userId}/ip-ban`).set(admin.auth);
+            expect(ban.status).toBe(404);
+            const bans = await ctx.request.get('/admin/ip-bans').set(admin.auth);
+            expect(bans.status).toBe(404);
         });
     });
 });

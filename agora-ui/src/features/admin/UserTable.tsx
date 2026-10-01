@@ -17,7 +17,6 @@ export function UserTable() {
   const [error, setError] = useState('');
   const [banTarget, setBanTarget] = useState<AdminUser | null>(null);
   const [banLoading, setBanLoading] = useState(false);
-  const [banIp, setBanIp] = useState(false);
   const [banResult, setBanResult] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const searchRef = useRef(search);
@@ -62,27 +61,14 @@ export function UserTable() {
     if (!banTarget) return;
     setBanLoading(true);
     try {
-      if (banIp) {
-        const res = await api.post<{ user: AdminUser; accountBanned: boolean; ipBanned: boolean }>(
-          `/admin/users/${banTarget.id}/ip-ban`
-        );
-        setUsers((prev) =>
-          prev.map((u) =>
-            u.id === banTarget.id ? { ...u, accountStatus: res.user.accountStatus } : u
-          )
-        );
-        setBanResult(res.accountBanned ? 'IP banned and account banned' : 'IP banned');
-      } else {
-        await api.post(`/admin/users/${banTarget.id}/ban`);
-        setUsers((prev) =>
-          prev.map((u) =>
-            u.id === banTarget.id ? { ...u, accountStatus: 'suspended' as const } : u
-          )
-        );
-        setBanResult('Account banned');
-      }
+      await api.post(`/admin/users/${banTarget.id}/ban`);
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === banTarget.id ? { ...u, accountStatus: 'suspended' as const } : u
+        )
+      );
+      setBanResult('Account banned');
       setBanTarget(null);
-      setBanIp(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.code : 'Failed to ban user');
     } finally {
@@ -172,7 +158,7 @@ export function UserTable() {
                       <Button
                         variant="danger"
                         className="text-xs px-2 py-1"
-                        onClick={() => { setBanTarget(user); setBanIp(false); setBanResult(''); }}
+                        onClick={() => { setBanTarget(user); setBanResult(''); }}
                       >
                         Ban
                       </Button>
@@ -209,10 +195,8 @@ export function UserTable() {
 
       <BanDialog
         target={banTarget}
-        banIp={banIp}
-        onBanIpChange={setBanIp}
         onConfirm={banUser}
-        onCancel={() => { setBanTarget(null); setBanIp(false); }}
+        onCancel={() => setBanTarget(null)}
         loading={banLoading}
       />
     </div>
@@ -241,15 +225,11 @@ function StatusChip({ status }: { status: AdminUser['accountStatus'] }) {
 
 function BanDialog({
   target,
-  banIp,
-  onBanIpChange,
   onConfirm,
   onCancel,
   loading,
 }: {
   target: AdminUser | null;
-  banIp: boolean;
-  onBanIpChange: (v: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
   loading: boolean;
@@ -263,17 +243,6 @@ function BanDialog({
         <p className="text-text-muted text-sm mt-2">
           Are you sure you want to ban {target.username}?
         </p>
-        {target.lastIp && (
-          <label className="flex items-center gap-2 mt-4 text-sm text-text-muted cursor-pointer">
-            <input
-              type="checkbox"
-              checked={banIp}
-              onChange={(e) => onBanIpChange(e.target.checked)}
-              className="rounded border-border"
-            />
-            Also ban IP address ({target.lastIp})
-          </label>
-        )}
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={onCancel} disabled={loading}>
             Cancel

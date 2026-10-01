@@ -23,7 +23,6 @@ declare module 'fastify' {
     interface FastifyInstance {
         db: import('pg').Pool;
         jwtSecret: string;
-        ipEncryptionKey: Buffer;
         io: import('socket.io').Server;
     }
 }

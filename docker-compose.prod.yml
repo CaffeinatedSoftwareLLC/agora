@@ -110,7 +110,6 @@ services:
       DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
       REDIS_URL: redis://redis:6379
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
-      IP_ENCRYPTION_KEY: ${IP_ENCRYPTION_KEY:-}
       AGORA_DOCKER_HOST: http://socket-proxy:2375
       AGORA_SANDBOX_IMAGE: ${AGORA_SANDBOX_IMAGE:-agora/sandbox-deno:local}
       AGORA_SANDBOX_NETWORK: agora_sandbox
@@ -143,7 +142,6 @@ services:
       # Same volume as the API: files posted by runs are served by the API
       STORAGE_DIR: /data/files
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
-      IP_ENCRYPTION_KEY: ${IP_ENCRYPTION_KEY:-}
     volumes:
       - files-data:/data/files
     networks: [default, sandbox]
