@@ -28,6 +28,7 @@ vite.config.ts.timestamp-*
 
 # Agora local data
 .agora/
+data/
 .mcp.json
 
 # Agent config (tokens, local settings) — but keep skills in repo

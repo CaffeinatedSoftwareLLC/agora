@@ -450,21 +450,18 @@ export function setTokenGetter(fn: () => string | null) { getToken = fn; }
 
 ### Namespace Helpers
 
-```typescript
-// Server operations
-serverApi.createServer(name)
-serverApi.createChannel(serverId, name, channelType)
-serverApi.createInvite(serverId)
-serverApi.joinServer(code)
-serverApi.getMembers(serverId)
-serverApi.getChannels(serverId)
+Beyond the generic `api.get/post/put/patch/delete`, `lib/api.ts` groups endpoints by area:
 
-// User search
-userApi.searchUsers(query)
+| Namespace | Covers |
+|---|---|
+| `serverApi` | Create server/channel, invites and joining, members, channels, the caller's access (`getAccess`) |
+| `userApi` | User search |
+| `botApi` | Bot CRUD, pause/resume, tokens, channel grants, per-channel bot config (loop guard) |
+| `aiApi` | AI providers, capability routes, budgets and usage, assistant config, the settings audit log |
+| `runtimeApi` | Sandboxed runs: approvals and run details |
+| `roleApi` | Roles, role assignment, channel permission overrides |
 
-// Direct messages
-dmApi.createDM(recipientId)
-```
+`uploadFile()` handles multipart file uploads; `getAuthHeaders()` is for requests made outside `api` (e.g. file downloads).
 
 ## Type Contracts (`lib/contracts/`)
 
@@ -473,7 +470,8 @@ TypeScript interfaces that define the shape of data exchanged between frontend a
 | File | Key Types |
 |---|---|
 | `auth.ts` | `LoginRequest`, `RegisterRequest`, `User`, `AuthResponse`, `PendingResponse` |
-| `server.ts` | `Server`, `Channel`, `Member`, `CreateServerResponse`, `InviteResponse`, `JoinServerResponse`, `UserSearchResult`, `CreateDMResponse` |
+| `server.ts` | `Server`, `Channel`, `Member`, `CreateServerRequest`, `CreateServerResponse`, `CreateChannelRequest`, `InviteResponse`, `JoinServerResponse`, `UserSearchResult`, `ServerAccess` |
+| `roles.ts` | `Role`, `ChannelOverride`, `ChannelOverrides` |
 | `instance.ts` | `InstanceStatus`, `RegistrationPolicy` |
 | `admin.ts` | `AdminStats`, `AdminUser`, `PendingUser`, `PaginatedUsers`, `InstanceConfig` |
 | `ws-events.ts` | `ReadyPayload`, `MessagePayload`, `MessageUpdatePayload`, `MessageDeletePayload`, `ServerJoinPayload`, `TypingPayload`, `PresenceUpdatePayload`, `ThreadMetadataUpdatePayload`, `BotMessageStreamPayload` |
@@ -587,7 +585,7 @@ Unreads are tracked per-channel with two dimensions: `unreadCount` (any message)
 
 **ACK (mark as read):** Happens in two places:
 - `MessageList`: ACKs after initial message load for a channel
-- `ChannelSidebar`: ACKs immediately when clicking a channel if messages are already loaded
+- `ArcChannelSidebar`: ACKs immediately when clicking a channel if messages are already loaded
 
 Both send `PUT /channels/:channelId/ack` with `{ messageId }` and call `unreadStore.markRead()` locally.
 
@@ -632,36 +630,40 @@ When the user scrolls within 200px of the top of the message list, `loadOlder()`
 | `PendingQueue` | Approve/reject pending user registrations |
 | `UserTable` | List all users with status management |
 | `InstanceSettings` | Edit instance name and registration policy |
+| `StorageSettings` | File limits: max size, allowed extensions, retention, quota (the `instance_settings` table is the only source of these) |
 
 ### `features/shell/`
 
 The app chrome -- everything visible after login.
 
+The layout follows the parts of the [Arc v2 design](design/arc-v2-spec.md) that were built: a tab bar across the top instead of a Discord-style icon rail, accent tinting, and a floating input pill.
+
 | Component | Purpose |
 |---|---|
 | `SocketProvider` | Creates Socket.IO connection, wires WS events to stores |
 | `SocketContext` | React context holding `Socket \| null` |
-| `AppShell` | Three-column layout: ServerRail + ChannelSidebar + ContentArea + optional MembersSidebar |
-| `ServerRail` | Vertical icon strip: server icons (first letter), add server menu |
-| `ChannelSidebar` | Channel list for active server, invite/create buttons, user panel |
-| `ContentArea` | Channel header + MessageList + TypingIndicator + MessageInput |
-| `UserPanel` | Current user info with presence dot and connection indicator |
-| `ConnectionIndicator` | Green/yellow/red dot showing WebSocket connection status |
+| `AppShell` | Layout: TabBar on top; below it ArcChannelSidebar + ArcContentArea, plus the optional MembersSidebar and ThreadPanel |
+| `TabBar` | Top bar: one tab named after the instance (an instance has one server) and the light/dark palette toggle |
+| `ArcChannelSidebar` | Channel list for the active server, invite/create buttons, user panel |
+| `ArcContentArea` | Channel header + MessageList + TypingIndicator + floating message input |
+| `ArcUserPanel` | Current user info with presence dot |
+
+`ContentArea`, `UserPanel` and `ConnectionIndicator` are pre-Arc leftovers that nothing imports.
 
 **AppShell layout:**
 ```
-┌─────────┬──────────┬───────────────────────────┬──────────┐
-│ Server  │ Channel  │       Content Area        │ Members  │
-│  Rail   │ Sidebar  │  ┌─────────────────────┐  │ Sidebar  │
-│  72px   │  240px   │  │   Message List       │  │ (toggle) │
-│         │          │  │   (virtual scroll)   │  │          │
-│  [DM]   │  #gen    │  │                      │  │          │
-│  ──     │  #random │  │                      │  │          │
-│  [S1]   │  #dev    │  ├─────────────────────┤  │          │
-│  [S2]   │          │  │ Typing indicator     │  │          │
-│  ──     │          │  ├─────────────────────┤  │          │
-│  [+]    │ UserPanel│  │ Message input        │  │          │
-└─────────┴──────────┴──┴─────────────────────┴──┴──────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  TabBar:  [Instance name]                      [palette toggle] │
+├──────────┬───────────────────────────┬──────────┬──────────────┤
+│ Channel  │       Content Area        │ Members  │ Thread panel │
+│ Sidebar  │  ┌─────────────────────┐  │ Sidebar  │ (when a      │
+│          │  │   Message List       │  │ (toggle) │  thread is   │
+│  #gen    │  │   (virtual scroll)   │  │          │  open)       │
+│  #dev    │  ├─────────────────────┤  │          │              │
+│          │  │ Typing indicator     │  │          │              │
+│          │  │ Floating input pill  │  │          │              │
+│ UserPanel│  └─────────────────────┘  │          │              │
+└──────────┴───────────────────────────┴──────────┴──────────────┘
 ```
 
 **URL-to-state sync:** `AppShell` reads URL params from `/app/*` and syncs them to `serverStore.activeServerId` and `channelStore.activeChannelId`. On server change with no channel in the URL, it auto-selects the first text channel and navigates.
@@ -670,8 +672,6 @@ The app chrome -- everything visible after login.
 
 | Component | Purpose |
 |---|---|
-| `CreateServerModal` | Form to create a new server |
-| `JoinServerModal` | Enter invite code to join a server |
 | `InviteModal` | Generate and display invite code for a server |
 | `CreateChannelModal` | Form to create a new text channel |
 | `MembersSidebar` | Right sidebar listing server members with presence dots |
@@ -690,6 +690,11 @@ The app chrome -- everything visible after login.
 | `ThreadPanel` | Side panel showing a thread's replies with input, close/reopen button |
 | `ThreadIndicator` | Inline indicator on parent messages showing reply count and last reply time |
 | `ActiveThreadsBar` | Bar above messages showing active threads in the channel with pagination |
+| `ProtocolBadge` | Pill on agora-collab protocol messages: state, `→ next agent`, mode on hover (parsed by the server, see `latestProtocol.ts`) |
+| `RuntimeCard` | System messages from the sandboxed runtime: approval requests, run results, files posted |
+| `SearchCard` | Google-grounded search results, displayed as Google's terms require |
+| `ReportCard` | Visual test report (`testReport()`): pass/fail/skip bar plus a link to the Markdown report |
+| `FileAttachment` | Inline file/image/audio/video attachment |
 | `EmptyChannel` | Empty state shown when a channel has no messages |
 | `NewMessagesPill` | Floating pill showing count of new messages below viewport |
 | `grouping.ts` | `shouldGroup()`, `estimateMessageHeight()`, `computePrependShift()`, `computeScrollCorrection()` |
@@ -702,9 +707,13 @@ Server settings UI, accessible to server owners and admins.
 |---|---|
 | `ServerSettingsLayout` | Sidebar layout with navigation for server settings pages |
 | `ServerAdminGuard` | Route guard checking server ownership or admin role |
-| `BotManagement` | Full bot CRUD UI: create/delete bots, manage tokens, assign channels, configure loop guard |
+| `BotManagement` | Full bot CRUD UI: create/delete bots, manage tokens, assign channels, configure loop guard, pause/resume, "Code runs" access |
 | `CreateBotModal` | Form to create a new bot with name and optional avatar |
 | `CreateTokenModal` | Form to generate a new token for an existing bot |
+| `RoleManagement` / `RoleEditor` / `PermissionGrid` | Create and edit roles; permission flags grouped by category |
+| `RoleAssignment` | Assign roles to members |
+| `ChannelOverrides` / `OverrideEditor` | Per-channel allow/deny overrides for roles and members |
+| `AISettings` | Settings → AI, built from the `ai/` sections: `ProvidersSection` (keys, base URLs, test), `RoutesSection` (which provider/model serves each capability), `UsageSection` (budgets and spend), `AssistantSection` (the @assistant bot), `ChangesSection` ("Recent changes" audit trail) |
 
 ### `features/moderation/`
 
@@ -740,21 +749,19 @@ Vite serves the frontend on its default port (usually 5173) and proxies API requ
 
 ### Proxy Configuration (`vite.config.ts`)
 
-All API paths and the WebSocket endpoint are proxied:
+Every top-level API prefix and the WebSocket endpoint are proxied to the backend:
 
 ```typescript
+const API_PREFIXES = ['auth', 'servers', 'channels', 'invites', 'admin', 'users', 'health', 'instance',
+  'unreads', 'messages', 'roles', 'files', 'bots', 'runtime']
+// ...
 proxy: {
-  '/auth':      'http://localhost:3000',
-  '/instance':  'http://localhost:3000',
-  '/servers':   'http://localhost:3000',
-  '/channels':  'http://localhost:3000',
-  '/invites':   'http://localhost:3000',
-  '/admin':     'http://localhost:3000',
-  '/users':     'http://localhost:3000',
-  '/health':    'http://localhost:3000',
-  '/socket.io': { target: 'http://localhost:3000', ws: true },
+  ...Object.fromEntries(API_PREFIXES.map(p => [`/${p}`, apiProxy])),
+  '/socket.io': { target: API, ws: true },
 }
 ```
+
+When you add a new top-level route prefix, add it here **and** to the regex in `agora-ui/nginx.conf`, or production serves `index.html` for it.
 
 ### Build
 

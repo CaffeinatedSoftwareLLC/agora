@@ -22,8 +22,8 @@ src/
 │   ├── setup/      # Instance initialization guard + setup wizard
 │   ├── shell/      # App chrome: layout, socket lifecycle, sidebar
 │   ├── servers/    # Server/channel CRUD, invites, members
-│   ├── messages/   # Message list, input, threads, markdown rendering
-│   ├── settings/   # Server settings: bot management, channel config
+│   ├── messages/   # Message list, input, threads, markdown, protocol badges, runtime/search/report cards
+│   ├── settings/   # Server settings: bots, roles and overrides, AI providers/routes/usage
 │   ├── moderation/ # Moderation tools: member list, guards
 │   └── live/       # Real-time UI: typing, presence, unreads, mentions
 ├── components/ui/  # Shared UI components

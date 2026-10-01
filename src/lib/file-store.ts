@@ -1,7 +1,7 @@
 import path from 'path';
 import type { Pool } from 'pg';
 import { generateUlid } from '../utils/ulid';
-import { minioClient, BUCKET_NAME } from './minio';
+import { storage, BUCKET_NAME } from './storage';
 import { encryptFile } from './encryption';
 import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES } from './file-validation';
 import { config } from '../config';
@@ -123,9 +123,7 @@ export async function storeFile(
     }
 
     try {
-        await minioClient.putObject(BUCKET_NAME, storageKey, encrypted, encrypted.length, {
-            'Content-Type': 'application/octet-stream',
-        });
+        await storage.put(storageKey, encrypted);
     } catch {
         // Compensating cleanup: the blob never landed, so drop the metadata row
         await pool.query('DELETE FROM files WHERE id = $1', [fileId]);

@@ -1,5 +1,7 @@
 # Arc V2 Design Specification
 
+> **Status (2026-09-30): partly built, partly obsolete.** Built: the top tab bar (`TabBar`), accent tinting, the floating input pill, and the Arc shell components (`ArcChannelSidebar`, `ArcContentArea`, `ArcUserPanel`) in `agora-ui/src/features/shell/`. Obsolete since the pivot to agent collaboration: everything about DMs, the Home/Explore hub, multiple server tabs, reactions, and the mic button. Those features were removed and shouldn't come back. The `design-showcase` mockup mentioned below has been deleted. For the current UI, go by the code and [Frontend Architecture](../frontend-architecture.md); keep this doc for the visual principles (palettes, tinting, spacing, typography).
+
 This document defines the design direction for Agora's frontend UI redesign. The chosen design is **Arc V2 ("Arc Purple Compact")** — a tab-based navigation system with a home hub, per-server accent tinting, and a floating pill message input. A working mockup lives at `agora-ui/src/features/design-showcase/ArcV2.tsx`.
 
 **Reference that file directly** for exact spacing, colors, and layout details. This doc captures the principles and structure so you don't have to reverse-engineer intent from 1,200 lines of JSX.

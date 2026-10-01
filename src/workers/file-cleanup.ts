@@ -1,13 +1,12 @@
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { Pool } from 'pg';
-import { Client as MinioClient } from 'minio';
+import type { ObjectStore } from '../lib/storage';
 
 export async function startFileCleanupWorker(opts: {
     redisUrl: string;
     dbUrl: string;
-    minioClient: MinioClient;
-    bucketName: string;
+    store: ObjectStore;
 }) {
     const redis = new IORedis(opts.redisUrl, { maxRetriesPerRequest: null });
     const db = new Pool({ connectionString: opts.dbUrl });
@@ -51,7 +50,7 @@ export async function startFileCleanupWorker(opts: {
 
         for (const file of expired.rows) {
             try {
-                await opts.minioClient.removeObject(opts.bucketName, file.storage_key);
+                await opts.store.remove(file.storage_key.trim());
             } catch { /* Object may already be gone */ }
             await db.query('UPDATE files SET deleted_at = NOW() WHERE id = $1', [file.id]);
         }
@@ -66,7 +65,7 @@ export async function startFileCleanupWorker(opts: {
         for (const file of orphans.rows) {
             try {
                 if (file.storage_key) {
-                    await opts.minioClient.removeObject(opts.bucketName, file.storage_key);
+                    await opts.store.remove(file.storage_key.trim());
                 }
             } catch { /* Expected for crash recovery */ }
             await db.query('UPDATE files SET deleted_at = NOW() WHERE id = $1', [file.id]);
