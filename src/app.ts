@@ -43,7 +43,6 @@ export async function buildApp(opts?: {
     // Decorate app so routes can access db pool and jwtSecret
     (app as any).decorate('db', db);
     (app as any).decorate('jwtSecret', jwtSecret);
-    (app as any).decorate('ipEncryptionKey', config.ipEncryptionKey);
 
     // Health endpoint (no auth required)
     app.get('/health', async () => {

@@ -529,7 +529,7 @@ The custom migration runner reads `.sql` files from `src/db/migrations/`, applie
 | 010 | `010_nullable_audit_server_id.sql` | Makes `audit_log.server_id` nullable to allow instance-level admin actions that have no server context. |
 | 011 | `011_grant_instance_config_to_app_user.sql` | Grants `SELECT, UPDATE` on `instance_config` to `app_user`. Required because the table was created in migration 007, after the blanket `GRANT ALL TABLES` in migration 006. |
 | 012 | `012_instance_server_id.sql` | Stores the instance's server ID in `instance_config` (backfilled from the oldest server). |
-| 013 | `013_ip_tracking_and_bans.sql` | Encrypted last-IP tracking on users (HMAC + ciphertext) and the `ip_bans` table. |
+| 013 | `013_ip_tracking_and_bans.sql` | Encrypted last-IP tracking on users (HMAC + ciphertext) and the `ip_bans` table. Removed again by 031. |
 | 014 | `014_system_messages.sql` | Adds `messages.system_event`. Originally for call history; now used by system cards (runtime results, loop guard, reports). |
 | 015 | `015_file_sharing.sql` | File sharing: extends `files` (channel, message, MIME type, storage key, encryption IV/tag, image dimensions), adds `instance_settings` for admin-set limits, file RLS. |
 | 016 | `016_bot_infrastructure.sql` | Bot infrastructure: makes email/password nullable for bots, adds `bot_owner_id` and `server_id` to users with CHECK constraints enforcing bot/human invariants. Creates `bot_tokens`, `bot_channel_access`, `bot_read_cursors` tables. Adds `max_bot_hops` and `bot_rate_limit` columns to channels. Creates RLS policy for bot channel access via `is_bot_channel_member()` SECURITY DEFINER function. Three DB triggers enforce: (1) bot_channel_access targets server channels only, (2) bot and channel must share the same server, (3) bot_tokens reference bot users only. |
@@ -547,6 +547,7 @@ The custom migration runner reads `.sql` files from `src/db/migrations/`, applie
 | 028 | `028_runtime_artifacts.sql` | `exec_runs.artifact_count` for files posted by a run. |
 | 029 | `029_runtime_access.sql` | `users.runtime_access` (`none` / `approval` / `auto`): the per-bot "Code runs" setting. |
 | 030 | `030_video_time_profile.sql` | A longer time profile for video (Veo) runs. |
+| 031 | `031_remove_ip_tracking.sql` | Drops `ip_bans` and the `users.last_ip_*` columns: IP tracking and IP bans are removed, and every stored IP with them. |
 
 ---
 
@@ -870,6 +871,7 @@ In Docker, `api` and `cap-gateway` mount the same `files-data` volume at `/data/
 | Data | Code | Key |
 |---|---|---|
 | AI provider API keys (`ai_providers.api_key_enc` / `_iv` / `_tag`) | `encryptString` / `decryptString` in `src/lib/encryption.ts` | `AGORA_ENCRYPTION_KEY` |
-| IPs (`users.last_ip_hmac`, `users.last_ip_encrypted`, `ip_bans`) | `hmacIp` / `encryptIp` / `decryptIp` in `src/auth/crypto.ts` | `IP_ENCRYPTION_KEY` |
 
-Key validation lives in `src/config.ts`: both keys must be 64 hex characters when set. The stricter checks (refuse a missing or default key) only run when `NODE_ENV=production`, which the Docker image does not set today; see the known gaps in [Storage and Encryption](storage-and-encryption.md#known-gaps).
+Client IPs are not stored (removed in migration 031); `request.ip` is only used by the rate limiter.
+
+Key validation lives in `src/config.ts`: the key must be 64 hex characters when set. The stricter check (refuse a missing key) only runs when `NODE_ENV=production`, which the Docker image does not set today; see the known gaps in [Storage and Encryption](storage-and-encryption.md#known-gaps).

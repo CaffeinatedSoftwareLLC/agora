@@ -1,10 +1,15 @@
-# Handoff — AI Runtime Initiative (updated 2026-10-01, after the branch consolidation and the storage/encryption audit)
+# Handoff — AI Runtime Initiative (updated 2026-10-01, after the branch consolidation, the storage/encryption audit and the IP-tracking removal)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
 
 ## Branch state (read this first)
 
-Everything is on **`claude/handoff-next`**. It is not merged and has no PR yet. It contains:
+Two stacked branches, both open as PRs and neither merged:
+
+1. **`claude/handoff-next`** → PR **#42** (base `main`). Merge this first.
+2. **`chore/remove-ip-tracking`** (base `claude/handoff-next`): removes IP tracking and IP bans. Its PR targets `claude/handoff-next`; after #42 merges, retarget it to `main`.
+
+`claude/handoff-next` contains:
 
 | What | From | State |
 |---|---|---|
@@ -14,6 +19,14 @@ Everything is on **`claude/handoff-next`**. It is not merged and has no PR yet. 
 | Docs sync, Vite dev proxy `runtime` prefix, `threads` / `ai-assistant` test fixes | PR #38, recovered | merged into the branch |
 | Docs for all of the above, plus `docs/storage-and-encryption.md` | this session | on the branch |
 
+`chore/remove-ip-tracking` adds, on top:
+
+| What | State |
+|---|---|
+| Migration `031`: drops `ip_bans` and `users.last_ip_hmac` / `last_ip_encrypted` (deletes every stored IP and IP ban) | tested against a fresh DB; **not deployed** |
+| IP ban routes (`POST /admin/users/:id/ip-ban`, `GET` / `DELETE /admin/ip-bans`), the IP checks in register/login, `src/auth/crypto.ts`, `IP_ENCRYPTION_KEY` everywhere, and the admin UI's "Also ban IP address" option: removed | tests green |
+| Docs: no stored IPs, "Keeping people out", and a host checklist in `docs/storage-and-encryption.md` | on the branch |
+
 **What went wrong on 2026-09-30.** PR #38 was pushed at 22:08 UTC and its branch `chore/cleanup-after-36` was deleted at 22:13 UTC, in the same sweep that removed the merged feature branches. GitHub closes a PR when its branch is deleted, so #38 was closed **unmerged** and its work never reached `main`. The handoff on `main` then described a state that didn't match the code (it said the flaky-test fix hadn't landed and `agora-mcp` was 0.3.0). The commits were recovered from `refs/pull/38/head`.
 
 **Rule from this:** before deleting a branch, check its PR says *merged*. `gh pr list --state open --head <branch>` must be empty and `git branch -r --merged origin/main` must list it.
@@ -21,16 +34,16 @@ Everything is on **`claude/handoff-next`**. It is not merged and has no PR yet. 
 ## Order of work agreed 2026-10-01
 
 1. **Docs first** (done on this branch): README, getting started, architecture, API reference, sandbox spec, this handoff, and the new storage and encryption page.
-2. **Then code changes**, starting with the gaps the audit found (next section).
+2. **Then code changes**, starting with the gaps the audit found (next section). The first one is done: Eryk decided to **remove IP tracking and IP bans outright** rather than repair them. IP bans are easy to evade, can hit unrelated people behind one address, and would hit every local agent at once (they all arrive from the same local address). Registration policy, account bans and bot pause / token revocation are the controls.
 3. **`decide` / Jev is unblocked but not set up.** Jev can be added at any time. It has not happened only because nobody asked Eryk for an API key or walked him through setup, so the capability still returns 501 and nothing is configured. Whoever picks up WBS 2.3 (`JevDecider`) starts by **asking Eryk for the Jev API key and setting up the provider with him**; do not report it as waiting on a decision. It sits after the audit fixes in the order below.
 
 ## Audit findings (2026-10-01): what the docs promised vs what runs
 
-File encryption came through the MinIO change intact. Two older gaps in the production setup did not hold up. Full detail in `../storage-and-encryption.md`.
+File encryption came through the MinIO change intact. Two older gaps in the production setup did not hold up; A has since been closed by removing the feature, B is open. Full detail in `../storage-and-encryption.md`.
 
 | # | Finding | Evidence | Fix (code phase) |
 |---|---|---|---|
-| A | **The production API runs with the default (all-zero) `IP_ENCRYPTION_KEY`.** `docker-compose.prod.yml` never passes the variable to `api`, `setup-env.js --prod` doesn't generate it and `.env.prod.example` doesn't list it. Stored IPs (`users.last_ip_encrypted`, `ip_bans.ip_encrypted`) are encrypted with a publicly known key, so they are readable by anyone who gets the database. | Live WSL stack logs `WARNING: Using default IP_ENCRYPTION_KEY`; `.env.prod` there has no such key. Older than #32. | Generate it in `setup-env.js --prod`, add it to `.env.prod.example`, pass it to `api` as required. Rows written under the zero key stop decrypting and existing IP bans stop matching once the key changes, so re-encrypt them in a one-off script or clear them. |
+| A | ~~The production API runs with the default (all-zero) `IP_ENCRYPTION_KEY`~~, so stored IPs were encrypted with a publicly known key. | Live WSL stack logged `WARNING: Using default IP_ENCRYPTION_KEY`. Older than #32. | **Closed by removal** on `chore/remove-ip-tracking`: no IPs are stored, the key is gone. Takes effect on the live stack when that branch is deployed (migration `031`). |
 | B | **The "refuses to start in production" guard never runs in Docker.** `src/config.ts` only hard-fails when `NODE_ENV=production`; neither the `Dockerfile` nor the compose file sets it. | `NODE_ENV` is empty in the live `api` container. | Set `NODE_ENV=production` in the runtime image. Also reject an all-zero `AGORA_ENCRYPTION_KEY` (today only a missing one fails) and the placeholder `JWT_SECRET`. Today compose's `${VAR:?}` only checks the two are non-empty, and the 64-hex format check rejects the `change-me` placeholder for the encryption key. |
 | C | **The setup script's domain prompt has no effect.** It writes `CORS_ORIGIN`, but compose builds the API's origin from `DOMAIN` (default `alpha.agora.host`), and the `caddy` service gets no `DOMAIN` at all, so the `Caddyfile` always falls back to `localhost`. A real domain only gets a certificate if the `Caddyfile` is edited by hand. | Read from `docker-compose.prod.yml`, `Caddyfile`, `scripts/setup-env.js`. Not reproduced on a real domain. | Write `DOMAIN` from the setup script and pass it to `caddy`; confirm on a host with a real domain. |
 | D | Stored blobs are ciphertext, but **the storage path contains the original filename** (`<channelId>/<fileId>/<filename>`), as the MinIO object keys did. Anyone who can list the volume or bucket sees names and sizes. | `src/lib/file-store.ts`; names on the live volume. | Optional: store under `<channelId>/<fileId>` only. Needs a move of existing blobs. |
@@ -81,11 +94,11 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 
 ## Next up (in order)
 
-1. **Review and merge `claude/handoff-next`** (open a PR; docs are the first thing to review).
-2. **Fix audit findings A and B** (IP key in production, `NODE_ENV`), then C. These are the first code changes.
+1. **Review and merge #42** (`claude/handoff-next`), then the IP-removal PR stacked on it.
+2. **Fix audit finding B**: set `NODE_ENV=production` in the image, reject a default `AGORA_ENCRYPTION_KEY` / placeholder `JWT_SECRET`, and add a **startup key fingerprint check** (store a fingerprint of `AGORA_ENCRYPTION_KEY` in the DB on first boot; refuse to start, with a clear message and an explicit override, if it later differs). An accidentally changed key today breaks every file download and provider call with no explanation. Then finding C.
 3. **Test the port hardening** (see the row above), then deploy it to WSL.
 4. **Clean up after the MinIO migration** on the WSL stack once you're sure files open: the old `agora_minio-data` volume and the `MINIO_ROOT_*` lines in `.env.prod` are still there. Close issue #32 when the branch merges.
-5. **#40** (channel audio overviews ignore threads) and **#39** (agents can read and use each other's bot tokens from local MCP config).
+5. **#40** (channel audio overviews ignore threads) and **#39** (agents can read and use each other's bot tokens from local MCP config). For #39, Eryk's idea (2026-10-01): let the **decision handler** take part of that job. Notes on what it can and can't see are in a comment on #39.
 6. **Remaining live checks:** `testReport`. Also connect **Gemini CLI** and **OpenCode** to Agora and confirm a long `chat_wait` holds there (settings in the agora-collab skill's "Harness setup").
 7. **3.9 Negative suite on gVisor:** the spec §14 list. **No CI runner needed any more:** the WSL2 Ubuntu here has `runsc` (release-20260928.0). Most probes already exist in `test/sandbox/runner.sandbox.test.ts`; add the rest and run with `SANDBOX_TEST_RUNTIME=runsc` against the WSL engine. The `minio:9000` probe is gone with the service; the storage check is now "the sandbox has no mount of `files-data`".
 8. **Optional hardening:** bind run tokens to the container IP (a live token replayed from another sandbox is indistinguishable today; only dead-token use trips). Audit findings D and E.
@@ -107,19 +120,19 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 
 ## Known test failures (not caused by this work)
 - **Fixed on this branch** (from #38): `ai-assistant` (expected `AI Assistant`, code creates `AI-Assistant`) and `threads` (read the DB before the request's COMMIT landed; now polls).
-- **`admin.integration.test.ts` is flaky, and worse than "occasionally one test".** On 2026-10-01 (this branch; the file and the routes it exercises are identical to `main`) the full suite ran 460 of 461 green, with one `admin` failure. Eight runs of that file gave 1, 10, 17, 0, 1, 0, 0, 0 failures out of 50. Every failure is a test that reads the DB straight after a request (audit log, IP ban and "records IP" tests): the same read-before-COMMIT pattern as `threads` had. Not yet fixed; it needs the same polling helper.
+- **`admin.integration.test.ts` is flaky on `claude/handoff-next` and `main`.** On 2026-10-01 the full suite ran 460 of 461 green, with one `admin` failure; eight runs of that file gave 1, 10, 17, 0, 1, 0, 0, 0 failures out of 50. The failures inspected were tests that read the DB straight after a request (the read-before-COMMIT pattern `threads` had), most of them IP ban and "records IP" tests. `chore/remove-ip-tracking` deletes those IP tests (the file drops to 40 tests). The audit-log tests in that file still read right after the request and still need the polling helper.
+- `auth-phase1` "register with valid inviteCode returns 201, user added to server" failed once in the full run on `chore/remove-ip-tracking` (658 of 659 green, 2026-10-01), then the file passed 5× alone. It queries `server_members` straight after the register request: read-before-COMMIT again.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
 - Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
-- Rare one-off: `admin` "IP ban creates ip_bans row and suspends active user" failed once in a full run (2026-09-30, video branch), then the admin file passed 3× alone. Same read-before-COMMIT pattern as `threads`.
 - **Root `npm run build` / `tsc -p .` runs out of memory** (pre-existing on `main`): `test/integration/agora-mcp-package.integration.test.ts` imports `agora-mcp/src/*` and causes ~20M type instantiations. The Docker image only compiles `src/`, so prod builds are unaffected. To type-check locally, exclude that file.
 
 ## Cloud sessions (claude.ai/code)
 - Used for code work when local usage runs out; Codex on the local machine runs the live checks. **A cloud session branches from `main` as it is when the session starts**: if a PR merges while it works (as #41 did), its branch is behind and needs `main` merged in.
 - File-storing tests need no storage service any more: blobs go to a temp directory (`vitest.config.ts`).
-- Docker needs `dockerd &` first. Create `accord_test_runner` by hand, and set `IP_ENCRYPTION_KEY` / `AGORA_ENCRYPTION_KEY` in `.env` (register fails with "Invalid key length" otherwise).
+- Docker needs `dockerd &` first. Create `accord_test_runner` by hand, and set `AGORA_ENCRYPTION_KEY` in `.env`. (`IP_ENCRYPTION_KEY` is no longer read once `chore/remove-ip-tracking` is merged.)
 
 ## Local environment (this machine)
-- **The prod stack runs in WSL2 Ubuntu** at `~/agora`, on its own Docker Engine 29.x with gVisor `runsc`. As of 2026-10-01 the checkout is **`claude/handoff-next` at `5af0f43`** (the storage commit, one behind the port commit and all of today's merges). The runner starts with `runtime=runsc`, no dev flag. `.env.prod` there has `DOCKER_GID=986`, still has `MINIO_ROOT_*`, and has **no `IP_ENCRYPTION_KEY`** (finding A).
+- **The prod stack runs in WSL2 Ubuntu** at `~/agora`, on its own Docker Engine 29.x with gVisor `runsc`. As of 2026-10-01 the checkout is **`claude/handoff-next` at `5af0f43`** (the storage commit, one behind the port commit and all of today's merges). The runner starts with `runtime=runsc`, no dev flag. `.env.prod` there has `DOCKER_GID=986`, still has `MINIO_ROOT_*`, and has no `IP_ENCRYPTION_KEY`, so it stores IPs under the default key until `chore/remove-ip-tracking` is deployed there.
   - Run commands in the distro via `wsl.exe -d Ubuntu -- bash -s <<'EOF' … EOF` (stdin scripts; PowerShell 5.1 and inline `bash -lc` mangle quotes).
   - Run long `compose up --build` as a background task, or it dies when the `wsl.exe` session closes.
   - **The distro stops about a minute after its last `wsl.exe` session closes**, taking the stack down (happened 2026-09-30 when a shared terminal was closed). A logon scheduled task, **"WSL Ubuntu keep-alive (Agora stack)"** (`conhost --headless wsl.exe -d Ubuntu --exec sleep infinity`), now holds it open. Docker is systemd-enabled and services are `restart: unless-stopped`, so the stack comes back on its own. If `localhost:3000` is dead, check `wsl -l -v` and that task first. Setup: `docs/getting-started.md` step 7.
@@ -128,7 +141,7 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
   - Volumes: `agora_files-data` (uploads, in use), `agora_minio-data` (old, safe to remove once files open), `agora_pgdata`, `agora_redisdata`, `agora_caddy_data`.
 - **Docker Desktop (Windows)** still has the **stopped** old prod stack (compose project `agora`, disposable test data; fallback only) and the test infra. **Never** `docker compose up` the dev file there without `-p agora-test`. A standalone `agora-minio` container is also running there; nothing on this branch uses it.
 - Test infra: `docker compose -p agora-test -f docker-compose.yml up -d postgres redis`, plus `--profile sandbox up -d socket-proxy` for runtime work. No storage service: tests write blobs to a temp directory.
-- Use an **isolated test DB** so parallel agent sessions don't truncate each other: DB `accord_test_threads`, Redis DB 1. Env via the scratchpad `testenv.sh`, or set `DATABASE_URL` / `TEST_DATABASE_URL` (both!) and `REDIS_URL=redis://localhost:6379/1`.
+- Use an **isolated test DB** so parallel agent sessions don't truncate each other: DB `accord_test_threads`, Redis DB 1. A branch with a **new migration** needs its own database (`chore/remove-ip-tracking` used `accord_test_noip`): migrations are not reversible, so running it against a shared test DB breaks every other branch's tests there. Env via the scratchpad `testenv.sh`, or set `DATABASE_URL` / `TEST_DATABASE_URL` (both!) and `REDIS_URL=redis://localhost:6379/1`.
 - Exclude agent worktrees from vitest: the default config excludes `.claude/**` and `test/sandbox/**`. Docker suite: `npm run test:sandbox` (Docker Desktop, runc, needs `agora_sandbox` network + `agora/sandbox-deno:dev` image).
 - **agora-mcp:** the global `agora-mcp` is **0.4.0 linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`), since npm only has 0.1.2, which lacks `runtime_exec` and the long `chat_wait`. Rebuilding that folder changes the installed MCP, but running agents keep the old code until their MCP server restarts (check process start times against `agora-mcp/dist` if unsure).
 - **Agents on Agora:** Claude Code (project entry in `~/.claude.json`) and **Sol** (Codex, project `.codex/config.toml`, gitignored, with `tool_timeout_sec = 3600`). Gemini CLI and OpenCode have no Agora server configured today. Codex also keeps a worktree at `~/.codex/worktrees/4acd/agora` (clean, detached at the old `main`).

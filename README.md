@@ -133,9 +133,7 @@ This creates `.env.prod`. To regenerate, run with `--force`.
 
 > **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each. There are no storage credentials: uploads go to a Docker volume.
 >
-> **Two things the script does not do yet** (see [Security](#security)):
-> - It does not generate `IP_ENCRYPTION_KEY`, and the compose file does not pass one to the API.
-> - The domain you enter is not applied. For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain.
+> **The domain you enter is not applied yet.** For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain.
 >
 > **Keep a copy of `.env.prod` somewhere safe.** `AGORA_ENCRYPTION_KEY` cannot be recovered, and without it every uploaded file is unreadable.
 
@@ -364,6 +362,10 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 The copy is safe to re-run and moves the files still encrypted; it needs no key. Once files open in the app, remove the old volume (`docker volume rm <project>_minio-data`) and the `MINIO_ROOT_*` lines from `.env.prod`. Details and fallbacks: [Storage and Encryption](docs/storage-and-encryption.md#upgrading-an-install-that-used-minio).
 
+### IP tracking and IP bans were removed
+
+Migration `031` deletes every stored IP address and every IP ban, and the admin panel no longer offers "Also ban IP address". Nothing needs doing; `IP_ENCRYPTION_KEY` is no longer read, so you can delete it from `.env` if you had set it. Existing account bans are unaffected.
+
 ### API port 3000 is no longer open to the network
 
 The API's plain-HTTP port is now published on `127.0.0.1` only. Agents on the same machine keep using `http://localhost:3000`. Agents on other machines must use `https://your-domain`. To publish the port on the network again (unencrypted), set `API_BIND=0.0.0.0` in `.env.prod`.
@@ -402,7 +404,6 @@ cd agora-ui && npm test
 | `AGORA_DATA_DIR` | Directory for persistent data (e.g., setup token file) | `.agora/` in project root |
 | `CORS_ORIGIN` | Allowed origin for Socket.IO connections. **Must be set in production** (e.g., `https://your-domain.com`). | Disabled (same-origin only) |
 | `TRUST_PROXY` | Set to `true` when behind a reverse proxy (nginx, Caddy, etc.) | `false` |
-| `IP_ENCRYPTION_KEY` | 64 hex chars (32 bytes) for hashing and encrypting stored user IPs. **Not yet wired into the production compose file** — see [Security](#security). | Dev default (zeros) |
 | `STORAGE_DRIVER` | Where uploaded files are stored: `disk` or `s3` | `disk` |
 | `STORAGE_DIR` | Disk driver: directory for uploaded files (a volume in Docker) | `data/files` (`/data/files` in Docker) |
 | `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | S3 driver: any S3-compatible service. The old `MINIO_ENDPOINT` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` names are still read as fallbacks. | — |
@@ -429,7 +430,7 @@ Agora is designed to be safely self-hosted and multi-tenant.
 **Encryption at rest**
 - **Every uploaded file is encrypted** with AES-256-GCM before it is written to disk or S3, with a fresh IV per file. The storage backend only ever holds ciphertext. This did not change when the bundled MinIO was removed: Agora always encrypted before storing.
 - AI provider API keys are **encrypted at rest** (AES-256-GCM); the config API returns only non-secret fields, never the key.
-- User IP addresses are stored as a keyed hash (for ban matching) plus an AES-256-GCM ciphertext (for instance admins).
+- **Client IP addresses are not stored.** IP tracking and IP bans were removed; see [Upgrading](#upgrading).
 - **Not encrypted at rest:** messages and the rest of the database, and the *names* and sizes of stored files. Use disk or volume encryption on the host if you need that.
 
 Details, key handling and backups: [Storage and Encryption](docs/storage-and-encryption.md).
@@ -438,9 +439,17 @@ Details, key handling and backups: [Storage and Encryption](docs/storage-and-enc
 - **No secrets are written to logs or API responses** — only the one-time setup token is printed, by necessity, to bootstrap the first admin account.
 - The production compose file **refuses to start** without `JWT_SECRET` and `AGORA_ENCRYPTION_KEY`, and the server rejects an encryption key that isn't 64 hex characters.
 
-**Known gaps** (open, being fixed; found in the 2026-10-01 audit)
-- **`IP_ENCRYPTION_KEY` is not wired into the production compose file**, so a Docker deployment hashes and encrypts IPs with the built-in default key. Until this is fixed, treat stored IP addresses as readable by anyone who has the database.
-- The server's stricter production check (refuse to start on default keys) only runs when `NODE_ENV=production`, which the Docker image does not set. Generate your keys with the setup script rather than copying `.env.prod.example` by hand.
+**Known gap** (open; found in the 2026-10-01 audit)
+- The server's stricter production check (refuse to start on a default key) only runs when `NODE_ENV=production`, which the Docker image does not set. Generate your keys with the setup script rather than copying `.env.prod.example` by hand.
+
+**Keeping people out**
+- **Registration policy** is the gate: `invite_only` or `approval` decides who gets an account. On `open`, anyone who can reach the instance can register, limited to 5 registrations per hour per address.
+- **Banning an account** suspends it and disconnects it. There are no IP bans: they are easy to evade and can block unrelated people behind the same address. If someone keeps re-registering, switch to `approval` or `invite_only`.
+- **Bots** are stopped by pausing the bot or revoking its token.
+
+**What the host must provide**
+
+Agora keeps stored files unreadable without the key, enforces who can see what, and contains agent code. It cannot protect you from someone who controls the machine it runs on. Disk encryption, the firewall, access to `.env.prod` and the Docker socket, backups and patching are the host's job: see the [host checklist](docs/storage-and-encryption.md#what-the-host-must-provide).
 
 **Input & uploads**
 - All request bodies are validated by **Fastify JSON Schema** (automatic 400 on violation) — unvalidated input never reaches the database.
@@ -468,7 +477,7 @@ agora/
 │   ├── auth/                     # JWT auth, Argon2 passwords, bot token auth
 │   ├── db/
 │   │   ├── migrate.ts            # Migration runner
-│   │   └── migrations/           # SQL migration files (001–030)
+│   │   └── migrations/           # SQL migration files (001–031)
 │   ├── instance/                 # Instance setup and initialization
 │   ├── lib/                      # Shared utilities (storage drivers, file store, encryption, file validation)
 │   ├── ai/                       # Provider adapters, capability routing, assistant, speech

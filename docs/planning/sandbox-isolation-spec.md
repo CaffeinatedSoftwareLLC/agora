@@ -49,7 +49,7 @@ It must do this without being able to hurt the host, the Agora instance, other t
 **Assets to protect**, most critical first:
 1. The host, and everything the Docker daemon controls (root equivalent).
 2. Postgres data: messages, users, provider keys (encrypted), password hashes.
-3. Secrets: `AGORA_ENCRYPTION_KEY`, `IP_ENCRYPTION_KEY`, `JWT_SECRET`, `DB_PASSWORD`, provider API keys, and S3 credentials when `STORAGE_DRIVER=s3`. *(amended #32: MinIO root credentials no longer exist)*
+3. Secrets: `AGORA_ENCRYPTION_KEY`, `JWT_SECRET`, `DB_PASSWORD`, provider API keys, and S3 credentials when `STORAGE_DRIVER=s3`. *(amended #32: MinIO root credentials no longer exist)*
 4. Stored files: the `files-data` volume or an S3 bucket. Contents are always AES-256-GCM ciphertext; file names and sizes are visible in the paths. See `docs/storage-and-encryption.md`. *(amended #32)*
 5. Other runs' inputs, outputs and tokens.
 6. Money: provider spend through capabilities.
