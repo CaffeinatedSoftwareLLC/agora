@@ -39,10 +39,11 @@ Every HTTP request gets its own DB client and transaction. This is the backbone 
 1. `onRequest` → acquire client from pool, `BEGIN`
 2. `preHandler` → check instance initialized, authenticate JWT, set RLS context (`SET LOCAL ROLE app_user` + `set_config('app.current_user_id', ...)`)
 3. Route handler → use `(request as any).dbClient` for all queries
-4. `onResponse` → `COMMIT`, then emit pending Socket.IO events, then release client
-5. `onError` → `ROLLBACK`, release client
+4. `onSend` → `COMMIT` and release the client, **before the reply is sent**; a failed COMMIT turns the reply into `500 commit_failed`
+5. `onResponse` → emit pending Socket.IO events (only if the commit succeeded)
+6. `onError` → `ROLLBACK`, release client
 
-Socket.IO events are queued during the request (`(request as any).pendingEvents`) and only emitted after COMMIT succeeds. This guarantees clients never receive events for uncommitted data.
+Socket.IO events are queued during the request (`(request as any).pendingEvents`) and only emitted after COMMIT succeeds. This guarantees clients never receive events for uncommitted data. Because the commit happens before the reply, a test or client can read its own write straight after a response; do not add polling for that.
 
 ### Row Level Security (RLS)
 

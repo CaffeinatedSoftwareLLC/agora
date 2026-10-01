@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { Pool } from 'pg';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
@@ -142,100 +142,137 @@ export async function buildApp(opts?: {
         }
     });
 
-    // Commit + release on success, then flush pending socket events
-    app.addHook('onResponse', async (request) => {
+    /**
+     * Commit the request's transaction and give the client back to the pool.
+     * Returns false (after rolling back) if the COMMIT fails, e.g. a deferred
+     * constraint that is only checked at commit.
+     */
+    async function commitRequest(request: FastifyRequest): Promise<boolean> {
         const client = request.dbClient;
-        if (client) {
-            request.dbClient = null;
-            try {
-                await client.query('COMMIT');
+        if (!client) return request.txCommitted === true;
+        request.dbClient = null;
+        try {
+            await client.query('COMMIT');
+            request.txCommitted = true;
+        } catch (err) {
+            request.txCommitted = false;
+            request.log.error({ err }, 'COMMIT failed; request rolled back');
+            await client.query('ROLLBACK').catch(() => {});
+        }
+        client.release();
+        return request.txCommitted;
+    }
 
-                // Emit socket events only after successful commit
-                const pendingEvents = request.pendingEvents;
-                const io = app.io;
-                if (io && pendingEvents) {
-                    for (const evt of pendingEvents) {
-                        // For ServerJoin, join user's sockets to new channel rooms BEFORE emitting
-                        // so they don't miss early channel events
-                        if (evt.event === 'ServerJoin' && evt.data?.channels) {
-                            try {
-                                const sockets = await io.in(evt.room).fetchSockets();
-                                for (const s of sockets) {
-                                    for (const ch of evt.data.channels) {
-                                        s.join(`channel:${ch.id}`);
-                                    }
-                                }
-                            } catch { /* best-effort room join */ }
-                        }
+    // Commit BEFORE the reply goes out, so a client that acts on the response at once
+    // (uses a token it was just issued, reads back what it just wrote) finds the data.
+    // A failed commit turns the reply into a 500 instead of a success that never happened.
+    app.addHook('onSend', async (request, reply, payload) => {
+        if (!request.dbClient) return payload;
+        if (await commitRequest(request)) return payload;
 
-                        // For _leaveRoom, eject sockets from a channel room (e.g. bot access revoked)
-                        if (evt.event === '_leaveRoom' && evt.data?.channelId) {
-                            try {
-                                const sockets = await io.in(evt.room).fetchSockets();
-                                for (const s of sockets) {
-                                    s.leave(`channel:${evt.data.channelId}`);
-                                }
-                            } catch { /* best-effort room leave */ }
-                            continue; // internal event, don't emit to clients
-                        }
+        request.pendingEvents = [];
+        request.pendingDisconnects = [];
+        request.idempotencyResponseBody = undefined;
+        reply.code(500);
+        reply.removeHeader('content-length');
+        reply.header('content-type', 'application/json; charset=utf-8');
+        return JSON.stringify({ error: 'commit_failed' });
+    });
 
-                        io.to(evt.room).emit(evt.event, evt.data);
-
-                        // Dispatch built-in assistant mentions via internal bus
-                        if (evt.event === 'MessageMention') {
-                            const botId = evt.room.replace('user:', '');
-                            internalBus.emit('assistantMention', {
-                                channelId: evt.data.channelId,
-                                messageId: evt.data.messageId,
-                                ...(evt.data.threadId ? { threadId: evt.data.threadId } : {}),
-                                content: evt.data.content,
-                                author: evt.data.author,
-                                botId,
-                                timestamp: evt.data.timestamp,
-                            });
-                        }
-                    }
-                }
-
-                // Force-disconnect suspended users only after successful commit
-                // (best-effort — WS failures must not affect the committed suspension)
-                const pendingDisconnects = request.pendingDisconnects;
-                if (io && pendingDisconnects) {
-                    for (const targetId of pendingDisconnects) {
-                        try {
-                            const sockets = await io.fetchSockets();
-                            for (const s of sockets) {
-                                if ((s as any).userId === targetId) {
-                                    s.emit('error', { code: 'account_suspended' });
-                                    s.disconnect(true);
-                                }
-                            }
-                        } catch { /* WS disconnect is best-effort */ }
-                    }
-                }
-
-                // Idempotency: replace in-flight marker with terminal response,
-                // or delete it if the request didn't produce a cacheable body.
-                const idempotencyKey = request.idempotencyKey;
-                if (idempotencyKey) {
-                    try {
-                        if (request.idempotencyResponseBody) {
-                            await getRedis().set(
-                                idempotencyKey,
-                                JSON.stringify({ status: 201, body: request.idempotencyResponseBody }),
-                                'EX', 300  // 5 min TTL
-                            );
-                        } else {
-                            // Non-201 or missing body — clear the in-flight lock
-                            // so the client can retry with the same key.
-                            await getRedis().del(idempotencyKey);
-                        }
-                    } catch { /* Redis failure is non-fatal */ }
-                }
-            } catch {
-                await client.query('ROLLBACK').catch(() => {});
+    // After the reply: flush pending socket events and finish idempotency bookkeeping.
+    // Nothing here runs unless the transaction committed.
+    app.addHook('onResponse', async (request) => {
+        // A reply that bypassed onSend still has its client: commit it here
+        const committed = await commitRequest(request);
+        const idempotencyKey = request.idempotencyKey;
+        if (!committed) {
+            if (idempotencyKey && request.txCommitted === false) {
+                // Clear the in-flight marker so the client can retry
+                try { await getRedis().del(idempotencyKey); } catch { /* non-fatal */ }
             }
-            client.release();
+            return;
+        }
+
+        // Emit socket events only after successful commit
+        const pendingEvents = request.pendingEvents;
+        const io = app.io;
+        if (io && pendingEvents) {
+            for (const evt of pendingEvents) {
+                // For ServerJoin, join user's sockets to new channel rooms BEFORE emitting
+                // so they don't miss early channel events
+                if (evt.event === 'ServerJoin' && evt.data?.channels) {
+                    try {
+                        const sockets = await io.in(evt.room).fetchSockets();
+                        for (const s of sockets) {
+                            for (const ch of evt.data.channels) {
+                                s.join(`channel:${ch.id}`);
+                            }
+                        }
+                    } catch { /* best-effort room join */ }
+                }
+
+                // For _leaveRoom, eject sockets from a channel room (e.g. bot access revoked)
+                if (evt.event === '_leaveRoom' && evt.data?.channelId) {
+                    try {
+                        const sockets = await io.in(evt.room).fetchSockets();
+                        for (const s of sockets) {
+                            s.leave(`channel:${evt.data.channelId}`);
+                        }
+                    } catch { /* best-effort room leave */ }
+                    continue; // internal event, don't emit to clients
+                }
+
+                io.to(evt.room).emit(evt.event, evt.data);
+
+                // Dispatch built-in assistant mentions via internal bus
+                if (evt.event === 'MessageMention') {
+                    const botId = evt.room.replace('user:', '');
+                    internalBus.emit('assistantMention', {
+                        channelId: evt.data.channelId,
+                        messageId: evt.data.messageId,
+                        ...(evt.data.threadId ? { threadId: evt.data.threadId } : {}),
+                        content: evt.data.content,
+                        author: evt.data.author,
+                        botId,
+                        timestamp: evt.data.timestamp,
+                    });
+                }
+            }
+        }
+
+        // Force-disconnect suspended users only after successful commit
+        // (best-effort — WS failures must not affect the committed suspension)
+        const pendingDisconnects = request.pendingDisconnects;
+        if (io && pendingDisconnects) {
+            for (const targetId of pendingDisconnects) {
+                try {
+                    const sockets = await io.fetchSockets();
+                    for (const s of sockets) {
+                        if ((s as any).userId === targetId) {
+                            s.emit('error', { code: 'account_suspended' });
+                            s.disconnect(true);
+                        }
+                    }
+                } catch { /* WS disconnect is best-effort */ }
+            }
+        }
+
+        // Idempotency: replace in-flight marker with terminal response,
+        // or delete it if the request didn't produce a cacheable body.
+        if (idempotencyKey) {
+            try {
+                if (request.idempotencyResponseBody) {
+                    await getRedis().set(
+                        idempotencyKey,
+                        JSON.stringify({ status: 201, body: request.idempotencyResponseBody }),
+                        'EX', 300  // 5 min TTL
+                    );
+                } else {
+                    // Non-201 or missing body — clear the in-flight lock
+                    // so the client can retry with the same key.
+                    await getRedis().del(idempotencyKey);
+                }
+            } catch { /* Redis failure is non-fatal */ }
         }
     });
 

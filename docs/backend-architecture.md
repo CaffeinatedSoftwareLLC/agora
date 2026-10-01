@@ -65,14 +65,19 @@ This is the most important pattern in the codebase. Every HTTP request gets its 
   yes        no
   |           |
   v           v
-+----------+ +-----------+
-| onResponse| | onError   |
++-----------+ +-----------+
+| onSend    | | onError   |
 | COMMIT    | | ROLLBACK  |
-| emit WS   | | release   |
-| events    | | client    |
-| release   | +-----------+
-| client    |
-+----------+
+| release   | | release   |
+| client    | | client    |
++-----------+ +-----------+
+  |
+  v  reply is sent
++-----------+
+| onResponse|
+| emit WS   |
+| events    |
++-----------+
 ```
 
 ### Key details
@@ -91,13 +96,17 @@ This is the most important pattern in the codebase. Every HTTP request gets its 
   });
   ```
 
-- **Post-commit emission**: The `onResponse` hook first `COMMIT`s, then iterates through `pendingEvents` and emits each one via Socket.IO. This guarantees clients never receive events for data that hasn't been committed.
+- **Commit before the reply**: The `onSend` hook `COMMIT`s and releases the client *before* the response goes out. A client that acts on a response at once (uses a token it was just issued, reads back what it wrote) therefore always finds the data. Until 0.2.0 the commit happened in `onResponse`, after the reply, and such a client could arrive first; that race was the cause of the flaky integration tests.
+
+- **A failed COMMIT is a 500**: if the commit throws (for example a deferred foreign key, which Postgres only checks at commit), the transaction is rolled back, the reply becomes `500 { "error": "commit_failed" }`, and no events are emitted. `request.txCommitted` records the outcome.
+
+- **Post-commit emission**: The `onResponse` hook runs after the reply. It emits each entry of `pendingEvents` via Socket.IO, and only if the transaction committed, so clients never receive events for data that isn't saved. If a reply ever bypasses `onSend`, `onResponse` commits as a fallback.
 
 - **ServerJoin room-join-before-emit**: When emitting a `ServerJoin` event, the `onResponse` hook first joins the user's sockets into the new channel rooms *before* emitting the event, preventing a race where the user could miss early channel events.
 
 - **Pending disconnects**: Admin suspension routes stash user IDs in `(request as any).pendingDisconnects`. After commit, these users are force-disconnected from WebSocket with an `account_suspended` error.
 
-- **Error path**: `onError` runs `ROLLBACK` and releases the client. No events are emitted.
+- **Error path**: `onError` runs `ROLLBACK` and releases the client. No events are emitted. A handler that *returns* an error reply (for example `reply.status(403).send(...)`) is not an error in this sense: its transaction is committed like any other.
 
 ---
 

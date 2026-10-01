@@ -223,7 +223,7 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.send({ users, total: countRes.rows[0].count, page, limit });
     });
 
-    // POST /admin/users/:id/ban (and backwards-compat /suspend alias)
+    // POST /admin/users/:id/ban
     const banHandler = async (request: any, reply: any) => {
         const db = request.dbClient!;
         const userId = request.userId;
@@ -277,11 +277,6 @@ export async function adminRoutes(app: FastifyInstance) {
     };
 
     app.post('/admin/users/:id/ban', {
-        preHandler: [requireInstanceAdmin],
-    }, banHandler);
-
-    // Backwards-compat alias — TODO: remove /suspend alias after v0.1.0 release
-    app.post('/admin/users/:id/suspend', {
         preHandler: [requireInstanceAdmin],
     }, banHandler);
 
