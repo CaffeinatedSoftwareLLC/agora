@@ -103,10 +103,10 @@ Backend already supports threads (`POST/GET /channels/:id/messages/:msgId/replie
 - `POST /runtime/runs`, `GET /runtime/runs/:id` + MCP `runtime_exec` — new `/runtime` prefix ⇒ update `agora-ui/nginx.conf` **and** `docker-compose.prod.yml` (runner service, network)
 - **Exec gate** via `Decider` before enqueue; `needs_approval` posts an Approve/Deny control into the originating thread; comments stripped before any model-based classification; code over the classifier's token limit ⇒ `needs_approval`; an `auto_run` verdict never relaxes sandbox limits
 - `exec_runs` audit table (who, code hash, gate decision + source, limits, exit, artifacts, duration)
-- Std-lib `agora:std` starting with `postFile()`; artifacts → `file-validation` → MinIO → posted into the thread (admin file limits apply)
+- Std-lib `agora:std` starting with `postFile()`; artifacts → `file-validation` → encrypted → file store (a volume or S3; MinIO until #32) → posted into the thread (admin file limits apply)
 - Capability endpoint + per-run tokens + per-run call caps + cost ledger
 - Tripwire: egress-denied / repeated failures ⇒ auto-pause bot (Phase 0.4)
-- **Negative security suite** (reach DB/Redis/MinIO, read other scratch, read env, fork bomb, infinite loop) — all must fail
+- **Negative security suite** (reach DB/Redis/API or the file volume, read other scratch, read env, fork bomb, infinite loop) — all must fail
 
 ## Phase 3 — First value (M each)
 - **Visual test report (MVP):** results payload → routed `image`/`chat` capability → chart + HTML card → posted to thread.

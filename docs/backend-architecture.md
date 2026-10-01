@@ -18,6 +18,7 @@ Agora's backend is built on **Fastify 5**, **PostgreSQL 16**, **Socket.IO 4**, a
 - [Input Validation](#input-validation)
 - [Bot Infrastructure](#bot-infrastructure)
 - [Threads](#threads)
+- [File Storage and Encryption](#file-storage-and-encryption)
 
 ---
 
@@ -490,7 +491,7 @@ Messages gain three thread-related columns:
 - **channel_member_overrides**: Per-channel permission overrides for individual users
 - **message_mentions**: Direct @user mentions (PK: message_id, user_id)
 - **message_attachments**: File attachments on messages (denormalized channel_id for "all images in channel" queries)
-- **files**: File registry (bucket + path, no presigned URLs stored)
+- **files**: File registry: storage key, MIME type, size, per-file encryption IV and auth tag, soft-delete and expiry timestamps. `bucket` is a legacy column (always `agora-files`)
 - **server_invites**: Invite codes with use counting and expiry
 - **server_bans**: Ban records with reason and actor
 - **relationships**: Friend/block/request status between users (pre-pivot, unused)
@@ -825,3 +826,50 @@ Threads use a flat reply model (Discord-style): replies are regular message rows
 ### Exclusion from main feed
 
 Replies (`thread_id IS NOT NULL`) are excluded from `GET /channels/:id/messages` — they only appear via the thread-specific endpoints. Parent messages include thread metadata (`replyCount`, `lastReplyAt`, `threadClosedAt`) in the message response.
+
+---
+
+## File Storage and Encryption
+
+Operator-facing detail (keys, backups, upgrading from MinIO, known gaps) is in [Storage and Encryption](storage-and-encryption.md). This section covers the code.
+
+### Pipeline
+
+Every stored file goes through `storeFile()` in `src/lib/file-store.ts`. It has three callers: `POST /files/upload` (`src/routes/files.ts`), the capability gateway (`src/gateway/cap-gateway.ts`: `postFile()`, test reports, generated video) and the assistant's audio overview (`src/ai/assistant-handler.ts`). Callers authorize first; `storeFile()` then does, in order:
+
+1. Size check against `files.max_size_bytes`.
+2. Extension allowlist and magic-byte validation (`src/lib/file-validation.ts`). A mismatch is a `415`.
+3. EXIF strip for images (re-encode with `sharp`), unless `files.exif_strip` is off. Animated GIFs are kept as-is.
+4. **Encryption:** AES-256-GCM with `AGORA_ENCRYPTION_KEY` and a fresh 96-bit IV (`src/lib/encryption.ts`). Unconditional.
+5. Quota check and `files` row insert in their own transaction, serialized instance-wide with `pg_advisory_xact_lock(hashtext('storage_quota'))`. The row stores the IV and auth tag.
+6. `storage.put(key, ciphertext)`. If it fails, the row is deleted again and the caller gets a `502`.
+
+The storage key is `<channelId>/<fileId>/<sanitized filename>`.
+
+**The storage driver never sees plaintext.** New code must not call `storage.put` directly; go through `storeFile()`.
+
+### Storage drivers
+
+`src/lib/storage.ts` exports an `ObjectStore` (`init`, `put`, `get`, `remove`) chosen by `STORAGE_DRIVER`:
+
+- `diskStore(root)` (default): files under `STORAGE_DIR`. Writes go to a temporary name and are renamed. A key with an empty, `.`, or `..` segment, a backslash or a NUL byte throws. `remove` also deletes the emptied parent directories.
+- `s3Store(opts)`: any S3-compatible service, through the `minio` npm client (path-style requests). The bucket is created on `init()` if missing.
+
+`get` returns `null` for a missing blob on both drivers.
+
+In Docker, `api` and `cap-gateway` mount the same `files-data` volume at `/data/files`. Both processes call `storage.init()` at startup.
+
+### Downloads and deletes
+
+- `GET /files/:fileId` checks `ViewChannel` on the file's channel, reads the blob, decrypts it in process and sends it. Inline-safe MIME types (`INLINE_SAFE_MIMES`) are served `inline`, everything else as an `attachment`, always with `X-Content-Type-Options: nosniff`. A missing blob returns `404` and leaves the row alone.
+- `DELETE /files/:fileId` (the uploader, or a member with `ManageMessages`) soft-deletes the row and removes the blob, best effort.
+- `src/workers/file-cleanup.ts` (BullMQ, hourly, one scheduler per instance through a Redis lock) removes blobs for expired files (`expires_at`) and for uploads never attached to a message after one hour, then hard-deletes rows soft-deleted more than 24 hours ago.
+
+### Other encrypted columns
+
+| Data | Code | Key |
+|---|---|---|
+| AI provider API keys (`ai_providers.api_key_enc` / `_iv` / `_tag`) | `encryptString` / `decryptString` in `src/lib/encryption.ts` | `AGORA_ENCRYPTION_KEY` |
+| IPs (`users.last_ip_hmac`, `users.last_ip_encrypted`, `ip_bans`) | `hmacIp` / `encryptIp` / `decryptIp` in `src/auth/crypto.ts` | `IP_ENCRYPTION_KEY` |
+
+Key validation lives in `src/config.ts`: both keys must be 64 hex characters when set. The stricter checks (refuse a missing or default key) only run when `NODE_ENV=production`, which the Docker image does not set today; see the known gaps in [Storage and Encryption](storage-and-encryption.md#known-gaps).

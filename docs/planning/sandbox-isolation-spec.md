@@ -2,6 +2,7 @@
 
 > **WBS 3.1**: sign-off gate for the sandboxed runtime (3.2–3.9). **Status: APPROVED 2026-09-29** (answers recorded in §0 and §18).
 > **Date:** 2026-09-29 · Builds on `ai-runtime-execution-plan.md` and the provider registry (Phase 1).
+> **Amended 2026-10-01 (#32):** the bundled MinIO service was replaced by a `files-data` volume mounted in `api` and `cap-gateway`. References to MinIO below were updated; each change is marked *(amended #32)*. No decision in §0 changes: sandboxes still hold no secrets and no mounts, and artifacts still leave only through the gateway.
 
 ## 0. Decisions to sign off
 
@@ -48,8 +49,8 @@ It must do this without being able to hurt the host, the Agora instance, other t
 **Assets to protect**, most critical first:
 1. The host, and everything the Docker daemon controls (root equivalent).
 2. Postgres data: messages, users, provider keys (encrypted), password hashes.
-3. Secrets: `AGORA_ENCRYPTION_KEY`, `JWT_SECRET`, `DB_PASSWORD`, MinIO root credentials, provider API keys.
-4. MinIO objects (files, possibly encrypted at rest).
+3. Secrets: `AGORA_ENCRYPTION_KEY`, `IP_ENCRYPTION_KEY`, `JWT_SECRET`, `DB_PASSWORD`, provider API keys, and S3 credentials when `STORAGE_DRIVER=s3`. *(amended #32: MinIO root credentials no longer exist)*
+4. Stored files: the `files-data` volume or an S3 bucket. Contents are always AES-256-GCM ciphertext; file names and sizes are visible in the paths. See `docs/storage-and-encryption.md`. *(amended #32)*
 5. Other runs' inputs, outputs and tokens.
 6. Money: provider spend through capabilities.
 7. Availability of the instance: CPU, memory, disk, queue.
@@ -60,8 +61,8 @@ It must do this without being able to hurt the host, the Agora instance, other t
 |---|---|---|
 | Host / Docker daemon | Full | everything |
 | `runner` | High (root-equivalent via socket) | job scheduling, container lifecycle. **Never parses or executes run code.** |
-| `api`, `postgres`, `redis`, `minio` | High | Agora core |
-| `cap-gateway` | Medium: the only bridge between sandbox and core | run-token auth, capability dispatch, artifact intake |
+| `api`, `postgres`, `redis`, the `files-data` volume | High | Agora core *(amended #32)* |
+| `cap-gateway` | Medium: the only bridge between sandbox and core | run-token auth, capability dispatch, artifact intake. Mounts `files-data` read-write and holds `AGORA_ENCRYPTION_KEY` (before #32 it held the MinIO root credentials instead: the same reach) |
 | Sandbox container | **Untrusted** | agent-authored code |
 
 ```
@@ -69,7 +70,7 @@ It must do this without being able to hurt the host, the Agora instance, other t
                                ▲
                                │ egress (provider calls only, SSRF-guarded)
 ┌──────────── agora_core (internal) ──────────────┐      ┌── agora_sandbox (internal: true, no egress) ──┐
-│  api ── postgres ── redis ── minio              │      │                                                │
+│  api ── postgres ── redis    [files-data vol]   │      │                                                │
 │   │                    ▲                        │      │   run-01…  run-02…  (runsc, one per run)       │
 │   │ enqueue            │ jobs/status            │      │        │ only allowed destination              │
 │   ▼                    │                        │      │        ▼                                       │
@@ -161,10 +162,10 @@ Notes:
 
 ## 6. Network design
 
-- **`agora_core`** is the existing internal network (api, postgres, redis, minio, runner, cap-gateway). Unchanged.
+- **`agora_core`** is the existing internal network (api, postgres, redis, runner, cap-gateway). Unchanged. *(amended #32: no `minio` member)*
 - **`agora_sandbox`** is new: `driver: bridge`, `internal: true`. Members are **cap-gateway plus sandbox containers only**.
   - `internal: true` means Docker creates no route to the outside world.
-  - Docker's embedded DNS on this network only resolves members, so `postgres`, `minio` and `api` don't resolve.
+  - Docker's embedded DNS on this network only resolves members, so `postgres`, `redis` and `api` don't resolve.
   - **Under gVisor there is no DNS at all** (found and verified 2026-09-30). Docker serves `127.0.0.11` through NAT rules inside the container's network namespace, and gVisor's netstack doesn't apply them ([google/gvisor#7469](https://github.com/google/gvisor/issues/7469), open since 2022). So `cap-gateway` doesn't resolve either. The fix follows gVisor's own FAQ advice to use IPs instead of container names:
     - before each run, the runner reads the gateway's IP from `GET /networks/agora_sandbox`, an endpoint the socket proxy already allows (matching the container name, default the `AGORA_CAP_URL` hostname, override with `AGORA_CAP_CONTAINER`);
     - it pins `cap-gateway:<ip>` in the run's `/etc/hosts` (`HostConfig.ExtraHosts`, IPv4-validated);
@@ -306,8 +307,8 @@ interface Decider {
 - `postFile(name, bytes, { mime? })` in `agora:std` → `POST cap-gateway/v1/files` with the run token. The gateway:
   - applies the instance file limits (size, extension allowlist),
   - checks magic bytes with `src/lib/file-validation.ts`,
-  - encrypts at rest if configured,
-  - stores the file in MinIO and attaches it to a system message in the run's thread.
+  - encrypts it (AES-256-GCM, always),
+  - writes the ciphertext to the file store (`src/lib/storage.ts`: the `files-data` volume, or S3) and attaches it to a system message in the run's thread. *(amended #32)*
 - **HTML artifacts are never rendered inline** in the Agora UI (stored XSS). They are served as downloads with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`, and opened in a sandboxed viewer if we add one later. Images use the existing preview path.
 - **The run summary** (status, duration, capability calls, cost, truncated stdout/stderr) is posted to the thread when the run finishes.
 
@@ -340,7 +341,7 @@ Posted messages reach clients through a Redis pub/sub **event bridge**. The API 
 | # | Threat | Vector | Mitigations (layers) | Residual risk | Test (3.9) |
 |---|---|---|---|---|---|
 | T1 | **Container escape** | kernel exploit, runtime bug | L1 gVisor, L2 hardening, non-root, no caps | gVisor 0-day plus sandbox break; accepted, mitigated by patching `runsc` | escape probes: `/proc/self`, mount, `ptrace`, raw sockets all fail |
-| T2 | **Lateral movement** to postgres/redis/minio/api | direct connection, DNS | L3 separate internal network, L6 Deno net allowlist | none known | connecting to `postgres:5432`, `redis:6379`, `minio:9000`, `api:3000` and the host gateway IP fails; DNS doesn't resolve them |
+| T2 | **Lateral movement** to postgres/redis/api or the file volume | direct connection, DNS, mounts | L3 separate internal network, L6 Deno net allowlist, no mounts (the socket proxy rejects bind mounts and the container spec declares no volumes) | none known | connecting to `postgres:5432`, `redis:6379`, `api:3000` and the host gateway IP fails; DNS doesn't resolve them; `/data/files` doesn't exist in the sandbox *(amended #32)* |
 | T3 | **Exfiltration** to the internet | fetch, DNS tunneling, remote import URLs, capability abuse | L3 `internal: true` (no route), L6 `--deny-import`, L4 capability inputs logged | an allowed capability as a covert channel (e.g. a search query carrying data): accepted, logged, rate-capped | outbound HTTP/HTTPS/DNS to public IPs fails; `import "https://esm.sh/…"` fails |
 | T4 | **Secret theft** | env, `/proc`, files, gateway responses | L4 env allowlist, no mounts, keys only in the gateway, token redaction | gateway compromise exposes keys (gateway is medium trust, minimal surface) | env contains only the two vars; `/proc/1/environ` shows nothing extra; gateway responses never include keys |
 | T5 | **Cross-run access** | reach another run, reuse its token | unique tokens, gateway run binding, no listeners, gVisor | shared bridge (see §6 hardening option) | run A's token rejected for run B's resources; connecting to another run's IP fails |
@@ -359,7 +360,7 @@ Posted messages reach clients through a Redis pub/sub **event bridge**. The API 
 
 These are automated integration tests against a real `runsc` runner. CI needs a Linux runner with gVisor. Every test asserts the attack fails **and** that the run ends in the expected status.
 
-1. `fetch("http://postgres:5432")`, `redis:6379`, `minio:9000`, `api:3000` → rejected (Deno) and unreachable (network, checked with Deno perms relaxed in a test-only image).
+1. `fetch("http://postgres:5432")`, `redis:6379`, `api:3000` → rejected (Deno) and unreachable (network, checked with Deno perms relaxed in a test-only image). Reading `/data/files` fails: the file volume is not mounted. *(amended #32)*
 2. `fetch("https://example.com")`, raw TCP to `1.1.1.1:53`, and DNS lookup of a public name → fail.
 3. `import("https://esm.sh/lodash")` and a static remote import → fail at load.
 4. `Deno.env.toObject()` → only `AGORA_CAP_URL` and `AGORA_RUN_TOKEN`.

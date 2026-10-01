@@ -15,6 +15,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Channels](#channels)
 - [Messages](#messages)
 - [Threads](#threads)
+- [Files](#files)
 - [Unreads](#unreads)
 - [Users](#users)
 - [Bots](#bots)
@@ -705,6 +706,132 @@ Close or reopen a thread. Requires the message author, ManageMessages permission
 | 404    | `not_a_thread_parent` | Message is not a thread parent       |
 
 **Side effects:** Emits `ThreadMetadataUpdate` with updated `threadClosedAt`.
+
+---
+
+## Files
+
+Files are stored encrypted (AES-256-GCM) and are only ever served through the API after a permission check. There are no public or signed URLs. See [Storage and Encryption](storage-and-encryption.md).
+
+To attach a file to a message, upload it first, then pass its `id` in the `attachments` array of `POST /channels/:id/messages` (up to 10, and only files you uploaded). An upload that is not attached to a message within an hour is deleted.
+
+### POST /files/upload
+
+Upload one file to a channel.
+
+**Auth:** Required. Needs `UploadFiles` and `SendMessages` in the channel.
+
+**Rate limit:** 20 uploads per minute per user.
+
+**Request:** `multipart/form-data` with a `channel_id` field followed by one file part. Send `channel_id` before the file.
+
+```bash
+curl -X POST http://localhost:3000/files/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "channel_id=$CHANNEL_ID" \
+  -F "file=@report.pdf"
+```
+
+**Response** `201`
+```json
+{
+  "id": "01JNXYZ...",
+  "name": "report.pdf",
+  "mime": "application/pdf",
+  "size": 48213,
+  "width": null,
+  "height": null,
+  "url": "/files/01JNXYZ..."
+}
+```
+
+`width` and `height` are set for images. `size` is the stored size after image metadata is stripped.
+
+**Errors**
+
+| Status | Meaning |
+|---|---|
+| `400` | No file, or `channel_id` missing |
+| `403` | Not a server member, or missing permissions |
+| `404` | Channel not found |
+| `413` | Larger than the instance's max file size |
+| `415` | Extension not allowed, or the content doesn't match an allowed type (checked by magic bytes) |
+| `502` | The file could not be written to storage |
+| `507` | Instance storage quota exceeded |
+
+---
+
+### GET /files/:fileId
+
+Download a file. The API decrypts it and sends the original bytes.
+
+**Auth:** Required. Needs `ViewChannel` in the file's channel.
+
+**Response** `200` with the file body and these headers:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | The detected MIME type |
+| `Content-Disposition` | `inline` for images, audio, MP4/WebM video and PDF; `attachment` for everything else |
+| `Cache-Control` | `private, max-age=3600` |
+| `X-Content-Type-Options` | `nosniff` |
+
+**Errors:** `403` no access to the channel · `404` unknown or deleted file, or its stored data is missing.
+
+---
+
+### DELETE /files/:fileId
+
+Delete a file. Allowed for the uploader, or a member with `ManageMessages` in the file's channel.
+
+**Response** `200`
+```json
+{ "deleted": true }
+```
+
+**Errors:** `403` not the uploader and no `ManageMessages` · `404` unknown or already deleted.
+
+---
+
+### GET /admin/settings/files
+
+Current file limits.
+
+**Auth:** Required (instance admin)
+
+**Response** `200`
+```json
+{
+  "files.max_size_bytes": 26214400,
+  "files.allowed_extensions": ["jpg", "jpeg", "png", "gif", "webp", "pdf", "txt", "md", "zip", "mp3", "mp4", "mov", "csv", "json"],
+  "files.retention_days": null,
+  "files.storage_quota_bytes": null,
+  "files.exif_strip": true
+}
+```
+
+---
+
+### PATCH /admin/settings/files
+
+Change file limits. Send only the keys you want to change. The change is recorded in the admin audit log.
+
+**Auth:** Required (instance admin)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `files.max_size_bytes` | number | 1024 to 104857600 (100 MB) |
+| `files.allowed_extensions` | string[] | lowercase letters and digits only |
+| `files.retention_days` | integer or null | 1 to 3650; `null` keeps files forever |
+| `files.storage_quota_bytes` | integer or null | at least 1; `null` means no quota |
+| `files.exif_strip` | boolean | strip metadata from uploaded images |
+
+**Response** `200`
+```json
+{ "success": true }
+```
+
+Retention applies to files stored after the change: each file's expiry is set when it is stored.
 
 ---
 

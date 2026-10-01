@@ -104,8 +104,8 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | ID | Work package | Size | Depends |
 |---|---|---|---|
 | 2.1 | ☑ `Decider` interface + `RulesDecider` done in 3.6 (exec gate); tripwires (3.8) pause the bot, which the decider already denies | S | 0.4 |
-| 2.2 | `WebhookDecider` + contract doc (schema, auth/HMAC, timeout ⇒ rules fallback) | S | 2.1 |
-| 2.3 | `JevDecider` adapter (`typesafe`, `decide` capability) — optional, gated on API access | S | 1.3, 2.1 |
+| 2.2 | ☐ `WebhookDecider` + contract doc (schema, auth/HMAC, timeout ⇒ rules fallback). Not started | S | 2.1 |
+| 2.3 | ☐ `JevDecider` adapter (`typesafe`, `decide` capability). Not started and not set up: `decide` returns 501. **Unblocked** (2026-10-01): Jev can be added any time, but Eryk was never asked for an API key. Start by asking him for the key and adding the `typesafe` provider with him | S | 1.3, 2.1 |
 
 ## 3 · Sandboxed Runtime — `feat/runtime`
 | ID | Work package | Size | Depends |
@@ -118,7 +118,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 3.6 | ☑ `Decider` + `RulesDecider`; approval card in the thread (View code / Approve / Deny, 30-min expiry, audit); result summary card; code retention (30 days, confirm before shortening, pruning sweep). Verified live: bot → approval in UI → sandbox → gateway → local Ollama → file + result in thread | M | 2.1, 3.5, 0.1 |
 | 3.7 | ~~Artifact harvest~~ folded into 3.4: artifacts leave only through the gateway (`postFile`), no container harvest (spec D5) | — | — |
 | 3.8 | ☑ Tripwires ⇒ auto-pause (`src/runtime/tripwires.ts`, spec §12): 3 failed/timed-out runs in 10 min (count resets on resume), a real run token used outside its run, a run hitting its call cap. Pausing posts a notice card in the thread, audits `bot_pause_tripwire`, kills the bot's running containers (runner polls), and denies its queued runs at claim. "Egress denied" dropped: the internal network drops egress, so nothing observes it | S | 0.4, 3.2 |
-| 3.9 | Negative security suite (DB/Redis/MinIO reach, cross-scratch, env read, fork bomb, infinite loop) | M | 3.2–3.4 |
+| 3.9 | ☐ Negative security suite (DB/Redis/API reach, no mount of the `files-data` volume, cross-scratch, env read, fork bomb, infinite loop). MinIO is gone (#32), so its probe is replaced by the volume check. Runs against the WSL2 engine with `SANDBOX_TEST_RUNTIME=runsc` | M | 3.2–3.4 |
 
 ## 4 · First Value — `feat/visual-reports`, `feat/search`
 | ID | Work package | Size | Depends |
@@ -131,6 +131,17 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 5.2 | ☑ `image` capability (Gemini native image via `responseModalities: [TEXT, IMAGE]` + `imageConfig` aspect ratio/size; returns base64 for `postFile`) | S | 3 |
 | 5.3 | ☑ `video` capability: Gemini adapter drives Veo (`predictLongRunning` → poll the operation → download; checked against Google's Veo REST example, 2026-09-17). The API key goes only to Google's API host; the storage redirect is followed without it. The gateway reserves an artifact slot before the (billed) call, stores the MP4, and posts it into the run's thread (`generateVideo()` returns IDs, not bytes). New `video` time profile (8 min default, 10 min ceiling; migration 030). MP4 attachments play inline. All Veo 3.1 models are preview; default `veo-3.1-fast-generate-preview`; no cost accounting yet (Veo bills per second, the ledger is per token) | L | 3 |
 
+## 6 · Platform — storage, hardening, audit fixes — `claude/handoff-next`
+| ID | Work package | Size | Depends |
+|---|---|---|---|
+| 6.1 | ☑ Replace the bundled MinIO with a disk store, S3 optional (#32): `src/lib/storage.ts` (disk driver with atomic writes and root confinement; S3 driver), `files-data` volume shared by `api` and `cap-gateway`, one-time `storage-migrate` tool, a missing blob is a 404 instead of a soft-delete. Works live (2026-10-01). File encryption unchanged: `storeFile()` encrypts before the driver sees the bytes | M | — |
+| 6.2 | ◐ Publish the API's plain-HTTP port on `127.0.0.1` only (`API_BIND` to override). Code is on the branch; **not tested or deployed** | XS | — |
+| 6.3 | ☑ Docs for 6.1–6.2 and an encryption audit: `docs/storage-and-encryption.md`, README security section rewritten to match the code | S | 6.1 |
+| 6.4 | ☐ Wire `IP_ENCRYPTION_KEY` into production: generate it in `setup-env.js --prod`, list it in `.env.prod.example`, pass it to `api` as required. Re-encrypt or clear rows written under the default key (audit finding A) | S | — |
+| 6.5 | ☐ Set `NODE_ENV=production` in the runtime image so the startup key checks run; reject an all-zero `AGORA_ENCRYPTION_KEY` and the placeholder `JWT_SECRET` (finding B) | XS | — |
+| 6.6 | ☐ Make the setup script's domain take effect: write `DOMAIN`, pass it to `caddy` (finding C). Verify on a real domain | S | — |
+| 6.7 | ☐ Optional hardening: storage keys without the filename (finding D); run backend containers as non-root (finding E); key rotation tool; bind run tokens to the container IP | M | 6.1 |
+
 ## Risks / open decisions log
 | # | Item | Owner | Due |
 |---|---|---|---|
@@ -138,5 +149,5 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | R2 | `messages.protocol` JSONB vs side table | Claude (default JSONB) | 0.3.1 |
 | R3 | ☑ Gemini API verified 2026-09-29 (generateContent/streamGenerateContent v1beta; live key-rejection response confirmed endpoint + auth header) | Claude | 1.3 |
 | R4 | gVisor compat on prod host kernel | user/Claude | 3.1 |
-| R5 | Jev API access (early access / Vercel AI Gateway) | user | 2.3 |
+| R5 | Jev API access: available. Eryk can supply a key whenever 2.3 starts; nobody has asked him yet (2026-10-01) | user | 2.3 |
 | R6 | ☑ Google grounding terms (updated 2026-04-28): results only with Search Suggestions, unmodified, to the prompt's submitter; no caching/analysis. Decision 2026-09-30: build both a compliant-display Gemini path and a Tavily adapter. Residual: grounded answers appear in a shared thread and run code still receives them; operators are responsible for derived use (docs/getting-started.md) | user | 4.2 |

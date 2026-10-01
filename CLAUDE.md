@@ -89,11 +89,11 @@ Fresh instances require a one-time setup via `POST /instance/setup` with a setup
 
 ### File Storage
 
-Files are stored through `src/lib/storage.ts`: local disk by default (`STORAGE_DIR`, the `files-data` volume in Docker, shared by `api` and `cap-gateway`), or any S3-compatible service with `STORAGE_DRIVER=s3`. `src/lib/file-store.ts` stores uploads, `src/routes/files.ts` handles download/delete. Files are validated by magic bytes (`src/lib/file-validation.ts`) and optionally encrypted at rest (`src/lib/encryption.ts`).
+Files are stored through `src/lib/storage.ts`: local disk by default (`STORAGE_DIR`, the `files-data` volume in Docker, shared by `api` and `cap-gateway`), or any S3-compatible service with `STORAGE_DRIVER=s3`. `src/lib/file-store.ts` stores uploads, `src/routes/files.ts` handles download/delete. Files are validated by magic bytes (`src/lib/file-validation.ts`) and **always** encrypted with AES-256-GCM before the storage driver sees them (`src/lib/encryption.ts`, called from `storeFile()`); the IV and auth tag are stored on the `files` row. Never add a path that writes to `storage` without going through `storeFile()`. See `docs/storage-and-encryption.md` for what is and isn't encrypted and the known gaps.
 
 All file limits (max size, allowed extensions, retention, quota) are admin-configurable via `instance_settings` table — no hardcoded caps anywhere else. The DB setting is the sole authority.
 
-Background cleanup worker (`src/workers/file-cleanup.ts`) enforces retention and quota policies.
+Background cleanup worker (`src/workers/file-cleanup.ts`) removes expired, orphaned and soft-deleted files hourly; the storage quota is checked on upload in `storeFile()`.
 
 ### nginx Route Proxying
 
