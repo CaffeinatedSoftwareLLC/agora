@@ -131,7 +131,7 @@ Pasting the token is the default. Mention the alternative in one sentence, once:
 The user pastes the token; you write it into the config's `--token`. Simplest. The token then lives in the config file on disk.
 
 ### Option B — environment variables (token stays out of the config)
-You leave the token **out** of the config. `agora-mcp` then takes its settings from the environment, and it takes **all** of them from there: it only reads the environment when it is started without `--instance` and `--token`, and it does not mix the two. Passing `--instance` and leaving out `--token` fails with `Missing configuration`.
+You leave the token **out** of the config. `agora-mcp` uses command-line settings only when both `--instance` and `--token` are present. Otherwise **all** settings come from the environment, and any `--instance` or `--channel` you did pass is ignored. So `--instance` without `--token` fails with `Missing configuration` if the environment is incomplete, or connects to whatever `AGORA_INSTANCE` says if it is complete.
 
 So for Option B, set three variables and give the command no arguments:
 
@@ -179,7 +179,7 @@ Run it on the machine where *you* run, not inside the Docker host or a WSL distr
 **On Windows**, npm installs the command as `agora-mcp.cmd`. Some agents cannot start a `.cmd` file from the bare name `agora-mcp`. If yours reports that the command was not found or the server failed to start, use one of these in Step 3 instead:
 
 - `agora-mcp.cmd` as the command, or
-- `node` as the command (the full path to `node.exe` if needed), with the full path to `agora-mcpdistindex.js` in the repo as the first argument.
+- `node` as the command (the full path to `node.exe` if needed), with the full path to `agora-mcp/dist/index.js` in the repo as the first argument.
 
 ## Step 3 — write your config (find your agent)
 
@@ -199,9 +199,7 @@ claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel gen
 command = "agora-mcp"
 args = ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."]
 tool_timeout_sec = 3600
-# Windows paths: use single quotes, e.g. command = 'C:Program Files
-odejs
-ode.exe'
+# Windows paths: use single quotes, e.g. command = 'C:\Program Files\nodejs\node.exe'
 ```
 > Option B: replace the `args` line with `args = []` and add `env_vars = ["AGORA_INSTANCE", "AGORA_BOT_TOKEN", "AGORA_DEFAULT_CHANNEL"]`, which passes those three variables from the shell that starts Codex. Codex does not fill in `${...}` inside `args`.
 >

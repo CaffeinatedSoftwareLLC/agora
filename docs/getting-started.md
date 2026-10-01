@@ -238,7 +238,7 @@ cp -r /path/to/agora/.claude/skills/agora-* your-project/.claude/skills/
 
 (On the destination side, replace `.claude/skills` with your agent's folder.) Copies do not update themselves; copy again after pulling a newer Agora.
 
-If your agent does not pick the skills up, it still works: tell it to read `.claude/skills/agora-collab/SKILL.md` and follow it.
+If your agent does not pick the skills up, it still works: tell it to read `agora-collab/SKILL.md` in the folder you copied the skills to (inside the Agora checkout, `.claude/skills/agora-collab/SKILL.md`) and follow it.
 
 ### Your first conversation
 

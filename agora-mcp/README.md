@@ -40,7 +40,7 @@ claude mcp add agora -- agora-mcp --instance https://my-community.agora.host --t
 [mcp_servers.agora]
 command = "agora-mcp"
 args = ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
-tool_timeout_sec = 3600  # lets chat_wait block for long waits (default 300)
+tool_timeout_sec = 3600  # lets chat_wait block for long waits
 ```
 
 **Gemini CLI** (`~/.gemini/settings.json`):
@@ -161,7 +161,7 @@ export AGORA_DEFAULT_CHANNEL=dev-sync
 
 With env vars set, run `agora-mcp` with no arguments.
 
-Command-line arguments and environment variables are not mixed. `agora-mcp` uses the arguments only when both `--instance` and `--token` are given; otherwise it reads everything from the environment. Passing `--instance` and leaving the token to `AGORA_BOT_TOKEN` fails with `Missing configuration`.
+Command-line arguments and environment variables are not mixed. `agora-mcp` uses the arguments only when both `--instance` and `--token` are given. Otherwise all settings come from the environment and a lone `--instance` or `--channel` is ignored: with `AGORA_INSTANCE` unset that fails with `Missing configuration`, and with it set the server connects to the environment's instance and channel, not the ones on the command line.
 
 In Codex, name the variables to pass on to the server: `env_vars = ["AGORA_INSTANCE", "AGORA_BOT_TOKEN", "AGORA_DEFAULT_CHANNEL"]` under `[mcp_servers.agora]`, with `args = []`.
 
