@@ -36,7 +36,7 @@ Three things to know about that file:
 
 - **Copy it somewhere safe.** `AGORA_ENCRYPTION_KEY` encrypts every uploaded file and every stored AI provider key. It cannot be recovered or rotated; lose it and those are unreadable.
 - **Set `DOCKER_GID`** to the host's docker group id (`getent group docker | cut -d: -f3`). The example value `999` is only right on some hosts; with the wrong one, code runs fail because the socket proxy can't reach Docker.
-- **The domain you typed isn't applied yet.** For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain. For `localhost` there is nothing to do.
+- **`DOMAIN` is the domain you typed** (empty for `localhost`). Caddy and the API both read it; to change it later, edit the line and run the `up -d` command again.
 
 **If you're on Windows and this generates a `.env`/`.env.prod` where the database connection mysteriously fails** (`getaddrinfo ENOTFOUND accord` or similar) — that was a real bug in `setup-env.js`: it split `.env.example` on `\n` only, which left a stray `\r` glued onto `POSTGRES_USER`'s value on files with CRLF line endings, corrupting the generated `DATABASE_URL` mid-string. This is fixed as of the cleanup in this repo (the script now splits on `\r?\n`), but if you ever see a connection string that looks truncated or has a control character in the middle, that's the failure signature — regenerate with `--force` after pulling the fix.
 

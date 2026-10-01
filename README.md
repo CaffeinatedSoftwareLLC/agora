@@ -133,7 +133,7 @@ This creates `.env.prod`. To regenerate, run with `--force`.
 
 > **What gets generated:** `DB_PASSWORD`, `JWT_SECRET`, `AGORA_ENCRYPTION_KEY` — all cryptographically random. See the [Environment Variables](#environment-variables) table for details on each. There are no storage credentials: uploads go to a Docker volume.
 >
-> **The domain you enter is not applied yet.** For a real domain, add `DOMAIN=your-domain.com` to `.env.prod` and replace the first line of the `Caddyfile` with your domain.
+> **The domain you enter is written to `.env.prod` as `DOMAIN`.** Caddy requests a certificate for it and the API accepts browser connections from `https://<DOMAIN>`. Press Enter to skip it and serve `https://localhost`. Add `--no-start` to write `.env.prod` without starting Docker.
 >
 > **Keep a copy of `.env.prod` somewhere safe.** `AGORA_ENCRYPTION_KEY` cannot be recovered, and without it every uploaded file is unreadable.
 
@@ -184,7 +184,7 @@ Copy the hex string and paste it into the setup wizard.
 
 Point your domain (e.g., `alpha.agora.host`) to your server's IP address. Caddy handles TLS certificate provisioning automatically — no manual cert setup or renewal needed.
 
-The domain is configured in the `Caddyfile` at the project root. Out of the box it serves `localhost` with Caddy's own local certificate; replace the first line with your domain to get a public certificate, and set `DOMAIN` in `.env.prod` to the same value.
+The domain comes from `DOMAIN` in `.env.prod` (the `Caddyfile` reads it). With no `DOMAIN`, Caddy serves `localhost` with its own local certificate. To change the domain later, edit `DOMAIN` and run the `up -d` command again.
 
 ### Architecture
 
@@ -402,7 +402,7 @@ cd agora-ui && npm test
 | `HOST` | Host address to bind to | `0.0.0.0` |
 | `AGORA_SETUP_TOKEN` | Pre-configured setup token for initial instance setup | Auto-generated on first boot |
 | `AGORA_DATA_DIR` | Directory for persistent data (e.g., setup token file) | `.agora/` in project root |
-| `CORS_ORIGIN` | Allowed origin for Socket.IO connections. **Must be set in production** (e.g., `https://your-domain.com`). | Disabled (same-origin only) |
+| `CORS_ORIGIN` | Allowed origin for Socket.IO connections. In the production compose file it follows `DOMAIN`; set it only if the browser's origin differs from `https://<DOMAIN>`. | Disabled (same-origin only); `https://<DOMAIN>` in Docker |
 | `TRUST_PROXY` | Set to `true` when behind a reverse proxy (nginx, Caddy, etc.) | `false` |
 | `STORAGE_DRIVER` | Where uploaded files are stored: `disk` or `s3` | `disk` |
 | `STORAGE_DIR` | Disk driver: directory for uploaded files (a volume in Docker) | `data/files` (`/data/files` in Docker) |
@@ -411,7 +411,7 @@ cd agora-ui && npm test
 | `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered or rotated.** The server refuses to start if it changes | Dev default (zeros) |
 | `AGORA_ACCEPT_NEW_ENCRYPTION_KEY` | Set to `1` for one start to record a different encryption key. Data encrypted with the old key stays unreadable. | — |
 | `API_BIND` | Production compose: host address the API's plain-HTTP port 3000 is published on. `0.0.0.0` opens it to the network. | `127.0.0.1` |
-| `DOMAIN` | Production compose: your domain, used for the API's allowed origin | `alpha.agora.host` |
+| `DOMAIN` | Production compose: your domain, without `https://`. Caddy gets a certificate for it and the API allows `https://<DOMAIN>` as origin | `localhost` |
 | `DOCKER_GID` | Production compose: the host's docker group id, for the sandbox's socket proxy | — (required) |
 
 The sandbox runner has its own variables (`AGORA_SANDBOX_IMAGE`, `AGORA_DOCKER_HOST`, concurrency limits); see `.env.example`, `.env.prod.example` and [Getting Started](docs/getting-started.md#sandbox-runner-development).

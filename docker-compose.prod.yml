@@ -52,7 +52,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.prod}
       HOST: 0.0.0.0
       PORT: "3000"
-      CORS_ORIGIN: https://${DOMAIN:-alpha.agora.host}
+      # The browser's origin. Follows DOMAIN unless CORS_ORIGIN is set explicitly.
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://${DOMAIN:-localhost}}
       TRUST_PROXY: "true"
       STORAGE_DIR: /data/files
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
@@ -169,6 +170,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # The Caddyfile serves {$DOMAIN}: a real domain gets a public certificate,
+      # localhost gets Caddy's local one
+      DOMAIN: ${DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
