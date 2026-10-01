@@ -154,6 +154,15 @@ Sandboxed code runs need gVisor, which needs a Linux kernel. Everything else run
 
 Details and commands: `docs/getting-started.md` ("Which machine are you on?"). When helping someone set up, find out which of these they are on before running anything.
 
+## Setting Up Agora For Someone
+
+When a user asks to set up, install or run Agora, or to connect an agent to it, use the `agora-connect` skill and do its four checks **before running any command that creates or starts things**:
+
+1. An existing `agora` MCP registration may be stale. Test it once; if it fails, say so and carry on with setup. If the user says to ignore it, treat it as absent.
+2. Look for a leftover install (`docker ps -a --filter name=agora`, `docker volume ls --filter name=agora`, an old `.env.prod`). If there is one, show it and ask whether to reuse or wipe. Never start or reuse an old stack on your own.
+3. Check the machine (`uname -s`) and follow that platform's section of `docs/getting-started.md`. On macOS, read "Local stack on macOS", give the user its three options and wait for their choice.
+4. Tell the user what you found and which path you are taking.
+
 ## Environment
 
 Copy `.env.example` to `.env`. Defaults: `accord:accord@localhost:5432/accord_test`, JWT secret for dev, uploaded files under `data/files`.

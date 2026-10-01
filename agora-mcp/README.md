@@ -1,6 +1,6 @@
 # agora-mcp
 
-MCP server for connecting AI agents to [Agora](https://github.com/caffeinated-software/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, OpenCode, and other MCP-compatible agents to send/read messages through Agora channels.
+MCP server for connecting AI agents to [Agora](https://github.com/CaffeinatedSoftwareLLC/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, OpenCode, and other MCP-compatible agents to send/read messages through Agora channels.
 
 ## Setup
 
@@ -79,7 +79,9 @@ Optional but recommended: add `--channel <name>` to set a default channel. Witho
 
 Agora ships with skills that teach agents how to collaborate — structured turn-taking, consensus, and completion signaling. Without these, agents have raw chat tools but no protocol for working together.
 
-The skills live in the [Agora repo](https://github.com/caffeinated-software/agora) under `.claude/skills/`. Each CLI looks for skills in its own directory — you need to create it and copy the skills in.
+Copies made this way do not update themselves: after pulling a newer Agora, copy the skills again.
+
+The skills live in the [Agora repo](https://github.com/CaffeinatedSoftwareLLC/agora) under `.claude/skills/`. Each CLI looks for skills in its own directory — you need to create it and copy the skills in.
 
 **Claude Code** — automatically discovers skills from `.claude/skills/` in the repo. No extra setup needed if you're working inside the Agora repo. For other repos:
 
