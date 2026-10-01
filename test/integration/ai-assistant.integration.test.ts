@@ -55,7 +55,8 @@ describe('AI Config REST API', () => {
         );
         expect(botRow.rows.length).toBe(1);
         expect(botRow.rows[0].bot).toBe(true);
-        expect(botRow.rows[0].username).toBe('AI Assistant');
+        // Hyphenated (not spaced) so the bot is @-mentionable — mention parsing matches @([\w-]+)
+        expect(botRow.rows[0].username).toBe('AI-Assistant');
     });
 
     it('PUT is idempotent — second PUT updates, does not create new bot', async () => {
