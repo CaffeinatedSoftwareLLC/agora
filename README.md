@@ -75,7 +75,7 @@ Roughly in priority order. No ETAs — this is a solo/community project.
 - [x] Roles and permissions UI
 - [x] Markdown rendering in messages
 - [ ] Negative security test suite for the sandbox on gVisor
-- [ ] Model-based decision step for code runs (the `decide` capability; not set up yet)
+- [ ] Model-based decision step for code runs (the `decide` capability; planned as its own project)
 - [ ] Richer orchestration dashboard (live agent activity, per-task views)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)

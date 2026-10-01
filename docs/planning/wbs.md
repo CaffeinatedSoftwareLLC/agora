@@ -3,7 +3,23 @@
 > Companion to `ai-runtime-execution-plan.md` (the *what/why*). This file is the *how/in what order*.
 > Branch for Phase 0: `feat/agent-threads`. Each phase gets its own branch + PR.
 > Sizes: **XS** <1h · **S** ≈ half-day · **M** ≈ 1–2 days · **L** ≈ 3–5 days.
-> Status: ☐ todo · ◐ in progress · ☑ done
+> Status: ☐ todo · ◐ in progress · ☑ done · → moved out of this WBS
+
+## Status at 0.2.0 (reviewed 2026-10-01)
+
+Everything below marked ☑ is on `main` and running on the WSL stack. Reviewed against the code, the merged PRs (#24–#44) and the live instance.
+
+| Phase | State |
+|---|---|
+| 0 Agent threads & orchestration | ☑ complete |
+| 1 Provider registry | ☑ complete |
+| 2 Decision seam | 2.1 ☑ (rules decider, in use). 2.2 and 2.3 → **moved to the separate Jev project** |
+| 3 Sandboxed runtime | ☑ except **3.9** (negative suite on gVisor), the one open package of the original plan |
+| 4 First value | ☑ complete. `testReport` has not had a live check |
+| 5 Media | ☑ complete. Follow-ups are GitHub issues (#40, #35) |
+| 6 Platform | 6.1–6.5 ☑. Open: 6.6, 6.7, 6.8, 6.9 |
+
+**Carried past 0.2.0:** 3.9, 6.6–6.9, the `testReport` live check, and the open GitHub issues (#39, #40, #35, #23, #22, and the older UI issues #9–#18).
 
 ## Definition of Done (every work package)
 - Backend: `npm run build` clean for `src/`; `npx vitest run test/integration` green
@@ -101,11 +117,14 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 1.7 | ☑ Tests: migration of legacy config, CRUD authz, routing resolution, budget enforcement, adapter SSE parsing fixtures | M | 1.3–1.5 |
 
 ## 2 · Decision Seam — folds into Phase 1/3 branches
+
+> **2.2 and 2.3 are no longer part of this WBS (2026-10-01).** The Jev decision layer is its own project. Its WBS will be written and worked by agents in Agora. Nothing here blocks on it: the rules decider (2.1) is the gate in use, and the `decide` capability stays at 501 until that project lands.
+
 | ID | Work package | Size | Depends |
 |---|---|---|---|
 | 2.1 | ☑ `Decider` interface + `RulesDecider` done in 3.6 (exec gate); tripwires (3.8) pause the bot, which the decider already denies | S | 0.4 |
-| 2.2 | ☐ `WebhookDecider` + contract doc (schema, auth/HMAC, timeout ⇒ rules fallback). Not started | S | 2.1 |
-| 2.3 | ☐ `JevDecider` adapter (`typesafe`, `decide` capability). Not started and not set up: `decide` returns 501. **Unblocked** (2026-10-01): Jev can be added any time, but Eryk was never asked for an API key. Start by asking him for the key and adding the `typesafe` provider with him | S | 1.3, 2.1 |
+| 2.2 | → `WebhookDecider` + contract doc (schema, auth/HMAC, timeout ⇒ rules fallback). Moved to the Jev project | S | 2.1 |
+| 2.3 | → `JevDecider` adapter (`typesafe`, `decide` capability). Moved to the Jev project. Starting notes for it: Eryk wants a toggle in Bot settings, "Use a System One model for decisions? (Beta, Jev only)", with the API key entered there; a second use for the decision handler is sketched in a comment on #39 | S | 1.3, 2.1 |
 
 ## 3 · Sandboxed Runtime — `feat/runtime`
 | ID | Work package | Size | Depends |
@@ -118,7 +137,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 3.6 | ☑ `Decider` + `RulesDecider`; approval card in the thread (View code / Approve / Deny, 30-min expiry, audit); result summary card; code retention (30 days, confirm before shortening, pruning sweep). Verified live: bot → approval in UI → sandbox → gateway → local Ollama → file + result in thread | M | 2.1, 3.5, 0.1 |
 | 3.7 | ~~Artifact harvest~~ folded into 3.4: artifacts leave only through the gateway (`postFile`), no container harvest (spec D5) | — | — |
 | 3.8 | ☑ Tripwires ⇒ auto-pause (`src/runtime/tripwires.ts`, spec §12): 3 failed/timed-out runs in 10 min (count resets on resume), a real run token used outside its run, a run hitting its call cap. Pausing posts a notice card in the thread, audits `bot_pause_tripwire`, kills the bot's running containers (runner polls), and denies its queued runs at claim. "Egress denied" dropped: the internal network drops egress, so nothing observes it | S | 0.4, 3.2 |
-| 3.9 | ☐ Negative security suite (DB/Redis/API reach, no mount of the `files-data` volume, cross-scratch, env read, fork bomb, infinite loop). MinIO is gone (#32), so its probe is replaced by the volume check. Runs against the WSL2 engine with `SANDBOX_TEST_RUNTIME=runsc` | M | 3.2–3.4 |
+| 3.9 | ☐ Negative security suite (spec §14, 15 items). **Partly covered, never run on gVisor.** `test/sandbox/runner.sandbox.test.ts` already probes internet, public DNS, `postgres`, subprocesses, writes outside scratch, remote imports, the infinite loop, memory exhaustion, output truncation, the unapproved-run refusal and the no-gVisor refusal, but only under `runc` on Docker Desktop. Still to write: `redis` / `api` reach and no mount of `files-data`, the env allowlist, `/proc/1/environ` and the Docker socket, the 64 MB scratch cap, cross-run token use from inside a sandbox. Then run the whole suite with `SANDBOX_TEST_RUNTIME=runsc` against the WSL2 engine | M | 3.2–3.4 |
 
 ## 4 · First Value — `feat/visual-reports`, `feat/search`
 | ID | Work package | Size | Depends |
@@ -126,28 +145,32 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 4.1 | ☑ Visual test report (MVP): `agora:std` `testReport()` parses JUnit XML / Vitest-Jest JSON / Agora's `{totals, suites, failures}` (`sandbox/report.ts`), gets a summary from the routed `chat` capability (computed fallback), and posts through gateway `POST /v1/reports` a bot-authored `runtime_report` card (UI-drawn pass-rate bar, per-suite bars, collapsible failures) plus the full report as Markdown. The card is native UI rather than a generated HTML file because HTML/SVG uploads aren't allowed (T10); charts come from the data, not an image model, so the numbers can't be wrong | M | 3 |
 | 4.2 | ☑ `search()`: routed `search` capability. **Gemini** (Google Search grounding via `generateContent` + `tools: [{googleSearch: {}}]`): per Google's terms the gateway posts the answer unmodified with Google's Search Suggestions into the thread (`runtime_search` card, suggestions in a script-less sandboxed iframe) and returns `{answer, citations, displayedIn}` to the run. **Tavily** adapter (agent-oriented terms; route "model" = search depth) returns `{answer, citations}` without posting. See R6 | M | 3, 1.3 |
 
-## 5 · Media — later
+## 5 · Media
+| ID | Work package | Size | Depends |
+|---|---|---|---|
 | 5.1 | ☑ Audio overview: mentioning the built-in assistant with "audio overview" / "podcast" makes the `chat` route write a two-host script (Alex and Sam) from the whole thread (or recent channel messages), the `tts` route voice it with two speakers, and posts an MP3 plus transcript as the assistant's reply, with progress in the placeholder. WAV → MP3 via `@breezystack/lamejs` (LGPL-3.0, pure JS) because `mp3` is allowed by default and `wav` isn't, and MP3 is ~6× smaller. Audio attachments get an inline player. Multi-speaker speech goes through `synthesizeDialogue` (`src/ai/speech.ts`): Gemini gets one text part per line tagged with `speechMetadata.speaker` (#33); adapters without native multi-speaker voice each line and the WAVs are joined | M | 3 |
 | 5.2 | ☑ `image` capability (Gemini native image via `responseModalities: [TEXT, IMAGE]` + `imageConfig` aspect ratio/size; returns base64 for `postFile`) | S | 3 |
 | 5.3 | ☑ `video` capability: Gemini adapter drives Veo (`predictLongRunning` → poll the operation → download; checked against Google's Veo REST example, 2026-09-17). The API key goes only to Google's API host; the storage redirect is followed without it. The gateway reserves an artifact slot before the (billed) call, stores the MP4, and posts it into the run's thread (`generateVideo()` returns IDs, not bytes). New `video` time profile (8 min default, 10 min ceiling; migration 030). MP4 attachments play inline. All Veo 3.1 models are preview; default `veo-3.1-fast-generate-preview`; no cost accounting yet (Veo bills per second, the ledger is per token) | L | 3 |
 
-## 6 · Platform — storage, hardening, audit fixes — `claude/handoff-next`
+## 6 · Platform — storage, hardening, audit fixes — PRs #42, #43, #44
 | ID | Work package | Size | Depends |
 |---|---|---|---|
 | 6.1 | ☑ Replace the bundled MinIO with a disk store, S3 optional (#32): `src/lib/storage.ts` (disk driver with atomic writes and root confinement; S3 driver), `files-data` volume shared by `api` and `cap-gateway`, one-time `storage-migrate` tool, a missing blob is a 404 instead of a soft-delete. Works live (2026-10-01). File encryption unchanged: `storeFile()` encrypts before the driver sees the bytes | M | — |
-| 6.2 | ◐ Publish the API's plain-HTTP port on `127.0.0.1` only (`API_BIND` to override). Code is on the branch; **not tested or deployed** | XS | — |
+| 6.2 | ☑ Publish the API's plain-HTTP port on `127.0.0.1` only (`API_BIND` to override). Deployed and verified from this machine 2026-10-01: localhost answers, the WSL address refuses. Not checked from a second device | XS | — |
 | 6.3 | ☑ Docs for 6.1–6.2 and an encryption audit: `docs/storage-and-encryption.md`, README security section rewritten to match the code | S | 6.1 |
-| 6.4 | ☑ Remove IP tracking and IP bans outright (decision 2026-10-01) instead of wiring `IP_ENCRYPTION_KEY` into production: migration `031` drops `ip_bans` and `users.last_ip_*`; the ban routes, the admin UI option, `src/auth/crypto.ts` and the key are gone. Closes audit finding A. Branch `chore/remove-ip-tracking` | S | — |
-| 6.5 | ☑ `NODE_ENV=production` in the runtime image so the startup checks run; an all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET` are refused; startup fingerprint check (`src/lib/key-fingerprint.ts`) refuses a changed encryption key, with `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` as the explicit override. Closes audit finding B. Branch `fix/production-key-checks`; not deployed | S | — |
+| 6.4 | ☑ Remove IP tracking and IP bans outright (decision 2026-10-01) instead of wiring `IP_ENCRYPTION_KEY` into production: migration `031` drops `ip_bans` and `users.last_ip_*`; the ban routes, the admin UI option, `src/auth/crypto.ts` and the key are gone. Closes audit finding A. Merged (#43) and deployed; migration `031` ran on the live DB | S | — |
+| 6.5 | ☑ `NODE_ENV=production` in the runtime image so the startup checks run; an all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET` are refused; startup fingerprint check (`src/lib/key-fingerprint.ts`) refuses a changed encryption key, with `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` as the explicit override. Closes audit finding B. Merged (#44) and deployed; the live key's fingerprint is recorded | S | — |
 | 6.6 | ☐ Make the setup script's domain take effect: write `DOMAIN`, pass it to `caddy` (finding C). Verify on a real domain | S | — |
 | 6.7 | ☐ Optional hardening: storage keys without the filename (finding D); run backend containers as non-root (finding E); key rotation tool; bind run tokens to the container IP | M | 6.1 |
+| 6.8 | ☐ **Commit the request transaction before the reply is sent.** `src/app.ts` commits in `onResponse`, after the response has gone out, so a client that acts on a response at once can arrive before the data is saved. This is the cause of the flaky integration tests (one full run: 21 failures of 670; the next, unchanged: 0). Move the commit ahead of the reply, keep socket events after the commit, then drop the test-side polling | M | — |
+| 6.9 | ☐ **Make nginx re-resolve the API address.** `agora-ui/nginx.conf` resolves `api` once at startup, so a deploy that recreates `api` but not `web` returns 502 until `web` is restarted (seen on the #44 deploy). Use Docker's resolver with a variable upstream | XS | — |
 
 ## Risks / open decisions log
 | # | Item | Owner | Due |
 |---|---|---|---|
 | R1 | ☑ Per-thread guard, default off. UI visibility tracked in a GitHub issue | user | 0.4.4 |
-| R2 | `messages.protocol` JSONB vs side table | Claude (default JSONB) | 0.3.1 |
+| R2 | ☑ `messages.protocol` JSONB vs side table: JSONB, shipped in 0.3 | Claude | 0.3.1 |
 | R3 | ☑ Gemini API verified 2026-09-29 (generateContent/streamGenerateContent v1beta; live key-rejection response confirmed endpoint + auth header) | Claude | 1.3 |
-| R4 | gVisor compat on prod host kernel | user/Claude | 3.1 |
-| R5 | Jev API access: available. Eryk can supply a key whenever 2.3 starts; nobody has asked him yet (2026-10-01) | user | 2.3 |
+| R4 | ◐ gVisor compat on the host kernel: works on WSL2 (kernel 6.6, `runsc` release-20260928.0, verified 2026-09-30). Not tried on a dedicated Linux production host | user/Claude | 3.1 |
+| R5 | → Jev API access: moved with 2.2 / 2.3 to the Jev project | user | — |
 | R6 | ☑ Google grounding terms (updated 2026-04-28): results only with Search Suggestions, unmodified, to the prompt's submitter; no caching/analysis. Decision 2026-09-30: build both a compliant-display Gemini path and a Tavily adapter. Residual: grounded answers appear in a shared thread and run code still receives them; operators are responsible for derived use (docs/getting-started.md) | user | 4.2 |
