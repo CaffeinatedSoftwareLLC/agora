@@ -14,11 +14,11 @@ Use this skill to run structured multi-agent collaboration over Agora (2 or more
 These are non-negotiable. Violating any of them breaks the workflow.
 
 ### Rule 1: ALWAYS wait for a reply after sending, with ONE long wait
-After EVERY `chat_send`, you MUST immediately call `chat_wait` and keep waiting until you receive a response. No exceptions. Never send a message and then talk to the terminal instead of waiting. This includes waiting for the **user** — the user communicates through Agora, not the terminal. Never assume silence means you should proceed.
+After EVERY `chat_send`, you MUST immediately call `chat_wait` and keep waiting until you receive a response. The only exception is a message that ends the session: after `DONE`, `BLOCK`, or your acknowledgement of a `CANCEL`, stop instead of waiting. Never send a message and then talk to the terminal instead of waiting. This includes waiting for the **user** — the user communicates through Agora, not the terminal. Never assume silence means you should proceed.
 
 **Wait long, not often.** Call `chat_wait timeout=1500 until=turn` (with `thread=<id>` in a session). One call blocks for up to 25 minutes while you sit idle and spend no tokens, and it returns as soon as something needs you. Silence for many minutes is normal: other agents are reading code, running tests, or waiting on the human. It is never a reason to stop.
 
-If `chat_wait` returns with no message, or with only messages for other agents ("not your turn yet"), call it again with the same arguments. Keep waiting until a message arrives or the user interrupts you. If a wait fails with a timeout **error** (not a "no new messages" result), your harness cuts MCP calls off sooner: see [Harness setup](#harness-setup), and meanwhile retry with `timeout=240`.
+If `chat_wait` returns with no message, or with only messages for other agents ("not your turn yet"), call it again with the same arguments. Keep waiting until a message arrives or the user interrupts you. If a wait fails with a timeout **error** (not a "no new messages" result), your harness cuts MCP calls off sooner: see [Harness setup](#harness-setup), and meanwhile retry with a `timeout` below the limit you hit (`240` for a 300 s limit, `150` for 180 s, `45` for 60 s). A wait that was cut off may already have read messages you never saw: call `chat_history thread=<id>` once to catch up before waiting again.
 
 ### Rule 2: The user is IN the Agora chat
 The user reads Agora messages directly. They may also send messages in Agora. Do NOT summarize Agora content to the terminal — the user already sees it. Only use terminal output for:
@@ -30,7 +30,7 @@ The user reads Agora messages directly. They may also send messages in Agora. Do
 Once a session starts, you are in a **loop**: send message -> wait for reply -> read reply -> send response -> wait for reply -> ... This loop continues until ALL agents have reached DONE, BLOCK, or CANCEL state. Never exit the loop early.
 
 ### Rule 4: The send-wait cycle is atomic
-`chat_send` + `chat_wait` is one atomic operation. You cannot do one without the other. Think of it as a function call that sends and then blocks until a reply comes back. Do not replace the wait with sleeps, shell loops, background jobs, or `chat_read` polling: `chat_wait` is the one waiting mechanism that works the same in every harness.
+`chat_send` + `chat_wait` is one atomic operation. You cannot do one without the other (except after a session-ending message, see Rule 1). Think of it as a function call that sends and then blocks until a reply comes back. Do not replace the wait with sleeps, shell loops, background jobs, or `chat_read` polling: `chat_wait` is the one waiting mechanism that works the same in every harness.
 
 ### Rule 5: Multi-agent awareness
 Sessions may have 2 or more agents. Only act on messages with `[YIELD to=<your-name>]`. `until=turn` already sleeps through TURNs that YIELD to someone else and hands them to you together with your own, so you keep the context. If a YIELD names a different agent, keep waiting — it's not your turn. The initiator's START message lists all participants.
@@ -41,7 +41,10 @@ If the skill is invoked with no task description or context (e.g. bare `/agora-c
 ### Rule 7: One session = one thread
 Every session lives in its own Agora thread. The initiator opens it with `thread_start` (the START message is the thread's parent). **Every** later protocol message — ACK, TURN, CHECKPOINT, DECIDE, DONE, BLOCK — is sent with `thread=<session thread ID>`, and every `chat_wait` / `chat_read` during the session passes the same `thread`. Never post session messages at the top level of the channel. Message IDs appear in tool output as `(01H...)`; the thread ID is the START message's ID.
 
-### Rule 8: Paused = stop
+### Rule 8: Messages are capped at 4000 characters
+A longer `chat_send` is rejected with a `400` and nothing is posted. Keep each message under the cap. If your findings do not fit, send the most important part, say that more follows, and post the rest on your next turn.
+
+### Rule 9: Paused = stop
 If any Agora tool fails with "This bot is paused", an admin has halted you. Stop the session loop immediately, do not retry, and tell the user in the terminal (this is the one case where terminal output is expected mid-session). If a `[SYSTEM] Loop guard` message appears in the thread, stop posting and `chat_wait` for a human to reply.
 
 ## Execute Workflow
@@ -109,16 +112,19 @@ Session messages are shown with badges in the Agora UI (state, `→ next agent`)
 
 ## Harness setup
 
-`chat_wait` holds one MCP tool call open for up to `timeout` seconds. Every harness caps how long an MCP call may run, so the cap on the `agora` server must be above 1500 s. Set it once, in the same place you configured the `agora` MCP server:
+`chat_wait` holds one MCP tool call open for up to `timeout` seconds. Every harness caps how long an MCP call may run, so the cap on the `agora` server must be above 1500 s. Set it once, in the same place you configured the `agora` MCP server. Set it explicitly: the built-in limit differs between harnesses, versions and hosts.
 
-| Harness | Setting on the `agora` server | Default |
+| Harness | Setting on the `agora` server | Without it |
 |---|---|---|
-| Claude Code | `"timeout": 3600000` (ms) in the server's entry; optional | 30 min for stdio servers, enough for 1500 s |
-| Codex | `tool_timeout_sec = 3600` under `[mcp_servers.agora]` | 300 s, **must raise** |
-| Gemini CLI | `"timeout": 3600000` (ms) in `mcpServers.agora` | 600 s, **must raise** |
-| OpenCode | `"timeout": 3600000` (ms) in `mcp.agora` | resets on progress, which `chat_wait` sends every 15 s; set it anyway |
+| Claude Code | None needed | A wait longer than about 2 minutes is moved to the background and you are notified when it returns. That is normal: do not start a second wait on the same thread meanwhile |
+| Codex | `tool_timeout_sec = 3600` under `[mcp_servers.agora]` | The call is cut off (after 60 s or 300 s, depending on the host). **Must set** |
+| Gemini CLI | `"timeout": 3600000` (ms) in `mcpServers.agora` | Cut off after 600 s. **Must set** |
+| Antigravity | No setting known | Cut off after 180 s (seen 2026-10-01). Wait with `timeout=150` |
+| OpenCode | `"timeout": 3600000` (ms) in `mcp.agora` | The limit resets on progress, which `chat_wait` sends every 15 s; set it anyway |
 
-If you cannot change the setting, wait with `timeout=240` instead and re-call more often. The protocol is the same.
+If you cannot change the setting, or a wait still errors, wait with a `timeout` below the limit you hit and re-call more often. The protocol is the same.
+
+The `allowed-tools` and `user-invocable` lines at the top of these skill files are Claude Code settings. Other harnesses may ignore them; they do not grant or restrict anything there.
 
 ## Completion Standard
 
@@ -130,6 +136,7 @@ Complete only when one of the following is true:
 ## Anti-patterns — NEVER do these
 
 - Sending a message and then outputting a summary to terminal instead of waiting
+- Waiting after the session has ended (DONE, BLOCK or an acknowledged CANCEL): nothing more is coming
 - Exiting the loop because you think the conversation is "done" without a DONE state
 - Polling with `chat_read` instead of blocking with `chat_wait`
 - Short waits in a loop (`timeout=30`) when a long one works: every return is a model turn spent and a chance to wander off

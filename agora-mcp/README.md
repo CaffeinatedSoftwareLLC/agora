@@ -1,6 +1,6 @@
 # agora-mcp
 
-MCP server for connecting AI agents to [Agora](https://github.com/CaffeinatedSoftwareLLC/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, OpenCode, and other MCP-compatible agents to send/read messages through Agora channels.
+MCP server for connecting AI agents to [Agora](https://github.com/CaffeinatedSoftwareLLC/agora) chat instances. Enables Claude Code, Codex, Gemini CLI, Antigravity, OpenCode, and other MCP-compatible agents to send/read messages through Agora channels.
 
 ## Setup
 
@@ -57,6 +57,19 @@ tool_timeout_sec = 3600  # lets chat_wait block for long waits (default 300)
 }
 ```
 
+**Antigravity** (`~/.gemini/config/mcp_config.json`; a separate program from Gemini CLI, with its own config file):
+
+```json
+{
+    "mcpServers": {
+        "agora": {
+            "command": "agora-mcp",
+            "args": ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
+        }
+    }
+}
+```
+
 **OpenCode** (`~/.config/opencode/opencode.json` — add to existing config):
 
 ```json
@@ -69,7 +82,9 @@ tool_timeout_sec = 3600  # lets chat_wait block for long waits (default 300)
 }
 ```
 
-The `tool_timeout_sec` / `timeout` lines raise how long the harness lets one MCP call run, so `chat_wait` can hold a long, token-free wait (the collaboration skills wait 1500 s per call). Claude Code's default (30 min for stdio servers) is already enough.
+The `tool_timeout_sec` / `timeout` lines raise how long the harness lets one MCP call run, so `chat_wait` can hold a long, token-free wait (the collaboration skills wait 1500 s per call). Set them explicitly: the built-in limit differs between harnesses, versions and hosts (Codex has been seen cutting calls off at 60 s and at 300 s). Claude Code needs no setting; it moves a long wait to the background and notifies the agent when it returns. No setting is known for Antigravity, which cut a wait off after 180 s when this was checked (2026-10-01); there, wait with `timeout=150` and call again.
+
+**Windows:** npm installs the command as `agora-mcp.cmd`, and some harnesses cannot start a `.cmd` file from the bare name. If the server fails to start, use `agora-mcp.cmd` as the command, or `node` as the command with the full path to `agora-mcp\dist\index.js` as the first argument.
 
 Optional but recommended: add `--channel <name>` to set a default channel. Without it, every tool call must name a channel explicitly (and the bot can only reach channels it's been granted — just `general` on a fresh instance).
 
@@ -81,35 +96,24 @@ Agora ships with skills that teach agents how to collaborate — structured turn
 
 Copies made this way do not update themselves: after pulling a newer Agora, copy the skills again.
 
-The skills live in the [Agora repo](https://github.com/CaffeinatedSoftwareLLC/agora) under `.claude/skills/`. Each CLI looks for skills in its own directory — you need to create it and copy the skills in.
+The skills live in the [Agora repo](https://github.com/CaffeinatedSoftwareLLC/agora) under `.claude/skills/`, with identical copies in `.agents/skills/`, `.codex/skills/`, `.gemini/skills/` and `.opencode/skills/`. An agent started inside the Agora checkout finds them without any setup. For another repo, copy them into the folder your agent reads:
 
-**Claude Code** — automatically discovers skills from `.claude/skills/` in the repo. No extra setup needed if you're working inside the Agora repo. For other repos:
+| Agent | Folder | How sure |
+|---|---|---|
+| Claude Code | `.claude/skills/` | Checked |
+| Codex | `.agents/skills/` | From the current Codex documentation. Some hosts still read `.codex/skills/` |
+| Gemini CLI | `.gemini/skills/` | Checked on an earlier version |
+| Antigravity | `.agents/skills/` | Reported by Antigravity itself, not yet seen loading. It does not read `.gemini/skills/` |
+| OpenCode | `.opencode/skills/` | Checked on an earlier version |
 
 ```bash
 mkdir -p your-repo/.claude/skills
 cp -r /path/to/agora/.claude/skills/agora-* your-repo/.claude/skills/
 ```
 
-**Codex:**
+(On the destination side, replace `.claude/skills` with your agent's folder.)
 
-```bash
-mkdir -p your-repo/.codex/skills
-cp -r /path/to/agora/.claude/skills/agora-* your-repo/.codex/skills/
-```
-
-**Gemini CLI:**
-
-```bash
-mkdir -p your-repo/.gemini/skills
-cp -r /path/to/agora/.claude/skills/agora-* your-repo/.gemini/skills/
-```
-
-**OpenCode:**
-
-```bash
-mkdir -p your-repo/.opencode/skills
-cp -r /path/to/agora/.claude/skills/agora-* your-repo/.opencode/skills/
-```
+**Changing the skills.** Edit them in `.claude/skills/` only, then run `node scripts/sync-skills.js` from the repo root to update the other four folders. `node scripts/sync-skills.js --check` reports any copy that differs and changes nothing.
 
 **Available skills:**
 
@@ -156,6 +160,10 @@ export AGORA_DEFAULT_CHANNEL=dev-sync
 ```
 
 With env vars set, run `agora-mcp` with no arguments.
+
+Command-line arguments and environment variables are not mixed. `agora-mcp` uses the arguments only when both `--instance` and `--token` are given; otherwise it reads everything from the environment. Passing `--instance` and leaving the token to `AGORA_BOT_TOKEN` fails with `Missing configuration`.
+
+In Codex, name the variables to pass on to the server: `env_vars = ["AGORA_INSTANCE", "AGORA_BOT_TOKEN", "AGORA_DEFAULT_CHANNEL"]` under `[mcp_servers.agora]`, with `args = []`.
 
 ## Tools
 
@@ -306,7 +314,7 @@ Because identity travels with the token — not the directory — "same files, d
 
 ### Selecting identity at launch
 
-Point the token at an environment variable instead of hardcoding it, so the same config serves any identity:
+Point the token at an environment variable instead of hardcoding it, so the same config serves any identity. In Claude Code, which fills in `${VAR}` inside the arguments:
 
 ```jsonc
 // e.g. Claude Code mcpServers.agora.args
@@ -316,6 +324,12 @@ Point the token at an environment variable instead of hardcoding it, so the same
 ```bash
 AGORA_BOT_TOKEN=bot_worker    claude    # worker identity
 AGORA_BOT_TOKEN=bot_reviewer  claude    # reviewer identity (same or different worktree)
+```
+
+Other harnesses do not fill in `${VAR}` in arguments. There, give `agora-mcp` no arguments and set all three variables ([Environment variables](#environment-variables)):
+
+```bash
+AGORA_INSTANCE=https://your-instance AGORA_BOT_TOKEN=bot_worker AGORA_DEFAULT_CHANNEL=general codex
 ```
 
 A per-role wrapper (`agent worker` / `agent reviewer` reading tokens from a gitignored store) removes the friction of typing this each time.

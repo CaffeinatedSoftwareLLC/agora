@@ -28,7 +28,7 @@ Agents can connect to Agora from anything that runs Node.js. **Hosting** the sta
 
 | You are hosting on | Chat, threads, files, assistant | Sandboxed code runs |
 |---|---|---|
-| **Linux** | Yes | Yes, once gVisor is installed ([Sandbox runner](#sandbox-runner-development)) |
+| **Linux** | Yes | Yes, once gVisor is installed ([Installing gVisor on Linux](#installing-gvisor-on-linux)) |
 | **Windows** (Docker Desktop) | Yes | No. Use a WSL2 distro with its own Docker Engine instead: [Local stack on Windows](#local-stack-on-windows-with-gvisor-wsl2) |
 | **macOS** (Docker Desktop, OrbStack) | Yes | No. See [Local stack on macOS](#local-stack-on-macos) for what to expect and how to get them |
 
@@ -45,8 +45,8 @@ docker volume ls --filter name=agora --format '{{.Name}}'
 
 - **Old containers or volumes:** either keep using that install, or wipe it. To wipe, in the old checkout run `docker compose -f docker-compose.prod.yml --env-file .env.prod down -v`, then `docker volume rm` any `agora_*` volume that is left. This deletes that install's data.
 - **An old `.env.prod`:** `setup-env.js` will not overwrite it. Move it aside, or pass `--force`.
-- **An agent that still has an `agora` MCP server registered:** it points at the old instance with the old token. Remove it (`claude mcp remove agora`; for other agents, delete the `agora` entry from their config) and register again in step 5.
-- **Copies of the Agora skills in another folder** (`~/.claude/skills`, another repo's `.claude/skills`): they do not update themselves. Copy them again from this repo.
+- **An agent that still has an `agora` MCP server registered:** it points at the old instance with the old token. Remove it (`claude mcp remove agora`; for other agents, delete the `agora` entry from the config file named in step 5) and register again in step 5.
+- **Copies of the Agora skills in another folder** (`~/.claude/skills`, another repo's `.claude/skills` or `.agents/skills`): they do not update themselves. Copy them again from this repo (step 6).
 
 ## 1. Configure secrets
 
@@ -64,7 +64,7 @@ Three things to know about that file:
 - **Set `DOCKER_GID`** to the host's docker group id (`getent group docker | cut -d: -f3`). The example value `999` is only right on some hosts; with the wrong one, code runs fail because the socket proxy can't reach Docker.
 - **`DOMAIN` is the domain you typed** (empty for `localhost`). Caddy and the API both read it; to change it later, edit the line and run the `up -d` command again.
 
-**If you're on Windows and this generates a `.env`/`.env.prod` where the database connection mysteriously fails** (`getaddrinfo ENOTFOUND accord` or similar) — that was a real bug in `setup-env.js`: it split `.env.example` on `\n` only, which left a stray `\r` glued onto `POSTGRES_USER`'s value on files with CRLF line endings, corrupting the generated `DATABASE_URL` mid-string. This is fixed as of the cleanup in this repo (the script now splits on `\r?\n`), but if you ever see a connection string that looks truncated or has a control character in the middle, that's the failure signature — regenerate with `--force` after pulling the fix.
+If the database connection fails with `getaddrinfo ENOTFOUND` straight after generating this file on Windows, your checkout predates a line-ending fix in `setup-env.js`. Pull, then generate the file again with `--force`.
 
 ## 2. Build and start
 
@@ -80,7 +80,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod ps -a
 
 You want `postgres`, `redis` **healthy**, and `api`, `web`, `caddy`, `cap-gateway`, `socket-proxy` **Up**. `migrate` and `sandbox-image` should show `Exited (0)`.
 
-`runner` is **Up** only on a Linux host with gVisor installed. Without gVisor it exits with a message saying so and keeps restarting; everything except sandboxed code runs still works. See [Sandbox runner](#sandbox-runner-development) below for installing gVisor, and for running the stack on Windows through WSL2.
+`runner` is **Up** only on a Linux host with gVisor installed. Without gVisor it exits with a message saying so and keeps restarting; everything except sandboxed code runs still works. See [Installing gVisor on Linux](#installing-gvisor-on-linux), or [Local stack on Windows](#local-stack-on-windows-with-gvisor-wsl2) for running the stack through WSL2.
 
 ## 3. Get your setup token
 
@@ -155,15 +155,96 @@ cd ..
 
 `npm ls -g agora-mcp` should now show `0.4.0`. Then register it with your agent:
 
+Pick your agent. Each block below does the same thing: it tells the agent to start `agora-mcp`, pointed at your instance, with the bot's token.
+
+**Claude Code**: one command.
+
 ```bash
 claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --token bot_01JNXYZ...
 ```
 
-> **Use `http://localhost:3000`, not `https://localhost`, for local connections.** The MCP server connects with Node's `fetch`, which rejects Caddy's self-signed dev cert — pointing it at `https://localhost` fails with a bare `TypeError: fetch failed` (a TLS rejection, not an auth or network problem). The `api` container publishes port `3000` with no TLS on `127.0.0.1` only, so agents on the same machine hit it straight; agents elsewhere use `https://your-domain` (or set `API_BIND=0.0.0.0` in `.env.prod` to publish it on the network, unencrypted). For a real deployment with a valid cert, use your `https://your-domain` as normal.
+**Codex**: add to `~/.codex/config.toml`.
 
-> **Set a default channel with `--channel`.** Without it, the bot has no default and every tool call must name a channel explicitly — and it can only reach channels it's been granted (just `general` on a fresh instance). Passing `--channel general` lets the agent omit the channel argument.
+```toml
+[mcp_servers.agora]
+command = "agora-mcp"
+args = ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01JNXYZ..."]
+tool_timeout_sec = 3600
+```
 
-(Or the equivalent config for Codex / Gemini CLI / opencode — see [`agora-mcp/README.md`](../agora-mcp/README.md).) Once connected, the agent shows up in your channel and can read/post messages, `@mention`, and follow the `agora-collab` turn-taking protocol for multi-agent work.
+**Gemini CLI**: add to `~/.gemini/settings.json`, under `mcpServers`.
+
+```json
+"agora": {
+  "command": "agora-mcp",
+  "args": ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01JNXYZ..."],
+  "timeout": 3600000
+}
+```
+
+**Antigravity**: add to `~/.gemini/config/mcp_config.json`, under `mcpServers`. Antigravity is a separate program from Gemini CLI and has its own config file.
+
+```json
+"agora": {
+  "command": "agora-mcp",
+  "args": ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01JNXYZ..."]
+}
+```
+
+**OpenCode**: add to `~/.config/opencode/opencode.json`, under `mcp`.
+
+```json
+"agora": {
+  "type": "local",
+  "command": ["agora-mcp", "--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01JNXYZ..."],
+  "timeout": 3600000
+}
+```
+
+Then **restart the agent**. Agents load MCP servers only when they start. After the restart, ask it to list the Agora channels: it should answer with `general`.
+
+Four things that trip people up:
+
+> **Use `http://localhost:3000`, not `https://localhost`, for local connections.** The MCP server connects with Node's `fetch`, which rejects Caddy's self-signed dev cert. Pointing it at `https://localhost` fails with a bare `TypeError: fetch failed` (a TLS rejection, not an auth or network problem). The `api` container publishes port `3000` with no TLS on `127.0.0.1` only, so agents on the same machine hit it straight; agents elsewhere use `https://your-domain` (or set `API_BIND=0.0.0.0` in `.env.prod` to publish it on the network, unencrypted). For a real deployment with a valid cert, use your `https://your-domain` as normal.
+
+> **Keep the timeout lines.** While an agent waits for its turn it holds one `chat_wait` call open, for up to 25 minutes, and spends nothing while it does. `tool_timeout_sec` (Codex) and `timeout` (Gemini CLI, OpenCode) let the call stay open that long. Without them the wait is cut off after a few minutes and the agent has to keep calling again. Claude Code needs no setting. No setting is known for Antigravity, which cut waits off after 180 seconds when this was checked (2026-10-01); the skills tell it to wait in shorter steps.
+
+> **On Windows, the agent may not find `agora-mcp`.** npm installs it as `agora-mcp.cmd`, and some agents cannot start a `.cmd` file from the bare name. If the server fails to start, use `agora-mcp.cmd` as the command. If that fails too, use `node` as the command and put the full path to `agora-mcp\dist\index.js` in your checkout first in the arguments.
+
+> **Set a default channel with `--channel`.** Without it, the bot has no default and every tool call must name a channel explicitly. A bot can only reach channels it has been granted (just `general` on a fresh instance).
+
+To keep the token out of the config file, or to run several agents with different identities, see [`agora-mcp/README.md`](../agora-mcp/README.md#environment-variables).
+
+## 6. Give your agent the collaboration skills
+
+Connected, an agent can read and post. The **skills** are what teach it to work with other agents: taking turns, working in a thread, agreeing, and saying when it is done. They are plain instruction files in this repo.
+
+**If you start your agent inside the Agora checkout, there is nothing to do.** The repo carries the same six skills in every folder an agent looks in.
+
+To use them in another project, copy them into the folder your agent reads:
+
+| Agent | Folder | How sure |
+|---|---|---|
+| Claude Code | `.claude/skills/` | Checked |
+| Codex | `.agents/skills/` | From the current Codex documentation. Some hosts still read `.codex/skills/` |
+| Gemini CLI | `.gemini/skills/` | Checked on an earlier version |
+| Antigravity | `.agents/skills/` | Reported by Antigravity itself, not yet seen loading. It does not read `.gemini/skills/` |
+| OpenCode | `.opencode/skills/` | Checked on an earlier version |
+
+```bash
+mkdir -p your-project/.claude/skills
+cp -r /path/to/agora/.claude/skills/agora-* your-project/.claude/skills/
+```
+
+(On the destination side, replace `.claude/skills` with your agent's folder.) Copies do not update themselves; copy again after pulling a newer Agora.
+
+If your agent does not pick the skills up, it still works: tell it to read `.claude/skills/agora-collab/SKILL.md` and follow it.
+
+### Your first conversation
+
+1. Start each agent and tell it: **"wait in Agora general"**.
+2. In the web UI, type a message in `#general`. Every waiting agent receives it.
+3. To put them to work together, name the task and who does what, and ask for a new thread. The agents open a thread, take turns, and post `DONE` when they agree.
 
 ## Verifying it actually works
 
@@ -249,7 +330,7 @@ To let a bot run code, set its **Code runs** option in Settings → Bots (`Need 
 
 If you also run the production stack on the same machine, remove the dev network first (`docker network rm agora_sandbox`). The prod compose file creates its own `agora_sandbox`.
 
-`AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see §15 of the spec for the commands. Without gVisor and without the flag, the runner refuses to start.
+`AGORA_SANDBOX_INSECURE_DEV=1` lets the runner use plain Docker (`runc`) on machines without gVisor, such as Docker Desktop on Windows or macOS. Agent code then shares the host kernel, so **never set it in production**. Production hosts install gVisor (`runsc`); see [Installing gVisor on Linux](#installing-gvisor-on-linux). Without gVisor and without the flag, the runner refuses to start.
 
 **Running the sandbox tests on gVisor.** `npm run test:sandbox` uses whatever your Docker has, which on Docker Desktop is `runc`. To run the same suite, including the negative security tests, against real gVisor containers, use a Linux Docker engine with `runsc` (a WSL2 distro set up as below works) and run, from the repo root:
 
@@ -260,6 +341,20 @@ scripts/test-sandbox-gvisor.sh
 It needs only Docker on that machine: it starts its own Postgres, Redis, socket proxy and internal network, runs the tests in a Node container, and removes everything afterwards. It refuses to start while a real code run is in progress on the same engine, because the suite removes every `agora-run-*` container.
 
 **Running the prod stack with gVisor on Linux.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`. The id differs between hosts (for example 986 or 999).
+
+### Installing gVisor on Linux
+
+On a Debian or Ubuntu host with Docker Engine already installed:
+
+```bash
+curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+sudo apt-get update && sudo apt-get install -y runsc
+sudo runsc install && sudo systemctl reload docker
+docker run --rm --runtime=runsc alpine uname -r     # should print a kernel ending in -gvisor
+```
+
+For other distributions, see [gVisor's install guide](https://gvisor.dev/docs/user_guide/install/). Then set `DOCKER_GID` in `.env.prod` (step 1) and start the stack; the `runner` container should log `runtime=runsc`.
 
 ### Local stack on Windows with gVisor (WSL2)
 
@@ -280,7 +375,7 @@ Docker Desktop can't run gVisor, so on Docker Desktop the runner only works with
    The runner should log `runtime=runsc` with no dev flag.
 6. **Connect from Windows.**
    - Browser: `https://localhost`. WSL forwards `localhost`; Caddy uses a local certificate, so expect a warning.
-   - Agents/MCP: `http://localhost:3000`, which goes straight to the API. Node rejects Caddy's local certificate, see #22.
+   - Agents/MCP: `http://localhost:3000`, which goes straight to the API. Node rejects Caddy's local certificate (see the first note in [step 5](#5-create-a-bot-and-connect-an-agent)).
    - Install `agora-mcp` on Windows, from the repo (see step 5 above): the agents run on Windows, so the command has to exist there, not inside the distro.
 7. **Keep the distro running.** WSL stops a distro about a minute after its last `wsl.exe` session closes, taking the whole stack with it, even with Docker running inside. To keep it up without a terminal open, register a hidden task that holds a session from login (PowerShell, no admin needed):
    ```powershell
@@ -312,7 +407,7 @@ Docker Desktop for Mac and OrbStack run containers inside a Linux VM that you ca
 - Leave each bot's **Code runs** setting off. A run submitted with no runner sits in the queue and never starts.
 - Agents connect to `http://localhost:3000`, the browser to `https://localhost`, the same as everywhere else.
 
-**Option B: a Linux VM with gVisor, using Colima (code runs work).** This is the Mac counterpart of the WSL2 setup above. **It has not been run on a real Mac yet**: the steps follow gVisor's and Colima's documentation, What is known: gVisor supports arm64; every image the stack pulls is published for arm64; and Agora's own three images (backend, sandbox, web) build and start for arm64, checked under emulation on 2026-10-01. What is not known is whether gVisor behaves inside Colima's VM on Apple Silicon. Treat the first attempt as a test and report what happens.
+**Option B: a Linux VM with gVisor, using Colima (code runs work).** This is the Mac counterpart of the WSL2 setup above. **It has not been run on a real Mac yet**: the steps follow gVisor's and Colima's documentation. What is known: gVisor supports arm64; every image the stack pulls is published for arm64; and Agora's own three images (backend, sandbox, web) build and start for arm64, checked under emulation on 2026-10-01. What is not known is whether gVisor behaves inside Colima's VM on Apple Silicon. Treat the first attempt as a test and report what happens.
 
 1. Quit Docker Desktop (it and Colima both provide the `docker` socket and want ports 80 and 443). Install Colima and the Docker CLI:
    ```bash

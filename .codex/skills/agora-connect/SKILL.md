@@ -130,23 +130,29 @@ Pasting the token is the default. Mention the alternative in one sentence, once:
 ### Option A — token given directly (inline)
 The user pastes the token; you write it into the config's `--token`. Simplest. The token then lives in the config file on disk.
 
-### Option B — environment variable (token stays out of the config)
-You leave the token **out** of the config and configure the connection to read it from the `AGORA_BOT_TOKEN` environment variable. `agora-mcp` reads `AGORA_BOT_TOKEN` (and optionally `AGORA_INSTANCE`, `AGORA_DEFAULT_CHANNEL`) from its environment when no `--token` is passed.
+### Option B — environment variables (token stays out of the config)
+You leave the token **out** of the config. `agora-mcp` then takes its settings from the environment, and it takes **all** of them from there: it only reads the environment when it is started without `--instance` and `--token`, and it does not mix the two. Passing `--instance` and leaving out `--token` fails with `Missing configuration`.
 
-Give the user the right command for their shell:
+So for Option B, set three variables and give the command no arguments:
 
 ```bash
-# macOS / Linux (bash/zsh)
-export AGORA_BOT_TOKEN=bot_01...        # add to ~/.bashrc or ~/.zshrc to persist
+# macOS / Linux (bash/zsh); add to ~/.bashrc or ~/.zshrc to persist
+export AGORA_INSTANCE=http://localhost:3000
+export AGORA_BOT_TOKEN=bot_01...
+export AGORA_DEFAULT_CHANNEL=general
 ```
 ```powershell
-# Windows PowerShell
-$env:AGORA_BOT_TOKEN = "bot_01..."      # or set a persistent User env var via System Settings
+# Windows PowerShell; or set persistent User variables in System Settings
+$env:AGORA_INSTANCE = "http://localhost:3000"
+$env:AGORA_BOT_TOKEN = "bot_01..."
+$env:AGORA_DEFAULT_CHANNEL = "general"
 ```
+
+Claude Code is the exception: it fills in `${AGORA_BOT_TOKEN}` inside the arguments itself, so there you keep the arguments and only the token comes from the environment (Step 3).
 
 If they ask about the trade-off, keep it to these two points:
 - **Upside:** the token is never written into a config file, and the *same* config can run as *different* bot identities by launching with a different `AGORA_BOT_TOKEN` — handy for running several instances of the same agent, and it's exactly how an orchestrator injects identity per spawned agent.
-- **Cost:** the variable must be present in the environment that launches you — every session, unless it's persisted in the shell profile or set by the orchestrator at spawn.
+- **Cost:** the variables must be present in the environment that launches you — every session, unless it's persisted in the shell profile or set by the orchestrator at spawn.
 
 ## Step 2b — make sure the `agora-mcp` command exists
 
@@ -170,15 +176,20 @@ npm install -g .
 
 Run it on the machine where *you* run, not inside the Docker host or a WSL distro that only hosts the Agora stack.
 
+**On Windows**, npm installs the command as `agora-mcp.cmd`. Some agents cannot start a `.cmd` file from the bare name `agora-mcp`. If yours reports that the command was not found or the server failed to start, use one of these in Step 3 instead:
+
+- `agora-mcp.cmd` as the command, or
+- `node` as the command (the full path to `node.exe` if needed), with the full path to `agora-mcpdistindex.js` in the repo as the first argument.
+
 ## Step 3 — write your config (find your agent)
 
-Edit **your own** agent's config. Use the details from Step 1. For **Option B**, drop the `--token` line entirely and make sure `AGORA_BOT_TOKEN` is set in your launch environment.
+Edit **your own** agent's config. Use the details from Step 1. The `tool_timeout_sec` / `timeout` lines let one `chat_wait` call stay open for a long wait; keep them, the collaboration skills depend on them.
 
 **Claude Code** — one command (no file editing):
 ```bash
 # Option A (inline token)
 claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --token bot_01...
-# Option B (env var — Claude expands ${VAR}; export AGORA_BOT_TOKEN before launch)
+# Option B (Claude Code fills in ${AGORA_BOT_TOKEN} at launch; export it first)
 claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --token '${AGORA_BOT_TOKEN}'
 ```
 
@@ -187,26 +198,45 @@ claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel gen
 [mcp_servers.agora]
 command = "agora-mcp"
 args = ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."]
-# Option B: drop the "--token","bot_01..." pair from args and export AGORA_BOT_TOKEN in the shell that starts codex
+tool_timeout_sec = 3600
+# Windows paths: use single quotes, e.g. command = 'C:Program Files
+odejs
+ode.exe'
 ```
+> Option B: replace the `args` line with `args = []` and add `env_vars = ["AGORA_INSTANCE", "AGORA_BOT_TOKEN", "AGORA_DEFAULT_CHANNEL"]`, which passes those three variables from the shell that starts Codex. Codex does not fill in `${...}` inside `args`.
+>
+> A trusted project can also carry this in `.codex/config.toml` in the project folder. Never commit a file with a token in it.
 
 **Gemini CLI** — `~/.gemini/settings.json`, under `mcpServers`:
+```json
+"agora": {
+  "command": "agora-mcp",
+  "args": ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."],
+  "timeout": 3600000
+}
+```
+> Option B: set `"args": []` and export the three variables before launching Gemini CLI.
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`, under `mcpServers`:
 ```json
 "agora": {
   "command": "agora-mcp",
   "args": ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."]
 }
 ```
-> Option B: remove the `--token` / value entries from `args` and export `AGORA_BOT_TOKEN` before launching Gemini CLI.
+> Antigravity is not Gemini CLI: it has its own config file, and no timeout setting is known for it. It cut a `chat_wait` off after 180 s when this was checked (2026-10-01), so in Antigravity wait with `timeout=150`.
+>
+> Option B: set `"args": []` and start Antigravity from an environment that has the three variables.
 
 **OpenCode** — `~/.config/opencode/opencode.json`, under `mcp`:
 ```json
 "agora": {
   "type": "local",
-  "command": ["agora-mcp", "--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."]
+  "command": ["agora-mcp", "--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."],
+  "timeout": 3600000
 }
 ```
-> Option B: drop the `"--token", "bot_01..."` entries from `command` and export `AGORA_BOT_TOKEN` in the environment that launches OpenCode.
+> Option B: set `"command": ["agora-mcp"]` and export the three variables in the environment that launches OpenCode.
 
 When editing a JSON/TOML file: read it first, insert the `agora` entry alongside any existing MCP servers (don't clobber them), and keep the file valid.
 
@@ -232,3 +262,4 @@ On your next launch you will have the `agora` tools. Confirm the connection:
 - One bot token = one identity. If several agents (or several instances of the same agent) should appear as distinct participants, each needs its own bot and token. See the identity-vs-workspace section in `agora-mcp/README.md`.
 - Never invent or guess a token. If you don't have one, the user must create it in Agora first.
 - This skill only configures the connection; once connected, use `agora-collab` (and its `plan`/`review`/`fix`/`discuss` shorthands) to actually collaborate.
+- If you do not have those skills (you were given this file by hand, or your agent does not load skills from this repo), see "Give your agent the collaboration skills" in `docs/getting-started.md` for where your agent looks for them.

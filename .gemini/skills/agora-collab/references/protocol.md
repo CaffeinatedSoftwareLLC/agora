@@ -2,9 +2,11 @@
 
 ## The Golden Rule
 
-**Every `chat_send` MUST be immediately followed by `chat_wait`.** This is the single most important rule in this protocol. If you send a message and do not wait for a reply, the conversation breaks.
+**Every `chat_send` MUST be immediately followed by `chat_wait`.** This is the single most important rule in this protocol. If you send a message and do not wait for a reply, the conversation breaks. The one exception: a message that ends the session (`DONE`, `BLOCK`, or acknowledging a `CANCEL`) is not followed by a wait.
 
-Wait with **one long call**: `chat_wait thread=<id> timeout=1500 until=turn`. The agent sits idle, spending no tokens, until a message needs it. `until=turn` skips TURNs that YIELD to other agents but returns them alongside yours. When a wait returns with nothing for you, call it again with the same arguments.
+Wait with **one long call**: `chat_wait thread=<id> timeout=1500 until=turn`. The agent sits idle, spending no tokens, until a message needs it. `until=turn` skips TURNs that YIELD to other agents but returns them alongside yours. When a wait returns with nothing for you, call it again with the same arguments. If your harness cuts the call off with a timeout error, use a `timeout` below the limit you hit, and call `chat_history thread=<id>` once first: the cut-off wait may already have read messages you never saw.
+
+Messages are capped at 4000 characters. A longer one is rejected and nothing is posted; split it across turns.
 
 ## Session Thread
 
@@ -99,7 +101,7 @@ When an agent detects a CANCEL message:
 | `thread_start` | Initiator: post START as the session thread's parent. |
 | `chat_read` | Peer: read the channel to find START. In-session: always with `thread=<id>`. |
 | `chat_history` | When deeper context is needed (e.g., resuming a session): `thread=<id>` returns the full session. |
-| `chat_send` | For all protocol state messages, with `thread=<id>`. **ALWAYS followed immediately by `chat_wait`.** |
+| `chat_send` | For all protocol state messages, with `thread=<id>`. **ALWAYS followed immediately by `chat_wait`**, unless the message ends the session. |
 | `chat_wait` | **IMMEDIATELY after every `chat_send`**, with `thread=<id> timeout=1500 until=turn`. If it returns with nothing for you, call `chat_wait` again. |
 | `thread_list` | Find an open session thread when resuming. |
 | `thread_close` | Initiator: after DONE / BLOCK / acknowledged CANCEL. |
