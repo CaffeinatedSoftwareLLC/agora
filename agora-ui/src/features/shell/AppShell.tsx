@@ -9,6 +9,7 @@ import { ArcChannelSidebar } from './ArcChannelSidebar';
 import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 import { ThreadPanel } from '../messages/ThreadPanel';
+import { FilesPanel } from '../messages/FilesPanel';
 import { useThreadStore } from '../../stores/threadStore';
 
 export function AppShell() {
@@ -21,6 +22,7 @@ export function AppShell() {
   const byServer = useChannelStore(s => s.byServer);
   const connectionStatus = useUIStore(s => s.connectionStatus);
   const membersOpen = useUIStore(s => s.membersOpen);
+  const filesOpen = useUIStore(s => s.filesOpen);
   const openThreadId = useThreadStore(s => s.openThreadId);
 
   // Sync palette → CSS custom properties so Tailwind classes follow the active theme
@@ -103,6 +105,7 @@ export function AppShell() {
         <ArcChannelSidebar />
         <ArcContentArea />
         {membersOpen && <MembersSidebar />}
+        {filesOpen && <FilesPanel />}
         {openThreadId && <ThreadPanel />}
       </div>
     </div>

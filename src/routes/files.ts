@@ -1,69 +1,16 @@
 import { FastifyInstance } from 'fastify';
 import path from 'path';
 import { generateUlid } from '../utils/ulid';
-import { computePermissions, Permissions } from '../permissions';
-import { checkChannelMembership } from './shared';
+import { Permissions } from '../permissions';
+import { checkChannelPermissions as checkFilePermissions } from '../lib/channel-access';
 import { storage } from '../lib/storage';
 import { encryptFile, decryptFile } from '../lib/encryption';
 import { INLINE_SAFE_MIMES } from '../lib/file-validation';
 import { storeFile } from '../lib/file-store';
+import { searchChannelFiles, MAX_LIMIT } from '../lib/file-search';
 import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 
-
-async function checkFilePermissions(
-    db: any,
-    channelId: string,
-    userId: string,
-    requiredPerms: bigint
-): Promise<{ allowed: boolean; error?: string; status?: number }> {
-    const channelRow = await db.query('SELECT id, server_id FROM channels WHERE id = $1', [channelId]);
-    if (channelRow.rows.length === 0) return { allowed: false, error: 'Channel not found', status: 404 };
-    const channel = channelRow.rows[0];
-
-    if (channel.server_id) {
-        const serverId = channel.server_id.trim();
-        const serverRow = await db.query('SELECT owner_id, everyone_role_id FROM servers WHERE id = $1', [serverId]);
-        if (serverRow.rows.length === 0) return { allowed: false, error: 'Server not found', status: 404 };
-
-        const memberCheck = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [channel.server_id, userId]);
-        if (memberCheck.rows.length === 0) return { allowed: false, error: 'Not a server member', status: 403 };
-
-        const userRolesRes = await db.query('SELECT role_id FROM member_roles WHERE server_id = $1 AND user_id = $2', [channel.server_id, userId]);
-        const roleIds = userRolesRes.rows.map((r: any) => r.role_id.trim());
-
-        const allRoleIds = [...roleIds, serverRow.rows[0].everyone_role_id.trim()];
-        const rolesRes = await db.query('SELECT id, permissions FROM roles WHERE id = ANY($1)', [allRoleIds]);
-        const roles = new Map<string, { permissions: bigint }>(rolesRes.rows.map((r: any) => [r.id.trim(), { permissions: BigInt(r.permissions) }]));
-
-        const roleOverridesRes = await db.query('SELECT role_id, allow, deny FROM channel_role_overrides WHERE channel_id = $1', [channelId]);
-        const channelRoleOverrides = new Map<string, { allow: bigint; deny: bigint }>(roleOverridesRes.rows.map((r: any) => [r.role_id.trim(), { allow: BigInt(r.allow), deny: BigInt(r.deny) }]));
-
-        const memberOverrideRes = await db.query('SELECT allow, deny FROM channel_member_overrides WHERE channel_id = $1 AND user_id = $2', [channelId, userId]);
-        const channelMemberOverride = memberOverrideRes.rows[0]
-            ? { allow: BigInt(memberOverrideRes.rows[0].allow), deny: BigInt(memberOverrideRes.rows[0].deny) }
-            : undefined;
-
-        const perms = computePermissions({
-            userId: userId.trim(),
-            roleIds,
-            server: { ownerId: serverRow.rows[0].owner_id.trim(), everyoneRoleId: serverRow.rows[0].everyone_role_id.trim() },
-            roles,
-            channelRoleOverrides,
-            channelMemberOverride,
-        });
-
-        if ((perms & requiredPerms) !== requiredPerms) {
-            return { allowed: false, error: 'Missing required permissions', status: 403 };
-        }
-
-        return { allowed: true };
-    } else {
-        const isMember = await checkChannelMembership(db, channelId, userId);
-        if (!isMember) return { allowed: false, error: 'Not a channel member', status: 403 };
-        return { allowed: true };
-    }
-}
 
 export async function fileRoutes(app: FastifyInstance) {
 
@@ -109,6 +56,40 @@ export async function fileRoutes(app: FastifyInstance) {
             return reply.status(result.status).send({ error: result.error, ...(result.details ? { details: result.details } : {}) });
         }
         return reply.status(201).send(result.file);
+    });
+
+    // GET /channels/:id/files/search?q=&tag=&limit= → files in the channel, best match first.
+    // Metadata only (names, tags, scores), never file text. Bots may call it for channels they can access.
+    app.get('/channels/:id/files/search', {
+        config: {
+            rateLimit: {
+                max: 30,
+                timeWindow: '1 minute',
+                keyGenerator: (request: any) => request.userId,
+            },
+        },
+        schema: {
+            querystring: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    q: { type: 'string', maxLength: 500 },
+                    tag: { type: 'string', maxLength: 40 },
+                    limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { id: channelId } = request.params as any;
+        const { q, tag, limit } = request.query as { q?: string; tag?: string; limit?: number };
+        // Authorization happens inside, before anything is read; the search itself runs
+        // as the server (bots are not server members, so row-level policies cannot express their access)
+        const result = await searchChannelFiles(
+            { db: app.db, store: storage, encryptionKey: config.encryptionKey },
+            { channelId, userId: request.userId, isBot: !!request.isBot, query: q, tag, limit },
+        );
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return reply.send(result.body);
     });
 
     // GET /files/:fileId → binary file content

@@ -34,7 +34,8 @@
     "pg": "^8.13.0",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.0",
-    "ulid": "^2.3.0"
+    "ulid": "^2.3.0",
+    "unpdf": "1.8.1"
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",

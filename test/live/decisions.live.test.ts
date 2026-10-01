@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { typesafeAdapter } from '../../src/ai/adapters/typesafe';
 import { validateDecideResult } from '../../src/ai/decide-validate';
-import { injectionQuestion, intentQuestion, type AssistantIntent } from '../../src/ai/decision-questions';
+import { injectionQuestion, intentQuestion, relevanceQuestion, tagQuestion, tagRelevanceQuestion, type AssistantIntent } from '../../src/ai/decision-questions';
+import { DEFAULT_TAGS } from '../../src/lib/file-tags';
 import type { DecideQuestion } from '../../src/ai/adapters';
 
 /**
@@ -67,6 +68,39 @@ describe.skipIf(!live)('TypeSafe live contract', () => {
         const narrowed = await ask('search the web for the latest gVisor release', ['chat', 'audio_overview']);
         expect(['chat', 'audio_overview']).toContain(narrowed.choice);
     }, 60_000);
+
+    test('tagging, tag relevance and ranking questions with the default tags', async () => {
+        const fx = fixture('tagging.json') as {
+            documents: { id: string; tags: string[]; not: string[]; text: string }[];
+            queries: { query: string; best: string; tags: string[] }[];
+        };
+        const key = (name: string) => name.replace(/[^A-Za-z0-9]/g, '_');
+        const ask = async (state: Record<string, string>, questions: Record<string, DecideQuestion>) =>
+            validateDecideResult(questions, await typesafeAdapter.decide!(creds, { model: 'jev-latest', state, questions, timeoutMs: 20_000 }));
+        const p = (answer: unknown) => (answer as { probability: number }).probability;
+        const wrong: string[] = [];
+
+        // Tagging: each document gets the tags it must have and none it must not (threshold 0.5)
+        for (const doc of fx.documents) {
+            const result = await ask({ document: doc.text }, Object.fromEntries(DEFAULT_TAGS.map(t => [key(t.name), tagQuestion(t)])));
+            for (const tag of doc.tags) if (p(result.answers[key(tag)]) < 0.5) wrong.push(`${doc.id}: missing tag "${tag}"`);
+            for (const tag of doc.not) if (p(result.answers[key(tag)]) >= 0.5) wrong.push(`${doc.id}: wrong tag "${tag}"`);
+        }
+
+        for (const q of fx.queries) {
+            // Tag relevance: the expected tag is the strongest one for the query
+            const rel = await ask({ query: q.query }, Object.fromEntries(DEFAULT_TAGS.map(t => [key(t.name), tagRelevanceQuestion(t)])));
+            const strongest = DEFAULT_TAGS.map(t => t.name).sort((a, b) => p(rel.answers[key(b)]) - p(rel.answers[key(a)]))[0];
+            if (!q.tags.includes(strongest)) wrong.push(`"${q.query}": strongest tag was "${strongest}", expected ${q.tags.join(' or ')}`);
+
+            // Ranking: one call per query and document; the expected document scores highest
+            const scores = await Promise.all(fx.documents.map(async doc =>
+                ({ id: doc.id, score: p((await ask({ query: q.query, document: doc.text }, { relevance: relevanceQuestion() })).answers.relevance) })));
+            const best = scores.sort((a, b) => b.score - a.score)[0];
+            if (best.id !== q.best) wrong.push(`"${q.query}": best document was ${best.id}, expected ${q.best}`);
+        }
+        expect(wrong).toEqual([]);
+    }, 120_000);
 
     test('injection question: golden inputs land in their verdict class, batched in one call', async () => {
         const { cases } = fixture('injection.json') as { cases: { id: string; expect: string; text: string }[] };

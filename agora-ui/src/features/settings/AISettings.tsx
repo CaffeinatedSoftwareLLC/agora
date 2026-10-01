@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { aiApi, botApi, serverApi, ApiError } from '../../lib/api';
-import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIProvider, AIRoute } from '../../lib/api';
+import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
 import { AssistantSection } from './ai/AssistantSection';
 import { DecisionsSection } from './ai/DecisionsSection';
+import { TagsSection } from './ai/TagsSection';
 import { UsageSection } from './ai/UsageSection';
 import { ChangesSection } from './ai/ChangesSection';
 
@@ -22,6 +23,7 @@ interface AIState {
   botChannelIds: Set<string>;
   usage: AICapabilityUsage[];
   decisions: AIDecisionSettings;
+  tags: { tags: AIFileTag[]; max: number; queue: AITaggingQueue };
 }
 
 export function AISettings() {
@@ -39,7 +41,7 @@ export function AISettings() {
     let cancelled = false;
     (async () => {
       try {
-        const [adapters, providers, routes, config, channels, usage, decisions] = await Promise.all([
+        const [adapters, providers, routes, config, channels, usage, decisions, tags] = await Promise.all([
           aiApi.listAdapters(instanceServerId),
           aiApi.listProviders(instanceServerId),
           aiApi.listRoutes(instanceServerId),
@@ -47,6 +49,7 @@ export function AISettings() {
           serverApi.getChannels(instanceServerId),
           aiApi.getCapabilityUsage(instanceServerId, USAGE_DAYS),
           aiApi.getDecisions(instanceServerId),
+          aiApi.listTags(instanceServerId),
         ]);
         let botChannelIds = new Set<string>();
         if (config.configured && config.botId) {
@@ -65,6 +68,7 @@ export function AISettings() {
           botChannelIds,
           usage: usage.capabilities,
           decisions,
+          tags,
         });
         setError('');
       } catch (err) {
@@ -141,6 +145,14 @@ export function AISettings() {
             key={JSON.stringify({ ...state.decisions, today: undefined })}
             serverId={instanceServerId}
             settings={state.decisions}
+            onChanged={reload}
+          />
+          <TagsSection
+            serverId={instanceServerId}
+            tags={state.tags.tags}
+            max={state.tags.max}
+            queue={state.tags.queue}
+            taggingOn={state.decisions.uses.file_tagging.enabled}
             onChanged={reload}
           />
           <UsageSection usage={state.usage} days={USAGE_DAYS} />

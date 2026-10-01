@@ -31,6 +31,8 @@ export function ArcContentArea() {
 
   const membersOpen = useUIStore(s => s.membersOpen);
   const toggleMembers = useUIStore(s => s.toggleMembers);
+  const filesOpen = useUIStore(s => s.filesOpen);
+  const toggleFiles = useUIStore(s => s.toggleFiles);
 
   const accentColor = instanceServer ? serverColor(instanceServer.name) : P.accent;
 
@@ -114,6 +116,31 @@ export function ArcContentArea() {
             >
               <line x1="12" y1="17" x2="12" y2="22" />
               <path d="M5 17h14v-1.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V6h1V2H8v4h1v4.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V17z" />
+            </svg>
+          </button>
+
+          {/* Files panel toggle */}
+          <button
+            onClick={toggleFiles}
+            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{
+              color: filesOpen ? accentColor : P.dim,
+              background: filesOpen ? `${accentColor}15` : 'transparent',
+            }}
+            title="Files in this channel"
+            aria-label="Files in this channel"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
             </svg>
           </button>
 

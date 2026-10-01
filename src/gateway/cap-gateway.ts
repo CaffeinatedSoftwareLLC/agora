@@ -6,6 +6,9 @@ import { resolveRoute, checkBudget, recordUsage, type ResolvedRoute } from '../a
 import { parseDialogue, synthesizeDialogue } from '../ai/speech';
 import { screeningPrecheck, screenSearchResult } from '../ai/search-screening';
 import { storeFile } from '../lib/file-store';
+import { searchChannelFiles, MAX_LIMIT as FILE_SEARCH_MAX_LIMIT } from '../lib/file-search';
+import { storage } from '../lib/storage';
+import { config } from '../config';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { hashToken } from '../runtime/runner';
 import type { RunLimits } from '../runtime/limits';
@@ -425,6 +428,35 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
             if (err instanceof PostError) return fail(reply, err.status, err.code, err.message);
             throw err;
         }
+    });
+
+    // ─── File search (docs/planning/jev-wbs.md, C.8) ───
+    // Not a capability: it needs no declaration and no decision-model handler of its own.
+    // A run can search the files of its own channel, as far as its bot may see them.
+    // The reply is names, tags and scores; never file text.
+    app.post('/v1/files/search', {
+        preHandler: authenticate,
+        schema: {
+            body: {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    query: { type: 'string', maxLength: 500 },
+                    tag: { type: 'string', maxLength: 40 },
+                    limit: { type: 'integer', minimum: 1, maximum: FILE_SEARCH_MAX_LIMIT },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const run = request.run!;
+        if (!run.channelId) return fail(reply, 409, 'no_channel', 'This run has no channel whose files it could search');
+        if (!(await consumeOrTrip(run, reply))) return reply;
+        const { query, tag, limit } = (request.body ?? {}) as { query?: string; tag?: string; limit?: number };
+        const result = await searchChannelFiles(
+            { db, store: storage, encryptionKey: config.encryptionKey },
+            { channelId: run.channelId, userId: run.submittedBy, isBot: true, query, tag, limit, runId: run.runId },
+        );
+        if (!result.ok) return fail(reply, result.status, result.status === 404 ? 'not_found' : 'forbidden', result.error);
+        return reply.send(result.body);
     });
 
     // ─── Results cards (WBS 4.1) ───

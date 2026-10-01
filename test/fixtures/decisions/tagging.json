@@ -1,0 +1,61 @@
+{
+  "about": "Golden inputs for the file tagging, tag relevance and ranking questions (src/ai/decision-questions.ts), using the default tags (src/lib/file-tags.ts). `tags` are the tags a document must get (at or above the 0.5 tag threshold); `not` are tags it must not get. `queries` checks ranking: for each query, `best` must score highest among the documents. The live check asserts these outcomes, never exact probabilities.",
+  "documents": [
+    {
+      "id": "collab_protocol",
+      "tags": ["protocol"],
+      "not": ["data", "test report"],
+      "text": "# agora-collab Protocol v1\n\nEvery chat_send MUST be immediately followed by chat_wait. Each session is one thread. The initiator posts START; each peer replies ACK. Agents then take turns: every TURN ends with [YIELD to=<agent>] naming the next agent, and only the named agent may respond. After each agent has spoken, post a CHECKPOINT. All agents must post DECIDE AGREE before the initiator posts DONE. Any agent may post BLOCK with a reason to stop the session."
+    },
+    {
+      "id": "storage_spec",
+      "tags": ["specification"],
+      "not": ["meeting notes", "test report"],
+      "text": "## File storage design\n\nFiles are encrypted with AES-256-GCM before they reach the storage driver. The 12-byte IV and 16-byte auth tag are stored on the files row. The storage key is <channelId>/<fileId>/blob. The ObjectStore interface has four methods: init(), put(key, data), get(key) returning the blob or null, and remove(key). The disk driver writes to a temp name and renames, so a crash never leaves a partial blob. Maximum size, allowed extensions and quota are read from instance_settings on every upload."
+    },
+    {
+      "id": "release_plan",
+      "tags": ["plan"],
+      "not": ["code", "data"],
+      "text": "Release 0.3.0 plan\n\n1. Week 1: finish the decision model foundation (owner: Claude). 2. Week 2: search screening and assistant search. 3. Week 3: file tagging worker and the tag settings page. 4. Week 4: live checks on the gVisor stack, then tag v0.3.0. Milestone: feature freeze on the 21st. Risks: PDF extraction dependency; TypeSafe rate limits during backfill."
+    },
+    {
+      "id": "ci_report",
+      "tags": ["test report"],
+      "not": ["plan", "protocol"],
+      "text": "CI run #482 on main (a1b2c3d)\n\n673 tests: 671 passed, 2 failed, 0 skipped. Duration 121 s.\n\nFailures:\n- admin.integration: 'records audit entry' expected 1 row, got 0\n- files.integration: 'rejects oversized upload' expected 413, got 500\n\nSandbox suite under gVisor: 37 of 37 passed."
+    },
+    {
+      "id": "standup_notes",
+      "tags": ["meeting notes"],
+      "not": ["code", "specification"],
+      "text": "Standup, Tuesday. Present: Eryk, Sam, Priya.\n\nSam said the migration is ready but untested on the staging copy. Priya asked whether we still need the MinIO container; Eryk said no, remove it. Decided: ship Friday if QA signs off. Open: who writes the migration notes? Sam will ask Ben. Next meeting Thursday."
+    },
+    {
+      "id": "usage_csv",
+      "tags": ["data"],
+      "not": ["meeting notes", "plan"],
+      "text": "date,capability,requests,input_tokens,output_tokens,cost_micros\n2026-09-28,chat,112,48211,9120,1820\n2026-09-28,search,14,0,0,0\n2026-09-29,chat,98,40110,8003,1511\n2026-09-29,tts,3,2210,0,440\n2026-09-30,chat,131,55902,10877,2104\n2026-09-30,video,2,0,0,800000"
+    },
+    {
+      "id": "retry_code",
+      "tags": ["code"],
+      "not": ["meeting notes", "test report"],
+      "text": "export async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {\n    let lastError: unknown;\n    for (let i = 0; i < attempts; i++) {\n        try {\n            return await fn();\n        } catch (err) {\n            lastError = err;\n            await new Promise(r => setTimeout(r, 100 * 2 ** i));\n        }\n    }\n    throw lastError;\n}"
+    },
+    {
+      "id": "plant_guide",
+      "tags": ["reference"],
+      "not": ["code", "test report"],
+      "text": "Monstera deliciosa care guide\n\nLight: bright, indirect light; direct sun scorches the leaves. Water: when the top 5 cm of soil is dry, roughly weekly in summer. Soil: a chunky, well-draining aroid mix. Humidity: 60% or more is ideal. Common problems: yellow leaves usually mean overwatering; brown crispy edges mean low humidity. Repot every two years in spring."
+    }
+  ],
+  "queries": [
+    { "query": "how do agents take turns in a thread?", "best": "collab_protocol", "tags": ["protocol"] },
+    { "query": "which tests failed in the last CI run", "best": "ci_report", "tags": ["test report"] },
+    { "query": "what did we decide about MinIO at standup", "best": "standup_notes", "tags": ["meeting notes"] },
+    { "query": "how are uploaded files encrypted and where is the key material stored", "best": "storage_spec", "tags": ["specification"] },
+    { "query": "when is the feature freeze", "best": "release_plan", "tags": ["plan"] },
+    { "query": "why are my monstera leaves turning yellow", "best": "plant_guide", "tags": ["reference"] }
+  ]
+}

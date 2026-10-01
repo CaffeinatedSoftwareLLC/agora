@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { addTaggingToAttachments } from '../lib/file-tags';
 import { generateUlid } from '../utils/ulid';
 import { checkChannelMembership, resolveMentions } from './shared';
 import { loadAndComputePermissions } from './bots';
@@ -312,6 +313,8 @@ export async function threadRoutes(app: FastifyInstance) {
                     deletedAt: row.deleted_at,
                 });
             }
+            // Tags, tagging state and injection warnings, for files a server has tagged
+            await addTaggingToAttachments(db, Object.values(attachmentsMap).flat());
         }
 
         const messages = result.rows.map((row: any) => ({

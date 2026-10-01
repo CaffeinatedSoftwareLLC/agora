@@ -5,6 +5,7 @@ import { getSetupToken } from './instance/setup-token';
 import { verifyEncryptionKeyAtStartup } from './lib/key-fingerprint';
 import { storage } from './lib/storage';
 import { startFileCleanupWorker } from './workers/file-cleanup';
+import { startFileTaggingWorker } from './workers/file-tagging';
 
 async function main() {
     const host = process.env.HOST ?? '0.0.0.0';
@@ -33,6 +34,10 @@ async function main() {
     }).catch(err => {
         console.error('Failed to start file cleanup worker:', err);
     });
+
+    // File tagging worker: idle unless a server has switched file tagging on
+    const stopTagging = startFileTaggingWorker({ db, store: storage, encryptionKey: config.encryptionKey, log: app.log });
+    app.addHook('onClose', async () => { await stopTagging(); });
 
     // Print setup token on startup if instance is not yet initialized
     const initialized = await isInstanceInitialized(db);
