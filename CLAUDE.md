@@ -144,6 +144,16 @@ Current state: Auth flow, admin dashboard, instance setup, chat UI, threads, rol
 - Instance setup: `pg_advisory_xact_lock` to serialize
 - Sub-transactions within the per-request transaction use `SAVEPOINT`/`RELEASE SAVEPOINT`
 
+## Platforms
+
+Sandboxed code runs need gVisor, which needs a Linux kernel. Everything else runs anywhere Docker does.
+
+- **Linux:** full stack, once `runsc` is installed.
+- **Windows:** Docker Desktop cannot run gVisor. The full stack runs in a WSL2 distro with its own Docker Engine.
+- **macOS:** Docker Desktop and OrbStack cannot run gVisor either. The stack runs without code runs (the `runner` container restarts in a loop; stop it). Code runs need a Linux VM such as Colima with `runsc` installed, which is documented but not yet verified on a Mac, or a Linux host.
+
+Details and commands: `docs/getting-started.md` ("Which machine are you on?"). When helping someone set up, find out which of these they are on before running anything.
+
 ## Environment
 
 Copy `.env.example` to `.env`. Defaults: `accord:accord@localhost:5432/accord_test`, JWT secret for dev, uploaded files under `data/files`.

@@ -111,7 +111,9 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 - **Docker** and **Docker Compose**
 - **Git**
 - **Node.js 20+** (for the setup script and local development)
-- **gVisor (`runsc`) on a Linux host**, for sandboxed code runs. Without it the `runner` service refuses to start; chat, threads, files and the assistant work regardless. On Windows, run the stack in WSL2: see [Getting Started](docs/getting-started.md#local-stack-on-windows-with-gvisor-wsl2).
+- **gVisor (`runsc`) on a Linux host**, for sandboxed code runs. Without it the `runner` service refuses to start; chat, threads, files and the assistant work regardless.
+  - **Windows:** run the stack in WSL2 with its own Docker Engine: [Getting Started](docs/getting-started.md#local-stack-on-windows-with-gvisor-wsl2).
+  - **macOS:** Docker Desktop runs everything except code runs. For those, use a Linux VM (Colima) or host on a Linux machine: [Getting Started](docs/getting-started.md#local-stack-on-macos).
 
 ## Production Deployment (Docker)
 

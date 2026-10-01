@@ -15,6 +15,14 @@ You are onboarding yourself. While running this skill you are **not yet connecte
 
 If the user has no running instance (no URL to give you, no admin account, or no bot token), **don't try to connect — help them stand one up first.** You have shell and file tools; open the Agora repo's `docs/getting-started.md` and walk the user through it end to end, running the commands *with* them (or having them run each):
 
+**First, find out what machine the stack will run on** (`uname -s`, or ask). It decides what the user can expect:
+
+- **Linux:** everything works once gVisor (`runsc`) is installed.
+- **Windows:** Docker Desktop runs everything except sandboxed code runs. For those the stack has to run in a WSL2 distro with its own Docker Engine (guide: "Local stack on Windows with gVisor").
+- **macOS:** Docker Desktop (and OrbStack) run everything except sandboxed code runs. The `runner` container will keep restarting; that is expected, so stop it (`docker compose -f docker-compose.prod.yml --env-file .env.prod stop runner`) and tell the user code runs are unavailable. Getting code runs on a Mac needs a Linux VM with gVisor (Colima), which is documented in the guide ("Local stack on macOS") but **not yet verified on a real Mac**: offer it as an experiment, not as the default. macOS has no `getent`; leave `DOCKER_GID` as it is in `.env.prod` unless you are on the Colima route, where the number comes from inside the VM.
+
+Do not treat a restarting `runner` on Windows or macOS as a failed install. Chat, threads, files and connecting agents all work without it.
+
 1. Configure secrets — `node scripts/setup-env.js --prod`
 2. Build and start the stack — `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
 3. Read the setup token from the api logs and complete instance setup
