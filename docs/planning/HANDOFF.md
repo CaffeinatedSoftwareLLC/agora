@@ -107,7 +107,7 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 
 ## Known test failures (not caused by this work)
 - **Fixed on this branch** (from #38): `ai-assistant` (expected `AI Assistant`, code creates `AI-Assistant`) and `threads` (read the DB before the request's COMMIT landed; now polls).
-- Occasionally one `admin` audit test: same read-before-COMMIT pattern, not yet fixed.
+- **`admin.integration.test.ts` is flaky, and worse than "occasionally one test".** On 2026-10-01 (this branch; the file and the routes it exercises are identical to `main`) the full suite ran 460 of 461 green, with one `admin` failure. Eight runs of that file gave 1, 10, 17, 0, 1, 0, 0, 0 failures out of 50. Every failure is a test that reads the DB straight after a request (audit log, IP ban and "records IP" tests): the same read-before-COMMIT pattern as `threads` had. Not yet fixed; it needs the same polling helper.
 - Rare one-off: `ai-streaming` happy path failed once in a full run, then passed 4×.
 - Rare one-off: `members` "returns 403 for non-member" failed once in a full run (2026-09-30), then passed 3× alone and on `main`.
 - Rare one-off: `admin` "IP ban creates ip_bans row and suspends active user" failed once in a full run (2026-09-30, video branch), then the admin file passed 3× alone. Same read-before-COMMIT pattern as `threads`.
