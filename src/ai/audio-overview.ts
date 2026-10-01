@@ -1,7 +1,8 @@
-import type { ConversationMessage, SpeechRequest } from './adapters';
+import type { ConversationMessage, SpeechSpeaker } from './adapters';
 import { streamCompletion } from './providers';
 import { resolveRoute, checkBudget, recordUsage, type Queryable, type ResolvedRoute } from './routing';
 import { wavToPcm, pcmToMp3, durationSeconds } from './mp3';
+import { synthesizeDialogue } from './speech';
 
 /**
  * Audio overview (WBS 5.1): "@assistant make an audio overview of this thread" →
@@ -9,7 +10,7 @@ import { wavToPcm, pcmToMp3, durationSeconds } from './mp3';
  * renders it with two voices → MP3 posted in the thread with a transcript.
  */
 
-export const OVERVIEW_SPEAKERS: NonNullable<SpeechRequest['speakers']> = [
+export const OVERVIEW_SPEAKERS: SpeechSpeaker[] = [
     { speaker: 'Alex', voice: 'Kore' },
     { speaker: 'Sam', voice: 'Puck' },
 ];
@@ -91,12 +92,10 @@ export function parseScript(raw: string): ScriptLine[] {
         lines.push({ speaker, text });
         size += line.length + 1;
     }
+    // A reply cut off at the token limit ends mid-sentence; don't voice the fragment
+    const last = lines[lines.length - 1];
+    if (last && !/[.!?…]["'”’)]*$/.test(last.text)) lines.pop();
     return lines;
-}
-
-export function speechText(lines: ScriptLine[]): string {
-    const who = OVERVIEW_SPEAKERS.map(s => s.speaker).join(' and ');
-    return `TTS the following conversation between ${who}:\n${lines.map(l => `${l.speaker}: ${l.text}`).join('\n')}`;
 }
 
 export type OverviewResult =
@@ -142,7 +141,8 @@ export async function createAudioOverview(db: Queryable, input: OverviewInput): 
         {
             provider: chat.value.adapter.id, model: chat.value.model,
             apiKey: chat.value.credentials.apiKey, baseUrl: chat.value.credentials.baseUrl,
-            systemPrompt: SCRIPT_SYSTEM_PROMPT, maxTokens: 2048,
+            // Thinking models (Gemini 3.x) spend part of this on reasoning; 2048 cut scripts off mid-line
+            systemPrompt: SCRIPT_SYSTEM_PROMPT, maxTokens: 8192,
         },
         scriptRequest(transcript, input.request),
         {
@@ -165,7 +165,7 @@ export async function createAudioOverview(db: Queryable, input: OverviewInput): 
     const ttsStarted = Date.now();
     let audio: { data: Buffer; mime: string };
     try {
-        const result = await tts.value.adapter.tts!(tts.value.credentials, { model: tts.value.model, text: speechText(script), speakers: OVERVIEW_SPEAKERS });
+        const result = await synthesizeDialogue(tts.value.adapter, tts.value.credentials, { model: tts.value.model, lines: script, speakers: OVERVIEW_SPEAKERS });
         await recordUsage(db, { ...usageBase, capability: 'tts', providerId: tts.value.providerId, adapter: tts.value.adapter.id, model: tts.value.model, route: tts.value.route, usage: result.usage, latencyMs: Date.now() - ttsStarted });
         audio = result;
     } catch (err) {

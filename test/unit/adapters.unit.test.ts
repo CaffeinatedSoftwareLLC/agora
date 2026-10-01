@@ -201,23 +201,46 @@ describe('gemini media and search', () => {
         });
     });
 
-    it('tts: multi-speaker config; non-PCM audio passes through', async () => {
-        const fetchMock = vi.fn(async () => jsonResponse({
+    it('tts: non-PCM audio passes through', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
             candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/wav', data: Buffer.from('RIFFxxxx').toString('base64') } }] } }],
+        })));
+        const res = await geminiAdapter.tts!({ apiKey: 'k' }, { model: 'm', text: 'hi' });
+        expect(res.mime).toBe('audio/wav');
+        expect(res.data.toString()).toBe('RIFFxxxx');
+    });
+
+    it('ttsDialogue: one text part per line with speechMetadata.speaker, plus the voice config (#33)', async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({
+            candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: Buffer.alloc(8).toString('base64') } }] } }],
+            usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 40 },
         }));
         vi.stubGlobal('fetch', fetchMock);
-        const res = await geminiAdapter.tts!({ apiKey: 'k' }, {
-            model: 'm', text: 'Joe: hi\nJane: hey',
+        const res = await geminiAdapter.ttsDialogue!({ apiKey: 'k' }, {
+            model: 'gemini-3.8-flash-tts',
+            lines: [{ speaker: 'Joe', text: 'hi' }, { speaker: 'Jane', text: 'hey there' }],
             speakers: [{ speaker: 'Joe', voice: 'Kore' }, { speaker: 'Jane', voice: 'Puck' }],
         });
         expect(res.mime).toBe('audio/wav');
-        expect(res.data.toString()).toBe('RIFFxxxx');
-        expect(lastCall(fetchMock).body.generationConfig.speechConfig).toEqual({
-            multiSpeakerVoiceConfig: {
-                speakerVoiceConfigs: [
-                    { speaker: 'Joe', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-                    { speaker: 'Jane', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-                ],
+        expect(res.usage).toEqual({ inputTokens: 12, outputTokens: 40 });
+        const { url, body } = lastCall(fetchMock);
+        expect(url).toContain('/models/gemini-3.8-flash-tts:generateContent');
+        expect(body.contents).toEqual([{
+            role: 'user',
+            parts: [
+                { text: 'hi', speechMetadata: { speaker: 'Joe' } },
+                { text: 'hey there', speechMetadata: { speaker: 'Jane' } },
+            ],
+        }]);
+        expect(body.generationConfig).toEqual({
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+                multiSpeakerVoiceConfig: {
+                    speakerVoiceConfigs: [
+                        { speaker: 'Joe', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+                        { speaker: 'Jane', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+                    ],
+                },
             },
         });
     });
