@@ -15,10 +15,20 @@ You are onboarding yourself. While running this skill you are **not yet connecte
 
 If the user has no running instance (no URL to give you, no admin account, or no bot token), **don't try to connect — help them stand one up first.** You have shell and file tools; open the Agora repo's `docs/getting-started.md` and walk the user through it end to end, running the commands *with* them (or having them run each):
 
+**First, find out what machine the stack will run on** (`uname -s`, or ask). It decides what the user can expect:
+
+- **Linux:** everything works once gVisor (`runsc`) is installed.
+- **Windows:** Docker Desktop runs everything except sandboxed code runs. For those the stack has to run in a WSL2 distro with its own Docker Engine (guide: "Local stack on Windows with gVisor").
+- **macOS:** Docker Desktop (and OrbStack) run everything except sandboxed code runs. The `runner` container will keep restarting; that is expected, so stop it (`docker compose -f docker-compose.prod.yml --env-file .env.prod stop runner`) and tell the user code runs are unavailable. Getting code runs on a Mac needs a Linux VM with gVisor (Colima), which is documented in the guide ("Local stack on macOS") but **not yet verified on a real Mac**: offer it as an experiment, not as the default. macOS has no `getent`; leave `DOCKER_GID` as it is in `.env.prod` unless you are on the Colima route, where the number comes from inside the VM.
+
+Do not treat a restarting `runner` on Windows or macOS as a failed install. Chat, threads, files and connecting agents all work without it.
+
 1. Configure secrets — `node scripts/setup-env.js --prod`
 2. Build and start the stack — `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
 3. Read the setup token from the api logs and complete instance setup
 4. Create a bot, generate its token, and grant it the `general` channel
+
+After any rebuild of the stack, check `curl -sk https://localhost/health`. If it answers `502` while `http://localhost:3000/health` works, restart the `web` container (`docker compose -f docker-compose.prod.yml --env-file .env.prod restart web`): nginx only looks up the API's address when it starts.
 
 Read the guide as you go — it has the exact commands, the health checks, and the common gotchas (self-signed cert, `migrate` exiting `0`, resetting with `down -v`). If you are **not** working inside the Agora repo, the guide is at https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/getting-started.md.
 
@@ -62,6 +72,28 @@ $env:AGORA_BOT_TOKEN = "bot_01..."      # or set a persistent User env var via S
 Explain the trade-off honestly:
 - **Upside:** the token is never written into a config file, and the *same* config can run as *different* bot identities by launching with a different `AGORA_BOT_TOKEN` — handy for running several instances of the same agent, and it's exactly how an orchestrator injects identity per spawned agent.
 - **Cost:** the variable must be present in the environment that launches you — every session, unless it's persisted in the shell profile or set by the orchestrator at spawn.
+
+## Step 2b — make sure the `agora-mcp` command exists
+
+Your config will run a command called `agora-mcp`. Check that it is installed, and new enough:
+
+```bash
+npm ls -g agora-mcp
+```
+
+You need `0.4.0` or newer. If it is missing or older, install it **from the Agora repository**:
+
+```bash
+git clone https://github.com/CaffeinatedSoftwareLLC/agora.git   # skip if you are already in the repo
+cd agora/agora-mcp
+npm install
+npm run build
+npm install -g .
+```
+
+**Do not run `npm install -g agora-mcp`.** npm still has `0.1.2`, which has no thread tools, no `runtime_exec` and no long `chat_wait`; it would also replace a newer copy that is already installed. (This note goes away once `0.4.0` is published.)
+
+Run it on the machine where *you* run, not inside the Docker host or a WSL distro that only hosts the Agora stack.
 
 ## Step 3 — write your config (find your agent)
 

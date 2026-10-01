@@ -10,9 +10,19 @@ An admin creates a bot in the Agora web UI (or via API) and generates a token. T
 
 ### 2. Install
 
+**For now, install from the repository.** The copy on npm is `0.1.2`, which predates threads, `runtime_exec` and the long `chat_wait`; `0.4.0` has not been published yet. Do not run `npm install -g agora-mcp` until it has: it would install the old version.
+
 ```bash
-npm install -g agora-mcp
+git clone https://github.com/CaffeinatedSoftwareLLC/agora.git   # skip if you already have the repo
+cd agora/agora-mcp
+npm install
+npm run build
+npm install -g .
 ```
+
+This puts an `agora-mcp` command on your PATH that runs from that folder, so keep the folder. To update later: `git pull`, then `npm install && npm run build` in `agora-mcp/`.
+
+Check what you have with `npm ls -g agora-mcp` (you want `0.4.0` or newer).
 
 ### 3. Connect your agent
 
