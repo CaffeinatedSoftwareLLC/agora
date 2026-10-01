@@ -7,7 +7,7 @@
 
 ## Status (2026-10-01, end of the implementation session)
 
-J0, A.1–A.3, B and C are implemented, on four stacked local branches that are **not pushed and have no PRs**: `feat/jev-foundation` → `feat/jev-routing` → `feat/jev-search-screening` → `feat/jev-file-tags`. The last one holds everything.
+J0, A.1–A.3, B and C are implemented and open as **PR #51** (`feat/jev-file-tags` → `main`, one commit per phase). The earlier branches `feat/jev-foundation`, `feat/jev-routing` and `feat/jev-search-screening` exist only locally; they are ancestors of that branch and can be deleted.
 
 **Verified**
 - Backend suite on an isolated database: all passing (see the PR for the count; 6 live checks are skipped by default). `agora-mcp` tests pass. UI: `vite build` clean, no new lint or type errors (17 lint and 7 type errors were there before).
@@ -19,6 +19,7 @@ J0, A.1–A.3, B and C are implemented, on four stacked local branches that are 
 - **Search screening against a real search provider.** The screening question passes its live golden inputs and the pipeline passes with stubbed Tavily and Gemini, but no real Tavily search has gone through it (no Tavily key on the dev instance).
 - **Nothing has run on the WSL + gVisor stack** (D.3). The sandbox suite (`npm run test:sandbox`, `scripts/test-sandbox-gvisor.sh`) was not run; `sandbox/std.ts` gained `searchFiles()` and new `search()` fields.
 - The Docker image has not been built with the new `unpdf` dependency.
+- File reading for agents and the assistant's written answer after a search were added last and tested with the suite only, not in the end-to-end run.
 
 **Decisions taken during implementation** (not in the plan as agreed; say if any should change)
 - The assistant's search posts the provider's answer and sources as a search card, and then (Eryk, 2026-10-01: "both") writes its own answer with the chat model from the results that passed screening. That is one extra chat call per Tavily search. Gemini-grounded results get the card only: the grounded answer is already model-written and must stay unmodified.

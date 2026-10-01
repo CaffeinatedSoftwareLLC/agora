@@ -2,12 +2,12 @@
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
 
-## Decision model (Jev): implemented on local branches, not pushed (2026-10-01, evening)
+## Decision model (Jev): implemented, open as PR #51 (2026-10-01, evening)
 
 The Jev project was planned in Agora with Codex and Gemini and then implemented in one session. **Plan, status, what was and was not verified, and the open questions for Eryk: [`jev-wbs.md`](jev-wbs.md), "Status" at the top.** Read that before touching this work.
 
-- Four stacked local branches, no PRs, nothing pushed: `feat/jev-foundation` → `feat/jev-routing` → `feat/jev-search-screening` → `feat/jev-file-tags` (the last holds everything). `main` is untouched.
-- What it adds: an optional decision model (`typesafe` adapter, `decide` route) used for assistant routing, assistant web search, search-result screening for prompt injection, file tagging with admin-defined tags, and file search with ranking. Off by default; with it off, Agora behaves as before.
+- **PR #51**, `feat/jev-file-tags` → `main`, one commit per phase. Not merged. Three earlier local branches (`feat/jev-foundation`, `feat/jev-routing`, `feat/jev-search-screening`) are ancestors of it and can be deleted.
+- What it adds: an optional decision model (`typesafe` adapter, `decide` route) used for assistant routing, assistant web search, search-result screening for prompt injection, file tagging with admin-defined tags, and file search with ranking. Agents can also read file text now (`file_read`), with or without a decision model. Off by default; with it off, Agora behaves as before.
 - Migrations `033` and `034` (not reversible: use a database of their own when testing, as with `031`). New dependency `unpdf`.
 - The test key is the Windows user environment variable `JEV_KEY`. Agora does not read it at runtime; admins enter the key in AI settings. Live checks: `JEV_LIVE=1 JEV_KEY=… npx vitest run test/live`.
 - Test databases made for this work on the Docker Desktop Postgres (`agora-test-postgres-1`): `accord_test_jev` (the test suite) and `agora_jev_live` (the dev instance used for the end-to-end check, with its files in `%TEMP%\agora-jev-live-files`). Both are disposable.
