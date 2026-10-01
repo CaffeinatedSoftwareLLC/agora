@@ -2,12 +2,13 @@ import path from 'path';
 import type { Pool } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import { storage, BUCKET_NAME } from './storage';
+import { BLOB_LEAF } from './storage-maintenance';
 import { encryptFile } from './encryption';
 import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES } from './file-validation';
 import { config } from '../config';
 
 /**
- * Validate, process, encrypt, and store a file (metadata in Postgres, blob in MinIO).
+ * Validate, process, encrypt, and store a file (metadata in Postgres, blob in the file store).
  * Shared by user uploads (POST /files/upload) and sandbox artifacts (cap-gateway),
  * so both go through the same limits: size, extension allowlist, magic bytes, EXIF
  * stripping, storage quota. Callers do their own authorization first.
@@ -90,7 +91,8 @@ export async function storeFile(
 
     const { encrypted, iv, authTag } = encryptFile(processedBuffer, config.encryptionKey);
     const fileId = generateUlid();
-    const storageKey = `${channelId}/${fileId}/${sanitizedName}`;
+    // No file name in the key: the name lives only in the database row
+    const storageKey = `${channelId}/${fileId}/${BLOB_LEAF}`;
     const retentionDays = await getFileSetting(db, 'files.retention_days');
     const expiresAt = retentionDays ? new Date(Date.now() + retentionDays * 86400000) : null;
 

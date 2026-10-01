@@ -23,8 +23,9 @@ export class EncryptionKeyMismatchError extends Error {
     constructor(detail: string) {
         super(
             `AGORA_ENCRYPTION_KEY ${detail}\n`
-            + 'Files and AI provider keys encrypted with the original key cannot be read with this one.\n'
-            + 'Restore the original key (in .env.prod for Docker). If it is lost and you accept losing that data, '
+            + 'Files and AI provider keys encrypted with the instance\'s key cannot be read with this one.\n'
+            + 'Set the key this instance uses (in .env.prod for Docker): the original one, or the new one if you have just '
+            + 'rotated keys. If that key is lost and you accept losing that data, '
             + 'start once with AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1 to record the current key instead.'
         );
         this.name = 'EncryptionKeyMismatchError';

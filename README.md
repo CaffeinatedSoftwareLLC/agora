@@ -362,6 +362,14 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 The copy is safe to re-run and moves the files still encrypted; it needs no key. Once files open in the app, remove the old volume (`docker volume rm <project>_minio-data`) and the `MINIO_ROOT_*` lines from `.env.prod`. Details and fallbacks: [Storage and Encryption](docs/storage-and-encryption.md#upgrading-an-install-that-used-minio).
 
+### Services no longer run as root
+
+The backend containers now run as an unprivileged user. On the first start after upgrading, a one-shot `files-perms` service hands your existing `files-data` volume over to that user; you will see it in `docker compose ps -a` as `Exited (0)`. Nothing to do.
+
+### File names leave the storage paths
+
+New uploads are stored without their file name in the path. To rename files stored earlier, stop `api` and `cap-gateway` and run the one-off tool in [Storage and Encryption](docs/storage-and-encryption.md#file-storage). Optional: old files keep working either way.
+
 ### IP tracking and IP bans were removed
 
 Migration `031` deletes every stored IP address and every IP ban, and the admin panel no longer offers "Also ban IP address". Nothing needs doing; `IP_ENCRYPTION_KEY` is no longer read, so you can delete it from `.env` if you had set it. Existing account bans are unaffected.
@@ -408,7 +416,7 @@ cd agora-ui && npm test
 | `STORAGE_DIR` | Disk driver: directory for uploaded files (a volume in Docker) | `data/files` (`/data/files` in Docker) |
 | `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | S3 driver: any S3-compatible service. The old `MINIO_ENDPOINT` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` names are still read as fallbacks. | — |
 | `S3_BUCKET` / `S3_REGION` | S3 driver: bucket (created if missing) and region | `agora-files` / — |
-| `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered or rotated.** The server refuses to start if it changes | Dev default (zeros) |
+| `AGORA_ENCRYPTION_KEY` | 64 hex chars (32 bytes). Encrypts uploaded files and stored AI provider API keys. **Required in production; cannot be recovered.** Rotate it with the tool described in [Storage and Encryption](docs/storage-and-encryption.md#rotating-the-encryption-key). The server refuses to start if it changes | Dev default (zeros) |
 | `AGORA_ACCEPT_NEW_ENCRYPTION_KEY` | Set to `1` for one start to record a different encryption key. Data encrypted with the old key stays unreadable. | — |
 | `API_BIND` | Production compose: host address the API's plain-HTTP port 3000 is published on. `0.0.0.0` opens it to the network. | `127.0.0.1` |
 | `DOMAIN` | Production compose: your domain, without `https://`. Caddy gets a certificate for it and the API allows `https://<DOMAIN>` as origin | `localhost` |
@@ -432,7 +440,7 @@ Agora is designed to be safely self-hosted and multi-tenant.
 - **Every uploaded file is encrypted** with AES-256-GCM before it is written to disk or S3, with a fresh IV per file. The storage backend only ever holds ciphertext. This did not change when the bundled MinIO was removed: Agora always encrypted before storing.
 - AI provider API keys are **encrypted at rest** (AES-256-GCM); the config API returns only non-secret fields, never the key.
 - **Client IP addresses are not stored.** IP tracking and IP bans were removed; see [Upgrading](#upgrading).
-- **Not encrypted at rest:** messages and the rest of the database, and the *names* and sizes of stored files. Use disk or volume encryption on the host if you need that.
+- **Not encrypted at rest:** messages and the rest of the database, including file names. Stored files carry no name in their path (only their size is visible in a listing of the volume). Use disk or volume encryption on the host if you need more.
 
 Details, key handling and backups: [Storage and Encryption](docs/storage-and-encryption.md).
 
@@ -456,7 +464,7 @@ Agora keeps stored files unreadable without the key, enforces who can see what, 
 
 **Agent safety**
 - A per-channel **loop guard** and **rate limiting** bound runaway agent-to-agent chatter.
-- **Agent-submitted code runs in a sandbox**: a fresh gVisor container per run, on a network with no route to the internet, the database or the file volume. Provider keys never enter the sandbox; a capability gateway makes those calls with a short-lived per-run token. Runs need human approval unless an admin grants a bot auto-run, and repeated failures or token misuse pause the bot automatically. See the [sandbox spec and threat model](docs/planning/sandbox-isolation-spec.md).
+- **Agent-submitted code runs in a sandbox**, and its per-run token only works from the sandbox it was issued to: a fresh gVisor container per run, on a network with no route to the internet, the database or the file volume. Provider keys never enter the sandbox; a capability gateway makes those calls with a short-lived per-run token. Runs need human approval unless an admin grants a bot auto-run, and repeated failures or token misuse pause the bot automatically. See the [sandbox spec and threat model](docs/planning/sandbox-isolation-spec.md).
 
 **Network**
 - Browsers and remote agents connect over TLS through Caddy. The API's plain-HTTP port 3000 is published on `127.0.0.1` only, for agents on the same machine.

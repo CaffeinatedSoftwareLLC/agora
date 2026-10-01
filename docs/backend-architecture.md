@@ -557,6 +557,7 @@ The custom migration runner reads `.sql` files from `src/db/migrations/`, applie
 | 029 | `029_runtime_access.sql` | `users.runtime_access` (`none` / `approval` / `auto`): the per-bot "Code runs" setting. |
 | 030 | `030_video_time_profile.sql` | A longer time profile for video (Veo) runs. |
 | 031 | `031_remove_ip_tracking.sql` | Drops `ip_bans` and the `users.last_ip_*` columns: IP tracking and IP bans are removed, and every stored IP with them. |
+| 032 | `032_run_token_bound_ip.sql` | `exec_run_tokens.bound_ip`: a run token is bound to the first address that uses it. |
 
 ---
 
@@ -854,7 +855,9 @@ Every stored file goes through `storeFile()` in `src/lib/file-store.ts`. It has 
 5. Quota check and `files` row insert in their own transaction, serialized instance-wide with `pg_advisory_xact_lock(hashtext('storage_quota'))`. The row stores the IV and auth tag.
 6. `storage.put(key, ciphertext)`. If it fails, the row is deleted again and the caller gets a `502`.
 
-The storage key is `<channelId>/<fileId>/<sanitized filename>`.
+The storage key is `<channelId>/<fileId>/blob`: the file name is only in the database row. (Files stored before 0.2.0 end in the sanitized file name; after a key rotation the leaf is `blob-<8 hex>`.)
+
+`src/lib/storage-maintenance.ts` holds two one-off operations, each with a CLI in `src/tools/`: `stripFilenamesFromStorageKeys` (rename pre-0.2.0 blobs) and `rotateEncryptionKey` (re-encrypt files and provider keys, then switch the key fingerprint). Both write the new blob, then update the row, then delete the old blob, so an interruption never leaves a row pointing at the wrong bytes.
 
 **The storage driver never sees plaintext.** New code must not call `storage.put` directly; go through `storeFile()`.
 

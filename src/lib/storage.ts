@@ -11,7 +11,7 @@ import { config } from '../config';
  * (AWS S3, Cloudflare R2, Backblaze B2, Garage, SeaweedFS, an existing MinIO, ...).
  *
  * Blobs are already encrypted by the caller (file-store.ts); keys look like
- * `<channelId>/<fileId>/<filename>`.
+ * `<channelId>/<fileId>/blob` (files stored before 0.2.0 end in the file name instead).
  */
 export interface ObjectStore {
     readonly kind: 'disk' | 's3';

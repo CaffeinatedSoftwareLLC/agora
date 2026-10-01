@@ -28,6 +28,12 @@ COPY --from=build /app/dist/ dist/
 # dist/src/db/migrations/
 COPY src/db/migrations/ dist/src/db/migrations/
 
+# Run as the image's unprivileged `node` user (uid 1000). It owns the two places the
+# services write to: the uploads directory (a volume created from the image inherits
+# this ownership) and the setup-token directory.
+RUN mkdir -p /data/files /app/.agora && chown node:node /data/files /app/.agora
+USER node
+
 EXPOSE 3000
 
 CMD ["node", "dist/src/index.js"]

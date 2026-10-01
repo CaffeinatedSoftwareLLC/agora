@@ -38,6 +38,19 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # One-shot. The services run as an unprivileged user; an uploads volume created
+  # before 0.2.0 is owned by root, so hand it over once. A no-op on later starts.
+  files-perms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "0:0"
+    command: ["sh", "-c", "if [ \"$$(stat -c %u /data/files)\" != \"$$(id -u node)\" ]; then chown -R node:node /data/files && echo 'files-data handed to node'; else echo 'files-data already owned by node'; fi"]
+    volumes:
+      - files-data:/data/files
+    network_mode: none
+    restart: "no"
+
   api:
     build:
       context: .
@@ -63,6 +76,8 @@ services:
       - files-data:/data/files
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      files-perms:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -151,6 +166,8 @@ services:
     networks: [default, sandbox]
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      files-perms:
         condition: service_completed_successfully
       redis:
         condition: service_healthy

@@ -118,6 +118,33 @@ describe('authentication', () => {
         }
     });
 
+    test('a token is bound to the first address that uses it', async () => {
+        const { auth } = await makeRun();
+        const boundIp = async () => (await ctx.db.query('SELECT bound_ip FROM exec_run_tokens WHERE token_hash = $1', [hashToken(auth.authorization.slice(7))])).rows[0].bound_ip;
+        expect(await boundIp()).toBeNull();
+
+        // First use binds (the request itself is rejected later, as invalid input: auth passed)
+        const first = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.5' });
+        expect(first.statusCode).toBe(400);
+        expect(await boundIp()).toBe('172.30.0.5');
+
+        // The same sandbox keeps working
+        const again = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.5' });
+        expect(again.statusCode).toBe(400);
+        expect(await pausedReason()).toBeNull();
+    });
+
+    test('a live token replayed from another address is refused and trips the bot', async () => {
+        const { runId, auth } = await makeRun();
+        await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.5' });
+
+        const replay = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {}, remoteAddress: '172.30.0.9' });
+        expect(replay.statusCode).toBe(401);
+        expect(replay.json().message ?? replay.body).toContain('different address');
+        expect(await pausedReason()).toBe(`Tripwire: a run token was used outside its run (run ${runId})`);
+        await resumeBot();
+    });
+
     test('a paused submitting bot is 423', async () => {
         const { auth } = await makeRun();
         await ctx.db.query('UPDATE users SET bot_paused_at = NOW() WHERE id = $1', [botId]);
