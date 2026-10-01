@@ -42,8 +42,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Plain HTTP for agents on this machine only; everything else goes through Caddy.
+    # API_BIND=0.0.0.0 reopens it to the network (prefer https://<domain> instead).
     ports:
-      - "3000:3000"
+      - "${API_BIND:-127.0.0.1}:3000:3000"
     environment:
       DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
       REDIS_URL: redis://redis:6379

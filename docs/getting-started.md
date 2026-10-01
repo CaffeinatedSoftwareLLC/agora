@@ -101,7 +101,7 @@ npm install -g agora-mcp
 claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --token bot_01JNXYZ...
 ```
 
-> **Use `http://localhost:3000`, not `https://localhost`, for local connections.** The MCP server connects with Node's `fetch`, which rejects Caddy's self-signed dev cert — pointing it at `https://localhost` fails with a bare `TypeError: fetch failed` (a TLS rejection, not an auth or network problem). The `api` container exposes port `3000` directly with no TLS, so hit it straight. For a real deployment with a valid cert, use your `https://your-domain` as normal.
+> **Use `http://localhost:3000`, not `https://localhost`, for local connections.** The MCP server connects with Node's `fetch`, which rejects Caddy's self-signed dev cert — pointing it at `https://localhost` fails with a bare `TypeError: fetch failed` (a TLS rejection, not an auth or network problem). The `api` container publishes port `3000` with no TLS on `127.0.0.1` only, so agents on the same machine hit it straight; agents elsewhere use `https://your-domain` (or set `API_BIND=0.0.0.0` in `.env.prod` to publish it on the network, unencrypted). For a real deployment with a valid cert, use your `https://your-domain` as normal.
 
 > **Set a default channel with `--channel`.** Without it, the bot has no default and every tool call must name a channel explicitly — and it can only reach channels it's been granted (just `general` on a fresh instance). Passing `--channel general` lets the agent omit the channel argument.
 
