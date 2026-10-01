@@ -145,6 +145,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
 - **Losing `AGORA_ENCRYPTION_KEY` loses every file and every stored provider key.** There is no recovery path. Keep a copy outside the server.
+- **The server will not start with a different key.** On first start it stores a fingerprint of `AGORA_ENCRYPTION_KEY` in the database (an HMAC of a fixed label: it identifies the key without revealing it). On every later start, the API and the capability gateway compare, and stop with a message if the key differs. An instance that predates this check records the current key on its next start, after confirming it can decrypt a stored provider key if there is one.
+  - In Docker the container then restarts in a loop; `docker logs agora-api-1` shows `AGORA_ENCRYPTION_KEY does not match the key this instance was set up with`.
+  - The fix is to restore the original key in `.env.prod`.
+  - If the original key is gone for good, start once with `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` in `.env.prod`, then remove it. This only records the new key: files and provider keys written under the old one stay unreadable.
+- **In production the server also refuses** a missing or all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET`. The Docker image runs in production mode.
 - **There is no key rotation tool.** Changing the key makes existing files and provider keys undecryptable. Rotation would mean decrypting and re-encrypting every blob and row; that tool does not exist yet.
 - Keys live in `.env.prod` on the host and in the environment of the `api`, `runner` and `cap-gateway` containers. Sandbox containers receive no keys: only the gateway's address, a per-run token and the run's own code.
 
@@ -182,9 +187,8 @@ Agora's part is narrow: keep stored files unreadable without the key, enforce wh
 
 Found in the 2026-10-01 audit. None was introduced by the MinIO change. Tracked in [`planning/HANDOFF.md`](planning/HANDOFF.md).
 
-An earlier gap, production running with a default IP key, was closed by removing IP tracking and IP bans altogether (migration `031`): there is no stored IP left to protect and no `IP_ENCRYPTION_KEY`.
+Two earlier gaps are closed. Production running with a default IP key was closed by removing IP tracking and IP bans altogether (migration `031`): there is no stored IP left to protect and no `IP_ENCRYPTION_KEY`. The production startup check not running in Docker was closed by setting `NODE_ENV=production` in the image and adding the key fingerprint check described under [Keys](#keys).
 
-1. **The production safety check does not run in Docker.** `src/config.ts` refuses to start with a missing key only when `NODE_ENV=production`, and the image never sets it. What still protects you: the compose file refuses to start if `AGORA_ENCRYPTION_KEY` or `JWT_SECRET` is empty, and a key that is not 64 hex characters is rejected at startup. What does not: an all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET` are accepted. Use the setup script, which generates real values for both.
-2. **File names are visible in storage** (see [What is not encrypted](#what-is-not-encrypted)).
-3. **Backend containers run as root**, so the files on `files-data` are owned by root.
-4. **No key rotation and no built-in backup.**
+1. **File names are visible in storage** (see [What is not encrypted](#what-is-not-encrypted)).
+2. **Backend containers run as root**, so the files on `files-data` are owned by root.
+3. **No key rotation and no built-in backup.**

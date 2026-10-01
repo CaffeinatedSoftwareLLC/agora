@@ -7,9 +7,11 @@ if (rawEncryptionKey && !/^[0-9a-fA-F]{64}$/.test(rawEncryptionKey)) {
     throw new Error('AGORA_ENCRYPTION_KEY must be exactly 64 hex characters');
 }
 
-// Hard-fail in production if encryption key is missing
-if (process.env.NODE_ENV === 'production' && !rawEncryptionKey) {
-    throw new Error('AGORA_ENCRYPTION_KEY must be set in production');
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Hard-fail in production if encryption key is missing or the all-zero dev default
+if (isProduction && (!rawEncryptionKey || /^0+$/.test(rawEncryptionKey))) {
+    throw new Error('AGORA_ENCRYPTION_KEY must be set to a real key in production (64 hex characters, not all zeros)');
 }
 
 // Warn in non-test environments if using default key
@@ -45,3 +47,16 @@ export const config = {
     },
     encryptionKey: Buffer.from(rawEncryptionKey ?? '0'.repeat(64), 'hex'),
 };
+
+/** The dev default and the value shipped in .env.prod.example. */
+const PLACEHOLDER_JWT_SECRETS = ['dev-secret-do-not-use-in-prod', 'change-me-to-a-random-secret'];
+
+/**
+ * Hard-fail in production if the JWT secret is a known placeholder. Called by the
+ * API only: the runner and cap-gateway load this module but never sign tokens.
+ */
+export function assertProductionJwtSecret(): void {
+    if (isProduction && PLACEHOLDER_JWT_SECRETS.includes(config.jwtSecret)) {
+        throw new Error('JWT_SECRET must be set to a random secret in production');
+    }
+}

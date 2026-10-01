@@ -874,4 +874,6 @@ In Docker, `api` and `cap-gateway` mount the same `files-data` volume at `/data/
 
 Client IPs are not stored (removed in migration 031); `request.ip` is only used by the rate limiter.
 
-Key validation lives in `src/config.ts`: the key must be 64 hex characters when set. The stricter check (refuse a missing key) only runs when `NODE_ENV=production`, which the Docker image does not set today; see the known gaps in [Storage and Encryption](storage-and-encryption.md#known-gaps).
+Key validation lives in `src/config.ts`: the key must be 64 hex characters when set, and with `NODE_ENV=production` (set in the Docker image) a missing or all-zero key throws at load. `assertProductionJwtSecret()` rejects a placeholder `JWT_SECRET`; only the API calls it, because the runner and cap-gateway load the config without a JWT secret.
+
+`src/lib/key-fingerprint.ts` guards against a *changed* key. `verifyEncryptionKeyAtStartup()` runs in `src/index.ts` (before `listen`) and `src/gateway-main.ts`: it stores `HMAC-SHA256(key, fixed label)` in `instance_config` under `encryption_key_fingerprint` on first start (`INSERT … ON CONFLICT DO NOTHING`, so processes starting together agree), and throws `EncryptionKeyMismatchError` on any later start with a different key. With no fingerprint yet, it first tries the key on one stored provider key and refuses to record a key that fails. `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` records the current key instead of throwing.

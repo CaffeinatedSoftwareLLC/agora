@@ -1,18 +1,23 @@
 import { buildApp } from './app';
-import { config } from './config';
+import { config, assertProductionJwtSecret } from './config';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { getSetupToken } from './instance/setup-token';
+import { verifyEncryptionKeyAtStartup } from './lib/key-fingerprint';
 import { storage } from './lib/storage';
 import { startFileCleanupWorker } from './workers/file-cleanup';
 
 async function main() {
     const host = process.env.HOST ?? '0.0.0.0';
+    assertProductionJwtSecret();
 
     const { app, db } = await buildApp({
         logger: true,
         jwtSecret: config.jwtSecret,
         dbUrl: config.dbUrl,
     });
+
+    // Refuse to serve with a different encryption key than the one the data was written with
+    await verifyEncryptionKeyAtStartup(db, config.encryptionKey);
 
     await app.listen({ port: config.port, host });
     console.log(`Agora listening on ${host}:${config.port}`);
