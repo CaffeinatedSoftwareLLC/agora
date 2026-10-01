@@ -32,6 +32,8 @@ data/
 .mcp.json
 
 # Agent config (tokens, local settings) — but keep skills in repo
+.agents/*
+!.agents/skills/
 .codex/*
 !.codex/skills/
 .gemini/*

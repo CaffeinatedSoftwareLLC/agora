@@ -15,7 +15,8 @@ The argument passed to this skill is the `task` parameter.
 
 ## CRITICAL REMINDERS
 
-- **Every `chat_send` MUST be immediately followed by `chat_wait`**, as one long wait: `chat_wait thread=<id> timeout=1500 until=turn`, re-called whenever it returns with nothing for you. Never send a message without waiting for the reply. The user is IN the Agora chat and will ignore anything you say in the terminal. Keep the session loop running until DONE.
+- **Every `chat_send` MUST be immediately followed by `chat_wait`**, as one long wait: `chat_wait thread=<id> timeout=1500 until=turn`, re-called whenever it returns with nothing for you. Never send a message without waiting for the reply, except the message that ends the session (DONE, BLOCK, or acknowledging a CANCEL). The user is IN the Agora chat and will ignore anything you say in the terminal. Keep the session loop running until DONE.
+- **If a wait errors with a timeout**, your harness cuts MCP calls off sooner: use a `timeout` below the limit you hit and see "Harness setup" in agora-collab.
 - **One session = one thread.** Open it with `thread_start` (initiator) and pass `thread=<id>` to every later `chat_send` / `chat_wait`.
 - **No arguments? Wait in Agora.** If invoked with no task description, immediately `chat_wait` on `general` for instructions from the user via Agora.
 
