@@ -16,6 +16,7 @@ import { botRoutes } from './routes/bots';
 import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
 import { aiProviderRoutes } from './routes/ai-providers';
+import { aiDecisionRoutes } from './routes/ai-decisions';
 import { runtimeRoutes } from './routes/runtime';
 import { roleRoutes } from './routes/roles';
 import { startAssistantHandler } from './ai/assistant-handler';
@@ -306,6 +307,7 @@ export async function buildApp(opts?: {
     await app.register(threadRoutes);
     await app.register(aiConfigRoutes);
     await app.register(aiProviderRoutes);
+    await app.register(aiDecisionRoutes);
     await app.register(runtimeRoutes);
     await app.register(roleRoutes);
 

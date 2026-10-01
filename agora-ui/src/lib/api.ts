@@ -264,7 +264,7 @@ export type AIConnectionResult = { ok: boolean; error?: string };
 /** One audited change to the server's AI settings (providers, routes, assistant). */
 export interface AIChange {
   id: string;
-  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update';
+  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update';
   targetType: string;
   targetId: string | null;
   changes: Record<string, any>;
@@ -272,7 +272,41 @@ export interface AIChange {
   actor: { id: string; username: string; bot: boolean } | null;
 }
 
+/** What a decision model can be used for. Each is switched on separately. */
+export type AIDecisionUse = 'routing' | 'search_screening' | 'file_tagging' | 'file_ranking';
+
+export interface AIDecisionUseSettings {
+  enabled: boolean;
+  /** Percent of the decide capability's daily budget this use may spend; 0 switches it off. */
+  sharePct: number;
+  dailyRequests: number | null;
+}
+
+export interface AIDecisionSettings {
+  uses: Record<AIDecisionUse, AIDecisionUseSettings>;
+  routingMinConfidence: number;
+  screeningFlagThreshold: number;
+  screeningSuspectThreshold: number;
+  screeningStrict: boolean;
+  tagThreshold: number;
+  /** The decide capability route, as configured under Capabilities. */
+  route: { configured: boolean; enabled: boolean; provider: string | null; adapter: string | null; model: string | null };
+  today: Record<AIDecisionUse, { requests: number; tokens: number; errors: number }>;
+  warnings: string[];
+}
+
+export type AIDecisionSettingsPatch = Partial<Pick<AIDecisionSettings,
+  'routingMinConfidence' | 'screeningFlagThreshold' | 'screeningSuspectThreshold' | 'screeningStrict' | 'tagThreshold'>> & {
+  uses?: Partial<Record<AIDecisionUse, Partial<AIDecisionUseSettings>>>;
+};
+
 export const aiApi = {
+  getDecisions: (serverId: string) =>
+    api.get<AIDecisionSettings>(`/servers/${serverId}/ai/decisions`),
+
+  patchDecisions: (serverId: string, data: AIDecisionSettingsPatch) =>
+    api.patch<AIDecisionSettings>(`/servers/${serverId}/ai/decisions`, data),
+
   getConfig: (serverId: string) =>
     api.get<AIConfig>(`/servers/${serverId}/ai-config`),
 

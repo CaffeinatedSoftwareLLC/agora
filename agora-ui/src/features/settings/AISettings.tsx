@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { aiApi, botApi, serverApi, ApiError } from '../../lib/api';
-import type { AIAdapter, AICapabilityUsage, AIConfig, AIProvider, AIRoute } from '../../lib/api';
+import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIProvider, AIRoute } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
 import { AssistantSection } from './ai/AssistantSection';
+import { DecisionsSection } from './ai/DecisionsSection';
 import { UsageSection } from './ai/UsageSection';
 import { ChangesSection } from './ai/ChangesSection';
 
@@ -20,6 +21,7 @@ interface AIState {
   channels: Channel[];
   botChannelIds: Set<string>;
   usage: AICapabilityUsage[];
+  decisions: AIDecisionSettings;
 }
 
 export function AISettings() {
@@ -37,13 +39,14 @@ export function AISettings() {
     let cancelled = false;
     (async () => {
       try {
-        const [adapters, providers, routes, config, channels, usage] = await Promise.all([
+        const [adapters, providers, routes, config, channels, usage, decisions] = await Promise.all([
           aiApi.listAdapters(instanceServerId),
           aiApi.listProviders(instanceServerId),
           aiApi.listRoutes(instanceServerId),
           aiApi.getConfig(instanceServerId),
           serverApi.getChannels(instanceServerId),
           aiApi.getCapabilityUsage(instanceServerId, USAGE_DAYS),
+          aiApi.getDecisions(instanceServerId),
         ]);
         let botChannelIds = new Set<string>();
         if (config.configured && config.botId) {
@@ -61,6 +64,7 @@ export function AISettings() {
           channels: channels.filter(c => c.channelType === 3), // server text channels
           botChannelIds,
           usage: usage.capabilities,
+          decisions,
         });
         setError('');
       } catch (err) {
@@ -130,6 +134,13 @@ export function AISettings() {
             hasChatRoute={state.routes.some(r => r.capability === 'chat' && r.enabled)}
             channels={state.channels}
             botChannelIds={state.botChannelIds}
+            onChanged={reload}
+          />
+          <DecisionsSection
+            // Re-seed the form whenever the saved settings or the decide route change
+            key={JSON.stringify({ ...state.decisions, today: undefined })}
+            serverId={instanceServerId}
+            settings={state.decisions}
             onChanged={reload}
           />
           <UsageSection usage={state.usage} days={USAGE_DAYS} />

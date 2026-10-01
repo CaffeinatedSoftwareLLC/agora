@@ -30,6 +30,8 @@ function describe(c: AIChange): string {
       return `Provider “${d.before?.label}” deleted${d.routesRemoved?.length ? ` (removed routes: ${d.routesRemoved.map(capLabel).join(', ')})` : ''}`;
     case 'ai_assistant_update':
       return `Assistant settings changed: ${Object.keys(d).filter(k => k !== 'client').join(', ')}`;
+    case 'ai_decision_update':
+      return `Decision model settings: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
     default:
       return c.action;
   }

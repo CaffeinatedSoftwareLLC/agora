@@ -92,7 +92,7 @@ export async function joinViaInvite(
 
 // ─── Database cleanup for test isolation ───
 export async function cleanDatabase(db: any) {
-    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, message_reactions, message_mentions, channel_unreads, instance_config, audit_log, instance_settings, files, bot_tokens, bot_channel_access, bot_read_cursors, bot_thread_cursors, ai_provider_config, ai_capability_routes, ai_providers, ai_usage_events, exec_run_tokens, exec_runs, ai_dispatch_log, member_roles, channel_role_overrides, channel_member_overrides CASCADE');
+    await db.query('TRUNCATE users, servers, roles, channels, server_invites, sessions, messages, message_reactions, message_mentions, channel_unreads, instance_config, audit_log, instance_settings, files, bot_tokens, bot_channel_access, bot_read_cursors, bot_thread_cursors, ai_provider_config, ai_capability_routes, ai_providers, ai_usage_events, ai_decision_settings, exec_run_tokens, exec_runs, ai_dispatch_log, member_roles, channel_role_overrides, channel_member_overrides CASCADE');
     // Re-seed instance_config so existing tests see an initialized instance
     await db.query(
         `INSERT INTO instance_config (key, value) VALUES
