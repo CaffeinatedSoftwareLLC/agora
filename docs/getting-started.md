@@ -465,4 +465,16 @@ Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImag
 
 **Test reports.** `testReport(results, { title })` takes JUnit XML, Vitest/Jest JSON, or `{ totals, suites, failures }`. It posts a results card into the thread, with the full report attached as Markdown. If the run declares `chat`, the chat model writes the summary; otherwise the summary is computed from the counts. The report doesn't need any other capability.
 
+**Decision model (optional).** Settings → AI → Decision model. A decision model answers quick yes/no and pick-one questions about text. Agora works the same without one; each use below is off until you switch it on.
+
+1. Add a provider of type **TypeSafe Jev (decisions)** with your TypeSafe API key, and press Test.
+2. Under Capabilities, set **Decide** to that provider (model `jev-latest`) and turn it on. Set daily limits there if you want a ceiling; Jev's price is entered as $0.042 per 1M input tokens.
+3. Under **Decision model**, switch on what you want:
+   - *Assistant routing*: the assistant works out what an `@assistant` request is asking for. With a Search route enabled, this is also what lets the assistant search the web ("@assistant look up …").
+   - *Search screening*: web search results are checked for text that tries to give instructions to the AI reading them; such text is withheld. *Strict* refuses a search whose results could not be checked. Gemini-grounded results cannot be screened (Google's terms), so strict screening needs Tavily.
+   - *File tagging*: each uploaded text file or PDF is tagged from the list under **File tags**, which you can edit. The file's text is sent to the decision provider.
+   - *File ranking*: file search (the Files button in a channel, or an agent's `file_search` tool) is ordered by how well each file answers the search. The text of the top candidates is sent to the decision provider.
+
+Screening lowers risk; it is not a guarantee. What is sent where is listed in [Storage and Encryption](storage-and-encryption.md#what-leaves-the-instance-when-a-decision-model-is-used).
+
 **Google Search grounding has display terms.** Google's Gemini API terms say grounded results may only be shown unmodified, together with Google's Search Suggestions, to the person who asked, and may not be cached or analyzed. So for Gemini search, the gateway posts the answer with the Search Suggestions into the run's thread itself. The code still receives the answer and citations. What your agents do with that text afterwards is your responsibility as the operator. If your bots need to process search results freely, route `search` to Tavily instead.

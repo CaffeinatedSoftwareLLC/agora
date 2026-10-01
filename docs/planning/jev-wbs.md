@@ -5,6 +5,28 @@
 > Sizes: **XS** <1h · **S** ≈ half-day · **M** ≈ 1–2 days · **L** ≈ 3–5 days. Sizes are relative, not calendar promises.
 > Status: ☐ todo · ◐ in progress · ☑ done
 
+## Status (2026-10-01, end of the implementation session)
+
+J0, A.1–A.3, B and C are implemented, on four stacked local branches that are **not pushed and have no PRs**: `feat/jev-foundation` → `feat/jev-routing` → `feat/jev-search-screening` → `feat/jev-file-tags`. The last one holds everything.
+
+**Verified**
+- Backend suite on an isolated database: 884 passed (6 live checks skipped by default). `agora-mcp`: 56 passed. UI: `vite build` clean, no new lint or type errors (17 lint and 7 type errors were there before).
+- Live contract checks against TypeSafe (`JEV_LIVE=1 JEV_KEY=… npx vitest run test/live`): 6 of 6. They cover the response contract and the golden inputs for every question (injection, intent, tagging, tag relevance, ranking).
+- End to end on a dev instance (API on Windows, real TypeSafe key, local Ollama for chat): provider test, 7 files tagged in 4 s (including a PDF), an injected file flagged and kept out of ranking, 5 searches ranked correctly in about 0.4 s each, a tag edit re-asking only that tag (7 requests), and two `@assistant` requests routed (one to chat, one to search). 51 decision requests cost about $0.0015.
+
+**Not verified**
+- **The UI has not been looked at in a browser.** It builds and its API calls work through the dev proxy, but the Decision model section, File tags section, Files panel and tag chips have not been seen on screen.
+- **Search screening against a real search provider.** The screening question passes its live golden inputs and the pipeline passes with stubbed Tavily and Gemini, but no real Tavily search has gone through it (no Tavily key on the dev instance).
+- **Nothing has run on the WSL + gVisor stack** (D.3). The sandbox suite (`npm run test:sandbox`, `scripts/test-sandbox-gvisor.sh`) was not run; `sandbox/std.ts` gained `searchFiles()` and new `search()` fields.
+- The Docker image has not been built with the new `unpdf` dependency.
+
+**Decisions taken during implementation** (not in the plan as agreed; say if any should change)
+- The assistant's search posts the provider's answer and sources as a search card. It does not pass results through the chat model to write a reply.
+- Search has no keyword trigger: without routing switched on, the assistant never searches.
+- `agora-mcp` gained `file_search` but its version is still `0.4.0`, because the docs, the skill and the pending npm publish all name `0.4.0`.
+- Bots can search files but still cannot download them (`GET /files/:fileId` is not on the bot allowlist). An agent can find a file and cannot read it. See "Open questions".
+- The default for a `decide` route is off, and every use is off, until switched on.
+
 ## What this adds
 
 Jev is TypeSafe's "System One" model: it answers typed questions (yes/no, pick one, rate) about a piece of text, in well under a second, and returns probabilities. It does not write text. Agora will use it for three things, in Eryk's priority order:
@@ -104,10 +126,10 @@ Everything in `wbs.md` "Definition of Done", plus:
 
 | ID | Work package | Size | Depends |
 |---|---|---|---|
-| D.1 | ☐ `docs/api-reference.md` (new endpoints and fields), `docs/backend-architecture.md` (decide service, screening, tagging worker), `docs/getting-started.md` (how to turn Jev on), `agora-mcp/README.md`. | S | each phase |
-| D.2 | ☐ `docs/storage-and-encryption.md`: tags are plain text in Postgres; file text is sent to the decision provider when tagging is on, and again when ranking is on; what strict mode does and does not protect against. | XS | C.3, C.7 |
-| D.3 | ☐ Live checks on the WSL + gVisor stack with a real key, one per use: an assistant mention routed; a Tavily search with a planted injection screened from a sandboxed run and from the assistant; a file tagged, re-tagged after a criteria edit, and found by search. Results written to `HANDOFF.md`. | S | A, B, C |
-| D.4 | ☐ `CHANGELOG.md`, `wbs.md` (2.2 / 2.3 point here), `HANDOFF.md`. | XS | each phase |
+| D.1 | ☑ `docs/api-reference.md` (new endpoints and fields), `docs/backend-architecture.md` (decide service, screening, tagging worker), `docs/getting-started.md` (how to turn Jev on), `agora-mcp/README.md`. | S | each phase |
+| D.2 | ☑ `docs/storage-and-encryption.md`: tags are plain text in Postgres; file text is sent to the decision provider when tagging is on, and again when ranking is on; what strict mode does and does not protect against. | XS | C.3, C.7 |
+| D.3 | ◐ Done on a dev instance, not on gVisor, and not with a real Tavily search (see Status). Live checks on the WSL + gVisor stack with a real key, one per use: an assistant mention routed; a Tavily search with a planted injection screened from a sandboxed run and from the assistant; a file tagged, re-tagged after a criteria edit, and found by search. Results written to `HANDOFF.md`. | S | A, B, C |
+| D.4 | ☑ `CHANGELOG.md`, `wbs.md` (2.2 / 2.3 point here), `HANDOFF.md`. | XS | each phase |
 
 ## Backlog (not in this WBS's first release)
 
@@ -133,6 +155,12 @@ Everything in `wbs.md` "Definition of Done", plus:
 
 ## Open questions
 
-- Which PDF extractor, and its page and byte limits (settled in C.2).
-- Default tag set: proposed `protocol`, `specification`, `plan`, `test report`, `meeting notes`, `data`, `code`, `reference` (Eryk to adjust in C.1).
-- Whether the default for search screening, once a `decide` route exists, is on or off (plan assumes off until switched on).
+Settled during implementation:
+- PDF extractor: `unpdf` 1.8.1 (MIT), run in a worker thread. Limits: 20 MB, 50 pages, 192,000 characters, 20 s.
+- Search screening stays off until switched on.
+
+Still open, for Eryk:
+- **Should agents be able to read a file they found?** Bots can search files and cannot download them. A read tool that returns a file's extracted text (bounded, with the injection warning) would complete this, and it widens what a bot can access, so it was not added without asking.
+- **The default tag set**: `protocol`, `specification`, `plan`, `test report`, `meeting notes`, `data`, `code`, `reference`. Edit them in AI settings, or say what the defaults should be.
+- **`agora-mcp` version**: publish the pending `0.4.0` with `file_search` in it, or bump to `0.5.0` (the docs and the skill then need the new number).
+- **Should the assistant write its own answer from search results** (search, then the chat model)? Today it posts the provider's answer and sources as they come back, screened.
