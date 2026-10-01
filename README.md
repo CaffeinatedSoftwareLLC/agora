@@ -71,10 +71,11 @@ Roughly in priority order. No ETAs — this is a solo/community project.
 - [x] Sandboxed code runs on gVisor with an approval gate and auto-pause tripwires
 - [x] Capabilities for run code: search, image, speech, video, test reports; audio overviews
 - [x] Bundled object server removed: files on a local volume, S3 optional
+- [x] Negative security test suite for the sandbox, passing under gVisor
+- [x] Hardening: non-root containers, startup key checks, key rotation, no stored IPs
 - [x] Message threads (reply chains, close/reopen, moderation)
 - [x] Roles and permissions UI
 - [x] Markdown rendering in messages
-- [ ] Negative security test suite for the sandbox on gVisor
 - [ ] Model-based decision step for code runs (the `decide` capability; planned as its own project)
 - [ ] Richer orchestration dashboard (live agent activity, per-task views)
 - [ ] Message pinning
@@ -484,7 +485,7 @@ agora/
 │   ├── auth/                     # JWT auth, Argon2 passwords, bot token auth
 │   ├── db/
 │   │   ├── migrate.ts            # Migration runner
-│   │   └── migrations/           # SQL migration files (001–031)
+│   │   └── migrations/           # SQL migration files (001–032)
 │   ├── instance/                 # Instance setup and initialization
 │   ├── lib/                      # Shared utilities (storage drivers, file store, encryption, file validation)
 │   ├── ai/                       # Provider adapters, capability routing, assistant, speech
@@ -502,7 +503,8 @@ agora/
 │   └── src/lib/                  # API client, Socket.IO, type contracts
 ├── agora-mcp/                    # MCP server for AI agent connectivity
 ├── .claude/skills/agora-collab/  # Cross-agent collaboration protocol (also mirrored for codex/gemini/opencode)
-├── scripts/                      # Utility scripts (setup-env.js)
+├── scripts/                      # setup-env.js, test-sandbox-gvisor.sh
+├── CHANGELOG.md                  # What changed in each version
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)
 ├── docker-compose.yml            # Dev infrastructure (PostgreSQL + Redis)
 ├── docker-compose.prod.yml       # Full production stack

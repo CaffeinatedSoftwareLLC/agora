@@ -14,12 +14,12 @@ Everything below marked ☑ is on `main` and running on the WSL stack. Reviewed 
 | 0 Agent threads & orchestration | ☑ complete |
 | 1 Provider registry | ☑ complete |
 | 2 Decision seam | 2.1 ☑ (rules decider, in use). 2.2 and 2.3 → **moved to the separate Jev project** |
-| 3 Sandboxed runtime | ☑ except **3.9** (negative suite on gVisor), the one open package of the original plan |
+| 3 Sandboxed runtime | ☑ complete, including the negative suite (3.9), which passes under gVisor |
 | 4 First value | ☑ complete. `testReport` has not had a live check |
 | 5 Media | ☑ complete. Follow-ups are GitHub issues (#40, #35) |
-| 6 Platform | 6.1–6.5 ☑. Open: 6.6, 6.7, 6.8, 6.9 |
+| 6 Platform | 6.1–6.8 ☑. Open: 6.9 |
 
-**Carried past 0.2.0:** 3.9, 6.6–6.9, the `testReport` live check, and the open GitHub issues (#39, #40, #35, #23, #22, and the older UI issues #9–#18).
+**Carried past 0.2.0:** 6.9 (nginx re-resolving the API address), the `testReport` live check, certificate issuance on a real domain through `DOMAIN`, and the open GitHub issues (#39, #40, #35, #23, #22, and the older UI issues #9–#18).
 
 ## Definition of Done (every work package)
 - Backend: `npm run build` clean for `src/`; `npx vitest run test/integration` green
@@ -137,7 +137,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 3.6 | ☑ `Decider` + `RulesDecider`; approval card in the thread (View code / Approve / Deny, 30-min expiry, audit); result summary card; code retention (30 days, confirm before shortening, pruning sweep). Verified live: bot → approval in UI → sandbox → gateway → local Ollama → file + result in thread | M | 2.1, 3.5, 0.1 |
 | 3.7 | ~~Artifact harvest~~ folded into 3.4: artifacts leave only through the gateway (`postFile`), no container harvest (spec D5) | — | — |
 | 3.8 | ☑ Tripwires ⇒ auto-pause (`src/runtime/tripwires.ts`, spec §12): 3 failed/timed-out runs in 10 min (count resets on resume), a real run token used outside its run, a run hitting its call cap. Pausing posts a notice card in the thread, audits `bot_pause_tripwire`, kills the bot's running containers (runner polls), and denies its queued runs at claim. "Egress denied" dropped: the internal network drops egress, so nothing observes it | S | 0.4, 3.2 |
-| 3.9 | ☐ Negative security suite (spec §14, 15 items). **Partly covered, never run on gVisor.** `test/sandbox/runner.sandbox.test.ts` already probes internet, public DNS, `postgres`, subprocesses, writes outside scratch, remote imports, the infinite loop, memory exhaustion, output truncation, the unapproved-run refusal and the no-gVisor refusal, but only under `runc` on Docker Desktop. Still to write: `redis` / `api` reach and no mount of `files-data`, the env allowlist, `/proc/1/environ` and the Docker socket, the 64 MB scratch cap, cross-run token use from inside a sandbox. Then run the whole suite with `SANDBOX_TEST_RUNTIME=runsc` against the WSL2 engine | M | 3.2–3.4 |
+| 3.9 | ☑ Negative security suite (spec §14, 15 items). `test/sandbox/negative.sandbox.test.ts` adds the missing probes (core services and the file volume, container settings, the internet at the Deno and the network level, remote imports, environment, sensitive files and the Docker socket, scratch cap, fork bomb) and maps every item to its test; a cross-run token test runs through the real gateway; artifact typing is in the gateway integration tests. `scripts/test-sandbox-gvisor.sh` runs the suite on a Linux engine with gVisor: 37 of 37 on WSL2 (kernel `4.19.0-gvisor` inside containers), 2026-10-01. Also green under `runc` on Docker Desktop | M | 3.2–3.4 |
 
 ## 4 · First Value — `feat/visual-reports`, `feat/search`
 | ID | Work package | Size | Depends |
@@ -171,6 +171,6 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | R1 | ☑ Per-thread guard, default off. UI visibility tracked in a GitHub issue | user | 0.4.4 |
 | R2 | ☑ `messages.protocol` JSONB vs side table: JSONB, shipped in 0.3 | Claude | 0.3.1 |
 | R3 | ☑ Gemini API verified 2026-09-29 (generateContent/streamGenerateContent v1beta; live key-rejection response confirmed endpoint + auth header) | Claude | 1.3 |
-| R4 | ◐ gVisor compat on the host kernel: works on WSL2 (kernel 6.6, `runsc` release-20260928.0, verified 2026-09-30). Not tried on a dedicated Linux production host | user/Claude | 3.1 |
+| R4 | ◐ gVisor compat on the host kernel: works on WSL2 (kernel 6.6, `runsc` release-20260928.0); the full sandbox suite passes there (2026-10-01). Not tried on a dedicated Linux production host | user/Claude | 3.1 |
 | R5 | → Jev API access: moved with 2.2 / 2.3 to the Jev project | user | — |
 | R6 | ☑ Google grounding terms (updated 2026-04-28): results only with Search Suggestions, unmodified, to the prompt's submitter; no caching/analysis. Decision 2026-09-30: build both a compliant-display Gemini path and a Tavily adapter. Residual: grounded answers appear in a shared thread and run code still receives them; operators are responsible for derived use (docs/getting-started.md) | user | 4.2 |
