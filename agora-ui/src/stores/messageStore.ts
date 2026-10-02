@@ -11,6 +11,13 @@ export interface Attachment {
   height: number | null;
   url: string;
   deletedAt?: string;
+  /** Set when the server tags files: tag names (strongest first) and where tagging stands. */
+  tags?: string[];
+  tagging?: 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+  /** The file was longer than what the tagger read. */
+  partial?: boolean;
+  /** The file's text looked like it tries to instruct an AI reader. */
+  injectionWarning?: boolean;
 }
 
 export interface Message {

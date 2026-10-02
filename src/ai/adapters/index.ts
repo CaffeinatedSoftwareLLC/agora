@@ -3,10 +3,11 @@ import { anthropicAdapter } from './anthropic';
 import { openaiAdapter } from './openai';
 import { geminiAdapter } from './gemini';
 import { tavilyAdapter } from './tavily';
+import { typesafeAdapter } from './typesafe';
 
 export * from './types';
 
-const ADAPTERS: Adapter[] = [anthropicAdapter, openaiAdapter, geminiAdapter, tavilyAdapter];
+const ADAPTERS: Adapter[] = [anthropicAdapter, openaiAdapter, geminiAdapter, tavilyAdapter, typesafeAdapter];
 const BY_ID = new Map(ADAPTERS.map(a => [a.id, a]));
 
 /** Legacy `ai_provider_config.provider` values → adapter IDs. */

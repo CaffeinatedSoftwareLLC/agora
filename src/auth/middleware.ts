@@ -11,6 +11,10 @@ const BOT_ALLOWED_ROUTES = new Set([
     'POST /channels/:id/messages/:msgId/replies',
     'GET /channels/:id/messages/:msgId/replies',
     'GET /channels/:id/threads',
+    // File search returns names, tags and scores, never file content
+    'GET /channels/:id/files/search',
+    // The extracted text of a file in a channel the bot can access (not the file itself)
+    'GET /files/:fileId/text',
     'PATCH /channels/:id/messages/:msgId/thread',
     'GET /bots/@me/cursors',
     'PUT /bots/@me/cursors/:channelId',

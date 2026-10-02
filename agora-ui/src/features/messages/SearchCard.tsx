@@ -3,19 +3,35 @@ import { MessageContent } from './MessageContent';
 
 interface SearchData {
   query?: string;
-  citations?: { url: string; title?: string }[];
+  citations?: { url: string; title?: string; verdict?: 'clean' | 'suspect' | 'flagged' | 'unscreened' }[];
   suggestionsHtml?: string;
+  /** Present on searches made by the assistant: whether results were checked for prompt injection. */
+  screening?: { status: 'off' | 'screened' | 'partial' | 'unavailable' | 'not_applicable'; withheld?: number };
+}
+
+/** One line under the sources saying what screening did, or nothing when there is nothing to say. */
+function screeningNote(s: SearchData['screening']): string | null {
+  if (!s) return null;
+  if (s.status === 'screened') {
+    return s.withheld
+      ? `${s.withheld} piece${s.withheld === 1 ? '' : 's'} of text withheld: it tried to give instructions to an AI.`
+      : null;
+  }
+  if (s.status === 'partial' || s.status === 'unavailable') return 'These results could not be fully checked for prompt injection.';
+  return null;
 }
 
 /**
- * A Google-grounded search result posted by the capability gateway. Google's terms
- * require the answer to be shown unmodified alongside its Search Suggestions, so
- * this card renders the stored answer as-is and Google's suggestion snippet in a
- * sandboxed iframe (no scripts, no same-origin access; links open in a new tab).
+ * A web search result: from a sandboxed run (posted by the capability gateway) or
+ * from the assistant. For Google-grounded results, Google's terms require the answer
+ * to be shown unmodified alongside its Search Suggestions, so this card renders the
+ * stored answer as-is and Google's suggestion snippet in a sandboxed iframe (no
+ * scripts, no same-origin access; links open in a new tab).
  */
 export function SearchCard({ message }: { message: Message }) {
   const data = (message.systemData ?? {}) as SearchData;
   const citations = (data.citations ?? []).filter(c => /^https?:\/\//i.test(c.url));
+  const note = screeningNote(data.screening);
 
   return (
     <div className="mx-4 my-2 rounded-lg border border-border bg-surface/60 px-4 py-3">
@@ -36,10 +52,14 @@ export function SearchCard({ message }: { message: Message }) {
               <a href={c.url} target="_blank" rel="noopener noreferrer nofollow" className="text-primary hover:underline">
                 {c.title || c.url}
               </a>
+              {c.verdict === 'flagged' && <span className="text-warn"> (text withheld)</span>}
+              {c.verdict === 'suspect' && <span className="text-warn"> (possible prompt injection)</span>}
             </li>
           ))}
         </ol>
       )}
+
+      {note && <p className="mt-2 text-xs text-warn">{note}</p>}
 
       {data.suggestionsHtml && (
         <iframe

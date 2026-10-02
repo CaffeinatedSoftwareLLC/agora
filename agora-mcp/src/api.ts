@@ -62,6 +62,43 @@ export interface RuntimeRun {
     codeExpiresAt?: string | null;
 }
 
+/** One file found by file search: metadata only, never the file's text. */
+export interface FileSearchItem {
+    id: string;
+    name: string;
+    mime: string;
+    size: number;
+    url: string;
+    messageId: string | null;
+    uploadedAt: string;
+    tags: { name: string; probability: number; stale?: true }[];
+    tagging: 'none' | 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+    partial: boolean;
+    score: number;
+    ranked: boolean;
+    injectionWarning: boolean;
+}
+
+export interface FileSearchResult {
+    query: string | null;
+    tag: string | null;
+    results: FileSearchItem[];
+    ranking: { status: 'ranked' | 'coarse'; reason?: string; model?: string; questionVersion?: string };
+}
+
+export interface FileText {
+    id: string;
+    name: string;
+    mime: string;
+    text: string;
+    offset: number;
+    totalChars: number;
+    hasMore: boolean;
+    truncated: boolean;
+    injectionWarning: boolean;
+    injectionChecked: boolean;
+}
+
 export interface ThreadCursor {
     threadId: string;
     channelId: string;
@@ -221,6 +258,25 @@ export class AgoraApi {
         if (res.status === 423) throw new Error('This bot is paused by an Agora admin. Stop and tell the user.');
         if (!res.ok) throw new Error(`Agora API ${res.status} POST /runtime/runs: ${text}`);
         return json as RuntimeRun;
+    }
+
+    /** Find files in a channel, best match first. */
+    async searchFiles(channelId: string, opts: { query?: string; tag?: string; limit?: number } = {}): Promise<FileSearchResult> {
+        const params = new URLSearchParams();
+        if (opts.query) params.set('q', opts.query);
+        if (opts.tag) params.set('tag', opts.tag);
+        if (opts.limit) params.set('limit', String(opts.limit));
+        const qs = params.toString();
+        return this.request('GET', `/channels/${channelId}/files/search${qs ? `?${qs}` : ''}`);
+    }
+
+    /** The readable text of a file (text files and PDFs), one page at a time. */
+    async readFileText(fileId: string, opts: { offset?: number; limit?: number } = {}): Promise<FileText> {
+        const params = new URLSearchParams();
+        if (opts.offset) params.set('offset', String(opts.offset));
+        if (opts.limit) params.set('limit', String(opts.limit));
+        const qs = params.toString();
+        return this.request('GET', `/files/${fileId}/text${qs ? `?${qs}` : ''}`);
     }
 
     async getRun(runId: string): Promise<RuntimeRun> {

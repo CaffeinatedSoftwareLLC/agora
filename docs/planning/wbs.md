@@ -13,7 +13,7 @@ Everything below marked ☑ is on `main` and running on the WSL stack. Reviewed 
 |---|---|
 | 0 Agent threads & orchestration | ☑ complete |
 | 1 Provider registry | ☑ complete |
-| 2 Decision seam | 2.1 ☑ (rules decider, in use). 2.2 and 2.3 → **moved to the separate Jev project** |
+| 2 Decision seam | 2.1 ☑ (rules decider, in use). 2.2 and 2.3 → **moved to the separate Jev project**: see [`jev-wbs.md`](jev-wbs.md) (the `typesafe` adapter and `decide` service exist; the run gate and `WebhookDecider` are in its backlog) |
 | 3 Sandboxed runtime | ☑ complete, including the negative suite (3.9), which passes under gVisor |
 | 4 First value | ☑ complete. `testReport` has not had a live check |
 | 5 Media | ☑ complete. Follow-ups are GitHub issues (#40, #35) |

@@ -1,0 +1,29 @@
+{
+  "about": "Golden inputs for the assistant intent question (src/ai/decision-questions.ts). Each request is what a person wrote after @assistant. `expect` is the handler it should reach when all three are offered; `either` lists acceptable handlers for judgement calls. The live check asserts the handler, never exact probabilities.",
+  "handlers": ["chat", "audio_overview", "search"],
+  "cases": [
+    { "id": "explain", "expect": "chat", "text": "can you explain what a deferred foreign key is?" },
+    { "id": "summarise_written", "expect": "chat", "text": "summarise this thread in three bullet points" },
+    { "id": "rewrite", "expect": "chat", "text": "rewrite my last message so it sounds less harsh" },
+    { "id": "opinion", "expect": "chat", "text": "which of the two plans above do you think is safer, and why?" },
+    { "id": "code_help", "expect": "chat", "text": "why does this TypeScript give me 'possibly undefined' on line 3?" },
+    { "id": "about_audio", "expect": "chat", "text": "what bitrate should I use for an mp3 of spoken word?" },
+    { "id": "greeting", "expect": "chat", "text": "hey, are you there?" },
+    { "id": "draft", "expect": "chat", "text": "draft a short release note from what we decided here" },
+
+    { "id": "audio_plain", "expect": "audio_overview", "text": "make an audio overview of this thread" },
+    { "id": "audio_podcast", "expect": "audio_overview", "text": "turn this conversation into a short podcast I can listen to on my walk" },
+    { "id": "audio_indirect", "expect": "audio_overview", "text": "I don't have time to read all of this, can you read me a recap out loud?" },
+    { "id": "audio_voice", "expect": "audio_overview", "text": "give me a spoken summary of the channel, two hosts if you can" },
+    { "id": "audio_listen", "expect": "audio_overview", "text": "something I can listen to that covers what was decided, please" },
+
+    { "id": "search_plain", "expect": "search", "text": "search the web for the latest gVisor release and what changed" },
+    { "id": "search_lookup", "expect": "search", "text": "look up current pricing for Tavily's search API" },
+    { "id": "search_news", "expect": "search", "text": "what happened with the npm outage today?" },
+    { "id": "search_sources", "expect": "search", "text": "find me two authoritative sources on overwatering pothos, with links" },
+    { "id": "search_docs", "expect": "search", "text": "check the official Fastify docs online and tell me what changed in the newest version" },
+
+    { "id": "ambiguous_recent", "either": ["chat", "search"], "text": "what's the best Postgres version to use right now?" },
+    { "id": "ambiguous_summary", "either": ["chat", "audio_overview"], "text": "recap please" }
+  ]
+}

@@ -15,6 +15,7 @@ What Agora stores, where it lives, what is encrypted, and what is not. This page
 - [Where data lives](#where-data-lives)
 - [What is encrypted, and how](#what-is-encrypted-and-how)
 - [What is not encrypted](#what-is-not-encrypted)
+- [What leaves the instance when a decision model is used](#what-leaves-the-instance-when-a-decision-model-is-used)
 - [File storage](#file-storage)
 - [The MinIO change (#32)](#the-minio-change-32)
 - [Upgrading an install that used MinIO](#upgrading-an-install-that-used-minio)
@@ -58,10 +59,30 @@ Be clear-eyed about this when deciding where to host:
 
 - **Message content and everything else in Postgres** except the items in the table above. Anyone with the database has the conversations.
 - **File sizes, and the names of files stored before 0.2.0.** New files are stored as `<channelId>/<fileId>/blob`, so a listing of the volume or bucket shows how many files a channel has and how large each is, but not what they are called. Files stored before 0.2.0 still carry their original name in the path until you run the one-off rename (see [File storage](#file-storage)). File names are always in the `files` table in Postgres.
+- **File tags.** When file tagging is on, the tag names and criteria an admin writes, and for each file the probability of each tag, are stored in plain text in Postgres (`file_tag_definitions`, `file_tags`, `file_tag_jobs`). They are derived from file contents: a tag says something about what a file is. No file text is stored outside the encrypted blob.
 - **Data in memory and in transit between containers.** Containers talk to each other over the Docker network in plain text.
 - **Redis.**
 
 For protection against a stolen disk or a copied volume, add full-disk or volume encryption on the host. Agora's file encryption protects file *contents* from someone who has the storage but not the key; it is not a substitute for host security.
+
+## What leaves the instance when a decision model is used
+
+A decision model is optional and every use is off by default. When a use is switched on, the text below is sent to the decision provider (TypeSafe, for the built-in adapter) over HTTPS. Nothing is sent for a use that is off.
+
+| Use | What is sent |
+|---|---|
+| Assistant routing | The text of the `@assistant` request (up to 2000 characters). Not the conversation |
+| Search screening | The search answer and each result's title and snippet (never for Gemini-grounded results) |
+| File tagging | The text of each uploaded text file or PDF, up to 192,000 characters, plus the server's tag names and criteria |
+| File ranking | The search text, the tag names and criteria, and the first 24,000 characters of up to 8 candidate files per search |
+
+The assistant's written answer to a web search sends the screened results to the chat provider, as any assistant reply sends the conversation.
+
+File tagging and file ranking have separate switches because both send file contents out. Files are decrypted in memory for this and nothing decrypted is written anywhere. Agora stores the answers (probabilities), not the text.
+
+**Screening is not a security boundary.** Search screening and the injection check on files lower the chance that text aimed at an AI reaches one. A model can be wrong, and text that passes is still untrusted. Strict screening refuses a search whose results could not be checked; it does not make checked results safe.
+
+**Bots can read file text.** A bot with access to a channel can read the text of text files and PDFs shared there (`GET /files/:fileId/text`), which then goes wherever that agent's own model runs. It cannot download the files themselves, and channel access is still an admin's explicit grant per bot.
 
 ## File storage
 
@@ -218,3 +239,4 @@ Earlier gaps, now closed: file names in storage paths (new files), backend conta
 
 1. **No built-in backup.** See [Backups](#backups) for what to copy.
 2. **Files stored before 0.2.0 keep their name in the storage path** until the one-off rename is run (see [File storage](#file-storage)).
+3. **File tags are plain text in Postgres** when file tagging is on (see [What is not encrypted](#what-is-not-encrypted)). Tagging is off by default.

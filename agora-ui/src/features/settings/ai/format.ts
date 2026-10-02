@@ -6,7 +6,7 @@ export const CAPABILITY_INFO: Record<AICapability, { label: string; description:
   image: { label: 'Image', description: 'Image generation' },
   tts: { label: 'Speech', description: 'Text-to-speech (audio overviews)' },
   video: { label: 'Video', description: 'Video generation' },
-  decide: { label: 'Decide', description: 'Fast typed decisions (routing, risk gating)' },
+  decide: { label: 'Decide', description: 'Decision model (optional): routing, search screening, file tags' },
 };
 
 export const CAPABILITY_ORDER: AICapability[] = ['chat', 'search', 'image', 'tts', 'video', 'decide'];

@@ -129,6 +129,64 @@ export interface MediaResult {
     usage: Usage;
 }
 
+/** Text or structured text (nested objects and arrays of strings); decision models read both. */
+export type DecideText = string | number | boolean | null | DecideText[] | { [key: string]: DecideText };
+
+/**
+ * A typed question for a decision model. Provider-neutral: any adapter that lists
+ * `decide` answers these three shapes.
+ * - `noul`: yes/no → the probability that the answer is yes
+ * - `choice`: pick one of the named options
+ * - `score`: rate against ordered levels (lowest first)
+ */
+export type DecideQuestion =
+    | { type: 'noul'; instructions: DecideText; criteria?: { true?: DecideText; false?: DecideText } }
+    | { type: 'choice'; instructions: DecideText; criteria: Record<string, DecideText> }
+    | { type: 'score'; instructions: DecideText; criteria: DecideText[] };
+
+export interface DecideRequest {
+    model: string;
+    /** The content being judged. Untrusted text belongs here, never in the questions. */
+    state: DecideText;
+    questions: Record<string, DecideQuestion>;
+    /** Total time allowed, retries included. */
+    timeoutMs?: number;
+}
+
+export type DecideAnswer =
+    | { type: 'noul'; probability: number }
+    | { type: 'choice'; choice: string; confidence: number; probabilities: Record<string, number> }
+    /** `score` is the probability-weighted level index (0 = lowest level); `probabilities[i]` is level i. */
+    | { type: 'score'; score: number; confidence: number; probabilities: number[] };
+
+export interface DecideResult {
+    /** The model that answered, as the provider reports it (not the alias that was asked for). */
+    model: string;
+    answers: Record<string, DecideAnswer>;
+    usage: Usage;
+}
+
+/** Request size limits of a decision adapter, in tokens. */
+export interface DecideLimits {
+    /** State plus the longest single question. */
+    stateTokens: number;
+    /** The whole request. */
+    requestTokens: number;
+    maxChoiceOptions: number;
+    minScoreLevels: number;
+    maxScoreLevels: number;
+}
+
+export type DecideFailureKind = 'transient' | 'permanent' | 'timeout' | 'invalid_response';
+
+/** A failed decision call. `message` is safe to store and show: no key material, truncated. */
+export class DecideError extends Error {
+    constructor(public kind: DecideFailureKind, message: string, public status?: number) {
+        super(message);
+        this.name = 'DecideError';
+    }
+}
+
 /**
  * Each capability method is present exactly when the adapter lists that capability;
  * `resolveRoute` refuses routes an adapter can't serve, so callers may assert them.
@@ -144,5 +202,15 @@ export interface Adapter extends AdapterInfo {
      */
     ttsDialogue?(creds: ProviderCredentials, req: DialogueRequest): Promise<MediaResult>;
     generateVideo?(creds: ProviderCredentials, req: VideoRequest): Promise<MediaResult>;
+    /**
+     * True when the provider's terms require search results to be shown unmodified and
+     * forbid passing them to another model (Gemini grounding). Such results are never
+     * sent to a decision model for screening.
+     */
+    restrictedSearchResults?: boolean;
+    /** Typed decisions. Throws `DecideError`; callers go through `src/ai/decide.ts`, never here directly. */
+    decide?(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult>;
+    /** Present exactly when the adapter lists `decide`. */
+    decideLimits?: DecideLimits;
     testConnection(creds: ProviderCredentials, model: string): Promise<ConnectionResult>;
 }

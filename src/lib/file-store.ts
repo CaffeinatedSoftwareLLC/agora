@@ -5,6 +5,7 @@ import { storage, BUCKET_NAME } from './storage';
 import { BLOB_LEAF } from './storage-maintenance';
 import { encryptFile } from './encryption';
 import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES } from './file-validation';
+import { enqueueFileTagging } from './file-tagging-queue';
 import { config } from '../config';
 
 /**
@@ -136,6 +137,10 @@ export async function storeFile(
         await pool.query('DELETE FROM files WHERE id = $1', [fileId]);
         return { ok: false, status: 502, error: 'Failed to store file' };
     }
+
+    // Queue the file for tagging when its server has that switched on. Only now, with
+    // the blob in place; it never fails or delays the upload (the sweep catches misses).
+    await enqueueFileTagging(pool, fileId, channelId);
 
     return {
         ok: true,

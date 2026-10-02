@@ -13,6 +13,10 @@ interface UIState {
   membersOpen: boolean;
   toggleMembers: () => void;
 
+  // Files panel (search the channel's files)
+  filesOpen: boolean;
+  toggleFiles: () => void;
+
   // Modals
   activeModal: string | null;
   setModal: (modal: string | null) => void;
@@ -41,6 +45,9 @@ export const useUIStore = create<UIState>((set) => ({
 
   membersOpen: false,
   toggleMembers: () => set((s) => ({ membersOpen: !s.membersOpen })),
+
+  filesOpen: false,
+  toggleFiles: () => set((s) => ({ filesOpen: !s.filesOpen })),
 
   activeModal: null,
   setModal: (modal) => set({ activeModal: modal }),

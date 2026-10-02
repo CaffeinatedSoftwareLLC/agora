@@ -19,6 +19,7 @@ Agora's backend is built on **Fastify 5**, **PostgreSQL 16**, **Socket.IO 4**, a
 - [Bot Infrastructure](#bot-infrastructure)
 - [Threads](#threads)
 - [File Storage and Encryption](#file-storage-and-encryption)
+- [Decision Model](#decision-model)
 
 ---
 
@@ -889,3 +890,51 @@ Client IPs are not stored (removed in migration 031); `request.ip` is only used 
 Key validation lives in `src/config.ts`: the key must be 64 hex characters when set, and with `NODE_ENV=production` (set in the Docker image) a missing or all-zero key throws at load. `assertProductionJwtSecret()` rejects a placeholder `JWT_SECRET`; only the API calls it, because the runner and cap-gateway load the config without a JWT secret.
 
 `src/lib/key-fingerprint.ts` guards against a *changed* key. `verifyEncryptionKeyAtStartup()` runs in `src/index.ts` (before `listen`) and `src/gateway-main.ts`: it stores `HMAC-SHA256(key, fixed label)` in `instance_config` under `encryption_key_fingerprint` on first start (`INSERT … ON CONFLICT DO NOTHING`, so processes starting together agree), and throws `EncryptionKeyMismatchError` on any later start with a different key. With no fingerprint yet, it first tries the key on one stored provider key and refuses to record a key that fails. `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` records the current key instead of throwing.
+
+---
+
+## Decision Model
+
+An optional model that answers typed questions about text (TypeSafe Jev is the first adapter). The plan and its decisions are in [`planning/jev-wbs.md`](planning/jev-wbs.md). Three rules hold everywhere:
+
+1. **Optional.** With no `decide` route, or a use switched off, the code path makes no decision call and behaves as before. Every caller has a named fallback.
+2. **Advisory.** An answer orders, labels or routes. It never grants access, loosens a limit or picks a provider.
+3. **Untrusted text goes in `state` only.** Questions are written by Agora or by an admin; the content being judged is never part of a question.
+
+### The call path
+
+| Layer | File | What it does |
+|---|---|---|
+| Contract | `src/ai/adapters/types.ts` | `DecideQuestion` (`noul` yes/no, `choice`, `score`), `DecideAnswer`, `DecideError`. Provider-neutral: another decision model is another adapter |
+| Adapter | `src/ai/adapters/typesafe.ts` | `POST /v1/systemone`. One total deadline (3 s by default) that covers retries; backoff on 429 and 529 honouring `Retry-After`; errors without key material |
+| Validation | `src/ai/decide-validate.ts` | Request size guards before the call. After it: every question answered and none extra, types match, probabilities finite and in 0–1, a choice that was offered |
+| Service | `src/ai/decide.ts` | **The only caller of an adapter's `decide`.** Resolves the server's route, checks the use's switch, the route's budget and the use's share, calls, validates, records usage with `decision_use`. Returns a typed outcome: `ok`, `disabled`, `unconfigured`, `over_budget`, `too_large`, `provider_error`, `invalid_response` |
+| Questions | `src/ai/decision-questions.ts` | The wording of every question, versioned. A version is stored with each result |
+
+Settings are one row per server in `ai_decision_settings` (`src/routes/ai-decisions.ts`). Budgets per use are counted from `ai_usage_events.decision_use`; they are soft limits (concurrent calls can overshoot).
+
+### Uses
+
+- **Routing** (`src/ai/intent-routing.ts`, called from `assistant-handler.ts` after the bot, channel, thread and duplicate-dispatch checks). A `choice` among the handlers that can run right now; below `routing_min_confidence` the reply is chat. With routing off, one handler available, or any failure, `intentByRules()` decides (the audio overview keywords). Ordinary messages never reach it.
+- **Search screening** (`src/ai/search-screening.ts`, used by the capability gateway's `search` and the assistant's search handler). One call per result, one `noul` per piece of text an agent would read (the answer, each title, each snippet). At or above the flag threshold the text is withheld and the link kept; between the suspect and flag thresholds it is delivered marked. Default mode never blocks a search. After the assistant's search card, `writeSearchAnswer()` gives the chat model only the text that passed screening and streams its answer; not for results under display terms. Strict mode refuses a search that could not be fully screened, in `screeningPrecheck()` before the search call where that is already known. Adapters with `restrictedSearchResults` (Gemini grounding) are never screened: Google's terms forbid passing those results to another model.
+- **File tagging** (`src/workers/file-tagging.ts`, `src/lib/file-tagging-queue.ts`). `storeFile()` queues a job after the blob is written, if the server has tagging on. The worker decrypts in memory, extracts text (`src/lib/text-extract.ts`: plain text directly, PDF through `unpdf` in a worker thread with time and memory limits), splits it into chunks, and asks one `noul` per tag per chunk plus one injection question. A tag's probability is its highest across chunks. No file text is stored.
+- **File ranking** (`src/lib/file-search.ts`). See below.
+
+### The tagging queue
+
+`file_tag_jobs` has one row per file: `pending → running → done | skipped | failed`.
+
+- **Claim:** a short transaction under one advisory lock picks a due job with `FOR UPDATE SKIP LOCKED`, sets a lease and raises `claim_generation`. The per-server limit on running jobs is exact across processes because claims are serialized.
+- **Fencing:** every later write is conditional on the generation. A worker that outlived its lease finds its generation gone and stops; the lease is renewed before each model call, which is also where a taken-over job is noticed.
+- **Before storing** the worker re-checks, in one transaction: the file still exists and has not expired, tagging is still on, and each tag still exists, is enabled and has the revision that was asked about.
+- **Outcomes:** rate limits, timeouts and malformed answers retry with backoff, up to 5 attempts. A rejected key or request fails the job at once. A spent budget or a switched-off model leaves the job waiting and costs no attempt.
+- **Staleness** is one rule: a file needs tagging when an enabled tag of its server has no result with that tag's current revision and the current question version. The sweep (every minute) and the admin re-tag action put such files back in the queue, and the worker asks only about the stale tags.
+- A trigger on `files` removes a file's tags and job when it is soft-deleted, whichever code path deleted it.
+
+### File search
+
+`searchChannelFiles()` is shared by `GET /channels/:id/files/search` and the gateway's `POST /v1/files/search`. In order: (1) `canViewChannel()`; nothing is read before it passes; (2) a shortlist from file names and stored tags, where the decision model may first be asked which tags fit the query (a call that sees the query and the tag list, no file); (3) with ranking on, the top candidates (at most 8, each at most 5 MB) are decrypted in memory and scored against the query, skipping any file whose stored injection probability is at or above the flag threshold; (4) access is checked again and files deleted meanwhile are dropped. The response is metadata only.
+
+`readFileText()` (`src/lib/file-read.ts`, behind `GET /files/:fileId/text` and the gateway's `POST /v1/files/read`) returns a file's extracted text in pages under the same access rule. A file the caller cannot see answers exactly like one that does not exist, and nothing is decrypted before the check. It needs no decision model.
+
+Both run on the pool rather than the request's RLS-bound client: bots are not server members, so row-level policies cannot express their per-channel access. Authorization is the explicit check in step 1 and step 4.

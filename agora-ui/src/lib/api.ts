@@ -264,7 +264,8 @@ export type AIConnectionResult = { ok: boolean; error?: string };
 /** One audited change to the server's AI settings (providers, routes, assistant). */
 export interface AIChange {
   id: string;
-  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update';
+  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update'
+    | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag';
   targetType: string;
   targetId: string | null;
   changes: Record<string, any>;
@@ -272,7 +273,121 @@ export interface AIChange {
   actor: { id: string; username: string; bot: boolean } | null;
 }
 
+/** What a decision model can be used for. Each is switched on separately. */
+export type AIDecisionUse = 'routing' | 'search_screening' | 'file_tagging' | 'file_ranking';
+
+export interface AIDecisionUseSettings {
+  enabled: boolean;
+  /** Percent of the decide capability's daily budget this use may spend; 0 switches it off. */
+  sharePct: number;
+  dailyRequests: number | null;
+}
+
+export interface AIDecisionSettings {
+  uses: Record<AIDecisionUse, AIDecisionUseSettings>;
+  routingMinConfidence: number;
+  screeningFlagThreshold: number;
+  screeningSuspectThreshold: number;
+  screeningStrict: boolean;
+  tagThreshold: number;
+  /** The decide capability route, as configured under Capabilities. */
+  route: { configured: boolean; enabled: boolean; provider: string | null; adapter: string | null; model: string | null };
+  today: Record<AIDecisionUse, { requests: number; tokens: number; errors: number }>;
+  warnings: string[];
+}
+
+export type AIDecisionSettingsPatch = Partial<Pick<AIDecisionSettings,
+  'routingMinConfidence' | 'screeningFlagThreshold' | 'screeningSuspectThreshold' | 'screeningStrict' | 'tagThreshold'>> & {
+  uses?: Partial<Record<AIDecisionUse, Partial<AIDecisionUseSettings>>>;
+};
+
+/** A file tag: a yes/no question a decision model answers about each uploaded text file. */
+export interface AIFileTag {
+  id: string;
+  name: string;
+  instructions: string;
+  criteriaTrue: string | null;
+  criteriaFalse: string | null;
+  /** Goes up whenever the name, instructions or criteria change; older results are then stale. */
+  revision: number;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AITaggingQueue {
+  pending: number;
+  running: number;
+  done: number;
+  skipped: number;
+  failed: number;
+  /** Tagged files whose results predate a tag change. */
+  stale: number;
+}
+
+export type AIFileTagInput = { name: string; instructions: string; criteriaTrue?: string | null; criteriaFalse?: string | null; enabled?: boolean };
+
+export interface FileSearchItem {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  url: string;
+  messageId: string | null;
+  uploadedAt: string;
+  tags: { name: string; probability: number; stale?: true }[];
+  tagging: 'none' | 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+  partial: boolean;
+  score: number;
+  ranked: boolean;
+  injectionWarning: boolean;
+}
+
+export interface FileSearchResult {
+  query: string | null;
+  tag: string | null;
+  results: FileSearchItem[];
+  ranking: { status: 'ranked' | 'coarse'; reason?: string; model?: string };
+}
+
+export const fileSearchApi = {
+  /** Files in a channel, best match first; with no query, newest first. */
+  search: (channelId: string, opts: { q?: string; tag?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.q) params.set('q', opts.q);
+    if (opts.tag) params.set('tag', opts.tag);
+    if (opts.limit) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return api.get<FileSearchResult>(`/channels/${channelId}/files/search${qs ? `?${qs}` : ''}`);
+  },
+
+  /** The tag names members can filter by. */
+  tagNames: (serverId: string) =>
+    api.get<{ id: string; name: string }[]>(`/servers/${serverId}/file-tags`),
+};
+
 export const aiApi = {
+  listTags: (serverId: string) =>
+    api.get<{ tags: AIFileTag[]; max: number; queue: AITaggingQueue }>(`/servers/${serverId}/ai/tags`),
+
+  createTag: (serverId: string, data: AIFileTagInput) =>
+    api.post<AIFileTag>(`/servers/${serverId}/ai/tags`, data),
+
+  updateTag: (serverId: string, tagId: string, data: Partial<AIFileTagInput>) =>
+    api.patch<AIFileTag>(`/servers/${serverId}/ai/tags/${tagId}`, data),
+
+  deleteTag: (serverId: string, tagId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/ai/tags/${tagId}`),
+
+  retagFiles: (serverId: string, includeFailed = false) =>
+    api.post<{ created: number; requeued: number; retried: number; queue: AITaggingQueue }>(`/servers/${serverId}/ai/tags/retag`, { includeFailed }),
+
+  getDecisions: (serverId: string) =>
+    api.get<AIDecisionSettings>(`/servers/${serverId}/ai/decisions`),
+
+  patchDecisions: (serverId: string, data: AIDecisionSettingsPatch) =>
+    api.patch<AIDecisionSettings>(`/servers/${serverId}/ai/decisions`, data),
+
   getConfig: (serverId: string) =>
     api.get<AIConfig>(`/servers/${serverId}/ai-config`),
 

@@ -802,6 +802,66 @@ Delete a file. Allowed for the uploader, or a member with `ManageMessages` in th
 
 ---
 
+### GET /channels/:id/files/search
+
+Find files shared in a channel, best match first. For members with `ViewChannel`, and for bots with access to the channel. The response is metadata only: it never contains file text (read a file with `GET /files/:fileId/text`).
+
+**Query:** `q` (what you are looking for, up to 500 characters; without it the newest files are listed) · `tag` (only files carrying this tag) · `limit` (1–25, default 10).
+
+**Response** `200`
+```json
+{
+  "query": "how do agents take turns in a thread?",
+  "tag": null,
+  "results": [
+    {
+      "id": "01M3...", "name": "collab-protocol.md", "mime": "text/markdown", "size": 412,
+      "url": "/files/01M3...", "messageId": "01M3...", "uploadedAt": "2026-10-01T22:10:00.000Z",
+      "tags": [{ "name": "protocol", "probability": 0.98 }],
+      "tagging": "done", "partial": false,
+      "score": 0.97, "ranked": true, "injectionWarning": false
+    }
+  ],
+  "ranking": { "status": "ranked", "model": "jev-1.13.0", "questionVersion": "ranking-1" }
+}
+```
+
+- `tags`: tags at or above the server's tag threshold. `stale: true` marks a result made before the tag was last edited.
+- `tagging`: `none` (never queued), `pending`, `running`, `done`, `skipped` (no readable text, such as an image) or `failed`. `partial`: the file was longer than what was read.
+- `score` (0–1) and `ranked`: when file ranking is on, the decision model reads the top candidates and `score` is its answer. Otherwise `score` comes from file names and tags and `ranked` is `false`.
+- `ranking.status` is `coarse` with a `reason` when the model did not rank: ranking off, no decision model, budget spent, provider failure, invalid answer, or no search text.
+- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. Such a file is not sent to the model for ranking.
+- Tags raise a file's rank. They never exclude a file: one that is untagged, pending or failed is still found by its name. Only the explicit `tag` parameter filters.
+- Only files attached to a message that still exists are listed.
+
+**Errors:** `400` invalid `limit` or `q` too long · `403` no access to the channel · `404` unknown channel.
+
+---
+
+### GET /files/:fileId/text
+
+The readable text of a text file or PDF, in pages. For members with `ViewChannel` on the file's channel, and for bots with access to that channel: this is how an agent reads a file it found with file search. Bots cannot use `GET /files/:fileId`.
+
+**Query:** `offset` (characters to skip, default 0) · `limit` (characters to return, 1–50000, default 20000).
+
+**Response** `200`
+```json
+{
+  "id": "01M3...", "name": "collab-protocol.md", "mime": "text/markdown",
+  "text": "# agora-collab Protocol v1 …",
+  "offset": 0, "totalChars": 412, "hasMore": false, "truncated": false,
+  "injectionWarning": false, "injectionChecked": true
+}
+```
+
+- `hasMore`: ask again with `offset` = `offset + text.length`.
+- `truncated`: the file is longer than the reading limits (20 MB, 50 PDF pages, 192,000 characters).
+- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` when no such check was made (file tagging off, or not done yet). File text is untrusted data in every case.
+
+**Errors:** `404` unknown, deleted, not attached to a message, or in a channel the caller cannot see (the same answer for all four) · `415` no readable text (images, audio, video, archives, empty files) · `413` larger than 20 MB · `422` the file could not be parsed.
+
+---
+
 ### GET /admin/settings/files
 
 Current file limits.
@@ -1115,7 +1175,7 @@ Update per-channel bot configuration (loop guard limit).
 
 ## AI Providers
 
-Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`) to a provider and model. The built-in assistant uses the `chat` route.
+Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`) to a provider and model. The built-in assistant uses the `chat` route.
 
 All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key.
 
@@ -1137,6 +1197,73 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 **Base URLs** (the `openai` adapter: Ollama, OpenRouter, Groq, vLLM, …) must be http(s). Hosts that resolve to private, loopback or link-local addresses are rejected unless an instance admin enables `PATCH /admin/settings/ai { "allowPrivateBaseUrls": true }`, e.g. for a local Ollama server.
 
 The older `/servers/:serverId/ai-config` endpoints still work. `PUT` upserts a provider plus the `chat` route plus the assistant bot in one call, and accepts `provider` values `claude` (legacy), `anthropic`, `openai` or `gemini`.
+
+---
+
+## Decision model
+
+Optional. A decision model answers typed questions about a piece of text (yes/no, pick one, rate) and returns probabilities; it writes no text. The first adapter is `typesafe` (TypeSafe Jev). Configure it like any provider: add a `typesafe` provider with its key, then set the `decide` capability route. With no `decide` route, or with every use below switched off (the default), Agora makes no decision calls and behaves as it did before.
+
+A decision informs Agora's code. It never grants access, loosens a limit, or picks a provider.
+
+Four uses, each switched on separately:
+
+| Use | What the model decides | Without it |
+|---|---|---|
+| `routing` | Which handler an explicit `@assistant` request goes to (chat, audio overview, search) | Keyword rules: "audio overview" / "podcast" → audio overview, else chat. Assistant search is not reachable |
+| `search_screening` | Whether each piece of search result text tries to give instructions to the AI reading it | Results are returned as they came, marked `off` |
+| `file_tagging` | Which of the server's tags apply to each uploaded text file or PDF | Files have no tags |
+| `file_ranking` | How well each of the top candidate files answers a file search | File search orders by file names and stored tags |
+
+All endpoints below require **Administrator**; bots cannot call them. Changes appear in `GET /servers/:serverId/ai/changes`.
+
+### GET /servers/:serverId/ai/decisions
+
+**Response** `200`
+```json
+{
+  "uses": {
+    "routing":          { "enabled": false, "sharePct": 25, "dailyRequests": null },
+    "search_screening": { "enabled": false, "sharePct": 25, "dailyRequests": null },
+    "file_tagging":     { "enabled": false, "sharePct": 25, "dailyRequests": null },
+    "file_ranking":     { "enabled": false, "sharePct": 25, "dailyRequests": null }
+  },
+  "routingMinConfidence": 0.6,
+  "screeningFlagThreshold": 0.7,
+  "screeningSuspectThreshold": 0.35,
+  "screeningStrict": false,
+  "tagThreshold": 0.5,
+  "route": { "configured": true, "enabled": true, "provider": "TypeSafe Jev (decisions)", "adapter": "typesafe", "model": "jev-latest" },
+  "today": { "routing": { "requests": 0, "tokens": 0, "errors": 0 }, "search_screening": { }, "file_tagging": { }, "file_ranking": { } },
+  "warnings": []
+}
+```
+
+- `sharePct`: the part of the `decide` route's daily limits this use may spend. Shares total 100 or less and are not borrowed, so one use cannot starve another. `0` switches the use off.
+- `dailyRequests`: a request cap for the use on its own. On a route with no daily limits this is what keeps uses apart.
+- These are soft limits: they are counted from recorded usage, so calls in flight at the same moment can overshoot.
+- `warnings` names settings that cannot work together, for example strict screening with a Gemini search route.
+
+### PATCH /servers/:serverId/ai/decisions
+
+Change any subset of the fields above (`uses` may name any subset of uses and fields).
+
+**Errors:** `400` shares over 100%, a suspect threshold above the flag threshold, or nothing recognised to change.
+
+### File tags
+
+A tag is a yes/no question about a file. A decision model cannot invent tags: it answers one question per tag in this list.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/servers/:serverId/file-tags` | `[{ id, name }]` of enabled tags. Any member |
+| GET | `/servers/:serverId/ai/tags` | `{ tags, max, queue }`: every tag with `instructions`, `criteriaTrue`, `criteriaFalse`, `revision`, `enabled`; and the tagging queue's counts (`pending`, `running`, `done`, `skipped`, `failed`, `stale`). The first call gives the server a default set of eight tags |
+| POST | `/servers/:serverId/ai/tags` | `{ name, instructions, criteriaTrue?, criteriaFalse?, enabled? }` → `201`. `409` duplicate name (case-insensitive) or more than 255 tags |
+| PATCH | `/servers/:serverId/ai/tags/:tagId` | Any subset. Changing the name, instructions or criteria raises `revision`; results made with an older revision are stale and the file is asked about that tag again |
+| DELETE | `/servers/:serverId/ai/tags/:tagId` | Also removes the tag from every file |
+| POST | `/servers/:serverId/ai/tags/retag` | `{ includeFailed? }` → `{ created, requeued, retried, queue }`. Queues files that have no job or stale results now, instead of waiting for the periodic sweep. `409` when file tagging is off |
+
+`name`: 1–40 characters, starting with a letter or digit; letters, digits, spaces and `_ . & + / -`. `instructions` and each criteria field: up to 500 characters.
 
 ---
 

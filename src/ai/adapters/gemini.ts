@@ -171,6 +171,8 @@ export const geminiAdapter: Adapter = {
         // All Veo 3.1 models are preview as of 2026-09; Fast trades quality for price and speed
         video: 'veo-3.1-fast-generate-preview',
     },
+    // Grounding terms: results are shown unmodified and not analysed by another model
+    restrictedSearchResults: true,
 
     /**
      * Veo via predictLongRunning: submit, poll the operation until done, download

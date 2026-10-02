@@ -2,6 +2,17 @@
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
 
+## Decision model (Jev): implemented, open as PR #51 (2026-10-01, evening)
+
+The Jev project was planned in Agora with Codex and Gemini and then implemented in one session. **Plan, status, what was and was not verified, and the open questions for Eryk: [`jev-wbs.md`](jev-wbs.md), "Status" at the top.** Read that before touching this work.
+
+- **PR #51**, `feat/jev-file-tags` → `main`, one commit per phase. Not merged. Three earlier local branches (`feat/jev-foundation`, `feat/jev-routing`, `feat/jev-search-screening`) are ancestors of it and can be deleted.
+- What it adds: an optional decision model (`typesafe` adapter, `decide` route) used for assistant routing, assistant web search, search-result screening for prompt injection, file tagging with admin-defined tags, and file search with ranking. Agents can also read file text now (`file_read`), with or without a decision model. Off by default; with it off, Agora behaves as before.
+- Migrations `033` and `034` (not reversible: use a database of their own when testing, as with `031`). New dependency `unpdf`.
+- The test key is the Windows user environment variable `JEV_KEY`. Agora does not read it at runtime; admins enter the key in AI settings. Live checks: `JEV_LIVE=1 JEV_KEY=… npx vitest run test/live`.
+- Test databases made for this work on the Docker Desktop Postgres (`agora-test-postgres-1`): `accord_test_jev` (the test suite) and `agora_jev_live` (the dev instance used for the end-to-end check, with its files in `%TEMP%\agora-jev-live-files`). Both are disposable.
+- Still to do before merging: look at the UI in a browser, run a real Tavily search through screening, run the sandbox suite and a deploy on the WSL + gVisor stack, and build the Docker image.
+
 ## Current state (read this first)
 
 **0.2.0 is released.** `main` is at #48. Tag `v0.2.0` sits on the merge of #45 (`49c78e5`), and there is a GitHub release with the changelog. No PRs are open.
@@ -39,7 +50,7 @@ Merged remote branches that can be deleted (each is merged; check no open PR use
 
 1. **Docs first** (done in #42): README, getting started, architecture, API reference, sandbox spec, this handoff, and the new storage and encryption page.
 2. **Then code changes**, starting with the gaps the audit found (next section). The first one is done: Eryk decided to **remove IP tracking and IP bans outright** rather than repair them. IP bans are easy to evade, can hit unrelated people behind one address, and would hit every local agent at once (they all arrive from the same local address). Registration policy, account bans and bot pause / token revocation are the controls.
-3. **Jev is its own project now.** Decided 2026-10-01: the Jev decision layer (WBS 2.2, 2.3, the `decide` capability) leaves this initiative. Its WBS will be written and worked by agents in Agora. Do not build it from this handoff. The rules decider stays the gate in use and `decide` stays at 501.
+3. **Jev is its own project now.** Decided 2026-10-01: the Jev decision layer (WBS 2.2, 2.3, the `decide` capability) leaves this initiative. Its WBS is [`jev-wbs.md`](jev-wbs.md), written in Agora and since implemented on local branches (see the section above). The rules decider is still the only gate on code runs, and `decide` still returns 501 to sandboxed code: both are in that WBS's backlog.
 
 ## Audit findings (2026-10-01): what the docs promised vs what runs
 

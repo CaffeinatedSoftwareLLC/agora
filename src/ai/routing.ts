@@ -147,6 +147,8 @@ export interface UsageRecord {
     messageId?: string | null;
     runId?: string | null;
     error?: string | null;
+    /** `decide` calls only: which use the call was for (per-use budgets, src/ai/decide.ts). */
+    decisionUse?: string | null;
 }
 
 export async function recordUsage(db: Queryable, rec: UsageRecord): Promise<void> {
@@ -154,10 +156,10 @@ export async function recordUsage(db: Queryable, rec: UsageRecord): Promise<void
     await db.query(
         `INSERT INTO ai_usage_events (id, server_id, channel_id, user_id, message_id, provider, model,
                                       input_tokens, output_tokens, latency_ms, error,
-                                      capability, provider_id, cost_micros, run_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+                                      capability, provider_id, cost_micros, run_id, decision_use)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
         [generateUlid(), rec.serverId, rec.channelId ?? null, rec.userId ?? null, rec.messageId ?? null,
          rec.adapter, rec.model, rec.usage.inputTokens, rec.usage.outputTokens, rec.latencyMs, rec.error ?? null,
-         rec.capability, rec.providerId, cost, rec.runId ?? null]
+         rec.capability, rec.providerId, cost, rec.runId ?? null, rec.decisionUse ?? null]
     );
 }

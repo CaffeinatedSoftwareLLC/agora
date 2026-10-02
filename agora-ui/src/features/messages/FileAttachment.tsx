@@ -9,7 +9,41 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** A file in a message, with the tags the server's decision model gave it (when it tags files). */
 export function FileAttachment({ attachment }: { attachment: Attachment }) {
+  return (
+    <>
+      <AttachmentBody attachment={attachment} />
+      {!attachment.deletedAt && <FileTags attachment={attachment} />}
+    </>
+  );
+}
+
+/** Tag chips under a file, and a warning when its text tries to instruct an AI reader. */
+export function FileTags({ attachment }: { attachment: Pick<Attachment, 'tags' | 'tagging' | 'partial' | 'injectionWarning'> }) {
+  const P = usePalette();
+  const tags = attachment.tags ?? [];
+  const busy = attachment.tagging === 'pending' || attachment.tagging === 'running';
+  if (tags.length === 0 && !attachment.injectionWarning && !busy) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs" style={{ color: P.dim }}>
+      {tags.map(tag => (
+        <span key={tag} className="px-1.5 py-0.5 rounded-full" style={{ background: P.surface, border: `1px solid ${P.border}`, color: P.muted }}>
+          {tag}
+        </span>
+      ))}
+      {attachment.partial && tags.length > 0 && <span title="The file was longer than what was read">(partly read)</span>}
+      {busy && <span>tagging…</span>}
+      {attachment.injectionWarning && (
+        <span style={{ color: P.warn }} title="A decision model judged that this file contains text addressed to an AI">
+          ⚠ Contains text that tries to instruct an AI
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AttachmentBody({ attachment }: { attachment: Attachment }) {
   const P = usePalette();
   const isImage = attachment.mime.startsWith('image/');
 

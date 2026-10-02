@@ -4,7 +4,12 @@ import type Redis from 'ioredis';
 import { CAPABILITIES, type Capability, type ConversationMessage, type Usage } from '../ai/adapters';
 import { resolveRoute, checkBudget, recordUsage, type ResolvedRoute } from '../ai/routing';
 import { parseDialogue, synthesizeDialogue } from '../ai/speech';
+import { screeningPrecheck, screenSearchResult } from '../ai/search-screening';
 import { storeFile } from '../lib/file-store';
+import { searchChannelFiles, MAX_LIMIT as FILE_SEARCH_MAX_LIMIT } from '../lib/file-search';
+import { readFileText, READ_MAX_CHARS } from '../lib/file-read';
+import { storage } from '../lib/storage';
+import { config } from '../config';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { hashToken } from '../runtime/runner';
 import type { RunLimits } from '../runtime/limits';
@@ -161,6 +166,7 @@ async function metered<T extends { usage: Usage }>(ctx: HandlerCtx, capability: 
 }
 
 const providerError = (error: string) => ({ status: 502, body: { error, code: 'provider_error' } });
+const screeningRequired = (error: string) => ({ status: 503, body: { error, code: 'screening_required' } });
 
 /** Capability implementations. `decide` comes later. */
 const HANDLERS: Partial<Record<Capability, Handler>> = {
@@ -187,11 +193,24 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
 
     search: async (ctx) => {
         const { run, route, input, db } = ctx;
+        // Strict screening: refuse before spending a search whose results could not be delivered
+        const precheck = await screeningPrecheck(db, run.serverId, route.adapter);
+        if (!precheck.ok) return screeningRequired(precheck.error);
+
         const result = await metered(ctx, 'search', () =>
             route.adapter.search!(route.credentials, { model: route.model, query: input.query, maxResults: input.maxResults }));
         if (!result.ok) return providerError(result.error);
-        const { answer, citations, display, usage } = result.value;
-        if (!display) return { body: { answer, citations, usage } };
+        const { display, usage } = result.value;
+
+        // Text an agent will read is checked for prompt injection first (when switched on).
+        // Results under display terms (Gemini grounding) are never sent to another model.
+        const screened = await screenSearchResult(db, {
+            serverId: run.serverId, adapter: route.adapter, result: result.value,
+            channelId: run.channelId, userId: run.submittedBy, runId: run.runId,
+        });
+        if (!screened.ok) return screeningRequired(screened.error);
+        const { answer, citations, screening } = screened.result;
+        if (!display) return { body: { answer, citations, usage, screening } };
 
         // Gemini grounding terms: show the answer unmodified with Google's Search
         // Suggestions. The gateway posts that display into the run's thread itself.
@@ -204,7 +223,7 @@ const HANDLERS: Partial<Record<Capability, Handler>> = {
             content: answer,
         });
         await ctx.publish(events);
-        return { body: { answer, citations, usage, displayedIn: messageId } };
+        return { body: { answer, citations, usage, screening, displayedIn: messageId } };
     },
 
     image: async (ctx) => {
@@ -410,6 +429,61 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
             if (err instanceof PostError) return fail(reply, err.status, err.code, err.message);
             throw err;
         }
+    });
+
+    // ─── File search (docs/planning/jev-wbs.md, C.8) ───
+    // Not a capability: it needs no declaration and no decision-model handler of its own.
+    // A run can search the files of its own channel, as far as its bot may see them.
+    // The reply is names, tags and scores; never file text.
+    app.post('/v1/files/search', {
+        preHandler: authenticate,
+        schema: {
+            body: {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    query: { type: 'string', maxLength: 500 },
+                    tag: { type: 'string', maxLength: 40 },
+                    limit: { type: 'integer', minimum: 1, maximum: FILE_SEARCH_MAX_LIMIT },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const run = request.run!;
+        if (!run.channelId) return fail(reply, 409, 'no_channel', 'This run has no channel whose files it could search');
+        if (!(await consumeOrTrip(run, reply))) return reply;
+        const { query, tag, limit } = (request.body ?? {}) as { query?: string; tag?: string; limit?: number };
+        const result = await searchChannelFiles(
+            { db, store: storage, encryptionKey: config.encryptionKey },
+            { channelId: run.channelId, userId: run.submittedBy, isBot: true, query, tag, limit, runId: run.runId },
+        );
+        if (!result.ok) return fail(reply, result.status, result.status === 404 ? 'not_found' : 'forbidden', result.error);
+        return reply.send(result.body);
+    });
+
+    // A run can read the text of a file in its own channel (text files and PDFs), in pages.
+    app.post('/v1/files/read', {
+        preHandler: authenticate,
+        schema: {
+            body: {
+                type: 'object', required: ['fileId'], additionalProperties: false,
+                properties: {
+                    fileId: { type: 'string', minLength: 26, maxLength: 26 },
+                    offset: { type: 'integer', minimum: 0 },
+                    limit: { type: 'integer', minimum: 1, maximum: READ_MAX_CHARS },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const run = request.run!;
+        if (!run.channelId) return fail(reply, 409, 'no_channel', 'This run has no channel whose files it could read');
+        if (!(await consumeOrTrip(run, reply))) return reply;
+        const { fileId, offset, limit } = request.body as { fileId: string; offset?: number; limit?: number };
+        const result = await readFileText(
+            { db, store: storage, encryptionKey: config.encryptionKey },
+            { fileId, userId: run.submittedBy, isBot: true, offset, limit, channelId: run.channelId },
+        );
+        if (!result.ok) return fail(reply, result.status, result.status === 404 ? 'not_found' : 'unreadable', result.error);
+        return reply.send(result.body);
     });
 
     // ─── Results cards (WBS 4.1) ───
