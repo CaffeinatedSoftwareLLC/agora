@@ -14,9 +14,12 @@ export const claimSchema = z.object({
         tokensUsed: z.number().nonnegative(), tokenBudget: z.number().nonnegative(),
     }),
     profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude']),
-        model: z.string().max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/), effort: z.string().min(1).max(30), workdirAlias: z.string().min(1) }),
+        // null: leave the model or effort to the CLI's own default
+        model: z.string().max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).nullable(),
+        effort: z.string().min(1).max(30).nullable(), workdirAlias: z.string().min(1) }),
     inbox: z.array(z.object({
-        messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol']),
+        // 'command': the session notice a /start or /resume posts, so the agent says hello
+        messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command']),
         authorId: id.nullable(), authorName: z.string().nullable(), authorBot: z.boolean(),
         authority: z.enum(['owner', 'director']).nullable(), content: z.string().max(4000).nullable(),
         createdAt: z.string().datetime(),

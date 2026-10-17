@@ -34,7 +34,8 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     const token = config.botTokens[claim.profile.botId];
     if (!token) throw new Error('missing_bot_token');
     const efforts = local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
-    if (!efforts.includes(claim.profile.effort)) throw new Error('unsupported_effort');
+    const { model, effort } = claim.profile;
+    if (effort !== null && !efforts.includes(effort)) throw new Error('unsupported_effort');
     if (claim.session.nativeSessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
     const dir = await mkdtemp(join(local.stateDir, 'run-'));
@@ -57,12 +58,15 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
             await writeFile(paths[1], `mcp_servers=${mcp}\n`, { mode: 0o600 });
             args = ['exec', '--ignore-user-config', '-s', local.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
-                '-m', claim.profile.model, '-c', `model_reasoning_effort=${JSON.stringify(claim.profile.effort)}`,
+                ...(model !== null ? ['-m', model] : []),
+                ...(effort !== null ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
                 ...(claim.session.nativeSessionId ? ['resume', claim.session.nativeSessionId] : []),
                 '--json', '--output-schema', paths[2], '-'];
         } else {
             args = ['-p', '--output-format', 'json', '--permission-mode', 'manual', '--permission-prompts', 'none',
-                '--strict-mcp-config', '--mcp-config', paths[0], '--model', claim.profile.model, '--effort', claim.profile.effort,
+                '--strict-mcp-config', '--mcp-config', paths[0],
+                ...(model !== null ? ['--model', model] : []),
+                ...(effort !== null ? ['--effort', effort] : []),
                 '--json-schema', JSON.stringify(resultSchema),
                 ...(local.approvedTools.length ? ['--allowedTools', local.approvedTools.map(t => `mcp__agora__${t}`).join(',')] : []),
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),

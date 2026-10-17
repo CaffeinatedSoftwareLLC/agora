@@ -10,6 +10,29 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
 async function setup() { const t = await tempDir(); cleanups.push(t.cleanup); return { c: config(t.dir), delivery: claim() }; }
 
+describe('profiles without a model or effort, and /start notices', () => {
+    it('leaves model and effort to the CLI when the profile has none', async () => {
+        const { c, delivery } = await setup();
+        delivery.profile.model = null; delivery.profile.effort = null;
+        const codex = await prepare(c, delivery); cleanups.push(codex.cleanup);
+        expect(codex.args).not.toContain('-m');
+        expect(codex.args.some(a => a.startsWith('model_reasoning_effort'))).toBe(false);
+        c.profiles.builder.adapter = 'claude'; delivery.profile.adapter = 'claude';
+        const claude = await prepare(c, delivery); cleanups.push(claude.cleanup);
+        expect(claude.args).not.toContain('--model'); expect(claude.args).not.toContain('--effort');
+    });
+    it('accepts a server claim with a command row and null model/effort', async () => {
+        const { claimSchema } = await import('../src/types.js');
+        const raw = claim();
+        const parsed = claimSchema.parse({
+            ...raw,
+            profile: { ...raw.profile, model: null, effort: null },
+            inbox: [{ ...raw.inbox[0], reason: 'command', authorId: null, authorName: null, authority: null }],
+        });
+        expect(parsed.inbox[0].reason).toBe('command');
+    });
+});
+
 describe('argv/config isolation', () => {
     it('builds Codex fresh/resume with the sandbox before resume, secrets only in selected env', async () => {
         const { c, delivery } = await setup();
