@@ -56,7 +56,7 @@ Eryk starts and steers agent sessions from his phone. An **agent host** on his P
 agent_hosts       id, server_id, name, token_id, secret_hash, created_by, created_at, last_seen_at, revoked_at
 agent_profiles    id, server_id, name (unique per server), bot_id, host_id, adapter ('codex'|'claude'),
                   model, effort, workdir_alias, wake_budget, token_budget, run_timeout_sec,
-                  created_by, created_at, updated_at
+                  generation, created_by, created_at, updated_at
 agent_sessions    id, server_id, channel_id, bot_id, profile_id, state ('live'|'shelved'|'ended'),
                   end_reason, native_session_id, summary, wakes_used, tokens_used,
                   started_by, created_at, last_active_at, shelved_at, ended_at
@@ -68,7 +68,7 @@ agent_inbox       id (ULID), session_id, message_id, thread_id NULL, reason ('di
 agent_batches     id, session_id, delivery_key, attempts, status ('pending'|'running'|'retry'|'done'|'failed'|'dropped'),
                   created_at, finished_at
                   -- immutable once created: its inbox rows never change
-agent_runs        id, batch_id, session_id, host_id, claim_token_hash, attempt,
+agent_runs        id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation,
                   status ('claimed'|'succeeded'|'failed'|'expired'|'cancelled'),
                   lease_until, cancel_requested, cancel_reason, native_session_id, tokens_used (NULL = unknown),
                   summary, error, created_at, finished_at
@@ -77,7 +77,7 @@ messages          + client_key TEXT NULL, UNIQUE (author_id, client_key) WHERE c
 
 A **batch** is the unit of delivery: the inbox rows one wake handles. It is created at the first claim, never changes, and keeps one `delivery_key` across all its attempts. Each attempt is a **run**. Rows that arrive later go into a later batch.
 
-A session is bound to one **profile**. Editing a profile's `adapter`, `host_id` or `workdir_alias` clears `native_session_id` on its sessions, so they rehydrate instead of resuming a session the new settings can't open. Changing `model` or `effort` doesn't; it applies from the next wake.
+A session is bound to one **profile**. Editing a profile's `adapter`, `host_id` or `workdir_alias` increments `agent_profiles.generation` and clears `native_session_id` on its sessions, so they rehydrate instead of resuming a session the new settings can't open. Each run records the `profile_generation` it was claimed under; `complete` stores a `nativeSessionId` only if that still equals the profile's generation, so a run that started before the edit can't restore an old ID. Changing `model` or `effort` doesn't bump the generation; it applies from the next wake.
 
 Tables carry `server_id` for tenant scoping. Host routes run as the service role with an explicit `server_id` filter in every query (like the workers); human and bot routes keep RLS.
 
@@ -125,7 +125,7 @@ Claim, in one transaction:
 {
   "run": {
     "id": "01J…", "claimToken": "rt_…", "attempt": 1, "deliveryKey": "dk_…",
-    "leaseSeconds": 120, "heartbeatSeconds": 30, "timeoutSeconds": 900
+    "leaseSeconds": 120, "leaseUntil": "…", "heartbeatSeconds": 30, "timeoutSeconds": 900
   },
   "session": {
     "id": "01J…", "channelId": "01J…", "channelName": "general",
@@ -184,7 +184,11 @@ Every `heartbeat`, `complete` and `fail` checks, in this order:
 
 So the host can safely retry `complete` or `fail` after a lost response.
 
-A sweeper (in the API process, every 15 s) expires runs past `lease_until`. An expired run's usage is unknown (not charged). Its batch goes to `retry` when `attempts < 3`, otherwise to `failed` with a notice.
+A sweeper (in the API process, every 15 s) expires runs past `lease_until`. An expired run's usage is unknown (not charged). Then, the same for the sweeper and for expiry found at request time:
+- run `cancel_requested`, or session no longer `live` → batch `dropped`, its rows acknowledged without work. Cancelled work is never retried.
+- otherwise → `retry` when `attempts < 3`, else `failed` with a notice.
+
+A `retry` batch is rechecked row by row at its next claim like a new one, plus: `handoff` and `protocol` rows need their thread binding still `open`. Rows that fail are acknowledged without work; if none are left, the batch is `dropped` and nothing is claimed.
 
 **Host-token errors:** `401` (revoked or wrong token) or `403` on any call → stop every child now. A revoked host never gets a `cancel: true` reply.
 
@@ -194,7 +198,7 @@ A sweeper (in the API process, every 15 s) expires runs past `lease_until`. An e
 - Spawn with an argv array, never a shell. Inject **only** that bot's token, through the child's MCP config or environment; never the host token or another bot's token, and never in argv or logs.
 - Resume by explicit `nativeSessionId`; never "last". No ID → fresh session with a rehydrate prompt (the session summary plus the batch).
 - Every wake prompt carries the run ID, delivery key, session, channel and the batch's messages, and the instruction: take your turn, post with `client_key` `<deliveryKey>:<n>`, do not call `chat_wait`, finish.
-- Heartbeat every `heartbeatSeconds` and keep the last `leaseUntil` it got. If heartbeats fail (network error or 5xx), keep trying, but kill the child before `leaseUntil` (with a 10 s margin): past that point another attempt may start.
+- Keep a **local deadline** on its own monotonic clock: the time it **sent** the claim (or the last successful heartbeat) plus `leaseSeconds`, minus a 10 s margin. Measuring from the send time covers network latency, and using its own clock avoids clock skew. `leaseUntil` in the responses is informational. Heartbeat every `heartbeatSeconds`; on network errors or 5xx keep trying, but kill the child at the local deadline: past that point another attempt may start. This holds from the first claim, before any heartbeat has succeeded.
 - Kill the process tree (`taskkill /T /F` on Windows) on: `cancel: true`, any `409`, `401`/`403`, `timeoutSeconds` passing, or the lease deadline above. After `cancel: true` or the timeout, report `complete` if the CLI finished and produced output, otherwise `fail` with `retryable: false` (cancel) or `true` (timeout). After a `409` or `401`/`403`, report nothing.
 - Retry `complete`/`fail` on a network error or 5xx with the same body; the server treats repeats as above.
 - Report usage and the native session ID from the CLI's structured output, `null` when the CLI didn't give them.
@@ -217,7 +221,7 @@ Shelving or ending a session never deletes its inbox rows; a batch that was `run
 
 `session_start`, `session_end`, `session_list`, `session_wake` call the same route with the bot's token. Authority is the bot's `can_direct` in that channel, so an agent can orchestrate only where the owner allowed it. `session_wake` writes a `direct` inbox row for another agent's live session.
 
-**Duplicate posts after a retry.** `chat_send` and `thread_start` get an optional `client_key` (≤ 100 chars). The channel and thread message routes accept it, store it in `messages.client_key`, and on a repeat from the same author return the existing message with `200` instead of inserting (the unique index on `(author_id, client_key)` decides under concurrency). The wake prompt tells the agent to pass `<deliveryKey>:<n>` for its n-th post in the run, so a retried batch re-posts with the same keys and nothing is duplicated. This is durable, unlike the 5-minute Redis `Idempotency-Key` cache, which stays as it is.
+**Duplicate posts after a retry.** `chat_send` and `thread_start` get an optional `client_key` (≤ 100 chars). The channel and thread message routes accept it and store it in `messages.client_key`. The routes' own checks (channel access, the parent exists and is open) run first, exactly as today. Then, on a repeat from the same author: if the existing message has the same channel, the same thread parent (or none) and the same content, the route returns it with `200` instead of inserting; otherwise `409 { "error": "client_key_conflict" }`. The unique index on `(author_id, client_key)` decides under concurrency. The wake prompt tells the agent to pass `<deliveryKey>:<n>` for its n-th post in the run, so a retried batch re-posts with the same keys and nothing is duplicated. This is durable, unlike the 5-minute Redis `Idempotency-Key` cache, which stays as it is.
 
 ## Work breakdown
 
@@ -248,7 +252,10 @@ Integration (real Postgres, as the rest of the suite):
 - Repeats: `complete` twice → the second returns `repeated` and changes nothing; `fail` after `complete` → `409 already_finished`.
 - `complete` after `/end` records usage and returns `cancelled: true`; the batch is not retried.
 - Failed and expired attempts: reported usage is charged once; `tokens_used >= token_budget` blocks the next claim and shelves the session.
-- `client_key`: the same key from the same author returns the first message; two concurrent posts with one key insert one row.
+- `client_key`: the same key from the same author with the same channel, parent and content returns the first message; with a different channel, parent or content → `409 client_key_conflict`; two concurrent posts with one key insert one row; a repeat into a channel the bot lost access to → 403, as without a key.
+- CANCEL + host crash: a director cancels a bound thread while its run is claimed, the host dies, the lease expires → the batch is `dropped`, not retried, and the next claim doesn't include it. Same when `/end` flags the run.
+- A `retry` batch whose thread has since closed → its handoff rows are acknowledged without work and nothing is claimed.
+- Profile edited (adapter changed) during a run, then the run completes → the session's `native_session_id` stays cleared.
 - Two profiles for one bot: `/start` of profile B while A's session is live → 409; after shelving, `/start A` resumes A's session, not B's. Changing a profile's adapter clears its sessions' native IDs.
 - A director's top-level message mentioning a bot with a live session creates one `direct` row; a member without DirectAgents creates none.
 - Revocation after enqueue: the author loses DirectAgents, or the bot is paused or removed, before the claim → the row is acknowledged without work, and no run is claimed for it.
