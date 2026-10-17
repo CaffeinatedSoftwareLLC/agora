@@ -154,7 +154,6 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
 
     // 3. Pick the batch: a retry first, unchanged; otherwise the oldest pending rows
     let batchId: string;
-    let deliveryKey: string;
     let attempt: number;
     const retry = await c.query(
         `SELECT id, delivery_key, attempts FROM agent_batches
@@ -165,7 +164,6 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     let candidates;
     if (isRetry) {
         batchId = retry.rows[0].id.trim();
-        deliveryKey = retry.rows[0].delivery_key;
         attempt = retry.rows[0].attempts + 1;
         candidates = (await c.query(
             `SELECT id, thread_id FROM agent_inbox WHERE batch_id = $1 AND acked_at IS NULL ORDER BY id`,
@@ -197,7 +195,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
          ORDER BY id`,
         isRetry ? [candidates.map((r: any) => r.id), batchId] : [candidates.map((r: any) => r.id)]
     )).rows;
-    if (!isRetry) deliveryKey = deliveryKeyFor(rows.map((r: any) => r.id.trim()));
+    // A retry keeps its batch's key; a new batch's key comes from the rows it actually took
+    const deliveryKey: string = isRetry ? retry.rows[0].delivery_key : deliveryKeyFor(rows.map((r: any) => r.id.trim()));
 
     // 4. Recheck each row; rows that fail are acknowledged without work
     const kept = await recheckRows(c, channelId, rows);
@@ -218,7 +217,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     } else {
         await c.query(
             `INSERT INTO agent_batches (id, session_id, delivery_key, attempts, status) VALUES ($1, $2, $3, 1, 'running')`,
-            [batchId, sessionId, deliveryKey!]
+            [batchId, sessionId, deliveryKey]
         );
         await c.query(
             `UPDATE agent_inbox SET batch_id = $1 WHERE id = ANY($2) AND batch_id IS NULL`,
