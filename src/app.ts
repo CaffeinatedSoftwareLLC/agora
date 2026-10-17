@@ -27,6 +27,8 @@ import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
 import { startEventBridge } from './lib/event-bridge';
 import { getRedis } from './auth/token-blacklist';
+import { readGatewayAccess, writeGatewayAccess } from './lib/gateway-gate';
+import { changesGatewayAccess, refreshGatewayAccess, invalidateGatewayAccess, visibleChannels } from './lib/gateway-access';
 import { LoginLimiter, type LoginLimits } from './auth/login-limit';
 
 export async function buildApp(opts?: {
@@ -175,7 +177,16 @@ export async function buildApp(opts?: {
     // A failed commit turns the reply into a 500 instead of a success that never happened.
     app.addHook('onSend', async (request, reply, payload) => {
         if (!request.dbClient) return payload;
-        if (await commitRequest(request)) return payload;
+        const accessChange = app.io && changesGatewayAccess(request.method, request.routeOptions.url ?? request.url);
+        const committed = accessChange
+            ? await writeGatewayAccess(app.io, async () => {
+                if (!await commitRequest(request)) return false;
+                invalidateGatewayAccess(app.io);
+                await refreshGatewayAccess(app.io, db);
+                return true;
+            })
+            : await commitRequest(request);
+        if (committed) return payload;
 
         request.pendingEvents = [];
         request.pendingDisconnects = [];
@@ -209,13 +220,18 @@ export async function buildApp(opts?: {
                 // so they don't miss early channel events
                 if (evt.event === 'ServerJoin' && evt.data?.channels) {
                     try {
+                        await readGatewayAccess(io, async () => {
                         const sockets = await io.in(evt.room).fetchSockets();
+                        evt.data.channels = await visibleChannels(db, evt.data.channels, evt.room.slice('user:'.length));
                         for (const s of sockets) {
                             for (const ch of evt.data.channels) {
                                 s.join(`channel:${ch.id}`);
                             }
                         }
-                    } catch { /* best-effort room join */ }
+                        io.to(evt.room).emit(evt.event, evt.data);
+                        });
+                        continue;
+                    } catch { continue; /* Fail closed: do not send unfiltered channel metadata. */ }
                 }
 
                 // For _leaveRoom, eject sockets from a channel room (e.g. bot access revoked)
@@ -326,7 +342,12 @@ export async function buildApp(opts?: {
     startAssistantHandler(db, io, app.log);
 
     // Forward events published by other services (cap-gateway) to Socket.IO clients
-    const stopEventBridge = startEventBridge(io, config.redisUrl, app.log);
+    const stopEventBridge = startEventBridge(io, config.redisUrl, app.log, async () => {
+        await writeGatewayAccess(io, async () => {
+            invalidateGatewayAccess(io);
+            await refreshGatewayAccess(io, db);
+        });
+    });
     app.addHook('onClose', async () => { await stopEventBridge(); });
 
     return { app, db };
