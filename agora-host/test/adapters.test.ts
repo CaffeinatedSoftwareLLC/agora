@@ -39,6 +39,8 @@ describe('argv/config isolation', () => {
         const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
         expect(launch.args.slice(0, 5)).toEqual(['exec', '--ignore-user-config', '-s', 'workspace-write', '-c']);
         expect(launch.args).toContain('approval_policy="never"');
+        // The user's [windows] sandbox setting is ignored with the user config; the host sets it
+        if (process.platform === 'win32') expect(launch.args).toContain('windows.sandbox="elevated"');
         expect(launch.args).not.toContain('resume'); expect(launch.args.at(-1)).toBe('-');
         expect(launch.env.AGORA_BOT_TOKEN).toBe('bot_selected.secret');
         expect(JSON.stringify(launch.args)).not.toContain('.secret');
