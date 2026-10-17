@@ -30,9 +30,12 @@ const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_us
     FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
 
 async function profileByName(db: any, channelId: string, name: string) {
+    // Lock order is profile → session (as in profile edits and completions): take the
+    // profile first, before any session lock, so /start can't deadlock with a PATCH.
     const row = await db.query(
         `SELECT p.* FROM agent_profiles p JOIN channels c ON c.server_id = p.server_id
-         WHERE c.id = $1 AND p.name = $2`,
+         WHERE c.id = $1 AND p.name = $2
+         FOR SHARE OF p`,
         [channelId, name]
     );
     if (!row.rows[0]) throw new CommandError(404, { error: 'unknown_profile' });
@@ -198,6 +201,11 @@ async function endSession(db: any, channelId: string, profileName: string, who: 
 }
 
 async function resumeSession(db: any, channelId: string, sessionId: string, onLive: string, who: string, notices: Notice[]) {
+    // Profile before session, as everywhere else
+    const profileOf = await db.query(`SELECT profile_id FROM agent_sessions WHERE id = $1`, [sessionId]);
+    if (profileOf.rows[0]) {
+        await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE`, [profileOf.rows[0].profile_id]);
+    }
     const target = await db.query(`${SESSION_SELECT} WHERE s.id = $1 FOR UPDATE OF s`, [sessionId]);
     const t = target.rows[0];
     if (!t || t.channel_id.trim() !== channelId.trim() || t.state !== 'shelved') {

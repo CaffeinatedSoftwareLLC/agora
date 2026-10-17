@@ -1,6 +1,8 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { sweepExpiredRuns, type Notice } from '../../src/lib/agent-runs';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * Agent sessions, server side (docs/planning/agent-sessions-wbs.md): client_key (S0),
@@ -71,6 +73,22 @@ async function inbox(sessionId: string): Promise<Array<{ message_id: string; rea
 async function claim(wait = 0) {
     return ctx.request.get(`/agent-hosts/@me/runs/next?wait=${wait}`).set(hostAuth);
 }
+
+/** Wait until some backend is blocked on a lock: the competing operation has really started. */
+async function waitForLockWait(timeoutMs = 5000): Promise<void> {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+        const r = await ctx.db.query(
+            `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`
+        );
+        if (r.rows[0].n > 0) return;
+        await new Promise(res => setTimeout(res, 25));
+    }
+    throw new Error('no backend ever waited on a lock');
+}
+
+/** agora-host's dependencies are needed for the cross-package contract test. */
+const hostDepsInstalled = existsSync(join(__dirname, '../../agora-host/node_modules/zod'));
 
 async function resetSessions() {
     await ctx.db.query('TRUNCATE agent_runs, agent_inbox, agent_batches, agent_session_threads, agent_sessions CASCADE');
@@ -601,7 +619,7 @@ describe('host API (S2)', () => {
             await cancel.query('BEGIN');
             await cancel.query(`SELECT 1 FROM agent_session_threads WHERE thread_id = $1 FOR UPDATE`, [start.id]);
             const pending = claim();
-            await new Promise(r => setTimeout(r, 300));
+            await waitForLockWait();
             await cancel.query(`UPDATE agent_session_threads SET state = 'closed', closed_at = NOW() WHERE thread_id = $1`, [start.id]);
             await cancel.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE thread_id = $1 AND batch_id IS NULL AND acked_at IS NULL`, [start.id]);
             await cancel.query('COMMIT');
@@ -622,9 +640,10 @@ describe('host API (S2)', () => {
         try {
             await end.query('BEGIN');
             await end.query(`SELECT 1 FROM agent_sessions WHERE id = $1 FOR UPDATE`, [s]);
+            // .then() starts the request now; a bare supertest request only starts when awaited
             const pending = ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/complete`).set(hostAuth)
-                .send({ claimToken: c.body.run.claimToken, tokensUsed: 5 });
-            await new Promise(r => setTimeout(r, 300));
+                .send({ claimToken: c.body.run.claimToken, tokensUsed: 5 }).then(r => r);
+            await waitForLockWait();
             await end.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'ended' WHERE session_id = $1 AND status = 'claimed'`, [s]);
             await end.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [s]);
             await end.query('COMMIT');
@@ -645,8 +664,8 @@ describe('host API (S2)', () => {
             await edit.query('BEGIN');
             await edit.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR UPDATE`, [codex.profileId]);
             const pending = ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/complete`).set(hostAuth)
-                .send({ claimToken: c.body.run.claimToken, nativeSessionId: 'from-stale-run' });
-            await new Promise(r => setTimeout(r, 300));
+                .send({ claimToken: c.body.run.claimToken, nativeSessionId: 'from-stale-run' }).then(r => r);
+            await waitForLockWait();
             await edit.query(`UPDATE agent_profiles SET generation = generation + 1 WHERE id = $1`, [codex.profileId]);
             await edit.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [codex.profileId]);
             await edit.query('COMMIT');
@@ -664,8 +683,15 @@ describe('host API (S2)', () => {
         await ctx.db.query('UPDATE agent_profiles SET host_id = $1 WHERE id = $2', [h.body.host.id, codex.profileId]);
         try {
             await startSession(codex);
-            const pending = ctx.request.get('/agent-hosts/@me/runs/next?wait=5').set(auth);
-            await new Promise(r => setTimeout(r, 400));
+            const pending = ctx.request.get('/agent-hosts/@me/runs/next?wait=5').set(auth).then(r => r);
+            // Wait until the poll has authenticated (it stamps last_seen_at) and is waiting
+            const until = Date.now() + 5000;
+            while (Date.now() < until) {
+                const seen = await ctx.db.query('SELECT last_seen_at FROM agent_hosts WHERE id = $1', [h.body.host.id]);
+                if (seen.rows[0].last_seen_at) break;
+                await new Promise(r => setTimeout(r, 25));
+            }
+            await new Promise(r => setTimeout(r, 100));
             await ctx.request.delete(`/servers/${serverId}/agent-hosts/${h.body.host.id}`).set(owner.auth);
             await post(owner.auth, '@codex work for a revoked host');
             expect((await pending).status).toBe(401);
@@ -682,11 +708,8 @@ describe('host API (S2)', () => {
         expect(await inbox(s)).toEqual([]);
     });
 
-    it('a real claim passes agora-host\'s claim parser', async () => {
-        // Cross-package contract check. Skipped when agora-host's dependencies aren't installed.
-        const { existsSync } = await import('node:fs');
-        const { join } = await import('node:path');
-        if (!existsSync(join(__dirname, '../../agora-host/node_modules/zod'))) return;
+    // Cross-package contract check; run `npm ci` in agora-host/ to enable it
+    it.skipIf(!hostDepsInstalled)('a real claim passes agora-host\'s claim parser (needs agora-host deps)', async () => {
         const { claimSchema } = await import('../../agora-host/src/types');
         // A profile with no model or effort, woken by a /start notice
         await ctx.db.query('UPDATE agent_profiles SET model = NULL, effort = NULL WHERE id = $1', [codex.profileId]);
@@ -701,6 +724,29 @@ describe('host API (S2)', () => {
             expect(c.body.inbox.map((i: any) => i.reason)).toEqual(['command', 'direct']);
         } finally {
             await ctx.db.query(`UPDATE agent_profiles SET model = 'm', effort = 'high' WHERE id = $1`, [codex.profileId]);
+        }
+    });
+
+    it('/start replacing a session and a profile edit overlapping do not deadlock', async () => {
+        const live = await startSession(codex, { native: 'n1' });
+        const edit = await ctx.db.connect();
+        try {
+            // Hold the profile the way an incompatible PATCH does, then start the replacement
+            await edit.query('BEGIN');
+            await edit.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR UPDATE`, [codex.profileId]);
+            const pending = ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth)
+                .send({ command: 'start', profile: 'codex', onLive: 'shelve' }).then(r => r);
+            await waitForLockWait();
+            // The PATCH goes on to touch the profile's sessions, including the live one
+            await edit.query(`UPDATE agent_profiles SET generation = generation + 1 WHERE id = $1`, [codex.profileId]);
+            await edit.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [codex.profileId]);
+            await edit.query('COMMIT');
+            const res = await pending;
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+            const old = await ctx.db.query('SELECT state FROM agent_sessions WHERE id = $1', [live]);
+            expect(old.rows[0].state).toBe('shelved');
+        } finally {
+            edit.release();
         }
     });
 
