@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { generateUlid } from '../utils/ulid';
-import { checkChannelMembership, resolveMentions } from './shared';
+import { resolveMentions } from './shared';
+import { canViewChannel } from '../lib/channel-access';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
@@ -29,9 +30,9 @@ export async function threadRoutes(app: FastifyInstance) {
         const { content } = request.body as any;
         const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, isBot);
-        if (!isMember) {
-            return reply.status(403).send({ error: 'Not a member of this channel' });
+        const access = await canViewChannel(db, channelId, userId, isBot);
+        if (!access.allowed) {
+            return reply.status(403).send({ error: 'Channel access denied' });
         }
 
         // Fetch parent message
@@ -248,9 +249,9 @@ export async function threadRoutes(app: FastifyInstance) {
         const { limit: rawLimit, after } = request.query as any;
         const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
-        if (!isMember) {
-            return reply.status(403).send({ error: 'Not a member of this channel' });
+        const access = await canViewChannel(db, channelId, userId, !!request.isBot);
+        if (!access.allowed) {
+            return reply.status(403).send({ error: 'Channel access denied' });
         }
 
         // Verify parent exists in channel
@@ -353,9 +354,9 @@ export async function threadRoutes(app: FastifyInstance) {
         const { limit: rawLimit, before } = request.query as any;
         const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
-        if (!isMember) {
-            return reply.status(403).send({ error: 'Not a member of this channel' });
+        const access = await canViewChannel(db, channelId, userId, !!request.isBot);
+        if (!access.allowed) {
+            return reply.status(403).send({ error: 'Channel access denied' });
         }
 
         let limit = rawLimit ? parseInt(rawLimit, 10) : 5;
@@ -473,9 +474,9 @@ export async function threadRoutes(app: FastifyInstance) {
         const { closed } = request.body as any;
         const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId, request.isBot);
-        if (!isMember) {
-            return reply.status(403).send({ error: 'Not a member of this channel' });
+        const access = await canViewChannel(db, channelId, userId, !!request.isBot);
+        if (!access.allowed) {
+            return reply.status(403).send({ error: 'Channel access denied' });
         }
 
         // Fetch parent message (thread_id IS NULL ensures only parents)

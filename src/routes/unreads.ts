@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import { checkChannelMembership } from './shared';
+import { canViewChannel } from '../lib/channel-access';
+import { visibleChannels } from '../lib/gateway-access';
 
 export async function unreadRoutes(app: FastifyInstance) {
 
@@ -20,9 +21,9 @@ export async function unreadRoutes(app: FastifyInstance) {
         const { messageId } = request.body as any;
         const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
-        if (!isMember) {
-            return reply.status(403).send({ error: 'Not a member of this channel' });
+        const access = await canViewChannel(db, channelId, userId, false);
+        if (!access.allowed) {
+            return reply.status(403).send({ error: 'Channel access denied' });
         }
 
         // Upsert — only advance the read marker forward (don't move backwards)
@@ -55,9 +56,9 @@ export async function unreadRoutes(app: FastifyInstance) {
         const userId = request.userId;
         const db = request.dbClient!;
 
-        const isMember = await checkChannelMembership(db, channelId, userId);
-        if (!isMember) {
-            return reply.status(403).send({ error: 'Not a member of this channel' });
+        const access = await canViewChannel(db, channelId, userId, false);
+        if (!access.allowed) {
+            return reply.status(403).send({ error: 'Channel access denied' });
         }
 
         const unreadRow = await db.query(
@@ -134,7 +135,8 @@ export async function unreadRoutes(app: FastifyInstance) {
             [userId]
         );
 
-        const unreads = result.rows.map((row: any) => ({
+        const visible = await visibleChannels(db, result.rows.map((row: any) => ({ ...row, id: row.channel_id })), userId);
+        const unreads = visible.map((row: any) => ({
             channelId: row.channel_id.trim(),
             lastReadId: row.last_read_id ? row.last_read_id.trim() : null,
             mentionCount: row.mention_count,

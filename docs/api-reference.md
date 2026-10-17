@@ -479,7 +479,7 @@ Send a message to a channel. Parses `@username` mentions from content and tracks
 
 | Status | Error                            | Cause                         |
 |--------|----------------------------------|-------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access     |
+| 403    | `Channel access denied`   | User lacks channel access     |
 
 **Side effects:**
 - Broadcasts `Message` event to the channel's Socket.IO room (after transaction commits).
@@ -527,7 +527,7 @@ Deleted messages have `content: null` and a non-null `deletedAt` timestamp.
 
 | Status | Error                            | Cause                         |
 |--------|----------------------------------|-------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access     |
+| 403    | `Channel access denied`   | User lacks channel access     |
 
 ---
 
@@ -561,7 +561,7 @@ Edit a message. Only the original author can edit their own messages.
 
 | Status | Error                            | Cause                              |
 |--------|----------------------------------|------------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access          |
+| 403    | `Channel access denied`   | User lacks channel access          |
 | 403    | `Not the message author`         | User did not author this message   |
 | 404    | `Message not found`              | Message does not exist in channel  |
 
@@ -587,7 +587,7 @@ Soft-delete a message. Sets `content` to `NULL` and records `deleted_at`. Only t
 
 | Status | Error                            | Cause                              |
 |--------|----------------------------------|------------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access          |
+| 403    | `Channel access denied`   | User lacks channel access          |
 | 403    | `Not the message author`         | User did not author this message   |
 | 404    | `Message not found`              | Message does not exist in channel  |
 
@@ -677,7 +677,7 @@ Create a reply to a message, starting or continuing a thread.
 
 | Status | Error                          | Cause                              |
 |--------|--------------------------------|------------------------------------|
-| 403    | `Not a member of this channel` | User lacks channel access          |
+| 403    | `Channel access denied` | User lacks channel access          |
 | 404    | `Parent message not found`     | Message does not exist or is deleted |
 | 409    | `Thread is closed`             | Thread has been closed             |
 
@@ -995,7 +995,7 @@ Acknowledge messages up to a given message ID. Advances the read marker forward 
 
 | Status | Error                            | Cause                         |
 |--------|----------------------------------|-------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access     |
+| 403    | `Channel access denied`   | User lacks channel access     |
 
 ---
 
@@ -1026,7 +1026,7 @@ Get unread state for a single channel.
 
 | Status | Error                            | Cause                         |
 |--------|----------------------------------|-------------------------------|
-| 403    | `Not a member of this channel`   | User lacks channel access     |
+| 403    | `Channel access denied`   | User lacks channel access     |
 
 ---
 

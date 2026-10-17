@@ -24,7 +24,7 @@ export async function socketAccountError(db: Pool, userId: string, isBot: boolea
     return null;
 }
 
-export async function visibleChannels<T extends { id: string }>(db: Pool, channels: T[], userId: string, isBot = false): Promise<T[]> {
+export async function visibleChannels<T extends { id: string }>(db: Pick<Pool, 'query'>, channels: T[], userId: string, isBot = false): Promise<T[]> {
     const visible: T[] = [];
     for (const channel of channels) {
         if ((await canViewChannel(db, channel.id.trim(), userId, isBot)).allowed) visible.push(channel);
