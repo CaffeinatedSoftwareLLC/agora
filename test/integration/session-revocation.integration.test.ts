@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import jwt from 'jsonwebtoken';
 import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
+import * as gatewayAccess from '../../src/lib/gateway-access';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let user: Awaited<ReturnType<typeof authedUser>>;
@@ -42,7 +43,7 @@ beforeEach(async () => {
     await cleanDatabase(ctx.db);
     user = await authedUser(ctx.request, 'sessionuser');
 });
-afterEach(() => { for (const socket of sockets.splice(0)) socket.disconnect(); });
+afterEach(() => { for (const socket of sockets.splice(0)) socket.disconnect(); vi.restoreAllMocks(); });
 afterAll(async () => { await ctx.close(); });
 
 test('logout-all revokes every token and open socket for this account, preserving other accounts', async () => {
@@ -85,6 +86,17 @@ test('logout-all requires a valid current human token', async () => {
     expect((await ctx.request.post('/auth/logout-all').set(user.auth)).status).toBe(200);
     expect((await ctx.request.post('/auth/logout-all').set(user.auth)).status).toBe(401);
     expect((await ctx.db.query('SELECT token_version FROM users WHERE id=$1', [user.userId])).rows[0].token_version).toBe(1);
+});
+
+test('invalid logouts and unauthorized mutations never trigger a socket refresh', async () => {
+    const refresh = vi.spyOn(gatewayAccess, 'refreshGatewayAccess');
+    expect((await ctx.request.post('/auth/logout').set('Authorization', 'Bearer garbage')).status).toBe(200);
+    expect((await ctx.request.post('/auth/logout')).status).toBe(401);
+    expect((await ctx.request.post('/auth/logout-all')).status).toBe(401);
+    expect((await ctx.request.patch('/servers/01AAAAAAAAAAAAAAAAAAAAAAAA/roles/01BBBBBBBBBBBBBBBBBBBBBBBB').send({ permissions: '0' })).status).toBe(401);
+    expect(refresh).not.toHaveBeenCalled();
+    expect((await ctx.request.post('/auth/logout').set(user.auth)).status).toBe(200);
+    expect(refresh).toHaveBeenCalledTimes(1);
 });
 
 test('legacy tokens without a version work at zero and are revoked by logout-all', async () => {

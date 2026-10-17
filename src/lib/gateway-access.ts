@@ -68,5 +68,5 @@ function disconnectForAccess(socket: Socket, code: string) {
 /** All authorization-bearing route families, including future membership routes. */
 export function changesGatewayAccess(method: string, route: string): boolean {
     return !['GET', 'HEAD', 'OPTIONS'].includes(method)
-        && /^\/(servers|invites|admin|roles|users)(\/|$)|^\/channels\/[^/]+\/(overrides|bots)(\/|$)|^\/auth\/logout(?:-all)?$/.test(route);
+        && /^\/(servers|invites|admin|roles|users)(\/|$)|^\/channels\/[^/]+\/(overrides|bots)(\/|$)/.test(route);
 }

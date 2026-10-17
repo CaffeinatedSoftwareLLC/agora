@@ -177,7 +177,10 @@ export async function buildApp(opts?: {
     // A failed commit turns the reply into a 500 instead of a success that never happened.
     app.addHook('onSend', async (request, reply, payload) => {
         if (!request.dbClient) return payload;
-        const accessChange = app.io && changesGatewayAccess(request.method, request.routeOptions.url ?? request.url);
+        const accessChange = app.io && (request.gatewayAccessChanged || (
+            reply.statusCode < 400 && request.userId
+            && changesGatewayAccess(request.method, request.routeOptions.url ?? request.url)
+        ));
         const committed = accessChange
             ? await writeGatewayAccess(app.io, async () => {
                 if (!await commitRequest(request)) return false;

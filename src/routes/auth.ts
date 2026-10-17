@@ -246,6 +246,7 @@ export async function authRoutes(app: FastifyInstance) {
             const payload = verifyToken(raw, app.jwtSecret);
             if (payload.jti && payload.exp) {
                 await blacklistToken(payload.jti, payload.exp);
+                request.gatewayAccessChanged = true;
             }
         } catch {
             // Token is already invalid/expired — nothing to revoke
@@ -257,6 +258,7 @@ export async function authRoutes(app: FastifyInstance) {
     // Revoking all sessions includes this one. Only the authenticated user's row is updated.
     app.post('/auth/logout-all', { preHandler: [requireAuth] }, async (request, reply) => {
         await request.dbClient!.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [request.userId]);
+        request.gatewayAccessChanged = true;
         return reply.status(200).send({ success: true });
     });
 }
