@@ -68,7 +68,7 @@ test('hidden members cannot inspect run output, download code or approve the run
     const runId = generateUlid();
     await ctx.db.query(
         `INSERT INTO exec_runs (id,server_id,channel_id,submitted_by,code,code_sha256,limits,gate_decision,status)
-         VALUES ($1,$2,$3,$4,'private code',$5,'{}','require_approval','awaiting_approval')`,
+         VALUES ($1,$2,$3,$4,'private code',$5,'{}','needs_approval','awaiting_approval')`,
         [runId, serverId, channelId, member.userId, 'a'.repeat(64)]);
     expect((await ctx.request.get(`/runtime/runs/${runId}`).set(member.auth)).status).toBe(404);
     expect((await ctx.request.get(`/runtime/runs/${runId}/code`).set(member.auth)).status).toBe(404);
