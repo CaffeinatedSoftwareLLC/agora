@@ -50,6 +50,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     s.on('Ready', (data: ReadyPayload) => {
       // REPLACE all stores — idempotent, reconnect-safe
+      const { openThreadId, openThreadChannelId } = useThreadStore.getState();
       setServers(data.servers);
       setChannels(data.channels);
       useMessageStore.getState().clear();
@@ -57,6 +58,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       useTypingStore.getState().clear();
       useUnreadStore.getState().setUnreads(data.unreads || []);
       usePresenceStore.getState().setOnlineUsers(data.onlineUserIds || []);
+
+      // Every reconnect (a phone waking, a network change) sends Ready. The views only load
+      // history when they mount, so reload what is on screen instead of leaving it blank.
+      const activeChannelId = useChannelStore.getState().activeChannelId;
+      if (activeChannelId && data.channels.some(c => c.id === activeChannelId)) {
+        void useMessageStore.getState().loadMessages(activeChannelId);
+      }
+      if (openThreadId && openThreadChannelId && data.channels.some(c => c.id === openThreadChannelId)) {
+        useThreadStore.getState().openThread(openThreadChannelId, openThreadId);
+      }
     });
 
     s.on('Message', (data: MessagePayload) => {
