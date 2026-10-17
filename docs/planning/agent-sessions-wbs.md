@@ -62,14 +62,22 @@ agent_sessions    id, server_id, channel_id, bot_id, profile_id, state ('live'|'
                   started_by, created_at, last_active_at, shelved_at, ended_at
                   UNIQUE (channel_id, bot_id) WHERE state = 'live'
 agent_session_threads  thread_id (PK), channel_id, initiator_session_id, session_ids[], state ('open'|'closed')
-agent_inbox       id (ULID), session_id, message_id, thread_id NULL, reason ('direct'|'mention'|'handoff'|'protocol'),
-                  run_id NULL, acked_at NULL, created_at
+agent_inbox       id (ULID), session_id, message_id, thread_id NULL, reason ('direct'|'handoff'|'protocol'),
+                  batch_id NULL, acked_at NULL, created_at
                   UNIQUE (session_id, message_id)
-agent_runs        id, session_id, host_id, claim_token_hash, delivery_key, attempt,
-                  status ('claimed'|'succeeded'|'failed'|'expired'|'cancelled'),
-                  lease_until, cancel_requested, native_session_id, tokens_used, summary, error,
+agent_batches     id, session_id, delivery_key, attempts, status ('pending'|'running'|'retry'|'done'|'failed'|'dropped'),
                   created_at, finished_at
+                  -- immutable once created: its inbox rows never change
+agent_runs        id, batch_id, session_id, host_id, claim_token_hash, attempt,
+                  status ('claimed'|'succeeded'|'failed'|'expired'|'cancelled'),
+                  lease_until, cancel_requested, cancel_reason, native_session_id, tokens_used (NULL = unknown),
+                  summary, error, created_at, finished_at
+messages          + client_key TEXT NULL, UNIQUE (author_id, client_key) WHERE client_key IS NOT NULL
 ```
+
+A **batch** is the unit of delivery: the inbox rows one wake handles. It is created at the first claim, never changes, and keeps one `delivery_key` across all its attempts. Each attempt is a **run**. Rows that arrive later go into a later batch.
+
+A session is bound to one **profile**. Editing a profile's `adapter`, `host_id` or `workdir_alias` clears `native_session_id` on its sessions, so they rehydrate instead of resuming a session the new settings can't open. Changing `model` or `effort` doesn't; it applies from the next wake.
 
 Tables carry `server_id` for tenant scoping. Host routes run as the service role with an explicit `server_id` filter in every query (like the workers); human and bot routes keep RLS.
 
@@ -81,10 +89,15 @@ A message produces inbox rows only for sessions that are `live` in its channel.
 - Author holds authority (stamped `author_could_direct` and can direct now) **and** either mentions the session's bot (`@username`, from the mentions table) or that bot is the only live agent in the channel → reason `direct`.
 - Anything else (other bots, members without DirectAgents, system notices) → no rows.
 
-**Reply in a bound thread** (`agent_session_threads`, state `open`)
-- START (posted by a session's agent, with `participants` resolving to bots holding live sessions in the channel) binds the thread and wakes each listed peer → `protocol`.
-- ACK → the initiator. TURN / CHECKPOINT with `[YIELD to=X]` → X, only if X is a participant → `handoff`. DECIDE → the other participants.
-- DONE / BLOCK / CANCEL → nobody; the thread closes and queued, unclaimed handoff rows for it are dropped. An authorized CANCEL also sets `cancel_requested` on running runs in that thread's sessions.
+**Top-level START: binding a thread.** `thread_start` posts START as a **top-level** message (`agora-mcp/src/tools.ts` → `sendMessage`), so binding happens on that insert, in the channel route:
+- The author is a bot with a `live` session in this channel. That session was started by someone with authority, which is the delegated authority to open collaboration threads; no other bot can bind.
+- `participants` (by bot username) resolve to bots holding `live` sessions in this channel. Names that don't resolve are left out; if none of the others resolve, nothing is bound.
+- Binding inserts `agent_session_threads` (`thread_id` = the START message's ID) and a `protocol` row for each other participant.
+
+**Reply in a bound thread** (state `open`). Protocol messages count only from **participants**; from anyone else they are ordinary text and wake nobody.
+- ACK from a participant → the initiator. TURN / CHECKPOINT with `[YIELD to=X]` → X, only if X is a participant → `handoff`. DECIDE → the other participants.
+- DONE / BLOCK from a participant → nobody; the thread closes, and that thread's unclaimed inbox rows are acknowledged without work.
+- CANCEL counts only from an author with authority now (owner or director). It closes the thread like DONE and sets `cancel_requested` (`cancel_reason='thread_cancelled'`) on running runs of its participant sessions. A CANCEL from anyone else is ordinary text.
 - A message from an author with authority → every participant → `direct`.
 - Replies in unbound threads wake nobody.
 
@@ -98,9 +111,14 @@ JSON bodies; IDs are 26-char ULIDs; times are ISO-8601 UTC.
 
 ### `GET /agent-hosts/@me/runs/next?wait=<0..25>`
 
-Long-poll for work and claim it. The handler releases the per-request transaction before waiting and polls in short transactions of its own. It returns as soon as a session assigned to this host (through its profile) has pending inbox rows and no active run, or `204` after `wait` seconds.
+Long-poll for work and claim it. The handler releases the per-request transaction before waiting and polls in short transactions of its own. It returns as soon as a session assigned to this host (through its profile) has work and no active run, or `204` after `wait` seconds.
 
-Claim, in one transaction: lock the session row (`FOR UPDATE`), check no run is `claimed`, recheck authority and access (above), reserve one wake (`wakes_used + 1 <= wake_budget`, else shelve the session with `end_reason='budget'` and post a notice), mark the pending rows with the new `run_id`, and insert the run.
+Claim, in one transaction:
+1. Lock the session row (`FOR UPDATE`). Skip it if a run is `claimed` or the session isn't `live`.
+2. Check budgets: `wakes_used >= wake_budget` or `tokens_used >= token_budget` → shelve with `end_reason='budget'`, post a notice, claim nothing.
+3. Pick the batch. A batch in `retry` is taken first, unchanged: same rows, same `delivery_key`, `attempts + 1`. Otherwise a new batch takes the oldest unbatched, unacknowledged rows, **at most 20**, and gets a fresh `delivery_key`. Rows that arrive later wait for the next batch.
+4. Recheck each row (above). Rows that fail are acknowledged without work. A new batch left empty is not created.
+5. Reserve the wake (`wakes_used + 1`), insert the run with a new `claim_token`, set the batch `running`.
 
 `200`:
 ```json
@@ -119,49 +137,68 @@ Claim, in one transaction: lock the session row (`FOR UPDATE`), check no run is 
     "model": "gpt-6.1-sol", "effort": "high", "workdirAlias": "agora"
   },
   "inbox": [
-    { "messageId": "01J…", "threadId": "01J…" | null, "reason": "handoff", "authorId": "01J…", "createdAt": "…" }
+    {
+      "messageId": "01J…", "threadId": "01J…" | null, "reason": "handoff",
+      "authorId": "01J…", "authorName": "Espresso", "authorBot": false,
+      "authority": "owner" | "director" | null,
+      "content": "…", "createdAt": "…"
+    }
   ]
 }
 ```
-The inbox holds **IDs only**. The agent reads content through its own bot token, so channel access applies.
+The batch carries each message's **content**, read at claim after the bot's channel access was rechecked, so it is exactly what the bot could read itself. Nothing has to be paged through, and nothing outside the batch is acknowledged. The host passes it to the agent as untrusted data in the same envelope `agora-mcp` uses (authority tags, continuation lines). The agent can still read more context through its MCP tools.
 
-`deliveryKey` is derived from the claimed inbox row IDs, so a retry that re-claims the same rows gets the same key.
+`deliveryKey` belongs to the batch and stays the same for every attempt.
 
 ### `POST /agent-hosts/@me/runs/:runId/heartbeat`
 
-Body `{ "claimToken": "rt_…" }`. Extends the lease by `leaseSeconds`. `200 { "cancel": false }` normally; `200 { "cancel": true, "reason": "ended" | "revoked" | "thread_cancelled" | "paused" }` when the host must stop the child.
+Body `{ "claimToken": "rt_…" }`. Extends `lease_until` to now + `leaseSeconds` and returns it: `200 { "cancel": false, "leaseUntil": "…" }`. When the host must stop the child: `200 { "cancel": true, "reason": "ended" | "shelved" | "thread_cancelled" | "paused" | "access_lost" }`. The lease is not extended after a cancel.
 
 ### `POST /agent-hosts/@me/runs/:runId/complete`
 
 Body:
 ```json
-{ "claimToken": "rt_…", "nativeSessionId": "…" | null, "tokensUsed": 18456, "summary": "…" | null }
+{ "claimToken": "rt_…", "nativeSessionId": "…" | null, "tokensUsed": 18456 | null, "summary": "…" | null }
 ```
-Acknowledges exactly the inbox rows carrying this `run_id`, sets the run `succeeded`, adds `tokensUsed` to the session, stores `nativeSessionId` and `summary` when given, and updates `last_active_at`. If `tokens_used` now exceeds `token_budget`, the session is shelved with `end_reason='budget'` and a notice is posted. `200 { "ok": true }`.
+Acknowledges exactly the batch's rows, sets the run `succeeded` and the batch `done`, adds `tokensUsed` to the session (`null` = unknown, not charged and recorded as unknown), stores `nativeSessionId` and `summary` when given, and updates `last_active_at`. If `tokens_used >= token_budget` afterwards, the session is shelved with `end_reason='budget'` and a notice is posted. `200 { "ok": true }`.
+
+If the run was cancelled (`cancel_requested`), `complete` still records usage, the native ID and the summary (the work happened), acknowledges the rows, and returns `200 { "ok": true, "cancelled": true }`. A cancel never turns finished work into a retry.
 
 ### `POST /agent-hosts/@me/runs/:runId/fail`
 
-Body `{ "claimToken": "rt_…", "error": "<code>", "message": "…", "tokensUsed": 0, "retryable": true }`. Releases the run's inbox rows (`run_id = NULL`) when `retryable` and `attempt < 3`; otherwise acknowledges them and posts a system notice with the error code. `200 { "ok": true }`.
+Body `{ "claimToken": "rt_…", "error": "<code>", "message": "…", "tokensUsed": 1200 | null, "retryable": true }`. Charges `tokensUsed` to the session once (`null` = unknown). Sets the run `failed`. If `retryable`, the run wasn't cancelled and the batch has `attempts < 3`, the batch goes to `retry`; otherwise it goes to `failed`, its rows are acknowledged and a notice with the error code is posted. `200 { "ok": true }`.
 
-### Fencing and errors
+### Repeated calls, fencing and leases
+
+Every `heartbeat`, `complete` and `fail` checks, in this order:
 
 | Case | Response |
 |---|---|
-| Wrong or old `claimToken`, or run not `claimed` | `409 { "error": "stale_claim" }` (the host stops the child) |
-| Run belongs to another host | `404` |
-| Lease expired before complete | The sweeper set it `expired` and released its rows: `409 stale_claim` |
+| Run unknown or belongs to another host | `404` |
+| Wrong `claimToken` | `409 { "error": "stale_claim" }` |
+| `complete` repeated with the right token on a `succeeded` run | `200 { "ok": true, "repeated": true }`, no change |
+| `fail` repeated with the right token on a `failed` run | `200 { "ok": true, "repeated": true }`, no change |
+| `fail` on a `succeeded` run, or `complete` on a `failed` one | `409 { "error": "already_finished", "status": "…" }`, no change |
+| Run `expired`, or `lease_until <= now` (checked at request time, not only by the sweeper) | `409 { "error": "lease_expired" }`; the run is marked `expired` on the spot |
 | Body fails schema | `400` |
 
-A sweeper (in the API process, every 15 s) expires runs whose `lease_until` has passed, releases their inbox rows and counts the attempt. After 3 attempts the rows are acknowledged and a notice is posted.
+So the host can safely retry `complete` or `fail` after a lost response.
+
+A sweeper (in the API process, every 15 s) expires runs past `lease_until`. An expired run's usage is unknown (not charged). Its batch goes to `retry` when `attempts < 3`, otherwise to `failed` with a notice.
+
+**Host-token errors:** `401` (revoked or wrong token) or `403` on any call → stop every child now. A revoked host never gets a `cancel: true` reply.
 
 ### What the host must do
 
 - One child per session at a time; never two runs for one session.
 - Spawn with an argv array, never a shell. Inject **only** that bot's token, through the child's MCP config or environment; never the host token or another bot's token, and never in argv or logs.
-- Resume by explicit `nativeSessionId`; never "last". No ID → fresh session with a rehydrate prompt (summary + inbox IDs).
-- Every wake prompt names the run ID, delivery key, session, channel, the inbox entries, and the instruction: read them, take your turn, post, do not call `chat_wait`, finish.
-- Heartbeat every `heartbeatSeconds`. On `cancel: true`, `409`, or `timeoutSeconds` passing: kill the process tree (`taskkill /T /F` on Windows) and report `fail` (or nothing after a `409`).
-- Report usage and the native session ID from the CLI's structured output.
+- Resume by explicit `nativeSessionId`; never "last". No ID → fresh session with a rehydrate prompt (the session summary plus the batch).
+- Every wake prompt carries the run ID, delivery key, session, channel and the batch's messages, and the instruction: take your turn, post with `client_key` `<deliveryKey>:<n>`, do not call `chat_wait`, finish.
+- Heartbeat every `heartbeatSeconds` and keep the last `leaseUntil` it got. If heartbeats fail (network error or 5xx), keep trying, but kill the child before `leaseUntil` (with a 10 s margin): past that point another attempt may start.
+- Kill the process tree (`taskkill /T /F` on Windows) on: `cancel: true`, any `409`, `401`/`403`, `timeoutSeconds` passing, or the lease deadline above. After `cancel: true` or the timeout, report `complete` if the CLI finished and produced output, otherwise `fail` with `retryable: false` (cancel) or `true` (timeout). After a `409` or `401`/`403`, report nothing.
+- Retry `complete`/`fail` on a network error or 5xx with the same body; the server treats repeats as above.
+- Report usage and the native session ID from the CLI's structured output, `null` when the CLI didn't give them.
+- **Per-run token caps** are host-local configuration, per profile, applied only where the CLI supports a cap. Where it doesn't, the host says so at start-up and relies on `timeoutSeconds` and the session's token budget. A setting the CLI can't honour is never silently dropped in a way that weakens the sandbox or approvals: the host refuses to start that profile instead.
 
 ## Commands (server + UI)
 
@@ -169,27 +206,31 @@ A sweeper (in the API process, every 15 s) expires runs whose `lease_until` has 
 
 | Command | Behaviour |
 |---|---|
-| `/start <profile>` | Live session for that bot here → `409 { "error": "session_live", "session": {…} }`; the UI shows **Shelve and start new / Keep it / Cancel**. Shelve → in one transaction, shelve the live one and start a new one. Keep → no change. No live session → resume the latest shelved one for (channel, bot), or create one; `--new` forces a fresh one. Starting writes a `direct` inbox row so the agent wakes and says hello. |
-| `/end <profile>` | Session → `ended`; pending inbox rows acknowledged; a running run gets `cancel_requested`. History is kept. |
+| `/start <profile>` | The profile's bot has a live session here (under any profile) → `409 { "error": "session_live", "session": {…} }`; the UI shows **Shelve and start new / Keep it / Cancel**. Shelve → in one transaction, shelve the live one (cancelling its running run, as `/end` does) and start the new one. Keep → no change. No live session → resume the latest shelved session **of this profile** in this channel, or create one; `--new` forces a fresh one. A shelved session of another profile for the same bot is never picked up by `/start`; use `/resume` for it. Starting writes a `direct` inbox row so the agent wakes and says hello. |
+| `/end <profile>` | Session → `ended`; unbatched rows acknowledged; a running run gets `cancel_requested` (`cancel_reason='ended'`). History is kept. |
 | `/sessions` | Lists this channel's sessions: profile, state, wakes, tokens, last active. Visible to anyone who can see the channel. |
-| `/resume <sessionId>` | Only `shelved` sessions of this channel. If the bot has a live one here → the same 409 and choice as `/start`. Ended or foreign sessions → 400. |
+| `/resume <sessionId>` | Only `shelved` sessions of this channel. If the bot has a live one here → the same 409 and choice as `/start` (shelving cancels its run). Ended or other-channel sessions → 400. |
+
+Shelving or ending a session never deletes its inbox rows; a batch that was `running` finishes as described under `complete`.
 
 ## MCP tools (agora-mcp)
 
 `session_start`, `session_end`, `session_list`, `session_wake` call the same route with the bot's token. Authority is the bot's `can_direct` in that channel, so an agent can orchestrate only where the owner allowed it. `session_wake` writes a `direct` inbox row for another agent's live session.
+
+**Duplicate posts after a retry.** `chat_send` and `thread_start` get an optional `client_key` (≤ 100 chars). The channel and thread message routes accept it, store it in `messages.client_key`, and on a repeat from the same author return the existing message with `200` instead of inserting (the unique index on `(author_id, client_key)` decides under concurrency). The wake prompt tells the agent to pass `<deliveryKey>:<n>` for its n-th post in the run, so a retried batch re-posts with the same keys and nothing is duplicated. This is durable, unlike the 5-minute Redis `Idempotency-Key` cache, which stays as it is.
 
 ## Work breakdown
 
 | ID | Work | Owner | Size | Status |
 |---|---|---|---|---|
 | **W0** | This WBS and the frozen host contract; codex reviews | claude-code | S | ◐ |
-| **S0** | Migration 037 and types | claude-code | S | ☐ |
-| **S1** | Inbox writes in messages.ts and threads.ts; bound-thread routing; thread binding on START | claude-code | M | ☐ |
-| **S2** | `/agent-hosts` API: AgentHost auth, long-poll claim, heartbeat, complete, fail, sweeper; host token create/revoke routes for the owner | claude-code | M | ☐ |
+| **S0** | Migration 037 and types; `messages.client_key` and its handling in the channel and thread message routes | claude-code | S | ☐ |
+| **S1** | Inbox writes in messages.ts and threads.ts; thread binding on a top-level START; bound-thread routing with participant and authority checks | claude-code | M | ☐ |
+| **S2** | `/agent-hosts` API: AgentHost auth, long-poll claim with batches, heartbeat, complete, fail, repeats and fencing, sweeper; host token create/revoke routes for the owner | claude-code | M | ☐ |
 | **H0** | Adapter verification gate on Windows: executable resolution, native IDs, JSON usage and errors, approvals in headless mode, model and effort mapping, credential isolation, process-tree kill. Results written into this file | codex | S | ☐ |
 | **S3** | `agora-host/` package: config (host token, workdir aliases, bot tokens per bot ID), poll loop, per-session serialization, codex and claude adapters, heartbeat and cancel | codex | M | ☐ |
 | **S4** | Commands route and UI (message box `/` handling, Shelve/Keep/Cancel, session notices, `/sessions` list) | claude-code | M | ☐ |
-| **S5** | Session MCP tools in agora-mcp | claude-code | S | ☐ |
+| **S5** | Session MCP tools in agora-mcp; `client_key` on `chat_send` and `thread_start` | claude-code | S | ☐ |
 | **S6** | `/create-agent` and profile editor: bot + token (shown once) + profile; host management screen | claude-code | M | ☐ |
 | **S7** | Docs (`docs/agent-sessions.md`), deploy to the WSL stack, phone run | claude-code | S | ☐ |
 
@@ -198,7 +239,17 @@ A sweeper (in the API process, every 15 s) expires runs whose `lease_until` has 
 ## Acceptance tests
 
 Integration (real Postgres, as the rest of the suite):
+- Bootstrap: a session's agent posts a top-level START naming another live agent → the thread is bound and the peer gets one `protocol` row. A START from a bot without a live session, or naming no live agent, binds nothing.
 - An unauthorized `[YIELD to=X]` (unbound thread, or a non-participant) creates no inbox row.
+- A non-participant posting DONE or CANCEL in a bound thread doesn't close it; a CANCEL from a director does, and flags running runs.
+- Crash plus new arrival: attempt 1 of batch A expires while message B arrives → the next claim is A again (same rows, same `deliveryKey`, attempt 2); B comes in a later batch. After 3 attempts A fails with a notice.
+- More than 20 pending rows → the batch takes the oldest 20; the rest come next.
+- Lease checked at request time: a heartbeat or `complete` after `lease_until`, before the sweeper runs → `409 lease_expired`.
+- Repeats: `complete` twice → the second returns `repeated` and changes nothing; `fail` after `complete` → `409 already_finished`.
+- `complete` after `/end` records usage and returns `cancelled: true`; the batch is not retried.
+- Failed and expired attempts: reported usage is charged once; `tokens_used >= token_budget` blocks the next claim and shelves the session.
+- `client_key`: the same key from the same author returns the first message; two concurrent posts with one key insert one row.
+- Two profiles for one bot: `/start` of profile B while A's session is live → 409; after shelving, `/start A` resumes A's session, not B's. Changing a profile's adapter clears its sessions' native IDs.
 - A director's top-level message mentioning a bot with a live session creates one `direct` row; a member without DirectAgents creates none.
 - Revocation after enqueue: the author loses DirectAgents, or the bot is paused or removed, before the claim → the row is acknowledged without work, and no run is claimed for it.
 - Two hosts long-poll at once → exactly one claim per session.
@@ -218,8 +269,8 @@ Live (S7): from the phone, `/start codex` in a channel, give it a task, watch it
 
 ## Risks
 
-- **Duplicate posts** after a crash between posting and `complete` (at-least-once). Mitigation: the delivery key in the prompt; agents pass it as an idempotency key when the tool supports it.
-- **Token overshoot** inside one run: usage is only known afterwards. Mitigation: a per-run timeout and CLI caps where available; overshoot is recorded and shelves the session.
+- **Duplicate posts** after a crash between posting and `complete` (at-least-once). Mitigation: `client_key` derived from the batch's delivery key (S0, S5). An agent that ignores the instruction can still duplicate; that is visible and bounded by the 3 attempts.
+- **Token overshoot** inside one run: usage is only known afterwards, and unknown after a crash. Mitigation: a per-run timeout, host-local CLI caps where available, failed usage charged, budget checked before every claim.
 - **Agents waking each other forever.** Mitigation: wakes only through bound threads and authority; wake budgets; the existing loop guard still applies.
 - **CLI behaviour changes** between versions. Mitigation: H0 records the versions tested; the host refuses unknown major versions unless configured.
 - **Host on the same machine as the agents' files.** The host is as trusted as the agent CLIs; the sandbox and approval settings of each CLI stay on.
