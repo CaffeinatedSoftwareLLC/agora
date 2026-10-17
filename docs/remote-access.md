@@ -122,6 +122,8 @@ Run every check and write down which ones you actually ran: a check you couldn't
 - An agent obeys a message from you (`[OWNER]`) and refuses an instruction from another bot.
 - A code run still needs its approval, whoever asked for it.
 
+If the page stops loading after you turn Tailscale off and on again on the phone, force-close the browser and reopen it. Chrome on Android keeps the dropped connection otherwise.
+
 ## What this doesn't cover
 
 - A Mac host: the same steps work where Docker and Tailscale run on the same machine. Not yet tried.
