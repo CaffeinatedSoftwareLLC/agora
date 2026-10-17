@@ -11,7 +11,7 @@ Merged: #61 (this plan), #62 (agora-host), #63 (server, commands, MCP tools, Set
 **Live-verified:** Eryk sent `/start codex` from his phone, then `@Codex summarize the last 5 messages in this channel`; the host woke codex headlessly and it answered in 16 s (run succeeded on attempt 1, 75k tokens, native session ID and summary stored).
 
 **Open:**
-- Shell commands inside a hosted codex run are rejected ("blocked by policy": approvals off and the Windows sandbox refuses them), so a hosted codex can use Agora but not run `git` or tests yet.
+- ~~Shell commands blocked in hosted codex runs~~: fixed in #66 (the host now sets `windows.sandbox`, which `--ignore-user-config` had dropped); a hosted-style run ran `git log` successfully.
 - Not yet tried live: the claude adapter, native resume on a second wake, two agents handing off in a bound thread, `/end` cancelling a running wake (Windows tree kill), the Settings → Agents screen in a browser.
 - The first `/start` hello was not posted: codex read the authorless notice as no instruction. Harmless; the wake prompt could say a `command` row means "introduce yourself".
 
