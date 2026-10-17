@@ -16,10 +16,10 @@ export function getRedis(): Redis {
  * Blacklist a token by its jti. TTL = seconds until the token expires,
  * so the blacklist entry auto-cleans after the token would have expired anyway.
  */
-export async function blacklistToken(jti: string, expUnix: number): Promise<void> {
+export async function blacklistToken(jti: string, expUnix: number): Promise<boolean> {
     const ttl = expUnix - Math.floor(Date.now() / 1000);
-    if (ttl <= 0) return; // already expired
-    await getRedis().set(`${BLACKLIST_PREFIX}${jti}`, '1', 'EX', ttl);
+    if (ttl <= 0) return false; // already expired
+    return await getRedis().set(`${BLACKLIST_PREFIX}${jti}`, '1', 'EX', ttl, 'NX') === 'OK';
 }
 
 /** Check if a token jti has been blacklisted. */

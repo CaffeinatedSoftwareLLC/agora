@@ -4,6 +4,7 @@ import { generateToken, verifyToken, extractToken } from '../auth/tokens';
 import { blacklistToken } from '../auth/token-blacklist';
 import { generateUlid } from '../utils/ulid';
 import type { LoginLimiter } from '../auth/login-limit';
+import { requireAuth } from '../auth/middleware';
 
 export async function authRoutes(app: FastifyInstance) {
     // POST /auth/register — policy-aware registration
@@ -176,7 +177,7 @@ export async function authRoutes(app: FastifyInstance) {
         // be more than one candidate: the password decides which account it is. Exact
         // matches and email matches are tried first. Bots have no password and never log in.
         const result = await db.query(
-            `SELECT id, username, password_hash, account_status, is_instance_admin
+            `SELECT id, username, password_hash, account_status, is_instance_admin, token_version
              FROM users
              WHERE bot = false AND password_hash IS NOT NULL
                AND (lower(email) = lower($1) OR lower(username) = lower($1))
@@ -226,7 +227,7 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'account_suspended' });
         }
 
-        const token = generateToken({ userId: user.id.trim() }, app.jwtSecret);
+        const token = generateToken({ userId: user.id.trim(), tokenVersion: user.token_version }, app.jwtSecret);
 
         return reply.status(200).send({
             user: { id: user.id.trim(), username: user.username, isInstanceAdmin: user.is_instance_admin },
@@ -241,15 +242,26 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(401).send({ error: 'Missing token' });
         }
 
+        let payload;
         try {
-            const payload = verifyToken(raw, app.jwtSecret);
-            if (payload.jti && payload.exp) {
-                await blacklistToken(payload.jti, payload.exp);
-            }
+            payload = verifyToken(raw, app.jwtSecret);
         } catch {
             // Token is already invalid/expired — nothing to revoke
+            return reply.status(200).send({ success: true });
+        }
+        if (payload.jti && payload.exp) {
+            // Store failures must not be reported as successful revocation. Replays
+            // of an already-revoked token do not trigger another global refresh.
+            request.gatewayAccessChanged = await blacklistToken(payload.jti, payload.exp);
         }
 
+        return reply.status(200).send({ success: true });
+    });
+
+    // Revoking all sessions includes this one. Only the authenticated user's row is updated.
+    app.post('/auth/logout-all', { preHandler: [requireAuth] }, async (request, reply) => {
+        await request.dbClient!.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [request.userId]);
+        request.gatewayAccessChanged = true;
         return reply.status(200).send({ success: true });
     });
 }

@@ -9,6 +9,7 @@ import { useUIStore } from './uiStore';
 import { useTypingStore } from './typingStore';
 import { usePresenceStore } from './presenceStore';
 import { useUnreadStore } from './unreadStore';
+import { useThreadStore } from './threadStore';
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'pending';
 
@@ -20,6 +21,8 @@ interface AuthState {
   login: (login: string, password: string) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => void;
+  logoutAll: () => Promise<void>;
+  clearSession: () => void;
 }
 
 // Restore persisted session from localStorage
@@ -46,7 +49,7 @@ function clearPersistedAuth() {
 
 const initialAuth = loadPersistedAuth();
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   token: initialAuth.token,
   user: initialAuth.user,
   status: initialAuth.status,
@@ -88,12 +91,23 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: () => {
     // Revoke token server-side (best-effort — don't block on failure)
     api.post('/auth/logout', undefined).catch(() => {});
+    get().clearSession();
+  },
+
+  logoutAll: async () => {
+    // Preserve the session on failure so the user can retry revoking other devices.
+    await api.post('/auth/logout-all');
+    get().clearSession();
+  },
+
+  clearSession: () => {
     clearPersistedAuth();
     set({ token: null, user: null, status: 'idle' });
     useServerStore.getState().clear();
     useChannelStore.getState().clear();
     useMemberStore.getState().clear();
     useMessageStore.getState().clear();
+    useThreadStore.getState().clear();
     useTypingStore.getState().clear();
     usePresenceStore.getState().clear();
     useUnreadStore.getState().clear();
