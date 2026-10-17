@@ -686,11 +686,13 @@ describe('host API (S2)', () => {
             const pending = ctx.request.get('/agent-hosts/@me/runs/next?wait=5').set(auth).then(r => r);
             // Wait until the poll has authenticated (it stamps last_seen_at) and is waiting
             const until = Date.now() + 5000;
-            while (Date.now() < until) {
+            let authenticated = false;
+            while (!authenticated && Date.now() < until) {
                 const seen = await ctx.db.query('SELECT last_seen_at FROM agent_hosts WHERE id = $1', [h.body.host.id]);
-                if (seen.rows[0].last_seen_at) break;
-                await new Promise(r => setTimeout(r, 25));
+                authenticated = !!seen.rows[0].last_seen_at;
+                if (!authenticated) await new Promise(r => setTimeout(r, 25));
             }
+            expect(authenticated, 'the poll authenticated before the revoke').toBe(true);
             await new Promise(r => setTimeout(r, 100));
             await ctx.request.delete(`/servers/${serverId}/agent-hosts/${h.body.host.id}`).set(owner.auth);
             await post(owner.auth, '@codex work for a revoked host');
