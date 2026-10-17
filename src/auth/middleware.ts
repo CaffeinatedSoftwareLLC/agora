@@ -107,12 +107,16 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     // Check account_status — reject non-active users
     const db = request.dbClient!;
     const result = await db.query(
-        'SELECT account_status FROM users WHERE id = $1',
+        'SELECT account_status, token_version FROM users WHERE id = $1',
         [request.userId]
     );
 
     if (result.rows.length === 0) {
         return reply.status(401).send({ error: 'Invalid token' });
+    }
+
+    if ((payload.tokenVersion ?? 0) !== result.rows[0].token_version) {
+        return reply.status(401).send({ error: 'Token revoked' });
     }
 
     const status = result.rows[0].account_status;
