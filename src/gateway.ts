@@ -91,6 +91,9 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             (socket as any).userId = payload.userId;
             socket.data.userId = payload.userId;
             socket.data.isBot = false;
+            socket.data.tokenVersion = payload.tokenVersion ?? 0;
+            socket.data.jti = payload.jti;
+            socket.data.tokenExpiresAt = payload.exp * 1000;
 
             // Check token blacklist (logout revocation)
             if (payload.jti && await isTokenBlacklisted(payload.jti)) {
@@ -99,12 +102,13 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
 
             // Check account_status using pool directly (no per-request transaction in WS)
             const result = await db.query(
-                'SELECT account_status FROM users WHERE id = $1',
+                'SELECT account_status, token_version FROM users WHERE id = $1',
                 [payload.userId]
             );
             if (result.rows.length === 0) {
                 return next(new Error('Invalid token'));
             }
+            if (socket.data.tokenVersion !== result.rows[0].token_version) return next(new Error('Token revoked'));
             const status = result.rows[0].account_status;
             if (status === 'pending') {
                 return next(new Error('account_pending'));
@@ -123,6 +127,16 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
 
     io.on('connection', (socket) => { void readGatewayAccess(io, async () => {
         const userId = (socket as any).userId;
+        if (!socket.data.isBot) {
+            const remaining = socket.data.tokenExpiresAt - Date.now();
+            if (!Number.isFinite(remaining) || remaining <= 0) { socket.disconnect(true); return; }
+            const expiry = setTimeout(() => {
+                socket.emit('error', { code: 'token_expired' });
+                socket.disconnect(true);
+            }, Math.min(remaining, 2_147_483_647));
+            expiry.unref();
+            socket.once('disconnect', () => clearTimeout(expiry));
+        }
 
         // === BOT BRANCH — early return, skip human hydration ===
         if ((socket as any).isBot) {

@@ -6,11 +6,12 @@ const TOKEN_EXPIRY = '7d';
 export interface TokenPayload {
     userId: string;
     jti?: string;
+    tokenVersion?: number;
 }
 
 export function generateToken(payload: TokenPayload, secret: string): string {
     const jti = randomBytes(16).toString('hex');
-    return jwt.sign({ ...payload, jti }, secret, { expiresIn: TOKEN_EXPIRY });
+    return jwt.sign({ tokenVersion: 0, ...payload, jti }, secret, { expiresIn: TOKEN_EXPIRY });
 }
 
 export function verifyToken(token: string, secret: string): TokenPayload & { jti: string; exp: number } {

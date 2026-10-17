@@ -159,6 +159,14 @@ One-time instance initialization. Creates the admin user, a default server with 
 
 ## Auth
 
+### POST /auth/logout-all
+
+**Auth:** Current human Bearer token. No request body. Returns `200 { "success": true }`.
+
+Increments the authenticated user's session version, revoking every existing JWT for that account, including this one. REST requests and WebSocket reconnects using an old version return `401` or `Token revoked`; existing sockets disconnect before the response succeeds. Other accounts and bot tokens are unaffected. Log in again to obtain the new version. JWTs issued before this migration are treated as version zero until the first account-wide revocation.
+
+`POST /auth/logout` revokes only its presented token and disconnects sockets using that token. WebSockets also disconnect when their JWT expires. Session revocation does not cancel already-running agent or sandbox work; use the task/runtime cancellation controls separately. The socket refresh and broadcast gate currently operate within the single API process; running multiple API instances requires distributed invalidation.
+
 ### POST /auth/register
 
 Register a new user account. Behavior depends on the instance's registration policy.

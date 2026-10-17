@@ -19,10 +19,13 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
   const navigate = useNavigate();
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
+  const logoutAll = useAuthStore(s => s.logoutAll);
   const instanceServerId = useServerStore(s => s.instanceServerId);
   const { hasModerationAccess } = useServerAccess(instanceServerId);
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -56,6 +59,17 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
     setMenuOpen(false);
     logout();
     navigate('/login');
+  };
+
+  const handleLogoutAll = async () => {
+    setRevoking(true);
+    setLogoutError('');
+    try {
+      await logoutAll();
+      navigate('/login');
+    } catch {
+      setLogoutError('Could not log out all sessions. Try again.');
+    } finally { setRevoking(false); }
   };
 
   return (
@@ -185,6 +199,15 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
                 </svg>
                 Log Out
               </button>
+              <button
+                onClick={handleLogoutAll}
+                disabled={revoking}
+                className="w-full px-3 py-2 text-[13px] text-left disabled:opacity-50"
+                style={{ color: P.danger }}
+              >
+                {revoking ? 'Logging out…' : 'Log Out All Sessions'}
+              </button>
+              {logoutError && <p role="alert" className="px-3 py-2 text-xs" style={{ color: P.danger }}>{logoutError}</p>}
             </div>
           )}
         </div>

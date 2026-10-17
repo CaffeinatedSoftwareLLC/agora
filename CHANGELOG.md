@@ -6,6 +6,8 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Added
 
+- **Log out all sessions.** The account menu can revoke all of the current user's sessions. Existing sockets disconnect on logout, account-wide revocation, or JWT expiry; a fresh login is required. Other accounts and bot tokens are unaffected.
+
 - **Decision model (optional).** A new provider type, TypeSafe Jev, behind the `decide` capability. It answers typed questions about text and writes none. With no `decide` route, or with every use switched off (the default), Agora makes no decision calls and behaves as before. Each use has its own switch, its own share of the daily budget, and a named fallback when the model is unavailable. Settings → AI → Decision model.
   - **Assistant routing.** The assistant works out what an `@assistant` request asks for and hands it to the right handler. Without it, the keyword rules decide as before.
   - **Assistant web search.** With routing on and a Search route enabled, "@assistant look up …" runs a search and posts a search card. With Tavily, the assistant then writes its own answer from the results that passed screening (one extra chat call per search). A Gemini-grounded answer stands alone, as Google's terms require it unmodified.

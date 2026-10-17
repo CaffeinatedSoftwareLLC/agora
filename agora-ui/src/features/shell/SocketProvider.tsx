@@ -25,7 +25,7 @@ import { SocketContext } from './SocketContext';
 export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const token = useAuthStore(s => s.token);
-  const logout = useAuthStore(s => s.logout);
+  const clearSession = useAuthStore(s => s.clearSession);
   const setServers = useServerStore(s => s.setServers);
   const setChannels = useChannelStore(s => s.setChannels);
   const setConnectionStatus = useUIStore(s => s.setConnectionStatus);
@@ -123,10 +123,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         'Authentication required',
         'account_pending',
         'account_suspended',
+        'Token revoked',
+        'token_expired',
       ];
       if (fatal.includes(err.message)) {
-        logout();
+        clearSession();
       }
+    });
+
+    s.on('error', (error: { code?: string }) => {
+      if (['Token revoked', 'token_expired', 'account_suspended'].includes(error?.code ?? '')) clearSession();
     });
 
     s.connect();
@@ -137,7 +143,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       s.disconnect();
       setSocket(null);
     };
-  }, [token, logout, setServers, setChannels, setConnectionStatus]);
+  }, [token, clearSession, setServers, setChannels, setConnectionStatus]);
 
   return (
     <SocketContext.Provider value={socket}>
