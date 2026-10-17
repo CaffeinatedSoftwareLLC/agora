@@ -1,7 +1,21 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { generateUlid } from '../utils/ulid';
-import { Permissions, computePermissions } from '../permissions';
+import { Permissions, computePermissions, KNOWN_PERMS_MASK } from '../permissions';
 import { loadAndComputePermissions } from './bots';
+import { isServerOwner, OWNER_ONLY_ERROR, touchesDirectAgents } from '../lib/direct-agents';
+
+/** A permission bitmask from the API, or null if it isn't one or has unknown bits. */
+function parsePerms(value: unknown): bigint | null {
+    if (typeof value !== 'string' || !/^[0-9]{1,20}$/.test(value)) return null;
+    const bits = BigInt(value);
+    return (bits & ~KNOWN_PERMS_MASK) === 0n ? bits : null;
+}
+
+/** DirectAgents changes are the owner's alone (src/lib/direct-agents.ts). */
+async function directorGuard(db: any, serverId: string, callerId: string, before: bigint, after: bigint): Promise<string | null> {
+    if (!touchesDirectAgents(before, after)) return null;
+    return await isServerOwner(db, serverId, callerId) ? null : OWNER_ONLY_ERROR;
+}
 
 // ─── PreHandler: require ManageRoles permission ───
 
@@ -148,7 +162,11 @@ export async function roleRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
         const { name, color, hoist, permissions: permsStr, mentionable } = request.body as any;
 
-        const rolePerms = permsStr ? BigInt(permsStr) : 0n;
+        const rolePerms = permsStr ? parsePerms(permsStr) : 0n;
+        if (rolePerms === null) return reply.status(400).send({ error: 'Invalid permissions' });
+
+        const ownerErr = await directorGuard(db, serverId, userId, 0n, rolePerms);
+        if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
         // Privilege escalation check
         const callerPerms = await loadAndComputePermissions(db, userId, serverId);
@@ -228,7 +246,10 @@ export async function roleRoutes(app: FastifyInstance) {
 
         // Privilege escalation check on new permissions
         if (body.permissions !== undefined) {
-            const newPerms = BigInt(body.permissions);
+            const newPerms = parsePerms(body.permissions);
+            if (newPerms === null) return reply.status(400).send({ error: 'Invalid permissions' });
+            const ownerErr = await directorGuard(db, serverId, userId, BigInt(role.permissions), newPerms);
+            if (ownerErr) return reply.status(403).send({ error: ownerErr });
             const callerPerms = await loadAndComputePermissions(db, userId, serverId);
             const err = await checkEscalation(db, callerPerms, newPerms, serverId, userId);
             if (err) return reply.status(403).send({ error: err });
@@ -293,7 +314,7 @@ export async function roleRoutes(app: FastifyInstance) {
 
         // Check if it's @everyone
         const role = await db.query(
-            'SELECT is_everyone FROM roles WHERE id = $1 AND server_id = $2',
+            'SELECT is_everyone, permissions FROM roles WHERE id = $1 AND server_id = $2',
             [roleId, serverId]
         );
         if (!role.rows[0]) {
@@ -302,6 +323,8 @@ export async function roleRoutes(app: FastifyInstance) {
         if (role.rows[0].is_everyone) {
             return reply.status(400).send({ error: 'Cannot delete the @everyone role' });
         }
+        const ownerErr = await directorGuard(db, serverId, request.userId, BigInt(role.rows[0].permissions), 0n);
+        if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
         await db.query(
             'DELETE FROM roles WHERE id = $1 AND server_id = $2',
@@ -344,6 +367,8 @@ export async function roleRoutes(app: FastifyInstance) {
 
         // Escalation check: can't assign a role with perms you don't have
         const rolePerms = BigInt(role.rows[0].permissions);
+        const ownerErr = await directorGuard(db, serverId, callerId, 0n, rolePerms);
+        if (ownerErr) return reply.status(403).send({ error: ownerErr });
         const callerPerms = await loadAndComputePermissions(db, callerId, serverId);
         const err = await checkEscalation(db, callerPerms, rolePerms, serverId, callerId);
         if (err) return reply.status(403).send({ error: err });
@@ -370,6 +395,12 @@ export async function roleRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { serverId, userId: targetUserId, roleId } = request.params as any;
         const db = request.dbClient!;
+
+        const roleRow = await db.query('SELECT permissions FROM roles WHERE id = $1 AND server_id = $2', [roleId, serverId]);
+        if (roleRow.rows[0]) {
+            const ownerErr = await directorGuard(db, serverId, request.userId, BigInt(roleRow.rows[0].permissions), 0n);
+            if (ownerErr) return reply.status(403).send({ error: ownerErr });
+        }
 
         const result = await db.query(
             'DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2 AND role_id = $3 RETURNING role_id',
@@ -455,8 +486,17 @@ export async function roleRoutes(app: FastifyInstance) {
             return reply.status(404).send({ error: 'Role not found in this server' });
         }
 
+        const allowBits = parsePerms(allow);
+        const denyBits = parsePerms(deny);
+        if (allowBits === null || denyBits === null) return reply.status(400).send({ error: 'Invalid permissions' });
+
+        // Adding or removing DirectAgents in either set is the owner's alone
+        const prev = await db.query('SELECT allow, deny FROM channel_role_overrides WHERE channel_id = $1 AND role_id = $2', [channelId, roleId]);
+        const ownerErr = await directorGuard(db, serverId, userId, BigInt(prev.rows[0]?.allow ?? 0), allowBits)
+            ?? await directorGuard(db, serverId, userId, BigInt(prev.rows[0]?.deny ?? 0), denyBits);
+        if (ownerErr) return reply.status(403).send({ error: ownerErr });
+
         // Escalation check on the allow bits
-        const allowBits = BigInt(allow);
         const err = await checkEscalation(db, callerPerms, allowBits, serverId, userId);
         if (err) return reply.status(403).send({ error: err });
 
@@ -481,6 +521,12 @@ export async function roleRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { channelId, roleId } = request.params as any;
         const db = request.dbClient!;
+
+        const prev = await db.query('SELECT allow, deny FROM channel_role_overrides WHERE channel_id = $1 AND role_id = $2', [channelId, roleId]);
+        if (prev.rows[0]) {
+            const ownerErr = await directorGuard(db, (request as any)._serverId, request.userId, BigInt(prev.rows[0].allow) | BigInt(prev.rows[0].deny), 0n);
+            if (ownerErr) return reply.status(403).send({ error: ownerErr });
+        }
 
         const result = await db.query(
             'DELETE FROM channel_role_overrides WHERE channel_id = $1 AND role_id = $2 RETURNING role_id',
@@ -523,8 +569,17 @@ export async function roleRoutes(app: FastifyInstance) {
             return reply.status(404).send({ error: 'User is not a member of this server' });
         }
 
+        const allowBits = parsePerms(allow);
+        const denyBits = parsePerms(deny);
+        if (allowBits === null || denyBits === null) return reply.status(400).send({ error: 'Invalid permissions' });
+
+        // Adding or removing DirectAgents in either set is the owner's alone
+        const prev = await db.query('SELECT allow, deny FROM channel_member_overrides WHERE channel_id = $1 AND user_id = $2', [channelId, targetUserId]);
+        const ownerErr = await directorGuard(db, serverId, callerId, BigInt(prev.rows[0]?.allow ?? 0), allowBits)
+            ?? await directorGuard(db, serverId, callerId, BigInt(prev.rows[0]?.deny ?? 0), denyBits);
+        if (ownerErr) return reply.status(403).send({ error: ownerErr });
+
         // Escalation check
-        const allowBits = BigInt(allow);
         const err = await checkEscalation(db, callerPerms, allowBits, serverId, callerId);
         if (err) return reply.status(403).send({ error: err });
 
@@ -549,6 +604,12 @@ export async function roleRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { channelId, userId: targetUserId } = request.params as any;
         const db = request.dbClient!;
+
+        const prev = await db.query('SELECT allow, deny FROM channel_member_overrides WHERE channel_id = $1 AND user_id = $2', [channelId, targetUserId]);
+        if (prev.rows[0]) {
+            const ownerErr = await directorGuard(db, (request as any)._serverId, request.userId, BigInt(prev.rows[0].allow) | BigInt(prev.rows[0].deny), 0n);
+            if (ownerErr) return reply.status(403).send({ error: ownerErr });
+        }
 
         const result = await db.query(
             'DELETE FROM channel_member_overrides WHERE channel_id = $1 AND user_id = $2 RETURNING user_id',

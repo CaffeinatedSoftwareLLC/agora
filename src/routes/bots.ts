@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { generateUlid } from '../utils/ulid';
+import { isServerOwner, OWNER_ONLY_ERROR } from '../lib/direct-agents';
 import { generateBotToken } from '../auth/bot-tokens';
 import { Permissions, computePermissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
@@ -286,7 +287,7 @@ export async function botRoutes(app: FastifyInstance) {
         }
 
         const channelsResult = await db.query(
-            `SELECT c.id, c.name, c.channel_type
+            `SELECT c.id, c.name, c.channel_type, bca.can_direct
              FROM bot_channel_access bca
              JOIN channels c ON c.id = bca.channel_id
              WHERE bca.bot_id = $1`,
@@ -302,6 +303,7 @@ export async function botRoutes(app: FastifyInstance) {
             canManageTokens,
             channels: channelsResult.rows.map((c: any) => ({
                 id: c.id.trim(),
+                canDirect: c.can_direct === true,
                 name: c.name,
                 channelType: c.channel_type,
             })),
@@ -570,6 +572,40 @@ export async function botRoutes(app: FastifyInstance) {
     });
 
     // DELETE /channels/:id/bots/:botId → 200 { removed: true }
+    // PUT /channels/:id/bots/:botId/direct → 200 { botId, channelId, canDirect }
+    // Lets a bot give other agents instructions in this channel. The server owner's alone.
+    app.put('/channels/:id/bots/:botId/direct', {
+        preHandler: [requireManageBotsForChannel],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['canDirect'],
+                additionalProperties: false,
+                properties: { canDirect: { type: 'boolean' } },
+            },
+        },
+    }, async (request, reply) => {
+        const { id: channelId, botId } = request.params as any;
+        const { canDirect } = request.body as { canDirect: boolean };
+        const db = request.dbClient!;
+
+        const channel = await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId]);
+        const serverId = channel.rows[0]?.server_id?.trim();
+        if (!serverId || !await isServerOwner(db, serverId, request.userId)) {
+            return reply.status(403).send({ error: OWNER_ONLY_ERROR });
+        }
+
+        const result = await db.query(
+            'UPDATE bot_channel_access SET can_direct = $1 WHERE bot_id = $2 AND channel_id = $3 RETURNING bot_id',
+            [canDirect, botId, channelId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Bot has no access to this channel' });
+        }
+
+        return reply.status(200).send({ botId: botId.trim(), channelId: channelId.trim(), canDirect });
+    });
+
     app.delete('/channels/:id/bots/:botId', {
         preHandler: [requireManageBotsForChannel],
     }, async (request, reply) => {

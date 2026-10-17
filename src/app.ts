@@ -13,6 +13,7 @@ import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
+import { directorRoutes } from './routes/directors';
 import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
 import { aiProviderRoutes } from './routes/ai-providers';
@@ -326,6 +327,7 @@ export async function buildApp(opts?: {
     await app.register(userRoutes);
     await app.register(fileRoutes);
     await app.register(botRoutes);
+    await app.register(directorRoutes);
     await app.register(threadRoutes);
     await app.register(aiConfigRoutes);
     await app.register(aiProviderRoutes);

@@ -122,7 +122,8 @@ export interface Bot {
 
 export interface BotDetail extends Bot {
   canManageTokens: boolean;
-  channels: { id: string; name: string; channelType: number }[];
+  /** canDirect: the bot may give agents instructions in that channel (set by the server owner) */
+  channels: { id: string; name: string; channelType: number; canDirect?: boolean }[];
 }
 
 export interface BotToken {
@@ -175,6 +176,10 @@ export const botApi = {
 
   revokeChannel: (channelId: string, botId: string) =>
     api.delete<{ removed: true }>(`/channels/${channelId}/bots/${botId}`),
+
+  /** Only the server owner may change this */
+  setCanDirect: (channelId: string, botId: string, canDirect: boolean) =>
+    api.put<{ botId: string; channelId: string; canDirect: boolean }>(`/channels/${channelId}/bots/${botId}/direct`, { canDirect }),
 
   updateChannelBotConfig: (channelId: string, data: { maxBotHops: number }) =>
     api.patch<{ channelId: string; maxBotHops: number }>(`/channels/${channelId}/bot-config`, data),

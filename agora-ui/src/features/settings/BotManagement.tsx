@@ -386,6 +386,19 @@ function BotDetailPanel({
     }
   }
 
+  async function toggleDirect(channelId: string, canDirect: boolean) {
+    setChannelLoading(channelId);
+    setError('');
+    try {
+      await botApi.setCanDirect(channelId, botId, !canDirect);
+      setDetail(await botApi.get(serverId, botId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : 'Failed to update who may direct');
+    } finally {
+      setChannelLoading(null);
+    }
+  }
+
   async function toggleChannel(channelId: string, hasAccess: boolean) {
     setChannelLoading(channelId);
     try {
@@ -415,6 +428,7 @@ function BotDetailPanel({
   if (!detail) return null;
 
   const botChannelIds = new Set(detail.channels.map(c => c.id));
+  const directChannelIds = new Set(detail.channels.filter(c => c.canDirect).map(c => c.id));
   const activeTokens = tokens.filter(t => !t.revokedAt);
   const revokedTokens = tokens.filter(t => t.revokedAt);
 
@@ -517,6 +531,22 @@ function BotDetailPanel({
                   <span className="text-text-muted">#</span>
                   <span className="text-text">{ch.name}</span>
                   {isLoading && <span className="text-text-dim text-xs ml-auto">...</span>}
+                  {hasAccess && (
+                    <span
+                      className="ml-auto flex items-center gap-1 text-xs text-text-muted"
+                      title="Lets this bot give other agents instructions in this channel. Only the server owner can change it."
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={directChannelIds.has(ch.id)}
+                        disabled={isLoading}
+                        onChange={() => toggleDirect(ch.id, directChannelIds.has(ch.id))}
+                        className="accent-primary"
+                      />
+                      can direct agents
+                    </span>
+                  )}
                 </label>
               );
             })}

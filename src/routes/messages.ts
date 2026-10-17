@@ -6,8 +6,13 @@ import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol } from '../lib/protocol';
+import { canDirect, messageAuthorities } from '../lib/direct-agents';
 
 export async function messageRoutes(app: FastifyInstance) {
+    // Authority is read with the server's own pool: agents read as bots, and RLS hides
+    // server membership and roles from bots (src/lib/direct-agents.ts)
+    const authorityDb = () => (app as any).db;
+
 
     // POST /channels/:id/messages → 201 { id, content, authorId, authorUsername, channelId, createdAt, attachments }
     app.post('/channels/:id/messages', {
@@ -128,10 +133,11 @@ export async function messageRoutes(app: FastifyInstance) {
         const mentionsEveryone = mentionedUsernames.includes('everyone');
         const protocol = parseProtocol(content);
 
+        const couldDirect = await canDirect(authorityDb(), channelId, userId, !!request.isBot);
         await db.query(
-            `INSERT INTO messages (id, channel_id, author_id, content, mentions_everyone, protocol)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [messageId, channelId, userId, content, mentionsEveryone, protocol]
+            `INSERT INTO messages (id, channel_id, author_id, content, mentions_everyone, protocol, author_could_direct)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [messageId, channelId, userId, content, mentionsEveryone, protocol, couldDirect]
         );
 
         const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
@@ -234,6 +240,9 @@ export async function messageRoutes(app: FastifyInstance) {
             authorUsername: userRow.rows[0].username,
             authorBot: userRow.rows[0].bot || false,
             authorAvatarUrl: userRow.rows[0].avatar_url || null,
+            authorAuthority: couldDirect
+                ? (await messageAuthorities(authorityDb(), channelId, [{ id: messageId, author_id: userId, author_bot: !!request.isBot, author_could_direct: true }])).get(messageId.trim()) ?? null
+                : null,
             channelId: channelId.trim(),
             createdAt: new Date().toISOString(),
             mentions: mentionedUserIds,
@@ -280,7 +289,7 @@ export async function messageRoutes(app: FastifyInstance) {
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
+                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol, m.author_could_direct
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
@@ -290,7 +299,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol
+                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol, m.author_could_direct
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.thread_id IS NULL
@@ -331,6 +340,7 @@ export async function messageRoutes(app: FastifyInstance) {
             await addTaggingToAttachments(db, Object.values(attachmentsMap).flat());
         }
 
+        const authorities = await messageAuthorities(authorityDb(), channelId, result.rows);
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -338,6 +348,7 @@ export async function messageRoutes(app: FastifyInstance) {
             authorUsername: row.author_username ?? null,
             authorBot: row.author_bot || false,
             authorAvatarUrl: row.author_avatar_url || null,
+            authorAuthority: authorities.get(row.id.trim()) ?? null,
             channelId: row.channel_id.trim(),
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,
@@ -387,11 +398,14 @@ export async function messageRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Not the message author' });
         }
 
+        // An edit is a new statement: authority is stamped again, so a revoked director
+        // can't edit an old authorized message into a new instruction
+        const couldDirect = await canDirect(authorityDb(), channelId, userId, !!request.isBot);
         const result = await db.query(
-            `UPDATE messages SET content = $1, edited_at = NOW(), protocol = $3
+            `UPDATE messages SET content = $1, edited_at = NOW(), protocol = $3, author_could_direct = $4
              WHERE id = $2
              RETURNING id, content, edited_at, protocol`,
-            [content, msgId, parseProtocol(content)]
+            [content, msgId, parseProtocol(content), couldDirect]
         );
 
         const updated = result.rows[0];

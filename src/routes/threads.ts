@@ -6,8 +6,12 @@ import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol } from '../lib/protocol';
+import { canDirect, messageAuthorities } from '../lib/direct-agents';
 
 export async function threadRoutes(app: FastifyInstance) {
+    // Authority is read with the server's own pool (see routes/messages.ts)
+    const authorityDb = () => (app as any).db;
+
 
     // POST /channels/:id/messages/:msgId/replies → 201
     app.post('/channels/:id/messages/:msgId/replies', {
@@ -144,10 +148,11 @@ export async function threadRoutes(app: FastifyInstance) {
         const mentionsEveryone = mentionedUsernames.includes('everyone');
 
         const protocol = parseProtocol(content);
+        const couldDirect = await canDirect(authorityDb(), channelId, userId, !!request.isBot);
         await db.query(
-            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone, protocol)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [replyId, channelId, userId, content, msgId, mentionsEveryone, protocol]
+            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone, protocol, author_could_direct)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [replyId, channelId, userId, content, msgId, mentionsEveryone, protocol, couldDirect]
         );
 
         // Update parent metadata
@@ -202,6 +207,9 @@ export async function threadRoutes(app: FastifyInstance) {
             authorUsername: userRow.rows[0].username,
             authorBot: userRow.rows[0].bot || false,
             authorAvatarUrl: userRow.rows[0].avatar_url || null,
+            authorAuthority: couldDirect
+                ? (await messageAuthorities(authorityDb(), channelId, [{ id: replyId, author_id: userId, author_bot: !!request.isBot, author_could_direct: true }])).get(replyId.trim()) ?? null
+                : null,
             channelId: channelId.trim(),
             createdAt: new Date().toISOString(),
             threadId: msgId.trim(),
@@ -266,7 +274,7 @@ export async function threadRoutes(app: FastifyInstance) {
         if (after) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.protocol
+                            m.system_event, m.system_data, m.protocol, m.author_could_direct
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.thread_id = $1 AND m.channel_id = $2 AND m.id > $3
@@ -276,7 +284,7 @@ export async function threadRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.protocol
+                            m.system_event, m.system_data, m.protocol, m.author_could_direct
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.thread_id = $1 AND m.channel_id = $2
@@ -317,6 +325,7 @@ export async function threadRoutes(app: FastifyInstance) {
             await addTaggingToAttachments(db, Object.values(attachmentsMap).flat());
         }
 
+        const authorities = await messageAuthorities(authorityDb(), channelId, result.rows);
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -324,6 +333,7 @@ export async function threadRoutes(app: FastifyInstance) {
             authorUsername: row.author_username ?? null,
             authorBot: row.author_bot || false,
             authorAvatarUrl: row.author_avatar_url || null,
+            authorAuthority: authorities.get(row.id.trim()) ?? null,
             channelId: row.channel_id.trim(),
             editedAt: row.edited_at,
             deletedAt: row.deleted_at,
@@ -359,7 +369,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at,
+                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies
                      FROM messages p
@@ -383,7 +393,7 @@ export async function threadRoutes(app: FastifyInstance) {
             params = [channelId, before, limit];
         } else {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at,
+                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies
                      FROM messages p
@@ -421,6 +431,7 @@ export async function threadRoutes(app: FastifyInstance) {
             hasManagePerms = true;
         }
 
+        const authorities = await messageAuthorities(authorityDb(), channelId, result.rows);
         const threads = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -428,6 +439,7 @@ export async function threadRoutes(app: FastifyInstance) {
             authorUsername: row.author_username ?? null,
             authorBot: row.author_bot || false,
             authorAvatarUrl: row.author_avatar_url || null,
+            authorAuthority: authorities.get(row.id.trim()) ?? null,
             channelId: row.channel_id.trim(),
             createdAt: row.created_at,
             editedAt: row.edited_at,
