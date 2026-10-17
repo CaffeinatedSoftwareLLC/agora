@@ -29,12 +29,14 @@ import { startEventBridge } from './lib/event-bridge';
 import { getRedis } from './auth/token-blacklist';
 import { readGatewayAccess, writeGatewayAccess } from './lib/gateway-gate';
 import { changesGatewayAccess, refreshGatewayAccess, invalidateGatewayAccess, visibleChannels } from './lib/gateway-access';
+import { LoginLimiter, type LoginLimits } from './auth/login-limit';
 
 export async function buildApp(opts?: {
     logger?: boolean;
     jwtSecret?: string;
     dbUrl?: string;
     rateLimit?: boolean;
+    loginLimits?: LoginLimits;
 }) {
     const app = Fastify({ logger: opts?.logger ?? false, trustProxy: config.trustProxy });
 
@@ -47,6 +49,9 @@ export async function buildApp(opts?: {
     // Decorate app so routes can access db pool and jwtSecret
     (app as any).decorate('db', db);
     (app as any).decorate('jwtSecret', jwtSecret);
+    // Login attempt limits live in Redis; off when rate limiting is off (most tests)
+    (app as any).decorate('loginLimiter',
+        opts?.rateLimit === false && !opts?.loginLimits ? null : new LoginLimiter(opts?.loginLimits));
 
     // Health endpoint (no auth required)
     app.get('/health', async () => {

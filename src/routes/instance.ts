@@ -39,7 +39,7 @@ export async function instanceRoutes(app: FastifyInstance) {
                     setupToken: { type: 'string', minLength: 1 },
                     username: { type: 'string', minLength: 1, maxLength: 32 },
                     email: { type: 'string', format: 'email' },
-                    password: { type: 'string', minLength: 8 },
+                    password: { type: 'string', minLength: 8, maxLength: 1024 },
                     instanceName: { type: 'string', minLength: 1, maxLength: 100 },
                     registrationPolicy: { type: 'string', enum: ['open', 'invite_only', 'approval'] },
                 },

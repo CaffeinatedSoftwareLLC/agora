@@ -5,13 +5,14 @@ import { resetInitializedCache } from '../src/instance/check-initialized';
 // ─── App lifecycle ───
 // Each test FILE calls this in beforeAll / afterAll.
 // Returns app (Fastify), db (Pool), request (supertest).
-export async function setupTestApp() {
+export async function setupTestApp(opts?: Pick<Parameters<typeof buildApp>[0] & {}, 'loginLimits'>) {
     const { app, db } = await buildApp({
         logger: false,
         jwtSecret: 'test-secret-do-not-use-in-prod',
         dbUrl: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL
             ?? 'postgres://accord:accord@localhost:5432/accord_test',
         rateLimit: false,
+        ...opts,
     });
     await app.ready();
     return {

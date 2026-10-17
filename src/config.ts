@@ -32,6 +32,12 @@ export const config = {
     port: parseInt(process.env.PORT ?? '3000', 10),
     trustProxy: process.env.TRUST_PROXY === 'true',
     corsOrigin: process.env.CORS_ORIGIN || undefined,
+    // Failed logins per account before a lock, how long it lasts, and attempts per minute instance-wide
+    loginLimits: {
+        maxFailures: parseInt(process.env.LOGIN_MAX_FAILURES ?? '10', 10),
+        lockSeconds: parseInt(process.env.LOGIN_LOCK_MINUTES ?? '15', 10) * 60,
+        globalPerMinute: parseInt(process.env.LOGIN_GLOBAL_PER_MINUTE ?? '60', 10),
+    },
     storage: {
         driver: storageDriver,
         /** Disk driver: where blobs are written (a Docker volume in the compose files). */
