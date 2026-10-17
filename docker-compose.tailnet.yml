@@ -1,0 +1,19 @@
+# Reach Agora from your own devices over Tailscale, without opening it to the internet.
+# See docs/remote-access.md. Use it together with the production file:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d
+#
+# What it changes:
+# - web (nginx: the UI plus the API and WebSocket proxy) gets a port on 127.0.0.1:8080, which
+#   `tailscale serve` forwards to from https://<machine>.<tailnet>.ts.net.
+# - caddy listens on 127.0.0.1 only, so this machine still reaches https://localhost and nothing
+#   else on the network does. It also leaves port 443 on the tailnet address to tailscale.
+services:
+  web:
+    ports:
+      - "127.0.0.1:${TAILNET_WEB_PORT:-8080}:80"
+
+  caddy:
+    ports: !override
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
