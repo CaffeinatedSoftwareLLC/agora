@@ -32,7 +32,7 @@ Afterwards check `curl -sk https://localhost/health`. If it returns 502, restart
 
 ### 1. PR #60: REST visibility (Codex's, finished by Claude). Merge, then deploy
 
-`fix/channel-view-access`: messages, threads, ack, unreads, the channel list and **run views** now need ViewChannel, not just membership. The 403 text changed to `Channel access denied`. Claude added the commit Codex left uncommitted, plus a fix to its test (invalid `gate_decision`). Visibility tests: 5/5. A full-suite run was in progress at handoff: check it, then merge and deploy. Codex reviewed its own first commit only. The run-view change and test fix are Claude's, small, and unreviewed by a second agent.
+`fix/channel-view-access`: messages, threads, ack, unreads, the channel list and **run views** now need ViewChannel, not just membership. The 403 text changed to `Channel access denied`. Claude added the commit Codex left uncommitted, plus a fix to its test (invalid `gate_decision`). Visibility tests: 5/5; full suite 64 files / 897 tests passing at `4a20790`. Next: merge, then deploy. Codex reviewed its own first commit only. The run-view change and test fix are Claude's, small, and unreviewed by a second agent.
 
 ### 2. Tailscale: Eryk's part (partly done)
 
