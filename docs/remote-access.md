@@ -63,28 +63,64 @@ Then, under **DNS**, turn on **MagicDNS** and **HTTPS Certificates**. They give 
 
 ### 4. Start the stack with the tailnet override
 
+You need Docker Compose 2.24.4 or newer (`docker compose version`): the override uses `!override` to replace Caddy's ports.
+
+In `.env.prod`, keep `DOMAIN` as it is (empty or `localhost` for a local stack) and set the browser origin to the tailnet name:
+
+```bash
+CORS_ORIGIN=https://agora-home.<your-tailnet>.ts.net
+```
+
 ```bash
 docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d --build
 ```
 
-`docker-compose.tailnet.yml` gives the web container a port on `127.0.0.1:8080` and keeps Caddy on `127.0.0.1`. This machine still opens `https://localhost`; nothing else on your network reaches Agora directly.
+`docker-compose.tailnet.yml` gives the web container a port on `127.0.0.1:8080` (set `TAILNET_WEB_PORT` in `.env.prod` to use another) and keeps Caddy on `127.0.0.1`. This machine still opens `https://localhost`; nothing else on your network reaches Agora directly. Check that every published port is on `127.0.0.1`:
+
+```bash
+docker ps --format '{{.Names}}	{{.Ports}}'
+```
 
 ### 5. Serve it on the tailnet
 
+First check nothing on this machine is already shared, least of all publicly:
+
 ```bash
-sudo tailscale serve --bg http://127.0.0.1:8080
 tailscale serve status
 tailscale funnel status
 ```
 
-`serve status` shows `https://agora-home.<your-tailnet>.ts.net`. `funnel status` must say there is no Funnel. The setting survives restarts.
+If `funnel status` shows anything, remove it before going on (`sudo tailscale funnel reset`). Then serve Agora, using the same port as `TAILNET_WEB_PORT` if you changed it:
+
+```bash
+sudo tailscale serve --bg http://127.0.0.1:8080
+tailscale serve status
+```
+
+`serve status` shows `https://agora-home.<your-tailnet>.ts.net`. The setting survives restarts.
 
 ### 6. Check it
 
-- On the phone, open `https://agora-home.<your-tailnet>.ts.net`, log in, send a message, and see an agent answer.
-- From another device on your tailnet that isn't the phone, the same address must not load.
+Run every check and write down which ones you actually ran: a check you couldn't run is still open, not passed.
+
+**It works**
+- On the phone, on Wi-Fi and again on mobile data, open `https://agora-home.<your-tailnet>.ts.net`, log in, send a message, and see an agent answer.
+- On this machine, `https://localhost` still works.
+- After restarting WSL (`wsl --shutdown`, then open the distro) and after restarting Windows, the phone still reaches Agora without any step from you.
+
+**Nothing else gets in**
+- From another device on your tailnet that isn't the phone, the address must not load.
 - With Tailscale switched off on the phone, it must not load.
-- From another machine on your home network, `http://<this machine's LAN address>:8080` and `https://<LAN address>` must not load.
+- From another machine on your home network, `http://<this machine's LAN address>:8080` and `https://<LAN address>` must not load. On Windows, also check that `netsh interface portproxy show all` lists nothing for 80, 443 or 8080, and that `.wslconfig` doesn't set `networkingMode=mirrored`.
+- A request with a forged `X-Forwarded-For` header still counts against the same login limits.
+
+**Losing the phone**
+- With the phone logged in and connected, use **Log out all sessions** from the computer: the phone's open page drops its connection, and a copy of its login token is refused.
+- Remove the phone in the Tailscale admin console: it can no longer load the address.
+
+**Agents**
+- An agent obeys a message from you (`[OWNER]`) and refuses an instruction from another bot.
+- A code run still needs its approval, whoever asked for it.
 
 ## What this doesn't cover
 
