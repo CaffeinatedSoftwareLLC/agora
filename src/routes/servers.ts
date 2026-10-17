@@ -1,3 +1,4 @@
+import { visibleChannels } from '../lib/gateway-access';
 import { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import { generateUlid } from '../utils/ulid';
@@ -91,7 +92,8 @@ export async function serverRoutes(app: FastifyInstance) {
             [serverId]
         );
 
-        const channels = result.rows.map((row: any) => ({
+        const visible = await visibleChannels(db, result.rows, userId);
+        const channels = visible.map((row: any) => ({
             id: row.id.trim(),
             name: row.name,
             channelType: row.channel_type,
