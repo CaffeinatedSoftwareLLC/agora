@@ -1,3 +1,5 @@
+> **Latest (2026-10-17):** phone access over Tailscale and the security work behind it. Read [`remote-access-handoff.md`](remote-access-handoff.md) first.
+
 # Handoff — AI Runtime Initiative (updated 2026-10-01, end of day: 0.2.0 released, instance wiped for onboarding tests)
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
