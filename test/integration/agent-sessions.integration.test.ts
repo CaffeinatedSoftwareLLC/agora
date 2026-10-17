@@ -591,6 +591,119 @@ describe('host API (S2)', () => {
             .send({ name: 'x1', adapter: 'claude', hostId, workdirAlias: 'a' })).status).toBe(403);
     });
 
+    it('a CANCEL that closes the thread while a claim waits leaves nothing to claim', async () => {
+        await startSession(codex);
+        await startSession(claude);
+        const start = await post(claude.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [claude, codex]');
+        // Hold the binding the way a CANCEL in progress does, then let the claim start
+        const cancel = await ctx.db.connect();
+        try {
+            await cancel.query('BEGIN');
+            await cancel.query(`SELECT 1 FROM agent_session_threads WHERE thread_id = $1 FOR UPDATE`, [start.id]);
+            const pending = claim();
+            await new Promise(r => setTimeout(r, 300));
+            await cancel.query(`UPDATE agent_session_threads SET state = 'closed', closed_at = NOW() WHERE thread_id = $1`, [start.id]);
+            await cancel.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE thread_id = $1 AND batch_id IS NULL AND acked_at IS NULL`, [start.id]);
+            await cancel.query('COMMIT');
+            expect((await pending).status).toBe(204);
+        } finally {
+            cancel.release();
+        }
+        const runs = await ctx.db.query('SELECT count(*)::int AS n FROM agent_runs');
+        expect(runs.rows[0].n).toBe(0);
+    });
+
+    it('/end and a completion overlapping do not deadlock; the completion reports the cancel', async () => {
+        const s = await startSession(codex);
+        await post(owner.auth, '@codex go');
+        const c = await claim();
+        // Hold the session the way /end does, flag the run, and let complete wait behind it
+        const end = await ctx.db.connect();
+        try {
+            await end.query('BEGIN');
+            await end.query(`SELECT 1 FROM agent_sessions WHERE id = $1 FOR UPDATE`, [s]);
+            const pending = ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/complete`).set(hostAuth)
+                .send({ claimToken: c.body.run.claimToken, tokensUsed: 5 });
+            await new Promise(r => setTimeout(r, 300));
+            await end.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'ended' WHERE session_id = $1 AND status = 'claimed'`, [s]);
+            await end.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [s]);
+            await end.query('COMMIT');
+            const res = await pending;
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ ok: true, cancelled: true });
+        } finally {
+            end.release();
+        }
+    });
+
+    it('a profile edit committing while a completion waits keeps the old native ID out', async () => {
+        const s = await startSession(codex, { native: 'old-native' });
+        await post(owner.auth, '@codex go');
+        const c = await claim();
+        const edit = await ctx.db.connect();
+        try {
+            await edit.query('BEGIN');
+            await edit.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR UPDATE`, [codex.profileId]);
+            const pending = ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/complete`).set(hostAuth)
+                .send({ claimToken: c.body.run.claimToken, nativeSessionId: 'from-stale-run' });
+            await new Promise(r => setTimeout(r, 300));
+            await edit.query(`UPDATE agent_profiles SET generation = generation + 1 WHERE id = $1`, [codex.profileId]);
+            await edit.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [codex.profileId]);
+            await edit.query('COMMIT');
+            expect((await pending).status).toBe(200);
+        } finally {
+            edit.release();
+        }
+        const session = await ctx.db.query('SELECT native_session_id FROM agent_sessions WHERE id = $1', [s]);
+        expect(session.rows[0].native_session_id).toBeNull();
+    });
+
+    it('a host revoked during its long poll gets 401, not work', async () => {
+        const h = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'polling' });
+        const auth = { Authorization: `AgentHost ${h.body.token}` };
+        await ctx.db.query('UPDATE agent_profiles SET host_id = $1 WHERE id = $2', [h.body.host.id, codex.profileId]);
+        try {
+            await startSession(codex);
+            const pending = ctx.request.get('/agent-hosts/@me/runs/next?wait=5').set(auth);
+            await new Promise(r => setTimeout(r, 400));
+            await ctx.request.delete(`/servers/${serverId}/agent-hosts/${h.body.host.id}`).set(owner.auth);
+            await post(owner.auth, '@codex work for a revoked host');
+            expect((await pending).status).toBe(401);
+        } finally {
+            await ctx.db.query('UPDATE agent_profiles SET host_id = $1 WHERE id = $2', [hostId, codex.profileId]);
+        }
+    });
+
+    it('a post rejected for its attachments wakes nobody', async () => {
+        const s = await startSession(codex);
+        const res = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth)
+            .send({ content: '@codex with a bad file', attachments: ['01J00000000000000000000000'] });
+        expect(res.status).toBe(400);
+        expect(await inbox(s)).toEqual([]);
+    });
+
+    it('a real claim passes agora-host\'s claim parser', async () => {
+        // Cross-package contract check. Skipped when agora-host's dependencies aren't installed.
+        const { existsSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        if (!existsSync(join(__dirname, '../../agora-host/node_modules/zod'))) return;
+        const { claimSchema } = await import('../../agora-host/src/types');
+        // A profile with no model or effort, woken by a /start notice
+        await ctx.db.query('UPDATE agent_profiles SET model = NULL, effort = NULL WHERE id = $1', [codex.profileId]);
+        try {
+            const started = await ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: 'codex' });
+            expect(started.status).toBe(201);
+            await post(owner.auth, '@codex and a direct message');
+            const c = await claim();
+            expect(c.status).toBe(200);
+            const parsed = claimSchema.safeParse(c.body);
+            expect(parsed.success, JSON.stringify(parsed.success ? '' : parsed.error.issues)).toBe(true);
+            expect(c.body.inbox.map((i: any) => i.reason)).toEqual(['command', 'direct']);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET model = 'm', effort = 'high' WHERE id = $1`, [codex.profileId]);
+        }
+    });
+
     it('only the owner manages hosts and profiles', async () => {
         expect((await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(member.auth).send({ name: 'x' })).status).toBe(403);
         expect((await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(member.auth)

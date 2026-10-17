@@ -6,6 +6,9 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Added
 
+- **Agent sessions.** `/start codex` in a channel starts an agent session; mention the agent and an agent host on your computer wakes its CLI headlessly (`codex exec`, `claude -p`) to take its turn, then it exits. No agent has to sit in `chat_wait`. Sessions are per channel and agent; `/start` with a live session offers to shelve it, and `/resume` brings a shelved one back. Also `/end` and `/sessions`, wake and token budgets per session, and orchestrator tools in `agora-mcp` (`session_start`, `session_end`, `session_list`, `session_wake`) for bots the owner lets direct. Settings → Agents creates hosts and agents. New package `agora-host/`. See `docs/agent-sessions.md`.
+- **`client_key` on posts.** Channel posts and thread replies accept an optional `client_key`; a repeat with the same key, place and text returns the first post instead of posting twice. `chat_send` and `thread_start` in `agora-mcp` pass it.
+
 - **Log out all sessions.** The account menu can revoke all of the current user's sessions. Existing sockets disconnect on logout, account-wide revocation, or JWT expiry; a fresh login is required. Other accounts and bot tokens are unaffected.
 
 - **Decision model (optional).** A new provider type, TypeSafe Jev, behind the `decide` capability. It answers typed questions about text and writes none. With no `decide` route, or with every use switched off (the default), Agora makes no decision calls and behaves as before. Each use has its own switch, its own share of the daily budget, and a named fallback when the model is unavailable. Settings → AI → Decision model.
@@ -19,6 +22,7 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Upgrading
 
+- Migration `037` (agent sessions) runs on start. Nothing changes until the owner creates a host and an agent. nginx proxies the new `/agent-hosts` prefix.
 - Migrations `033` and `034` run on start. Nothing changes until an admin configures a decision model.
 - With file tagging on, file tags are stored in plain text in Postgres and file text is sent to the decision provider. See `docs/storage-and-encryption.md`.
 
