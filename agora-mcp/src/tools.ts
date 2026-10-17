@@ -246,7 +246,7 @@ export function registerTools(
         if (!target) {
             throw new Error(
                 'No channel specified and no default channel configured. '
-                + `Available: ${botInfo.channels.map(c => c.name).join(', ')}`,
+                + `Available: ${botInfo.channels.map(c => oneLine(c.name)).join(', ')}`,
             );
         }
 
@@ -262,7 +262,7 @@ export function registerTools(
         if (refreshed) return { id: refreshed.id, name: refreshed.name };
 
         throw new Error(
-            `Channel "${target}" not found. Available: ${botInfo.channels.map(c => c.name).join(', ')}`,
+            `Channel "${oneLine(target)}" not found. Available: ${botInfo.channels.map(c => oneLine(c.name)).join(', ')}`,
         );
     }
 
@@ -272,7 +272,7 @@ export function registerTools(
 
     /** Header label for tool output, e.g. "#general" or "#general › thread 01H...". */
     function label(channelName: string, thread?: string): string {
-        return thread ? `#${channelName} › thread ${thread}` : `#${channelName}`;
+        return thread ? `#${oneLine(channelName)} › thread ${oneLine(thread)}` : `#${oneLine(channelName)}`;
     }
 
     /** Read unread messages from a channel (top-level) or a thread, excluding the bot's own. */
@@ -351,11 +351,11 @@ export function registerTools(
             botInfo = info;
 
             const lines = info.channels.map(c =>
-                `#${c.name} (${c.channelType}, id: ${c.id})`,
+                `#${oneLine(c.name)} (${oneLine(c.channelType)}, id: ${c.id})`,
             );
 
             const pausedNote = info.paused
-                ? `[PAUSED by an admin${info.pausedReason ? `: ${info.pausedReason}` : ''} — read-only until resumed]\n\n`
+                ? `[PAUSED by an admin${info.pausedReason ? `: ${oneLine(info.pausedReason)}` : ''} — read-only until resumed]\n\n`
                 : '';
 
             return {
@@ -480,7 +480,7 @@ export function registerTools(
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `Thread started in #${ch.name} (thread: ${msg.id}). Reply with chat_send thread="${msg.id}".`,
+                    text: `Thread started in #${oneLine(ch.name)} (thread: ${msg.id}). Reply with chat_send thread="${msg.id}".`,
                 }],
             };
         },
@@ -500,7 +500,7 @@ export function registerTools(
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `#${ch.name} — ${threads.length} open thread(s):\n\n${formatThreads(threads)}`,
+                    text: `#${oneLine(ch.name)} — ${threads.length} open thread(s):\n\n${formatThreads(threads)}`,
                 }],
             };
         },
@@ -541,7 +541,7 @@ export function registerTools(
         async ({ query, tag, channel, limit }) => {
             const ch = await resolveChannel(channel);
             const result = await api.searchFiles(ch.id, { query, tag, limit });
-            return { content: [{ type: 'text' as const, text: `#${ch.name} — ${formatFileSearch(result)}` }] };
+            return { content: [{ type: 'text' as const, text: `#${oneLine(ch.name)} — ${formatFileSearch(result)}` }] };
         },
     );
 
@@ -623,7 +623,7 @@ export function formatFileSearch(result: FileSearchResult): string {
     });
     lines.push('', result.ranking.status === 'ranked'
         ? 'Ranked by the decision model of the server.'
-        : `Not ranked by a decision model${result.ranking.reason ? `: ${result.ranking.reason}` : ''}.`);
+        : `Not ranked by a decision model${result.ranking.reason ? `: ${oneLine(result.ranking.reason)}` : ''}.`);
     return lines.join('\n');
 }
 
