@@ -31,18 +31,28 @@ export async function publishEvents(redis: Redis, events: BridgedEvent[]): Promi
 }
 
 /** Subscribe in the API process and forward allowlisted events to Socket.IO rooms. Returns a closer. */
-export function startEventBridge(io: Server, redisUrl: string, log?: { warn: (...a: unknown[]) => void }): () => Promise<void> {
+export function startEventBridge(io: Server, redisUrl: string, log?: { warn: (...a: unknown[]) => void }, refreshAccess?: () => Promise<void>): () => Promise<void> {
     const sub = new Redis(redisUrl, { lazyConnect: false, maxRetriesPerRequest: null });
+    // Preserve event order: a tripwire access change precedes its channel notice.
+    let delivery = Promise.resolve();
     sub.subscribe(EVENT_CHANNEL).catch(err => log?.warn({ err }, 'Event bridge subscribe failed'));
     sub.on('message', (_channel, raw) => {
         let evt: Partial<BridgedEvent>;
         try { evt = JSON.parse(raw); } catch { return; }
+        if (!evt || typeof evt !== 'object') return;
+        if (evt?.event === '_GatewayAccessChanged' && typeof evt.room === 'string' && /^user:[0-9A-Z]{26}$/.test(evt.room)) {
+            // This is only an invalidation hint, never authority supplied by Redis.
+            // Re-read committed DB permissions; never forward this event to clients.
+            delivery = delivery.then(() => refreshAccess?.()).catch(err => log?.warn({ err }, 'Gateway access refresh failed'));
+            return;
+        }
         if (!isForwardable(evt)) {
             log?.warn({ room: evt.room, event: evt.event }, 'Dropped non-allowlisted bridged event');
             return;
         }
-        io.to(evt.room).emit(evt.event, evt.data);
+        const event = evt;
+        delivery = delivery.then(() => { io.to(event.room).emit(event.event, event.data); });
     });
     sub.on('error', err => log?.warn({ err }, 'Event bridge Redis error'));
-    return async () => { await sub.quit().catch(() => sub.disconnect()); };
+    return async () => { await sub.quit().catch(() => sub.disconnect()); await delivery; };
 }

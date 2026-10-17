@@ -60,7 +60,8 @@ export async function tripBot(db: Pool, runId: string, kind: TripwireKind): Prom
         [generateUlid(), run.server_id.trim(), botId, reason]
     );
 
-    if (!run.channel_id) return { paused: true, events: [] };
+    const accessEvent: BridgedEvent = { room: `user:${botId}`, event: '_GatewayAccessChanged', data: {} };
+    if (!run.channel_id) return { paused: true, events: [accessEvent] };
     const { events } = await postSystemMessage(db, {
         channelId: run.channel_id,
         threadId: run.thread_id,
@@ -69,7 +70,7 @@ export async function tripBot(db: Pool, runId: string, kind: TripwireKind): Prom
         content: `${paused.rows[0].username} was paused automatically: ${REASONS[kind]}. `
             + 'Its running code was stopped and pending runs will not start. A member with Manage Bots can resume it.',
     });
-    return { paused: true, events };
+    return { paused: true, events: [accessEvent, ...events] };
 }
 
 /**
