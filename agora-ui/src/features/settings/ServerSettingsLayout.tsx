@@ -20,6 +20,7 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
     { to: '/settings/role-assign', label: 'Role Assignment', end: false },
     { to: '/settings/overrides', label: 'Channel Overrides', end: false },
     { to: '/settings/bots', label: 'Bots', end: false },
+    { to: '/settings/agents', label: 'Agents', end: false },
     { to: '/settings/ai', label: 'AI', end: false },
   ];
 

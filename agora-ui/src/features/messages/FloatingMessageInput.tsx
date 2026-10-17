@@ -6,6 +6,7 @@ import { useUploadStore, type PendingUpload } from '../../stores/uploadStore';
 import { useSocket } from '../../hooks/useSocket';
 import { MentionAutocomplete } from '../live/MentionAutocomplete';
 import { usePalette, hexToRgb } from '../../theme';
+import { useAgentCommands } from './AgentCommands';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ export function FloatingMessageInput({
   const user = useAuthStore(s => s.user);
   const activeServerId = useServerStore(s => s.activeServerId);
   const socket = useSocket();
+  const agentCommands = useAgentCommands(channelId);
 
   // Upload store
   const addUpload = useUploadStore(s => s.addUpload);
@@ -91,6 +93,13 @@ export function FloatingMessageInput({
     const trimmed = content.trim();
     const hasAttachments = completedIds.length > 0;
     if ((!trimmed && !hasAttachments) || !user) return;
+
+    // /start, /end, /sessions, /resume go to the agent sessions route, not the channel
+    if (!hasAttachments && agentCommands.tryHandle(trimmed)) {
+      setContent('');
+      setShowMentions(false);
+      return;
+    }
 
     // Check if all uploads are complete
     const pending = uploads.filter(u => u.status === 'uploading');
@@ -243,6 +252,8 @@ export function FloatingMessageInput({
         className="hidden"
         onChange={handleFileInputChange}
       />
+
+      {agentCommands.panel}
 
       {/* Mention autocomplete (positioned above the input) */}
       <div className="relative">

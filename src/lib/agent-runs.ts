@@ -1,0 +1,525 @@
+import { createHash, randomBytes } from 'crypto';
+import type { Pool, PoolClient } from 'pg';
+import { generateUlid } from '../utils/ulid';
+import { readAuthorities } from './direct-agents';
+
+/**
+ * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
+ * (docs/planning/agent-sessions-wbs.md, "Host wire contract").
+ *
+ * These functions run their own short transactions on the pool: host routes release the
+ * per-request transaction first, so a long poll never holds a pooled connection open. They
+ * run as the table owner and scope every query to the host's own server and profiles.
+ */
+
+export const LEASE_SECONDS = 120;
+export const HEARTBEAT_SECONDS = 30;
+export const MAX_ATTEMPTS = 3;
+export const MAX_BATCH = 20;
+
+/** A system notice to emit after the transaction that wrote it commits. */
+export interface Notice { channelId: string; event: any }
+
+export interface Host { id: string; serverId: string }
+
+/** The host's token was revoked after the request authenticated. */
+export class HostRevokedError extends Error {
+    constructor() { super('host_revoked'); }
+}
+
+export function hashClaimToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+}
+
+function deliveryKeyFor(inboxIds: string[]): string {
+    return 'dk_' + createHash('sha256').update([...inboxIds].sort().join(',')).digest('hex').slice(0, 32);
+}
+
+async function inTx<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const result = await fn(client);
+        await client.query('COMMIT');
+        return result;
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+/** Insert a system notice in a channel; returns the socket event to emit after commit. */
+export async function postNotice(c: PoolClient | any, channelId: string, content: string): Promise<Notice> {
+    const id = generateUlid();
+    await c.query(
+        `INSERT INTO messages (id, channel_id, author_id, content, system_event)
+         VALUES ($1, $2, NULL, $3, 'agent_session')`,
+        [id, channelId, content]
+    );
+    return {
+        channelId: channelId.trim(),
+        event: {
+            id, content, authorId: null, authorUsername: null,
+            channelId: channelId.trim(), createdAt: new Date().toISOString(), systemEvent: 'agent_session',
+        },
+    };
+}
+
+// ─── Claim ───
+
+export interface ClaimResult {
+    run: {
+        id: string; claimToken: string; attempt: number; deliveryKey: string;
+        leaseSeconds: number; leaseUntil: string; heartbeatSeconds: number; timeoutSeconds: number;
+    };
+    session: {
+        id: string; channelId: string; channelName: string;
+        nativeSessionId: string | null; summary: string | null;
+        wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
+    };
+    profile: {
+        id: string; name: string; botId: string; adapter: string;
+        model: string | null; effort: string | null; workdirAlias: string;
+    };
+    inbox: Array<{
+        messageId: string; threadId: string | null; reason: string;
+        authorId: string | null; authorName: string | null; authorBot: boolean;
+        authority: 'owner' | 'director' | null; content: string | null; createdAt: string;
+    }>;
+}
+
+/** Try to claim work for this host. Returns null when there is none right now. */
+export async function claimNext(pool: Pool, host: Host, notices: Notice[]): Promise<ClaimResult | null> {
+    const candidates = await pool.query(
+        `SELECT s.id FROM agent_sessions s
+         JOIN agent_profiles p ON p.id = s.profile_id
+         WHERE p.host_id = $1 AND p.server_id = $2 AND s.state = 'live'
+           AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')
+           AND (EXISTS (SELECT 1 FROM agent_batches b WHERE b.session_id = s.id AND b.status = 'retry')
+                OR EXISTS (SELECT 1 FROM agent_inbox i WHERE i.session_id = s.id AND i.batch_id IS NULL AND i.acked_at IS NULL))
+         ORDER BY s.last_active_at
+         LIMIT 10`,
+        [host.id, host.serverId]
+    );
+    for (const row of candidates.rows) {
+        const result = await inTx(pool, c => claimSession(c, host, row.id.trim(), notices));
+        if (result) return result;
+    }
+    return null;
+}
+
+async function claimSession(c: PoolClient, host: Host, sessionId: string, notices: Notice[]): Promise<ClaimResult | null> {
+    // 1. Lock the session; skip it if another claim holds it or a run is active
+    const s = await c.query(
+        `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
+                p.token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name
+         FROM agent_sessions s
+         JOIN agent_profiles p ON p.id = s.profile_id
+         JOIN channels ch ON ch.id = s.channel_id
+         WHERE s.id = $1 AND p.host_id = $2 AND s.server_id = $3
+         FOR UPDATE OF s SKIP LOCKED`,
+        [sessionId, host.id, host.serverId]
+    );
+    const session = s.rows[0];
+    if (!session || session.state !== 'live') return null;
+    const active = await c.query(`SELECT 1 FROM agent_runs WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
+    if (active.rows.length > 0) return null;
+    // The host may have been revoked while its long poll was waiting
+    const hostOk = await c.query(`SELECT 1 FROM agent_hosts WHERE id = $1 AND revoked_at IS NULL FOR SHARE`, [host.id]);
+    if (hostOk.rows.length === 0) throw new HostRevokedError();
+
+    const channelId = session.channel_id.trim();
+    const botId = session.bot_id.trim();
+
+    // 2. Budgets
+    if (session.wakes_used >= session.wake_budget || Number(session.tokens_used) >= Number(session.token_budget)) {
+        await shelveForBudget(c, sessionId, channelId, session.profile_name, notices);
+        return null;
+    }
+
+    // The agent must still be able to act in this channel at all
+    if (!await botCanAct(c, botId, channelId)) {
+        await c.query(
+            `UPDATE agent_inbox SET acked_at = NOW() WHERE session_id = $1 AND acked_at IS NULL`,
+            [sessionId]
+        );
+        await c.query(
+            `UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE session_id = $1 AND status = 'retry'`,
+            [sessionId]
+        );
+        return null;
+    }
+
+    // 3. Pick the batch: a retry first, unchanged; otherwise the oldest pending rows
+    let batchId: string;
+    let deliveryKey: string;
+    let attempt: number;
+    const retry = await c.query(
+        `SELECT id, delivery_key, attempts FROM agent_batches
+         WHERE session_id = $1 AND status = 'retry' ORDER BY created_at LIMIT 1`,
+        [sessionId]
+    );
+    const isRetry = !!retry.rows[0];
+    let candidates;
+    if (isRetry) {
+        batchId = retry.rows[0].id.trim();
+        deliveryKey = retry.rows[0].delivery_key;
+        attempt = retry.rows[0].attempts + 1;
+        candidates = (await c.query(
+            `SELECT id, thread_id FROM agent_inbox WHERE batch_id = $1 AND acked_at IS NULL ORDER BY id`,
+            [batchId]
+        )).rows;
+    } else {
+        candidates = (await c.query(
+            `SELECT id, thread_id FROM agent_inbox
+             WHERE session_id = $1 AND batch_id IS NULL AND acked_at IS NULL
+             ORDER BY id LIMIT $2`,
+            [sessionId, MAX_BATCH]
+        )).rows;
+        batchId = generateUlid();
+        attempt = 1;
+    }
+
+    // A CANCEL or DONE closes a thread under an exclusive lock on its binding and
+    // acknowledges that thread's unclaimed rows. Hold a shared lock on the bindings
+    // these rows belong to, then read the rows again: whatever a concurrent close
+    // acknowledged before we got the lock is gone, and a close that comes later waits
+    // for this claim and then finds (and flags) the run.
+    const threadIds = [...new Set(candidates.filter((r: any) => r.thread_id).map((r: any) => r.thread_id.trim()))];
+    if (threadIds.length > 0) {
+        await c.query(`SELECT 1 FROM agent_session_threads WHERE thread_id = ANY($1) FOR SHARE`, [threadIds]);
+    }
+    const rows = candidates.length === 0 ? [] : (await c.query(
+        `SELECT * FROM agent_inbox
+         WHERE id = ANY($1) AND acked_at IS NULL AND ${isRetry ? 'batch_id = $2' : 'batch_id IS NULL'}
+         ORDER BY id`,
+        isRetry ? [candidates.map((r: any) => r.id), batchId] : [candidates.map((r: any) => r.id)]
+    )).rows;
+    if (!isRetry) deliveryKey = deliveryKeyFor(rows.map((r: any) => r.id.trim()));
+
+    // 4. Recheck each row; rows that fail are acknowledged without work
+    const kept = await recheckRows(c, channelId, rows);
+    const dropped = rows.filter((r: any) => !kept.some(k => k.row.id === r.id));
+    if (dropped.length > 0) {
+        await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE id = ANY($1)`, [dropped.map((r: any) => r.id)]);
+    }
+    if (kept.length === 0) {
+        if (isRetry) {
+            await c.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE id = $1`, [batchId]);
+        }
+        return null;
+    }
+
+    // 5. Reserve the wake, create the batch (if new) and the run
+    if (isRetry) {
+        await c.query(`UPDATE agent_batches SET status = 'running', attempts = $2 WHERE id = $1`, [batchId, attempt]);
+    } else {
+        await c.query(
+            `INSERT INTO agent_batches (id, session_id, delivery_key, attempts, status) VALUES ($1, $2, $3, 1, 'running')`,
+            [batchId, sessionId, deliveryKey!]
+        );
+        await c.query(
+            `UPDATE agent_inbox SET batch_id = $1 WHERE id = ANY($2) AND batch_id IS NULL`,
+            [batchId, rows.map((r: any) => r.id)]
+        );
+    }
+    await c.query(`UPDATE agent_sessions SET wakes_used = wakes_used + 1 WHERE id = $1`, [sessionId]);
+
+    const runId = generateUlid();
+    const claimToken = 'rt_' + randomBytes(32).toString('hex');
+    const lease = await c.query(
+        `INSERT INTO agent_runs (id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation, lease_until)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8))
+         RETURNING lease_until`,
+        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS]
+    );
+
+    return {
+        run: {
+            id: runId, claimToken, attempt, deliveryKey,
+            leaseSeconds: LEASE_SECONDS, leaseUntil: new Date(lease.rows[0].lease_until).toISOString(),
+            heartbeatSeconds: HEARTBEAT_SECONDS, timeoutSeconds: session.run_timeout_sec,
+        },
+        session: {
+            id: sessionId, channelId, channelName: session.channel_name,
+            nativeSessionId: session.native_session_id ?? null, summary: session.summary ?? null,
+            wakesUsed: session.wakes_used + 1, wakeBudget: session.wake_budget,
+            tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget),
+        },
+        profile: {
+            id: session.profile_id.trim(), name: session.profile_name, botId, adapter: session.adapter,
+            model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
+        },
+        inbox: kept.map(k => k.entry),
+    };
+}
+
+/** Not paused, the bot and its owner active, and the bot still has access to the channel. */
+async function botCanAct(c: PoolClient, botId: string, channelId: string): Promise<boolean> {
+    const row = await c.query(
+        `SELECT 1 FROM users u
+         JOIN users o ON o.id = u.bot_owner_id
+         JOIN bot_channel_access bca ON bca.bot_id = u.id AND bca.channel_id = $2
+         WHERE u.id = $1 AND u.bot = true AND u.bot_paused_at IS NULL
+           AND u.account_status = 'active' AND o.account_status = 'active'`,
+        [botId, channelId]
+    );
+    return row.rows.length > 0;
+}
+
+async function recheckRows(c: PoolClient, channelId: string, rows: any[]) {
+    if (rows.length === 0) return [];
+    const msgs = await c.query(
+        `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
+                u.username, u.bot AS author_bot
+         FROM messages m LEFT JOIN users u ON u.id = m.author_id
+         WHERE m.id = ANY($1)`,
+        [rows.map(r => r.message_id)]
+    );
+    const byId = new Map<string, any>(msgs.rows.map((m: any) => [m.id.trim(), m]));
+    const authorities = await readAuthorities(c, channelId, msgs.rows);
+
+    const threadIds = [...new Set(rows.filter(r => r.thread_id).map(r => r.thread_id.trim()))];
+    const openThreads = new Set<string>();
+    if (threadIds.length > 0) {
+        const open = await c.query(
+            `SELECT thread_id FROM agent_session_threads WHERE thread_id = ANY($1) AND state = 'open'`,
+            [threadIds]
+        );
+        for (const t of open.rows) openThreads.add(t.thread_id.trim());
+    }
+
+    const kept: Array<{ row: any; entry: ClaimResult['inbox'][number] }> = [];
+    for (const row of rows) {
+        const m = byId.get(row.message_id.trim());
+        if (!m || m.deleted_at) continue;
+        const authority = authorities.get(m.id.trim()) ?? null;
+        if (row.reason === 'direct' && !authority) continue;
+        // A session notice from /start or /resume: no author, valid while the session is live
+        if (row.reason === 'command' && m.author_id) continue;
+        if ((row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
+        kept.push({
+            row,
+            entry: {
+                messageId: m.id.trim(),
+                threadId: row.thread_id?.trim() ?? null,
+                reason: row.reason,
+                authorId: m.author_id?.trim() ?? null,
+                authorName: m.username ?? null,
+                authorBot: !!m.author_bot,
+                authority,
+                content: m.content,
+                createdAt: new Date(m.created_at).toISOString(),
+            },
+        });
+    }
+    return kept;
+}
+
+async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[]) {
+    await c.query(
+        `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW() WHERE id = $1 AND state = 'live'`,
+        [sessionId]
+    );
+    notices.push(await postNotice(c, channelId, `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`));
+}
+
+// ─── Heartbeat, complete, fail ───
+
+export type RunCheck =
+    | { ok: true; run: any }
+    | { ok: false; status: number; body: any };
+
+/**
+ * Load a run for a host call and apply the fencing rules, in the contract's order. Locks the
+ * run row. `finished` says which terminal status a repeat of this call may find.
+ */
+async function checkRun(c: PoolClient, host: Host, runId: string, claimToken: string, finished: 'succeeded' | 'failed' | null,
+                        notices: Notice[], lockProfile = false): Promise<RunCheck> {
+    // Lock order, everywhere: profile → session → run → batch → inbox. Commands, claims and
+    // the sweeper lock the session first too, so /end and a completion can't deadlock, and a
+    // profile edit (profile, then its sessions) can't interleave with a completion's
+    // generation check.
+    const meta = await c.query(
+        `SELECT r.session_id, s.profile_id FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id
+         WHERE r.id = $1 AND r.host_id = $2 AND s.server_id = $3`,
+        [runId, host.id, host.serverId]
+    );
+    if (!meta.rows[0]) return { ok: false, status: 404, body: { error: 'not_found' } };
+    if (lockProfile) await c.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE`, [meta.rows[0].profile_id]);
+    await c.query(`SELECT 1 FROM agent_sessions WHERE id = $1 FOR UPDATE`, [meta.rows[0].session_id]);
+
+    const r = await c.query(
+        `SELECT r.*, (r.lease_until <= NOW()) AS lease_over
+         FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id
+         WHERE r.id = $1 AND r.host_id = $2 AND s.server_id = $3
+         FOR UPDATE OF r`,
+        [runId, host.id, host.serverId]
+    );
+    const run = r.rows[0];
+    if (!run) return { ok: false, status: 404, body: { error: 'not_found' } };
+    if (run.claim_token_hash !== hashClaimToken(claimToken)) return { ok: false, status: 409, body: { error: 'stale_claim' } };
+
+    if (run.status !== 'claimed') {
+        if (finished && run.status === finished) return { ok: false, status: 200, body: { ok: true, repeated: true } };
+        if (run.status === 'expired') return { ok: false, status: 409, body: { error: 'lease_expired' } };
+        return { ok: false, status: 409, body: { error: 'already_finished', status: run.status } };
+    }
+    if (run.lease_over) {
+        await expireRun(c, run, notices);
+        return { ok: false, status: 409, body: { error: 'lease_expired' } };
+    }
+    return { ok: true, run };
+}
+
+export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[]) {
+    return inTx(pool, async c => {
+        const check = await checkRun(c, host, runId, claimToken, null, notices);
+        if (!check.ok) return { status: check.status, body: check.body };
+        const run = check.run;
+
+        const reason = await cancelReason(c, run);
+        if (reason) return { status: 200, body: { cancel: true, reason } };
+
+        const lease = await c.query(
+            `UPDATE agent_runs SET lease_until = NOW() + make_interval(secs => $2) WHERE id = $1 RETURNING lease_until`,
+            [runId, LEASE_SECONDS]
+        );
+        return { status: 200, body: { cancel: false, leaseUntil: new Date(lease.rows[0].lease_until).toISOString() } };
+    });
+}
+
+/** Why the host must stop this run, or null. */
+async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
+    if (run.cancel_requested) return run.cancel_reason ?? 'ended';
+    const s = await c.query(
+        `SELECT s.state, s.channel_id, s.bot_id FROM agent_sessions s WHERE s.id = $1`,
+        [run.session_id]
+    );
+    const session = s.rows[0];
+    if (!session) return 'ended';
+    if (session.state === 'shelved') return 'shelved';
+    if (session.state !== 'live') return 'ended';
+    const bot = await c.query(`SELECT bot_paused_at FROM users WHERE id = $1`, [session.bot_id]);
+    if (bot.rows[0]?.bot_paused_at) return 'paused';
+    if (!await botCanAct(c, session.bot_id.trim(), session.channel_id.trim())) return 'access_lost';
+    return null;
+}
+
+export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null }
+
+export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
+    return inTx(pool, async c => {
+        const check = await checkRun(c, host, runId, body.claimToken, 'succeeded', notices, true);
+        if (!check.ok) return { status: check.status, body: check.body };
+        const run = check.run;
+        const tokens = typeof body.tokensUsed === 'number' ? Math.max(0, Math.floor(body.tokensUsed)) : null;
+
+        await c.query(
+            `UPDATE agent_runs SET status = 'succeeded', finished_at = NOW(), tokens_used = $2,
+                    native_session_id = $3, summary = $4
+             WHERE id = $1`,
+            [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null]
+        );
+        await c.query(`UPDATE agent_batches SET status = 'done', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
+        await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
+
+        // A run claimed before an incompatible profile edit must not restore an old session ID
+        const s = await c.query(
+            `UPDATE agent_sessions s SET
+                tokens_used = s.tokens_used + COALESCE($2::bigint, 0),
+                native_session_id = CASE WHEN $3::text IS NOT NULL AND p.generation = $5 THEN $3 ELSE s.native_session_id END,
+                summary = COALESCE($4, s.summary),
+                last_active_at = NOW()
+             FROM agent_profiles p
+             WHERE s.id = $1 AND p.id = s.profile_id
+             RETURNING s.state, s.tokens_used, s.channel_id, p.token_budget, p.name AS profile_name`,
+            [run.session_id, tokens, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation]
+        );
+        const session = s.rows[0];
+        if (session && session.state === 'live' && Number(session.tokens_used) >= Number(session.token_budget)) {
+            await shelveForBudget(c, run.session_id.trim(), session.channel_id.trim(), session.profile_name, notices);
+        }
+        return { status: 200, body: run.cancel_requested ? { ok: true, cancelled: true } : { ok: true } };
+    });
+}
+
+export interface FailBody { claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean }
+
+export async function fail(pool: Pool, host: Host, runId: string, body: FailBody, notices: Notice[]) {
+    return inTx(pool, async c => {
+        const check = await checkRun(c, host, runId, body.claimToken, 'failed', notices);
+        if (!check.ok) return { status: check.status, body: check.body };
+        const run = check.run;
+        const tokens = typeof body.tokensUsed === 'number' ? Math.max(0, Math.floor(body.tokensUsed)) : null;
+
+        await c.query(
+            `UPDATE agent_runs SET status = 'failed', finished_at = NOW(), tokens_used = $2, error = $3, error_message = $4
+             WHERE id = $1`,
+            [runId, tokens, body.error.slice(0, 64), body.message?.slice(0, 2000) ?? null]
+        );
+        if (tokens !== null) {
+            await c.query(`UPDATE agent_sessions SET tokens_used = tokens_used + $2 WHERE id = $1`, [run.session_id, tokens]);
+        }
+        await settleBatch(c, run, !!body.retryable && !run.cancel_requested, body.error, notices);
+        return { status: 200, body: { ok: true } };
+    });
+}
+
+/**
+ * After a failed or expired attempt: retry the batch unchanged, or give it up. Cancelled
+ * work and work for sessions that are no longer live is dropped, never retried.
+ */
+async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: string, notices: Notice[]) {
+    const s = await c.query(
+        `SELECT s.state, s.channel_id, p.name AS profile_name FROM agent_sessions s
+         JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
+        [run.session_id]
+    );
+    const session = s.rows[0];
+    const b = await c.query(`SELECT attempts FROM agent_batches WHERE id = $1`, [run.batch_id]);
+    const attempts = b.rows[0]?.attempts ?? MAX_ATTEMPTS;
+
+    if (run.cancel_requested || !session || session.state !== 'live') {
+        await c.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
+        await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
+        return;
+    }
+    if (retryable && attempts < MAX_ATTEMPTS) {
+        await c.query(`UPDATE agent_batches SET status = 'retry' WHERE id = $1`, [run.batch_id]);
+        return;
+    }
+    await c.query(`UPDATE agent_batches SET status = 'failed', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
+    await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
+    notices.push(await postNotice(c, session.channel_id.trim(),
+        `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`));
+}
+
+/** Expire one claimed run whose lease is over. Its usage is unknown and not charged. */
+async function expireRun(c: PoolClient, run: any, notices: Notice[]) {
+    await c.query(
+        `UPDATE agent_runs SET status = 'expired', finished_at = NOW() WHERE id = $1 AND status = 'claimed'`,
+        [run.id]
+    );
+    await settleBatch(c, run, true, 'lease_expired', notices);
+}
+
+/** Sweeper: expire every claimed run past its lease. Returns how many it expired. */
+export async function sweepExpiredRuns(pool: Pool, notices: Notice[]): Promise<number> {
+    const due = await pool.query(`SELECT id, session_id FROM agent_runs WHERE status = 'claimed' AND lease_until <= NOW()`);
+    let n = 0;
+    for (const { id, session_id } of due.rows) {
+        await inTx(pool, async c => {
+            // Same lock order as everywhere else: session, then run
+            await c.query(`SELECT 1 FROM agent_sessions WHERE id = $1 FOR UPDATE`, [session_id]);
+            const r = await c.query(
+                `SELECT * FROM agent_runs WHERE id = $1 AND status = 'claimed' AND lease_until <= NOW() FOR UPDATE`,
+                [id]
+            );
+            if (r.rows[0]) { await expireRun(c, r.rows[0], notices); n++; }
+        });
+    }
+    return n;
+}

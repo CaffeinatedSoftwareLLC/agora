@@ -62,7 +62,7 @@ agent_sessions    id, server_id, channel_id, bot_id, profile_id, state ('live'|'
                   started_by, created_at, last_active_at, shelved_at, ended_at
                   UNIQUE (channel_id, bot_id) WHERE state = 'live'
 agent_session_threads  thread_id (PK), channel_id, initiator_session_id, session_ids[], state ('open'|'closed')
-agent_inbox       id (ULID), session_id, message_id, thread_id NULL, reason ('direct'|'handoff'|'protocol'),
+agent_inbox       id (ULID), session_id, message_id, thread_id NULL, reason ('direct'|'handoff'|'protocol'|'command'),
                   batch_id NULL, acked_at NULL, created_at
                   UNIQUE (session_id, message_id)
 agent_batches     id, session_id, delivery_key, attempts, status ('pending'|'running'|'retry'|'done'|'failed'|'dropped'),
@@ -227,18 +227,25 @@ Shelving or ending a session never deletes its inbox rows; a batch that was `run
 
 | ID | Work | Owner | Size | Status |
 |---|---|---|---|---|
-| **W0** | This WBS and the frozen host contract; codex reviews | claude-code | S | ◐ |
-| **S0** | Migration 037 and types; `messages.client_key` and its handling in the channel and thread message routes | claude-code | S | ☐ |
-| **S1** | Inbox writes in messages.ts and threads.ts; thread binding on a top-level START; bound-thread routing with participant and authority checks | claude-code | M | ☐ |
-| **S2** | `/agent-hosts` API: AgentHost auth, long-poll claim with batches, heartbeat, complete, fail, repeats and fencing, sweeper; host token create/revoke routes for the owner | claude-code | M | ☐ |
+| **W0** | This WBS and the frozen host contract; codex reviews | claude-code | S | ☑ PR #61 |
+| **S0** | Migration 037 and types; `messages.client_key` and its handling in the channel and thread message routes | claude-code | S | ◐ PR #63 |
+| **S1** | Inbox writes in messages.ts and threads.ts; thread binding on a top-level START; bound-thread routing with participant and authority checks | claude-code | M | ◐ PR #63 |
+| **S2** | `/agent-hosts` API: AgentHost auth, long-poll claim with batches, heartbeat, complete, fail, repeats and fencing, sweeper; host token create/revoke routes for the owner | claude-code | M | ◐ PR #63 |
 | **H0** | Adapter verification gate on Windows: executable resolution, native IDs, JSON usage and errors, approvals in headless mode, model and effort mapping, credential isolation, process-tree kill. Results written into this file | codex | S | ☐ |
 | **S3** | `agora-host/` package: config (host token, workdir aliases, bot tokens per bot ID), poll loop, per-session serialization, codex and claude adapters, heartbeat and cancel | codex | M | ☐ |
-| **S4** | Commands route and UI (message box `/` handling, Shelve/Keep/Cancel, session notices, `/sessions` list) | claude-code | M | ☐ |
-| **S5** | Session MCP tools in agora-mcp; `client_key` on `chat_send` and `thread_start` | claude-code | S | ☐ |
+| **S4** | Commands route and UI (message box `/` handling, Shelve/Keep/Cancel, session notices, `/sessions` list) | claude-code | M | ◐ PR #63 |
+| **S5** | Session MCP tools in agora-mcp; `client_key` on `chat_send` and `thread_start` | claude-code | S | ◐ PR #63 |
 | **S6** | `/create-agent` and profile editor: bot + token (shown once) + profile; host management screen | claude-code | M | ☐ |
 | **S7** | Docs (`docs/agent-sessions.md`), deploy to the WSL stack, phone run | claude-code | S | ☐ |
 
 **Order:** W0 → (S0 → S1 → S2) in parallel with H0 → S3 → S4 → S5 → S6 → S7. Each lands as its own PR, reviewed by the other agent.
+
+**Decisions taken while building S0–S5** (not in the contract as reviewed; say if any should change)
+- Inbox reason `command`: `/start` and `/resume` post a notice and queue it for the agent, so it wakes and says hello. A `command` row is valid while the session is live and its message has no author (a system notice); it has no authority check because a director already passed one to send the command.
+- `session_wake` posts `@<bot username> <message>` instead of writing an inbox row directly. A post from a bot with `can_direct` that mentions an agent is already a `direct` wake under S1, so this reuses that path.
+- Participants in a START, and YIELD targets, match either the bot's username or its profile name (case-insensitive). `claude-code` matches only if a profile or bot has that name.
+- A profile's bot can't be changed while it has sessions that aren't ended (409); end them first.
+- Host routes and the commands route write as the service role after their own checks; members get read-only RLS access to profiles and sessions.
 
 ## Acceptance tests
 

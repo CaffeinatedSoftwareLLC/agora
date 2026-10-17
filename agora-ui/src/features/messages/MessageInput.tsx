@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useSocket } from '../../hooks/useSocket';
 import { MentionAutocomplete } from '../live/MentionAutocomplete';
+import { useAgentCommands } from './AgentCommands';
 
 interface MessageInputProps {
   channelId: string;
@@ -19,6 +20,7 @@ export function MessageInput({ channelId }: MessageInputProps) {
   const user = useAuthStore(s => s.user);
   const activeServerId = useServerStore(s => s.activeServerId);
   const socket = useSocket();
+  const agentCommands = useAgentCommands(channelId);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -31,6 +33,12 @@ export function MessageInput({ channelId }: MessageInputProps) {
   const handleSend = () => {
     const trimmed = content.trim();
     if (!trimmed || !user) return;
+    // /start, /end, /sessions, /resume go to the agent sessions route, not the channel
+    if (agentCommands.tryHandle(trimmed)) {
+      setContent('');
+      setShowMentions(false);
+      return;
+    }
     sendMessage(channelId, trimmed, user.id, user.username);
     setContent('');
     setShowMentions(false);
@@ -91,6 +99,7 @@ export function MessageInput({ channelId }: MessageInputProps) {
 
   return (
     <div className="px-4 pb-4 pt-2 shrink-0 relative">
+      {agentCommands.panel}
       <MentionAutocomplete
         query={mentionQuery}
         serverId={activeServerId}

@@ -13,6 +13,8 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/threads',
     // Who may give agents instructions in the channel
     'GET /channels/:id/directors',
+    // Agent sessions: the route itself requires can_direct for anything but listing
+    'POST /channels/:id/agent-commands',
     // File search returns names, tags and scores, never file content
     'GET /channels/:id/files/search',
     // The extracted text of a file in a channel the bot can access (not the file itself)
@@ -34,8 +36,49 @@ const BOT_PAUSED_ALLOWED_WRITES = new Set([
     'PUT /bots/@me/thread-cursors/:threadId',
 ]);
 
+/** Routes an agent host may call, and the only routes its token is good for. */
+function isAgentHostRoute(request: FastifyRequest): boolean {
+    return (request.routeOptions.url ?? '').startsWith('/agent-hosts/@me/');
+}
+
+/** ah_<hostId>.<secret>, the same shape as a bot token. */
+function parseAgentHostToken(raw: string): { hostId: string; secret: string } | null {
+    if (!raw.startsWith('ah_')) return null;
+    const dot = raw.indexOf('.');
+    if (dot === -1) return null;
+    const hostId = raw.slice(3, dot);
+    const secret = raw.slice(dot + 1);
+    if (hostId.length !== 26 || !secret) return null;
+    return { hostId, secret };
+}
+
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
     const authHeader = request.headers.authorization;
+
+    // Agent host token: valid only on /agent-hosts/@me/*. A host never acts as a user,
+    // so no userId is set and the request runs without an RLS identity; the host routes
+    // scope every query to the host's own server.
+    if (authHeader?.startsWith('AgentHost ')) {
+        const parsed = parseAgentHostToken(authHeader.slice('AgentHost '.length));
+        if (!parsed) return reply.status(401).send({ error: 'Malformed host token' });
+        const db = request.dbClient!;
+        const row = await db.query(
+            `SELECT id, server_id, secret_hash FROM agent_hosts WHERE id = $1 AND revoked_at IS NULL`,
+            [parsed.hostId]
+        );
+        if (!row.rows[0] || !await verifyBotSecret(parsed.secret, row.rows[0].secret_hash)) {
+            return reply.status(401).send({ error: 'Invalid host token' });
+        }
+        if (!isAgentHostRoute(request)) {
+            return reply.status(403).send({ error: 'Host tokens cannot access this endpoint' });
+        }
+        request.agentHost = { id: row.rows[0].id.trim(), serverId: row.rows[0].server_id.trim() };
+        db.query('UPDATE agent_hosts SET last_seen_at = NOW() WHERE id = $1', [parsed.hostId]);
+        return;
+    }
+    if (isAgentHostRoute(request)) {
+        return reply.status(403).send({ error: 'This endpoint needs a host token' });
+    }
 
     // Bot token auth path
     if (authHeader?.startsWith('Bot ')) {

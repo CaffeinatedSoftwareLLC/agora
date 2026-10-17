@@ -15,7 +15,7 @@ describe('nginx route prefix coverage', () => {
     function getNginxPrefixes(): Set<string> {
         const nginxConf = readFileSync(join(projectRoot, 'agora-ui', 'nginx.conf'), 'utf-8');
         // Match the API proxy regex: location ~ ^/(auth|servers|...) {
-        const match = nginxConf.match(/location\s+~\s+\^\/\(([\w|]+)\)\s*\{/);
+        const match = nginxConf.match(/location\s+~\s+\^\/\(([\w|-]+)\)\s*\{/);
         if (!match) throw new Error('Could not find API proxy regex in nginx.conf');
         return new Set(match[1].split('|'));
     }
