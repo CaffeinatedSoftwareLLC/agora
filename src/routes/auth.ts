@@ -242,14 +242,17 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(401).send({ error: 'Missing token' });
         }
 
+        let payload;
         try {
-            const payload = verifyToken(raw, app.jwtSecret);
-            if (payload.jti && payload.exp) {
-                await blacklistToken(payload.jti, payload.exp);
-                request.gatewayAccessChanged = true;
-            }
+            payload = verifyToken(raw, app.jwtSecret);
         } catch {
             // Token is already invalid/expired — nothing to revoke
+            return reply.status(200).send({ success: true });
+        }
+        if (payload.jti && payload.exp) {
+            // Store failures must not be reported as successful revocation. Replays
+            // of an already-revoked token do not trigger another global refresh.
+            request.gatewayAccessChanged = await blacklistToken(payload.jti, payload.exp);
         }
 
         return reply.status(200).send({ success: true });

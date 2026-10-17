@@ -2,6 +2,7 @@ import { io, Socket } from 'socket.io-client';
 import jwt from 'jsonwebtoken';
 import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
 import * as gatewayAccess from '../../src/lib/gateway-access';
+import * as tokenBlacklist from '../../src/auth/token-blacklist';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let user: Awaited<ReturnType<typeof authedUser>>;
@@ -97,6 +98,15 @@ test('invalid logouts and unauthorized mutations never trigger a socket refresh'
     expect(refresh).not.toHaveBeenCalled();
     expect((await ctx.request.post('/auth/logout').set(user.auth)).status).toBe(200);
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect((await ctx.request.post('/auth/logout').set(user.auth)).status).toBe(200);
+    expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('logout reports failure if the revocation store is unavailable', async () => {
+    vi.spyOn(tokenBlacklist, 'blacklistToken').mockRejectedValue(new Error('Redis unavailable'));
+    const refresh = vi.spyOn(gatewayAccess, 'refreshGatewayAccess');
+    expect((await ctx.request.post('/auth/logout').set(user.auth)).status).toBe(500);
+    expect(refresh).not.toHaveBeenCalled();
 });
 
 test('legacy tokens without a version work at zero and are revoked by logout-all', async () => {
