@@ -4,6 +4,9 @@ import { verifyToken } from './auth/tokens';
 import { isTokenBlacklisted } from './auth/token-blacklist';
 import { parseBotToken, verifyBotSecret } from './auth/bot-tokens';
 import { config } from './config';
+import { socketAccountError, visibleChannels, gatewayAccessRevision } from './lib/gateway-access';
+import { canViewChannel } from './lib/channel-access';
+import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
 
 // In-memory presence: userId → Set of socket IDs (supports multiple tabs/devices)
 export const onlineUsers = new Map<string, Set<string>>();
@@ -14,6 +17,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         cors: { origin: config.corsOrigin ?? false },
     });
 
+    installGatewayGate(io);
     const jwtSecret = app.jwtSecret;
     const db = app.db;
 
@@ -34,10 +38,11 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
 
     // Auth middleware — verify JWT or bot token from handshake
     io.use(async (socket, next) => {
+        socket.data.accessRevision = gatewayAccessRevision(io);
         const token = socket.handshake.auth?.token;
         const type = socket.handshake.auth?.type;
 
-        if (!token) {
+        if (typeof token !== 'string' || !token) {
             return next(new Error('Authentication required'));
         }
 
@@ -62,11 +67,17 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     return next(new Error('Invalid bot token'));
                 }
 
-                (socket as any).userId = tokenRow.rows[0].bot_id;
+                const botId = tokenRow.rows[0].bot_id.trim();
+                const error = await socketAccountError(db, botId, true);
+                if (error) return next(new Error(error));
+                socket.data.userId = botId;
+                socket.data.isBot = true;
+                socket.data.botTokenId = parsed.tokenId;
+                (socket as any).userId = botId;
                 (socket as any).isBot = true;
 
-                // Update last_used_at (fire and forget)
-                db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
+                // Record use before completing authentication
+                await db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
 
                 return next();
             } catch {
@@ -78,6 +89,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         try {
             const payload = verifyToken(token, jwtSecret);
             (socket as any).userId = payload.userId;
+            socket.data.userId = payload.userId;
+            socket.data.isBot = false;
 
             // Check token blacklist (logout revocation)
             if (payload.jti && await isTokenBlacklisted(payload.jti)) {
@@ -108,7 +121,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         }
     });
 
-    io.on('connection', async (socket) => {
+    io.on('connection', (socket) => { void readGatewayAccess(io, async () => {
         const userId = (socket as any).userId;
 
         // === BOT BRANCH — early return, skip human hydration ===
@@ -122,6 +135,10 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     'SELECT channel_id FROM bot_channel_access WHERE bot_id = $1',
                     [userId]
                 );
+                if (!socket.connected || socket.data.accessRevision !== gatewayAccessRevision(io)) {
+                    socket.disconnect(true);
+                    return;
+                }
                 for (const row of channels.rows) {
                     socket.join(`channel:${row.channel_id.trim()}`);
                 }
@@ -175,7 +192,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                      WHERE server_id = ANY($1)`,
                     [serverIds]
                 );
-                channels = channelsResult.rows;
+                channels = await visibleChannels(db, channelsResult.rows, userId);
             }
 
             // Fetch unread state for all user's channels
@@ -198,7 +215,12 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                 }
             }
 
-            // Join socket rooms for all channels
+            if (!socket.connected || socket.data.accessRevision !== gatewayAccessRevision(io)) {
+                socket.disconnect(true);
+                return;
+            }
+
+            // Join only authorized channel rooms
             const channelRoomIds = channels.map((c: any) => c.id.trim());
             for (const ch of channels) {
                 socket.join(`channel:${ch.id.trim()}`);
@@ -230,7 +252,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     channelType: c.channel_type,
                     serverId: c.server_id ? c.server_id.trim() : null,
                 })),
-                unreads: unreadResult.rows.map((r: any) => ({
+                unreads: unreadResult.rows.filter((r: any) => channelRoomIds.includes(r.channel_id.trim())).map((r: any) => ({
                     channelId: r.channel_id.trim(),
                     lastReadId: r.last_read_id ? r.last_read_id.trim() : null,
                     mentionCount: r.mention_count,
@@ -256,9 +278,13 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             }
 
             // --- Typing handler ---
-            socket.on('Typing', (data: { channelId: string }) => {
-                if (!data || !data.channelId) return;
+            socket.on('Typing', async (data: { channelId: string }) => {
+                if (!data || typeof data.channelId !== 'string') return;
                 const channelId = data.channelId.trim();
+                if (!socket.rooms.has(`channel:${channelId}`)) return;
+                try {
+                    if (!(await canViewChannel(db, channelId, userId, false)).allowed || !socket.connected) return;
+                } catch { return; }
                 socket.to(`channel:${channelId}`).emit('Typing', {
                     channelId,
                     userId: trimmedUserId,
@@ -294,7 +320,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         } catch {
             socket.disconnect();
         }
-    });
+    }); });
 
     return io;
 }
