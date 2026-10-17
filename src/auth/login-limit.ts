@@ -78,8 +78,9 @@ export class LoginLimiter {
             // NX: the window starts at the first attempt and is not extended by later ones
             multi.expire(key, this.limits.lockSeconds, 'NX');
         }
-        // Each account has an INCR and an EXPIRE; an EXPIRE error is caught too, so a
-        // counter can't be left without its expiry (a lock that never lifts)
+        // Each account has an INCR and an EXPIRE. An EXPIRE error refuses the login, but
+        // the INCR may already have run: a counter left without an expiry is lifted with
+        // login:unlock (or by the next successful login)
         const values = checkedResults(await multi.exec(), userIds.length * 2);
         return userIds.some((_, i) => count(values[i * 2]) > this.limits.maxFailures);
     }
