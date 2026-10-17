@@ -230,9 +230,11 @@ Authenticate with a username or an email, and a password.
 |------------|--------|----------|-------|
 | `login`    | string | Yes*     | The account's username or its email. Case does not matter. |
 | `email`    | string | Yes*     | Older name for the same field; still accepted. Send one of the two. |
-| `password` | string | Yes      | |
+| `password` | string | Yes      | At most 1024 characters. |
 
 Bots cannot log in this way; they authenticate with a bot token.
+
+**Attempt limits.** Every account the identifier matches is charged one attempt before the password is checked; a successful login clears that account's count. After 10 attempts without a success, the account is refused for 15 minutes from the first of them, even with the right password. Across the instance, 60 attempts a minute are allowed, counting names that match no account. Change these with `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_MINUTES` and `LOGIN_GLOBAL_PER_MINUTE`. The client's IP address plays no part. To lift a lock on one account: `npm run login:unlock -- <username or email>` (in Docker: `docker compose -f docker-compose.prod.yml --env-file .env.prod exec api node dist/src/tools/unlock-login.js <username or email>`).
 
 **Response** `200`
 ```json
@@ -250,6 +252,8 @@ Bots cannot log in this way; they authenticate with a bot token.
 | 401    | `invalid_credentials`| No such username or email, or the password does not match |
 | 403    | `account_pending`    | Account exists but has not been approved   |
 | 403    | `account_suspended`  | Account has been suspended by an admin     |
+| 429    | `too_many_attempts`  | The account, or the instance, is over its attempt limit. `Retry-After` gives the seconds to wait |
+| 503    | `login_unavailable`  | The attempt counters (Redis) could not be reached; logins are refused rather than let through unlimited |
 
 ---
 

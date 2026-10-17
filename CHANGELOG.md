@@ -22,6 +22,7 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Changed
 
+- **Login attempts are limited.** `POST /auth/login` had no limit. Now every account a login name matches is charged an attempt before the password is checked; after 10 without a success the account is refused for 15 minutes, and the instance allows 60 attempts a minute in all. A lock answers `429 too_many_attempts` with `Retry-After`; if Redis is down, logins are refused with `503`. Passwords over 1024 characters are rejected. `npm run login:unlock -- <name>` lifts one account's lock. Settings: `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_MINUTES`, `LOGIN_GLOBAL_PER_MINUTE`.
 - **Log in with a username or an email.** The login form's first field is now "Username or email", and `POST /auth/login` takes a `login` field holding either one (the older `email` field still works). Case is ignored. A mistyped email at setup no longer locks you out: the username works.
 - `POST /auth/login` validates its body: a missing identifier or password is a `400` instead of a server error.
 

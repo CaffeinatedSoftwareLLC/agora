@@ -3,6 +3,7 @@ import { hashPassword, verifyPassword } from '../auth/passwords';
 import { generateToken, verifyToken, extractToken } from '../auth/tokens';
 import { blacklistToken } from '../auth/token-blacklist';
 import { generateUlid } from '../utils/ulid';
+import type { LoginLimiter } from '../auth/login-limit';
 
 export async function authRoutes(app: FastifyInstance) {
     // POST /auth/register — policy-aware registration
@@ -146,7 +147,7 @@ export async function authRoutes(app: FastifyInstance) {
                 properties: {
                     login: { type: 'string', minLength: 1, maxLength: 255 },
                     email: { type: 'string', minLength: 1, maxLength: 255 },
-                    password: { type: 'string', minLength: 1 },
+                    password: { type: 'string', minLength: 1, maxLength: 1024 },
                 },
             },
         },
@@ -155,6 +156,20 @@ export async function authRoutes(app: FastifyInstance) {
         const identifier = (body.login ?? body.email ?? '').trim();
         const { password } = body;
         const db = request.dbClient!;
+        const limiter: LoginLimiter | null = (app as any).loginLimiter;
+
+        // Limits are checked before any password is hashed. If Redis can't be reached
+        // the login is refused rather than let through unlimited.
+        if (limiter) {
+            try {
+                if (!await limiter.takeGlobalAttempt()) {
+                    return reply.status(429).header('Retry-After', '60').send({ error: 'too_many_attempts' });
+                }
+            } catch (err) {
+                request.log.error({ err }, 'login limit unavailable');
+                return reply.status(503).send({ error: 'login_unavailable' });
+            }
+        }
 
         // Match the identifier against both columns, ignoring case. A username may look
         // like someone else's email (or differ from another only by case), so there can
@@ -170,6 +185,23 @@ export async function authRoutes(app: FastifyInstance) {
             [identifier]
         );
 
+        // Every matched account is charged, not just the one the password would
+        // unlock, so an ambiguous identifier can't be used to dodge a lock.
+        const candidateIds = result.rows.map((r: any) => r.id.trim());
+        if (limiter) {
+            try {
+                if (await limiter.reserveAttempt(candidateIds)) {
+                    request.log.warn({ userIds: candidateIds }, 'login refused: too many attempts');
+                    return reply.status(429)
+                        .header('Retry-After', String(limiter.lockSeconds))
+                        .send({ error: 'too_many_attempts' });
+                }
+            } catch (err) {
+                request.log.error({ err }, 'login limit unavailable');
+                return reply.status(503).send({ error: 'login_unavailable' });
+            }
+        }
+
         let user: any = null;
         for (const candidate of result.rows) {
             if (await verifyPassword(password, candidate.password_hash)) {
@@ -180,6 +212,10 @@ export async function authRoutes(app: FastifyInstance) {
 
         if (!user) {
             return reply.status(401).send({ error: 'invalid_credentials' });
+        }
+
+        if (limiter) {
+            await limiter.clearFailures(user.id).catch(() => { /* expires on its own */ });
         }
 
         // Check account status after credential verification
