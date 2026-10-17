@@ -1,3 +1,4 @@
+// Every permission Administrator implies. DirectAgents is deliberately outside it.
 export const ALL_PERMS_MASK = (1n << 29n) - 1n;
 
 export const Permissions = {
@@ -21,7 +22,13 @@ export const Permissions = {
     UseExternalEmoji:   1n << 18n,
     ManageBots:         1n << 27n,
     UseBots:            1n << 28n,
+    // May give agents instructions in a channel. Only the server owner holds it
+    // implicitly or can grant it; Administrator does not imply it.
+    DirectAgents:       1n << 29n,
 } as const;
+
+/** Every bit a role or override may carry. */
+export const KNOWN_PERMS_MASK = ALL_PERMS_MASK | Permissions.DirectAgents;
 
 export const DEFAULT_EVERYONE_PERMS =
     Permissions.ViewChannel |
@@ -46,9 +53,9 @@ export function computePermissions(params: {
 }): bigint {
     const { userId, roleIds, server, roles, channelRoleOverrides, channelMemberOverride } = params;
 
-    // Owner gets everything
+    // Owner gets everything, including DirectAgents
     if (userId === server.ownerId) {
-        return ALL_PERMS_MASK;
+        return KNOWN_PERMS_MASK;
     }
 
     // Start with @everyone role permissions
@@ -61,10 +68,7 @@ export function computePermissions(params: {
         if (role) permissions |= role.permissions;
     }
 
-    // Admin shortcut
-    if (permissions & Permissions.Administrator) {
-        return ALL_PERMS_MASK;
-    }
+    const isAdmin = (permissions & Permissions.Administrator) !== 0n;
 
     // Apply @everyone channel override
     const everyoneOverride = channelRoleOverrides.get(server.everyoneRoleId);
@@ -87,6 +91,12 @@ export function computePermissions(params: {
     // Member override — final word
     if (channelMemberOverride) {
         permissions = (permissions & ~channelMemberOverride.deny) | channelMemberOverride.allow;
+    }
+
+    // Administrator gets every ordinary permission regardless of overrides, but
+    // DirectAgents only as roles and overrides grant it
+    if (isAdmin) {
+        return ALL_PERMS_MASK | (permissions & Permissions.DirectAgents);
     }
 
     return permissions;

@@ -9,12 +9,23 @@ export interface BotInfo {
     channels: { id: string; name: string; channelType: string }[];
 }
 
+export type Authority = 'owner' | 'director' | null;
+
+export interface Director {
+    userId: string;
+    username: string;
+    bot: boolean;
+    authority: 'owner' | 'director';
+}
+
 export interface Message {
     id: string;
     content: string | null;
     authorId: string | null;
     authorUsername: string | null;
     authorBot: boolean;
+    /** Set by the server: the author may give agents instructions in this channel. */
+    authorAuthority?: Authority;
     channelId: string;
     createdAt: string;
     editedAt?: string | null;
@@ -34,6 +45,7 @@ export interface ThreadSummary {
     authorId: string | null;
     authorUsername: string | null;
     authorBot: boolean;
+    authorAuthority?: Authority;
     channelId: string;
     createdAt: string;
     replyCount: number;
@@ -154,6 +166,12 @@ export class AgoraApi {
 
     async getMe(): Promise<BotInfo> {
         return this.request('GET', '/bots/@me');
+    }
+
+    /** Who may give agents instructions in a channel right now. */
+    async getDirectors(channelId: string): Promise<Director[]> {
+        const res = await this.request<{ directors: Director[] }>('GET', `/channels/${channelId}/directors`);
+        return res.directors;
     }
 
     async getMessages(

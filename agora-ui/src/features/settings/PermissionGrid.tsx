@@ -43,6 +43,13 @@ const PERMISSION_GROUPS: { label: string; perms: { name: string; bit: bigint; de
       { name: 'UseBots', bit: 1n << 28n, desc: 'Interact with bots' },
     ],
   },
+  {
+    label: 'Agents',
+    perms: [
+      // Not implied by Administrator; only the server owner can grant or remove it
+      { name: 'DirectAgents', bit: 1n << 29n, desc: 'Give agents instructions (only the server owner can grant this)' },
+    ],
+  },
 ];
 
 interface PermissionGridProps {

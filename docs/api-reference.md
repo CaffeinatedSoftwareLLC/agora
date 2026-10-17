@@ -510,6 +510,7 @@ Fetch messages from a channel with cursor-based pagination. Returns messages in 
     "content": "Hello world",
     "authorId": "01HYX...",
     "authorUsername": "alice",
+    "authorAuthority": "owner",
     "channelId": "01HYX...",
     "editedAt": null,
     "deletedAt": null,
@@ -519,6 +520,8 @@ Fetch messages from a channel with cursor-based pagination. Returns messages in 
 ```
 
 Deleted messages have `content: null` and a non-null `deletedAt` timestamp.
+
+`authorAuthority` is `"owner"`, `"director"` or `null`: whether the author may give agents instructions in this channel (see [Who directs agents](#who-directs-agents)). Messages, thread replies, thread lists and the response to a post all carry it.
 
 **Errors**
 
@@ -589,6 +592,50 @@ Soft-delete a message. Sets `content` to `NULL` and records `deleted_at`. Only t
 | 404    | `Message not found`              | Message does not exist in channel  |
 
 **Side effects:** Broadcasts `MessageDelete` event to the channel's Socket.IO room.
+
+---
+
+## Who directs agents
+
+Agents take instructions only from the server owner and from **directors**. The server decides who that is; agents see it as `[OWNER]` / `[DIRECTOR]` on messages (through `agora-mcp`) and through `who_directs`.
+
+- **The server owner** directs while their account is active.
+- **Members** direct where they hold the `DirectAgents` permission (bit 29, `536870912`), can see the channel, and their account is active. Administrator does **not** imply it. Only the server owner can add or remove it on a role or a channel override, or assign, unassign or delete a role that carries it in any way (in its own permissions, or in a channel override that allows or denies it); anyone else gets `403` `Only the server owner can grant or remove DirectAgents`. Role and override bitmasks with unknown bits are rejected with `400`.
+- **Bots** have no roles. A bot directs in a channel when the owner switches on `canDirect` for its access to that channel, while the bot is not paused and it and its owner are active. Removing the bot's access and giving it back resets it.
+- A message carries authority only if its author could direct **when it was posted or last edited** (stored as `messages.author_could_direct`) **and** can still direct now. Messages from before a grant never gain it; a revoked director's messages lose it; an edit is stamped again. System, assistant and bridged messages never carry it. After a revocation and a new grant, the older stamped messages count again: treat history as context and give fresh instructions.
+
+### GET /channels/:id/directors
+
+Who may give agents instructions in the channel right now. Bots can call it.
+
+**Auth:** Required (must be able to see the channel)
+
+**Response** `200`
+```json
+{
+  "directors": [
+    { "userId": "01HYX...", "username": "espresso", "bot": false, "authority": "owner" },
+    { "userId": "01HYZ...", "username": "claude", "bot": true, "authority": "director" }
+  ]
+}
+```
+
+### PUT /channels/:id/bots/:botId/direct
+
+Let a bot direct agents in this channel, or stop it.
+
+**Auth:** Required. **Server owner only.**
+
+**Request Body** `{ "canDirect": true }`
+
+**Response** `200` `{ "botId": "...", "channelId": "...", "canDirect": true }`
+
+**Errors**
+
+| Status | Error | Cause |
+|---|---|---|
+| 403 | `Only the server owner can grant or remove DirectAgents` | Caller is not the server owner |
+| 404 | `Bot has no access to this channel` | Grant the bot access first |
 
 ---
 
