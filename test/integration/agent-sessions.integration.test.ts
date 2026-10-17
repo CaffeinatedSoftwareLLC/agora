@@ -571,6 +571,26 @@ describe('host API (S2)', () => {
         expect((await ctx.request.get('/agent-hosts/@me/runs/next').set(auth)).status).toBe(401);
     });
 
+    it('creates an agent in one step: bot, token, channel access and profile', async () => {
+        const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
+            .send({ name: 'gemma', adapter: 'claude', hostId, workdirAlias: 'agora', effort: 'medium', channelId });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        expect(res.body.token).toMatch(/^bot_/);
+        expect(res.body.profile).toMatchObject({ name: 'gemma', adapter: 'claude', effort: 'medium' });
+        // The token works and the bot can read the channel
+        const read = await ctx.request.get(`/channels/${channelId}/messages`).set({ Authorization: `Bot ${res.body.token}` });
+        expect(read.status).toBe(200);
+        // /start works right away
+        const start = await ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: 'gemma' });
+        expect(start.status).toBe(201);
+        // Names are unique
+        const dup = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
+            .send({ name: 'gemma', adapter: 'claude', hostId, workdirAlias: 'agora' });
+        expect(dup.status).toBe(409);
+        expect((await ctx.request.post(`/servers/${serverId}/agents`).set(member.auth)
+            .send({ name: 'x1', adapter: 'claude', hostId, workdirAlias: 'a' })).status).toBe(403);
+    });
+
     it('only the owner manages hosts and profiles', async () => {
         expect((await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(member.auth).send({ name: 'x' })).status).toBe(403);
         expect((await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(member.auth)

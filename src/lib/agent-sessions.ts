@@ -167,8 +167,7 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
 async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string): Promise<void> {
     const threadId = msg.threadId!;
     const binding = await db.query(
-        `SELECT initiator_session_id, session_ids FROM agent_session_threads
-         WHERE thread_id = $1 AND state = 'open' FOR UPDATE`,
+        `SELECT initiator_session_id, session_ids FROM agent_session_threads WHERE thread_id = $1 AND state = 'open'`,
         [threadId]
     );
     const bound = binding.rows[0];
@@ -180,11 +179,22 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
     const others = participants.filter(s => s.botId !== authorId);
     const state = msg.protocol?.state;
 
-    // CANCEL counts only from someone who can direct now; it stops the thread's runs too
-    if (state === 'CANCEL' && msg.couldDirect) {
-        await closeThread(db, threadId, [...boundIds], true);
+    // CANCEL counts only from someone who can direct now; it stops the thread's runs too.
+    // DONE and BLOCK from a participant close the thread without stopping runs.
+    const cancel = state === 'CANCEL' && msg.couldDirect;
+    const closing = cancel || (!!author && (state === 'DONE' || state === 'BLOCK'));
+    if (closing) {
+        // Lock order is session → binding (as in a claim): lock the participants' sessions
+        // in ID order first, then the binding, and recheck it is still open.
+        await db.query(`SELECT 1 FROM agent_sessions WHERE id = ANY($1) ORDER BY id FOR UPDATE`, [[...boundIds].sort()]);
+        const still = await db.query(`SELECT 1 FROM agent_session_threads WHERE thread_id = $1 AND state = 'open' FOR UPDATE`, [threadId]);
+        if (still.rows.length > 0) await closeThread(db, threadId, [...boundIds], cancel);
         return;
     }
+
+    // Keep the thread from closing while this message's wakes are recorded
+    const open = await db.query(`SELECT 1 FROM agent_session_threads WHERE thread_id = $1 AND state = 'open' FOR SHARE`, [threadId]);
+    if (open.rows.length === 0) return;
 
     if (author && msg.protocol) {
         switch (state) {
@@ -205,10 +215,6 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
             }
             case 'DECIDE':
                 await addInbox(db, others.map(o => o.id), msg.messageId, threadId, 'protocol');
-                return;
-            case 'DONE':
-            case 'BLOCK':
-                await closeThread(db, threadId, [...boundIds], false);
                 return;
             default:
                 // START inside a thread, or CANCEL without authority: ordinary text

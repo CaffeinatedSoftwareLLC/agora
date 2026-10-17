@@ -2,9 +2,10 @@ import { randomBytes } from 'crypto';
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { hashPassword } from '../auth/passwords';
+import { generateBotToken } from '../auth/bot-tokens';
 import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { claimNext, complete, fail, heartbeat, type Notice } from '../lib/agent-runs';
+import { claimNext, complete, fail, heartbeat, HostRevokedError, type Notice } from '../lib/agent-runs';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -278,6 +279,73 @@ export async function agentHostRoutes(app: FastifyInstance) {
         return reply.status(204).send();
     });
 
+    // ─── Create an agent in one step (owner): bot + token + channel access + profile ───
+
+    // POST /servers/:serverId/agents → 201 { bot, token, profile } (the token is shown once;
+    // it goes into the host's config, never into a channel)
+    app.post('/servers/:serverId/agents', {
+        schema: {
+            body: {
+                type: 'object',
+                required: ['name', 'adapter', 'hostId', 'workdirAlias'],
+                additionalProperties: false,
+                properties: {
+                    name: profileFields.name,
+                    adapter: profileFields.adapter,
+                    hostId: profileFields.hostId,
+                    workdirAlias: profileFields.workdirAlias,
+                    model: profileFields.model,
+                    effort: profileFields.effort,
+                    channelId: ID,
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const serverId = await requireOwner(request, reply);
+        if (!serverId) return reply;
+        const b = request.body as any;
+        const db = request.dbClient!;
+        const { tokenId, secretHash, raw } = await generateBotToken();
+        try {
+            const result = await asService(db, async () => {
+                const bad = await checkRefs(db, serverId, undefined, b.hostId);
+                if (bad) return { status: 400, body: { error: bad } };
+                if (b.channelId) {
+                    const ch = await db.query(`SELECT 1 FROM channels WHERE id = $1 AND server_id = $2`, [b.channelId, serverId]);
+                    if (ch.rows.length === 0) return { status: 400, body: { error: 'Unknown channel' } };
+                }
+                const botId = generateUlid();
+                await db.query(
+                    `INSERT INTO users (id, username, bot, bot_owner_id, server_id) VALUES ($1, $2, true, $3, $4)`,
+                    [botId, b.name, request.userId, serverId]
+                );
+                await db.query(
+                    `INSERT INTO bot_tokens (id, bot_id, secret_hash, name) VALUES ($1, $2, $3, $4)`,
+                    [tokenId, botId, secretHash, 'agent host']
+                );
+                if (b.channelId) {
+                    await db.query(
+                        `INSERT INTO bot_channel_access (bot_id, channel_id, granted_by) VALUES ($1, $2, $3)`,
+                        [botId, b.channelId, request.userId]
+                    );
+                }
+                const profile = await db.query(
+                    `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias, created_by)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                    [generateUlid(), serverId, b.name, botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null, b.workdirAlias, request.userId]
+                );
+                return {
+                    status: 201,
+                    body: { bot: { id: botId, username: b.name }, token: raw, profile: profileJson(profile.rows[0]) },
+                };
+            });
+            return reply.status(result.status).send(result.body);
+        } catch (err: any) {
+            if (err.code === '23505') return reply.status(409).send({ error: 'That name is taken by a user, bot or profile' });
+            throw err;
+        }
+    });
+
     // ─── Host routes (AgentHost token) ───
 
     // GET /agent-hosts/@me/runs/next?wait=0..25 → 200 claim | 204
@@ -291,7 +359,14 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const deadline = Date.now() + wait * 1000;
         const notices: Notice[] = [];
         for (;;) {
-            const claim = await claimNext(app.db, host, notices);
+            let claim;
+            try {
+                claim = await claimNext(app.db, host, notices);
+            } catch (err) {
+                // Revoked while the long poll was waiting: the host must stop
+                if (err instanceof HostRevokedError) return reply.status(401).send({ error: 'Invalid host token' });
+                throw err;
+            }
             if (claim) {
                 queueNotices(request, notices);
                 return reply.status(200).send(claim);
@@ -326,7 +401,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     ...claimBody,
                     nativeSessionId: { type: ['string', 'null'], maxLength: 128 },
                     tokensUsed: { type: ['integer', 'null'], minimum: 0 },
-                    summary: { type: ['string', 'null'], maxLength: 8000 },
+                    // Same limit as agora-host's result parser
+                    summary: { type: ['string', 'null'], maxLength: 16000 },
                 },
             },
         },

@@ -162,12 +162,6 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
 
-        // Wake agents this post is addressed to (same transaction as the message)
-        await routeMessage(db, {
-            channelId, messageId, threadId: null, authorId: userId, couldDirect, protocol,
-            mentionedUserIds: mentionedUsers.map(u => u.id),
-        });
-
         // Validate and bind attachments
         let resolvedAttachments: any[] = [];
 
@@ -222,6 +216,13 @@ export async function messageRoutes(app: FastifyInstance) {
                 url: `/files/${f.id.trim()}`,
             }));
         }
+
+        // Wake agents this post is addressed to, in the message's transaction. Placed after
+        // every validation gate: a rejected post must not wake anyone.
+        await routeMessage(db, {
+            channelId, messageId, threadId: null, authorId: userId, couldDirect, protocol,
+            mentionedUserIds: mentionedUsers.map(u => u.id),
+        });
 
         const userRow = await db.query(
             'SELECT username, bot, avatar_url FROM users WHERE id = $1',

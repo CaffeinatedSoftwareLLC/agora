@@ -16,6 +16,7 @@ import { AppShell } from './features/shell/AppShell';
 import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
 import { ServerAdminGuard } from './features/settings/ServerAdminGuard';
 import { BotManagement } from './features/settings/BotManagement';
+import { AgentSessionsSettings } from './features/settings/AgentSessionsSettings';
 import { AISettings } from './features/settings/AISettings';
 import { RoleManagement } from './features/settings/RoleManagement';
 import { RoleAssignment } from './features/settings/RoleAssignment';
@@ -71,6 +72,7 @@ export default function App() {
                             <Route path="role-assign" element={<RoleAssignment />} />
                             <Route path="overrides" element={<ChannelOverrides />} />
                             <Route path="bots" element={<BotManagement />} />
+                            <Route path="agents" element={<AgentSessionsSettings />} />
                             <Route path="ai" element={<AISettings />} />
                             <Route path="instance" element={<AdminGuard><InstanceSettings /></AdminGuard>} />
                             <Route path="storage" element={<AdminGuard><StorageSettings /></AdminGuard>} />
