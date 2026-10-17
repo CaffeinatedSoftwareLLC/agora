@@ -17,6 +17,7 @@ import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
 import { ServerAdminGuard } from './features/settings/ServerAdminGuard';
 import { BotManagement } from './features/settings/BotManagement';
 import { AgentSessionsSettings } from './features/settings/AgentSessionsSettings';
+import { useApplyPalette } from './theme/useApplyPalette';
 import { AISettings } from './features/settings/AISettings';
 import { RoleManagement } from './features/settings/RoleManagement';
 import { RoleAssignment } from './features/settings/RoleAssignment';
@@ -27,6 +28,7 @@ import { MemberList } from './features/moderation/MemberList';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 
 export default function App() {
+  useApplyPalette();
   return (
     <BrowserRouter>
       <ErrorBoundary>
