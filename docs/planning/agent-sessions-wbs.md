@@ -286,3 +286,42 @@ Live (S7): from the phone, `/start codex` in a channel, give it a task, watch it
 
 - Should `/sessions` show token use to members who aren't directors? (v1: yes, it is channel-visible.)
 - Rehydrate summary: written by the agent at the end of each run (structured output), or by the decision model afterwards? (v1: the agent's own, through structured output.)
+
+## H0 results (2026-10-17)
+
+Checks ran on Windows in `feat/agora-host`. Commands below were executed locally;
+success cases from documentation are distinguished from authenticated live runs.
+
+| Check | Result |
+|---|---|
+| `codex --version` | Observed `codex-cli 0.163.0`. PowerShell resolves an npm `.ps1` shim. A native executable exists at `C:/Users/miste/AppData/Roaming/npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe`; the host uses native paths, never a shell shim. |
+| `codex exec --help` | Observed `--json` (JSONL), `--output-schema`, `--ignore-user-config`, `-s`, `-m`, `-c`, stdin via `-`, and `--ephemeral`. The host preserves normal approval/sandbox policy and never uses bypass flags. |
+| `codex exec resume --help` | Observed explicit UUID/session argument, stdin prompt, JSON/schema/model/config options. Sandbox is an **exec parent** flag: the host puts `-s` before `resume`. It never uses `--last`. Actual native resume was not run in this isolated probe. |
+| Isolated Codex invocation | A fresh `CODEX_HOME` under this worktree's ignored `.agora/h0`, read-only sandbox, `--ephemeral`, ignored user config, and a no-tools prompt did not complete within 15 seconds; the probe terminated its CLI process. No authenticated successful JSON/usage or sandboxed tool execution was established. No approval bypass was attempted. |
+| `claude --version` | Observed `2.1.287 (Claude Code)`, native executable `C:/Users/miste/.local/bin/claude.exe`. |
+| `claude --help` | Observed `-p`, `--resume`, `--output-format json/stream-json`, `--mcp-config`, `--strict-mcp-config`, `--allowedTools`, `--model`, `--effort`, `--json-schema`, and `--max-budget-usd`. `manual` is supported; the earlier proposed `default` permission mode is not listed. `--permission-prompts none` denies calls that would prompt. |
+| Isolated Claude invocation | A fresh `CLAUDE_CONFIG_DIR`, no tools/MCP servers, manual permissions, no permission prompts, and no session persistence returned exit 1 and a JSON result. It included `session_id`, `usage` (zero input/cache/output), `is_error: true`, `terminal_reason: api_error`, and `result: Not logged in`. Notably `subtype` was `success`: the parser must also check `is_error` and exit code. The sanitized observed shape is a test fixture. No successful model turn or native resume was established. |
+| Model/effort and caps | Codex accepts `-m` and a `model_reasoning_effort` config override; Claude advertises `--model` and `--effort low/medium/high/xhigh/max`. No hard per-run token cap was advertised by either help output. Host config rejects `maxTokens`; Claude supports a local USD cap. Actual model/effort acceptance needs a logged-in live run. |
+| `taskkill /?` and controlled dummy process | Help confirms `/PID`, `/T` (descendants) and `/F`. A `/T /F` attempt against a dummy Node process returned exit 1; tree termination was **not verified** in this sandbox. CIM process inspection also returned access denied. The dummy root was subsequently removed with `Stop-Process`. The host treats a failed tree kill as fatal, not as successful cancellation. |
+| Node/runtime | This machine reports Node `v25.4.0`; the package targets Node 22+ and compiles against Node 22 types. A separate Node 22 runtime was not exercised. |
+
+Structured output expectations follow the [official OpenAI noninteractive-mode
+documentation](https://developers.openai.com/codex/noninteractive) and
+[Claude Code programmatic usage documentation](https://code.claude.com/docs/en/headless).
+Codex emits `thread.started.thread_id`, agent-message items and `turn.completed.usage`;
+the adapter counts input + output without adding cached input twice. Claude JSON
+exposes the native session ID and `structured_output`; its result `usage` is used
+instead of cumulative model/cost totals. Positive parser examples are documented
+shapes with synthetic summaries, **not recordings of authenticated success**.
+
+H0 credential isolation is implemented with a per-profile CLI state directory,
+an OS-only inherited environment, one bot token per child, and a per-run explicit
+Agora MCP configuration. Only local tool approvals are added. Native session
+selection, argv construction, permissions, envelopes, usage/error parsing,
+deadline/cancellation logic and process APIs are covered with fake-process tests.
+
+**Remaining live gates:** authenticate each profile's own CLI state; verify real
+fresh and resumed JSON/usage, required MCP initialization and project-config
+isolation, model/effort acceptance, and actual Windows descendant termination
+under the deployment account. Then run the host against S2 and the S7 phone flow.
+These limitations do not count as live verification or deployment.
