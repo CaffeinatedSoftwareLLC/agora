@@ -2,16 +2,16 @@
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
 
-## Decision model (Jev): implemented, open as PR #51 (2026-10-01, evening)
+## Decision model (Jev): merged (PR #51, 2026-10-02) and verified live
 
 The Jev project was planned in Agora with Codex and Gemini and then implemented in one session. **Plan, status, what was and was not verified, and the open questions for Eryk: [`jev-wbs.md`](jev-wbs.md), "Status" at the top.** Read that before touching this work.
 
-- **PR #51**, `feat/jev-file-tags` → `main`, one commit per phase. Not merged. Three earlier local branches (`feat/jev-foundation`, `feat/jev-routing`, `feat/jev-search-screening`) are ancestors of it and can be deleted.
+- **PR #51**, `feat/jev-file-tags` → `main`, one commit per phase. Merged 2026-10-02. Three earlier local branches (`feat/jev-foundation`, `feat/jev-routing`, `feat/jev-search-screening`) are ancestors of it and can be deleted.
 - What it adds: an optional decision model (`typesafe` adapter, `decide` route) used for assistant routing, assistant web search, search-result screening for prompt injection, file tagging with admin-defined tags, and file search with ranking. Agents can also read file text now (`file_read`), with or without a decision model. Off by default; with it off, Agora behaves as before.
 - Migrations `033` and `034` (not reversible: use a database of their own when testing, as with `031`). New dependency `unpdf`.
 - The test key is the Windows user environment variable `JEV_KEY`. Agora does not read it at runtime; admins enter the key in AI settings. Live checks: `JEV_LIVE=1 JEV_KEY=… npx vitest run test/live`.
 - Test databases made for this work on the Docker Desktop Postgres (`agora-test-postgres-1`): `accord_test_jev` (the test suite) and `agora_jev_live` (the dev instance used for the end-to-end check, with its files in `%TEMP%\agora-jev-live-files`). Both are disposable.
-- Still to do before merging: look at the UI in a browser, run a real Tavily search through screening, run the sandbox suite and a deploy on the WSL + gVisor stack, and build the Docker image.
+- Verified after merging (Eryk, 2026-10-17): the decision model, Tavily search through screening, code runs on gVisor and the Docker build all work. The live WSL stack runs it (`89cbcca`, 34 migrations).
 
 ## Current state (read this first)
 

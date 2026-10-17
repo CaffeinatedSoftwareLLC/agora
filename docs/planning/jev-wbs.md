@@ -5,7 +5,13 @@
 > Sizes: **XS** <1h · **S** ≈ half-day · **M** ≈ 1–2 days · **L** ≈ 3–5 days. Sizes are relative, not calendar promises.
 > Status: ☐ todo · ◐ in progress · ☑ done
 
-## Status (2026-10-01, end of the implementation session)
+## Status (2026-10-17: merged and running live)
+
+Merged to `main` as **PR #51** on 2026-10-02. The live WSL + gVisor stack runs it: checked 2026-10-17, its checkout is at `89cbcca` (the PR's last commit), 34 migrations are applied (`033`, `034` included) and the `api` image contains `unpdf`.
+
+**Verified live by Eryk (reported 2026-10-17):** the decision model works, search screening works with a real Tavily key, code runs work under gVisor, and the Docker image builds. Not reported separately: the UI screens one by one, and the dates of each check.
+
+### At the end of the implementation session (2026-10-01)
 
 J0, A.1–A.3, B and C are implemented and open as **PR #51** (`feat/jev-file-tags` → `main`, one commit per phase). The earlier branches `feat/jev-foundation`, `feat/jev-routing` and `feat/jev-search-screening` exist only locally; they are ancestors of that branch and can be deleted.
 
@@ -14,7 +20,7 @@ J0, A.1–A.3, B and C are implemented and open as **PR #51** (`feat/jev-file-ta
 - Live contract checks against TypeSafe (`JEV_LIVE=1 JEV_KEY=… npx vitest run test/live`): 6 of 6. They cover the response contract and the golden inputs for every question (injection, intent, tagging, tag relevance, ranking).
 - End to end on a dev instance (API on Windows, real TypeSafe key, local Ollama for chat): provider test, 7 files tagged in 4 s (including a PDF), an injected file flagged and kept out of ranking, 5 searches ranked correctly in about 0.4 s each, a tag edit re-asking only that tag (7 requests), and two `@assistant` requests routed (one to chat, one to search). 51 decision requests cost about $0.0015.
 
-**Not verified**
+**Not verified then** (all but the last item since covered by Eryk's live checks above)
 - **The UI has not been looked at in a browser.** It builds and its API calls work through the dev proxy, but the Decision model section, File tags section, Files panel and tag chips have not been seen on screen.
 - **Search screening against a real search provider.** The screening question passes its live golden inputs and the pipeline passes with stubbed Tavily and Gemini, but no real Tavily search has gone through it (no Tavily key on the dev instance).
 - **Nothing has run on the WSL + gVisor stack** (D.3). The sandbox suite (`npm run test:sandbox`, `scripts/test-sandbox-gvisor.sh`) was not run; `sandbox/std.ts` gained `searchFiles()` and new `search()` fields.
