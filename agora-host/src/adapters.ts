@@ -53,7 +53,8 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
         let args: string[];
         if (local.adapter === 'codex') {
             // A top-level CLI override replaces the MCP map: inherited servers/tokens are not passed through.
-            const tools = local.approvedTools.map(t => `${t}={approval_mode="never"}`).join(',');
+            // approval_mode "approve" pre-approves a listed tool; Codex 0.163 accepts auto|prompt|writes|approve.
+            const tools = local.approvedTools.map(t => `${t}={approval_mode="approve"}`).join(',');
             const mcp = `{agora={command=${JSON.stringify(server.command)},args=${JSON.stringify(server.args)},env_vars=["AGORA_INSTANCE","AGORA_BOT_TOKEN","AGORA_DEFAULT_CHANNEL"],required=true,tools={${tools}}}}`;
             await writeFile(paths[1], `mcp_servers=${mcp}\n`, { mode: 0o600 });
             args = ['exec', '--ignore-user-config', '-s', local.sandbox,
