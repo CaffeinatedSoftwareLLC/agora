@@ -10,6 +10,9 @@ const profile = z.object({
     adapter: z.enum(['codex', 'claude']), workdir: absolute, workdirAlias: z.string().min(1),
     executable, stateDir: absolute,
     sandbox: z.enum(['read-only', 'workspace-write']).default('workspace-write'),
+    // Codex's Windows sandbox mode. --ignore-user-config drops the user's [windows] sandbox
+    // setting, and without one Codex rejects every shell command, so the host sets it.
+    windowsSandbox: z.enum(['elevated', 'unelevated']).default('elevated'),
     approvedTools: z.array(tool).default([]),
     caps: z.object({ maxTokens: z.number().int().positive().optional(), maxBudgetUsd: z.number().positive().optional() }).strict().default({}),
     allowUntestedVersion: z.boolean().default(false),

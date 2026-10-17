@@ -59,6 +59,7 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
             await writeFile(paths[1], `mcp_servers=${mcp}\n`, { mode: 0o600 });
             args = ['exec', '--ignore-user-config', '-s', local.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : []),
                 ...(model !== null ? ['-m', model] : []),
                 ...(effort !== null ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
                 ...(claim.session.nativeSessionId ? ['resume', claim.session.nativeSessionId] : []),
