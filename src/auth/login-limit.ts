@@ -30,15 +30,37 @@ export function failureKey(userId: string): string {
     return `${FAIL_PREFIX}${userId.trim()}`;
 }
 
+/**
+ * MULTI/EXEC can succeed as a whole while single commands in it fail (a key of the
+ * wrong type, an ACL denial), and EXEC returns null when the transaction is aborted.
+ * Any of these would read as a count of zero and let attempts through, so they are
+ * errors here, which the login route turns into 503.
+ */
+function checkedResults(results: [Error | null, unknown][] | null, expected: number): unknown[] {
+    if (!results || results.length !== expected) {
+        throw new Error('login limit: Redis transaction did not run');
+    }
+    return results.map(([err, value]) => {
+        if (err) throw err;
+        return value;
+    });
+}
+
+function count(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+        throw new Error(`login limit: unexpected counter value ${String(value)}`);
+    }
+    return value;
+}
+
 export class LoginLimiter {
     constructor(private readonly limits: LoginLimits = defaultLoginLimits) {}
 
     /** Count one attempt against this minute's budget. False when it is spent. */
     async takeGlobalAttempt(): Promise<boolean> {
         const key = `${GLOBAL_PREFIX}${Math.floor(Date.now() / 60_000)}`;
-        const results = await getRedis().multi().incr(key).expire(key, 120).exec();
-        const count = Number(results?.[0]?.[1] ?? 0);
-        return count <= this.limits.globalPerMinute;
+        const [attempts] = checkedResults(await getRedis().multi().incr(key).expire(key, 120).exec(), 2);
+        return count(attempts) <= this.limits.globalPerMinute;
     }
 
     /**
@@ -56,8 +78,10 @@ export class LoginLimiter {
             // NX: the window starts at the first attempt and is not extended by later ones
             multi.expire(key, this.limits.lockSeconds, 'NX');
         }
-        const results = await multi.exec();
-        return userIds.some((_, i) => Number(results?.[i * 2]?.[1] ?? 0) > this.limits.maxFailures);
+        // Each account has an INCR and an EXPIRE; an EXPIRE error is caught too, so a
+        // counter can't be left without its expiry (a lock that never lifts)
+        const values = checkedResults(await multi.exec(), userIds.length * 2);
+        return userIds.some((_, i) => count(values[i * 2]) > this.limits.maxFailures);
     }
 
     async clearFailures(userId: string): Promise<void> {

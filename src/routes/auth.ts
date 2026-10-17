@@ -21,7 +21,7 @@ export async function authRoutes(app: FastifyInstance) {
                 properties: {
                     username: { type: 'string', minLength: 1, maxLength: 32 },
                     email: { type: 'string', format: 'email' },
-                    password: { type: 'string', minLength: 8 },
+                    password: { type: 'string', minLength: 8, maxLength: 1024 },
                     inviteCode: { type: 'string', minLength: 1 },
                 },
             },

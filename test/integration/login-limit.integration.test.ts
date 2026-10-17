@@ -110,6 +110,37 @@ describe('login attempt limits', () => {
         expect(res.status).toBe(400);
     });
 
+    it('refuses logins when a counter key holds the wrong type', async () => {
+        const alice = await authedUser(ctx.request, 'alice');
+        await getRedis().rpush(failureKey(alice.userId), 'x');
+        const res = await login(ctx, 'alice', PASSWORD);
+        expect(res.status).toBe(503);
+        expect(res.body.error).toBe('login_unavailable');
+    });
+
+    it('refuses logins when the instance counter holds the wrong type', async () => {
+        await authedUser(ctx.request, 'alice');
+        const minute = Math.floor(Date.now() / 60_000);
+        for (const m of [minute, minute + 1]) await getRedis().hset(`login:global:${m}`, 'x', '1');
+        const res = await login(ctx, 'alice', PASSWORD);
+        expect(res.status).toBe(503);
+    });
+
+    it('refuses logins when the Redis transaction is aborted', async () => {
+        await authedUser(ctx.request, 'alice');
+        const fake: any = { incr: () => fake, expire: () => fake, exec: async () => null };
+        vi.spyOn(getRedis(), 'multi').mockReturnValue(fake);
+        const res = await login(ctx, 'alice', PASSWORD);
+        expect(res.status).toBe(503);
+    });
+
+    it('caps passwords at registration the same way', async () => {
+        const res = await ctx.request.post('/auth/register').send({
+            username: 'longpw', email: 'longpw@test.com', password: 'x'.repeat(1025),
+        });
+        expect(res.status).toBe(400);
+    });
+
     it('refuses logins when the limit store is unavailable', async () => {
         await authedUser(ctx.request, 'alice');
         vi.spyOn(LoginLimiter.prototype, 'takeGlobalAttempt').mockRejectedValue(new Error('redis down'));
