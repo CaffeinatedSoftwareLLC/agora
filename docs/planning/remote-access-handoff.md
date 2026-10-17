@@ -2,6 +2,8 @@
 
 **Goal:** Eryk uses his Agora instance from his phone (Android, `eryks-s26-ultra`) to direct the agents on his Windows PC, without exposing anything to the internet. Planned with Codex in Agora (#general, planning thread `01M550QH905XYHYYW3EB6CTDNY`, work thread `01M551ZCPDNNVXNY48YPS54H6S`). Codex ran out of usage at ~14:37 UTC; Claude carries on alone.
 
+> **Update 2026-10-17 ~17:55 UTC:** items 1, 2, 3 and 5 below are done. #60 is merged (`545479e`) and deployed, `/health` ok; full suite 971 passed. Tailscale HTTPS certs are on (`CertDomains: tim.tail995bbc.ts.net`) and Eryk saved the ACL (old policy backed up as screenshots; applied rules not yet checked, needs `sudo tailscale debug netmap`). `agora-minio` is stopped (volume kept). Dev ports are on `127.0.0.1` (`e120ada`) and the test containers were recreated. `agora-mcp` is rebuilt in the main checkout (the global `agora-mcp` is an `npm link` to it), now on `main`. **Left:** Eryk restarts each agent session, then item 4 (serve, needs his sudo password) and item 6 (D).
+
 **Rule for the whole job:** nothing is used remotely until step D passes. In D, each check is reported as *live-verified*, *source-reviewed* or *pending*. A check that couldn't be run is pending, never passed.
 
 ## Done and merged to `main`
