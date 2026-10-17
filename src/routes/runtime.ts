@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { CAPABILITIES, type Capability } from '../ai/adapters';
 import { Permissions } from '../permissions';
 import { loadAndComputePermissions, requireManageBots } from './bots';
-import { checkChannelMembership } from './shared';
+import { canViewChannel } from '../lib/channel-access';
 import { MAX_CODE_BYTES } from '../runtime/container-spec';
 import { submitRun, reviewRun, codeRetentionDays, codeExpiresAt } from '../runtime/service';
 
@@ -25,8 +25,8 @@ async function loadRun(request: FastifyRequest, reply: FastifyReply) {
     const userId = request.userId!.trim();
     const isSubmitter = run.submitted_by?.trim() === userId;
     // Humans: must be able to see the channel the run belongs to
-    const canSee = isSubmitter || (!request.isBot && run.channel_id
-        && await checkChannelMembership(request.dbClient!, run.channel_id.trim(), userId, false));
+    const canSee = request.isBot ? isSubmitter : (run.channel_id
+        && (await canViewChannel(request.dbClient!, run.channel_id.trim(), userId, false)).allowed);
     if (!canSee) return reply.status(404).send({ error: 'Run not found' });
     (request as any).execRun = run;
 }

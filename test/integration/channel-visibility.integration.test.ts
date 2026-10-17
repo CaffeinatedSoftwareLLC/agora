@@ -1,5 +1,6 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { Permissions } from '../../src/permissions';
+import { generateUlid } from '../../src/utils/ulid';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: Awaited<ReturnType<typeof authedUser>>;
@@ -61,6 +62,18 @@ test('hidden channel names and unread metadata are omitted from REST lists', asy
     expect(unreads.body).toEqual([]);
     expect((await ctx.request.get(`/channels/${channelId}/unreads`).set(member.auth)).status).toBe(403);
     expect((await ctx.request.put(`/channels/${channelId}/ack`).set(member.auth).send({ messageId })).status).toBe(403);
+});
+
+test('hidden members cannot inspect run output, download code or approve the run', async () => {
+    const runId = generateUlid();
+    await ctx.db.query(
+        `INSERT INTO exec_runs (id,server_id,channel_id,submitted_by,code,code_sha256,limits,gate_decision,status)
+         VALUES ($1,$2,$3,$4,'private code',$5,'{}','require_approval','awaiting_approval')`,
+        [runId, serverId, channelId, member.userId, 'a'.repeat(64)]);
+    expect((await ctx.request.get(`/runtime/runs/${runId}`).set(member.auth)).status).toBe(404);
+    expect((await ctx.request.get(`/runtime/runs/${runId}/code`).set(member.auth)).status).toBe(404);
+    expect((await ctx.request.post(`/runtime/runs/${runId}/approve`).set(member.auth)).status).toBe(404);
+    expect((await ctx.request.get(`/runtime/runs/${runId}`).set(owner.auth)).status).toBe(200);
 });
 
 test('explicitly allowlisted bots retain access, and removing the member deny restores access', async () => {

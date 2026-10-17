@@ -73,6 +73,8 @@ Everything since the pre-pivot snapshot (`v1-platform`): the move to an agent-co
 
 ### Fixed
 
+- Hidden-channel REST access now requires ViewChannel for messages, threads, unread metadata and human runtime access. Channel lists omit hidden channels. Denied messaging/unread requests still return403, with `Channel access denied` replacing `Not a member of this channel`; clients matching the old error text must update.
+
 - The API replied before its database transaction had committed, so a client acting on a response at once (using a token it was just issued, reading back what it wrote) could arrive first. The commit now happens before the reply, and a failed commit is a `500` instead of a success that never happened. This was the cause of the intermittent integration test failures.
 - The domain typed into the setup script had no effect: Caddy always served `localhost`. `DOMAIN` in `.env.prod` now drives both Caddy and the API's allowed origin.
 - Multi-speaker speech was rejected by Gemini, and audio overview scripts were cut off after a few lines (#41).
