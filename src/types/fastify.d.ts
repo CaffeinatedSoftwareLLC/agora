@@ -8,6 +8,8 @@ declare module 'fastify' {
         userId: string;
         /** True when the request was authenticated with a Bot token. */
         isBot: boolean;
+        /** Set when the request was authenticated with an AgentHost token (only on /agent-hosts/@me/*). */
+        agentHost?: { id: string; serverId: string };
         /** True when the user has instance admin privileges. Set by requireInstanceAdmin. */
         isInstanceAdmin: boolean;
         /** Set when the request's transaction ends: true after COMMIT, false if the COMMIT failed. */

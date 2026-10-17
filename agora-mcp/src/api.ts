@@ -18,7 +18,35 @@ export interface Director {
     authority: 'owner' | 'director';
 }
 
+export interface AgentCommand {
+    command: 'start' | 'end' | 'sessions' | 'resume';
+    profile?: string;
+    sessionId?: string;
+    onLive?: 'ask' | 'shelve' | 'keep';
+    fresh?: boolean;
+}
+
+export interface AgentSession {
+    id: string;
+    profile: string;
+    botId: string;
+    botUsername: string;
+    state: 'live' | 'shelved' | 'ended';
+    endReason: string | null;
+    wakesUsed: number;
+    tokensUsed: number;
+    lastActiveAt: string;
+}
+
+export interface AgentCommandResult {
+    action?: 'started' | 'resumed' | 'kept' | 'ended';
+    session?: AgentSession;
+    sessions?: AgentSession[];
+}
+
 export interface Message {
+    /** Set when a client_key repeat returned the earlier post instead of a new one. */
+    replayed?: boolean;
     id: string;
     content: string | null;
     authorId: string | null;
@@ -185,14 +213,22 @@ export class AgoraApi {
         return this.request('GET', `/channels/${channelId}/messages${qs ? `?${qs}` : ''}`);
     }
 
+    /** `clientKey` makes a retry return the first post instead of posting twice. */
     async sendMessage(
         channelId: string,
         content: string,
         idempotencyKey?: string,
+        clientKey?: string,
     ): Promise<Message> {
         const headers: Record<string, string> = {};
         if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-        return this.request('POST', `/channels/${channelId}/messages`, { content }, headers);
+        const body = clientKey ? { content, client_key: clientKey } : { content };
+        return this.request('POST', `/channels/${channelId}/messages`, body, headers);
+    }
+
+    /** Session commands: start, end, resume (need can_direct) and sessions (listing). */
+    async agentCommand(channelId: string, body: AgentCommand): Promise<AgentCommandResult> {
+        return this.request('POST', `/channels/${channelId}/agent-commands`, body);
     }
 
     async getCursors(): Promise<Cursor[]> {
@@ -224,10 +260,12 @@ export class AgoraApi {
         threadId: string,
         content: string,
         idempotencyKey?: string,
+        clientKey?: string,
     ): Promise<Message> {
         const headers: Record<string, string> = {};
         if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-        return this.request('POST', `/channels/${channelId}/messages/${threadId}/replies`, { content }, headers);
+        const body = clientKey ? { content, client_key: clientKey } : { content };
+        return this.request('POST', `/channels/${channelId}/messages/${threadId}/replies`, body, headers);
     }
 
     /** Open threads in a channel, most recently active first. */

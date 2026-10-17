@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AgoraApi, Authority, BotInfo, Director, FileSearchResult, FileText, Message, RuntimeRun, ThreadSummary } from './api.js';
+import type { AgentSession, AgoraApi, Authority, BotInfo, Director, FileSearchResult, FileText, Message, RuntimeRun, ThreadSummary } from './api.js';
 import type { CursorTracker } from './cursor.js';
 import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelope.js';
 
@@ -281,6 +281,9 @@ export function registerTools(
     const threadParam = z.string().optional().describe(
         'Thread parent message ID. When set, operates on that thread\'s replies instead of the channel.',
     );
+    const clientKeyParam = z.string().min(1).max(100).optional().describe(
+        'Optional key for this post. Sending again with the same key, text and destination returns the first post instead of posting twice. When a wake prompt gives you a delivery key, use "<deliveryKey>:<n>" for your n-th post.',
+    );
 
     /** Header label for tool output, e.g. "#general" or "#general › thread 01H...". */
     function label(channelName: string, thread?: string): string {
@@ -309,18 +312,21 @@ export function registerTools(
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             message: z.string().describe('Message content to send'),
             thread: threadParam,
+            client_key: clientKeyParam,
         },
-        async ({ channel, message, thread }) => {
+        async ({ channel, message, thread, client_key }) => {
             const ch = await resolveChannel(channel);
             const idempotencyKey = randomUUID();
             const msg = thread
-                ? await api.sendReply(ch.id, thread, message, idempotencyKey)
-                : await api.sendMessage(ch.id, message, idempotencyKey);
+                ? await api.sendReply(ch.id, thread, message, idempotencyKey, client_key)
+                : await api.sendMessage(ch.id, message, idempotencyKey, client_key);
 
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `Message sent to ${label(ch.name, thread)} (id: ${msg.id})`,
+                    text: msg.replayed
+                        ? `Already sent to ${label(ch.name, thread)} with this client_key (id: ${msg.id}); not posted again`
+                        : `Message sent to ${label(ch.name, thread)} (id: ${msg.id})`,
                 }],
             };
         },
@@ -499,10 +505,11 @@ export function registerTools(
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             message: z.string().describe('Parent message content (the thread\'s topic or opening message)'),
+            client_key: clientKeyParam,
         },
-        async ({ channel, message }) => {
+        async ({ channel, message, client_key }) => {
             const ch = await resolveChannel(channel);
-            const msg = await api.sendMessage(ch.id, message, randomUUID());
+            const msg = await api.sendMessage(ch.id, message, randomUUID(), client_key);
 
             return {
                 content: [{
@@ -551,6 +558,84 @@ export function registerTools(
                     text: `${label(ch.name, thread)} ${reopen ? 'reopened' : 'closed'}`,
                 }],
             };
+        },
+    );
+
+    // ─── Agent sessions ───
+    // Starting, ending and waking other agents needs can_direct in the channel, which only
+    // the server owner grants; without it these return 403. Listing needs only access.
+
+    const formatSession = (s: AgentSession) =>
+        `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${s.endReason})` : ''}, `
+        + `${s.wakesUsed} wakes, ${s.tokensUsed} tokens, last active ${s.lastActiveAt}`;
+
+    server.tool(
+        'session_list',
+        'List agent sessions in a channel: live ones first, then shelved and ended. Each line shows the session ID, profile, agent, state and usage.',
+        { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)') },
+        async ({ channel }) => {
+            const ch = await resolveChannel(channel);
+            const res = await api.agentCommand(ch.id, { command: 'sessions' });
+            const sessions = res.sessions ?? [];
+            return {
+                content: [{
+                    type: 'text' as const,
+                    text: sessions.length
+                        ? `#${oneLine(ch.name)} — ${sessions.length} session(s):\n${sessions.map(formatSession).join('\n')}`
+                        : `#${oneLine(ch.name)} — no agent sessions`,
+                }],
+            };
+        },
+    );
+
+    server.tool(
+        'session_start',
+        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            profile: z.string().describe('Profile name, e.g. "codex"'),
+            on_live: z.enum(['ask', 'keep', 'shelve']).optional().describe('What to do if the agent is already live here'),
+            fresh: z.boolean().optional().describe('Start a new session instead of resuming a shelved one'),
+        },
+        async ({ channel, profile, on_live, fresh }) => {
+            const ch = await resolveChannel(channel);
+            const res = await api.agentCommand(ch.id, { command: 'start', profile, onLive: on_live, fresh });
+            return { content: [{ type: 'text' as const, text: `Session ${res.action}: ${res.session ? formatSession(res.session) : ''}` }] };
+        },
+    );
+
+    server.tool(
+        'session_end',
+        'End an agent\'s live session in a channel. Queued work is dropped and a run in progress is stopped; the history stays. Needs can_direct.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            profile: z.string().describe('Profile name, e.g. "codex"'),
+        },
+        async ({ channel, profile }) => {
+            const ch = await resolveChannel(channel);
+            const res = await api.agentCommand(ch.id, { command: 'end', profile });
+            return { content: [{ type: 'text' as const, text: `Session ended: ${res.session ? formatSession(res.session) : ''}` }] };
+        },
+    );
+
+    server.tool(
+        'session_wake',
+        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Counts as an instruction only if you have can_direct in the channel.',
+        {
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            profile: z.string().describe('Profile name of the agent to wake'),
+            message: z.string().describe('What the agent should do'),
+            client_key: clientKeyParam,
+        },
+        async ({ channel, profile, message, client_key }) => {
+            const ch = await resolveChannel(channel);
+            const res = await api.agentCommand(ch.id, { command: 'sessions' });
+            const live = (res.sessions ?? []).find(s => s.profile === profile && s.state === 'live');
+            if (!live) {
+                return { content: [{ type: 'text' as const, text: `No live ${oneLine(profile)} session in #${oneLine(ch.name)}; start one with session_start.` }] };
+            }
+            const msg = await api.sendMessage(ch.id, `@${live.botUsername} ${message}`, randomUUID(), client_key);
+            return { content: [{ type: 'text' as const, text: `Woke ${oneLine(profile)} in #${oneLine(ch.name)} (message id: ${msg.id})` }] };
         },
     );
 

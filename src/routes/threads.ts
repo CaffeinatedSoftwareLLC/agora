@@ -8,6 +8,8 @@ import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol } from '../lib/protocol';
 import { readAuthorities, stampAuthority } from '../lib/direct-agents';
+import { findClientKey, insertWithClientKey } from '../lib/client-key';
+import { routeMessage } from '../lib/agent-sessions';
 
 export async function threadRoutes(app: FastifyInstance) {
 
@@ -20,6 +22,7 @@ export async function threadRoutes(app: FastifyInstance) {
                 required: ['content'],
                 properties: {
                     content: { type: 'string', minLength: 1, maxLength: 4000 },
+                    client_key: { type: 'string', minLength: 1, maxLength: 100 },
                 },
             },
         },
@@ -27,7 +30,7 @@ export async function threadRoutes(app: FastifyInstance) {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
         const isBot = request.isBot;
-        const { content } = request.body as any;
+        const { content, client_key: clientKey } = request.body as any;
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, isBot);
@@ -52,6 +55,15 @@ export async function threadRoutes(app: FastifyInstance) {
         // Reject replies to closed threads
         if (parent.rows[0].thread_closed_at !== null) {
             return reply.status(409).send({ error: 'Thread is closed' });
+        }
+
+        // A repeat of an earlier reply (same author and client_key) returns that reply.
+        // Checked after the access and parent checks, before rate limits and the loop guard.
+        const keyTarget = { channelId, threadId: msgId, content };
+        if (clientKey) {
+            const earlier = await findClientKey(db, userId, clientKey, keyTarget);
+            if (earlier.kind === 'replay') return reply.status(200).send(earlier.message);
+            if (earlier.kind === 'conflict') return reply.status(409).send({ error: 'client_key_conflict' });
         }
 
         // Fetch channel details for mention resolution, rate limiting, loop guard
@@ -148,11 +160,21 @@ export async function threadRoutes(app: FastifyInstance) {
 
         const protocol = parseProtocol(content);
         const couldDirect = await stampAuthority(db, channelId, userId, !!request.isBot);
-        await db.query(
-            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone, protocol, author_could_direct)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [replyId, channelId, userId, content, msgId, mentionsEveryone, protocol, couldDirect]
+        const insert = () => db.query(
+            `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone, protocol, author_could_direct, client_key)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [replyId, channelId, userId, content, msgId, mentionsEveryone, protocol, couldDirect, clientKey ?? null]
         );
+        if (clientKey) {
+            // A concurrent reply with the same key may have committed since the check above
+            if (await insertWithClientKey(db, insert) === 'duplicate') {
+                const winner = await findClientKey(db, userId, clientKey, keyTarget);
+                if (winner.kind === 'replay') return reply.status(200).send(winner.message);
+                return reply.status(409).send({ error: 'client_key_conflict' });
+            }
+        } else {
+            await insert();
+        }
 
         // Update parent metadata
         const parentUpdate = await db.query(
@@ -164,6 +186,12 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Resolve @mentions (shared helper)
         const { mentionedUsers } = await resolveMentions(db, replyId, channelId, serverId, userId, content);
+
+        // Wake agents this reply is addressed to (same transaction as the reply)
+        await routeMessage(db, {
+            channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol,
+            mentionedUserIds: mentionedUsers.map(u => u.id),
+        });
 
         const userRow = await db.query(
             'SELECT username, bot, avatar_url FROM users WHERE id = $1',
