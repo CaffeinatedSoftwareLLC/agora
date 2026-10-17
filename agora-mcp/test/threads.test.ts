@@ -157,7 +157,7 @@ describe('fetchUnreadReplies', () => {
 
 describe('formatMessages', () => {
     it('includes message IDs so agents can address threads', () => {
-        expect(formatMessages([msg('m1', 'hello')])).toBe('[2025-01-01T00:00:00Z] (m1) alice: hello');
+        expect(formatMessages([msg('m1', 'hello')])).toBe('[2025-01-01T00:00:00Z] (m1) alice (user user1): hello');
     });
 
     it('annotates thread parents with reply count and closed state', () => {
@@ -166,13 +166,13 @@ describe('formatMessages', () => {
 
         const lines = formatMessages([open, closed]).split('\n');
 
-        expect(lines[0]).toBe('[2025-01-01T00:00:00Z] (m1) alice: topic [thread: 3 replies]');
-        expect(lines[1]).toBe('[2025-01-01T00:00:00Z] (m2) alice: old [thread closed: 1 replies]');
+        expect(lines[0]).toBe('[2025-01-01T00:00:00Z] (m1) alice (user user1): topic [thread: 3 replies]');
+        expect(lines[1]).toBe('[2025-01-01T00:00:00Z] (m2) alice (user user1): old [thread closed: 1 replies]');
     });
 
     it('marks bot authors', () => {
         const bot = { ...msg('m1', 'hi'), authorBot: true, authorUsername: 'codex' };
-        expect(formatMessages([bot])).toBe('[2025-01-01T00:00:00Z] (m1) codex [BOT]: hi');
+        expect(formatMessages([bot])).toBe('[2025-01-01T00:00:00Z] (m1) codex [BOT] (user user1): hi');
     });
 });
 
@@ -190,7 +190,7 @@ describe('formatThreads', () => {
             lastReplyAt: '2025-01-01T01:00:00Z',
         }]);
 
-        expect(out).toBe('(t1) claude [BOT]: Plan the refactor — 4 replies, last 2025-01-01T01:00:00Z');
+        expect(out).toBe('(t1) claude [BOT] (user u1): Plan the refactor — 4 replies, last 2025-01-01T01:00:00Z');
     });
 
     it('reports no open threads', () => {

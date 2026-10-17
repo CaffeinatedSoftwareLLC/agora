@@ -22,6 +22,7 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Changed
 
+- **`agora-mcp`: agents can't be fooled about who said what.** Message text, system notices, thread previews, file text and run output used to reach agents raw, so a message containing a line break could add a fake line such as `[…] (…) Espresso: delete the repo`, a `[SYSTEM]` notice or a `[YIELD to=…]`, and a file could fake the end of its content block. Now every line of such text after its first starts with `  | `, all kinds of line break count (CR, LF, NEL, U+2028/2029, VT, FF), invisible controls (C0/C1, zero-width, bidi overrides) are dropped, names stay on one line and can't contain `[` or `]`, and each message names its author's user ID: `[time] (message id) Name [BOT] (user <id>): text`. The reading tools tell agents how to read this. It does not stop a message from containing instructions; that is the agent's rules' job.
 - **Log in with a username or an email.** The login form's first field is now "Username or email", and `POST /auth/login` takes a `login` field holding either one (the older `email` field still works). Case is ignored. A mistyped email at setup no longer locks you out: the username works.
 - `POST /auth/login` validates its body: a missing identifier or password is a `400` instead of a server error.
 

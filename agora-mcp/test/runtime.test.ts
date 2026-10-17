@@ -7,7 +7,7 @@ describe('formatRun', () => {
         expect(text).toContain('Run R1: succeeded');
         expect(text).toContain('Exit code: 0');
         expect(text).toContain('Capability calls: 2 · files posted: 1');
-        expect(text).toContain('stdout:\nhello');
+        expect(text).toContain('stdout:\n  | hello');
     });
 
     it('explains denials and pending approval', () => {

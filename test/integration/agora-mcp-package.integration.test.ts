@@ -534,8 +534,8 @@ describe('agora-mcp package: AgoraApi + CursorTracker + fetchUnreadMessages', ()
                     authorBot: true, channelId: 'c', createdAt: '2024-01-01T00:01:00Z',
                 },
             ]);
-            expect(result).toContain('alice:');
-            expect(result).toContain('test-bot [BOT]:');
+            expect(result).toContain('alice (user a):');
+            expect(result).toContain('test-bot [BOT] (user b):');
             expect(result).not.toContain('[SYSTEM]');
         });
 
