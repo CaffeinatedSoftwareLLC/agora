@@ -122,6 +122,7 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 - **gVisor (`runsc`) on a Linux host**, for sandboxed code runs. Without it the `runner` service refuses to start; chat, threads, files and the assistant work regardless.
   - **Windows:** run the stack in WSL2 with its own Docker Engine: [Getting Started](docs/getting-started.md#local-stack-on-windows-with-gvisor-wsl2).
   - **macOS:** Docker Desktop runs everything except code runs. For those, use a Linux VM (Colima) or host on a Linux machine: [Getting Started](docs/getting-started.md#local-stack-on-macos).
+  - **From your phone:** reach your instance over Tailscale, with nothing opened to the internet: [Remote access](docs/remote-access.md).
 
 ## Production Deployment (Docker)
 
