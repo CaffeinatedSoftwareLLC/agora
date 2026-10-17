@@ -4,9 +4,10 @@ import { checkChannelPermissions } from './channel-access';
 /**
  * Who may give agents instructions in a channel.
  *
- * - The server owner, always.
- * - A member whose roles or channel overrides grant DirectAgents. Only the owner can
- *   grant it (routes/roles.ts); Administrator does not imply it.
+ * - The server owner, while their account is active.
+ * - An active member who can see the channel and whose roles or channel overrides
+ *   grant DirectAgents. Only the owner can grant it (routes/roles.ts); Administrator
+ *   does not imply it.
  * - A bot whose access to the channel has can_direct set, while the bot is not paused
  *   and both it and its owner are active. Only the server owner sets it; removing and
  *   re-adding the bot's access resets it.
@@ -31,7 +32,10 @@ export async function canDirect(db: any, channelId: string, userId: string, isBo
             );
             return row.rows[0]?.can_direct === true;
         }
-        return (await checkChannelPermissions(db, channelId, userId, Permissions.DirectAgents)).allowed;
+        // An active account that can see the channel and holds DirectAgents there
+        const user = await db.query('SELECT account_status FROM users WHERE id = $1 AND bot = false', [userId]);
+        if (user.rows[0]?.account_status !== 'active') return false;
+        return (await checkChannelPermissions(db, channelId, userId, Permissions.DirectAgents | Permissions.ViewChannel)).allowed;
     } catch {
         return false;
     }
@@ -116,6 +120,23 @@ export async function listDirectors(db: any, channelId: string): Promise<Directo
 
     // Owner first
     return directors.sort((a, b) => (a.authority === 'owner' ? -1 : b.authority === 'owner' ? 1 : 0));
+}
+
+/**
+ * True when a role carries DirectAgents in any way: in its own permissions, or in a channel
+ * override that allows or denies it. Assigning, unassigning or deleting such a role changes
+ * who directs, so it is the owner's alone.
+ */
+export async function roleTouchesDirectAgents(db: any, roleId: string): Promise<boolean> {
+    const bit = Permissions.DirectAgents.toString();
+    const row = await db.query(
+        `SELECT (r.permissions & $2::bigint) <> 0
+                OR EXISTS (SELECT 1 FROM channel_role_overrides o
+                           WHERE o.role_id = r.id AND ((o.allow | o.deny) & $2::bigint) <> 0) AS touches
+         FROM roles r WHERE r.id = $1`,
+        [roleId, bit]
+    );
+    return row.rows[0]?.touches === true;
 }
 
 /**

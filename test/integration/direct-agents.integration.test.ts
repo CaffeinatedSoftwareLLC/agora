@@ -171,6 +171,65 @@ describe('a member the owner makes a director', () => {
     });
 });
 
+describe('roles that carry DirectAgents only through a channel override', () => {
+    it('are owner-only to assign, unassign or delete', async () => {
+        const via = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth).send({ name: 'ViaOverride', permissions: '0' });
+        expect((await ctx.request.put(`/channels/${channelId}/overrides/roles/${via.body.id}`).set(owner.auth)
+            .send({ allow: DIRECT, deny: '0' })).status).toBe(200);
+
+        // An Administrator can't hand it to themselves, or delete it
+        expect((await ctx.request.put(`/servers/${serverId}/members/${admin.userId}/roles/${via.body.id}`).set(admin.auth)).status).toBe(403);
+        expect((await ctx.request.delete(`/servers/${serverId}/roles/${via.body.id}`).set(admin.auth)).status).toBe(403);
+
+        // The owner can, and it then directs
+        expect((await ctx.request.put(`/servers/${serverId}/members/${member.userId}/roles/${via.body.id}`).set(owner.auth)).status).toBe(200);
+        const said = await post(member.auth, 'via override');
+        expect((await authorities()).get(said)).toBe('director');
+
+        // ...and only the owner can take it away again
+        expect((await ctx.request.delete(`/servers/${serverId}/members/${member.userId}/roles/${via.body.id}`).set(admin.auth)).status).toBe(403);
+        expect((await ctx.request.delete(`/servers/${serverId}/members/${member.userId}/roles/${via.body.id}`).set(owner.auth)).status).toBe(200);
+    });
+
+    it('protect a deny too: an Administrator cannot lift a restriction by unassigning', async () => {
+        const muzzle = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth).send({ name: 'Muzzle', permissions: '0' });
+        await ctx.request.put(`/channels/${channelId}/overrides/roles/${muzzle.body.id}`).set(owner.auth).send({ allow: '0', deny: DIRECT });
+        await ctx.request.put(`/servers/${serverId}/members/${member.userId}/roles/${muzzle.body.id}`).set(owner.auth);
+        expect((await ctx.request.delete(`/servers/${serverId}/members/${member.userId}/roles/${muzzle.body.id}`).set(admin.auth)).status).toBe(403);
+        expect((await ctx.request.delete(`/servers/${serverId}/roles/${muzzle.body.id}`).set(admin.auth)).status).toBe(403);
+        expect((await ctx.request.delete(`/servers/${serverId}/roles/${muzzle.body.id}`).set(owner.auth)).status).toBe(200);
+    });
+});
+
+describe('human directors who stop qualifying', () => {
+    it('lose authority while suspended', async () => {
+        await ctx.request.put(`/servers/${serverId}/members/${member.userId}/roles/${directorRoleId}`).set(owner.auth);
+        const said = await post(member.auth, 'director speaking');
+        const ownerSaid = await post(owner.auth, 'owner speaking');
+        await ctx.db.query(`UPDATE users SET account_status = 'suspended' WHERE id = ANY($1)`, [[member.userId, owner.userId]]);
+        try {
+            const auth = await authorities();
+            expect(auth.get(said)).toBeNull();
+            expect(auth.get(ownerSaid)).toBeNull();
+            expect((await directors()).length).toBe(0);
+        } finally {
+            await ctx.db.query(`UPDATE users SET account_status = 'active' WHERE id = ANY($1)`, [[member.userId, owner.userId]]);
+        }
+        expect((await authorities()).get(said)).toBe('director');
+        await ctx.request.delete(`/servers/${serverId}/members/${member.userId}/roles/${directorRoleId}`).set(owner.auth);
+    });
+
+    it('lose authority in a channel they can no longer see', async () => {
+        await ctx.request.put(`/servers/${serverId}/members/${member.userId}/roles/${directorRoleId}`).set(owner.auth);
+        const said = await post(member.auth, 'before hiding');
+        const VIEW = (1n << 10n).toString();
+        await ctx.request.put(`/channels/${channelId}/overrides/members/${member.userId}`).set(owner.auth).send({ allow: '0', deny: VIEW });
+        expect((await authorities()).get(said)).toBeNull();
+        await ctx.request.delete(`/channels/${channelId}/overrides/members/${member.userId}`).set(owner.auth);
+        await ctx.request.delete(`/servers/${serverId}/members/${member.userId}/roles/${directorRoleId}`).set(owner.auth);
+    });
+});
+
 describe('a bot the owner lets direct', () => {
     it('directs only after the owner sets can_direct', async () => {
         const before = await post(botAuth, 'not yet');

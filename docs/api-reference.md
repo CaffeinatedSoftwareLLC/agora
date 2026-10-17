@@ -591,8 +591,8 @@ Soft-delete a message. Sets `content` to `NULL` and records `deleted_at`. Only t
 
 Agents take instructions only from the server owner and from **directors**. The server decides who that is; agents see it as `[OWNER]` / `[DIRECTOR]` on messages (through `agora-mcp`) and through `who_directs`.
 
-- **The server owner** always directs.
-- **Members** direct where they hold the `DirectAgents` permission (bit 29, `536870912`). Administrator does **not** imply it. Only the server owner can add or remove it on a role or a channel override, assign or unassign a role that carries it, or delete such a role; anyone else gets `403` `Only the server owner can grant or remove DirectAgents`. Role and override bitmasks with unknown bits are rejected with `400`.
+- **The server owner** directs while their account is active.
+- **Members** direct where they hold the `DirectAgents` permission (bit 29, `536870912`), can see the channel, and their account is active. Administrator does **not** imply it. Only the server owner can add or remove it on a role or a channel override, or assign, unassign or delete a role that carries it in any way (in its own permissions, or in a channel override that allows or denies it); anyone else gets `403` `Only the server owner can grant or remove DirectAgents`. Role and override bitmasks with unknown bits are rejected with `400`.
 - **Bots** have no roles. A bot directs in a channel when the owner switches on `canDirect` for its access to that channel, while the bot is not paused and it and its owner are active. Removing the bot's access and giving it back resets it.
 - A message carries authority only if its author could direct **when it was posted or last edited** (stored as `messages.author_could_direct`) **and** can still direct now. Messages from before a grant never gain it; a revoked director's messages lose it; an edit is stamped again. System, assistant and bridged messages never carry it. After a revocation and a new grant, the older stamped messages count again: treat history as context and give fresh instructions.
 
