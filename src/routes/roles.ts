@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { Permissions, computePermissions, KNOWN_PERMS_MASK } from '../permissions';
 import { loadAndComputePermissions } from './bots';
-import { isServerOwner, OWNER_ONLY_ERROR, roleTouchesDirectAgents, touchesDirectAgents } from '../lib/direct-agents';
+import { isServerOwner, OWNER_ONLY_ERROR, roleCarriesDirectAgents, touchesDirectAgents } from '../lib/direct-agents';
 
 /** A permission bitmask from the API, or null if it isn't one or has unknown bits. */
 function parsePerms(value: unknown): bigint | null {
@@ -13,7 +13,7 @@ function parsePerms(value: unknown): bigint | null {
 
 /** Assigning, unassigning or deleting a role that carries DirectAgents in any way: owner only. */
 async function directorRoleGuard(db: any, serverId: string, callerId: string, roleId: string): Promise<string | null> {
-    if (!await roleTouchesDirectAgents(db, roleId)) return null;
+    if (!await roleCarriesDirectAgents(db, roleId)) return null;
     return await isServerOwner(db, serverId, callerId) ? null : OWNER_ONLY_ERROR;
 }
 
@@ -329,7 +329,7 @@ export async function roleRoutes(app: FastifyInstance) {
         if (role.rows[0].is_everyone) {
             return reply.status(400).send({ error: 'Cannot delete the @everyone role' });
         }
-        const ownerErr = await directorRoleGuard((app as any).db, serverId, request.userId, roleId);
+        const ownerErr = await directorRoleGuard(db, serverId, request.userId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
         await db.query(
@@ -373,7 +373,7 @@ export async function roleRoutes(app: FastifyInstance) {
 
         // Escalation check: can't assign a role with perms you don't have
         const rolePerms = BigInt(role.rows[0].permissions);
-        const ownerErr = await directorRoleGuard((app as any).db, serverId, callerId, roleId);
+        const ownerErr = await directorRoleGuard(db, serverId, callerId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
         const callerPerms = await loadAndComputePermissions(db, callerId, serverId);
         const err = await checkEscalation(db, callerPerms, rolePerms, serverId, callerId);
@@ -402,7 +402,7 @@ export async function roleRoutes(app: FastifyInstance) {
         const { serverId, userId: targetUserId, roleId } = request.params as any;
         const db = request.dbClient!;
 
-        const ownerErr = await directorRoleGuard((app as any).db, serverId, request.userId, roleId);
+        const ownerErr = await directorRoleGuard(db, serverId, request.userId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
         const result = await db.query(

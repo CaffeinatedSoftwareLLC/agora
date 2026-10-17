@@ -269,6 +269,41 @@ describe('a bot the owner lets direct', () => {
     });
 });
 
+describe('authority lookups on the request connection', () => {
+    it('hold up with more requests at once than the pool has connections', async () => {
+        await ctx.request.put(`/channels/${channelId}/bots/${botId}/direct`).set(owner.auth).send({ canDirect: true });
+        const reads = Array.from({ length: 25 }, () => ctx.request.get(`/channels/${channelId}/messages?limit=50`).set(botAuth));
+        const posts = Array.from({ length: 15 }, (_, i) => ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: `burst ${i}` }));
+        const lists = Array.from({ length: 10 }, () => ctx.request.get(`/channels/${channelId}/directors`).set(botAuth));
+        const results = await Promise.all([...reads, ...posts, ...lists]);
+        expect(results.filter(r => r.status >= 400)).toHaveLength(0);
+        expect(results.slice(25, 40).every(r => r.body.authorAuthority === 'owner')).toBe(true);
+    });
+
+    it('roll back a failed lookup and leave the transaction and role as they were', async () => {
+        const { withServiceRoleForTests } = await import('../../src/lib/direct-agents');
+        const client = await ctx.db.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query('SET LOCAL ROLE app_user');
+            const fallback = await withServiceRoleForTests(client, async () => {
+                await client.query('SELECT * FROM no_such_table');
+                return 'unreachable';
+            }, { value: 'fell back' });
+            expect(fallback).toBe('fell back');
+            expect((await client.query('SELECT current_user AS r')).rows[0].r).toBe('app_user');
+
+            const ok = await withServiceRoleForTests(client, async () => (await client.query('SELECT current_user AS r')).rows[0].r);
+            expect(ok).not.toBe('app_user');
+            expect((await client.query('SELECT current_user AS r')).rows[0].r).toBe('app_user');
+            expect((await client.query('SELECT 1 AS one')).rows[0].one).toBe(1);
+        } finally {
+            await client.query('ROLLBACK');
+            client.release();
+        }
+    });
+});
+
 describe('the directors list', () => {
     it('is open to members and bots of the channel, and closed to others', async () => {
         expect((await ctx.request.get(`/channels/${channelId}/directors`).set(member.auth)).status).toBe(200);

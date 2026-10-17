@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { canViewChannel } from '../lib/channel-access';
-import { listDirectors } from '../lib/direct-agents';
+import { readDirectors } from '../lib/direct-agents';
 
 export async function directorRoutes(app: FastifyInstance) {
     // GET /channels/:id/directors → 200 { directors: [{ userId, username, bot, authority }] }
@@ -11,8 +11,9 @@ export async function directorRoutes(app: FastifyInstance) {
         const access = await canViewChannel(request.dbClient!, channelId, request.userId, !!request.isBot);
         if (!access.allowed) return reply.status(access.status ?? 403).send({ error: access.error ?? 'forbidden' });
 
-        // Read with the server's own pool: bots can't see roles or membership under RLS
-        const directors = await listDirectors((app as any).db, channelId);
+        // Read as the service role on this request's connection: bots can't see roles or
+        // membership under RLS (src/lib/direct-agents.ts)
+        const directors = await readDirectors(request.dbClient!, channelId);
         return reply.status(200).send({ directors });
     });
 }

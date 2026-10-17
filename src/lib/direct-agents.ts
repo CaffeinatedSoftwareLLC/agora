@@ -16,29 +16,31 @@ import { checkChannelPermissions } from './channel-access';
  * `GET /channels/:id/directors`. A message carries authority only if its author could
  * direct when it was posted or last edited (messages.author_could_direct) AND can
  * still direct now. Any lookup failure means no authority.
+ *
+ * Agents read as bots, and RLS hides roles and membership from bots, so these lookups run
+ * as the service role (withServiceRole) on the request's own connection, inside its
+ * transaction, after the route has checked that the caller can see the channel. The stamp is
+ * therefore taken in the same transaction as the insert. A second pool connection would be
+ * simpler but could exhaust the pool under load: every request already holds one.
  */
 export type Authority = 'owner' | 'director' | null;
 
-export async function canDirect(db: any, channelId: string, userId: string, isBot: boolean): Promise<boolean> {
-    try {
-        if (isBot) {
-            const row = await db.query(
-                `SELECT bca.can_direct FROM bot_channel_access bca
-                 JOIN users u ON u.id = bca.bot_id
-                 JOIN users o ON o.id = u.bot_owner_id
-                 WHERE bca.channel_id = $1 AND bca.bot_id = $2
-                   AND u.bot_paused_at IS NULL AND u.account_status = 'active' AND o.account_status = 'active'`,
-                [channelId, userId]
-            );
-            return row.rows[0]?.can_direct === true;
-        }
-        // An active account that can see the channel and holds DirectAgents there
-        const user = await db.query('SELECT account_status FROM users WHERE id = $1 AND bot = false', [userId]);
-        if (user.rows[0]?.account_status !== 'active') return false;
-        return (await checkChannelPermissions(db, channelId, userId, Permissions.DirectAgents | Permissions.ViewChannel)).allowed;
-    } catch {
-        return false;
+async function canDirect(db: any, channelId: string, userId: string, isBot: boolean): Promise<boolean> {
+    if (isBot) {
+        const row = await db.query(
+            `SELECT bca.can_direct FROM bot_channel_access bca
+             JOIN users u ON u.id = bca.bot_id
+             JOIN users o ON o.id = u.bot_owner_id
+             WHERE bca.channel_id = $1 AND bca.bot_id = $2
+               AND u.bot_paused_at IS NULL AND u.account_status = 'active' AND o.account_status = 'active'`,
+            [channelId, userId]
+        );
+        return row.rows[0]?.can_direct === true;
     }
+    // An active account that can see the channel and holds DirectAgents there
+    const user = await db.query('SELECT account_status FROM users WHERE id = $1 AND bot = false', [userId]);
+    if (user.rows[0]?.account_status !== 'active') return false;
+    return (await checkChannelPermissions(db, channelId, userId, Permissions.DirectAgents | Permissions.ViewChannel)).allowed;
 }
 
 async function channelOwner(db: any, channelId: string): Promise<string | null> {
@@ -54,28 +56,72 @@ async function channelOwner(db: any, channelId: string): Promise<string | null> 
  * when posted. `rows` need author_id, author_bot and author_could_direct.
  * Returns message id → authority.
  */
-export async function messageAuthorities(
-    db: any,
-    channelId: string,
-    rows: Array<{ id: string; author_id: string | null; author_bot?: boolean; author_could_direct?: boolean }>
-): Promise<Map<string, Authority>> {
+type AuthorRow = { id: string; author_id: string | null; author_bot?: boolean; author_could_direct?: boolean };
+
+async function messageAuthorities(db: any, channelId: string, rows: AuthorRow[]): Promise<Map<string, Authority>> {
     const result = new Map<string, Authority>();
     const stamped = rows.filter(r => r.author_could_direct && r.author_id);
     if (stamped.length === 0) return result;
 
-    try {
-        const owner = await channelOwner(db, channelId);
-        const now = new Map<string, boolean>();
-        for (const row of stamped) {
-            const authorId = row.author_id!.trim();
-            if (!now.has(authorId)) now.set(authorId, await canDirect(db, channelId, authorId, !!row.author_bot));
-            if (now.get(authorId)) result.set(row.id.trim(), authorId === owner ? 'owner' : 'director');
-        }
-    } catch {
-        return new Map();
+    const owner = await channelOwner(db, channelId);
+    const now = new Map<string, boolean>();
+    for (const row of stamped) {
+        const authorId = row.author_id!.trim();
+        if (!now.has(authorId)) now.set(authorId, await canDirect(db, channelId, authorId, !!row.author_bot));
+        if (now.get(authorId)) result.set(row.id.trim(), authorId === owner ? 'owner' : 'director');
     }
     return result;
 }
+
+/**
+ * Run trusted lookups on the request's own connection as the service role (no RLS), then
+ * put the request's role back. A savepoint keeps a failed lookup from aborting the request's
+ * transaction: on error it rolls back to the savepoint (which also restores the role) and
+ * returns `fallback`, or rethrows when there is none. Only the queries in this file run here.
+ */
+async function withServiceRole<T>(client: any, fn: () => Promise<T>, fallback?: { value: T }): Promise<T> {
+    const role = (await client.query('SELECT current_user AS role')).rows[0].role as string;
+    await client.query('SAVEPOINT direct_agents_lookup');
+    try {
+        await client.query('SET LOCAL ROLE NONE');
+        const result = await fn();
+        await client.query(`SET LOCAL ROLE ${quoteIdent(role)}`);
+        await client.query('RELEASE SAVEPOINT direct_agents_lookup');
+        return result;
+    } catch (err) {
+        await client.query('ROLLBACK TO SAVEPOINT direct_agents_lookup');
+        await client.query('RELEASE SAVEPOINT direct_agents_lookup');
+        if (fallback) return fallback.value;
+        throw err;
+    }
+}
+
+function quoteIdent(name: string): string {
+    return '"' + name.split('"').join('""') + '"';
+}
+
+/** For the insert: may this author direct in this channel now? Any failure means no. */
+export function stampAuthority(client: any, channelId: string, userId: string, isBot: boolean): Promise<boolean> {
+    return withServiceRole(client, () => canDirect(client, channelId, userId, isBot), { value: false });
+}
+
+/** Message id -> authority now, for rows that carry the stamp. Any failure means none. */
+export function readAuthorities(client: any, channelId: string, rows: AuthorRow[]): Promise<Map<string, Authority>> {
+    return withServiceRole(client, () => messageAuthorities(client, channelId, rows), { value: new Map() });
+}
+
+/** Everyone who may direct in the channel. Errors propagate: an empty list would mislead. */
+export function readDirectors(client: any, channelId: string): Promise<Director[]> {
+    return withServiceRole(client, () => listDirectors(client, channelId));
+}
+
+/** Whether a role carries DirectAgents in any way. A failed lookup counts as yes (owner only). */
+export function roleCarriesDirectAgents(client: any, roleId: string): Promise<boolean> {
+    return withServiceRole(client, () => roleTouchesDirectAgents(client, roleId), { value: true });
+}
+
+/** Test hook: run any lookup the way the routes do. */
+export const withServiceRoleForTests = withServiceRole;
 
 export interface Director {
     userId: string;
@@ -85,7 +131,7 @@ export interface Director {
 }
 
 /** Everyone who may direct agents in a channel right now. */
-export async function listDirectors(db: any, channelId: string): Promise<Director[]> {
+async function listDirectors(db: any, channelId: string): Promise<Director[]> {
     const channel = await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId]);
     const serverId = channel.rows[0]?.server_id?.trim();
     if (!serverId) return [];
@@ -127,7 +173,7 @@ export async function listDirectors(db: any, channelId: string): Promise<Directo
  * override that allows or denies it. Assigning, unassigning or deleting such a role changes
  * who directs, so it is the owner's alone.
  */
-export async function roleTouchesDirectAgents(db: any, roleId: string): Promise<boolean> {
+async function roleTouchesDirectAgents(db: any, roleId: string): Promise<boolean> {
     const bit = Permissions.DirectAgents.toString();
     const row = await db.query(
         `SELECT (r.permissions & $2::bigint) <> 0

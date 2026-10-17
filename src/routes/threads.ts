@@ -6,11 +6,9 @@ import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol } from '../lib/protocol';
-import { canDirect, messageAuthorities } from '../lib/direct-agents';
+import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 
 export async function threadRoutes(app: FastifyInstance) {
-    // Authority is read with the server's own pool (see routes/messages.ts)
-    const authorityDb = () => (app as any).db;
 
 
     // POST /channels/:id/messages/:msgId/replies → 201
@@ -148,7 +146,7 @@ export async function threadRoutes(app: FastifyInstance) {
         const mentionsEveryone = mentionedUsernames.includes('everyone');
 
         const protocol = parseProtocol(content);
-        const couldDirect = await canDirect(authorityDb(), channelId, userId, !!request.isBot);
+        const couldDirect = await stampAuthority(db, channelId, userId, !!request.isBot);
         await db.query(
             `INSERT INTO messages (id, channel_id, author_id, content, thread_id, mentions_everyone, protocol, author_could_direct)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -208,7 +206,7 @@ export async function threadRoutes(app: FastifyInstance) {
             authorBot: userRow.rows[0].bot || false,
             authorAvatarUrl: userRow.rows[0].avatar_url || null,
             authorAuthority: couldDirect
-                ? (await messageAuthorities(authorityDb(), channelId, [{ id: replyId, author_id: userId, author_bot: !!request.isBot, author_could_direct: true }])).get(replyId.trim()) ?? null
+                ? (await readAuthorities(db, channelId, [{ id: replyId, author_id: userId, author_bot: !!request.isBot, author_could_direct: true }])).get(replyId.trim()) ?? null
                 : null,
             channelId: channelId.trim(),
             createdAt: new Date().toISOString(),
@@ -325,7 +323,7 @@ export async function threadRoutes(app: FastifyInstance) {
             await addTaggingToAttachments(db, Object.values(attachmentsMap).flat());
         }
 
-        const authorities = await messageAuthorities(authorityDb(), channelId, result.rows);
+        const authorities = await readAuthorities(db, channelId, result.rows);
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -431,7 +429,7 @@ export async function threadRoutes(app: FastifyInstance) {
             hasManagePerms = true;
         }
 
-        const authorities = await messageAuthorities(authorityDb(), channelId, result.rows);
+        const authorities = await readAuthorities(db, channelId, result.rows);
         const threads = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
