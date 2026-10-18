@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { api, ApiError } from '../../lib/api';
+import {
+  ERRORS, classifyCommandError, describeSession as describe, runAgentCommand,
+  type AgentSession, type CommandBody,
+} from '../agents/agentSessions';
 
 /**
  * Agent session commands typed in the message box: /start, /end, /sessions, /resume
@@ -7,17 +10,6 @@ import { api, ApiError } from '../../lib/api';
  * change, so the channel sees it; this panel shows the sender the result, and asks what
  * to do when the agent already has a live session here.
  */
-
-interface AgentSession {
-  id: string;
-  profile: string;
-  botUsername: string;
-  state: 'live' | 'shelved' | 'ended';
-  endReason: string | null;
-  wakesUsed: number;
-  tokensUsed: number;
-  lastActiveAt: string;
-}
 
 type Command =
   | { command: 'start'; profile: string; fresh: boolean }
@@ -49,19 +41,6 @@ export function parseAgentCommand(text: string): Command | 'usage' | null {
   }
 }
 
-const ERRORS: Record<string, string> = {
-  unknown_profile: 'No agent profile with that name on this server.',
-  bot_not_in_channel: "That agent's bot hasn't been added to this channel.",
-  no_live_session: 'That agent has no live session here.',
-  not_resumable: 'Only a shelved session from this channel can be resumed.',
-  session_live: 'That agent already has a live session here.',
-};
-
-function describe(s: AgentSession): string {
-  const reason = s.endReason ? ` (${s.endReason})` : '';
-  return `${s.profile} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`;
-}
-
 type Panel =
   | { kind: 'none' }
   | { kind: 'busy' }
@@ -74,15 +53,13 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
 
   const run = async (cmd: Command, onLive?: 'shelve' | 'keep') => {
     setState({ kind: 'busy' });
-    const body = cmd.command === 'start'
+    const body: CommandBody = cmd.command === 'start'
       ? { command: 'start', profile: cmd.profile, fresh: cmd.fresh, ...(onLive ? { onLive } : {}) }
       : cmd.command === 'resume'
         ? { command: 'resume', sessionId: cmd.sessionId, ...(onLive ? { onLive } : {}) }
         : cmd;
     try {
-      const res = await api.post<{ action?: string; session?: AgentSession; sessions?: AgentSession[] }>(
-        `/channels/${channelId}/agent-commands`, body,
-      );
+      const res = await runAgentCommand(channelId, body);
       onAccepted?.();
       if (cmd.command === 'sessions') {
         setState({ kind: 'sessions', sessions: res.sessions ?? [] });
@@ -90,13 +67,11 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
         setState({ kind: 'message', text: `Session ${res.action}: ${res.session ? describe(res.session) : ''}` });
       }
     } catch (err) {
-      const code = err instanceof ApiError ? err.code : 'unknown_error';
-      if (code === 'session_live' && (cmd.command === 'start' || cmd.command === 'resume')) {
+      const outcome = classifyCommandError(err, cmd.command);
+      if (outcome.kind === 'live') {
         setState({ kind: 'live', retry: (choice) => { void run(cmd, choice); } });
-      } else if (err instanceof ApiError && err.status === 403) {
-        setState({ kind: 'message', text: 'Only the owner and directors can start, end or resume agent sessions.', error: true });
       } else {
-        setState({ kind: 'message', text: ERRORS[code] ?? `Command failed (${code}).`, error: true });
+        setState({ kind: 'message', text: outcome.text, error: true });
       }
     }
   };

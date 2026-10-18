@@ -76,17 +76,18 @@ export function RuntimeCard({ message }: { message: Message }) {
       </div>
 
       {runId && (
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-          <Button variant="secondary" onClick={toggleCode} loading={busy === 'code'}>
+        // Phone: full-width 44px buttons stacked, so Approve and Deny can't be mis-tapped. Desktop unchanged.
+        <div className="mt-2 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
+          <Button variant="secondary" onClick={toggleCode} loading={busy === 'code'} className={TOUCH}>
             {showCode ? 'Hide code' : 'View code'}
           </Button>
           {pending && (
             <>
-              <Button onClick={() => review('approve')} loading={busy === 'approve'}>Approve</Button>
-              <Button variant="danger" onClick={() => review('deny')} loading={busy === 'deny'}>Deny</Button>
+              <Button onClick={() => review('approve')} loading={busy === 'approve'} className={TOUCH}>Approve</Button>
+              <Button variant="danger" onClick={() => review('deny')} loading={busy === 'deny'} className={TOUCH}>Deny</Button>
             </>
           )}
-          {error && <span className="text-danger text-sm">{error}</span>}
+          {error && <span className="text-danger text-sm" role="alert">{error}</span>}
         </div>
       )}
 
@@ -96,6 +97,8 @@ export function RuntimeCard({ message }: { message: Message }) {
     </div>
   );
 }
+
+const TOUCH = 'min-h-[44px] w-full md:min-h-0 md:w-auto';
 
 /** Split text on ``` fences so run output wraps instead of scrolling sideways. */
 function splitFences(text: string): { text: string; code: boolean }[] {

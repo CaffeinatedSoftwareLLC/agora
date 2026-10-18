@@ -271,7 +271,7 @@ describe('commands (S4)', () => {
         await cmd(owner.auth, { command: 'start', profile: 'codex' });
         const list = await cmd(member.auth, { command: 'sessions' });
         expect(list.status).toBe(200);
-        expect(list.body.sessions).toEqual([expect.objectContaining({ profile: 'codex', state: 'live' })]);
+        expect(list.body.sessions).toEqual([expect.objectContaining({ profile: 'codex', state: 'live', running: false })]);
     });
 
     it('/start with a live session asks, then keeps or shelves and starts fresh', async () => {
@@ -313,6 +313,8 @@ describe('commands (S4)', () => {
     it('/end during a run cancels it and drops queued work', async () => {
         const s = await cmd(owner.auth, { command: 'start', profile: 'codex' });
         const c = await claim();
+        const listed = await cmd(owner.auth, { command: 'sessions' });
+        expect(listed.body.sessions).toEqual([expect.objectContaining({ id: s.body.session.id, running: true })]);
         await post(owner.auth, '@codex queued while running');
         const end = await cmd(owner.auth, { command: 'end', profile: 'codex' });
         expect(end.body.action).toBe('ended');

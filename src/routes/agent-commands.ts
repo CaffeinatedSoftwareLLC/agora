@@ -23,10 +23,13 @@ function sessionJson(r: any) {
         id: r.id.trim(), profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
+        running: !!r.running,
     };
 }
 
-const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_username
+// running: a host has claimed a run for this session and is working on it now
+const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_username,
+        EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') AS running
     FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
 
 async function profileByName(db: any, channelId: string, name: string) {
