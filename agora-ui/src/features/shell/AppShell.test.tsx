@@ -13,7 +13,7 @@ vi.hoisted(() => {
 });
 vi.mock('./TabBar', () => ({ TabBar: () => <div>Tabs</div> }));
 vi.mock('./ArcChannelSidebar', () => ({ ArcChannelSidebar: () => <button>Channel</button> }));
-vi.mock('../messages/ActiveThreadsBar', () => ({ ActiveThreadsBar: () => null }));
+vi.mock('../agents/ConsoleStrip', () => ({ ConsoleStrip: () => null }));
 vi.mock('../live/TypingIndicator', () => ({ TypingIndicator: () => null }));
 vi.mock('../messages/MessageList', () => ({ MessageList: () => <div data-testid="feed">Messages</div> }));
 vi.mock('../messages/FloatingMessageInput', () => ({ FloatingMessageInput: () => {

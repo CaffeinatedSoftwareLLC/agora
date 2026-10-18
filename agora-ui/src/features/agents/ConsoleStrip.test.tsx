@@ -4,8 +4,13 @@ import { ApiError } from '../../lib/api';
 import { useChannelStore } from '../../stores/channelStore';
 import { useMessageStore, type Message } from '../../stores/messageStore';
 import { useThreadStore } from '../../stores/threadStore';
+import { useUIStore } from '../../stores/uiStore';
 import { ConsoleStrip } from './ConsoleStrip';
 import type { AgentSession } from './agentSessions';
+
+vi.hoisted(() => {
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+});
 
 const post = vi.fn();
 const get = vi.fn();
@@ -87,9 +92,11 @@ describe('ConsoleStrip', () => {
     const dialog = screen.getByRole('dialog', { name: 'Agent: claude' });
     expect(dialog.getAttribute('aria-modal')).toBe('true');
     expect(within(dialog).getByRole('button', { name: 'End session' })).toBeTruthy();
+    expect(useUIStore.getState().activeOverlay?.kind).toBe('session-sheet');
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
+    expect(useUIStore.getState().activeOverlay).toBeNull();
     expect(document.activeElement).toBe(chip);
 
     fireEvent.click(screen.getByRole('button', { name: 'Start an agent' }));

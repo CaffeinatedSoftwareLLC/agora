@@ -3,7 +3,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
 import { TypingIndicator } from '../live/TypingIndicator';
-import { ActiveThreadsBar } from '../messages/ActiveThreadsBar';
+import { ConsoleStrip } from '../agents/ConsoleStrip';
 import { usePalette } from '../../theme';
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -23,6 +23,7 @@ export function ArcContentArea() {
   const toggleMembers = useUIStore(s => s.toggleAux);
   const filesOpen = useUIStore(s => s.aux === 'files');
   const toggleFiles = useUIStore(s => s.toggleAux);
+  const openThreadView = useUIStore(s => s.openThreadView);
 
   const accentColor = P.accent;
 
@@ -157,9 +158,11 @@ export function ArcContentArea() {
         </div>
       </header>
 
+      {/* ── Console Strip: agents + active collab threads ─────────────── */}
+      <ConsoleStrip channelId={activeChannelId} onOpenThread={(tid) => openThreadView(activeChannelId, tid)} />
+
       {/* ── Messages + typing + input ─────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-h-0">
-        <ActiveThreadsBar channelId={activeChannelId} />
         <MessageList channelId={activeChannelId} channelName={channel.name} />
         <TypingIndicator channelId={activeChannelId} />
         <FloatingMessageInput

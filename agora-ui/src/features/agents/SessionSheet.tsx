@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useUIStore } from '../../stores/uiStore';
+import { useOverlayFocus } from '../shell/useOverlayFocus';
 import {
   ERRORS, STATE_LABEL, actionText, classifyCommandError, compactTokens, deriveChips, runAgentCommand, sessionState,
   type AgentProfile, type AgentSession, type ChipState, type CommandBody,
@@ -8,8 +10,8 @@ import {
 /**
  * Agent session sheet (docs/planning/ui-redesign.md 6.2): start, resume, shelve-and-start-new
  * and end an agent's session in this channel without typing a command. A bottom sheet below
- * 768px, a centered dialog above. Traps focus, closes on Escape, and returns focus to whatever
- * opened it. The overlay manager (Phase 1) can mount it through `open` / `onClose`.
+ * 768px, a centered dialog above. Traps focus, closes on Escape or Back, and returns focus to whatever
+ * opened it. Registered with the shell overlay manager as kind 'session-sheet'.
  */
 
 export type SheetMode = { kind: 'profile'; profile: string } | { kind: 'start' };
@@ -40,12 +42,10 @@ export function StateDot({ state }: { state: ChipState | 'none' }) {
 }
 
 const BTN = 'inline-flex min-h-[44px] w-full items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
-const BTN_PRIMARY = `${BTN} bg-primary text-text hover:bg-primary-hover`;
+const BTN_PRIMARY = `${BTN} bg-primary text-on-primary hover:bg-primary-hover`;
 const BTN_SECONDARY = `${BTN} border border-border bg-surface-hover text-text hover:bg-bg`;
 const BTN_DANGER = `${BTN} border border-danger/40 bg-danger/15 text-danger hover:bg-danger/25`;
 const BTN_SMALL = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg px-3 text-sm text-text hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50';
-
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function shortId(id: string): string {
   return `${id.slice(0, 8)}…`;
@@ -63,40 +63,31 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
   const [conflict, setConflict] = useState<CommandBody | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Focus: move in on open, trap Tab, Escape closes, give focus back on close.
+  // One overlay at a time (Phase 1 overlay manager): registering closes any other sheet, makes
+  // Back and Escape dismiss this one, and inerts the shell behind it.
+  const overlayId = useId();
   useEffect(() => {
     if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const panel = panelRef.current;
-    const first = panel?.querySelector<HTMLElement>('[data-autofocus]') ?? panel?.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? panel)?.focus();
-
+    useUIStore.getState().openOverlay({ kind: 'session-sheet', id: overlayId, onClose: () => onCloseRef.current() });
+    return () => useUIStore.getState().releaseOverlay(overlayId);
+  }, [open, overlayId]);
+  useOverlayFocus(panelRef, open);
+  // Escape also works where the shell's OverlayManager is not mounted (tests, standalone use).
+  useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== 'Tab' || !panelRef.current) return;
-      const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (items.length === 0) { e.preventDefault(); return; }
-      const firstItem = items[0];
-      const lastItem = items[items.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey && (active === firstItem || !panelRef.current.contains(active))) {
-        e.preventDefault();
-        lastItem.focus();
-      } else if (!e.shiftKey && (active === lastItem || !panelRef.current.contains(active))) {
-        e.preventDefault();
-        firstItem.focus();
-      }
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      if (useUIStore.getState().activeOverlay?.id === overlayId) useUIStore.getState().closeOverlay();
+      else onCloseRef.current();
     };
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('keydown', onKey, true);
-      if (previous && document.contains(previous)) previous.focus();
-    };
-  }, [open]);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, overlayId]);
+  // When the live-session choice appears, put focus on its first button.
+  useEffect(() => {
+    if (conflict) panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+  }, [conflict]);
 
   if (!open) return null;
 
