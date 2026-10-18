@@ -3,6 +3,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
 import { TypingIndicator } from '../live/TypingIndicator';
+import { RunActivity } from '../agents/RunActivity';
 import { ConsoleStrip } from '../agents/ConsoleStrip';
 import { usePalette } from '../../theme';
 
@@ -165,6 +166,7 @@ export function ArcContentArea() {
       <div className="flex-1 flex flex-col min-h-0">
         <MessageList channelId={activeChannelId} channelName={channel.name} />
         <TypingIndicator channelId={activeChannelId} />
+        <RunActivity key={`run-${activeChannelId}`} channelId={activeChannelId} />
         <FloatingMessageInput
           key={activeChannelId}
           channelId={activeChannelId}

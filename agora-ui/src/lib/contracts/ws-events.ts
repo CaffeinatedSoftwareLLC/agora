@@ -110,4 +110,7 @@ export interface AgentSessionUpdatePayload {
   channelId: string;
   sessionId: string;
   running: boolean;
+  state?: 'live' | 'shelved' | 'ended';
+  endReason?: string | null;
+  run?: import('../../features/agents/agentSessions').AgentRun | null;
 }

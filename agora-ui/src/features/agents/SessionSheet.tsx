@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { SessionBudget } from './SessionBudget';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import {
@@ -179,6 +180,18 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           )}
         </p>
 
+        {current && <SessionBudget key={current.id} session={current} channelId={channelId} onChanged={onChanged} />}
+        {current?.recentRuns && current.recentRuns.length > 0 && <details className="text-sm">
+          <summary className="cursor-pointer">Recent runs</summary>
+          <ul className="space-y-2 py-2">
+            {current.recentRuns.map(run => <li key={run.id}>
+              <p>{new Date(run.startedAt).toLocaleString()} ? {run.status}{run.error ? ` (${run.error})` : ''}</p>
+              {run.changedPaths.length > 0 && <details><summary className="cursor-pointer">{run.changedPaths.length} changed {run.changedPaths.length === 1 ? 'file' : 'files'}</summary>
+                <ul className="max-h-40 overflow-y-auto font-mono text-xs">{run.changedPaths.map(path => <li key={path} className="break-all">{path}</li>)}</ul>
+              </details>}
+            </li>)}
+          </ul>
+        </details>}
         {conflict ? (
           <div className="space-y-2" role="group" aria-label="Agent already live">
             <p className="text-sm text-text">{ERRORS.session_live}</p>
