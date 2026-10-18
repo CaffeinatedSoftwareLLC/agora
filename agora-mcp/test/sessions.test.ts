@@ -37,6 +37,10 @@ describe('client_key', () => {
 });
 
 describe('session tools', () => {
+    it('shows branch @ sha', async () => {
+        const { call } = setup([{ ...live, branch: 'agora/codex/S1', headSha: 'a'.repeat(40) }]);
+        expect((await call('session_list', {})).content[0].text).toContain('agora/codex/S1 @ aaaaaaaaaaaa');
+    });
     it('lists sessions', async () => {
         const { call } = setup([live]);
         const out = await call('session_list', {});

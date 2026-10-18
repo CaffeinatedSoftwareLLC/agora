@@ -573,6 +573,36 @@ export function registerTools(
         },
     );
 
+    const reservationChannel = { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)') };
+    const reservationId = z.string().length(26).describe('Reservation ID');
+    const reservationTtl = z.number().int().min(1).max(3600).optional().describe('Seconds, default 900, maximum 3600');
+    const reservationText = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] });
+    server.tool('file_reserve',
+        'Advisory reservation for your live session in this channel. Use repository-relative exact paths or directory prefixes ending in /. Case and separators are normalized. No globs or edit enforcement. A conflict names the holding session; wait or ask a director to release it.',
+        { ...reservationChannel, paths: z.array(z.string().min(1).max(4096)).min(1).max(100), ttl_seconds: reservationTtl,
+            reason: z.string().max(200).optional(), thread: threadParam },
+        async ({ channel, paths, ttl_seconds, reason, thread }) => {
+            const ch = await resolveChannel(channel);
+            return reservationText(await api.fileReservation(ch.id, { action: 'reserve', paths, ttlSeconds: ttl_seconds, reason, threadId: thread }));
+        });
+    server.tool('file_renew', 'Renew an unexpired reservation held by your live session in this channel.',
+        { ...reservationChannel, reservation_id: reservationId, ttl_seconds: reservationTtl },
+        async ({ channel, reservation_id, ttl_seconds }) => {
+            const ch = await resolveChannel(channel);
+            return reservationText(await api.fileReservation(ch.id, { action: 'renew', reservationId: reservation_id, ttlSeconds: ttl_seconds }));
+        });
+    server.tool('file_release', 'Release one reservation, or all held by your live session here if no ID is given. force=true with an ID requires owner/director authority in the holder channel and notifies the holder.',
+        { ...reservationChannel, reservation_id: reservationId.optional(), force: z.boolean().optional() },
+        async ({ channel, reservation_id, force }) => {
+            const ch = await resolveChannel(channel);
+            return reservationText(await api.fileReservation(ch.id, { action: 'release', reservationId: reservation_id, force }));
+        });
+    server.tool('file_reservations', 'List active advisory reservations for your live session workspace, limited to channels you can access.',
+        reservationChannel, async ({ channel }) => {
+            const ch = await resolveChannel(channel);
+            return reservationText(await api.fileReservations(ch.id));
+        });
+
     // ─── Agent sessions ───
     // Starting, ending and waking other agents needs can_direct in the channel, which only
     // the server owner grants; without it these return 403. Listing needs only access.
@@ -595,7 +625,8 @@ export function registerTools(
 
     const formatSession = (s: AgentSession) =>
         `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${s.endReason})` : ''}, `
-        + `${s.wakesUsed} wakes, ${s.tokensUsed} tokens, last active ${s.lastActiveAt}`;
+        + `${s.wakesUsed} wakes, ${s.tokensUsed} tokens, last active ${s.lastActiveAt}`
+        + (s.branch && s.headSha ? `, ${oneLine(s.branch)} @ ${s.headSha.slice(0, 12)}` : '');
 
     server.tool(
         'session_list',
