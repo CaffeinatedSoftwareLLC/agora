@@ -382,12 +382,12 @@ export async function agentHostRoutes(app: FastifyInstance) {
 
     // POST /agent-hosts/@me/runs/:runId/heartbeat → 200 { cancel, leaseUntil? | reason? }
     app.post('/agent-hosts/@me/runs/:runId/heartbeat', {
-        schema: { body: { type: 'object', required: ['claimToken'], properties: claimBody } },
+        schema: { body: { type: 'object', required: ['claimToken'], properties: { ...claimBody, tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 } } } },
     }, async (request, reply) => {
         await releaseRequestClient(request);
         const notices: Notice[] = [];
         const { runId } = request.params as any;
-        const r = await heartbeat(app.db, request.agentHost!, runId, (request.body as any).claimToken, notices);
+        const r = await heartbeat(app.db, request.agentHost!, runId, (request.body as any).claimToken, notices, (request.body as any).tokensUsed);
         queueNotices(request, notices);
         return reply.status(r.status).send(r.body);
     });
@@ -400,9 +400,10 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 properties: {
                     ...claimBody,
                     nativeSessionId: { type: ['string', 'null'], maxLength: 128 },
-                    tokensUsed: { type: ['integer', 'null'], minimum: 0 },
+                    tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 },
                     // Same limit as agora-host's result parser
                     summary: { type: ['string', 'null'], maxLength: 16000 },
+                    changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                 },
             },
         },
@@ -424,8 +425,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     ...claimBody,
                     error: { type: 'string', minLength: 1, maxLength: 64 },
                     message: { type: 'string', maxLength: 2000 },
-                    tokensUsed: { type: ['integer', 'null'], minimum: 0 },
+                    tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 },
                     retryable: { type: 'boolean' },
+                    changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                 },
             },
         },
