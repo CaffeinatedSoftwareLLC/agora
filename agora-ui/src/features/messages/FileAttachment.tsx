@@ -177,7 +177,7 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
     <button
       type="button"
       onClick={() => downloadAttachment(attachment)}
-      className="min-h-11 min-w-11 md:h-9 md:w-9 flex items-center justify-center rounded-lg hover:opacity-80 shrink-0"
+      className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 flex items-center justify-center rounded-lg hover:opacity-80 shrink-0"
       title={`Download ${attachment.name}`}
       aria-label={`Download ${attachment.name}`}
     >

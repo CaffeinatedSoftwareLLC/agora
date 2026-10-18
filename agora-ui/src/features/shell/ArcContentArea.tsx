@@ -91,7 +91,7 @@ export function ArcContentArea() {
           {/* Mobile palette toggle (since TabBar is hidden on <768px) */}
           <button
             onClick={togglePalette}
-            className="md:hidden min-h-11 px-2.5 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold transition-colors"
+            className="md:hidden min-h-11 min-w-11 px-2.5 rounded-lg flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-colors"
             style={{
               background: P.surface,
               border: `1px solid ${P.border}`,
@@ -107,7 +107,7 @@ export function ArcContentArea() {
           {/* Files panel toggle */}
           <button
             onClick={() => toggleFiles('files')}
-            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
             style={{
               color: filesOpen ? accentColor : P.muted,
               background: filesOpen ? `${accentColor}1f` : 'transparent',
@@ -132,7 +132,7 @@ export function ArcContentArea() {
           {/* Members toggle button */}
           <button
             onClick={() => toggleMembers('members')}
-            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
             style={{
               color: membersOpen ? accentColor : P.muted,
               background: membersOpen ? `${accentColor}1f` : 'transparent',

@@ -308,7 +308,7 @@ export function FloatingMessageInput({
         <div className="flex items-end gap-1.5 px-2 py-1.5 md:px-2.5 md:py-2">
           <button
             type="button"
-            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 transition-colors hover:opacity-80"
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 transition-colors hover:opacity-80"
             style={{ color: P.muted }}
             title="Attach file"
             aria-label="Attach file"
@@ -347,7 +347,7 @@ export function FloatingMessageInput({
             type="button"
             onClick={handleSend}
             disabled={!canSend || !user}
-            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:cursor-not-allowed"
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:cursor-not-allowed"
             style={{
               background: canSend ? P.primary : P.bg,
               color: canSend ? P.onPrimary : P.muted,

@@ -127,7 +127,7 @@ function ChannelCategory({
         </button>
         <button
           onClick={onCreateChannel}
-          className="transition-colors shrink-0 min-h-11 min-w-11 md:h-8 md:w-8 flex items-center justify-center rounded-lg hover:bg-surface-hover"
+          className="transition-colors shrink-0 min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:h-8 md:w-8 flex items-center justify-center rounded-lg hover:bg-surface-hover"
           style={{ color: P.muted }}
           title="Create Channel"
           aria-label="Create Channel"
@@ -263,7 +263,7 @@ export function ArcChannelSidebar() {
             >
               {server.name}
             </div>
-            <div className="text-[11px] flex items-center gap-1.5" style={{ color: P.muted }}>
+            <div className="text-[11px] flex items-center gap-1.5 whitespace-nowrap" style={{ color: P.muted }}>
               <div
                 className="w-1.5 h-1.5 rounded-full"
                 style={{ background: P.online }}
@@ -277,7 +277,7 @@ export function ArcChannelSidebar() {
             {/* Invite button */}
             <button
               onClick={() => setShowInvite(true)}
-              className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+              className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
               style={{ color: P.muted }}
               title="Invite People"
               aria-label="Invite People"
@@ -302,7 +302,7 @@ export function ArcChannelSidebar() {
             {hasModerationAccess && (
               <button
                 onClick={() => navigate('/moderation')}
-                className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
                 style={{ color: P.muted }}
                 title="Moderation"
                 aria-label="Moderation"
@@ -325,7 +325,7 @@ export function ArcChannelSidebar() {
             {hasServerAdminAccess && (
               <button
                 onClick={() => navigate('/settings')}
-                className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
                 style={{ color: P.muted }}
                 title="Server Settings"
                 aria-label="Server Settings"

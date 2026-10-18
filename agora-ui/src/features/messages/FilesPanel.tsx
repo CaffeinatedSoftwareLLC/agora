@@ -77,7 +77,7 @@ export function FilesPanel() {
         <h2 className="text-[15px] font-semibold" style={{ color: P.text }}>Files</h2>
         <button
           onClick={toggleFiles}
-          className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+          className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
           style={{ color: P.muted }}
           title="Close"
           aria-label="Close files"

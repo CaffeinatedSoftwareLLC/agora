@@ -53,7 +53,7 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
   const statusFontSize = 'text-[11px]';
   const statusColor = P.muted;
   const iconSize = 'h-4 w-4';
-  const buttonSize = 'min-h-11 min-w-11 md:h-9 md:w-9 md:min-h-0 md:min-w-0 rounded-lg';
+  const buttonSize = 'min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg';
 
   const handleLogout = () => {
     setMenuOpen(false);

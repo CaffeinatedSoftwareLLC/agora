@@ -55,6 +55,7 @@ code, pre, kbd {
 .prose-msg {
   font-size: 0.9375rem;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .prose-msg p { margin: 0.25em 0; }
 .prose-msg h1, .prose-msg h2, .prose-msg h3,

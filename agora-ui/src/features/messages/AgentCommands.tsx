@@ -119,7 +119,7 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
           )}
         </div>
         {state.kind !== 'busy' && state.kind !== 'live' && (
-          <button className="min-h-11 min-w-11 md:h-8 md:w-8 flex items-center justify-center rounded-lg text-text-muted hover:text-text" onClick={close} aria-label="Close">×</button>
+          <button className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:h-8 md:w-8 flex items-center justify-center rounded-lg text-text-muted hover:text-text" onClick={close} aria-label="Close">×</button>
         )}
       </div>
     </div>

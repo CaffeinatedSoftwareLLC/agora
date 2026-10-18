@@ -131,7 +131,7 @@ export function MessageInput({ channelId }: MessageInputProps) {
           type="button"
           onClick={handleSend}
           disabled={!content.trim() || !user}
-          className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 bg-primary text-on-primary hover:bg-primary-hover disabled:bg-bg disabled:text-text-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 bg-primary text-on-primary hover:bg-primary-hover disabled:bg-bg disabled:text-text-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           aria-label="Send message"
         >
           <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">

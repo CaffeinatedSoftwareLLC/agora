@@ -118,7 +118,7 @@ export function ThreadPanel() {
           {canClose && (
             <button
               onClick={handleToggleClose}
-              className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+              className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
               style={{ color: isClosed ? P.accent : P.muted }}
               title={isClosed ? 'Reopen thread' : 'Close thread'}
               aria-label={isClosed ? 'Reopen thread' : 'Close thread'}
@@ -138,7 +138,7 @@ export function ThreadPanel() {
           )}
           <button
             onClick={closeThread}
-            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
             style={{ color: P.muted }}
             title="Close panel"
             aria-label="Close panel"
@@ -235,7 +235,7 @@ export function ThreadPanel() {
               type="button"
               onClick={handleSend}
               disabled={!content.trim()}
-              className="shrink-0 min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
+              className="shrink-0 min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
               style={{
                 background: content.trim() ? P.primary : P.bg,
                 color: content.trim() ? P.onPrimary : P.muted,
