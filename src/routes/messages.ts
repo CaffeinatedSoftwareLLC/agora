@@ -7,9 +7,10 @@ import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol } from '../lib/protocol';
-import { readAuthorities, stampAuthority } from '../lib/direct-agents';
+import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
+import { sanitizeMessageText } from '../lib/sanitize-text';
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -22,6 +23,9 @@ export async function messageRoutes(app: FastifyInstance) {
                 properties: {
                     content: { type: 'string', minLength: 1, maxLength: 4000 },
                     client_key: { type: 'string', minLength: 1, maxLength: 100 },
+                    // Set by agora-mcp session_wake: refuse the post (403 cannot_direct) when the
+                    // author can't direct here, since it would wake no one (#75).
+                    require_direct: { type: 'boolean' },
                     attachments: {
                         type: 'array',
                         items: { type: 'string', minLength: 26, maxLength: 26 },
@@ -38,14 +42,17 @@ export async function messageRoutes(app: FastifyInstance) {
         const { id: channelId } = request.params as any;
         const userId = request.userId;
         const isBot = request.isBot;
-        const { content: rawContent, attachments: attachmentIds, client_key: clientKey } = request.body as any;
-        const content = rawContent || null;
+        const { content: rawContent, attachments: attachmentIds, client_key: clientKey, require_direct: requireDirect } = request.body as any;
+        // Terminal escapes and private keys never reach the database (#88)
+        const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        // Nothing left after cleaning (only escape codes)
+        if (rawContent && !content && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
 
         // A repeat of an earlier post (same author and client_key) returns that post.
         // Checked before rate limits and the loop guard, so a retry doesn't count twice.
@@ -54,6 +61,12 @@ export async function messageRoutes(app: FastifyInstance) {
             const earlier = await findClientKey(db, userId, clientKey, keyTarget);
             if (earlier.kind === 'replay') return reply.status(200).send(earlier.message);
             if (earlier.kind === 'conflict') return reply.status(409).send({ error: 'client_key_conflict' });
+        }
+
+        // A wake from someone who can't direct would post but wake no one: say so instead.
+        // Checked before rate limits so a refused wake doesn't count against the bot.
+        if (requireDirect && !await stampAuthority(db, channelId, userId, !!isBot)) {
+            return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
 
         // Fetch channel details (needed for mention resolution, loop guard, rate limiting)
@@ -404,13 +417,15 @@ export async function messageRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
-        const { content } = request.body as any;
+        const content = sanitizeMessageText((request.body as any).content);
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, !!request.isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        // Nothing left after cleaning (only escape codes)
+        if (!content) return reply.status(400).send({ error: 'empty_content' });
 
         // Find the message
         const msg = await db.query(

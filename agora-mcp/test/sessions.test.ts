@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { registerTools } from '../src/tools.js';
 import { CursorTracker } from '../src/cursor.js';
+import { AgoraApi, AgoraApiError } from '../src/api.js';
 
 type Handler = (args: any, extra?: any) => Promise<{ content: Array<{ text: string }> }>;
 
@@ -51,7 +52,7 @@ describe('session tools', () => {
     it('wakes a live agent by mentioning its bot', async () => {
         const { api, call } = setup([live]);
         await call('session_wake', { profile: 'codex', message: 'review PR 62' });
-        expect(api.sendMessage).toHaveBeenCalledWith('ch1', '@Codex review PR 62', expect.any(String), undefined);
+        expect(api.sendMessage).toHaveBeenCalledWith('ch1', '@Codex review PR 62', expect.any(String), undefined, { requireDirect: true });
     });
 
     it('says so when there is no live session to wake', async () => {
@@ -59,5 +60,57 @@ describe('session tools', () => {
         const out = await call('session_wake', { profile: 'codex', message: 'x' });
         expect(out.content[0].text).toMatch(/No live codex session/);
         expect(api.sendMessage).not.toHaveBeenCalled();
+    });
+});
+
+describe('callers without can_direct (#75)', () => {
+    const refused = () => new AgoraApiError('Agora API 403', 403, 'cannot_direct',
+        { error: 'cannot_direct', username: 'Claude', channel: 'general', message: "Claude can't direct agents in #general" });
+
+    it('session_wake fails with a clear message instead of saying it woke the agent', async () => {
+        const { api, call } = setup([live]);
+        api.sendMessage.mockRejectedValueOnce(refused());
+        const err = await call('session_wake', { profile: 'codex', message: 'review' }).catch((e: Error) => e);
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).toMatch(/^Claude can't direct agents in #general; ask the server owner to grant DirectAgents .* or @ the agent yourself/);
+        expect((err as Error).message).not.toMatch(/Woke/);
+    });
+
+    it('session_start and session_end explain it the same way', async () => {
+        const { api, call } = setup([live]);
+        api.agentCommand.mockRejectedValueOnce(refused()).mockRejectedValueOnce(refused());
+        for (const tool of ['session_start', 'session_end']) {
+            const err = await call(tool, { profile: 'codex' }).catch((e: Error) => e);
+            expect((err as Error).message).toMatch(/^Claude can't direct agents in #general/);
+        }
+    });
+
+    it('passes other errors through unchanged', async () => {
+        const { api, call } = setup([live]);
+        const other = new AgoraApiError('Agora API 403 POST x: denied', 403, 'Channel access denied', null);
+        api.sendMessage.mockRejectedValueOnce(other);
+        await expect(call('session_wake', { profile: 'codex', message: 'x' })).rejects.toBe(other);
+    });
+});
+
+describe('AgoraApi errors', () => {
+    it('carry the status and the error code, and send require_direct only when asked', async () => {
+        const bodies: any[] = [];
+        const fetchMock = vi.fn(async (_url: string, init: any) => {
+            bodies.push(JSON.parse(init.body));
+            return new Response(JSON.stringify({ error: 'cannot_direct', username: 'Claude' }), { status: 403 });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        try {
+            const api = new AgoraApi('http://agora', 'tok');
+            const err = await api.sendMessage('ch1', 'hi', undefined, undefined, { requireDirect: true }).catch(e => e);
+            expect(err).toBeInstanceOf(AgoraApiError);
+            expect(err).toMatchObject({ status: 403, code: 'cannot_direct' });
+            expect(err.message).toMatch(/^Agora API 403 POST \/channels\/ch1\/messages/);
+            await api.sendMessage('ch1', 'hi').catch(() => {});
+            expect(bodies).toEqual([{ content: 'hi', require_direct: true }, { content: 'hi' }]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });

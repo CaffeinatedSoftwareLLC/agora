@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
-import { stampAuthority, isServerOwner } from '../lib/direct-agents';
+import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 
@@ -130,7 +130,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
         }
 
         if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {
-            return reply.status(403).send({ error: 'Only the owner and directors can start, end or resume agent sessions' });
+            // Only the owner and directors can start, end or resume agent sessions
+            return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
         if ((command === 'start' || command === 'end') && !profileName) return reply.status(400).send({ error: 'profile is required' });
         if ((command === 'resume' || command === 'budget') && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });

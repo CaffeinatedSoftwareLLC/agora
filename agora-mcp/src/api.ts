@@ -6,7 +6,8 @@ export interface BotInfo {
     /** Paused bots can read but every write returns 423 until an admin resumes them. */
     paused?: boolean;
     pausedReason?: string | null;
-    channels: { id: string; name: string; channelType: string }[];
+    /** `channels.channel_type` is a SMALLINT: 3 = text, 4 = voice, 5 = category (see channelTypeName). */
+    channels: { id: string; name: string; channelType: number }[];
 }
 
 export type Authority = 'owner' | 'director' | null;
@@ -146,6 +147,14 @@ export interface ThreadCursor {
     updatedAt: string;
 }
 
+/** A non-2xx answer from Agora. `code` is the JSON body's `error`, when there is one. */
+export class AgoraApiError extends Error {
+    constructor(message: string, public status: number, public code: string | null, public body: any) {
+        super(message);
+        this.name = 'AgoraApiError';
+    }
+}
+
 export class AgoraApi {
     private baseUrl: string;
     private token: string;
@@ -182,7 +191,10 @@ export class AgoraApi {
                     + 'It can still read messages but cannot post until resumed. Stop and tell the user.',
                 );
             }
-            throw new Error(`Agora API ${res.status} ${method} ${path}: ${text}`);
+            let json: any = null;
+            try { json = JSON.parse(text); } catch { /* non-JSON body */ }
+            throw new AgoraApiError(`Agora API ${res.status} ${method} ${path}: ${text}`, res.status,
+                typeof json?.error === 'string' ? json.error : null, json);
         }
 
         const contentType = res.headers.get('content-type');
@@ -213,16 +225,22 @@ export class AgoraApi {
         return this.request('GET', `/channels/${channelId}/messages${qs ? `?${qs}` : ''}`);
     }
 
-    /** `clientKey` makes a retry return the first post instead of posting twice. */
+    /**
+     * `clientKey` makes a retry return the first post instead of posting twice.
+     * `requireDirect` makes the server refuse the post (403 cannot_direct) when this bot
+     * can't direct agents in the channel, so a wake that would reach no one isn't posted.
+     */
     async sendMessage(
         channelId: string,
         content: string,
         idempotencyKey?: string,
         clientKey?: string,
+        opts?: { requireDirect?: boolean },
     ): Promise<Message> {
         const headers: Record<string, string> = {};
         if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-        const body = clientKey ? { content, client_key: clientKey } : { content };
+        const body: Record<string, unknown> = clientKey ? { content, client_key: clientKey } : { content };
+        if (opts?.requireDirect) body.require_direct = true;
         return this.request('POST', `/channels/${channelId}/messages`, body, headers);
     }
 

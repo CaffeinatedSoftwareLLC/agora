@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import type { BridgedEvent } from '../lib/event-bridge';
+import { sanitizeMessageText } from '../lib/sanitize-text';
 
 /**
  * Post a message as the bot that submitted a run, into the run's thread (or channel),
@@ -26,6 +27,8 @@ export async function postBotMessage(db: Pool, input: {
     const channelId = input.channelId.trim();
     const threadId = input.threadId?.trim() || null;
     const authorId = input.authorId.trim();
+    // Sandboxed code posts terminal output: strip escapes and private keys (#88)
+    const content = sanitizeMessageText(input.content);
 
     const access = await db.query('SELECT 1 FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2', [authorId, channelId]);
     if (access.rows.length === 0) throw new PostError('The submitting bot no longer has access to this channel', 403, 'no_channel_access');
@@ -48,7 +51,7 @@ export async function postBotMessage(db: Pool, input: {
         await client.query(
             `INSERT INTO messages (id, channel_id, author_id, content, thread_id, system_event, system_data)
              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [messageId, channelId, authorId, input.content, threadId,
+            [messageId, channelId, authorId, content, threadId,
              input.systemEvent ?? null, input.systemData ? JSON.stringify(input.systemData) : null]
         );
         if (input.fileIds?.length) {
@@ -85,7 +88,7 @@ export async function postBotMessage(db: Pool, input: {
         event: 'Message',
         data: {
             id: messageId,
-            content: input.content,
+            content,
             authorId,
             authorUsername: author?.username ?? null,
             authorBot: author?.bot ?? true,

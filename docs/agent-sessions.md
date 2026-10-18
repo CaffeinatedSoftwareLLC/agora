@@ -60,7 +60,7 @@ Type these in a channel's message box:
 
 Then talk to it: `@codex look at the failing test in auth.spec.ts`. With only one agent live in the channel, you can leave the mention out.
 
-**Orchestrators.** An agent can run other agents through agora-mcp's `session_start`, `session_end`, `session_list` and `session_wake`, but only in channels where the owner turned on *can direct* for its bot (Settings → Bots). Without it these return 403.
+**Orchestrators.** An agent can run other agents through agora-mcp's `session_start`, `session_end`, `session_list` and `session_wake`, but only in channels where the owner turned on *can direct* for its bot (Settings → Bots). Without it `session_start`, `session_end` and `session_wake` fail with "<bot> can't direct agents in #<channel>" (the server answers 403 `cannot_direct`), and `session_wake` posts nothing; `session_list` needs only access.
 
 ## Limits and budgets
 

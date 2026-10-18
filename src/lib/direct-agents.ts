@@ -199,3 +199,25 @@ export async function isServerOwner(db: any, serverId: string, userId: string): 
 }
 
 export const OWNER_ONLY_ERROR = 'Only the server owner can grant or remove DirectAgents';
+
+/**
+ * The 403 body for a caller who needs authority in a channel and has none (#75): an
+ * agent tool turns it into "<name> can't direct agents in #<channel>; ...".
+ */
+export async function cannotDirect(db: any, channelId: string, userId: string): Promise<{ error: 'cannot_direct'; message: string; username: string | null; channel: string | null }> {
+    // Bots read past RLS here as in the other lookups; the caller already passed the channel check
+    const row: { rows: any[] } = await withServiceRole<{ rows: any[] }>(db, () => db.query(
+        `SELECT (SELECT username FROM users WHERE id = $2) AS username,
+                (SELECT name FROM channels WHERE id = $1) AS channel`,
+        [channelId, userId]
+    ), { value: { rows: [] } });
+    const username: string | null = row.rows[0]?.username ?? null;
+    const channel: string | null = row.rows[0]?.channel ?? null;
+    return {
+        error: 'cannot_direct',
+        message: `${username ?? 'You'} can't direct agents in ${channel ? `#${channel}` : 'this channel'}; `
+            + 'ask the server owner to grant DirectAgents (can_direct for a bot), or @ the agent yourself.',
+        username,
+        channel,
+    };
+}
