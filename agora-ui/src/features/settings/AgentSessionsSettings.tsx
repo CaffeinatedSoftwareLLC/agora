@@ -13,7 +13,7 @@ import { Button } from '../../components/ui/Button';
 interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null }
 interface Profile {
   id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude';
-  model: string | null; effort: string | null; workdirAlias: string;
+  model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
 }
 
@@ -131,7 +131,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
   serverId: string; hosts: Host[]; profiles: Profile[]; channels: Channel[]; onChange: () => void;
   onToken: (s: { label: string; token: string }) => void; onError: (e: string) => void;
 }) {
-  const [form, setForm] = useState({ name: '', adapter: 'codex', hostId: '', workdirAlias: 'agora', model: '', effort: 'high', channelId: '' });
+  const [form, setForm] = useState({ name: '', adapter: 'codex', hostId: '', workdirAlias: 'agora', workspaceId: 'primary', model: '', effort: 'high', channelId: '' });
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm(f => ({ ...f, [k]: e.target.value }));
   const hostId = form.hostId || hosts[0]?.id || '';
 
@@ -139,6 +139,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
     try {
       const res = await api.post<{ bot: { username: string }; token: string }>(`/servers/${serverId}/agents`, {
         name: form.name.trim().toLowerCase(), adapter: form.adapter, hostId, workdirAlias: form.workdirAlias.trim(),
+        workspaceId: form.workspaceId.trim().toLowerCase(),
         ...(form.model.trim() ? { model: form.model.trim() } : {}),
         ...(form.effort ? { effort: form.effort } : {}),
         ...(form.channelId ? { channelId: form.channelId } : {}),
@@ -185,6 +186,9 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
             <label className="flex flex-col gap-1 text-text-muted">Model (optional)
               <input className={input} value={form.model} maxLength={64} placeholder="gpt-6.1-sol" onChange={set('model')} />
             </label>
+            <label className="flex flex-col gap-1 text-text-muted">Workspace ID (same repository = same ID across hosts)
+              <input className={input} value={form.workspaceId} maxLength={64} onChange={set('workspaceId')} />
+            </label>
             <label className="flex flex-col gap-1 text-text-muted">Effort
               <select className={input} value={form.effort} onChange={set('effort')}>
                 {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
@@ -213,11 +217,12 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
 }) {
   const [model, setModel] = useState(profile.model ?? '');
   const [effort, setEffort] = useState(profile.effort ?? '');
-  const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '');
+  const [workspaceId, setWorkspaceId] = useState(profile.workspaceId ?? 'primary');
+  const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary');
 
   const save = async () => {
     try {
-      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null });
+      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase() });
       onChange();
     } catch (err) { onError(errorText(err)); }
   };
@@ -237,7 +242,10 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
         </span>
         <button className="min-h-11 md:min-h-8 px-2 text-xs text-danger hover:underline" onClick={() => void remove()}>Delete</button>
       </div>
-      <div className="mt-2 flex items-center gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="flex flex-col text-xs text-text-muted">Workspace ID (end sessions before changing)
+          <input className={input} value={workspaceId} maxLength={64} onChange={e => setWorkspaceId(e.target.value)} />
+        </label>
         <input className={input} value={model} placeholder="model (CLI default)" maxLength={64} onChange={e => setModel(e.target.value)} />
         <select className={input} value={effort} onChange={e => setEffort(e.target.value)}>
           {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../lib/api';
-import { classifyCommandError, compactTokens, deriveChips, NO_AUTHORITY, type AgentSession } from './agentSessions';
+import { classifyCommandError, compactTokens, deriveChips, describeSession, NO_AUTHORITY, type AgentSession } from './agentSessions';
 
 const s = (over: Partial<AgentSession>): AgentSession => ({
   id: 'S'.repeat(26), profile: 'codex', botUsername: 'codex', state: 'live', endReason: null,
@@ -8,6 +8,9 @@ const s = (over: Partial<AgentSession>): AgentSession => ({
 });
 
 describe('compactTokens', () => {
+  it('shows branch @ sha in /sessions', () => {
+    expect(describeSession(s({ branch: 'agora/codex/session', headSha: 'a'.repeat(40) }))).toContain('agora/codex/session @ aaaaaaaaaaaa');
+  });
   it.each([
     [0, '0'], [950, '950'], [1000, '1k'], [1234, '1.2k'], [9999, '10k'], [14321, '14k'],
     [999_499, '999k'], [1_250_000, '1.3M'], [12_000_000, '12M'],

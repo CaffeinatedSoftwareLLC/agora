@@ -16,6 +16,9 @@ export interface AgentRun {
 }
 
 export interface AgentSession {
+  branch?: string | null;
+  baseSha?: string | null;
+  headSha?: string | null;
   id: string;
   profile: string;
   botId?: string;
@@ -147,7 +150,8 @@ export function deriveChips(sessions: AgentSession[]): AgentChip[] {
 
 export function describeSession(s: AgentSession): string {
   const reason = s.endReason ? ` (${s.endReason})` : '';
-  return `${s.profile} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`;
+  return `${s.profile} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`
+    + (s.branch && s.headSha ? ` · ${s.branch} @ ${s.headSha.slice(0, 12)}` : '');
 }
 
 const ACTION_TEXT: Record<string, string> = {
