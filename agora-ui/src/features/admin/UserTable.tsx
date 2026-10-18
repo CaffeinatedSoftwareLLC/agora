@@ -86,7 +86,7 @@ export function UserTable() {
         <select
           value={status}
           onChange={(e) => handleStatusChange(e.target.value as StatusFilter)}
-          className="bg-surface border border-border rounded px-3 py-2 text-text text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          className="min-h-11 md:min-h-9 bg-surface border border-border rounded px-3 py-2 text-text text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         >
           <option value="all">All</option>
           <option value="active">Active</option>
@@ -98,7 +98,7 @@ export function UserTable() {
           placeholder="Search users..."
           value={search}
           onChange={(e) => handleSearchChange(e.target.value)}
-          className="bg-surface border border-border rounded px-3 py-2 text-text text-sm placeholder-text-dim focus:outline-none focus:ring-2 focus:ring-primary flex-1 max-w-xs"
+          className="min-h-11 md:min-h-9 bg-surface border border-border rounded px-3 py-2 text-text text-sm placeholder:text-text-muted/70 focus:outline-none focus:ring-2 focus:ring-primary flex-1 max-w-xs"
         />
       </div>
 
@@ -106,7 +106,7 @@ export function UserTable() {
       {banResult && (
         <p className="text-online text-sm mb-4">
           {banResult}
-          <button className="ml-2 underline text-text-muted" onClick={() => setBanResult('')}>dismiss</button>
+          <button className="ml-2 min-h-11 md:min-h-8 px-2 underline text-text-muted hover:text-text" onClick={() => setBanResult('')}>dismiss</button>
         </p>
       )}
 
@@ -157,7 +157,7 @@ export function UserTable() {
                     {user.accountStatus === 'active' && !user.isInstanceAdmin && (
                       <Button
                         variant="danger"
-                        className="text-xs px-2 py-1"
+                        className="text-xs !px-3 !py-1 min-h-11 md:min-h-8"
                         onClick={() => { setBanTarget(user); setBanResult(''); }}
                       >
                         Ban

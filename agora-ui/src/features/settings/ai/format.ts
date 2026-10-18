@@ -41,4 +41,4 @@ export function parseLimit(input: string): number | null | undefined {
 }
 
 export const inputClass =
-  'bg-surface border border-border rounded px-3 py-2 text-text placeholder-text-dim focus:outline-none focus:ring-2 focus:ring-primary';
+  'min-h-11 md:min-h-9 bg-surface border border-border rounded px-3 py-2 text-text placeholder:text-text-muted/70 focus:outline-none focus:ring-2 focus:ring-primary';

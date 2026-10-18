@@ -74,7 +74,7 @@ export function RoleAssignment() {
       <h2 className="text-xl font-bold text-text mb-4">Role Assignment</h2>
 
       {error && (
-        <div className="bg-red-500/20 text-red-300 px-3 py-2 rounded text-sm mb-4">
+        <div className="bg-danger/15 border border-danger/40 text-danger px-3 py-2 rounded text-sm mb-4">
           {error}
         </div>
       )}
@@ -84,7 +84,7 @@ export function RoleAssignment() {
         <select
           value={selectedMember}
           onChange={(e) => selectMember(e.target.value)}
-          className="w-full px-3 py-2 rounded bg-surface border border-border text-text"
+          className="min-h-11 md:min-h-9 w-full px-3 py-2 rounded bg-surface border border-border text-text"
         >
           <option value="">Choose a member...</option>
           {members.map((m) => (
@@ -101,7 +101,7 @@ export function RoleAssignment() {
           {roles.map((role) => (
             <label
               key={role.id}
-              className="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-hover cursor-pointer"
+              className="min-h-11 md:min-h-9 flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-hover cursor-pointer"
             >
               <input
                 type="checkbox"
@@ -111,7 +111,7 @@ export function RoleAssignment() {
               />
               <span
                 className="w-3 h-3 rounded-full"
-                style={{ backgroundColor: role.color || '#99aab5' }}
+                style={{ backgroundColor: role.color || 'var(--color-text-muted)' }}
               />
               <span className="text-sm text-text">{role.name}</span>
             </label>

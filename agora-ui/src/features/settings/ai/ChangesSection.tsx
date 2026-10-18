@@ -72,9 +72,9 @@ export function ChangesSection({ serverId, version }: { serverId: string; versio
       <h3 className="text-lg font-semibold text-text mb-2">Recent changes</h3>
       <p className="text-sm text-text-muted mb-3">Who changed AI providers and capabilities, and when. Keys are never shown.</p>
       {changes === null ? (
-        <p className="text-sm text-text-dim">Loading…</p>
+        <p className="text-sm text-text-muted">Loading…</p>
       ) : changes.length === 0 ? (
-        <p className="text-sm text-text-dim">No changes recorded yet.</p>
+        <p className="text-sm text-text-muted">No changes recorded yet.</p>
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border">
           {changes.map(c => {
@@ -82,7 +82,7 @@ export function ChangesSection({ serverId, version }: { serverId: string; versio
             return (
               <li key={c.id} className="px-3 py-2 text-sm">
                 <div className="text-text break-words">{describe(c)}</div>
-                <div className="text-xs text-text-dim mt-0.5">
+                <div className="text-xs text-text-muted mt-0.5">
                   {new Date(c.createdAt).toLocaleString()} · {c.actor ? c.actor.username : 'unknown user'}
                   {client && ` · via ${client}`}
                 </div>

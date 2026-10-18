@@ -45,7 +45,7 @@ export function BotManagement() {
       <div>
         <h2 className="text-xl font-bold text-text mb-4">Bot Management</h2>
         <p className="text-text-muted mb-4">You don't have permission to manage bots.</p>
-        <Link to="/app" className="text-primary hover:underline">Back to chat</Link>
+        <Link to="/app" className="min-h-11 md:min-h-8 inline-flex items-center text-primary-text hover:underline">Back to chat</Link>
       </div>
     );
   }
@@ -185,13 +185,13 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
               max={1000}
               value={values[ch.id] ?? 4}
               onChange={(e) => handleChange(ch.id, e.target.value)}
-              className="w-20 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
+              className="min-h-11 md:min-h-8 w-20 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
             />
             {values[ch.id] === 0 && (
               <span className="text-text-muted text-xs">Disabled</span>
             )}
             {saving === ch.id && (
-              <span className="text-text-dim text-xs">Saving...</span>
+              <span className="text-text-muted text-xs">Saving...</span>
             )}
           </div>
         ))}
@@ -260,7 +260,7 @@ function BotRow({
       <div className="flex items-center hover:bg-surface-hover">
       <button
         onClick={onToggle}
-        className="flex-1 flex items-center justify-between px-4 py-3 text-left"
+        className="min-h-11 flex-1 flex items-center justify-between px-4 py-3 text-left"
       >
         <div>
           <span className="text-text font-medium">{bot.username}</span>
@@ -291,7 +291,7 @@ function BotRow({
       <label className="flex items-center gap-1 pr-3 text-xs text-text-muted" title="Whether this bot may run code in the sandbox">
         Code runs
         <select
-          className="bg-surface border border-border rounded px-1.5 py-1 text-xs text-text"
+          className="min-h-11 md:min-h-8 bg-surface border border-border rounded px-2 py-1 text-xs text-text"
           value={bot.runtimeAccess ?? 'none'}
           disabled={savingAccess}
           onChange={e => changeAccess(e.target.value as RuntimeAccess)}
@@ -447,7 +447,7 @@ function BotDetailPanel({
               className="w-12 h-12 rounded-full object-cover shrink-0"
             />
           ) : (
-            <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-white shrink-0">
+            <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-on-primary shrink-0">
               {(detail.username || '?')[0].toUpperCase()}
             </div>
           )}
@@ -457,13 +457,13 @@ function BotDetailPanel({
               value={avatarInput}
               onChange={(e) => { setAvatarInput(e.target.value); setAvatarError(''); }}
               placeholder="data:image/svg+xml;base64,..."
-              className="w-full px-2 py-1.5 rounded border border-border bg-surface text-text text-sm"
+              className="min-h-11 md:min-h-9 w-full px-3 py-1.5 rounded border border-border bg-surface text-text placeholder:text-text-muted/70 text-sm"
             />
             {avatarError && <p className="text-danger text-xs mt-1">{avatarError}</p>}
             <div className="flex gap-2 mt-2">
               <Button
                 variant="secondary"
-                className="!px-2 !py-1 !text-xs"
+                className="min-h-11 md:min-h-8 !px-3 !py-1 !text-xs"
                 loading={avatarSaving}
                 onClick={async () => {
                   setAvatarSaving(true);
@@ -483,7 +483,7 @@ function BotDetailPanel({
               {detail.avatarUrl && (
                 <Button
                   variant="secondary"
-                  className="!px-2 !py-1 !text-xs"
+                  className="min-h-11 md:min-h-8 !px-3 !py-1 !text-xs"
                   onClick={async () => {
                     setAvatarSaving(true);
                     setAvatarError('');
@@ -519,7 +519,7 @@ function BotDetailPanel({
               return (
                 <label
                   key={ch.id}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer text-sm"
+                  className="min-h-11 md:min-h-9 flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer text-sm"
                 >
                   <input
                     type="checkbox"
@@ -530,7 +530,7 @@ function BotDetailPanel({
                   />
                   <span className="text-text-muted">#</span>
                   <span className="text-text">{ch.name}</span>
-                  {isLoading && <span className="text-text-dim text-xs ml-auto">...</span>}
+                  {isLoading && <span className="text-text-muted text-xs ml-auto">...</span>}
                   {hasAccess && (
                     <span
                       className="ml-auto flex items-center gap-1 text-xs text-text-muted"
@@ -561,7 +561,7 @@ function BotDetailPanel({
             <h4 className="text-sm font-semibold text-text">Tokens</h4>
             <Button
               variant="secondary"
-              className="!px-2 !py-1 !text-xs"
+              className="min-h-11 md:min-h-8 !px-3 !py-1 !text-xs"
               onClick={() => setShowCreateToken(true)}
             >
               New Token
@@ -579,14 +579,14 @@ function BotDetailPanel({
                       Created {new Date(t.createdAt).toLocaleDateString()}
                     </span>
                     {t.lastUsedAt && (
-                      <span className="text-text-dim text-xs ml-2">
+                      <span className="text-text-muted text-xs ml-2">
                         Last used {new Date(t.lastUsedAt).toLocaleDateString()}
                       </span>
                     )}
                   </div>
                   <button
                     onClick={() => handleRevokeToken(t.id)}
-                    className="text-danger text-xs hover:underline"
+                    className="min-h-11 md:min-h-8 px-2 text-danger text-xs hover:underline"
                   >
                     Revoke
                   </button>

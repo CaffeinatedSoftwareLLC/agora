@@ -68,7 +68,7 @@ export function PendingQueue() {
               <div>
                 <p className="font-bold">{user.username}</p>
                 <p className="text-text-muted text-sm">{user.email}</p>
-                <p className="text-text-dim text-xs">
+                <p className="text-text-muted text-xs">
                   Registered {new Date(user.createdAt).toLocaleDateString()}
                 </p>
               </div>

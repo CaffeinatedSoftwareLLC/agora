@@ -18,7 +18,7 @@ interface Profile {
 }
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh'];
-const input = 'bg-bg border border-border rounded px-2 py-1 text-sm text-text';
+const input = 'min-h-11 md:min-h-9 bg-bg border border-border rounded px-3 py-1.5 text-sm text-text placeholder:text-text-muted/70 focus:outline-none focus:ring-2 focus:ring-primary';
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError) return err.status === 403 ? 'Only the server owner can do this.' : err.code;
@@ -115,7 +115,7 @@ function HostsSection({ serverId, hosts, onChange, onToken, onError }: {
                 {h.revokedAt ? 'revoked' : h.lastSeenAt ? `last seen ${new Date(h.lastSeenAt).toLocaleString()}` : 'never connected'}
               </span>
             </span>
-            {!h.revokedAt && <button className="text-xs text-danger hover:underline" onClick={() => void revoke(h)}>Revoke</button>}
+            {!h.revokedAt && <button className="min-h-11 md:min-h-8 px-2 text-xs text-danger hover:underline" onClick={() => void revoke(h)}>Revoke</button>}
           </li>
         ))}
       </ul>
@@ -164,7 +164,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
       ) : (
         <div className="rounded border border-border bg-surface p-3">
           <h4 className="mb-2 text-sm font-semibold text-text">Create agent</h4>
-          <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
             <label className="flex flex-col gap-1 text-text-muted">Name (bot and /start name)
               <input className={input} value={form.name} maxLength={32} placeholder="codex" onChange={set('name')} />
             </label>
@@ -190,7 +190,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
                 {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
               </select>
             </label>
-            <label className="col-span-2 flex flex-col gap-1 text-text-muted">Add to channel (optional)
+            <label className="sm:col-span-2 flex flex-col gap-1 text-text-muted">Add to channel (optional)
               <select className={input} value={form.channelId} onChange={set('channelId')}>
                 <option value="">None</option>
                 {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
@@ -235,7 +235,7 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
             {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {profile.wakeBudget} wakes · {profile.tokenBudget.toLocaleString()} tokens per session
           </span>
         </span>
-        <button className="text-xs text-danger hover:underline" onClick={() => void remove()}>Delete</button>
+        <button className="min-h-11 md:min-h-8 px-2 text-xs text-danger hover:underline" onClick={() => void remove()}>Delete</button>
       </div>
       <div className="mt-2 flex items-center gap-2">
         <input className={input} value={model} placeholder="model (CLI default)" maxLength={64} onChange={e => setModel(e.target.value)} />

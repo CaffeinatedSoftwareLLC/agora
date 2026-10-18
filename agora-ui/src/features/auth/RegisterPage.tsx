@@ -103,7 +103,7 @@ export function RegisterPage() {
           {error && <p className="text-sm text-danger">{error}</p>}
 
           {isApproval && (
-            <p className="text-sm text-text-dim">
+            <p className="text-sm text-text-muted">
               Accounts on this instance require administrator approval before you can sign in.
             </p>
           )}
@@ -115,7 +115,7 @@ export function RegisterPage() {
 
         <p className="text-center text-text-muted text-sm mt-4">
           Already have an account?{' '}
-          <Link to="/login" className="text-accent hover:underline">
+          <Link to="/login" className="min-h-11 md:min-h-8 inline-flex items-center px-1 text-accent hover:underline">
             Sign in
           </Link>
         </p>

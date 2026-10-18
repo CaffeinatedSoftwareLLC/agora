@@ -45,7 +45,7 @@ export function ProvidersSection({
       )}
 
       {providers.length === 0 && !adding ? (
-        <p className="text-text-dim text-sm">No providers yet.</p>
+        <p className="text-text-muted text-sm">No providers yet.</p>
       ) : (
         <div className="flex flex-col gap-2">
           {providers.map(p => (
@@ -62,7 +62,7 @@ export function ProvidersSection({
       )}
 
       {isInstanceAdmin && allowPrivateBaseUrls !== null && (
-        <label className="flex items-start gap-2 mt-4 text-sm text-text-muted cursor-pointer">
+        <label className="min-h-11 flex items-start gap-2 mt-4 text-sm text-text-muted cursor-pointer">
           <input
             type="checkbox"
             className="accent-primary mt-0.5"
@@ -136,7 +136,7 @@ function AddProviderForm({ serverId, adapters, onCancel, onCreated }: {
             onChange={e => setBaseUrl(e.target.value)}
             placeholder={adapter.defaultBaseUrl}
           />
-          <p className="text-xs text-text-dim mt-1">
+          <p className="text-xs text-text-muted mt-1">
             Any OpenAI-compatible server, e.g. Ollama at <code>http://localhost:11434/v1</code>, OpenRouter, Groq, vLLM.
           </p>
         </div>
@@ -190,17 +190,17 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
     <div className={`border border-border rounded-lg p-3 ${provider.enabled ? '' : 'opacity-60'}`}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-text font-medium">{provider.label}</span>
-        <span className="text-xs text-text-dim">{adapter?.label ?? provider.adapter}</span>
+        <span className="text-xs text-text-muted">{adapter?.label ?? provider.adapter}</span>
         {provider.capabilities.map(c => (
-          <span key={c} className="px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none bg-primary/20 text-primary">
+          <span key={c} className="px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none bg-primary/20 text-primary-text">
             {CAPABILITY_INFO[c].label}
           </span>
         ))}
         <span className="ml-auto flex items-center gap-3 text-xs">
-          <span className={provider.hasApiKey ? 'text-online' : 'text-text-dim'}>
+          <span className={provider.hasApiKey ? 'text-online' : 'text-text-muted'}>
             {provider.hasApiKey ? 'Key saved' : 'No key'}
           </span>
-          <label className="flex items-center gap-1 text-text-muted cursor-pointer">
+          <label className="min-h-11 md:min-h-8 flex items-center gap-1.5 text-text-muted cursor-pointer">
             <input
               type="checkbox"
               className="accent-primary"
@@ -211,7 +211,7 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
           </label>
         </span>
       </div>
-      {provider.baseUrl && <p className="text-xs text-text-dim mt-1 break-all">{provider.baseUrl}</p>}
+      {provider.baseUrl && <p className="text-xs text-text-muted mt-1 break-all">{provider.baseUrl}</p>}
 
       <div className="flex items-center gap-2 mt-3 flex-wrap">
         <input
