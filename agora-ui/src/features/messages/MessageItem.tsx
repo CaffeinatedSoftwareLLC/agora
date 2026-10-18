@@ -77,7 +77,24 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
     return <RuntimeCard message={message} />;
   }
 
-  // System event message (e.g., call started, call ended)
+  // Agent session notice (started / shelved / ended): left-aligned with the message column, console icon
+  if (message.systemEvent === 'agent_session') {
+    return (
+      <div className="flex items-start gap-3 px-4 py-1">
+        <div className="flex w-10 shrink-0 justify-center pt-[3px]">
+          <svg className="h-4 w-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M7 9l3 3-3 3M13 15h4" />
+          </svg>
+        </div>
+        <span className="min-w-0 text-[13px] leading-5 text-text-muted [overflow-wrap:anywhere]">
+          {message.content}
+        </span>
+      </div>
+    );
+  }
+
+  // Other system events (e.g. loop guard)
   if (message.systemEvent) {
     return (
       <div className="flex items-center justify-center gap-2 py-2 px-4">
