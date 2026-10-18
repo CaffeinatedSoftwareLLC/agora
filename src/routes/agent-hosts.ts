@@ -77,7 +77,7 @@ function queueNotices(request: FastifyRequest, notices: Notice[]) {
     if (notices.length === 0) return;
     request.pendingEvents ??= [];
     for (const n of notices) {
-        request.pendingEvents.push({ room: `channel:${n.channelId}`, event: 'Message', data: n.event });
+        request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
     }
 }
 

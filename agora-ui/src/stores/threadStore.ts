@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
 import type { Message } from './messageStore';
-import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, ThreadMetadataUpdatePayload } from '../lib/contracts/ws-events';
+import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, ThreadMetadataUpdatePayload, ProtocolInfo } from '../lib/contracts/ws-events';
 
 export interface ThreadSummary {
+  latestProtocol?: ProtocolInfo & { messageId: string; authorUsername: string | null } | null;
   id: string;
   content: string | null;
   authorId: string | null;

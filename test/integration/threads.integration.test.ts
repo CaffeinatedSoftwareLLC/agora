@@ -640,4 +640,25 @@ describe('Threads', () => {
 
         expect(res.status).toBe(404);
     });
+
+    test('thread summaries include newest undeleted protocol, fall back to parent, and paginate', async () => {
+        const parent = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth)
+            .send({ content: '[AGORA/v1 MODE=fix STATE=START]\nFix leftovers' });
+        const id = parent.body.id;
+        const add = (content: string) => ctx.request.post(`/channels/${channelId}/messages/${id}/replies`).set(owner.auth).send({ content });
+        await add('ordinary reply');
+        const list = async (suffix = '') => {
+            const res = await ctx.request.get(`/channels/${channelId}/threads?limit=10${suffix}`).set(owner.auth);
+            expect(res.status).toBe(200);
+            return res.body.find((t: any) => t.id === id);
+        };
+        expect((await list()).latestProtocol).toMatchObject({ state: 'START', messageId: id, authorUsername: 'threadowner' });
+        const turn = await add('[AGORA/v1 MODE=fix STATE=TURN]\nReady\n[YIELD to=codex]');
+        await add('newer non-protocol reply');
+        const deleted = await add('[AGORA/v1 MODE=fix STATE=DONE]\nDone');
+        await ctx.db.query('UPDATE messages SET deleted_at = NOW() WHERE id = $1', [deleted.body.id]);
+        const expected = { state: 'TURN', yieldTo: 'codex', messageId: turn.body.id, authorUsername: 'threadowner' };
+        expect((await list()).latestProtocol).toMatchObject(expected);
+        expect((await list('&before=2099-01-01T00:00:00Z')).latestProtocol).toMatchObject(expected);
+    });
 });

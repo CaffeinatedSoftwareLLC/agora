@@ -105,3 +105,9 @@ export interface BotMessageStreamPayload {
     /** Files attached when the stream finishes (e.g. an audio overview). */
     attachments?: MessagePayload['attachments'];
 }
+
+export interface AgentSessionUpdatePayload {
+  channelId: string;
+  sessionId: string;
+  running: boolean;
+}

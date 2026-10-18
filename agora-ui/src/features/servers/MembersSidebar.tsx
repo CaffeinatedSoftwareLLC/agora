@@ -1,3 +1,4 @@
+import { AuxPanelControl } from '../shell/AuxPanelControl';
 import { useEffect } from 'react';
 import { useMemberStore } from '../../stores/memberStore';
 import { useServerStore } from '../../stores/serverStore';
@@ -20,8 +21,9 @@ export function MembersSidebar() {
 
   return (
     <div className="w-60 bg-surface flex flex-col border-l border-border shrink-0">
-      <div className="min-h-12 px-4 flex items-center border-b border-border">
-        <span className="font-semibold text-text text-[15px]">Members — {members.length}</span>
+      <div className="min-h-12 px-4 flex items-center gap-2 border-b border-border">
+        <AuxPanelControl label="members" />
+        <span className="flex-1 font-semibold text-text text-[15px]">Members — {members.length}</span>
       </div>
       <div className="flex-1 overflow-y-auto py-2">
         {members.map((member) => (

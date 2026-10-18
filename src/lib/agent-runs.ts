@@ -17,8 +17,8 @@ export const HEARTBEAT_SECONDS = 30;
 export const MAX_ATTEMPTS = 3;
 export const MAX_BATCH = 20;
 
-/** A system notice to emit after the transaction that wrote it commits. */
-export interface Notice { channelId: string; event: any }
+/** A channel event to emit after the transaction that produced it commits. */
+export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'AgentSessionUpdate' }
 
 export interface Host { id: string; serverId: string }
 
@@ -68,6 +68,12 @@ export async function postNotice(c: PoolClient | any, channelId: string, content
 }
 
 // ─── Claim ───
+
+async function sessionUpdate(c: PoolClient, sessionId: string, running: boolean): Promise<Notice> {
+    const result = await c.query('SELECT channel_id FROM agent_sessions WHERE id = $1', [sessionId]);
+    const channelId = result.rows[0].channel_id.trim();
+    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), running } };
+}
 
 export interface ClaimResult {
     run: {
@@ -235,6 +241,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS]
     );
 
+    notices.push(await sessionUpdate(c, sessionId, true));
     return {
         run: {
             id: runId, claimToken, attempt, deliveryKey,
@@ -437,6 +444,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
              RETURNING s.state, s.tokens_used, s.channel_id, p.token_budget, p.name AS profile_name`,
             [run.session_id, tokens, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation]
         );
+        notices.push(await sessionUpdate(c, run.session_id, false));
         const session = s.rows[0];
         if (session && session.state === 'live' && Number(session.tokens_used) >= Number(session.token_budget)) {
             await shelveForBudget(c, run.session_id.trim(), session.channel_id.trim(), session.profile_name, notices);
@@ -462,6 +470,7 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         if (tokens !== null) {
             await c.query(`UPDATE agent_sessions SET tokens_used = tokens_used + $2 WHERE id = $1`, [run.session_id, tokens]);
         }
+        notices.push(await sessionUpdate(c, run.session_id, false));
         await settleBatch(c, run, !!body.retryable && !run.cancel_requested, body.error, notices);
         return { status: 200, body: { ok: true } };
     });
@@ -502,6 +511,7 @@ async function expireRun(c: PoolClient, run: any, notices: Notice[]) {
         `UPDATE agent_runs SET status = 'expired', finished_at = NOW() WHERE id = $1 AND status = 'claimed'`,
         [run.id]
     );
+    notices.push(await sessionUpdate(c, run.session_id, false));
     await settleBatch(c, run, true, 'lease_expired', notices);
 }
 

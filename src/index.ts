@@ -44,7 +44,7 @@ async function main() {
     const runSweeper = setInterval(() => {
         const notices: Notice[] = [];
         sweepExpiredRuns(db, notices)
-            .then(() => { for (const n of notices) app.io.to(`channel:${n.channelId}`).emit('Message', n.event); })
+            .then(() => { for (const n of notices) app.io.to(`channel:${n.channelId}`).emit(n.eventName ?? 'Message', n.event); })
             .catch(err => app.log.warn({ err }, 'Agent run sweep failed'));
     }, 15_000);
     runSweeper.unref();

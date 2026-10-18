@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { AuxPanelControl } from './AuxPanelControl';
 import { AppShell } from './AppShell';
 import { useUIStore } from '../../stores/uiStore';
 import { useServerStore } from '../../stores/serverStore';
@@ -20,9 +21,9 @@ vi.mock('../messages/FloatingMessageInput', () => ({ FloatingMessageInput: () =>
   const text = useDraftStore(s => s.drafts['channel:channel'] ?? '');
   return <textarea aria-label="Composer" value={text} onChange={e => useDraftStore.getState().setDraft('channel:channel', e.target.value)} />;
 } }));
-vi.mock('../messages/ThreadPanel', () => ({ ThreadPanel: () => <div>Thread content</div> }));
-vi.mock('../messages/FilesPanel', () => ({ FilesPanel: () => <div>File content</div> }));
-vi.mock('../servers/MembersSidebar', () => ({ MembersSidebar: () => <div>Members content</div> }));
+vi.mock('../messages/ThreadPanel', () => ({ ThreadPanel: () => <div><header><AuxPanelControl label="panel" />Thread content</header></div> }));
+vi.mock('../messages/FilesPanel', () => ({ FilesPanel: () => <div><header><AuxPanelControl label="files" />File content</header></div> }));
+vi.mock('../servers/MembersSidebar', () => ({ MembersSidebar: () => <div><header><AuxPanelControl label="members" />Members content</header></div> }));
 let width = 360;
 const listeners = new Set<() => void>();
 beforeEach(() => {
@@ -49,7 +50,7 @@ it('keeps one feed and composer DOM instance through resizes and phone auxiliary
   feed.scrollTop = 123;
   act(() => useUIStore.getState().openAux('files'));
   expect(container.querySelector('.shell-channel')?.hasAttribute('inert')).toBe(true);
-  expect(screen.getByText('File content')).toBeTruthy();
+  expect(screen.getByText('File content', { exact: false })).toBeTruthy();
   for (const next of [768, 1280, 360]) {
     act(() => { width = next; listeners.forEach(listener => listener()); });
     expect(screen.getByTestId('feed')).toBe(feed);
@@ -79,7 +80,7 @@ it('opening a thread via a shared action renders one inspector and local Back ke
   vi.spyOn(api, 'get').mockResolvedValue([]);
   const { container } = mount();
   act(() => useUIStore.getState().openThreadView('channel', 'parent'));
-  expect(screen.getByText('Thread content')).toBeTruthy();
+  expect(screen.getByText('Thread content', { exact: false })).toBeTruthy();
   expect(container.querySelectorAll('.shell-aux')).toHaveLength(1);
   fireEvent.click(screen.getByText('\u2190 Back'));
   expect(useUIStore.getState().aux).toBeNull();
@@ -92,4 +93,20 @@ it('phone header toggles the palette and shows connection state', () => {
   fireEvent.click(screen.getByRole('button', { name: /Switch theme from Aegean/ }));
   expect(useUIStore.getState().paletteKey).toBe('terracotta');
   expect(screen.getByRole('button', { name: /Switch theme from Terracotta/ })).toBeTruthy();
+});
+
+it.each(['thread', 'files', 'members'] as const)('keeps a single %s dismiss control in the panel header', async aux => {
+  vi.spyOn(api, 'get').mockResolvedValue([]);
+  const { container } = mount();
+  const trigger = screen.getByTitle('Files in this channel');
+  trigger.focus();
+  act(() => useUIStore.getState().openAux(aux));
+  const panel = container.querySelector('.shell-aux')!;
+  expect(panel.querySelectorAll('button')).toHaveLength(1);
+  expect(panel.querySelector('header button')).toBeTruthy();
+  expect(panel.querySelector('.shell-aux-back')).toBeNull();
+  fireEvent.click(panel.querySelector('button')!);
+  await act(async () => {});
+  expect(useUIStore.getState().aux).toBeNull();
+  expect(document.activeElement).toBe(trigger);
 });
