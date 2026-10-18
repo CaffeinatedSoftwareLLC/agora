@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, type KeyboardEvent } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, type KeyboardEvent } from 'react';
 import { useMemberStore } from '../../stores/memberStore';
 
 interface MentionAutocompleteProps {
@@ -11,6 +11,8 @@ interface MentionAutocompleteProps {
 
 function MentionAutocompleteInner({ query, serverId, onSelect, onClose }: Omit<MentionAutocompleteProps, 'visible'>) {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const selectedRef = useRef(0);
+  useEffect(() => { selectedRef.current = selectedIndex; }, [selectedIndex]);
   const members = useMemberStore((s) => (serverId ? s.byServer.get(serverId) : null));
   const loadMembers = useMemberStore((s) => s.loadMembers);
 
@@ -32,20 +34,25 @@ function MentionAutocompleteInner({ query, serverId, onSelect, onClose }: Omit<M
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (filtered.length === 0) return;
+      // This runs in the document capture phase, before the composer's own
+      // onKeyDown. preventDefault marks the key as handled and stopPropagation
+      // keeps it from reaching the composer, so Enter selects without sending.
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIndex((i) => (i + 1) % filtered.length);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIndex((i) => (i - 1 + filtered.length) % filtered.length);
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
+      } else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
         e.preventDefault();
-        setSelectedIndex((cur) => {
-          onSelect(filtered[cur].username);
-          return cur;
-        });
+        e.stopPropagation();
+        const member = filtered[Math.min(selectedRef.current, filtered.length - 1)];
+        if (member) onSelect(member.username);
       } else if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     },

@@ -126,6 +126,9 @@ export function FloatingMessageInput({
   // Enter to send, Shift+Enter for newline
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentions) return; // Let MentionAutocomplete handle keyboard events
+    // The autocomplete handles its keys in the capture phase and may already have
+    // closed itself by now; a handled key must not also send (#17).
+    if (e.defaultPrevented || e.nativeEvent.defaultPrevented) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
