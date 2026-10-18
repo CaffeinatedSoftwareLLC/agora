@@ -6,7 +6,8 @@ export interface BotInfo {
     /** Paused bots can read but every write returns 423 until an admin resumes them. */
     paused?: boolean;
     pausedReason?: string | null;
-    channels: { id: string; name: string; channelType: string }[];
+    /** `channels.channel_type` is a SMALLINT: 3 = text, 4 = voice, 5 = category (see channelTypeName). */
+    channels: { id: string; name: string; channelType: number }[];
 }
 
 export type Authority = 'owner' | 'director' | null;

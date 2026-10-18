@@ -18,6 +18,17 @@ function authorLabel(m: { authorId: string | null; authorUsername: string | null
     return `${displayName(m.authorUsername)}${tags}${id}`;
 }
 
+/** Readable names for `channels.channel_type` (SMALLINT, 002_channels_and_members.sql). */
+const CHANNEL_TYPES: Record<number, string> = {
+    0: 'saved messages', 1: 'dm', 2: 'group dm', 3: 'text', 4: 'voice', 5: 'category',
+};
+
+export function channelTypeName(type: unknown): string {
+    const n = typeof type === 'string' && /^\d+$/.test(type) ? Number(type) : type;
+    if (typeof n === 'number' && CHANNEL_TYPES[n]) return CHANNEL_TYPES[n];
+    return `type ${oneLine(String(type))}`;
+}
+
 export function formatDirectors(directors: Director[]): string {
     if (directors.length === 0) return 'Nobody may give agents instructions in this channel.';
     return directors.map(d =>
@@ -384,7 +395,7 @@ export function registerTools(
             botInfo = info;
 
             const lines = info.channels.map(c =>
-                `#${oneLine(c.name)} (${oneLine(c.channelType)}, id: ${c.id})`,
+                `#${oneLine(c.name)} (${channelTypeName(c.channelType)}, id: ${c.id})`,
             );
 
             const pausedNote = info.paused
