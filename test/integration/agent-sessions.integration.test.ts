@@ -357,6 +357,51 @@ describe('commands (S4)', () => {
             await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: false });
         }
     });
+    it('/start from a bot without can_direct says cannot_direct, with its name and the channel (#75)', async () => {
+        const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe('cannot_direct');
+        expect(res.body.message).toMatch(/^claude can't direct agents in #general; ask the server owner to grant DirectAgents/);
+    });
+});
+
+describe('session_wake: require_direct (#75)', () => {
+    const wake = (auth: object, content: string) =>
+        ctx.request.post(`/channels/${channelId}/messages`).set(auth).send({ content, require_direct: true });
+
+    it('refuses a wake from a bot that cannot direct: nothing is posted, nothing is queued', async () => {
+        const session = await startSession(codex);
+        const before = await ctx.db.query('SELECT count(*)::int AS n FROM messages WHERE channel_id = $1', [channelId]);
+        const res = await wake(claude.auth, '@codex review PR 62');
+        expect(res.status).toBe(403);
+        expect(res.body).toMatchObject({ error: 'cannot_direct', username: 'claude', channel: 'general' });
+        expect(res.body.message).toMatch(/or @ the agent yourself/);
+        const after = await ctx.db.query('SELECT count(*)::int AS n FROM messages WHERE channel_id = $1', [channelId]);
+        expect(after.rows[0].n).toBe(before.rows[0].n);
+        expect(await inbox(session)).toEqual([]);
+    });
+
+    it('refuses a member without DirectAgents too', async () => {
+        await startSession(codex);
+        expect((await wake(member.auth, '@codex hi')).body.error).toBe('cannot_direct');
+    });
+
+    it('posts and wakes when the caller can direct', async () => {
+        const session = await startSession(codex);
+        await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: true });
+        try {
+            const res = await wake(claude.auth, '@codex review PR 62');
+            expect(res.status).toBe(201);
+            expect(await inbox(session)).toEqual([{ message_id: res.body.id, reason: 'direct', acked: false }]);
+        } finally {
+            await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: false });
+        }
+    });
+
+    it('a post without require_direct still goes through, as before', async () => {
+        await startSession(codex);
+        await post(claude.auth, '@codex just chatting');
+    });
 });
 
 describe('host API (S2)', () => {

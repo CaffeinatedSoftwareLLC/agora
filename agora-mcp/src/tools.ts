@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { AgoraApiError } from './api.js';
 import type { AgentSession, AgoraApi, Authority, BotInfo, Director, FileSearchResult, FileText, Message, RuntimeRun, ThreadSummary } from './api.js';
 import type { CursorTracker } from './cursor.js';
 import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelope.js';
@@ -576,6 +577,22 @@ export function registerTools(
     // Starting, ending and waking other agents needs can_direct in the channel, which only
     // the server owner grants; without it these return 403. Listing needs only access.
 
+    /**
+     * Turn the server's 403 cannot_direct into an error the agent can act on (#75), so a
+     * start or wake without authority fails loudly instead of looking like it worked.
+     */
+    const explainCannotDirect = async <T>(channelName: string, call: () => Promise<T>): Promise<T> => {
+        try {
+            return await call();
+        } catch (err) {
+            if (!(err instanceof AgoraApiError) || err.status !== 403 || err.code !== 'cannot_direct') throw err;
+            const name = typeof err.body?.username === 'string' ? err.body.username : botInfo?.username ?? 'This bot';
+            throw new Error(`${oneLine(name)} can't direct agents in #${oneLine(channelName)}; `
+                + 'ask the server owner to grant DirectAgents (can_direct for this bot in the channel) or @ the agent yourself. '
+                + 'Nothing was started or posted.');
+        }
+    };
+
     const formatSession = (s: AgentSession) =>
         `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${s.endReason})` : ''}, `
         + `${s.wakesUsed} wakes, ${s.tokensUsed} tokens, last active ${s.lastActiveAt}`;
@@ -610,7 +627,8 @@ export function registerTools(
         },
         async ({ channel, profile, on_live, fresh }) => {
             const ch = await resolveChannel(channel);
-            const res = await api.agentCommand(ch.id, { command: 'start', profile, onLive: on_live, fresh });
+            const res = await explainCannotDirect(ch.name, () =>
+                api.agentCommand(ch.id, { command: 'start', profile, onLive: on_live, fresh }));
             return { content: [{ type: 'text' as const, text: `Session ${res.action}: ${res.session ? formatSession(res.session) : ''}` }] };
         },
     );
@@ -624,14 +642,14 @@ export function registerTools(
         },
         async ({ channel, profile }) => {
             const ch = await resolveChannel(channel);
-            const res = await api.agentCommand(ch.id, { command: 'end', profile });
+            const res = await explainCannotDirect(ch.name, () => api.agentCommand(ch.id, { command: 'end', profile }));
             return { content: [{ type: 'text' as const, text: `Session ended: ${res.session ? formatSession(res.session) : ''}` }] };
         },
     );
 
     server.tool(
         'session_wake',
-        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Counts as an instruction only if you have can_direct in the channel.',
+        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Needs can_direct in the channel: without it this fails and nothing is posted.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name of the agent to wake'),
@@ -645,7 +663,8 @@ export function registerTools(
             if (!live) {
                 return { content: [{ type: 'text' as const, text: `No live ${oneLine(profile)} session in #${oneLine(ch.name)}; start one with session_start.` }] };
             }
-            const msg = await api.sendMessage(ch.id, `@${live.botUsername} ${message}`, randomUUID(), client_key);
+            const msg = await explainCannotDirect(ch.name, () =>
+                api.sendMessage(ch.id, `@${live.botUsername} ${message}`, randomUUID(), client_key, { requireDirect: true }));
             return { content: [{ type: 'text' as const, text: `Woke ${oneLine(profile)} in #${oneLine(ch.name)} (message id: ${msg.id})` }] };
         },
     );
