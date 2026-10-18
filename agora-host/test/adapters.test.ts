@@ -5,10 +5,16 @@ import { childEnv, parseOutput, prepare } from '../src/adapters.js';
 import { configSchema } from '../src/config.js';
 import { wakePrompt } from '../src/prompt.js';
 import { claim, config, tempDir } from './helpers.js';
+import { git } from '../src/workspaces.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
-async function setup() { const t = await tempDir(); cleanups.push(t.cleanup); return { c: config(t.dir), delivery: claim() }; }
+async function setup() {
+    const t = await tempDir(); cleanups.push(t.cleanup);
+    await git(t.dir, ['init']);
+    await git(t.dir, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'fixture']);
+    return { c: config(t.dir), delivery: claim() };
+}
 
 describe('profiles without a model or effort, and /start notices', () => {
     it('leaves model and effort to the CLI when the profile has none', async () => {

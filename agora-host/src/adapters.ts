@@ -5,8 +5,10 @@ import { promisify } from 'node:util';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { wakePrompt } from './prompt.js';
+import { ensureWorkspace, type Workspace } from './workspaces.js';
 
 export interface Launch {
+    workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
     adapter: 'codex' | 'claude'; cleanup(): Promise<void>;
 }
@@ -38,6 +40,7 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     if (effort !== null && !efforts.includes(effort)) throw new Error('unsupported_effort');
     if (claim.session.nativeSessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
+    const workspace = await ensureWorkspace(local, claim);
     const dir = await mkdtemp(join(local.stateDir, 'run-'));
     const paths = ['mcp.json', 'mcp.toml', 'schema.json'].map(p => join(dir, p));
     const cleanup = async () => {
@@ -74,7 +77,7 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: local.workdir, adapter: local.adapter, stdin: wakePrompt(claim), cleanup };
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup };
     } catch (err) { await cleanup(); throw err; }
 }
 
