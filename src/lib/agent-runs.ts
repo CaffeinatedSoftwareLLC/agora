@@ -422,20 +422,25 @@ async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     return null;
 }
 
-export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[] }
+export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string }
 
 export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, body.claimToken, 'succeeded', notices, true);
         if (!check.ok) return { status: check.status, body: check.body };
         const run = check.run;
+        const hasBranch = body.branch !== undefined || body.baseSha !== undefined || body.headSha !== undefined;
+        if (hasBranch && (!/^agora\/[a-z0-9][a-z0-9_-]{0,31}\/[0-9A-HJKMNP-TV-Z]{26}$/.test(body.branch ?? '')
+            || !body.branch?.endsWith(`/${run.session_id.trim()}`)
+            || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(body.baseSha ?? '')
+            || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(body.headSha ?? ''))) return { status: 400, body: { error: 'invalid_workspace_report' } };
         const tokens = await chargeUsage(c, run, body.tokensUsed);
 
         await c.query(
             `UPDATE agent_runs SET status = 'succeeded', finished_at = NOW(), tokens_used = $2,
-                    native_session_id = $3, summary = $4, changed_paths = $5
+                    native_session_id = $3, summary = $4, changed_paths = $5, branch = $6, base_sha = $7, head_sha = $8
              WHERE id = $1`,
-            [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])]]
+            [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])], body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
         );
         const posted = await c.query(`SELECT 1 FROM messages m JOIN agent_sessions s ON s.bot_id = m.author_id
             WHERE s.id = $1 AND m.channel_id = s.channel_id AND m.created_at >= $2 LIMIT 1`, [run.session_id, run.created_at]);
@@ -452,11 +457,14 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
             `UPDATE agent_sessions s SET
                 native_session_id = CASE WHEN $2::text IS NOT NULL AND p.generation = $4 THEN $2 ELSE s.native_session_id END,
                 summary = COALESCE($3, s.summary),
+                branch = CASE WHEN p.generation = $4 THEN COALESCE($5, s.branch) ELSE s.branch END,
+                base_sha = CASE WHEN p.generation = $4 THEN COALESCE($6, s.base_sha) ELSE s.base_sha END,
+                head_sha = CASE WHEN p.generation = $4 THEN COALESCE($7, s.head_sha) ELSE s.head_sha END,
                 last_active_at = NOW()
              FROM agent_profiles p
              WHERE s.id = $1 AND p.id = s.profile_id
              RETURNING s.state, s.tokens_used, s.channel_id, COALESCE(s.token_budget, p.token_budget) AS token_budget, p.name AS profile_name`,
-            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation]
+            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation, body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
         );
         notices.push(await sessionUpdate(c, run.session_id, false));
         const session = s.rows[0];

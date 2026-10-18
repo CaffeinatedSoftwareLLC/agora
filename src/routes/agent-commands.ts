@@ -22,6 +22,8 @@ function sessionJson(r: any) {
     return {
         id: r.id.trim(), profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
+        branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
+        workspaceId: r.workspace_id,
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
         running: !!r.running, tokenBudget: Number(r.effective_token_budget), wakeBudget: r.wake_budget, run: r.run ?? null, recentRuns: r.recent_runs ?? [],
     };
@@ -207,9 +209,9 @@ async function startSession(db: any, channelId: string, profileName: string, onL
 
     const id = generateUlid();
     await db.query(
-        `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, profile.server_id, channelId, botId, profile.id, userId]
+        `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, workspace_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, profile.server_id, channelId, botId, profile.id, userId, profile.workspace_id]
     );
     await announce(db, channelId, id,
         `${who} started a ${profile.name} session (${id})${shelvedNow ? '; the previous one is shelved' : ''}.`, notices);

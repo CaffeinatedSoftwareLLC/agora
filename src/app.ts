@@ -22,6 +22,7 @@ import { fileTagRoutes } from './routes/file-tags';
 import { runtimeRoutes } from './routes/runtime';
 import { roleRoutes } from './routes/roles';
 import { agentHostRoutes } from './routes/agent-hosts';
+import { fileReservationRoutes } from './routes/file-reservations';
 import { agentCommandRoutes } from './routes/agent-commands';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
@@ -342,6 +343,7 @@ export async function buildApp(opts?: {
     await app.register(roleRoutes);
     await app.register(agentHostRoutes);
     await app.register(agentCommandRoutes);
+    await app.register(fileReservationRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

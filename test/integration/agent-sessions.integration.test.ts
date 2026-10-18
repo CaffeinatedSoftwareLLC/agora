@@ -121,6 +121,53 @@ afterAll(async () => {
 
 beforeEach(resetSessions);
 
+describe('workspace lifecycle and branch reports', () => {
+    it('defers cleanup until the ended session’s claim settles and lets its historical host reconcile after a profile move', async () => {
+        const id = await startSession(codex);
+        await post(owner.auth, '@codex work');
+        const c = (await claim()).body;
+        const url = '/agent-hosts/@me/workspaces/reconcile';
+        await ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'codex' });
+        expect((await ctx.request.post(url).set(hostAuth).send({ sessionIds: [id] })).body).toEqual([]);
+        const other = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'moved-wsi-host' });
+        try {
+            expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${codex.profileId}`).set(owner.auth).send({ hostId: other.body.host.id })).status).toBe(200);
+            expect((await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/fail`).set(hostAuth).send({ claimToken: c.run.claimToken, error: 'cancelled' })).status).toBe(200);
+            expect((await ctx.request.post(url).set(hostAuth).send({ sessionIds: [id] })).body).toEqual([id]);
+        } finally {
+            await ctx.request.patch(`/servers/${serverId}/agent-profiles/${codex.profileId}`).set(owner.auth).send({ hostId });
+        }
+    });
+    it('stores branch/base/head through completion and session listing; rejects partial or foreign reports', async () => {
+        const id = await startSession(codex);
+        await post(owner.auth, '@codex work');
+        const c = (await claim()).body;
+        const url = `/agent-hosts/@me/runs/${c.run.id}/complete`;
+        expect((await ctx.request.post(url).set(hostAuth).send({ claimToken: c.run.claimToken, branch: `agora/codex/${id}` })).status).toBe(400);
+        expect((await ctx.request.post(url).set(hostAuth).send({ claimToken: c.run.claimToken, branch: `agora/codex/${generateUlid()}`, baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40) })).status).toBe(400);
+        const fields = { branch: `agora/codex/${id}`, baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40) };
+        expect((await ctx.request.post(url).set(hostAuth).send({ claimToken: c.run.claimToken, ...fields })).status).toBe(200);
+        const list = await ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'sessions' });
+        expect(list.body.sessions[0]).toMatchObject(fields);
+        const run = await ctx.db.query('SELECT branch, base_sha, head_sha FROM agent_runs WHERE id = $1', [c.run.id]);
+        expect(run.rows[0]).toMatchObject({ branch: fields.branch, base_sha: fields.baseSha, head_sha: fields.headSha });
+    });
+    it('reconciles idle ended sessions only for their host, and posts dirty-file warnings', async () => {
+        const id = await startSession(codex);
+        const url = '/agent-hosts/@me/workspaces/reconcile';
+        expect((await ctx.request.post(url).set(hostAuth).send({ sessionIds: [id] })).body).toEqual([]);
+        await ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'codex' });
+        expect((await ctx.request.post(url).set(hostAuth).send({ sessionIds: [id] })).body).toEqual([id]);
+        const other = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'other-wsi' });
+        const otherAuth = { Authorization: `AgentHost ${other.body.token}` };
+        expect((await ctx.request.post(url).set(otherAuth).send({ sessionIds: [id] })).body).toEqual([]);
+        const warning = '/agent-hosts/@me/workspaces/warning';
+        expect((await ctx.request.post(warning).set(otherAuth).send({ sessionId: id, paths: ['dirty.txt'] })).status).toBe(404);
+        expect((await ctx.request.post(warning).set(hostAuth).send({ sessionId: id, paths: ['dirty.txt'] })).status).toBe(200);
+        expect((await ctx.db.query(`SELECT content FROM messages WHERE channel_id = $1 ORDER BY id DESC LIMIT 1`, [channelId])).rows[0].content).toContain('dirty.txt');
+    });
+});
+
 describe('client_key (S0)', () => {
     it('returns the first post on a repeat to the same place with the same content', async () => {
         const first = await post(codex.auth, 'hello once', { client_key: 'k-1' });
