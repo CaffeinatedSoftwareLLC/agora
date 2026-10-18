@@ -69,10 +69,14 @@ export async function postNotice(c: PoolClient | any, channelId: string, content
 
 // ─── Claim ───
 
-async function sessionUpdate(c: PoolClient, sessionId: string, running: boolean): Promise<Notice> {
-    const result = await c.query('SELECT channel_id FROM agent_sessions WHERE id = $1', [sessionId]);
+export async function sessionUpdate(c: PoolClient, sessionId: string, running: boolean): Promise<Notice> {
+    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason,
+        (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
+            'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
+         FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS run
+        FROM agent_sessions s WHERE s.id = $1`, [sessionId]);
     const channelId = result.rows[0].channel_id.trim();
-    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), running } };
+    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), running: result.rows[0].run?.status === 'claimed' && running, run: result.rows[0].run, state: result.rows[0].state, endReason: result.rows[0].end_reason } };
 }
 
 export interface ClaimResult {
@@ -120,7 +124,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     // 1. Lock the session; skip it if another claim holds it or a run is active
     const s = await c.query(
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
-                p.token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name
+                COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name
          FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN channels ch ON ch.id = s.channel_id
@@ -329,6 +333,8 @@ async function shelveForBudget(c: PoolClient, sessionId: string, channelId: stri
         `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW() WHERE id = $1 AND state = 'live'`,
         [sessionId]
     );
+    await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
+    notices.push(await sessionUpdate(c, sessionId, false));
     notices.push(await postNotice(c, channelId, `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`));
 }
 
@@ -380,11 +386,13 @@ async function checkRun(c: PoolClient, host: Host, runId: string, claimToken: st
     return { ok: true, run };
 }
 
-export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[]) {
+export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, claimToken, null, notices);
         if (!check.ok) return { status: check.status, body: check.body };
         const run = check.run;
+        await chargeUsage(c, run, tokensUsed);
+        await enforceTokenBudget(c, run.session_id.trim(), notices);
 
         const reason = await cancelReason(c, run);
         if (reason) return { status: 200, body: { cancel: true, reason } };
@@ -414,35 +422,41 @@ async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     return null;
 }
 
-export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null }
+export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[] }
 
 export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, body.claimToken, 'succeeded', notices, true);
         if (!check.ok) return { status: check.status, body: check.body };
         const run = check.run;
-        const tokens = typeof body.tokensUsed === 'number' ? Math.max(0, Math.floor(body.tokensUsed)) : null;
+        const tokens = await chargeUsage(c, run, body.tokensUsed);
 
         await c.query(
             `UPDATE agent_runs SET status = 'succeeded', finished_at = NOW(), tokens_used = $2,
-                    native_session_id = $3, summary = $4
+                    native_session_id = $3, summary = $4, changed_paths = $5
              WHERE id = $1`,
-            [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null]
+            [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])]]
         );
+        const posted = await c.query(`SELECT 1 FROM messages m JOIN agent_sessions s ON s.bot_id = m.author_id
+            WHERE s.id = $1 AND m.channel_id = s.channel_id AND m.created_at >= $2 LIMIT 1`, [run.session_id, run.created_at]);
+        if (!posted.rows.length) {
+            await c.query(`UPDATE agent_runs SET error = 'nothing_posted' WHERE id = $1`, [runId]);
+            const name = await c.query(`SELECT p.name, s.channel_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
+            notices.push(await postNotice(c, name.rows[0].channel_id.trim(), `${name.rows[0].name} finished without posting a reply. The run may be blocked; check its permissions or wake it again.`));
+        }
         await c.query(`UPDATE agent_batches SET status = 'done', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
         await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
 
         // A run claimed before an incompatible profile edit must not restore an old session ID
         const s = await c.query(
             `UPDATE agent_sessions s SET
-                tokens_used = s.tokens_used + COALESCE($2::bigint, 0),
-                native_session_id = CASE WHEN $3::text IS NOT NULL AND p.generation = $5 THEN $3 ELSE s.native_session_id END,
-                summary = COALESCE($4, s.summary),
+                native_session_id = CASE WHEN $2::text IS NOT NULL AND p.generation = $4 THEN $2 ELSE s.native_session_id END,
+                summary = COALESCE($3, s.summary),
                 last_active_at = NOW()
              FROM agent_profiles p
              WHERE s.id = $1 AND p.id = s.profile_id
-             RETURNING s.state, s.tokens_used, s.channel_id, p.token_budget, p.name AS profile_name`,
-            [run.session_id, tokens, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation]
+             RETURNING s.state, s.tokens_used, s.channel_id, COALESCE(s.token_budget, p.token_budget) AS token_budget, p.name AS profile_name`,
+            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation]
         );
         notices.push(await sessionUpdate(c, run.session_id, false));
         const session = s.rows[0];
@@ -453,23 +467,21 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
     });
 }
 
-export interface FailBody { claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean }
+export interface FailBody { claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[] }
 
 export async function fail(pool: Pool, host: Host, runId: string, body: FailBody, notices: Notice[]) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, body.claimToken, 'failed', notices);
         if (!check.ok) return { status: check.status, body: check.body };
         const run = check.run;
-        const tokens = typeof body.tokensUsed === 'number' ? Math.max(0, Math.floor(body.tokensUsed)) : null;
+        const tokens = await chargeUsage(c, run, body.tokensUsed);
 
         await c.query(
-            `UPDATE agent_runs SET status = 'failed', finished_at = NOW(), tokens_used = $2, error = $3, error_message = $4
+            `UPDATE agent_runs SET status = 'failed', finished_at = NOW(), tokens_used = $2, error = $3, error_message = $4, changed_paths = $5
              WHERE id = $1`,
-            [runId, tokens, body.error.slice(0, 64), body.message?.slice(0, 2000) ?? null]
+            [runId, tokens, body.error.slice(0, 64), body.message?.slice(0, 2000) ?? null, [...new Set(body.changedPaths ?? [])]]
         );
-        if (tokens !== null) {
-            await c.query(`UPDATE agent_sessions SET tokens_used = tokens_used + $2 WHERE id = $1`, [run.session_id, tokens]);
-        }
+        await enforceTokenBudget(c, run.session_id.trim(), notices);
         notices.push(await sessionUpdate(c, run.session_id, false));
         await settleBatch(c, run, !!body.retryable && !run.cancel_requested, body.error, notices);
         return { status: 200, body: { ok: true } };
@@ -505,7 +517,7 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
         `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`));
 }
 
-/** Expire one claimed run whose lease is over. Its usage is unknown and not charged. */
+/** Expire one claimed run whose lease is over. Keep usage already reported by heartbeats. */
 async function expireRun(c: PoolClient, run: any, notices: Notice[]) {
     await c.query(
         `UPDATE agent_runs SET status = 'expired', finished_at = NOW() WHERE id = $1 AND status = 'claimed'`,
@@ -531,4 +543,24 @@ export async function sweepExpiredRuns(pool: Pool, notices: Notice[]): Promise<n
         });
     }
     return n;
+}
+
+/** Hosts report cumulative usage for this run. Repeated or older reports never double charge. */
+async function chargeUsage(c: PoolClient, run: any, reported?: number | null): Promise<number | null> {
+    const previous = Number(run.tokens_used ?? 0);
+    if (reported == null) return run.tokens_used == null ? null : previous;
+    const total = Math.max(previous, reported);
+    await c.query('UPDATE agent_runs SET tokens_used = $2 WHERE id = $1', [run.id, total]);
+    await c.query('UPDATE agent_sessions SET tokens_used = tokens_used + $2 WHERE id = $1', [run.session_id, total - previous]);
+    run.tokens_used = total;
+    return total;
+}
+
+async function enforceTokenBudget(c: PoolClient, sessionId: string, notices: Notice[]) {
+    const r = await c.query(`SELECT s.state, s.channel_id, s.tokens_used,
+        COALESCE(s.token_budget, p.token_budget) AS token_budget, p.name
+        FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [sessionId]);
+    const s = r.rows[0];
+    if (s?.state === 'live' && Number(s.tokens_used) >= Number(s.token_budget))
+        await shelveForBudget(c, sessionId, s.channel_id.trim(), s.name, notices);
 }

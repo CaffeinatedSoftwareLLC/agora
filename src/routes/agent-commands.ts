@@ -1,9 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
-import { stampAuthority } from '../lib/direct-agents';
+import { stampAuthority, isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { postNotice, type Notice } from '../lib/agent-runs';
+import { postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 
 /**
  * Session commands (docs/planning/agent-sessions-wbs.md, "Commands"): /start, /end,
@@ -23,12 +23,19 @@ function sessionJson(r: any) {
         id: r.id.trim(), profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
-        running: !!r.running,
+        running: !!r.running, tokenBudget: Number(r.effective_token_budget), wakeBudget: r.wake_budget, run: r.run ?? null, recentRuns: r.recent_runs ?? [],
     };
 }
 
 // running: a host has claimed a run for this session and is working on it now
-const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_username,
+const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_username, COALESCE(s.token_budget, p.token_budget) AS effective_token_budget, p.wake_budget,
+        (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
+            'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
+         FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS run,
+        (SELECT COALESCE(json_agg(recent.run ORDER BY recent.created_at DESC, recent.id DESC), '[]'::json) FROM
+            (SELECT r.id, r.created_at, json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
+                'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths) AS run
+             FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 5) recent) AS recent_runs,
         EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') AS running
     FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
 
@@ -94,17 +101,18 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 required: ['command'],
                 additionalProperties: false,
                 properties: {
-                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume'] },
+                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget'] },
                     profile: { type: 'string', minLength: 1, maxLength: 32 },
                     sessionId: { type: 'string', minLength: 26, maxLength: 26 },
                     onLive: { type: 'string', enum: ['ask', 'shelve', 'keep'] },
                     fresh: { type: 'boolean' },
+                    tokenBudget: { type: 'integer', minimum: 1, maximum: 9007199254740991 },
                 },
             },
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const { command, profile: profileName, sessionId, onLive = 'ask', fresh = false } = request.body as any;
+        const { command, profile: profileName, sessionId, onLive = 'ask', fresh = false, tokenBudget } = request.body as any;
         const db = request.dbClient!;
         const userId = request.userId;
 
@@ -125,18 +133,30 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Only the owner and directors can start, end or resume agent sessions' });
         }
         if ((command === 'start' || command === 'end') && !profileName) return reply.status(400).send({ error: 'profile is required' });
-        if (command === 'resume' && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });
+        if ((command === 'resume' || command === 'budget') && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });
 
+        if ((command === 'budget' || tokenBudget !== undefined) &&
+            (request.isBot || !await isServerOwner(db, (await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId])).rows[0].server_id.trim(), userId))) {
+            return reply.status(403).send({ error: 'Only the owner can change session budgets' });
+        }
+        if (command === 'budget' && tokenBudget === undefined) return reply.status(400).send({ error: 'tokenBudget is required' });
         const who = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'someone';
         const notices: Notice[] = [];
         try {
             const result = await asService(db, async () => {
+                if (command === 'budget') {
+                    const updated = await db.query(`UPDATE agent_sessions SET token_budget = $3 WHERE id = $1 AND channel_id = $2 AND state <> 'ended' RETURNING id`, [sessionId, channelId, tokenBudget]);
+                    if (!updated.rows.length) throw new CommandError(404, { error: 'not_resumable' });
+                    notices.push(await sessionUpdate(db, sessionId, true));
+                    const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
+                    return { status: 200, body: { action: 'budget_updated', session: sessionJson(row.rows[0]) } };
+                }
                 if (command === 'end') return endSession(db, channelId, profileName, who, notices);
-                if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, who, notices);
+                if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, who, notices, tokenBudget);
                 return startSession(db, channelId, profileName, onLive, fresh, userId, who, notices);
             });
             request.pendingEvents ??= [];
-            for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: 'Message', data: n.event });
+            for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
             return reply.status(result.status).send(result.body);
         } catch (err: any) {
             if (err instanceof CommandError) return reply.status(err.status).send(err.body);
@@ -170,7 +190,10 @@ async function startSession(db: any, channelId: string, profileName: string, onL
             [channelId, profile.id]
         );
         if (shelved.rows[0]) {
-            const id = shelved.rows[0].id.trim();
+            const previous = shelved.rows[0];
+            if (Number(previous.tokens_used) >= Number(previous.effective_token_budget) || previous.wakes_used >= previous.wake_budget)
+                throw new CommandError(409, { error: 'budget_exhausted' });
+            const id = previous.id.trim();
             await db.query(
                 `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW() WHERE id = $1`,
                 [id]
@@ -203,7 +226,7 @@ async function endSession(db: any, channelId: string, profileName: string, who: 
     return { status: 200, body: { action: 'ended', session: sessionJson(row.rows[0]) } };
 }
 
-async function resumeSession(db: any, channelId: string, sessionId: string, onLive: string, who: string, notices: Notice[]) {
+async function resumeSession(db: any, channelId: string, sessionId: string, onLive: string, who: string, notices: Notice[], tokenBudget?: number) {
     // Profile before session, as everywhere else
     const profileOf = await db.query(`SELECT profile_id FROM agent_sessions WHERE id = $1`, [sessionId]);
     if (profileOf.rows[0]) {
@@ -214,6 +237,12 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
     if (!t || t.channel_id.trim() !== channelId.trim() || t.state !== 'shelved') {
         throw new CommandError(400, { error: 'not_resumable' });
     }
+    if (tokenBudget !== undefined) {
+        await db.query('UPDATE agent_sessions SET token_budget = $2 WHERE id = $1', [sessionId, tokenBudget]);
+        t.effective_token_budget = tokenBudget;
+    }
+    if (Number(t.tokens_used) >= Number(t.effective_token_budget) || t.wakes_used >= t.wake_budget)
+        throw new CommandError(409, { error: 'budget_exhausted' });
     const botId = t.bot_id.trim();
     await botInChannel(db, botId, channelId);
 

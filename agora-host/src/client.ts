@@ -45,8 +45,8 @@ export class Client implements HostApi {
         const data = await this.request('GET', 'runs/next?wait=25', undefined, signal, 30000);
         return data === null ? null : { claim: claimSchema.parse(data), sentAt };
     }
-    async heartbeat(claim: Claim, signal?: AbortSignal): Promise<Heartbeat> {
-        return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`, { claimToken: claim.run.claimToken }, signal));
+    async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat> {
+        return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`, { claimToken: claim.run.claimToken, tokensUsed }, signal));
     }
     private async report(claim: Claim, action: 'complete' | 'fail', body: Completion | Failure, signal?: AbortSignal) {
         for (let attempt = 0; ; attempt++) {

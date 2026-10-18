@@ -6,6 +6,15 @@ import { api, ApiError } from '../../lib/api';
  * src/routes/agent-commands.ts.
  */
 
+export interface AgentRun {
+  id: string;
+  status: 'claimed' | 'succeeded' | 'failed' | 'expired';
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  changedPaths: string[];
+}
+
 export interface AgentSession {
   id: string;
   profile: string;
@@ -19,6 +28,9 @@ export interface AgentSession {
   lastActiveAt: string;
   /** A host has claimed a run for this session and is working now. */
   running?: boolean;
+  tokenBudget?: number;
+  run?: AgentRun | null;
+  recentRuns?: AgentRun[];
 }
 
 export interface AgentProfile {
@@ -32,7 +44,8 @@ export type CommandBody =
   | { command: 'start'; profile: string; fresh?: boolean; onLive?: 'shelve' | 'keep' }
   | { command: 'end'; profile: string }
   | { command: 'sessions' }
-  | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep' };
+  | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number }
+  | { command: 'budget'; sessionId: string; tokenBudget: number };
 
 export interface CommandResponse {
   action?: string;
@@ -41,6 +54,7 @@ export interface CommandResponse {
 }
 
 export const ERRORS: Record<string, string> = {
+  budget_exhausted: 'This session has used its budget. The owner can raise its token budget, or start a fresh session.',
   unknown_profile: 'No agent profile with that name on this server.',
   bot_not_in_channel: "That agent's bot hasn't been added to this channel.",
   no_live_session: 'That agent has no live session here.',
@@ -137,6 +151,7 @@ export function describeSession(s: AgentSession): string {
 }
 
 const ACTION_TEXT: Record<string, string> = {
+  budget_updated: 'Token budget updated. Resume the session when ready.',
   started: 'Session started.',
   resumed: 'Session resumed.',
   kept: 'Kept the live session.',
@@ -145,4 +160,9 @@ const ACTION_TEXT: Record<string, string> = {
 
 export function actionText(action: string | undefined): string {
   return (action && ACTION_TEXT[action]) || 'Done.';
+}
+
+export function elapsedTime(startedAt: string, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000)) || 0;
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }

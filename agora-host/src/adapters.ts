@@ -65,7 +65,7 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
                 ...(claim.session.nativeSessionId ? ['resume', claim.session.nativeSessionId] : []),
                 '--json', '--output-schema', paths[2], '-'];
         } else {
-            args = ['-p', '--output-format', 'json', '--permission-mode', 'manual', '--permission-prompts', 'none',
+            args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'manual', '--permission-prompts', 'none',
                 '--strict-mcp-config', '--mcp-config', paths[0],
                 ...(model !== null ? ['--model', model] : []),
                 ...(effort !== null ? ['--effort', effort] : []),
@@ -94,18 +94,36 @@ function summary(value: unknown): string | null {
         ? (value as { summary: string }).summary.slice(0, 16000) : null;
 }
 export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCode: number | null): Result {
+    const changedPaths = new Set<string>();
     let nativeSessionId: string | null = null; let tokensUsed: number | null = null; let final: string | null = null; let success = false;
     try {
         if (adapter === 'claude') {
-            const r = JSON.parse(stdout);
+            const events: any[] = [];
+            let invalid = false;
+            for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
+                try { events.push(JSON.parse(line)); } catch { invalid = true; break; }
+            }
+            const r = [...events].reverse().find((e: any) => e.type === 'result') ?? {};
+            const messages = new Map<string, number>();
+            for (const [index, e] of events.entries()) {
+                if (e.type === 'assistant') {
+                    const usage = sumUsage(e.message?.usage, ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']);
+                    if (usage !== null) messages.set(e.message?.id ?? String(index), usage);
+                }
+            }
+            if (messages.size) tokensUsed = [...messages.values()].reduce((a, b) => a + b, 0);
             nativeSessionId = typeof r.session_id === 'string' ? r.session_id : null;
-            tokensUsed = sumUsage(r.usage, ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']);
+            tokensUsed = sumUsage(r.usage, ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']) ?? tokensUsed;
             final = summary(r.structured_output ?? r.result);
-            success = r.type === 'result' && r.subtype === 'success' && r.is_error === false && final !== null;
+            success = !invalid && r.type === 'result' && r.subtype === 'success' && r.is_error === false && final !== null;
         } else {
             for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
                 const e = JSON.parse(line);
                 if (e.type === 'thread.started' && typeof e.thread_id === 'string') nativeSessionId = e.thread_id;
+                if (e.type === 'item.completed' && e.item?.type === 'file_change' && e.item.status !== 'failed') {
+                    for (const change of e.item.changes ?? [])
+                        if (typeof change.path === 'string' && change.path.length > 0 && change.path.length <= 4096 && changedPaths.size < 1000) changedPaths.add(change.path);
+                }
                 if (e.type === 'item.completed' && e.item?.type === 'agent_message') final = summary(e.item.text);
                 if (e.type === 'turn.completed') {
                     const used = sumUsage(e.usage, ['input_tokens', 'output_tokens']);
@@ -117,5 +135,5 @@ export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCod
         }
     } catch { success = false; }
     success &&= exitCode === 0;
-    return { success, nativeSessionId, tokensUsed, summary: final, ...(success ? {} : { error: 'cli_failed_or_invalid_output' }) };
+    return { success, nativeSessionId, tokensUsed, summary: final, changedPaths: [...changedPaths], ...(success ? {} : { error: 'cli_failed_or_invalid_output' }) };
 }

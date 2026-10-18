@@ -153,3 +153,15 @@ describe('ConsoleStrip', () => {
     expect(post).toHaveBeenCalledWith(`/channels/${CH}/agent-commands`, { command: 'start', profile: 'claude', onLive: 'keep' });
   });
 });
+
+
+it('keeps changed-file details from recent runs in the session sheet', async () => {
+  post.mockResolvedValue({ sessions: [live({ running: false, recentRuns: [
+    { id: 'old-run', status: 'succeeded', startedAt: '2026-10-17T10:00:00Z', finishedAt: '2026-10-17T10:01:00Z', error: null, changedPaths: ['src/older.ts'] },
+  ] })] });
+  render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /claude: live and idle/ }));
+  fireEvent.click(screen.getByText('Recent runs'));
+  fireEvent.click(screen.getByText('1 changed file'));
+  expect(screen.getByText('src/older.ts')).toBeInTheDocument();
+});

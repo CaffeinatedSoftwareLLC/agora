@@ -379,11 +379,11 @@ describe('host API (S2)', () => {
         try {
             const c = await claim();
             expect(c.status).toBe(200);
-            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('AgentSessionUpdate', { channelId, sessionId, running: true }));
+            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('AgentSessionUpdate', expect.objectContaining({ channelId, sessionId, running: true })));
             expect(room).toHaveBeenCalledWith(`channel:${channelId}`);
             await ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/complete`).set(hostAuth)
                 .send({ claimToken: c.body.run.claimToken });
-            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('AgentSessionUpdate', { channelId, sessionId, running: false }));
+            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('AgentSessionUpdate', expect.objectContaining({ channelId, sessionId, running: false })));
         } finally { room.mockRestore(); }
     });
 
@@ -393,7 +393,7 @@ describe('host API (S2)', () => {
         const notices: Notice[] = [];
         const expectUpdate = (running: boolean) => {
             expect(notices.filter(n => n.eventName === 'AgentSessionUpdate').at(-1)).toEqual({
-                channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId, running },
+                channelId, eventName: 'AgentSessionUpdate', event: expect.objectContaining({ channelId, sessionId, running }),
             });
             notices.length = 0;
         };
@@ -801,5 +801,62 @@ describe('host API (S2)', () => {
             .send({ name: 'x', botId: codex.botId, hostId, adapter: 'codex', workdirAlias: 'a' })).status).toBe(403);
         // Members can list profiles
         expect((await ctx.request.get(`/servers/${serverId}/agent-profiles`).set(member.auth)).status).toBe(200);
+    });
+});
+
+
+describe('run visibility and session token budgets', () => {
+    it('publishes durable run details and stores unique changed paths on completion', async () => {
+        const id = await startSession(codex);
+        await post(owner.auth, '@codex work');
+        const notices: Notice[] = [];
+        const c = (await claimNext(ctx.db, { id: hostId, serverId }, notices))!;
+        expect(notices.find(n => n.eventName === 'AgentSessionUpdate')?.event.run).toMatchObject({ id: c.run.id, status: 'claimed', changedPaths: [] });
+        const done = await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/complete`).set(hostAuth)
+            .send({ claimToken: c.run.claimToken, tokensUsed: 12, changedPaths: ['src/a.ts', 'src/a.ts', 'file name.txt'] });
+        expect(done.status, JSON.stringify(done.body)).toBe(200);
+        const list = await ctx.request.post(`/channels/${channelId}/agent-commands`).set(member.auth).send({ command: 'sessions' });
+        expect(list.body.sessions.find((s: any) => s.id === id).recentRuns[0].changedPaths).toEqual(['src/a.ts', 'file name.txt']);
+        expect(list.body.sessions.find((s: any) => s.id === id)).toMatchObject({ running: false, run: { id: c.run.id, status: 'succeeded', error: 'nothing_posted', changedPaths: ['src/a.ts', 'file name.txt'] } });
+        const repeat = await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/complete`).set(hostAuth).send({ claimToken: c.run.claimToken, tokensUsed: 12 });
+        expect(repeat.body.repeated).toBe(true);
+        expect(Number((await ctx.db.query('SELECT tokens_used FROM agent_sessions WHERE id = $1', [id])).rows[0].tokens_used)).toBe(12);
+    });
+
+    it('charges heartbeats once, pauses at the session limit, and lets only the owner raise and resume', async () => {
+        const id = await startSession(codex);
+        const command = (auth: Record<string, string>, body: object) => ctx.request.post(`/channels/${channelId}/agent-commands`).set(auth).send(body);
+        expect((await command(owner.auth, { command: 'budget', sessionId: id, tokenBudget: 20 })).status).toBe(200);
+        expect((await command(member.auth, { command: 'budget', sessionId: id, tokenBudget: 100 })).status).toBe(403);
+        expect((await command(owner.auth, { command: 'budget', sessionId: id, tokenBudget: -1 })).status).toBe(400);
+        await post(owner.auth, '@codex work');
+        const c = (await claim()).body;
+        const beat = (tokensUsed: number) => ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/heartbeat`).set(hostAuth).send({ claimToken: c.run.claimToken, tokensUsed });
+        expect((await beat(10)).body.cancel).toBe(false);
+        expect((await beat(10)).body.cancel).toBe(false);
+        expect((await beat(5)).body.cancel).toBe(false);
+        expect((await beat(20)).body).toMatchObject({ cancel: true, reason: 'shelved' });
+        const paused = (await ctx.db.query('SELECT * FROM agent_sessions WHERE id = $1', [id])).rows[0];
+        expect(paused.state).toBe('shelved'); expect(Number(paused.tokens_used)).toBe(20);
+        expect((await command(owner.auth, { command: 'resume', sessionId: id })).body.error).toBe('budget_exhausted');
+        const failed = await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/fail`).set(hostAuth).send({ claimToken: c.run.claimToken, error: 'cancelled', tokensUsed: 23 });
+        expect(failed.status).toBe(200);
+        expect(Number((await ctx.db.query('SELECT tokens_used FROM agent_sessions WHERE id = $1', [id])).rows[0].tokens_used)).toBe(23);
+        const resumed = await command(owner.auth, { command: 'resume', sessionId: id, tokenBudget: 100 });
+        expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+        expect(resumed.body.session).toMatchObject({ state: 'live', tokenBudget: 100, tokensUsed: 23 });
+    });
+
+    it('shelves completions that exhaust a budget and suppresses the no-reply marker when the bot posted', async () => {
+        const id = await startSession(codex);
+        await ctx.db.query('UPDATE agent_sessions SET token_budget = 5 WHERE id = $1', [id]);
+        await post(owner.auth, '@codex work');
+        const c = (await claim()).body;
+        await post(codex.auth, 'Here is my reply');
+        const done = await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/complete`).set(hostAuth).send({ claimToken: c.run.claimToken, tokensUsed: 5 });
+        expect(done.status).toBe(200);
+        const row = (await ctx.db.query('SELECT error FROM agent_runs WHERE id = $1', [c.run.id])).rows[0];
+        expect(row.error).toBeNull();
+        expect((await ctx.db.query('SELECT state FROM agent_sessions WHERE id = $1', [id])).rows[0].state).toBe('shelved');
     });
 });

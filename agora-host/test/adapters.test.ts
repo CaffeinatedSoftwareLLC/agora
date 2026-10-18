@@ -131,3 +131,23 @@ describe('structured output parsing (documented and sanitized observed shapes)',
         expect(parseOutput('claude', '{"type":"result","subtype":"success","is_error":false,"result":"hello"}', 0)).toMatchObject({ success: false, tokensUsed: null });
     });
 });
+
+
+describe('changed files and streaming usage', () => {
+    it('collects unique Codex paths and excludes failed edits', () => {
+        const events = [
+            { type: 'item.completed', item: { type: 'file_change', changes: [{ path: 'src/a.ts' }, { path: 'src/a.ts' }, { path: 'new name.txt' }] } },
+            { type: 'item.completed', item: { type: 'file_change', status: 'failed', changes: [{ path: 'denied' }] } },
+            { type: 'item.completed', item: { type: 'agent_message', text: '{"summary":"done"}' } },
+            { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } },
+        ].map(e => JSON.stringify(e)).join('\n');
+        expect(parseOutput('codex', events, 0)).toMatchObject({ success: true, changedPaths: ['src/a.ts', 'new name.txt'], tokensUsed: 12 });
+    });
+    it('reads Claude stream-json result and exposes usage before completion', () => {
+        const assistant = JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 10, output_tokens: 3 } } });
+        expect(parseOutput('claude', assistant, null).tokensUsed).toBe(13);
+        expect(parseOutput('claude', assistant + '\n{', 1)).toMatchObject({ success: false, tokensUsed: 13 });
+        const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { summary: 'done' }, usage: { input_tokens: 10, output_tokens: 5 } });
+        expect(parseOutput('claude', assistant + '\n' + result, 0)).toMatchObject({ success: true, tokensUsed: 15 });
+    });
+});
