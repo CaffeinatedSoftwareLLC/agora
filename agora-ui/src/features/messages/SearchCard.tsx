@@ -46,10 +46,10 @@ export function SearchCard({ message }: { message: Message }) {
       <MessageContent content={message.content ?? ''} />
 
       {citations.length > 0 && (
-        <ol className="mt-2 space-y-0.5 text-xs text-text-muted list-decimal pl-5">
+        <ol className="mt-2 space-y-0.5 text-[13px] text-text-muted list-decimal pl-5">
           {citations.map((c, i) => (
             <li key={i} className="break-all">
-              <a href={c.url} target="_blank" rel="noopener noreferrer nofollow" className="text-primary hover:underline">
+              <a href={c.url} target="_blank" rel="noopener noreferrer nofollow" className="text-primary-text hover:underline">
                 {c.title || c.url}
               </a>
               {c.verdict === 'flagged' && <span className="text-warn"> (text withheld)</span>}

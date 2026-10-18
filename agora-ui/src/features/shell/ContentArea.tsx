@@ -10,8 +10,8 @@ export function ContentArea() {
   const channels = useChannelStore(s => s.channels);
   const channel = activeChannelId ? channels.get(activeChannelId) : null;
   const activeServerId = useServerStore(s => s.activeServerId);
-  const membersOpen = useUIStore(s => s.membersOpen);
-  const toggleMembers = useUIStore(s => s.toggleMembers);
+  const membersOpen = useUIStore(s => s.aux === 'members');
+  const toggleMembers = useUIStore(s => s.toggleAux);
 
   if (!activeChannelId || !channel) {
     return (
@@ -34,7 +34,7 @@ export function ContentArea() {
         </div>
         {activeServerId && (
           <button
-            onClick={toggleMembers}
+            onClick={() => toggleMembers('members')}
             className={`p-1.5 rounded transition-colors ${membersOpen ? 'text-text bg-surface-hover' : 'text-text-muted hover:text-text'}`}
             title="Toggle members"
           >

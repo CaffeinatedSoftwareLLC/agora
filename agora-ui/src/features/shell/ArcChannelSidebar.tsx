@@ -1,26 +1,17 @@
+import { shellHistorySettled } from './shellHistory';
+import { useUIStore } from '../../stores/uiStore';
 import { useState, useMemo } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUnreadStore } from '../../stores/unreadStore';
-import { useMessageStore } from '../../stores/messageStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../lib/api';
 import { usePalette, hexToRgb } from '../../theme';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { ArcUserPanel } from './ArcUserPanel';
 import { InviteModal } from '../servers/InviteModal';
 import { CreateChannelModal } from '../servers/CreateChannelModal';
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function serverColor(name: string): string {
-  const colors = ['#0FA3B1', '#4ADE80', '#FBBF24', '#C77DFF', '#F97316', '#EF4444', '#3B82F6', '#EC4899', '#8B5CF6', '#10B981'];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return colors[Math.abs(hash) % colors.length];
-}
 
 // ─── Channel Item ────────────────────────────────────────────────────────────
 
@@ -46,21 +37,21 @@ function ChannelItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg mb-0.5 transition-all duration-150 text-sm"
+      className="w-full min-h-11 md:min-h-9 flex items-center gap-2 px-2.5 py-1.5 rounded-lg mb-0.5 transition-all duration-150 text-[13px]"
       style={{
-        background: isActive ? `rgba(${accentRgb}, 0.12)` : 'transparent',
+        background: isActive ? `rgba(${accentRgb}, 0.14)` : 'transparent',
         boxShadow: isActive ? `inset 2px 0 0 ${accentColor}` : 'none',
         color: isActive ? P.text : hasUnread ? P.text : P.muted,
       }}
     >
-      <span className="text-base leading-none" style={{ color: isActive ? accentColor : P.dim }}>#</span>
+      <span className="text-base leading-none" style={{ color: isActive ? accentColor : P.muted }}>#</span>
       <span className={`truncate ${hasUnread ? 'font-semibold' : isActive ? 'font-medium' : ''}`}>
         {channelName}
       </span>
       {badgeCount > 0 && !isActive && (
         <span
-          className="ml-auto text-[10px] font-bold rounded-full px-1.5 py-0.5 min-w-[16px] text-center shrink-0"
-          style={{ background: accentColor, color: P.bg }}
+          className="ml-auto text-[11px] font-bold rounded-full px-1.5 py-0.5 min-w-[18px] text-center shrink-0"
+          style={{ background: accentColor, color: P.onAccent }}
         >
           {badgeCount}
         </span>
@@ -103,27 +94,27 @@ function ChannelCategory({
   return (
     <div className="mb-1">
       {/* Category header */}
-      <div className="flex items-center gap-1 px-2 py-1 cursor-pointer group">
+      <div className="flex items-center gap-1 px-2 py-0.5 group">
         <button
           onClick={onToggle}
-          className="flex items-center gap-1 flex-1 min-w-0"
+          className="flex items-center gap-1.5 flex-1 min-w-0 min-h-11 md:min-h-8 text-left"
         >
           <svg
-            className="h-2.5 w-2.5 transition-transform shrink-0"
+            className="h-3 w-3 transition-transform shrink-0"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
             strokeWidth="2.5"
             style={{
-              color: P.dim,
+              color: P.muted,
               transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
             }}
           >
             <polyline points="9 18 15 12 9 6" />
           </svg>
           <span
-            className="text-[10px] font-semibold tracking-widest uppercase truncate"
-            style={{ color: P.dim }}
+            className="text-[13px] font-semibold truncate"
+            style={{ color: P.muted }}
           >
             {categoryName}
           </span>
@@ -136,12 +127,13 @@ function ChannelCategory({
         </button>
         <button
           onClick={onCreateChannel}
-          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 h-4 w-4 flex items-center justify-center rounded"
-          style={{ color: P.dim }}
+          className="transition-colors shrink-0 min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:h-8 md:w-8 flex items-center justify-center rounded-lg hover:bg-surface-hover"
+          style={{ color: P.muted }}
           title="Create Channel"
+          aria-label="Create Channel"
         >
           <svg
-            className="h-3.5 w-3.5"
+            className="h-4 w-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -190,13 +182,13 @@ export function ArcChannelSidebar() {
   const { hasModerationAccess, hasServerAdminAccess } = useServerAccess(instanceServerId);
 
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
-    new Set(['Text Channels']),
+    new Set(['Text channels']),
   );
   const [showInvite, setShowInvite] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
 
   const server = instanceServerId ? servers.get(instanceServerId) : null;
-  const accentColor = server ? serverColor(server.name) : P.accent;
+  const accentColor = P.accent;
   const accentRgb = hexToRgb(accentColor);
 
   // Filter to text channels only (channelType 3)
@@ -225,23 +217,17 @@ export function ArcChannelSidebar() {
     });
   };
 
-  const handleChannelClick = (channelId: string) => {
+  const handleChannelClick = async (channelId: string) => {
+    useUIStore.getState().onChannelSelect(channelId);
     setActiveChannel(channelId);
 
-    // ACK immediately if messages loaded
-    const messages = useMessageStore.getState().byChannel.get(channelId);
-    if (messages && messages.length > 0) {
-      const lastMsgId = messages[messages.length - 1].id;
-      useUnreadStore.getState().markRead(channelId, lastMsgId);
-      api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
-    }
-
+    await shellHistorySettled();
     navigate(`/app/${channelId}`);
   };
 
   if (!instanceServerId || !server) return null;
 
-  // Server initial for the gradient icon
+  // Server initial for the badge icon
   const serverInitial = server.name[0]?.toUpperCase() ?? '?';
 
   return (
@@ -254,16 +240,16 @@ export function ArcChannelSidebar() {
     >
       {/* ── Server header ──────────────────────────────────────────────── */}
       <div
-        className="px-3 py-3 shrink-0"
+        className="px-3 py-2.5 shrink-0"
         style={{ borderBottom: `1px solid ${P.border}` }}
       >
-        <div className="flex items-center gap-2.5">
-          {/* Server icon (gradient initials) */}
+        <div className="flex items-center gap-2">
+          {/* Server icon */}
           <div
             className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0"
             style={{
-              background: `linear-gradient(135deg, ${accentColor}, ${P.primary})`,
-              color: P.text,
+              background: P.primary,
+              color: P.onPrimary,
             }}
           >
             {serverInitial}
@@ -272,12 +258,12 @@ export function ArcChannelSidebar() {
           {/* Server name + online count */}
           <div className="flex-1 min-w-0">
             <div
-              className="text-[14px] font-semibold truncate"
+              className="text-[15px] font-semibold truncate"
               style={{ color: P.text }}
             >
               {server.name}
             </div>
-            <div className="text-[11px] flex items-center gap-1" style={{ color: P.dim }}>
+            <div className="text-[11px] flex items-center gap-1.5 whitespace-nowrap" style={{ color: P.muted }}>
               <div
                 className="w-1.5 h-1.5 rounded-full"
                 style={{ background: P.online }}
@@ -291,9 +277,10 @@ export function ArcChannelSidebar() {
             {/* Invite button */}
             <button
               onClick={() => setShowInvite(true)}
-              className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
-              style={{ color: P.dim }}
+              className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+              style={{ color: P.muted }}
               title="Invite People"
+              aria-label="Invite People"
             >
               <svg
                 className="h-4 w-4"
@@ -315,9 +302,10 @@ export function ArcChannelSidebar() {
             {hasModerationAccess && (
               <button
                 onClick={() => navigate('/moderation')}
-                className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
-                style={{ color: P.dim }}
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+                style={{ color: P.muted }}
                 title="Moderation"
+                aria-label="Moderation"
               >
                 <svg
                   className="h-4 w-4"
@@ -337,9 +325,10 @@ export function ArcChannelSidebar() {
             {hasServerAdminAccess && (
               <button
                 onClick={() => navigate('/settings')}
-                className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors"
-                style={{ color: P.dim }}
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+                style={{ color: P.muted }}
                 title="Server Settings"
+                aria-label="Server Settings"
               >
                 <svg
                   className="h-4 w-4"
@@ -363,10 +352,10 @@ export function ArcChannelSidebar() {
       {/* ── Channel categories ─────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto py-2">
         <ChannelCategory
-          categoryName="Text Channels"
+          categoryName="Text channels"
           channels={textChannels}
-          isExpanded={expandedCategories.has('Text Channels')}
-          onToggle={() => toggleCategory('Text Channels')}
+          isExpanded={expandedCategories.has('Text channels')}
+          onToggle={() => toggleCategory('Text channels')}
           activeChannelId={activeChannelId}
           accentColor={accentColor}
           onChannelClick={handleChannelClick}

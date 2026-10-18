@@ -1,3 +1,6 @@
+import { useNavigate } from 'react-router-dom';
+import { useUIStore } from '../../stores/uiStore';
+import { shellHistorySettled } from '../shell/shellHistory';
 import { useState, type FormEvent } from 'react';
 import { Modal } from '../../components/ui/Modal';
 import { Input } from '../../components/ui/Input';
@@ -12,6 +15,7 @@ interface CreateChannelModalProps {
 }
 
 export function CreateChannelModal({ serverId, isOpen, onClose }: CreateChannelModalProps) {
+  const navigate = useNavigate();
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -40,7 +44,10 @@ export function CreateChannelModal({ serverId, isOpen, onClose }: CreateChannelM
     try {
       const channel = await serverApi.createChannel(serverId, trimmed, 3);
       addChannel(channel);
+      useUIStore.getState().onChannelSelect(channel.id);
+      await shellHistorySettled();
       setActiveChannel(channel.id);
+      navigate(`/app/${channel.id}`);
       setName('');
       onClose();
     } catch {

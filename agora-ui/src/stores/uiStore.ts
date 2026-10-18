@@ -1,8 +1,16 @@
 import { create } from 'zustand';
+import { useThreadStore } from './threadStore';
 import type { PaletteKey } from '../theme/palettes';
 import { api } from '../lib/api';
 
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
+
+export type AuxView = 'thread' | 'files' | 'members';
+export interface Overlay {
+  kind: 'session-sheet' | 'message-actions' | 'modal';
+  id: string;
+  onClose: () => void;
+}
 
 interface UIState {
   // Arc V2: palette
@@ -12,13 +20,20 @@ interface UIState {
   /** Load the account's saved preferences (theme) after sign-in. */
   loadPreferences: () => Promise<void>;
 
-  // Members sidebar
-  membersOpen: boolean;
-  toggleMembers: () => void;
-
-  // Files panel (search the channel's files)
-  filesOpen: boolean;
-  toggleFiles: () => void;
+  navOpen: boolean;
+  aux: AuxView | null;
+  activeOverlay: Overlay | null;
+  openNav: () => void;
+  closeNav: () => void;
+  openAux: (kind: AuxView) => void;
+  toggleAux: (kind: AuxView) => void;
+  closeAux: () => void;
+  openThreadView: (channelId: string, threadId: string) => void;
+  onChannelSelect: (channelId: string | null) => void;
+  openOverlay: (overlay: Overlay) => void;
+  closeOverlay: () => void;
+  releaseOverlay: (id: string) => void;
+  dismissTop: () => void;
 
   // Modals
   activeModal: string | null;
@@ -63,14 +78,52 @@ export const useUIStore = create<UIState>((set, get) => ({
     } catch { /* older server or offline: keep the local choice */ }
   },
 
-  membersOpen: false,
-  toggleMembers: () => set((s) => ({ membersOpen: !s.membersOpen })),
-
-  filesOpen: false,
-  toggleFiles: () => set((s) => ({ filesOpen: !s.filesOpen })),
-
+  navOpen: false,
+  aux: null,
+  activeOverlay: null,
+  openNav: () => set({ navOpen: true, aux: null }),
+  closeNav: () => set({ navOpen: false }),
+  openAux: (kind) => set({ aux: kind, navOpen: false }),
+  toggleAux: (kind) => set(s => ({ aux: s.aux === kind ? null : kind, navOpen: false })),
+  closeAux: () => set({ aux: null }),
+  openThreadView: (channelId, threadId) => {
+    useThreadStore.getState().openThread(channelId, threadId);
+    set({ aux: 'thread', navOpen: false });
+  },
+  onChannelSelect: (channelId) => {
+    if (useThreadStore.getState().openThreadChannelId !== channelId) {
+      useThreadStore.getState().closeThread();
+    }
+    const overlay = get().activeOverlay;
+    set({ navOpen: false, aux: null, activeOverlay: null, activeModal: null });
+    overlay?.onClose();
+  },
+  openOverlay: (overlay) => {
+    const previous = get().activeOverlay;
+    // Modal dialogs take precedence over popover/bottom sheets.
+    if (previous?.kind === 'modal' && overlay.kind !== 'modal') return;
+    if (previous && previous.id !== overlay.id) previous.onClose();
+    set({ activeOverlay: overlay });
+  },
+  releaseOverlay: (id) => {
+    if (get().activeOverlay?.id === id) set({ activeOverlay: null });
+  },
+  closeOverlay: () => {
+    const overlay = get().activeOverlay;
+    set({ activeOverlay: null, activeModal: null });
+    overlay?.onClose();
+  },
+  dismissTop: () => {
+    if (get().activeOverlay) get().closeOverlay();
+    else if (get().navOpen) get().closeNav();
+    else get().closeAux();
+  },
   activeModal: null,
-  setModal: (modal) => set({ activeModal: modal }),
+  setModal: (modal) => {
+    if (modal) get().openOverlay({ kind: 'modal', id: modal, onClose: () => set({ activeModal: null }) });
+    else get().closeOverlay();
+    set({ activeModal: modal });
+  },
 
   connectionStatus: 'disconnected',
   setConnectionStatus: (status) => set({ connectionStatus: status }),

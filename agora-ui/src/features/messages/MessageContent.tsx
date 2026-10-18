@@ -11,7 +11,7 @@ const ALLOWED_ELEMENTS = new Set([
 
 export function MessageContent({ content }: MessageContentProps) {
   return (
-    <div className="text-sm text-text prose-msg">
+    <div className="text-[15px] text-text prose-msg">
       <Markdown
         allowedElements={[...ALLOWED_ELEMENTS]}
         unwrapDisallowed

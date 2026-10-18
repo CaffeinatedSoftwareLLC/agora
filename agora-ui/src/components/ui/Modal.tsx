@@ -1,4 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useUIStore } from '../../stores/uiStore';
+import { useOverlayFocus } from '../../features/shell/useOverlayFocus';
+import { useEffect, useRef, useId, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface ModalProps {
@@ -11,24 +13,27 @@ interface ModalProps {
 export function Modal({ isOpen, onClose, title, children }: ModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
+  const id = useId();
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
   useEffect(() => {
     if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+    useUIStore.getState().openOverlay({ kind: 'modal', id, onClose: () => closeRef.current() });
+    return () => {
+      useUIStore.getState().releaseOverlay(id);
     };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  // Auto-focus first input when modal opens
+  }, [isOpen, id]);
+  useOverlayFocus(contentRef, isOpen);
   useEffect(() => {
     if (!isOpen) return;
-    const timer = setTimeout(() => {
-      const input = contentRef.current?.querySelector('input');
-      input?.focus();
-    }, 0);
-    return () => clearTimeout(timer);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
+        useUIStore.getState().closeOverlay();
+      }
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -42,6 +47,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
     >
       <div
         ref={contentRef}
+        role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}
         className="bg-surface rounded-lg border border-border p-6 max-w-md w-full mx-4"
       >
         <h2 className="text-lg font-bold text-text">{title}</h2>

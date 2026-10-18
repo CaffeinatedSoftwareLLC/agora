@@ -1,4 +1,4 @@
-import { useThreadStore } from '../../stores/threadStore';
+import { useUIStore } from '../../stores/uiStore';
 import { usePalette } from '../../theme';
 import { relativeTime } from '../../lib/relativeTime';
 
@@ -12,16 +12,16 @@ interface ThreadIndicatorProps {
 
 export function ThreadIndicator({ replyCount, lastReplyAt, channelId, messageId, threadClosedAt }: ThreadIndicatorProps) {
   const P = usePalette();
-  const openThread = useThreadStore(s => s.openThread);
+  const openThread = useUIStore(s => s.openThreadView);
   const isClosed = !!threadClosedAt;
 
   return (
     <button
       onClick={() => openThread(channelId, messageId)}
-      className="flex items-center gap-2 mt-1 px-2 py-1 rounded text-xs transition-colors cursor-pointer"
-      style={{ color: isClosed ? P.muted : P.accent, background: isClosed ? `${P.muted}10` : `${P.accent}10` }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = isClosed ? `${P.muted}20` : `${P.accent}20`; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = isClosed ? `${P.muted}10` : `${P.accent}10`; }}
+      className="flex items-center gap-2 mt-1 min-h-11 md:min-h-8 px-2.5 py-1.5 rounded-lg text-[13px] transition-colors cursor-pointer"
+      style={{ color: isClosed ? P.muted : P.accent, background: isClosed ? `${P.muted}14` : `${P.accent}14` }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = isClosed ? `${P.muted}24` : `${P.accent}24`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = isClosed ? `${P.muted}14` : `${P.accent}14`; }}
     >
       {isClosed ? (
         <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

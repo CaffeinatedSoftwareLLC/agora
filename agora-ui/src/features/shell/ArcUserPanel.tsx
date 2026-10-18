@@ -48,12 +48,12 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
   // Size variants
   const avatarRingSize = compact ? 'w-9 h-9' : 'w-10 h-10';
   const avatarRingPadding = compact ? 'p-[2px]' : 'p-[2.5px]';
-  const avatarTextSize = compact ? 'text-xs' : 'text-sm';
-  const nameFontSize = compact ? 'text-[12px]' : 'text-[13px]';
-  const statusFontSize = compact ? 'text-[10px]' : 'text-[11px]';
-  const statusColor = compact ? P.dim : P.muted;
-  const iconSize = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
-  const buttonSize = compact ? 'h-6 w-6 rounded-md' : 'p-1.5 rounded-md';
+  const avatarTextSize = 'text-[13px]';
+  const nameFontSize = 'text-[13px]';
+  const statusFontSize = 'text-[11px]';
+  const statusColor = P.muted;
+  const iconSize = 'h-4 w-4';
+  const buttonSize = 'min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg';
 
   const handleLogout = () => {
     setMenuOpen(false);
@@ -80,8 +80,8 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
       <div
         className={
           compact
-            ? 'flex items-center gap-2.5 px-2.5 py-2 rounded-xl'
-            : 'flex items-center gap-3 px-3 py-2 rounded-xl'
+            ? 'flex items-center gap-2 px-2.5 py-1.5 rounded-xl'
+            : 'flex items-center gap-2.5 px-3 py-2 rounded-xl'
         }
         style={{ background: P.bg }}
       >
@@ -89,7 +89,7 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
         <div className="relative shrink-0">
           <div
             className={`${avatarRingSize} rounded-full ${avatarRingPadding}`}
-            style={{ background: 'linear-gradient(135deg, #F97316, #C77DFF)' }}
+            style={{ background: `linear-gradient(135deg, ${P.primary}, ${P.accent})` }}
           >
             <div
               className={`w-full h-full rounded-full flex items-center justify-center ${avatarTextSize} font-bold`}
@@ -117,26 +117,14 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
           </div>
         </div>
 
-        {/* ── Mic button ─────────────────────────────────────────────────── */}
-        <button
-          className={`${buttonSize} flex items-center justify-center transition-colors`}
-          style={{ color: P.dim }}
-        >
-          <svg className={iconSize} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-            <path d="M19 10v2a7 7 0 01-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="23" />
-            <line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
-        </button>
-
         {/* ── Moderation button (users with mod perms) ──────────────── */}
         {hasModerationAccess && (
           <button
             onClick={() => navigate('/moderation')}
-            className={`${buttonSize} flex items-center justify-center transition-colors`}
-            style={{ color: P.dim }}
+            className={`${buttonSize} flex items-center justify-center transition-colors hover:bg-surface-hover`}
+            style={{ color: P.muted }}
             title="Moderation"
+            aria-label="Moderation"
           >
             <svg className={iconSize} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -148,9 +136,10 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
         {user?.isInstanceAdmin && (
           <button
             onClick={() => navigate('/admin')}
-            className={`${buttonSize} flex items-center justify-center transition-colors`}
-            style={{ color: P.dim }}
+            className={`${buttonSize} flex items-center justify-center transition-colors hover:bg-surface-hover`}
+            style={{ color: P.muted }}
             title="Instance Admin"
+            aria-label="Instance Admin"
           >
             <svg className={iconSize} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -164,9 +153,10 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
           <button
             ref={buttonRef}
             onClick={() => setMenuOpen(!menuOpen)}
-            className={`${buttonSize} flex items-center justify-center transition-colors`}
-            style={{ color: menuOpen ? P.text : P.dim }}
+            className={`${buttonSize} flex items-center justify-center transition-colors hover:bg-surface-hover`}
+            style={{ color: menuOpen ? P.text : P.muted }}
             title="Settings"
+            aria-label="Settings"
           >
             <svg className={iconSize} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -178,7 +168,7 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
           {menuOpen && (
             <div
               ref={menuRef}
-              className="absolute bottom-full right-0 mb-2 w-44 rounded-lg py-1 shadow-lg z-50"
+              className="absolute bottom-full right-0 mb-2 w-48 rounded-xl py-1 shadow-lg z-50"
               style={{
                 background: P.surface,
                 border: `1px solid ${P.border}`,
@@ -186,26 +176,26 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
             >
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-left transition-colors"
+                className="w-full min-h-11 md:min-h-9 flex items-center gap-2.5 px-3 py-2 text-[13px] text-left transition-colors"
                 style={{ color: P.danger }}
                 onMouseEnter={e => (e.currentTarget.style.background = `rgba(${hexToRgb(P.danger)}, 0.1)`)}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 {/* Log out icon */}
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
                   <polyline points="16 17 21 12 16 7" />
                   <line x1="21" y1="12" x2="9" y2="12" />
                 </svg>
-                Log Out
+                Log out
               </button>
               <button
                 onClick={handleLogoutAll}
                 disabled={revoking}
-                className="w-full px-3 py-2 text-[13px] text-left disabled:opacity-50"
+                className="w-full min-h-11 md:min-h-9 px-3 py-2 text-[13px] text-left disabled:opacity-50"
                 style={{ color: P.danger }}
               >
-                {revoking ? 'Logging out…' : 'Log Out All Sessions'}
+                {revoking ? 'Logging out…' : 'Log out all sessions'}
               </button>
               {logoutError && <p role="alert" className="px-3 py-2 text-xs" style={{ color: P.danger }}>{logoutError}</p>}
             </div>

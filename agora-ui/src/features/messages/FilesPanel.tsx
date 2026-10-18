@@ -33,7 +33,7 @@ export function FilesPanel() {
   const P = usePalette();
   const channelId = useChannelStore(s => s.activeChannelId);
   const serverId = useServerStore(s => s.instanceServerId);
-  const toggleFiles = useUIStore(s => s.toggleFiles);
+  const toggleFiles = useUIStore(s => s.closeAux);
 
   const [text, setText] = useState('');
   const [query, setQuery] = useState('');
@@ -73,11 +73,11 @@ export function FilesPanel() {
 
   return (
     <div className="w-[340px] shrink-0 flex flex-col border-l" style={{ background: P.bg, borderColor: P.border }}>
-      <div className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: `1px solid ${P.border}` }}>
-        <h2 className="text-sm font-semibold" style={{ color: P.text }}>Files</h2>
+      <div className="flex items-center justify-between min-h-12 px-4 py-2 shrink-0" style={{ borderBottom: `1px solid ${P.border}` }}>
+        <h2 className="text-[15px] font-semibold" style={{ color: P.text }}>Files</h2>
         <button
           onClick={toggleFiles}
-          className="h-7 w-7 rounded flex items-center justify-center"
+          className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
           style={{ color: P.muted }}
           title="Close"
           aria-label="Close files"
@@ -94,7 +94,7 @@ export function FilesPanel() {
         onSubmit={e => { e.preventDefault(); setQuery(text.trim()); }}
       >
         <input
-          className="rounded px-3 py-1.5 text-sm focus:outline-none"
+          className="min-h-11 md:min-h-9 rounded-lg px-3 py-1.5 text-[16px] md:text-[15px] placeholder:text-text-muted/70 focus:outline-none"
           style={{ background: P.surface, border: `1px solid ${P.border}`, color: P.text }}
           value={text}
           onChange={e => setText(e.target.value)}
@@ -105,7 +105,7 @@ export function FilesPanel() {
         <div className="flex items-center gap-2">
           {tagNames.length > 0 && (
             <select
-              className="rounded px-2 py-1 text-xs flex-1 min-w-0"
+              className="min-h-11 md:min-h-9 rounded-lg px-2.5 py-1 text-[16px] md:text-[13px] flex-1 min-w-0"
               style={{ background: P.surface, border: `1px solid ${P.border}`, color: P.text }}
               value={tag}
               onChange={e => setTag(e.target.value)}
@@ -115,17 +115,21 @@ export function FilesPanel() {
               {tagNames.map(name => <option key={name} value={name}>{name}</option>)}
             </select>
           )}
-          <button type="submit" className="rounded px-3 py-1 text-xs font-medium" style={{ background: P.primary, color: P.text }}>
+          <button
+            type="submit"
+            className="min-h-11 md:min-h-9 rounded-lg px-3.5 py-1.5 text-[13px] font-semibold transition-colors"
+            style={{ background: P.primary, color: P.onPrimary }}
+          >
             Search
           </button>
         </div>
       </form>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
-        {error && <p className="text-sm" style={{ color: P.danger }}>{error}</p>}
-        {!error && !result && loading && <p className="text-sm" style={{ color: P.muted }}>Loading…</p>}
+        {error && <p className="text-[13px]" style={{ color: P.danger }}>{error}</p>}
+        {!error && !result && loading && <p className="text-[13px]" style={{ color: P.muted }}>Loading…</p>}
         {result && result.results.length === 0 && (
-          <p className="text-sm" style={{ color: P.muted }}>
+          <p className="text-[13px]" style={{ color: P.muted }}>
             {query || tag ? 'No files match.' : 'No files have been shared in this channel yet.'}
           </p>
         )}
@@ -134,14 +138,14 @@ export function FilesPanel() {
             <li key={file.id}>
               <button
                 type="button"
-                className="text-sm font-medium text-left break-all hover:underline"
-                style={{ color: P.primary }}
+                className="text-[15px] font-medium text-left break-all hover:underline"
+                style={{ color: P.primaryText }}
                 onClick={() => download(file)}
                 title={`Download ${file.name}`}
               >
                 {file.name}
               </button>
-              <div className="text-xs" style={{ color: P.dim }}>
+              <div className="text-[11px]" style={{ color: P.muted }}>
                 {formatSize(file.size)} · {new Date(file.uploadedAt).toLocaleDateString()}
                 {result.query && ` · match ${Math.round(file.score * 100)}%`}
               </div>
@@ -156,7 +160,7 @@ export function FilesPanel() {
           ))}
         </ul>
         {result && result.query && result.results.length > 0 && (
-          <p className="text-xs mt-4" style={{ color: P.dim }}>
+          <p className="text-[11px] mt-4" style={{ color: P.muted }}>
             {result.ranking.status === 'ranked'
               ? 'Ordered by how well each file answers your search.'
               : `Ordered by file names and tags${result.ranking.reason ? ` (${result.ranking.reason.toLowerCase()})` : ''}.`}

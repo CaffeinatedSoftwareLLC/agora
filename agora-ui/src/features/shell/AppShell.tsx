@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -10,7 +10,9 @@ import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 import { ThreadPanel } from '../messages/ThreadPanel';
 import { FilesPanel } from '../messages/FilesPanel';
-import { useThreadStore } from '../../stores/threadStore';
+import { OverlayManager } from './OverlayManager';
+import { useShellViewport } from './viewport';
+import './shell.css';
 
 export function AppShell() {
   const params = useParams();
@@ -21,9 +23,13 @@ export function AppShell() {
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
   const byServer = useChannelStore(s => s.byServer);
   const connectionStatus = useUIStore(s => s.connectionStatus);
-  const membersOpen = useUIStore(s => s.membersOpen);
-  const filesOpen = useUIStore(s => s.filesOpen);
-  const openThreadId = useThreadStore(s => s.openThreadId);
+  const navOpen = useUIStore(s => s.navOpen);
+  const aux = useUIStore(s => s.aux);
+  const overlay = useUIStore(s => s.activeOverlay);
+  const { phone, compact } = useShellViewport();
+  const navRef = useRef<HTMLElement>(null);
+  const auxRef = useRef<HTMLElement>(null);
+  const obscured = !!overlay || (compact && navOpen) || (phone && !!aux);
 
   // URL: /app/{channelId} or /app
   const urlSegment1 = params['*']?.split('/')[0] || null;
@@ -31,7 +37,10 @@ export function AppShell() {
 
   // Sync URL → store
   useEffect(() => {
-    setActiveChannel(urlChannelId);
+    if (useChannelStore.getState().activeChannelId !== urlChannelId) {
+      useUIStore.getState().onChannelSelect(urlChannelId);
+      setActiveChannel(urlChannelId);
+    }
   }, [urlChannelId, setActiveChannel]);
 
   // Auto-navigate to first text channel when at /app with no channel
@@ -48,8 +57,8 @@ export function AppShell() {
   if (connectionStatus === 'disconnected' && servers.size === 0) {
     return (
       <div
-        className="h-screen flex flex-col overflow-hidden"
-        style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+        className="app-shell flex flex-col min-h-0 min-w-0 overflow-hidden"
+        style={{ background: P.bg, color: P.text }}
       >
         {/* Skeleton tab bar */}
         <div className="flex items-center gap-2 px-3 pt-2 pb-0 shrink-0">
@@ -77,18 +86,35 @@ export function AppShell() {
 
   return (
     <div
-      className="h-screen flex flex-col overflow-hidden"
-      style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+      className="app-shell flex flex-col min-h-0 min-w-0 overflow-hidden"
+      style={{ background: P.bg, color: P.text }}
     >
-      <TabBar />
-
-      {/* Main content area */}
-      <div className="flex flex-1 min-h-0">
-        <ArcChannelSidebar />
-        <ArcContentArea />
-        {membersOpen && <MembersSidebar />}
-        {filesOpen && <FilesPanel />}
-        {openThreadId && <ThreadPanel />}
+      <OverlayManager navRef={navRef} auxRef={auxRef} />
+      <div className="shell-tabbar" inert={obscured}><TabBar /></div>
+      <div className="shell-body flex flex-1 min-h-0 min-w-0">
+        <div className="shell-rail" inert={!!overlay || !!aux}>
+          <button aria-label="Open navigation" onClick={() => useUIStore.getState().openNav()}>&#9776;</button>
+        </div>
+        {compact && navOpen && <button className="shell-backdrop" aria-label="Close navigation" onClick={() => useUIStore.getState().closeNav()} />}
+        <nav ref={navRef} tabIndex={-1} aria-label="Channels" aria-modal={compact && navOpen ? true : undefined}
+          role={compact && navOpen ? 'dialog' : undefined}
+          className={`shell-nav ${navOpen ? 'is-open' : ''}`} inert={!!overlay || (compact && !navOpen)}>
+          <button className="shell-nav-close xl:hidden" onClick={() => useUIStore.getState().closeNav()}>Back</button>
+          <ArcChannelSidebar />
+        </nav>
+        <div className="shell-channel flex flex-1 min-w-0 min-h-0" inert={obscured}>
+          <ArcContentArea />
+        </div>
+        {aux && <>
+          {compact && !phone && <button className="shell-backdrop" aria-label="Close inspector" onClick={() => useUIStore.getState().closeAux()} />}
+          <aside ref={auxRef} tabIndex={-1} className="shell-aux" role={compact ? 'dialog' : 'complementary'}
+            aria-label={aux} aria-modal={compact ? true : undefined} inert={!!overlay}>
+            <button className="shell-aux-back" onClick={() => useUIStore.getState().closeAux()}>&larr; Back</button>
+            {aux === 'thread' && <ThreadPanel />}
+            {aux === 'files' && <FilesPanel />}
+            {aux === 'members' && <MembersSidebar />}
+          </aside>
+        </>}
       </div>
     </div>
   );

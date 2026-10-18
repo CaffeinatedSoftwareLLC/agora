@@ -8,7 +8,11 @@ export interface Palette {
   surfaceHover: string;
   primary: string;
   primaryHover: string;
+  primaryText: string;
+  onPrimary: string;
   accent: string;
+  onAccent: string;
+  secondary: string;
   text: string;
   white: string;
   muted: string;
@@ -25,14 +29,18 @@ export const AEGEAN: Palette = {
   surfaceHover: '#3E3345',
   primary: '#0D5EAF',
   primaryHover: '#0B4E95',
+  primaryText: '#68B0FF',
+  onPrimary: '#FDFFF7',
   accent: '#0FA3B1',
+  onAccent: '#241623',
+  secondary: '#0FA3B1',
   text: '#FDFFF7',
   white: '#FCFCFC',
   muted: '#A09AAB',
   dim: '#6E6479',
   border: '#3A2E3E',
   online: '#4ADE80',
-  danger: '#EF4444',
+  danger: '#F87171',
   warn: '#FBBF24',
 };
 
@@ -41,15 +49,19 @@ export const TERRACOTTA: Palette = {
   surface: '#2A2018',
   surfaceHover: '#362A20',
   primary: '#C2703E',
-  primaryHover: '#A85F34',
+  primaryHover: '#D4824E',
+  primaryText: '#E08A56',
+  onPrimary: '#1C1410',
   accent: '#D5FFF3',
+  onAccent: '#1C1410',
+  secondary: '#65743A',
   text: '#EBF5DF',
   white: '#FCFCFC',
   muted: '#9B8B7A',
   dim: '#6E5D4E',
   border: '#352820',
   online: '#4ADE80',
-  danger: '#EF4444',
+  danger: '#F87171',
   warn: '#FBBF24',
 };
 

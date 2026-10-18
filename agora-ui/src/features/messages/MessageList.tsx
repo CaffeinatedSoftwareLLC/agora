@@ -1,3 +1,5 @@
+import { useUIStore } from '../../stores/uiStore';
+import { useShellViewport } from '../shell/viewport';
 import { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMessageStore } from '../../stores/messageStore';
@@ -16,6 +18,8 @@ interface MessageListProps {
 }
 
 export function MessageList({ channelId, channelName, isDm }: MessageListProps) {
+  const { phone, compact } = useShellViewport();
+  const blocked = useUIStore(s => !!s.activeOverlay || (compact && s.navOpen) || (phone && s.aux !== null));
   const messages = useMessageStore(s => s.byChannel.get(channelId));
   const hasMore = useMessageStore(s => s.hasMore.get(channelId) ?? false);
   const loadMessages = useMessageStore(s => s.loadMessages);
@@ -32,9 +36,11 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   const lastMessageIdRef = useRef<string | null>(null);
   const prevCountRef = useRef(0);
   const initialLoadRef = useRef(true);
+  const nearBottomRef = useRef(true);
   const pendingCorrectionRef = useRef<{ anchorIndex: number; estimatedOffset: number } | null>(null);
 
   const count = messages?.length ?? 0;
+  const hasMessages = count > 0;
 
   const virtualizer = useVirtualizer({
     count,
@@ -56,19 +62,21 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     lastMessageIdRef.current = null;
     prevCountRef.current = 0;
     initialLoadRef.current = true;
+    nearBottomRef.current = true;
     pendingCorrectionRef.current = null;
-    ackedRef.current = false;
+    lastAckRef.current = null;
   }, [channelId, loadMessages]);
 
   // Send server ACK when messages first load for this channel
-  const ackedRef = useRef(false);
+  const lastAckRef = useRef<string | null>(null);
   useEffect(() => {
-    if (ackedRef.current || !messages || messages.length === 0) return;
-    ackedRef.current = true;
-    const lastMsgId = messages[messages.length - 1].id;
-    useUnreadStore.getState().markRead(channelId, lastMsgId);
-    api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
-  }, [channelId, messages]);
+    if (blocked || !isAtBottom || !messages?.length) return;
+    const lastMessage = [...messages].reverse().find(m => !m.pending && !m.failed);
+    if (!lastMessage || lastAckRef.current === lastMessage.id) return;
+    lastAckRef.current = lastMessage.id;
+    useUnreadStore.getState().markRead(channelId, lastMessage.id);
+    api.put(`/channels/${channelId}/ack`, { messageId: lastMessage.id }).catch(() => {});
+  }, [channelId, messages, blocked, isAtBottom]);
 
   // Scroll positioning: initial scroll-to-bottom, prepend anchor, auto-scroll on new message
   useLayoutEffect(() => {
@@ -160,13 +168,29 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     };
   }, [messages]);
 
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
+      });
+    });
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [channelId, hasMessages]);
+
   // Track scroll position + trigger load-older
   const handleScroll = useCallback(() => {
     const el = parentRef.current;
     if (!el) return;
 
-    const threshold = 50;
+    const threshold = 60;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    nearBottomRef.current = atBottom;
     setIsAtBottom(atBottom);
     if (atBottom && newCount > 0) setNewCount(0);
 
@@ -256,7 +280,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
         </div>
       </div>
       {loadingOlder && (
-        <div className="absolute top-0 left-0 right-0 py-3 text-center text-text-dim text-sm bg-bg/80 backdrop-blur-sm z-10">
+        <div className="absolute top-0 left-0 right-0 py-3 text-center text-text-muted text-[13px] bg-bg/80 backdrop-blur-sm z-10">
           Loading older messages...
         </div>
       )}
