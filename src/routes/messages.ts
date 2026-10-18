@@ -52,7 +52,7 @@ export async function messageRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
         // Nothing left after cleaning (only escape codes)
-        if (!content && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
+        if (rawContent && !content && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
 
         // A repeat of an earlier post (same author and client_key) returns that post.
         // Checked before rate limits and the loop guard, so a retry doesn't count twice.
