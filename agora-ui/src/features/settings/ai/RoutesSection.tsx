@@ -81,7 +81,7 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
     return (
       <div className="border border-border rounded-lg px-4 py-3 flex items-center gap-3">
         <CapabilityName label={info.label} description={info.description} />
-        <span className="ml-auto text-xs text-text-dim">No configured provider supports this yet</span>
+        <span className="ml-auto text-xs text-text-muted">No configured provider supports this yet</span>
       </div>
     );
   }
@@ -135,12 +135,12 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
     <div className="border border-border rounded-lg px-4 py-3">
       <div className="flex items-center gap-3 flex-wrap">
         <CapabilityName label={info.label} description={info.description} />
-        {!route && <span className="text-xs text-text-dim">Not set</span>}
+        {!route && <span className="text-xs text-text-muted">Not set</span>}
         {savedModelInvalid && (
           <span className="text-xs text-danger">Saved model “{route!.model}” isn’t valid here; pick one and save</span>
         )}
         {route && !route.enabled && <span className="text-xs text-warn">Off</span>}
-        {limitsSummary && <span className="text-xs text-text-dim">{limitsSummary}</span>}
+        {limitsSummary && <span className="text-xs text-text-muted">{limitsSummary}</span>}
       </div>
 
       <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -175,11 +175,11 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
             aria-label={`${info.label} model`}
           />
         )}
-        <label className="flex items-center gap-1 text-sm text-text-muted cursor-pointer">
+        <label className="min-h-11 md:min-h-9 flex items-center gap-1.5 px-1 text-sm text-text-muted cursor-pointer">
           <input type="checkbox" className="accent-primary" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
           On
         </label>
-        <button className="text-sm text-primary hover:underline" onClick={() => setShowLimits(v => !v)}>
+        <button className="min-h-11 md:min-h-9 px-2 text-sm text-primary-text hover:underline" onClick={() => setShowLimits(v => !v)}>
           {showLimits ? 'Hide limits' : 'Limits & prices'}
         </button>
         <span className="ml-auto flex gap-2">
@@ -195,7 +195,7 @@ function RouteRow({ serverId, capability, route, eligible, adapters, onChanged }
           <LimitInput label="Cost / day ($)" value={costLimit} onChange={setCostLimit} placeholder="unlimited" />
           <LimitInput label="Input price ($ / 1M tokens)" value={inPrice} onChange={setInPrice} placeholder="not tracked" />
           <LimitInput label="Output price ($ / 1M tokens)" value={outPrice} onChange={setOutPrice} placeholder="not tracked" />
-          <p className="text-xs text-text-dim sm:col-span-3">
+          <p className="text-xs text-text-muted sm:col-span-3">
             Prices are only used to estimate cost; enter them from your provider's pricing page. The cost limit
             needs prices to take effect.
           </p>
@@ -210,7 +210,7 @@ function CapabilityName({ label, description }: { label: string; description: st
   return (
     <div>
       <span className="text-text font-medium">{label}</span>
-      <span className="text-xs text-text-dim ml-2">{description}</span>
+      <span className="text-xs text-text-muted ml-2">{description}</span>
     </div>
   );
 }

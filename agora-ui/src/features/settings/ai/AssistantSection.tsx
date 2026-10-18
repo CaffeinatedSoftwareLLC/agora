@@ -128,9 +128,9 @@ export function AssistantSection({ serverId, config, hasChatRoute, channels, bot
         max={100}
         value={maxContext}
         onChange={e => { setMaxContext(parseInt(e.target.value, 10)); setSaved(false); }}
-        className="w-full"
+        className="w-full min-h-11 md:min-h-6 accent-primary"
       />
-      <p className="text-xs text-text-dim mt-1">Recent messages (or thread replies) sent as context with each mention.</p>
+      <p className="text-xs text-text-muted mt-1">Recent messages (or thread replies) sent as context with each mention.</p>
 
       <div className="flex items-center gap-3 mt-4">
         <Button onClick={save} loading={saving}>Save</Button>
@@ -140,12 +140,12 @@ export function AssistantSection({ serverId, config, hasChatRoute, channels, bot
       <h4 className="text-sm font-semibold text-text mt-6 mb-2">Channels it can answer in</h4>
       <div className="space-y-1 max-h-60 overflow-y-auto">
         {channels.map(ch => (
-          <label key={ch.id} className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-surface-hover cursor-pointer">
+          <label key={ch.id} className="min-h-11 md:min-h-9 flex items-center gap-2 px-3 py-1.5 rounded hover:bg-surface-hover cursor-pointer">
             <input type="checkbox" checked={access.has(ch.id)} onChange={() => toggleChannel(ch.id)} className="accent-primary" />
             <span className="text-text text-sm">#{ch.name}</span>
           </label>
         ))}
-        {channels.length === 0 && <p className="text-text-dim text-sm">No text channels found.</p>}
+        {channels.length === 0 && <p className="text-text-muted text-sm">No text channels found.</p>}
       </div>
       {error && <p className="text-danger text-sm mt-3">{error}</p>}
     </section>

@@ -54,7 +54,7 @@ export function TagsSection({ serverId, tags, max, queue, taggingOn, onChanged }
       </p>
 
       {!taggingOn && (
-        <p className="text-sm text-text-dim mb-3">
+        <p className="text-sm text-text-muted mb-3">
           File tagging is off. Turn it on under Decision model above; you can prepare the tags first.
         </p>
       )}
@@ -63,7 +63,7 @@ export function TagsSection({ serverId, tags, max, queue, taggingOn, onChanged }
         {tags.map(tag => (
           <TagRow key={`${tag.id}:${tag.updatedAt}`} serverId={serverId} tag={tag} onChanged={onChanged} />
         ))}
-        {tags.length === 0 && <p className="text-sm text-text-dim">No tags yet.</p>}
+        {tags.length === 0 && <p className="text-sm text-text-muted">No tags yet.</p>}
       </div>
 
       {adding ? (
@@ -85,15 +85,15 @@ export function TagsSection({ serverId, tags, max, queue, taggingOn, onChanged }
             <Button variant="secondary" onClick={() => retag(false)} loading={busy}>Tag files now</Button>
           )}
           {taggingOn && queue.failed > 0 && (
-            <button className="text-sm text-primary hover:underline" onClick={() => retag(true)} disabled={busy}>
+            <button className="min-h-11 md:min-h-9 px-2 text-sm text-primary-text hover:underline" onClick={() => retag(true)} disabled={busy}>
               Retry {queue.failed} failed
             </button>
           )}
-          <span className="text-xs text-text-dim">{tags.length} of {max} tags</span>
+          <span className="text-xs text-text-muted">{tags.length} of {max} tags</span>
         </div>
       )}
 
-      <p className="text-xs text-text-dim mt-3">
+      <p className="text-xs text-text-muted mt-3">
         Files: {queue.done} tagged
         {queue.stale > 0 && `, ${queue.stale} out of date (a tag changed since)`}
         {waiting > 0 && `, ${waiting} waiting`}
@@ -143,18 +143,18 @@ function TagRow({ serverId, tag, onChanged }: { serverId: string; tag: AIFileTag
     <div className="border border-border rounded-lg px-4 py-3">
       <div className="flex items-start gap-3">
         <div className="min-w-0">
-          <span className={`font-medium ${tag.enabled ? 'text-text' : 'text-text-dim line-through'}`}>{tag.name}</span>
+          <span className={`font-medium ${tag.enabled ? 'text-text' : 'text-text-muted line-through'}`}>{tag.name}</span>
           {!tag.enabled && <span className="text-xs text-warn ml-2">Off</span>}
           <p className="text-sm text-text-muted break-words">{tag.instructions}</p>
           {(tag.criteriaTrue || tag.criteriaFalse) && (
-            <p className="text-xs text-text-dim break-words mt-1">
+            <p className="text-xs text-text-muted break-words mt-1">
               {tag.criteriaTrue && <>Yes: {tag.criteriaTrue} </>}
               {tag.criteriaFalse && <>No: {tag.criteriaFalse}</>}
             </p>
           )}
         </div>
-        <span className="ml-auto flex items-center gap-3 shrink-0 text-sm">
-          <label className="flex items-center gap-1 text-text-muted cursor-pointer">
+        <span className="ml-auto flex items-center gap-2 shrink-0 text-sm">
+          <label className="min-h-11 md:min-h-8 flex items-center gap-1.5 px-1 text-text-muted cursor-pointer">
             <input
               type="checkbox"
               className="accent-primary"
@@ -163,9 +163,9 @@ function TagRow({ serverId, tag, onChanged }: { serverId: string; tag: AIFileTag
             />
             On
           </label>
-          <button className="text-primary hover:underline" onClick={() => setEditing(true)}>Edit</button>
+          <button className="min-h-11 md:min-h-8 px-2 text-primary-text hover:underline" onClick={() => setEditing(true)}>Edit</button>
           <button
-            className="text-danger hover:underline"
+            className="min-h-11 md:min-h-8 px-2 text-danger hover:underline"
             onClick={() => {
               if (window.confirm(`Delete the tag “${tag.name}”? It is removed from every file.`)) {
                 void run(() => aiApi.deleteTag(serverId, tag.id), 'Failed to delete');

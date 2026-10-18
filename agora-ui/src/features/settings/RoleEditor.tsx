@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Role } from '../../lib/contracts/roles';
+import { usePalette } from '../../theme/usePalette';
 import { PermissionGrid } from './PermissionGrid';
 
 interface RoleEditorProps {
@@ -9,8 +10,9 @@ interface RoleEditorProps {
 }
 
 export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
+  const defaultColor = usePalette().muted;
   const [name, setName] = useState(role.name);
-  const [color, setColor] = useState(role.color || '#99aab5');
+  const [color, setColor] = useState(role.color || defaultColor);
   const [hoist, setHoist] = useState(role.hoist);
   const [mentionable, setMentionable] = useState(role.mentionable);
   const [permissions, setPermissions] = useState(role.permissions);
@@ -44,19 +46,19 @@ export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
         </h3>
         <button
           onClick={onClose}
-          className="text-text-muted hover:text-text text-sm"
+          className="min-h-11 md:min-h-8 px-2 text-text-muted hover:text-text text-sm"
         >
           Back
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-500/20 text-red-300 px-3 py-2 rounded text-sm">
+        <div className="bg-danger/15 border border-danger/40 text-danger px-3 py-2 rounded text-sm">
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm text-text-muted mb-1">Name</label>
           <input
@@ -65,7 +67,7 @@ export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
             onChange={(e) => setName(e.target.value)}
             disabled={role.isEveryone}
             maxLength={64}
-            className="w-full px-3 py-2 rounded bg-surface border border-border text-text disabled:opacity-50"
+            className="min-h-11 md:min-h-9 w-full px-3 py-2 rounded bg-surface border border-border text-text disabled:opacity-50"
           />
         </div>
         <div>
@@ -75,21 +77,21 @@ export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
               type="color"
               value={color}
               onChange={(e) => setColor(e.target.value)}
-              className="w-10 h-10 rounded cursor-pointer"
+              className="w-11 h-11 md:w-10 md:h-10 rounded cursor-pointer"
             />
             <input
               type="text"
               value={color}
               onChange={(e) => setColor(e.target.value)}
               maxLength={7}
-              className="flex-1 px-3 py-2 rounded bg-surface border border-border text-text font-mono text-sm"
+              className="min-h-11 md:min-h-9 flex-1 px-3 py-2 rounded bg-surface border border-border text-text font-mono text-sm"
             />
           </div>
         </div>
       </div>
 
-      <div className="flex gap-4">
-        <label className="flex items-center gap-2 cursor-pointer">
+      <div className="flex flex-wrap gap-4">
+        <label className="min-h-11 md:min-h-9 flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             checked={hoist}
@@ -98,7 +100,7 @@ export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
           />
           <span className="text-sm text-text">Display separately in member list</span>
         </label>
-        <label className="flex items-center gap-2 cursor-pointer">
+        <label className="min-h-11 md:min-h-9 flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             checked={mentionable}
@@ -119,14 +121,14 @@ export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
       <div className="flex justify-end gap-2">
         <button
           onClick={onClose}
-          className="px-4 py-2 rounded text-sm text-text-muted hover:bg-surface-hover"
+          className="min-h-11 md:min-h-9 px-4 py-2 rounded text-sm text-text-muted hover:bg-surface-hover"
         >
           Cancel
         </button>
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 rounded text-sm bg-primary text-white hover:bg-primary/80 disabled:opacity-50"
+          className="min-h-11 md:min-h-9 px-4 py-2 rounded text-sm font-medium bg-primary text-on-primary hover:bg-primary-hover disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save Changes'}
         </button>

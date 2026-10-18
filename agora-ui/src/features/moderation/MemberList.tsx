@@ -58,7 +58,7 @@ export function MemberList() {
                       member.roles.map(role => (
                         <span
                           key={role.id}
-                          className="px-2 py-0.5 rounded text-xs bg-primary/20 text-text-muted"
+                          className="px-2 py-0.5 rounded text-xs bg-primary/20 text-primary-text"
                         >
                           {role.name}
                         </span>

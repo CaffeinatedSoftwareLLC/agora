@@ -168,7 +168,7 @@ export function StorageSettings() {
             min={1}
             value={maxSizeMB}
             onChange={(e) => setMaxSizeMB(Number(e.target.value))}
-            className="bg-surface border border-border rounded px-3 py-2 text-text focus:outline-none focus:ring-2 focus:ring-primary w-32"
+            className="min-h-11 md:min-h-9 bg-surface border border-border rounded px-3 py-2 text-text focus:outline-none focus:ring-2 focus:ring-primary w-32"
           />
           <span className="text-xs text-text-muted">
             {(maxSizeMB * 1048576).toLocaleString()} bytes
@@ -182,16 +182,16 @@ export function StorageSettings() {
             {allowedExtensions.map((ext) => (
               <span
                 key={ext}
-                className="inline-flex items-center gap-1 bg-primary/15 text-text text-sm px-2 py-1 rounded"
+                className="inline-flex items-center gap-1 bg-primary/15 text-text text-sm pl-2.5 pr-1 py-1 rounded"
               >
                 .{ext}
                 <button
                   type="button"
                   onClick={() => removeExtension(ext)}
-                  className="text-text-muted hover:text-danger ml-1"
+                  className="min-w-7 min-h-7 inline-flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger/15 ml-0.5"
                   aria-label={`Remove .${ext}`}
                 >
-                  x
+                  ×
                 </button>
               </span>
             ))}
@@ -208,7 +208,7 @@ export function StorageSettings() {
                 }
               }}
               placeholder="e.g. png"
-              className="bg-surface border border-border rounded px-3 py-2 text-text placeholder-text-dim focus:outline-none focus:ring-2 focus:ring-primary w-40 text-sm"
+              className="min-h-11 md:min-h-9 bg-surface border border-border rounded px-3 py-2 text-text placeholder:text-text-muted/70 focus:outline-none focus:ring-2 focus:ring-primary w-40 text-sm"
             />
             <Button type="button" variant="secondary" onClick={addExtension}>
               Add
@@ -222,7 +222,7 @@ export function StorageSettings() {
           {RETENTION_OPTIONS.map((opt) => (
             <label
               key={String(opt.value)}
-              className={`flex items-center gap-3 p-2 rounded border cursor-pointer ${
+              className={`min-h-11 md:min-h-9 flex items-center gap-3 p-2 rounded border cursor-pointer ${
                 retentionDays === opt.value
                   ? 'border-primary bg-primary/10'
                   : 'border-border hover:bg-surface-hover'
@@ -233,6 +233,7 @@ export function StorageSettings() {
                 name="retentionDays"
                 checked={retentionDays === opt.value}
                 onChange={() => setRetentionDays(opt.value)}
+                className="accent-primary"
               />
               <span className="text-sm">{opt.label}</span>
             </label>
@@ -240,12 +241,12 @@ export function StorageSettings() {
         </fieldset>
 
         {/* EXIF Stripping */}
-        <label className="flex items-center gap-3 cursor-pointer">
+        <label className="min-h-11 flex items-center gap-3 cursor-pointer">
           <input
             type="checkbox"
             checked={exifStrip}
             onChange={(e) => setExifStrip(e.target.checked)}
-            className="w-4 h-4 rounded border-border"
+            className="w-4 h-4 rounded border-border accent-primary"
           />
           <div>
             <p className="text-sm font-medium">Strip EXIF Data</p>

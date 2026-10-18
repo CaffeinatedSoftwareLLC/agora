@@ -82,7 +82,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
     <div className="flex items-center justify-center min-h-screen px-4">
       <div className="w-full max-w-md bg-surface rounded-lg p-8 border border-border">
         <h1 className="text-2xl font-bold text-center mb-2">Set Up Agora</h1>
-        <p className="text-text-dim text-sm text-center mb-6">
+        <p className="text-text-muted text-sm text-center mb-6">
           Complete the initial setup to get started.
         </p>
 
@@ -93,8 +93,8 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
               <div
                 className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
                   i <= step
-                    ? 'bg-primary text-text'
-                    : 'bg-surface-hover text-text-dim'
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-hover text-text-muted'
                 }`}
               >
                 {i + 1}
@@ -122,7 +122,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
                 required
                 autoFocus
               />
-              <p className="text-text-dim text-xs">
+              <p className="text-text-muted text-xs">
                 The setup token is printed in the server console when Agora starts for the first time.
               </p>
             </>
@@ -188,7 +188,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
                   ] as const).map(([value, label, desc]) => (
                     <label
                       key={value}
-                      className={`flex items-start gap-3 p-3 rounded border cursor-pointer transition-colors ${
+                      className={`min-h-11 flex items-start gap-3 p-3 rounded border cursor-pointer transition-colors ${
                         registrationPolicy === value
                           ? 'border-primary bg-primary/10'
                           : 'border-border hover:bg-surface-hover'
@@ -200,11 +200,11 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
                         value={value}
                         checked={registrationPolicy === value}
                         onChange={() => setRegistrationPolicy(value)}
-                        className="mt-0.5"
+                        className="mt-0.5 accent-primary"
                       />
                       <div>
                         <div className="text-sm font-medium text-text">{label}</div>
-                        <div className="text-xs text-text-dim">{desc}</div>
+                        <div className="text-xs text-text-muted">{desc}</div>
                       </div>
                     </label>
                   ))}

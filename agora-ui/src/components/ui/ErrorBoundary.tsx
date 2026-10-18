@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 this.setState({ error: null });
                 window.location.href = '/app';
               }}
-              className="mt-4 px-4 py-2 bg-primary text-text rounded hover:bg-primary-hover"
+              className="mt-4 min-h-11 md:min-h-9 px-4 py-2 bg-primary text-on-primary font-medium rounded hover:bg-primary-hover"
             >
               Reload
             </button>

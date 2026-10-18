@@ -6,7 +6,7 @@ export function UsageSection({ usage, days }: { usage: AICapabilityUsage[]; days
     <section>
       <h3 className="text-lg font-semibold text-text mb-3">Usage (last {days} days)</h3>
       {usage.length === 0 ? (
-        <p className="text-text-dim text-sm">No AI calls yet.</p>
+        <p className="text-text-muted text-sm">No AI calls yet.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -38,7 +38,7 @@ export function UsageSection({ usage, days }: { usage: AICapabilityUsage[]; days
               ))}
             </tbody>
           </table>
-          <p className="text-xs text-text-dim mt-2">Cost is estimated from the prices set on each capability; blank if none are set.</p>
+          <p className="text-xs text-text-muted mt-2">Cost is estimated from the prices set on each capability; blank if none are set.</p>
         </div>
       )}
     </section>

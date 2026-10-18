@@ -88,7 +88,7 @@ export function ChannelOverrides() {
       <h2 className="text-xl font-bold text-text mb-4">Channel Overrides</h2>
 
       {error && (
-        <div className="bg-red-500/20 text-red-300 px-3 py-2 rounded text-sm mb-4">
+        <div className="bg-danger/15 border border-danger/40 text-danger px-3 py-2 rounded text-sm mb-4">
           {error}
         </div>
       )}
@@ -98,7 +98,7 @@ export function ChannelOverrides() {
         <select
           value={selectedChannel}
           onChange={(e) => loadOverrides(e.target.value)}
-          className="w-full px-3 py-2 rounded bg-surface border border-border text-text"
+          className="min-h-11 md:min-h-9 w-full px-3 py-2 rounded bg-surface border border-border text-text"
         >
           <option value="">Choose a channel...</option>
           {channels.map((ch) => (
@@ -124,16 +124,16 @@ export function ChannelOverrides() {
                     className="flex items-center justify-between px-3 py-2 rounded hover:bg-surface-hover group"
                   >
                     <span className="text-sm text-text">{o.roleName}</span>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={() => setEditingRole(o.roleId!)}
-                        className="px-2 py-1 rounded text-xs text-text-muted hover:bg-surface hover:text-text"
+                        className="min-h-11 md:min-h-8 px-2.5 py-1 rounded text-xs text-text-muted hover:bg-surface hover:text-text"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => handleDeleteRoleOverride(o.roleId!)}
-                        className="px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/20"
+                        className="min-h-11 md:min-h-8 px-2.5 py-1 rounded text-xs text-danger hover:bg-danger/15"
                       >
                         Remove
                       </button>
@@ -151,7 +151,7 @@ export function ChannelOverrides() {
                   if (e.target.value) setEditingRole(e.target.value);
                   e.target.value = '';
                 }}
-                className="w-full px-3 py-2 rounded bg-surface border border-border text-text text-sm"
+                className="min-h-11 md:min-h-9 w-full px-3 py-2 rounded bg-surface border border-border text-text text-sm"
                 defaultValue=""
               >
                 <option value="">Add role override...</option>

@@ -27,7 +27,7 @@ export function InstanceGuard({ children }: { children: ReactNode }) {
         <div className="text-center">
           <h1 className="text-xl text-danger mb-2">Connection Error</h1>
           <p className="text-text-muted">Could not reach the server. Please try again later.</p>
-          <p className="text-text-dim text-sm mt-2">{error}</p>
+          <p className="text-danger text-sm mt-2">{error}</p>
         </div>
       </div>
     );

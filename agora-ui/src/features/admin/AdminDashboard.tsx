@@ -41,7 +41,7 @@ export function AdminDashboard() {
             {stats.pendingCount}
           </p>
           {stats.pendingCount > 0 && (
-            <Link to="/admin/pending" className="text-accent text-sm hover:underline">
+            <Link to="/admin/pending" className="min-h-11 md:min-h-8 inline-flex items-center text-accent text-sm hover:underline">
               Review pending users
             </Link>
           )}

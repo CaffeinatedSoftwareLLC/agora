@@ -96,7 +96,7 @@ function BinaryGrid({ permissions, onChange }: PermissionGridProps) {
             {group.perms.map((p) => (
               <label
                 key={p.name}
-                className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer"
+                className="min-h-11 flex items-center gap-3 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer"
               >
                 <input
                   type="checkbox"
@@ -150,8 +150,8 @@ function TriStateGrid({ allow, deny, onChange }: TriStatePermissionGridProps) {
   }
 
   function stateColor(bit: bigint): string {
-    if (allowBits & bit) return 'text-green-400';
-    if (denyBits & bit) return 'text-red-400';
+    if (allowBits & bit) return 'text-online';
+    if (denyBits & bit) return 'text-danger';
     return 'text-text-muted';
   }
 
@@ -167,7 +167,7 @@ function TriStateGrid({ allow, deny, onChange }: TriStatePermissionGridProps) {
               <button
                 key={p.name}
                 onClick={() => cycle(p.bit)}
-                className="flex items-center gap-3 w-full px-2 py-1.5 rounded hover:bg-surface-hover text-left"
+                className="min-h-11 flex items-center gap-3 w-full px-2 py-1.5 rounded hover:bg-surface-hover text-left"
               >
                 <span className={`text-xs font-mono w-14 ${stateColor(p.bit)}`}>
                   {stateLabel(p.bit)}

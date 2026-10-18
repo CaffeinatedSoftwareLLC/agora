@@ -111,7 +111,7 @@ export function DecisionsSection({ serverId, settings, onChanged }: Props) {
             Model: {route.provider} · {route.model}{route.enabled ? '' : ' (off)'}
           </span>
         ) : (
-          <span className={anyOn ? 'text-warn' : 'text-text-dim'}>
+          <span className={anyOn ? 'text-warn' : 'text-text-muted'}>
             No decision model yet. Add a provider that supports decisions, then set Capabilities → Decide.
           </span>
         )}
@@ -124,7 +124,7 @@ export function DecisionsSection({ serverId, settings, onChanged }: Props) {
       <div className="flex flex-col gap-2">
         {USES.map(({ use, label, description }) => (
           <div key={use} className="border border-border rounded-lg px-4 py-3">
-            <label className="flex items-start gap-3 cursor-pointer">
+            <label className="min-h-11 flex items-start gap-3 cursor-pointer">
               <input
                 type="checkbox"
                 className="accent-primary mt-1"
@@ -133,20 +133,20 @@ export function DecisionsSection({ serverId, settings, onChanged }: Props) {
               />
               <span>
                 <span className="text-text font-medium">{label}</span>
-                <span className="block text-xs text-text-dim">{description}</span>
+                <span className="block text-xs text-text-muted">{description}</span>
               </span>
-              <span className="ml-auto text-xs text-text-dim whitespace-nowrap">
+              <span className="ml-auto text-xs text-text-muted whitespace-nowrap">
                 Today: {settings.today[use].requests} req
                 {settings.today[use].errors > 0 && <span className="text-danger"> · {settings.today[use].errors} failed</span>}
               </span>
             </label>
 
             {use === 'search_screening' && (
-              <label className="flex items-start gap-3 mt-3 ml-7 cursor-pointer">
+              <label className="min-h-11 flex items-start gap-3 mt-3 ml-7 cursor-pointer">
                 <input type="checkbox" className="accent-primary mt-1" checked={strict} onChange={e => setStrict(e.target.checked)} />
                 <span className="text-sm text-text-muted">
                   Strict: refuse a search when its results could not be screened
-                  <span className="block text-xs text-text-dim">
+                  <span className="block text-xs text-text-muted">
                     Off: results are returned with a note saying they were not screened. Screening lowers risk; it is not a guarantee.
                   </span>
                 </span>
@@ -176,7 +176,7 @@ export function DecisionsSection({ serverId, settings, onChanged }: Props) {
       </div>
 
       {showAdvanced && (
-        <p className="text-xs text-text-dim mt-2">
+        <p className="text-xs text-text-muted mt-2">
           Each use may spend its share of the limits set on Capabilities → Decide, and shares are not borrowed, so
           one use cannot starve another. Shares total {shareTotal}% (maximum 100%). A share of 0 switches a use off.
           If Decide has no limits, only the request caps here apply.
@@ -185,7 +185,7 @@ export function DecisionsSection({ serverId, settings, onChanged }: Props) {
 
       <div className="flex items-center gap-3 mt-3">
         <Button onClick={save} loading={saving}>Save</Button>
-        <button className="text-sm text-primary hover:underline" onClick={() => setShowAdvanced(v => !v)}>
+        <button className="min-h-11 md:min-h-9 px-2 text-sm text-primary-text hover:underline" onClick={() => setShowAdvanced(v => !v)}>
           {showAdvanced ? 'Hide budgets and thresholds' : 'Budgets and thresholds'}
         </button>
       </div>

@@ -65,7 +65,7 @@ export function InstanceSettings() {
           {policyOptions.map((opt) => (
             <label
               key={opt.value}
-              className={`flex items-start gap-3 p-3 rounded border cursor-pointer ${
+              className={`min-h-11 flex items-start gap-3 p-3 rounded border cursor-pointer ${
                 registrationPolicy === opt.value
                   ? 'border-primary bg-primary/10'
                   : 'border-border hover:bg-surface-hover'
@@ -77,7 +77,7 @@ export function InstanceSettings() {
                 value={opt.value}
                 checked={registrationPolicy === opt.value}
                 onChange={() => setRegistrationPolicy(opt.value)}
-                className="mt-1"
+                className="mt-1 accent-primary"
               />
               <div>
                 <p className="text-sm font-medium">{opt.label}</p>

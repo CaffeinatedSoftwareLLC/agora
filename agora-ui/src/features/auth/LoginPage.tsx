@@ -80,7 +80,7 @@ export function LoginPage() {
         {instance?.registrationPolicy !== 'invite_only' && (
           <p className="text-center text-text-muted text-sm mt-4">
             Don't have an account?{' '}
-            <Link to="/register" className="text-accent hover:underline">
+            <Link to="/register" className="min-h-11 md:min-h-8 inline-flex items-center px-1 text-accent hover:underline">
               Register
             </Link>
           </p>
