@@ -624,7 +624,7 @@ export function registerTools(
     };
 
     const formatSession = (s: AgentSession) =>
-        `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${s.endReason})` : ''}, `
+        `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${s.endReason})` : ''}${s.sleepingUntil && s.state === 'live' && Date.parse(s.sleepingUntil) > Date.now() ? ` (rate limited, sleeping until ${s.sleepingUntil})` : ''}, `
         + `${s.wakesUsed} wakes, ${s.tokensUsed} tokens, last active ${s.lastActiveAt}`
         + (s.branch && s.headSha ? `, ${oneLine(s.branch)} @ ${s.headSha.slice(0, 12)}` : '');
 

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import { readAuthorities } from './direct-agents';
+import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -18,7 +19,7 @@ export const MAX_ATTEMPTS = 3;
 export const MAX_BATCH = 20;
 
 /** A channel event to emit after the transaction that produced it commits. */
-export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'AgentSessionUpdate' }
+export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' }
 
 export interface Host { id: string; serverId: string }
 
@@ -70,28 +71,31 @@ export async function postNotice(c: PoolClient | any, channelId: string, content
 // ─── Claim ───
 
 export async function sessionUpdate(c: PoolClient, sessionId: string, running: boolean): Promise<Notice> {
-    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason,
+    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason, s.sleeping_until,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
             'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
          FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS run
         FROM agent_sessions s WHERE s.id = $1`, [sessionId]);
     const channelId = result.rows[0].channel_id.trim();
-    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), running: result.rows[0].run?.status === 'claimed' && running, run: result.rows[0].run, state: result.rows[0].state, endReason: result.rows[0].end_reason } };
+    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), running: result.rows[0].run?.status === 'claimed' && running, run: result.rows[0].run, state: result.rows[0].state, endReason: result.rows[0].end_reason, sleepingUntil: result.rows[0].sleeping_until ?? null } };
 }
 
 export interface ClaimResult {
     run: {
         id: string; claimToken: string; attempt: number; deliveryKey: string;
         leaseSeconds: number; leaseUntil: string; heartbeatSeconds: number; timeoutSeconds: number;
+        grantedTools: string[];
     };
     session: {
         id: string; channelId: string; channelName: string;
         nativeSessionId: string | null; summary: string | null;
         wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
+        wokeFromSleep: boolean;
     };
     profile: {
         id: string; name: string; botId: string; adapter: string;
         model: string | null; effort: string | null; workdirAlias: string;
+        toolPresets: string[]; allowedTools: string[];
     };
     inbox: Array<{
         messageId: string; threadId: string | null; reason: string;
@@ -106,6 +110,7 @@ export async function claimNext(pool: Pool, host: Host, notices: Notice[]): Prom
         `SELECT s.id FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          WHERE p.host_id = $1 AND p.server_id = $2 AND s.state = 'live'
+           AND (s.sleeping_until IS NULL OR s.sleeping_until <= NOW())
            AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')
            AND (EXISTS (SELECT 1 FROM agent_batches b WHERE b.session_id = s.id AND b.status = 'retry')
                 OR EXISTS (SELECT 1 FROM agent_inbox i WHERE i.session_id = s.id AND i.batch_id IS NULL AND i.acked_at IS NULL))
@@ -124,7 +129,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     // 1. Lock the session; skip it if another claim holds it or a run is active
     const s = await c.query(
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
-                COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name
+                COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
+                p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep
          FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN channels ch ON ch.id = s.channel_id
@@ -133,7 +139,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         [sessionId, host.id, host.serverId]
     );
     const session = s.rows[0];
-    if (!session || session.state !== 'live') return null;
+    if (!session || session.state !== 'live' || session.asleep) return null;
     const active = await c.query(`SELECT 1 FROM agent_runs WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     if (active.rows.length > 0) return null;
     // The host may have been revoked while its long poll was waiting
@@ -160,6 +166,20 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
             [sessionId]
         );
         return null;
+    }
+
+    // A session that slept through a rate limit (#87) wakes with everything held for it:
+    // the batch that hit the limit goes back into the inbox and one new batch takes the
+    // oldest rows, so the held messages arrive together in one turn.
+    const wokeFromSleep = session.sleeping_until !== null;
+    if (wokeFromSleep) {
+        await c.query(
+            `UPDATE agent_inbox SET batch_id = NULL
+             WHERE acked_at IS NULL AND batch_id IN (SELECT id FROM agent_batches WHERE session_id = $1 AND status = 'retry')`,
+            [sessionId]
+        );
+        await c.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE session_id = $1 AND status = 'retry'`, [sessionId]);
+        await c.query(`UPDATE agent_sessions SET sleeping_until = NULL WHERE id = $1`, [sessionId]);
     }
 
     // 3. Pick the batch: a retry first, unchanged; otherwise the oldest pending rows
@@ -245,22 +265,25 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS]
     );
 
+    const grantedTools = await takeGrants(c, sessionId, batchId, runId);
+
     notices.push(await sessionUpdate(c, sessionId, true));
     return {
         run: {
             id: runId, claimToken, attempt, deliveryKey,
             leaseSeconds: LEASE_SECONDS, leaseUntil: new Date(lease.rows[0].lease_until).toISOString(),
-            heartbeatSeconds: HEARTBEAT_SECONDS, timeoutSeconds: session.run_timeout_sec,
+            heartbeatSeconds: HEARTBEAT_SECONDS, timeoutSeconds: session.run_timeout_sec, grantedTools,
         },
         session: {
             id: sessionId, channelId, channelName: session.channel_name,
             nativeSessionId: session.native_session_id ?? null, summary: session.summary ?? null,
             wakesUsed: session.wakes_used + 1, wakeBudget: session.wake_budget,
-            tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget),
+            tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget), wokeFromSleep,
         },
         profile: {
             id: session.profile_id.trim(), name: session.profile_name, botId, adapter: session.adapter,
             model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
+            toolPresets: session.tool_presets ?? [], allowedTools: session.allowed_tools ?? [],
         },
         inbox: kept.map(k => k.entry),
     };
@@ -422,7 +445,7 @@ async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     return null;
 }
 
-export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string }
+export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
 
 export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -442,6 +465,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
              WHERE id = $1`,
             [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])], body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
         );
+        await fileDeniedTools(c, run, body.deniedTools, notices);
         const posted = await c.query(`SELECT 1 FROM messages m JOIN agent_sessions s ON s.bot_id = m.author_id
             WHERE s.id = $1 AND m.channel_id = s.channel_id AND m.created_at >= $2 LIMIT 1`, [run.session_id, run.created_at]);
         if (!posted.rows.length) {
@@ -475,7 +499,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
     });
 }
 
-export interface FailBody { claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[] }
+export interface FailBody { claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null } }
 
 export async function fail(pool: Pool, host: Host, runId: string, body: FailBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -490,6 +514,11 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
             [runId, tokens, body.error.slice(0, 64), body.message?.slice(0, 2000) ?? null, [...new Set(body.changedPaths ?? [])]]
         );
         await enforceTokenBudget(c, run.session_id.trim(), notices);
+        await fileDeniedTools(c, run, body.deniedTools, notices);
+        if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {
+            notices.push(await sessionUpdate(c, run.session_id, false));
+            return { status: 200, body: { ok: true, sleeping: true } };
+        }
         notices.push(await sessionUpdate(c, run.session_id, false));
         await settleBatch(c, run, !!body.retryable && !run.cancel_requested, body.error, notices);
         return { status: 200, body: { ok: true } };
@@ -523,6 +552,36 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
     notices.push(await postNotice(c, session.channel_id.trim(),
         `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`));
+}
+
+/**
+ * The CLI hit its account's rate limit (#87): the session sleeps until the limit resets and
+ * its batch waits, without spending a retry or a wake. Other live sessions of the same
+ * profile share the CLI login, so they sleep too (skipping any locked by their own run).
+ * Returns false when the session can't sleep (no longer live, or cancelled).
+ */
+async function sleepForRateLimit(c: PoolClient, run: any, resetAt: string | null, notices: Notice[]): Promise<boolean> {
+    const s = await c.query(
+        `SELECT s.state, s.channel_id, s.profile_id, p.name AS profile_name FROM agent_sessions s
+         JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
+        [run.session_id]
+    );
+    const session = s.rows[0];
+    if (run.cancel_requested || !session || session.state !== 'live') return false;
+    const until = sleepUntil(resetAt);
+    await c.query(`UPDATE agent_sessions SET sleeping_until = $2, wakes_used = GREATEST(wakes_used - 1, 0) WHERE id = $1`, [run.session_id, until]);
+    await c.query(`UPDATE agent_batches SET status = 'retry', attempts = GREATEST(attempts - 1, 0) WHERE id = $1`, [run.batch_id]);
+    const others = await c.query(
+        `UPDATE agent_sessions SET sleeping_until = GREATEST(COALESCE(sleeping_until, $2), $2)
+         WHERE id IN (SELECT id FROM agent_sessions WHERE profile_id = $1 AND state = 'live' AND id <> $3 FOR UPDATE SKIP LOCKED)
+         RETURNING id`,
+        [session.profile_id, until, run.session_id]
+    );
+    for (const o of others.rows) notices.push(await sessionUpdate(c, o.id, false));
+    notices.push(await postNotice(c, session.channel_id.trim(),
+        `${session.profile_name} hit its rate limit and is sleeping for about ${duration(until.getTime() - Date.now())} (until ${until.toISOString().slice(11, 16)} UTC). `
+        + 'Messages for it are held and delivered together when it wakes.'));
+    return true;
 }
 
 /** Expire one claimed run whose lease is over. Keep usage already reported by heartbeats. */

@@ -7,6 +7,7 @@ import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { noticePathList } from '../lib/file-reservations';
 import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
+import { allowedToolsSchema, deniedToolsSchema, toolPresetsSchema } from '../lib/agent-permissions';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -44,6 +45,7 @@ function profileJson(r: any) {
         adapter: r.adapter, model: r.model ?? null, effort: r.effort ?? null, workdirAlias: r.workdir_alias, workspaceId: r.workspace_id,
         wakeBudget: r.wake_budget, tokenBudget: Number(r.token_budget), runTimeoutSec: r.run_timeout_sec,
         generation: r.generation, createdAt: r.created_at, updatedAt: r.updated_at,
+        toolPresets: r.tool_presets ?? [], allowedTools: r.allowed_tools ?? [],
     };
 }
 
@@ -59,6 +61,9 @@ const profileFields = {
     wakeBudget: { type: 'integer', minimum: 1, maximum: 100000 },
     tokenBudget: { type: 'integer', minimum: 1 },
     runTimeoutSec: { type: 'integer', minimum: 60, maximum: 7200 },
+    // Tool presets and always-allowed rules (#73); the host reads them at every claim
+    toolPresets: toolPresetsSchema,
+    allowedTools: allowedToolsSchema,
 } as const;
 
 /** The bot belongs to this server and the host is this server's and not revoked. */
@@ -174,11 +179,13 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 if (bad) return { status: 400, body: { error: bad } };
                 const row = await db.query(
                     `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias,
-                                                 wake_budget, token_budget, run_timeout_sec, created_by, workspace_id)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 2000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'))
+                                                 wake_budget, token_budget, run_timeout_sec, created_by, workspace_id, tool_presets, allowed_tools)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 2000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'),
+                             COALESCE($15, '{}'::text[]), COALESCE($16, '{}'::text[]))
                      RETURNING *`,
                     [generateUlid(), serverId, b.name, b.botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null,
-                     b.workdirAlias, b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, request.userId, b.workspaceId ?? null]
+                     b.workdirAlias, b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, request.userId, b.workspaceId ?? null,
+                     b.toolPresets ?? null, b.allowedTools ?? null]
                 );
                 return { status: 201, body: profileJson(row.rows[0]) };
             });
@@ -251,11 +258,13 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         wake_budget = COALESCE($12, wake_budget), token_budget = COALESCE($13, token_budget),
                         run_timeout_sec = COALESCE($14, run_timeout_sec),
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
+                        tool_presets = COALESCE($17, tool_presets), allowed_tools = COALESCE($18, allowed_tools),
                         updated_at = NOW()
                      WHERE id = $1 AND server_id = $2 RETURNING *`,
                     [profileId, serverId, b.name ?? null, b.botId ?? null, b.hostId ?? null, b.adapter ?? null,
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
-                     b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null]
+                     b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null,
+                     b.toolPresets ?? null, b.allowedTools ?? null]
                 );
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
@@ -445,6 +454,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     baseSha: { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' },
                     headSha: { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' },
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
+                    deniedTools: deniedToolsSchema,
                 },
             },
         },
@@ -469,6 +479,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 },
                     retryable: { type: 'boolean' },
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
+                    deniedTools: deniedToolsSchema,
+                    // error 'rate_limited': the session sleeps until resetAt (#87)
+                    rateLimit: { type: 'object', additionalProperties: false, properties: { resetAt: { type: ['string', 'null'], maxLength: 40 } } },
                 },
             },
         },

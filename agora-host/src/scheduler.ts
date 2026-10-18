@@ -78,6 +78,7 @@ export class Scheduler {
             if (deadline <= this.now()) return;
             interval = setInterval(tick, this.options.tickMs ?? 100);
             launch = await (this.options.prepare ?? prepare)(this.config, claim);
+            if (launch.unknownPresets?.length) this.log('unknown_tool_preset');
             if (this.stopping || a.stop || this.now() >= deadline) return;
             const before = launch.adapter === 'claude' ? await worktreeSnapshot(launch.cwd) : null;
             if (this.stopping || a.stop || this.now() >= deadline) return;
@@ -102,11 +103,16 @@ export class Scheduler {
                         let head = {};
                         if (launch?.workspace) { try { head = await workspaceHead(launch.workspace); } catch { this.log('workspace_head_failed'); } }
                         await this.api.complete(claim, { claimToken: claim.run.claimToken, nativeSessionId: result.nativeSessionId,
-                            tokensUsed: result.tokensUsed, summary: result.summary, changedPaths: result.changedPaths, ...head }, reportAbort);
+                            tokensUsed: result.tokensUsed, summary: result.summary, changedPaths: result.changedPaths, ...head,
+                            ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}) }, reportAbort);
                     } else {
-                        await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? result.error ?? 'cli_failed',
-                            message: 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
-                            retryable: a.stop !== 'cancelled' && result.error !== 'host_launch_failed' }, reportAbort);
+                        // A rate limit puts the session to sleep server-side instead of spending a retry (#87)
+                        const rateLimited = !a.stop && finished && !!result.rateLimit;
+                        await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
+                            message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
+                            retryable: a.stop !== 'cancelled' && result.error !== 'host_launch_failed',
+                            ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
+                            ...(rateLimited ? { rateLimit: result.rateLimit } : {}) }, reportAbort);
                     }
                 } catch (err) {
                     if (fatalAuth(err)) await this.stop();

@@ -33,6 +33,7 @@ interface SessionSheetProps {
 const DOT_CLASS: Record<ChipState | 'none', string> = {
   working: 'bg-online motion-safe:animate-pulse',
   idle: 'bg-online',
+  sleeping: 'bg-accent',
   shelved: 'bg-warn',
   ended: 'bg-text-dim',
   none: 'bg-text-dim',
@@ -159,7 +160,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     title = `Agent: ${selected}`;
     const state = chip?.state;
     const current = chip?.session;
-    const live = state === 'working' || state === 'idle';
+    const live = state === 'working' || state === 'idle' || state === 'sleeping';
     const history = (chip?.sessions ?? []).filter(s => !(live && s.id === current?.id)).slice(0, 5);
     const latestShelved = chip?.sessions.find(s => s.state === 'shelved');
 
@@ -180,6 +181,17 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           )}
         </p>
 
+        {state === 'sleeping' && current?.sleepingUntil && (
+          <div className="space-y-2 rounded-lg border border-border bg-bg/60 p-3 text-sm text-text-muted">
+            <p>
+              Hit its rate limit. Sleeping until {new Date(current.sleepingUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })};
+              messages for it are held and delivered together when it wakes.
+            </p>
+            <button type="button" className={BTN_SECONDARY} disabled={busy} onClick={() => void run({ command: 'wake', sessionId: current.id })}>
+              Wake now
+            </button>
+          </div>
+        )}
         {current && <SessionBudget key={current.id} session={current} channelId={channelId} onChanged={onChanged} />}
         {current?.recentRuns && current.recentRuns.length > 0 && <details className="text-sm">
           <summary className="cursor-pointer">Recent runs</summary>

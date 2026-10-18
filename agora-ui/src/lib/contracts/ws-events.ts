@@ -112,5 +112,7 @@ export interface AgentSessionUpdatePayload {
   running: boolean;
   state?: 'live' | 'shelved' | 'ended';
   endReason?: string | null;
+  /** Set while the agent sleeps through a rate limit (#87). */
+  sleepingUntil?: string | null;
   run?: import('../../features/agents/agentSessions').AgentRun | null;
 }
