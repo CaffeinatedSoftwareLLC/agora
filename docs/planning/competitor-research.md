@@ -160,3 +160,34 @@ Where Agora is ahead: waking idle agents on @mention, one server across machines
 
 ---
 
+
+---
+
+## Hands-on review (2026-10-18, all three agents)
+
+Claude, Codex and Gemini each read the READMEs and source of their share (nothing installed or run). Full posts: #general thread `01M57QZT602A4R269DB5ZDJP97`. **Where this section and Gemini's report above disagree, this section wins.**
+
+### Corrections to the report
+- **Concord can wake idle agents** through its supported adapters (README L130-136). Waking on @mention is not unique to Agora.
+- Concord's "verifies done" uses evidence the caller supplies (`handoff.ts` L52-70), not disk checks. Its claims and Agent Mail's "exclusive" reservations are advisory only: they warn, they don't lock.
+- Agor isolates per branch/task, not per agent. Agent Mail's Python repo is superseded by a Rust one, and it's not `npx`.
+- Parley has no database. tunnel-mcp seats up to 16, not 2. Roundtable agents can't edit code (it's a forum). duplex-bridge is two-way.
+- afk-code and Clicker4AI are Claude Code only, and afk-code has no approval buttons. OpenACP's GitHub repo is gone; `@openacp/cli` is on npm, licensed AGPL-3.0 (not MIT).
+- codex-delegate-mcp runs `--dangerously-bypass-approvals-and-sandbox` in every mode.
+
+### Ranked: what Agora should borrow
+| # | Idea | From | Where it fits in Agora |
+|---|---|---|---|
+| 1 | A persistent worktree per task/session: provision it before `prepare()`, keep it across resumes, use it as cwd | Agor | `agora-host/src/adapters.ts:77` (today a fixed `local.workdir`) |
+| 2 | Expiring, repo-scoped file reservations (reserve/renew/release), with conflicts shown in handoffs | Agent Mail, Concord | new tools in `agora-mcp/src/tools.ts` + server table |
+| 3 | Approval card for a denied tool, with a one-shot escalation instead of a settings edit; passkey step-up before "always allow" | Happy, Clicker4AI | host + UI (#73, #78) |
+| 4 | Token/cost budget that pauses a runaway session | OpenACP, Clicker4AI | host + server session budget |
+| 5 | List of files changed per run, from Codex `file_change` events | codex-delegate | `parseOutput` in `agora-host/src/adapters.ts` |
+| 6 | Lurk mode: an unaddressed agent hears everything, replies `[pass]` unless it spots a problem | Parley | `routeMessage` in `src/lib/agent-sessions.ts` + host |
+| 7 | Ownership handoff the recipient must accept, alongside YIELD | Concord | protocol + `agora-mcp` |
+| 8 | Single-use invite (~10 min) that bundles the `claude mcp add agora …` line | tunnel-mcp | bot-token flow + `agora-connect` (setup wizard) |
+
+Smaller: auto-attach images an agent references (afk-code); hold messages while an agent is rate-limited and replay them on wake (Parley); strip ANSI escapes and private-key blocks from relayed text (duplex-bridge).
+
+### Things others do that Agora can't (not planned)
+End-to-end encryption (tunnel-mcp, Happy); a live view of an agent's terminal (Roundtable, Clicker4AI); the ChatGPT web app as a participant (duplex-bridge); dev-port tunnels (OpenACP).
