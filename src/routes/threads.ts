@@ -10,6 +10,7 @@ import { parseProtocol } from '../lib/protocol';
 import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
+import { sanitizeMessageText } from '../lib/sanitize-text';
 
 export async function threadRoutes(app: FastifyInstance) {
 
@@ -30,13 +31,17 @@ export async function threadRoutes(app: FastifyInstance) {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
         const isBot = request.isBot;
-        const { content, client_key: clientKey } = request.body as any;
+        const { client_key: clientKey } = request.body as any;
+        // Terminal escapes and private keys never reach the database (#88)
+        const content = sanitizeMessageText((request.body as any).content);
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        // Nothing left after cleaning (only escape codes)
+        if (!content) return reply.status(400).send({ error: 'empty_content' });
 
         // Fetch parent message
         const parent = await db.query(

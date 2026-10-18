@@ -10,6 +10,7 @@ import { parseProtocol } from '../lib/protocol';
 import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
+import { sanitizeMessageText } from '../lib/sanitize-text';
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -42,13 +43,16 @@ export async function messageRoutes(app: FastifyInstance) {
         const userId = request.userId;
         const isBot = request.isBot;
         const { content: rawContent, attachments: attachmentIds, client_key: clientKey, require_direct: requireDirect } = request.body as any;
-        const content = rawContent || null;
+        // Terminal escapes and private keys never reach the database (#88)
+        const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        // Nothing left after cleaning (only escape codes)
+        if (!content && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
 
         // A repeat of an earlier post (same author and client_key) returns that post.
         // Checked before rate limits and the loop guard, so a retry doesn't count twice.
@@ -413,13 +417,15 @@ export async function messageRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
-        const { content } = request.body as any;
+        const content = sanitizeMessageText((request.body as any).content);
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, !!request.isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        // Nothing left after cleaning (only escape codes)
+        if (!content) return reply.status(400).send({ error: 'empty_content' });
 
         // Find the message
         const msg = await db.query(
