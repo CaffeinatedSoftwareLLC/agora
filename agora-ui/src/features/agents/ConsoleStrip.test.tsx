@@ -12,6 +12,8 @@ vi.hoisted(() => {
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
 });
 
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
+vi.mock('../../hooks/useSocket', () => ({ useSocket: () => socket }));
 const post = vi.fn();
 const get = vi.fn();
 vi.mock('../../lib/api', async (orig) => {
@@ -30,6 +32,8 @@ function message(over: Partial<Message>): Message {
 }
 
 beforeEach(() => {
+  socket.on.mockReset();
+  socket.off.mockReset();
   post.mockReset();
   get.mockReset();
   useChannelStore.setState({ channels: new Map([[CH, { id: CH, name: 'general', channelType: 0, serverId: 'SRV' }]]) });
@@ -61,6 +65,34 @@ describe('ConsoleStrip', () => {
     expect(within(thread).getByText('→ codex')).toBeTruthy();
     fireEvent.click(thread);
     expect(onOpenThread).toHaveBeenCalledWith('T1');
+  });
+
+  it('shows the latest server protocol before opening and tracks live replies', async () => {
+    post.mockResolvedValue({ sessions: [] });
+    useMessageStore.setState({ byChannel: new Map([[CH, [message({ id: 'T1', protocol: { version: 1, mode: 'fix', state: 'START' } })]]]) });
+    useThreadStore.setState({ activeThreads: new Map([[CH, [{
+      id: 'T1', content: 'Fix UI', authorId: null, authorUsername: null, channelId: CH, createdAt: '',
+      replyCount: 4, lastReplyAt: '', previewReplies: [],
+      latestProtocol: { version: 1, mode: 'fix', state: 'TURN', yieldTo: 'codex', messageId: 'T3', authorUsername: 'claude' },
+    }]]]), repliesByThread: new Map([['T1', [message({ id: 'T2', protocol: { version: 1, mode: 'fix', state: 'ACK' } })]]]) });
+    render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
+    expect(screen.getByRole('button', { name: /Open thread \(TURN, next: codex\)/ })).toBeTruthy();
+    act(() => useThreadStore.getState().addReply({ ...message({ id: 'T4', protocol: { version: 1, mode: 'fix', state: 'DONE' } }), content: 'Done', threadId: 'T1' }));
+    expect(screen.getByRole('button', { name: /Open thread \(DONE\)/ })).toBeTruthy();
+  });
+
+  it('refreshes immediately on channel run updates and removes its socket listener', async () => {
+    post.mockResolvedValue({ sessions: [live({ running: false })] });
+    const { unmount } = render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
+    await screen.findByRole('button', { name: /^claude: live and idle/ });
+    const handler = socket.on.mock.calls.find(c => c[0] === 'AgentSessionUpdate')![1];
+    act(() => handler({ channelId: 'other', sessionId: 'A'.repeat(26), running: true }));
+    expect(post).toHaveBeenCalledTimes(1);
+    post.mockResolvedValue({ sessions: [live()] });
+    act(() => handler({ channelId: CH, sessionId: 'A'.repeat(26), running: true }));
+    await screen.findByRole('button', { name: /^claude: live and working/ });
+    unmount();
+    expect(socket.off).toHaveBeenCalledWith('AgentSessionUpdate', handler);
   });
 
   it('refreshes when an agent_session notice arrives, and polls every 20s', async () => {

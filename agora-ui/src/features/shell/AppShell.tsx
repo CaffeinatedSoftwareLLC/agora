@@ -109,7 +109,6 @@ export function AppShell() {
           {compact && !phone && <button className="shell-backdrop" aria-label="Close inspector" onClick={() => useUIStore.getState().closeAux()} />}
           <aside ref={auxRef} tabIndex={-1} className="shell-aux" role={compact ? 'dialog' : 'complementary'}
             aria-label={aux} aria-modal={compact ? true : undefined} inert={!!overlay}>
-            <button className="shell-aux-back" onClick={() => useUIStore.getState().closeAux()}>&larr; Back</button>
             {aux === 'thread' && <ThreadPanel />}
             {aux === 'files' && <FilesPanel />}
             {aux === 'members' && <MembersSidebar />}

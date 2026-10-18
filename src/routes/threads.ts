@@ -398,7 +398,8 @@ export async function threadRoutes(app: FastifyInstance) {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
                             p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            previews.replies AS preview_replies
+                            previews.replies AS preview_replies, latest.protocol AS latest_protocol,
+                            latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
                      FROM messages p
                      LEFT JOIN users u ON u.id = p.author_id
                      LEFT JOIN LATERAL (
@@ -413,6 +414,18 @@ export async function threadRoutes(app: FastifyInstance) {
                              LIMIT 2
                          ) sub
                      ) previews ON true
+                     LEFT JOIN LATERAL (
+                         -- Newest protocol reply via idx_messages_thread_replies, else the parent's own.
+                         SELECT c.id, c.protocol, cu.username AS author_username
+                         FROM (
+                             (SELECT r.id, r.protocol, r.author_id FROM messages r
+                              WHERE r.thread_id = p.id AND r.protocol IS NOT NULL AND r.deleted_at IS NULL
+                              ORDER BY r.id DESC LIMIT 1)
+                             UNION ALL
+                             SELECT p.id, p.protocol, p.author_id WHERE p.protocol IS NOT NULL
+                         ) c LEFT JOIN users cu ON cu.id = c.author_id
+                         ORDER BY c.id DESC LIMIT 1
+                     ) latest ON true
                      WHERE p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL
                        AND p.thread_closed_at IS NULL AND p.last_reply_at < $2
                      ORDER BY p.last_reply_at DESC
@@ -422,7 +435,8 @@ export async function threadRoutes(app: FastifyInstance) {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
                             p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            previews.replies AS preview_replies
+                            previews.replies AS preview_replies, latest.protocol AS latest_protocol,
+                            latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
                      FROM messages p
                      LEFT JOIN users u ON u.id = p.author_id
                      LEFT JOIN LATERAL (
@@ -437,6 +451,18 @@ export async function threadRoutes(app: FastifyInstance) {
                              LIMIT 2
                          ) sub
                      ) previews ON true
+                     LEFT JOIN LATERAL (
+                         -- Newest protocol reply via idx_messages_thread_replies, else the parent's own.
+                         SELECT c.id, c.protocol, cu.username AS author_username
+                         FROM (
+                             (SELECT r.id, r.protocol, r.author_id FROM messages r
+                              WHERE r.thread_id = p.id AND r.protocol IS NOT NULL AND r.deleted_at IS NULL
+                              ORDER BY r.id DESC LIMIT 1)
+                             UNION ALL
+                             SELECT p.id, p.protocol, p.author_id WHERE p.protocol IS NOT NULL
+                         ) c LEFT JOIN users cu ON cu.id = c.author_id
+                         ORDER BY c.id DESC LIMIT 1
+                     ) latest ON true
                      WHERE p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL
                        AND p.thread_closed_at IS NULL
                      ORDER BY p.last_reply_at DESC
@@ -473,6 +499,10 @@ export async function threadRoutes(app: FastifyInstance) {
             replyCount: row.reply_count,
             lastReplyAt: row.last_reply_at,
             canClose: hasManagePerms || (row.author_id?.trim() === userId.trim()),
+            latestProtocol: row.latest_protocol ? {
+                ...row.latest_protocol, messageId: row.protocol_message_id.trim(),
+                authorUsername: row.protocol_author_username ?? null,
+            } : null,
             previewReplies: (row.preview_replies || []).map((r: any) => ({
                 id: r.id?.trim(),
                 content: r.content,

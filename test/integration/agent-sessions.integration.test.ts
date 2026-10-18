@@ -1,6 +1,6 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
-import { sweepExpiredRuns, type Notice } from '../../src/lib/agent-runs';
+import { claimNext, complete, fail, sweepExpiredRuns, type Notice } from '../../src/lib/agent-runs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -371,6 +371,46 @@ describe('host API (S2)', () => {
         expect((await claim()).status).toBe(204);
     });
 
+    it('broadcasts host run transitions to the channel room', async () => {
+        const sessionId = await startSession(codex);
+        await post(owner.auth, '@codex run');
+        const emit = vi.fn();
+        const room = vi.spyOn(ctx.app.io, 'to').mockReturnValue({ emit } as any);
+        try {
+            const c = await claim();
+            expect(c.status).toBe(200);
+            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('AgentSessionUpdate', { channelId, sessionId, running: true }));
+            expect(room).toHaveBeenCalledWith(`channel:${channelId}`);
+            await ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/complete`).set(hostAuth)
+                .send({ claimToken: c.body.run.claimToken });
+            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('AgentSessionUpdate', { channelId, sessionId, running: false }));
+        } finally { room.mockRestore(); }
+    });
+
+    it('returns running events on claim, success, failure, and expiry', async () => {
+        const sessionId = await startSession(codex);
+        const host = { id: hostId, serverId };
+        const notices: Notice[] = [];
+        const expectUpdate = (running: boolean) => {
+            expect(notices.filter(n => n.eventName === 'AgentSessionUpdate').at(-1)).toEqual({
+                channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId, running },
+            });
+            notices.length = 0;
+        };
+        for (const finish of ['success', 'failure', 'expiry']) {
+            await post(owner.auth, '@codex work');
+            const run = (await claimNext(ctx.db, host, notices))!.run;
+            expectUpdate(true);
+            if (finish === 'success') await complete(ctx.db, host, run.id, { claimToken: run.claimToken }, notices);
+            if (finish === 'failure') await fail(ctx.db, host, run.id, { claimToken: run.claimToken, error: 'test' }, notices);
+            if (finish === 'expiry') {
+                await ctx.db.query("UPDATE agent_runs SET lease_until = NOW() - interval '1 second' WHERE id = $1", [run.id]);
+                await sweepExpiredRuns(ctx.db, notices);
+            }
+            expectUpdate(false);
+        }
+    });
+
     it('claims a batch with content, then completes it', async () => {
         const s = await startSession(codex, { summary: 'earlier work' });
         const m = await post(owner.auth, '@codex weather please');
@@ -493,7 +533,8 @@ describe('host API (S2)', () => {
             await ctx.db.query(`UPDATE agent_runs SET lease_until = NOW() - interval '1 second' WHERE id = $1`, [c.body.run.id]);
             const notices: Notice[] = [];
             expect(await sweepExpiredRuns(ctx.db, notices)).toBe(1);
-            if (attempt === 3) expect(notices).toHaveLength(1);
+            expect(notices.filter(n => n.eventName === 'AgentSessionUpdate')).toHaveLength(1);
+            if (attempt === 3) expect(notices.filter(n => !n.eventName || n.eventName === 'Message')).toHaveLength(1);
         }
         const next = await claim();
         expect(next.body.inbox.map((i: any) => i.content)).toEqual(['@codex B']);

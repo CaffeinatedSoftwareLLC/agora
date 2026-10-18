@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSocket } from '../../hooks/useSocket';
+import type { AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
 import { useChannelStore } from '../../stores/channelStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useThreadStore } from '../../stores/threadStore';
@@ -31,6 +33,7 @@ const CHIP_TARGET = 'group flex min-h-[44px] shrink-0 items-center rounded-full 
 const CHIP_PILL = 'flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-surface-hover px-3 text-[13px] text-text transition-colors group-hover:bg-bg group-focus-visible:outline-2 group-focus-visible:outline-offset-1 group-focus-visible:outline-accent';
 
 export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
+  const socket = useSocket();
   const serverId = useChannelStore(s => s.channels.get(channelId)?.serverId ?? null);
   const [loaded, setLoaded] = useState<{ channelId: string; sessions: AgentSession[] }>({ channelId, sessions: [] });
   const [sheetState, setSheet] = useState<{ mode: SheetMode; key: number; channelId: string } | null>(null);
@@ -51,6 +54,14 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
   }, [channelId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!socket) return;
+    const onSessionUpdate = (event: AgentSessionUpdatePayload) => {
+      if (event.channelId === channelId) refresh();
+    };
+    socket.on('AgentSessionUpdate', onSessionUpdate);
+    return () => { socket.off('AgentSessionUpdate', onSessionUpdate); };
+  }, [socket, channelId, refresh]);
 
   // Poll while visible; catch up as soon as the page is shown again.
   useEffect(() => {
@@ -94,7 +105,10 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 
   const threads = useMemo(() => (activeThreads ?? []).filter(t => !t.threadClosedAt).map(t => {
     const parent = channelMessages?.find(m => m.id === t.id);
-    const protocol = latestProtocol([...(parent ? [parent] : []), ...(repliesByThread.get(t.id) ?? [])]);
+    const cached = [...(parent ? [parent] : []), ...(repliesByThread.get(t.id) ?? [])]
+      .filter(m => !t.latestProtocol || m.id >= t.latestProtocol.messageId)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const protocol = latestProtocol(cached) ?? t.latestProtocol ?? undefined;
     return { thread: t, protocol };
   }), [activeThreads, channelMessages, repliesByThread]);
 

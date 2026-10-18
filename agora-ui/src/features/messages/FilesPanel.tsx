@@ -1,7 +1,7 @@
+import { AuxPanelControl } from '../shell/AuxPanelControl';
 import { useEffect, useState } from 'react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useServerStore } from '../../stores/serverStore';
-import { useUIStore } from '../../stores/uiStore';
 import { fileSearchApi, getAuthHeaders, ApiError } from '../../lib/api';
 import type { FileSearchItem, FileSearchResult } from '../../lib/api';
 import { FileTags } from './FileAttachment';
@@ -33,7 +33,6 @@ export function FilesPanel() {
   const P = usePalette();
   const channelId = useChannelStore(s => s.activeChannelId);
   const serverId = useServerStore(s => s.instanceServerId);
-  const toggleFiles = useUIStore(s => s.closeAux);
 
   const [text, setText] = useState('');
   const [query, setQuery] = useState('');
@@ -73,19 +72,9 @@ export function FilesPanel() {
 
   return (
     <div className="w-[340px] shrink-0 flex flex-col border-l" style={{ background: P.bg, borderColor: P.border }}>
-      <div className="flex items-center justify-between min-h-12 px-4 py-2 shrink-0" style={{ borderBottom: `1px solid ${P.border}` }}>
-        <h2 className="text-[15px] font-semibold" style={{ color: P.text }}>Files</h2>
-        <button
-          onClick={toggleFiles}
-          className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
-          style={{ color: P.muted }}
-          title="Close"
-          aria-label="Close files"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
+      <div className="flex items-center justify-between gap-2 min-h-12 px-4 py-2 shrink-0" style={{ borderBottom: `1px solid ${P.border}` }}>
+        <AuxPanelControl label="files" />
+        <h2 className="text-[15px] font-semibold flex-1" style={{ color: P.text }}>Files</h2>
       </div>
 
       <form

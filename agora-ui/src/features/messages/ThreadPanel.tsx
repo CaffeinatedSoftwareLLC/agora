@@ -1,4 +1,4 @@
-import { useUIStore } from '../../stores/uiStore';
+import { AuxPanelControl } from '../shell/AuxPanelControl';
 import { useDraftStore, sendDraft, type DraftKey } from '../../stores/draftStore';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useThreadStore } from '../../stores/threadStore';
@@ -13,7 +13,6 @@ export function ThreadPanel() {
   const P = usePalette();
   const openThreadId = useThreadStore(s => s.openThreadId);
   const openThreadChannelId = useThreadStore(s => s.openThreadChannelId);
-  const closeThread = useUIStore(s => s.closeAux);
   const repliesByThread = useThreadStore(s => s.repliesByThread);
   const sendReply = useThreadStore(s => s.sendReply);
   const closeThreadRemote = useThreadStore(s => s.closeThreadRemote);
@@ -104,10 +103,11 @@ export function ThreadPanel() {
     >
       {/* Header */}
       <div
-        className="flex items-center justify-between min-h-12 px-4 py-2 shrink-0"
+        className="flex items-center justify-between gap-2 min-h-12 px-4 py-2 shrink-0"
         style={{ borderBottom: `1px solid ${P.border}` }}
       >
-        <h2 className="text-[15px] font-semibold" style={{ color: P.text }}>
+        <AuxPanelControl label="panel" />
+        <h2 className="text-[15px] font-semibold flex-1 min-w-0" style={{ color: P.text }}>
           Thread
           {isClosed && <span className="ml-1.5 text-[11px] font-normal" style={{ color: P.muted }}>(Closed)</span>}
           {sessionProtocol && (
@@ -136,17 +136,6 @@ export function ThreadPanel() {
               )}
             </button>
           )}
-          <button
-            onClick={closeThread}
-            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
-            style={{ color: P.muted }}
-            title="Close panel"
-            aria-label="Close panel"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
         </div>
       </div>
 
