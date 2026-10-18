@@ -133,18 +133,18 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
           {state.kind === 'live' && (
             <div className="flex flex-wrap items-center gap-2">
               <span>{ERRORS.session_live}</span>
-              <button className="rounded bg-primary px-2 py-1 text-xs font-medium text-white" onClick={() => state.retry('shelve')}>
+              <button className="min-h-11 md:min-h-8 rounded-lg bg-primary px-3 py-1 text-[13px] font-semibold text-on-primary" onClick={() => state.retry('shelve')}>
                 Shelve it and start new
               </button>
-              <button className="rounded border border-border px-2 py-1 text-xs" onClick={() => state.retry('keep')}>
+              <button className="min-h-11 md:min-h-8 rounded-lg border border-border px-3 py-1 text-[13px]" onClick={() => state.retry('keep')}>
                 Keep it
               </button>
-              <button className="rounded px-2 py-1 text-xs text-text-muted" onClick={close}>Cancel</button>
+              <button className="min-h-11 md:min-h-8 rounded-lg px-3 py-1 text-[13px] text-text-muted" onClick={close}>Cancel</button>
             </div>
           )}
         </div>
         {state.kind !== 'busy' && state.kind !== 'live' && (
-          <button className="text-text-muted hover:text-text" onClick={close} aria-label="Close">×</button>
+          <button className="min-h-11 min-w-11 md:h-8 md:w-8 flex items-center justify-center rounded-lg text-text-muted hover:text-text" onClick={close} aria-label="Close">×</button>
         )}
       </div>
     </div>

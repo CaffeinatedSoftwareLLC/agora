@@ -27,16 +27,16 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
 
   return (
     <div
-      className="shrink-0 px-4 py-2"
+      className="shrink-0 px-3 py-1.5 md:px-4 md:py-2"
       style={{ borderBottom: `1px solid ${P.border}` }}
     >
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="flex items-center gap-1.5 text-xs font-medium mb-1 transition-colors"
+        className="flex items-center gap-1.5 min-h-11 md:min-h-8 text-[13px] font-semibold transition-colors"
         style={{ color: P.muted }}
       >
         <svg
-          className={`w-3 h-3 transition-transform ${collapsed ? '' : 'rotate-90'}`}
+          className={`w-3.5 h-3.5 transition-transform ${collapsed ? '' : 'rotate-90'}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -44,16 +44,16 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
-        Active Threads ({threads.length})
+        Active threads ({threads.length})
       </button>
 
       {!collapsed && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 mt-0.5">
           {threads.map((thread) => (
             <button
               key={thread.id}
               onClick={() => openThread(channelId, thread.id)}
-              className="flex items-center gap-2 px-2 py-1.5 rounded text-left transition-colors w-full"
+              className="flex items-center gap-2 min-h-11 md:min-h-8 px-2.5 py-1.5 rounded-lg text-left transition-colors w-full"
               style={{ color: P.text }}
               onMouseEnter={(e) => { e.currentTarget.style.background = P.surfaceHover; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
@@ -61,13 +61,13 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
               <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke={P.accent} viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
               </svg>
-              <span className="text-xs truncate flex-1" style={{ color: P.text }}>
+              <span className="text-[13px] truncate flex-1" style={{ color: P.text }}>
                 {thread.content ? thread.content.slice(0, 60) + (thread.content.length > 60 ? '...' : '') : '(deleted)'}
               </span>
-              <span className="text-xs shrink-0" style={{ color: P.muted }}>
+              <span className="text-[11px] shrink-0" style={{ color: P.muted }}>
                 {thread.replyCount} {thread.replyCount === 1 ? 'reply' : 'replies'}
               </span>
-              <span className="text-xs shrink-0" style={{ color: P.dim }}>
+              <span className="text-[11px] shrink-0" style={{ color: P.muted }}>
                 {relativeTime(thread.lastReplyAt)}
               </span>
             </button>
@@ -75,7 +75,7 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
           {hasMoreThreads.get(channelId) && (
             <button
               onClick={() => loadMoreThreads(channelId)}
-              className="flex items-center justify-center px-2 py-1 rounded text-xs transition-colors"
+              className="flex items-center justify-center min-h-11 md:min-h-8 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-colors"
               style={{ color: P.accent }}
               onMouseEnter={(e) => { e.currentTarget.style.background = P.surfaceHover; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}

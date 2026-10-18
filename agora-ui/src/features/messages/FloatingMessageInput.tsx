@@ -75,12 +75,12 @@ export function FloatingMessageInput({
     [uploads],
   );
 
-  // Auto-resize textarea
+  // Auto-resize textarea (1 to 4 rows)
   useEffect(() => {
     const el = textareaRef.current;
     if (el) {
       el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+      el.style.height = `${Math.min(el.scrollHeight, 104)}px`;
     }
   }, [content]);
 
@@ -244,7 +244,7 @@ export function FloatingMessageInput({
 
   return (
     <div
-      className="shrink-0 px-5 pb-4 pt-2"
+      className="shrink-0 px-2.5 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-5 md:pb-4 md:pt-2"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -291,16 +291,27 @@ export function FloatingMessageInput({
         {dragging && (
           <div className="absolute inset-0 rounded-2xl flex items-center justify-center z-10"
             style={{ backgroundColor: `${P.bg}cc` }}>
-            <span className="text-sm font-medium" style={{ color: P.primary }}>Drop files to upload</span>
+            <span className="text-sm font-medium" style={{ color: P.primaryText }}>Drop files to upload</span>
           </div>
         )}
 
-        {/* Top row: + attach button */}
-        <div className="flex items-center gap-0.5 px-3 pt-2">
+        {/* Pending uploads preview */}
+        {uploads.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-2.5">
+            {uploads.map(upload => (
+              <UploadPreview key={upload.id} upload={upload} onRemove={removeUpload} />
+            ))}
+          </div>
+        )}
+
+        {/* Single row: [+ attach 44x44] [textarea 1-4 rows] [send 44x44] */}
+        <div className="flex items-end gap-1.5 px-2 py-1.5 md:px-2.5 md:py-2">
           <button
-            className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors hover:opacity-80"
-            style={{ color: P.dim }}
+            type="button"
+            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 transition-colors hover:opacity-80"
+            style={{ color: P.muted }}
             title="Attach file"
+            aria-label="Attach file"
             onClick={() => fileInputRef.current?.click()}
           >
             <svg
@@ -316,19 +327,7 @@ export function FloatingMessageInput({
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
-        </div>
 
-        {/* Pending uploads preview */}
-        {uploads.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-3 pt-1">
-            {uploads.map(upload => (
-              <UploadPreview key={upload.id} upload={upload} onRemove={removeUpload} />
-            ))}
-          </div>
-        )}
-
-        {/* Bottom row: textarea + emoji + send */}
-        <div className="flex items-end gap-2 px-3 pb-2.5 pt-1">
           <textarea
             ref={textareaRef}
             value={content}
@@ -336,62 +335,40 @@ export function FloatingMessageInput({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={isDm ? `Message @${channelName || 'user'}` : `Message #${channelName || 'channel'}`}
-            className="flex-1 bg-transparent text-[14px] outline-none min-w-0 py-1 resize-none overflow-y-auto"
-            style={{ color: P.text, caretColor: accentColor, maxHeight: 144 }}
+            className="flex-1 bg-transparent text-[16px] md:text-[15px] leading-[1.4] outline-none min-w-0 py-2 md:py-1.5 px-1 resize-none overflow-y-auto placeholder:text-text-muted/70"
+            style={{ color: P.text, caretColor: accentColor, maxHeight: 104 }}
             rows={1}
             maxLength={4000}
             disabled={!user}
           />
-          <div className="flex items-center gap-0.5 shrink-0">
-            {/* Emoji button */}
-            <button
-              className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
-              style={{ color: P.dim }}
-              title="Emoji"
-            >
-              <svg
-                className="h-4.5 w-4.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                <line x1="9" y1="9" x2="9.01" y2="9" />
-                <line x1="15" y1="9" x2="15.01" y2="9" />
-              </svg>
-            </button>
 
-            {/* Send button - gradient when text present */}
-            <button
-              onClick={handleSend}
-              disabled={!canSend || !user}
-              className="h-8 w-8 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
-              style={{
-                background: canSend
-                  ? `linear-gradient(135deg, ${P.primary}, ${accentColor})`
-                  : P.bg,
-                color: canSend ? P.text : P.dim,
-                boxShadow: canSend ? `0 2px 8px ${accentColor}40` : 'none',
-              }}
+          {/* Solid primary Send button */}
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!canSend || !user}
+            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:cursor-not-allowed"
+            style={{
+              background: canSend ? P.primary : P.bg,
+              color: canSend ? P.onPrimary : P.muted,
+              opacity: canSend ? 1 : 0.5,
+            }}
+            title="Send message"
+            aria-label="Send message"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
-          </div>
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -431,7 +408,7 @@ function UploadPreview({ upload, onRemove }: { upload: PendingUpload; onRemove: 
       {/* File info */}
       <div className="min-w-0 max-w-[120px]">
         <div className="truncate font-medium" style={{ color: P.text }}>{upload.file.name}</div>
-        <div style={{ color: P.dim }}>
+        <div style={{ color: P.muted }}>
           {upload.status === 'uploading' && 'Uploading...'}
           {upload.status === 'done' && formatFileSize(upload.file.size)}
           {upload.status === 'error' && (
@@ -452,10 +429,12 @@ function UploadPreview({ upload, onRemove }: { upload: PendingUpload; onRemove: 
 
       {/* Remove button */}
       <button
-        className="ml-1 shrink-0 rounded-full p-0.5 hover:opacity-80 transition-opacity"
-        style={{ color: P.dim }}
+        type="button"
+        className="ml-1 shrink-0 min-h-7 min-w-7 flex items-center justify-center rounded-full hover:opacity-80 transition-opacity"
+        style={{ color: P.muted }}
         onClick={() => onRemove(upload.id)}
         title="Remove"
+        aria-label="Remove attachment"
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

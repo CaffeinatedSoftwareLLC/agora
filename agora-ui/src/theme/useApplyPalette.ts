@@ -15,8 +15,13 @@ export function useApplyPalette() {
     s.setProperty('--color-surface-hover', P.surfaceHover);
     s.setProperty('--color-primary', P.primary);
     s.setProperty('--color-primary-hover', P.primaryHover);
+    s.setProperty('--color-primary-text', P.primaryText);
+    s.setProperty('--color-on-primary', P.onPrimary);
     s.setProperty('--color-accent', P.accent);
+    s.setProperty('--color-on-accent', P.onAccent);
+    s.setProperty('--color-secondary', P.secondary);
     s.setProperty('--color-text', P.text);
+    s.setProperty('--color-white', P.white);
     s.setProperty('--color-text-muted', P.muted);
     s.setProperty('--color-text-dim', P.dim);
     s.setProperty('--color-border', P.border);
@@ -24,5 +29,6 @@ export function useApplyPalette() {
     s.setProperty('--color-danger', P.danger);
     s.setProperty('--color-warn', P.warn);
     document.body.style.background = P.bg;
+    document.body.style.color = P.text;
   }, [P]);
 }

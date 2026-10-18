@@ -51,13 +51,25 @@ export function EditMessageInput({ message, onSave, onCancel }: EditMessageInput
         value={content}
         onChange={(e) => setContent(e.target.value)}
         onKeyDown={handleKeyDown}
-        className="w-full bg-bg border border-border rounded px-3 py-2 text-text text-sm resize-none focus:outline-none focus:border-primary"
+        className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-text text-[16px] md:text-[15px] leading-[1.4] resize-none focus:outline-none focus:border-primary"
         maxLength={4000}
         rows={1}
       />
-      <div className="text-xs text-text-dim mt-1">
-        Escape to <button onClick={onCancel} className="text-accent hover:underline">cancel</button>
-        {' '}&middot; Enter to <button onClick={() => { const t = content.trim(); if (t.length > 0 && t !== message.content) onSave(t); else onCancel(); }} className="text-accent hover:underline">save</button>
+      <div className="flex items-center gap-2 text-[11px] text-text-muted mt-1">
+        <span>Escape to</span>
+        <button type="button" onClick={onCancel} className="min-h-9 px-2 rounded text-accent font-medium hover:underline">cancel</button>
+        <span>&middot; Enter to</span>
+        <button
+          type="button"
+          onClick={() => {
+            const t = content.trim();
+            if (t.length > 0 && t !== message.content) onSave(t);
+            else onCancel();
+          }}
+          className="min-h-9 px-2 rounded text-accent font-medium hover:underline"
+        >
+          save
+        </button>
       </div>
     </div>
   );

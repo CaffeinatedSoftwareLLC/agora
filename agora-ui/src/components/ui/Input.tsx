@@ -10,12 +10,12 @@ export function Input({ label, error, id, className = '', ...props }: InputProps
 
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={inputId} className="text-sm text-text-muted">
+      <label htmlFor={inputId} className="text-[13px] text-text-muted">
         {label}
       </label>
       <input
         id={inputId}
-        className={`bg-surface border border-border rounded px-3 py-2 text-text placeholder-text-dim focus:outline-none focus:ring-2 focus:ring-primary ${error ? 'border-danger' : ''} ${className}`}
+        className={`min-h-11 md:min-h-9 bg-surface border border-border rounded-lg px-3 py-2 text-[16px] md:text-[15px] text-text placeholder:text-text-muted/70 focus:outline-none focus:ring-2 focus:ring-primary ${error ? 'border-danger' : ''} ${className}`}
         {...props}
       />
       {error && <span className="text-sm text-danger">{error}</span>}

@@ -280,7 +280,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
         </div>
       </div>
       {loadingOlder && (
-        <div className="absolute top-0 left-0 right-0 py-3 text-center text-text-dim text-sm bg-bg/80 backdrop-blur-sm z-10">
+        <div className="absolute top-0 left-0 right-0 py-3 text-center text-text-muted text-[13px] bg-bg/80 backdrop-blur-sm z-10">
           Loading older messages...
         </div>
       )}

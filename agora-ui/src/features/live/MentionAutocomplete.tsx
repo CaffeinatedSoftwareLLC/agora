@@ -68,14 +68,14 @@ function MentionAutocompleteInner({ query, serverId, onSelect, onClose }: Omit<M
         <button
           key={member.id}
           onClick={() => onSelect(member.username)}
-          className={`w-full px-3 py-2 flex items-center gap-2 text-sm text-left transition-colors ${
+          className={`w-full min-h-11 md:min-h-9 px-3 py-2 flex items-center gap-2 text-[13px] text-left transition-colors ${
             i === selectedIndex ? 'bg-surface-hover text-text' : 'text-text-muted hover:bg-surface-hover/50'
           }`}
         >
-          <span className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-white shrink-0">
+          <span className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-[11px] font-bold text-on-primary shrink-0">
             {member.username[0].toUpperCase()}
           </span>
-          <span>{member.username}</span>
+          <span className="font-medium">{member.username}</span>
         </button>
       ))}
     </div>

@@ -26,7 +26,7 @@ export function FileTags({ attachment }: { attachment: Pick<Attachment, 'tags' |
   const busy = attachment.tagging === 'pending' || attachment.tagging === 'running';
   if (tags.length === 0 && !attachment.injectionWarning && !busy) return null;
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs" style={{ color: P.dim }}>
+    <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]" style={{ color: P.muted }}>
       {tags.map(tag => (
         <span key={tag} className="px-1.5 py-0.5 rounded-full" style={{ background: P.surface, border: `1px solid ${P.border}`, color: P.muted }}>
           {tag}
@@ -48,7 +48,7 @@ function AttachmentBody({ attachment }: { attachment: Attachment }) {
   const isImage = attachment.mime.startsWith('image/');
 
   if (attachment.deletedAt) {
-    return <span className="text-sm italic" style={{ color: P.dim }}>[file deleted]</span>;
+    return <span className="text-[13px] italic" style={{ color: P.muted }}>[file deleted]</span>;
   }
 
   if (isImage) {
@@ -106,7 +106,7 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
   return (
     <>
       <div
-        className="mt-1 rounded-lg overflow-hidden cursor-pointer inline-block"
+        className="mt-1 rounded-lg overflow-hidden cursor-pointer inline-block max-w-full"
         style={{ width: displayWidth, height: displayHeight, backgroundColor: 'rgba(0,0,0,0.1)' }}
         onClick={() => setExpanded(true)}
       >
@@ -177,11 +177,11 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
     <button
       type="button"
       onClick={() => downloadAttachment(attachment)}
-      className="p-1 rounded hover:opacity-80 shrink-0"
+      className="min-h-11 min-w-11 md:h-9 md:w-9 flex items-center justify-center rounded-lg hover:opacity-80 shrink-0"
       title={`Download ${attachment.name}`}
       aria-label={`Download ${attachment.name}`}
     >
-      <DownloadIcon color={P.dim} />
+      <DownloadIcon color={P.muted} />
     </button>
   );
 
@@ -189,7 +189,7 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
     return (
       <div className="mt-1 max-w-lg">
         <video controls autoPlay playsInline src={blobUrl} className="w-full max-h-96 rounded-lg bg-black" aria-label={attachment.name} />
-        <div className="flex items-center gap-2 mt-0.5 text-xs" style={{ color: P.dim }}>
+        <div className="flex items-center gap-2 mt-0.5 text-[11px]" style={{ color: P.muted }}>
           <span className="truncate">{attachment.name} · {formatFileSize(attachment.size)}</span>
           <span className="ml-auto">{download}</span>
         </div>
@@ -200,7 +200,7 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
   return (
     <div className="mt-1 max-w-md">
       <div
-        className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg"
         style={{ backgroundColor: P.surface, border: `1px solid ${P.border}` }}
       >
         {blobUrl ? (
@@ -210,20 +210,20 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
             type="button"
             onClick={load}
             disabled={loading}
-            className="flex flex-1 min-w-0 items-center gap-2 text-left hover:opacity-80 disabled:opacity-60"
+            className="flex flex-1 min-w-0 min-h-11 items-center gap-2.5 text-left hover:opacity-80 disabled:opacity-60"
           >
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: P.primary }}>
-              <svg className="w-4 h-4 ml-0.5" viewBox="0 0 24 24" fill="white" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+              <svg className="w-4 h-4 ml-0.5" viewBox="0 0 24 24" fill={P.onPrimary} aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
             </span>
             <span className="min-w-0">
-              <span className="block text-sm font-medium truncate" style={{ color: P.primary }}>{loading ? 'Loading…' : attachment.name}</span>
-              <span className="block text-xs" style={{ color: P.dim }}>{formatFileSize(attachment.size)}</span>
+              <span className="block text-[13px] font-medium truncate" style={{ color: P.primaryText }}>{loading ? 'Loading…' : attachment.name}</span>
+              <span className="block text-[11px]" style={{ color: P.muted }}>{formatFileSize(attachment.size)}</span>
             </span>
           </button>
         )}
         {download}
       </div>
-      {error && <span className="text-xs text-danger">Couldn't load the {kind}.</span>}
+      {error && <span className="text-[11px] text-danger">Couldn't load the {kind}.</span>}
     </div>
   );
 }
@@ -235,20 +235,20 @@ function FileCard({ attachment }: { attachment: Attachment }) {
 
   return (
     <div
-      className="mt-1 flex items-center gap-3 px-3 py-2 rounded-lg max-w-xs cursor-pointer hover:opacity-80"
+      className="mt-1 flex items-center gap-3 min-h-12 px-3 py-2 rounded-lg max-w-xs cursor-pointer hover:opacity-80"
       style={{ backgroundColor: P.surface, border: `1px solid ${P.border}` }}
       onClick={handleDownload}
     >
       <div className="shrink-0">
-        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke={P.muted} strokeWidth="1.5">
+        <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke={P.muted} strokeWidth="1.5">
           <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
         </svg>
       </div>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate" style={{ color: P.primary }}>{attachment.name}</div>
-        <div className="text-xs" style={{ color: P.dim }}>{formatFileSize(attachment.size)}</div>
+        <div className="text-[13px] font-medium truncate" style={{ color: P.primaryText }}>{attachment.name}</div>
+        <div className="text-[11px]" style={{ color: P.muted }}>{formatFileSize(attachment.size)}</div>
       </div>
-      <DownloadIcon color={P.dim} />
+      <DownloadIcon color={P.muted} />
     </div>
   );
 }

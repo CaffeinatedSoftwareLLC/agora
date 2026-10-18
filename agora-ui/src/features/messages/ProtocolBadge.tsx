@@ -4,7 +4,7 @@ type Tone = 'neutral' | 'primary' | 'accent' | 'good' | 'warn' | 'danger';
 
 const TONE_CLASS: Record<Tone, string> = {
   neutral: 'bg-surface-hover text-text-muted',
-  primary: 'bg-primary/20 text-primary',
+  primary: 'bg-primary/20 text-primary-text',
   accent: 'bg-accent/20 text-accent',
   good: 'bg-online/20 text-online',
   warn: 'bg-warn/20 text-warn',
@@ -44,10 +44,10 @@ export function ProtocolBadge({ protocol }: { protocol: ProtocolInfo }) {
   ].filter(Boolean).join('\n');
 
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-semibold leading-none" title={title}>
+    <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-semibold leading-none" title={title}>
       <span className={`px-1.5 py-0.5 rounded ${TONE_CLASS[toneFor(protocol)]}`}>{labelFor(protocol)}</span>
       {protocol.yieldTo && (
-        <span className="text-text-dim font-normal">→ {protocol.yieldTo}</span>
+        <span className="text-text-muted font-normal">→ {protocol.yieldTo}</span>
       )}
     </span>
   );

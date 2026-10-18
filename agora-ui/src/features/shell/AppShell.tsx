@@ -58,7 +58,7 @@ export function AppShell() {
     return (
       <div
         className="app-shell flex flex-col min-h-0 min-w-0 overflow-hidden"
-        style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+        style={{ background: P.bg, color: P.text }}
       >
         {/* Skeleton tab bar */}
         <div className="flex items-center gap-2 px-3 pt-2 pb-0 shrink-0">
@@ -87,7 +87,7 @@ export function AppShell() {
   return (
     <div
       className="app-shell flex flex-col min-h-0 min-w-0 overflow-hidden"
-      style={{ background: P.bg, color: P.text, fontFamily: "'Inter', 'Segoe UI', -apple-system, sans-serif" }}
+      style={{ background: P.bg, color: P.text }}
     >
       <OverlayManager navRef={navRef} auxRef={auxRef} />
       <div className="shell-tabbar" inert={obscured}><TabBar /></div>

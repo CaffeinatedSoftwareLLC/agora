@@ -15,12 +15,12 @@ export function Button({
   className = '',
   ...props
 }: ButtonProps) {
-  const base = 'px-4 py-2 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+  const base = 'min-h-11 md:min-h-9 px-4 py-2 rounded-lg text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center';
 
   const variants = {
-    primary: 'bg-primary hover:bg-primary-hover text-text',
+    primary: 'bg-primary hover:bg-primary-hover text-on-primary',
     secondary: 'bg-surface border border-border hover:bg-surface-hover text-text',
-    danger: 'bg-danger hover:bg-red-600 text-text',
+    danger: 'bg-danger/15 border border-danger/40 hover:bg-danger/25 text-danger',
   };
 
   return (

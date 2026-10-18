@@ -61,45 +61,45 @@ export function ReportCard({ message }: { message: Message }) {
         <svg className="h-4 w-4 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
         </svg>
-        <span className="text-sm font-semibold text-text truncate">{data.title || 'Test report'}</span>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none shrink-0 ${failed ? 'bg-danger/20 text-danger' : 'bg-online/20 text-online'}`}>
+        <span className="text-[15px] font-semibold text-text truncate">{data.title || 'Test report'}</span>
+        <span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold leading-none shrink-0 ${failed ? 'bg-danger/20 text-danger' : 'bg-online/20 text-online'}`}>
           {failed ? 'FAILED' : 'PASSED'}
         </span>
-        {message.authorUsername && <span className="ml-auto text-xs text-text-dim shrink-0">by {message.authorUsername}</span>}
+        {message.authorUsername && <span className="ml-auto text-[11px] text-text-muted shrink-0">by {message.authorUsername}</span>}
       </div>
 
-      <div className="flex items-baseline gap-x-4 gap-y-1 flex-wrap mb-1.5 text-sm">
-        <span className="text-2xl font-semibold text-text tabular-nums">{passRate}%</span>
+      <div className="flex items-baseline gap-x-4 gap-y-1 flex-wrap mb-1.5 text-[13px]">
+        <span className="text-[22px] font-semibold text-text tabular-nums">{passRate}%</span>
         <span className="text-text-muted tabular-nums"><span className="text-online font-medium">{totals.passed}</span> passed</span>
         <span className="text-text-muted tabular-nums"><span className={failed ? 'text-danger font-medium' : ''}>{totals.failed}</span> failed</span>
         <span className="text-text-muted tabular-nums">{totals.skipped} skipped</span>
-        {totals.durationMs !== undefined && <span className="text-text-dim tabular-nums">{duration(totals.durationMs)}</span>}
+        {totals.durationMs !== undefined && <span className="text-text-muted tabular-nums">{duration(totals.durationMs)}</span>}
       </div>
       <StackedBar counts={totals} />
 
       {data.summary && (
         <div className="mt-3">
-          {data.summarySource === 'model' && <div className="text-[10px] uppercase tracking-wide text-text-dim mb-0.5">AI summary</div>}
+          {data.summarySource === 'model' && <div className="text-[11px] font-semibold text-text-muted mb-0.5">AI summary</div>}
           <MessageContent content={data.summary} />
         </div>
       )}
 
       {suites.length > 0 && (
         <div className="mt-3">
-          <div className="text-xs font-semibold text-text-muted mb-1">Suites</div>
+          <div className="text-[13px] font-semibold text-text-muted mb-1">Suites</div>
           <ul className="space-y-1">
             {shownSuites.map(s => (
-              <li key={s.name} className="grid grid-cols-[minmax(0,1fr)_7.5rem] sm:grid-cols-[minmax(0,1fr)_6rem_7.5rem] items-center gap-x-2 text-xs">
+              <li key={s.name} className="grid grid-cols-[minmax(0,1fr)_7.5rem] sm:grid-cols-[minmax(0,1fr)_6rem_7.5rem] items-center gap-x-2 text-[13px]">
                 <span className={`col-span-2 sm:col-span-1 truncate font-mono ${s.failed ? 'text-danger' : 'text-text-muted'}`} title={s.name}>{s.name}</span>
                 <StackedBar counts={s} className="h-1.5" />
-                <span className="text-text-dim tabular-nums whitespace-nowrap text-right">
+                <span className="text-text-muted tabular-nums whitespace-nowrap text-right text-[11px]">
                   {s.passed}/{s.passed + s.failed + s.skipped}{s.durationMs !== undefined ? ` · ${duration(s.durationMs)}` : ''}
                 </span>
               </li>
             ))}
           </ul>
           {suites.length > SUITES_SHOWN && (
-            <button className="mt-1 text-xs text-primary hover:underline" onClick={() => setAllSuites(v => !v)}>
+            <button className="mt-1 min-h-9 text-[13px] text-primary-text hover:underline" onClick={() => setAllSuites(v => !v)}>
               {allSuites ? 'Show fewer' : `Show all ${suites.length} suites`}
             </button>
           )}
@@ -108,14 +108,14 @@ export function ReportCard({ message }: { message: Message }) {
 
       {failures.length > 0 && (
         <div className="mt-3">
-          <div className="text-xs font-semibold text-text-muted mb-1">
+          <div className="text-[13px] font-semibold text-text-muted mb-1">
             Failures{totals.failed > failures.length ? ` (first ${failures.length} of ${totals.failed})` : ''}
           </div>
           <div className="space-y-1">
             {failures.map((f, i) => (
               <details key={i} className="rounded border border-border bg-bg/60">
-                <summary className="cursor-pointer px-2 py-1 text-xs text-text break-words">
-                  {f.suite && <span className="text-text-dim">{f.suite} › </span>}{f.name}
+                <summary className="cursor-pointer px-2 py-1.5 text-[13px] text-text break-words">
+                  {f.suite && <span className="text-text-muted">{f.suite} › </span>}{f.name}
                 </summary>
                 <pre className="max-h-60 overflow-auto px-2 pb-2 text-[11px] text-text-muted font-mono whitespace-pre-wrap break-words">{f.message}</pre>
               </details>

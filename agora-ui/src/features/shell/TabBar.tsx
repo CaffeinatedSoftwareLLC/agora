@@ -43,7 +43,7 @@ export function TabBar() {
         {/* ── Instance name / Channels tab ────────────────────────────────── */}
         <button
           onClick={handleChannelsClick}
-          className="relative flex items-center gap-2 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0"
+          className="relative flex items-center gap-2 min-h-11 md:min-h-9 px-4 py-2 text-[13px] font-medium transition-all duration-200 rounded-t-xl shrink-0"
           style={{
             background: `linear-gradient(180deg, rgba(${accentRgb}, 0.15) 0%, rgba(${accentRgb}, 0.04) 100%)`,
             boxShadow: `0 1px 0 0 rgba(${accentRgb}, 0.3), inset 0 1px 0 0 rgba(${accentRgb}, 0.12)`,
@@ -74,33 +74,13 @@ export function TabBar() {
           {/* Palette toggle */}
           <button
             onClick={togglePalette}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium transition-all"
-            style={{ background: `${P.surface}88`, border: `1px solid ${P.border}`, color: P.muted }}
+            className="flex items-center gap-1.5 min-h-11 md:min-h-8 px-3 py-1.5 rounded-full text-[13px] font-medium transition-all hover:opacity-90"
+            style={{ background: P.surface, border: `1px solid ${P.border}`, color: P.text }}
+            title="Switch theme palette"
+            aria-label={`Switch theme palette (current: ${paletteKey === 'aegean' ? 'Aegean' : 'Terracotta'})`}
           >
-            <span className="h-3 w-3 rounded-full" style={{ background: P.bg, border: `1.5px solid ${P.accent}` }} />
+            <span className="h-3 w-3 rounded-full shrink-0" style={{ background: P.primary, border: `1.5px solid ${P.accent}` }} />
             {paletteKey === 'aegean' ? 'Aegean' : 'Terracotta'}
-          </button>
-
-          {/* Search pill (Ctrl+K) */}
-          <button
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[12px] transition-all"
-            style={{ background: `${P.surface}88`, border: `1px solid ${P.border}`, color: P.dim }}
-          >
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
-            </svg>
-            <span className="hidden xl:inline">Search</span>
-            <kbd className="hidden xl:inline px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: P.bg, color: P.dim }}>
-              Ctrl+K
-            </kbd>
-          </button>
-
-          {/* Notification bell */}
-          <button className="relative h-8 w-8 rounded-lg flex items-center justify-center transition-colors" style={{ color: P.dim }}>
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 01-3.46 0" />
-            </svg>
-            <span className="absolute top-1 right-1 h-2 w-2 rounded-full" style={{ background: P.danger }} />
           </button>
         </div>
       </div>

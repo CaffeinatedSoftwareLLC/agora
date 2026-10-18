@@ -1,5 +1,4 @@
 import { useChannelStore } from '../../stores/channelStore';
-import { useServerStore } from '../../stores/serverStore';
 import { useUIStore } from '../../stores/uiStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
@@ -7,48 +6,45 @@ import { TypingIndicator } from '../live/TypingIndicator';
 import { ActiveThreadsBar } from '../messages/ActiveThreadsBar';
 import { usePalette } from '../../theme';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function serverColor(name: string): string {
-  const colors = ['#0FA3B1', '#4ADE80', '#FBBF24', '#C77DFF', '#F97316', '#EF4444', '#3B82F6', '#EC4899', '#8B5CF6', '#10B981'];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return colors[Math.abs(hash) % colors.length];
-}
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ArcContentArea() {
   const P = usePalette();
+  const paletteKey = useUIStore(s => s.paletteKey);
+  const togglePalette = useUIStore(s => s.togglePalette);
+  const paletteName = paletteKey === 'aegean' ? 'Aegean' : 'Terracotta';
 
   const activeChannelId = useChannelStore(s => s.activeChannelId);
   const channels = useChannelStore(s => s.channels);
   const channel = activeChannelId ? channels.get(activeChannelId) : null;
-
-  const instanceServerId = useServerStore(s => s.instanceServerId);
-  const servers = useServerStore(s => s.servers);
-  const instanceServer = instanceServerId ? servers.get(instanceServerId) : null;
+  const connectionStatus = useUIStore(s => s.connectionStatus);
 
   const membersOpen = useUIStore(s => s.aux === 'members');
   const toggleMembers = useUIStore(s => s.toggleAux);
   const filesOpen = useUIStore(s => s.aux === 'files');
   const toggleFiles = useUIStore(s => s.toggleAux);
 
-  const accentColor = instanceServer ? serverColor(instanceServer.name) : P.accent;
+  const accentColor = P.accent;
 
   // ── Empty state (no channel selected) ──────────────────────────────────
   if (!activeChannelId || !channel) {
     return (
       <div
-        className="flex-1 flex items-center justify-center"
+        className="flex-1 flex items-center justify-center p-6"
         style={{ background: P.bg }}
       >
         <div className="text-center">
-          <button className="xl:hidden min-h-11 px-3" onClick={() => useUIStore.getState().openNav()}>Open navigation</button>
-          <div className="text-4xl mb-4" style={{ color: P.text }}>
+          <button
+            className="md:hidden min-h-11 px-4 mb-4 rounded-xl border border-border text-[13px] font-semibold"
+            style={{ background: P.surface, color: P.text }}
+            onClick={() => useUIStore.getState().openNav()}
+          >
+            Open navigation
+          </button>
+          <div className="text-[22px] font-bold mb-2" style={{ color: P.text }}>
             Select a channel
           </div>
-          <div className="text-lg" style={{ color: P.muted }}>
+          <div className="text-[15px]" style={{ color: P.muted }}>
             Select a channel to start chatting
           </div>
         </div>
@@ -58,76 +54,62 @@ export function ArcContentArea() {
 
   return (
     <main className="flex-1 flex flex-col min-w-0 min-h-0" style={{ background: P.bg }}>
-      {/* ── Channel header ────────────────────────────────────────────── */}
+      {/* ── Channel header (48px min-h-12 on phone) ───────────────────── */}
       <header
-        className="flex items-center gap-3 px-5 py-2.5 shrink-0"
+        className="flex items-center gap-2 md:gap-3 min-h-12 px-3 py-1.5 md:px-5 md:py-2 shrink-0"
         style={{
           borderBottom: `1px solid ${P.border}`,
           background: `${P.bg}ee`,
           backdropFilter: 'blur(12px)',
         }}
       >
-        <button className="xl:hidden shrink-0 min-h-11 min-w-11" aria-label="Open navigation" onClick={() => useUIStore.getState().openNav()}>&#9776;</button>
-        <span className="text-lg font-light" style={{ color: accentColor }}>
+        <button
+          className="md:hidden shrink-0 min-h-11 min-w-11 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+          style={{ color: P.text }}
+          aria-label="Open navigation"
+          onClick={() => useUIStore.getState().openNav()}
+        >
+          &#9776;
+        </button>
+        <span className="text-lg font-medium shrink-0" style={{ color: accentColor }}>
           #
         </span>
-        <h1 className="text-[14px] font-semibold" style={{ color: P.text }}>
+        <h1 className="text-[15px] font-semibold truncate" style={{ color: P.text }}>
           {channel.name}
         </h1>
-        <div className="hidden md:block h-4 w-px" style={{ background: P.border }} />
-        <p className="hidden md:block text-[12px] truncate" style={{ color: P.dim }}>
-          Channel description
-        </p>
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ background: connectionStatus === 'connected' ? P.online : connectionStatus === 'reconnecting' ? P.warn : P.danger }}
+          title={connectionStatus === 'connected' ? 'Connected' : connectionStatus === 'reconnecting' ? 'Reconnecting' : 'Disconnected'}
+          role="img"
+          aria-label={connectionStatus}
+        />
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-1 shrink-0">
-          {/* Search button */}
+          {/* Mobile palette toggle (since TabBar is hidden on <768px) */}
           <button
-            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
-            style={{ color: P.dim }}
-            title="Search"
+            onClick={togglePalette}
+            className="md:hidden min-h-11 px-2.5 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold transition-colors"
+            style={{
+              background: P.surface,
+              border: `1px solid ${P.border}`,
+              color: P.muted,
+            }}
+            title={`Theme: ${paletteName} (tap to switch)`}
+            aria-label={`Switch theme from ${paletteName}`}
           >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-          </button>
-
-          {/* Pin button */}
-          <button
-            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
-            style={{ color: P.dim }}
-            title="Pinned Messages"
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="12" y1="17" x2="12" y2="22" />
-              <path d="M5 17h14v-1.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V6h1V2H8v4h1v4.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V17z" />
-            </svg>
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: P.primary }} />
+            <span className="sr-only">{paletteName}</span>
           </button>
 
           {/* Files panel toggle */}
           <button
             onClick={() => toggleFiles('files')}
-            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
             style={{
-              color: filesOpen ? accentColor : P.dim,
-              background: filesOpen ? `${accentColor}15` : 'transparent',
+              color: filesOpen ? accentColor : P.muted,
+              background: filesOpen ? `${accentColor}1f` : 'transparent',
             }}
             title="Files in this channel"
             aria-label="Files in this channel"
@@ -149,12 +131,13 @@ export function ArcContentArea() {
           {/* Members toggle button */}
           <button
             onClick={() => toggleMembers('members')}
-            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
             style={{
-              color: membersOpen ? accentColor : P.dim,
-              background: membersOpen ? `${accentColor}15` : 'transparent',
+              color: membersOpen ? accentColor : P.muted,
+              background: membersOpen ? `${accentColor}1f` : 'transparent',
             }}
             title="Toggle Members"
+            aria-label="Toggle Members"
           >
             <svg
               className="h-4 w-4"

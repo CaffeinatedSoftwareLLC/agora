@@ -32,7 +32,7 @@ export function MessageInput({ channelId }: MessageInputProps) {
     const el = textareaRef.current;
     if (el) {
       el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight, 144)}px`; // max ~6 lines
+      el.style.height = `${Math.min(el.scrollHeight, 104)}px`; // max 4 lines
     }
   }, [content]);
 
@@ -105,7 +105,7 @@ export function MessageInput({ channelId }: MessageInputProps) {
   };
 
   return (
-    <div className="px-4 pb-4 pt-2 shrink-0 relative">
+    <div className="px-2.5 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-4 md:pb-4 md:pt-2 shrink-0 relative">
       {agentCommands.panel}
       <MentionAutocomplete
         query={mentionQuery}
@@ -114,25 +114,27 @@ export function MessageInput({ channelId }: MessageInputProps) {
         onClose={() => setShowMentions(false)}
         visible={showMentions}
       />
-      <div className="bg-surface rounded-lg border border-border flex items-end">
+      <div className="bg-surface rounded-2xl border border-border flex items-end gap-1.5 px-2.5 py-1.5">
         <textarea
           ref={textareaRef}
           value={content}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder="Send a message..."
-          className="flex-1 bg-transparent px-4 py-3 text-sm text-text placeholder:text-text-dim resize-none focus:outline-none overflow-y-auto"
-          style={{ maxHeight: 144 }}
+          className="flex-1 bg-transparent px-2 py-2 md:py-1.5 text-[16px] md:text-[15px] leading-[1.4] text-text placeholder:text-text-muted/70 resize-none focus:outline-none overflow-y-auto"
+          style={{ maxHeight: 104 }}
           rows={1}
           maxLength={4000}
           disabled={!user}
         />
         <button
+          type="button"
           onClick={handleSend}
           disabled={!content.trim() || !user}
-          className="px-3 py-3 text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="min-h-11 min-w-11 md:h-9 md:w-9 rounded-xl flex items-center justify-center shrink-0 bg-primary text-on-primary hover:bg-primary-hover disabled:bg-bg disabled:text-text-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          aria-label="Send message"
         >
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+          <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
           </svg>
         </button>

@@ -85,3 +85,11 @@ it('opening a thread via a shared action renders one inspector and local Back ke
   expect(useUIStore.getState().aux).toBeNull();
   expect(screen.getByTestId('feed')).toBeTruthy();
 });
+it('phone header toggles the palette and shows connection state', () => {
+  useUIStore.setState({ paletteKey: 'aegean', connectionStatus: 'reconnecting' });
+  mount();
+  expect(screen.getByRole('img', { name: 'reconnecting' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /Switch theme from Aegean/ }));
+  expect(useUIStore.getState().paletteKey).toBe('terracotta');
+  expect(screen.getByRole('button', { name: /Switch theme from Terracotta/ })).toBeTruthy();
+});
