@@ -14,7 +14,7 @@
 
 Merged as PR #69 (with #67 blank-chat and theme fixes and #68 account theme sync) and deployed. Eryk confirmed on his Android phone: channel drawer with Back, agent strip and session sheet, full-screen thread with Back keeping the reading position, composer above the soft keyboard, theme shared across devices.
 
-Open: a thread chip shows its first protocol state until the thread is opened (the threads endpoint doesn't return the latest protocol); the phone thread view has both a Back bar and a close button; older settings pages still use dim text and light text on Terracotta primary; the working dot updates within 20 s.
+Leftovers fixed (2026-10-18): #70 (codex) thread chips show the latest protocol state, the working dot updates live (AgentSessionUpdate event), one Back control in the phone/tablet panel header; #71 (gemini) readable text and 44px controls on settings, admin, moderation, setup and auth pages. Still open: text-text-dim on text in RuntimeCard, UserSearch and ContentArea; a role with no colour now defaults to the palette muted colour.
 
 ## 1. Product Context & Design Principles
 
