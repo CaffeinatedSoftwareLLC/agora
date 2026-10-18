@@ -32,13 +32,14 @@ export interface Result {
     tokensUsed: number | null;
     summary: string | null;
     error?: string;
+    changedPaths?: string[];
 }
-export interface Completion { claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null }
-export interface Failure { claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean }
+export interface Completion { claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[] }
+export interface Failure { claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[] }
 export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; reason: string };
 export interface HostApi {
     claim(signal?: AbortSignal): Promise<{ claim: Claim; sentAt: number } | null>;
-    heartbeat(claim: Claim, signal?: AbortSignal): Promise<Heartbeat>;
+    heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat>;
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;
 }

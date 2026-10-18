@@ -42,7 +42,7 @@ describe('HTTP contract against a fake local server', () => {
             return { status: bodies.length === 2 ? 200 : status, body: { ok: true } };
         });
         const client = new Client(url, 'ah_test', fetch, undefined, 1);
-        const body = { claimToken: 'rt_test', nativeSessionId: null, tokensUsed: 10, summary: 'Done' };
+        const body = { claimToken: 'rt_test', nativeSessionId: null, tokensUsed: 10, summary: 'Done', changedPaths: ['src/a.ts'] };
         await client.complete(claim(), body); expect(bodies).toHaveLength(2); expect(bodies[0]).toBe(bodies[1]);
         status = 409; await expect(client.complete(claim(), body)).rejects.toBeInstanceOf(HttpError); expect(bodies).toHaveLength(3);
         status = 401; await expect(client.complete(claim(), body)).rejects.toMatchObject({ status: 401 }); expect(bodies).toHaveLength(4);
@@ -62,4 +62,13 @@ describe('HTTP contract against a fake local server', () => {
         const controller = new AbortController(); controller.abort();
         await expect(client.claim(controller.signal)).rejects.toThrow();
     });
+});
+
+
+it('sends cumulative token usage with a heartbeat', async () => {
+    const url = await fake((_path, body) => {
+        expect(JSON.parse(body)).toEqual({ claimToken: 'rt_test', tokensUsed: 123 });
+        return { status: 200, body: { cancel: true, reason: 'shelved' } };
+    });
+    expect(await new Client(url, 'ah_test').heartbeat(claim(), undefined, 123)).toMatchObject({ cancel: true });
 });

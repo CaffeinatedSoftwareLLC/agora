@@ -1,10 +1,12 @@
 import { spawn, execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parseOutput, type Launch } from './adapters.js';
 import type { Result } from './types.js';
 
-export interface RunningChild { result: Promise<Result>; kill(): Promise<void> }
+export interface RunningChild { result: Promise<Result>; kill(): Promise<void>; tokensUsed?(): number | null }
 export interface Runner { start(launch: Launch): RunningChild }
 export class ProcessRunner implements Runner {
     start(launch: Launch): RunningChild {
@@ -65,6 +67,29 @@ export class ProcessRunner implements Runner {
             return killed;
         };
         child.stdin.end(launch.stdin);
-        return { result, kill };
+        return { result, kill, tokensUsed: () => parseOutput(launch.adapter, stdout.slice(0, stdout.lastIndexOf('\n') + 1), null).tokensUsed };
     }
+}
+
+/** Compare dirty file contents, including files already dirty at launch and untracked files. */
+export async function worktreeSnapshot(cwd: string): Promise<Map<string, string> | null> {
+    try {
+        const { stdout } = await promisify(execFile)('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+            { cwd, windowsHide: true, timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
+        const entries = stdout.split('\0');
+        const snapshot = new Map<string, string>();
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (!entry) continue;
+            const path = entry.slice(3);
+            const bytes = await readFile(join(cwd, path)).catch(() => null);
+            snapshot.set(path, entry.slice(0, 2) + (bytes ? createHash('sha256').update(bytes).digest('hex') : 'deleted'));
+            if (/[RC]/.test(entry.slice(0, 2))) { const old = entries[++i]; if (old) snapshot.set(old, 'renamed'); }
+        }
+        return snapshot;
+    } catch { return null; }
+}
+export function changedSince(before: Map<string, string> | null, after: Map<string, string> | null): string[] {
+    if (!before || !after) return [];
+    return [...new Set([...before.keys(), ...after.keys()])].filter(p => p.length <= 4096 && before.get(p) !== after.get(p)).slice(0, 1000);
 }

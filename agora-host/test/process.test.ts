@@ -24,6 +24,7 @@ describe('process runner (all subprocesses mocked)', () => {
         c.stdout.write('{"type":"thread.started","thread_id":"native"}\n');
         c.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"{\\"summary\\":\\"Done\\"}"}}\n');
         c.stdout.write('{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}\n');
+        expect(running.tokensUsed?.()).toBe(12);
         c.emit('close', 0);
         expect(await running.result).toMatchObject({ success: true, nativeSessionId: 'native', tokensUsed: 12 });
     });
@@ -49,4 +50,24 @@ describe('process runner (all subprocesses mocked)', () => {
         const running = new ProcessRunner().start(launch); c.emit('error', new Error('token: secret'));
         const result = await running.result; expect(result.error).toBe('spawn_failed'); expect(JSON.stringify(result)).not.toContain('secret');
     });
+});
+
+
+it('compares worktree fingerprints including already dirty, removed and newly untracked paths', async () => {
+    const { changedSince } = await import('../src/process.js');
+    expect(changedSince(new Map([['dirty', 'old'], ['gone', 'contents'], ['same', 'hash']]),
+        new Map([['dirty', 'new'], ['untracked', 'contents'], ['same', 'hash']]))).toEqual(['dirty', 'gone', 'untracked']);
+    expect(changedSince(null, new Map([['x', 'x']]))).toEqual([]);
+});
+
+
+it('snapshots renamed and untracked paths with spaces using nul-delimited git status', async () => {
+    const { worktreeSnapshot } = await import('../src/process.js');
+    mocked.execFile.mockImplementation((_exe, args, opts, cb) => {
+        expect(args).toEqual(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+        expect(opts.windowsHide).toBe(true);
+        cb(null, { stdout: 'R  new name.txt\0old name.txt\0?? untracked file\0', stderr: '' });
+    });
+    const snapshot = await worktreeSnapshot('nonexistent-test-dir');
+    expect([...snapshot!.keys()]).toEqual(['new name.txt', 'old name.txt', 'untracked file']);
 });

@@ -8,7 +8,7 @@ function setup() {
     const children: ReturnType<typeof child>[] = [];
     function child() {
         const finish = deferred<Result>();
-        return { result: finish.promise, finish,
+        return { result: finish.promise, finish, tokensUsed: () => 123,
             kill: vi.fn(async () => { finish.resolve({ success: false, nativeSessionId: null, tokensUsed: null, summary: null }); }) };
     }
     const runner = { start: vi.fn(() => { const c = child(); children.push(c); return c; }) };
@@ -44,6 +44,7 @@ describe('scheduler with fake processes', () => {
         const s = setup(); s.api.heartbeat.mockResolvedValue({ cancel: true, reason: 'ended' } as never);
         const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(30010); await work;
         expect(s.children[0].kill).toHaveBeenCalled();
+        expect(s.api.heartbeat).toHaveBeenCalledWith(expect.anything(), expect.anything(), 123);
         expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'cancelled', retryable: false }), expect.anything());
     });
     it('run timeout kills and reports retryable failure', async () => {
