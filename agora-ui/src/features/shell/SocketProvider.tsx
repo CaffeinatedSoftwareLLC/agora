@@ -39,6 +39,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('connect', () => {
       setConnectionStatus('connected');
       setSocket(s);
+      // Signed in and connected: pick up the theme saved on this account (another device may have changed it)
+      void useUIStore.getState().loadPreferences();
     });
 
     s.on('disconnect', () => {
