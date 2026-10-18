@@ -39,7 +39,7 @@ describe('redactPrivateKeys (#88)', () => {
     test.each([
         'PRIVATE KEY', 'RSA PRIVATE KEY', 'EC PRIVATE KEY', 'OPENSSH PRIVATE KEY',
         'ENCRYPTED PRIVATE KEY', 'DSA PRIVATE KEY', 'PGP PRIVATE KEY BLOCK',
-    ])('redacts a %s block and keeps the text around it', (label) => {
+    ])('redacts a %s block and keeps the text around it', (label: string) => {
         const text = `here is my key:\n-----BEGIN ${label}-----\n${body}-----END ${label}-----\nthanks`;
         expect(redactPrivateKeys(text)).toBe(`here is my key:\n${REDACTED_PRIVATE_KEY}\nthanks`);
     });
