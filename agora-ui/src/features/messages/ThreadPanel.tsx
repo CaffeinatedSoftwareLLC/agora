@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useUIStore } from '../../stores/uiStore';
+import { useDraftStore, sendDraft, type DraftKey } from '../../stores/draftStore';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useThreadStore } from '../../stores/threadStore';
-import { useMessageStore, type Message } from '../../stores/messageStore';
+import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
-import { useChannelStore } from '../../stores/channelStore';
 import { MessageItem } from './MessageItem';
 import { ProtocolBadge } from './ProtocolBadge';
 import { latestProtocol } from './latestProtocol';
@@ -12,7 +13,7 @@ export function ThreadPanel() {
   const P = usePalette();
   const openThreadId = useThreadStore(s => s.openThreadId);
   const openThreadChannelId = useThreadStore(s => s.openThreadChannelId);
-  const closeThread = useThreadStore(s => s.closeThread);
+  const closeThread = useUIStore(s => s.closeAux);
   const repliesByThread = useThreadStore(s => s.repliesByThread);
   const sendReply = useThreadStore(s => s.sendReply);
   const closeThreadRemote = useThreadStore(s => s.closeThreadRemote);
@@ -22,18 +23,33 @@ export function ThreadPanel() {
   const user = useAuthStore(s => s.user);
   const byChannel = useMessageStore(s => s.byChannel);
 
-  const [content, setContent] = useState('');
+  const draftKey: DraftKey = `thread:${openThreadId ?? ''}`;
+  const content = useDraftStore(s => s.drafts[draftKey] ?? '');
+  const setContent = (text: string) => useDraftStore.getState().setDraft(draftKey, text);
+  const [sending, setSending] = useState(false);
+  const nearBottom = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const replies = openThreadId ? (repliesByThread.get(openThreadId) ?? []) : [];
+  const replies = useMemo(() => openThreadId ? (repliesByThread.get(openThreadId) ?? []) : [], [openThreadId, repliesByThread]);
 
-  // Auto-scroll to bottom when new replies arrive
   useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight;
-    }
-  }, [replies.length]);
+    nearBottom.current = true;
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [openThreadId]);
+  useEffect(() => {
+    if (listRef.current && nearBottom.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [replies]);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (nearBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    for (const child of el.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [replies]);
 
   if (!openThreadId || !openThreadChannelId) return null;
 
@@ -60,11 +76,14 @@ export function ThreadPanel() {
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
+    if (sending) return;
     const trimmed = content.trim();
     if (!trimmed || !user) return;
-    sendReply(openThreadChannelId, openThreadId, trimmed, user.id, user.username);
-    setContent('');
+    nearBottom.current = true;
+    setSending(true);
+    await sendDraft(draftKey, () => sendReply(openThreadChannelId, openThreadId, trimmed, user.id, user.username));
+    setSending(false);
     inputRef.current?.focus();
   };
 
@@ -150,7 +169,10 @@ export function ThreadPanel() {
       )}
 
       {/* Reply list */}
-      <div ref={listRef} className="flex-1 overflow-y-auto px-2 py-2 min-h-0">
+      <div ref={listRef} onScroll={e => {
+        const el = e.currentTarget;
+        nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 60;
+      }} className="flex-1 overflow-y-auto px-2 py-2 min-h-0">
         {replies.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <p className="text-sm" style={{ color: P.muted }}>No replies yet</p>

@@ -1,3 +1,4 @@
+import { useDraftStore, sendDraft, type DraftKey } from '../../stores/draftStore';
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -11,7 +12,10 @@ interface MessageInputProps {
 }
 
 export function MessageInput({ channelId }: MessageInputProps) {
-  const [content, setContent] = useState('');
+  const draftKey: DraftKey = `channel:${channelId}`;
+  const content = useDraftStore(s => s.drafts[draftKey] ?? '');
+  const setContent = (text: string) => useDraftStore.getState().setDraft(draftKey, text);
+  const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [showMentions, setShowMentions] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -20,7 +24,9 @@ export function MessageInput({ channelId }: MessageInputProps) {
   const user = useAuthStore(s => s.user);
   const activeServerId = useServerStore(s => s.activeServerId);
   const socket = useSocket();
-  const agentCommands = useAgentCommands(channelId);
+  const agentCommands = useAgentCommands(channelId, () => {
+    if (useDraftStore.getState().getDraft(draftKey) === content) useDraftStore.getState().clearDraft(draftKey);
+  });
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -30,17 +36,18 @@ export function MessageInput({ channelId }: MessageInputProps) {
     }
   }, [content]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
+    if (sending) return;
     const trimmed = content.trim();
     if (!trimmed || !user) return;
     // /start, /end, /sessions, /resume go to the agent sessions route, not the channel
     if (agentCommands.tryHandle(trimmed)) {
-      setContent('');
       setShowMentions(false);
       return;
     }
-    sendMessage(channelId, trimmed, user.id, user.username);
-    setContent('');
+    setSending(true);
+    await sendDraft(draftKey, () => sendMessage(channelId, trimmed, user.id, user.username));
+    setSending(false);
     setShowMentions(false);
   };
 

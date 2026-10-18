@@ -38,7 +38,7 @@ interface ThreadState {
   closeThread: () => void;
   loadReplies: (channelId: string, messageId: string) => Promise<void>;
   loadNewer: (channelId: string, messageId: string) => Promise<void>;
-  sendReply: (channelId: string, messageId: string, content: string, authorId: string, authorUsername: string) => Promise<void>;
+  sendReply: (channelId: string, messageId: string, content: string, authorId: string, authorUsername: string) => Promise<boolean>;
   addReply: (msg: MessagePayload) => void;
   updateReply: (payload: MessageUpdatePayload) => void;
   removeReply: (payload: MessageDeletePayload) => void;
@@ -171,6 +171,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         }
         return { repliesByThread: nextReplies };
       });
+      return true;
     } catch {
       set((state) => {
         const nextReplies = new Map(state.repliesByThread);
@@ -180,6 +181,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         ));
         return { repliesByThread: nextReplies };
       });
+      return false;
     }
   },
 

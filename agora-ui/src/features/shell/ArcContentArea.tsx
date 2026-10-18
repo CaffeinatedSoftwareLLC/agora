@@ -29,10 +29,10 @@ export function ArcContentArea() {
   const servers = useServerStore(s => s.servers);
   const instanceServer = instanceServerId ? servers.get(instanceServerId) : null;
 
-  const membersOpen = useUIStore(s => s.membersOpen);
-  const toggleMembers = useUIStore(s => s.toggleMembers);
-  const filesOpen = useUIStore(s => s.filesOpen);
-  const toggleFiles = useUIStore(s => s.toggleFiles);
+  const membersOpen = useUIStore(s => s.aux === 'members');
+  const toggleMembers = useUIStore(s => s.toggleAux);
+  const filesOpen = useUIStore(s => s.aux === 'files');
+  const toggleFiles = useUIStore(s => s.toggleAux);
 
   const accentColor = instanceServer ? serverColor(instanceServer.name) : P.accent;
 
@@ -44,6 +44,7 @@ export function ArcContentArea() {
         style={{ background: P.bg }}
       >
         <div className="text-center">
+          <button className="xl:hidden min-h-11 px-3" onClick={() => useUIStore.getState().openNav()}>Open navigation</button>
           <div className="text-4xl mb-4" style={{ color: P.text }}>
             Select a channel
           </div>
@@ -56,7 +57,7 @@ export function ArcContentArea() {
   }
 
   return (
-    <main className="flex-1 flex flex-col min-w-0" style={{ background: P.bg }}>
+    <main className="flex-1 flex flex-col min-w-0 min-h-0" style={{ background: P.bg }}>
       {/* ── Channel header ────────────────────────────────────────────── */}
       <header
         className="flex items-center gap-3 px-5 py-2.5 shrink-0"
@@ -66,14 +67,15 @@ export function ArcContentArea() {
           backdropFilter: 'blur(12px)',
         }}
       >
+        <button className="xl:hidden shrink-0 min-h-11 min-w-11" aria-label="Open navigation" onClick={() => useUIStore.getState().openNav()}>&#9776;</button>
         <span className="text-lg font-light" style={{ color: accentColor }}>
           #
         </span>
         <h1 className="text-[14px] font-semibold" style={{ color: P.text }}>
           {channel.name}
         </h1>
-        <div className="h-4 w-px" style={{ background: P.border }} />
-        <p className="text-[12px] truncate" style={{ color: P.dim }}>
+        <div className="hidden md:block h-4 w-px" style={{ background: P.border }} />
+        <p className="hidden md:block text-[12px] truncate" style={{ color: P.dim }}>
           Channel description
         </p>
 
@@ -121,7 +123,7 @@ export function ArcContentArea() {
 
           {/* Files panel toggle */}
           <button
-            onClick={toggleFiles}
+            onClick={() => toggleFiles('files')}
             className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
             style={{
               color: filesOpen ? accentColor : P.dim,
@@ -146,7 +148,7 @@ export function ArcContentArea() {
 
           {/* Members toggle button */}
           <button
-            onClick={toggleMembers}
+            onClick={() => toggleMembers('members')}
             className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
             style={{
               color: membersOpen ? accentColor : P.dim,

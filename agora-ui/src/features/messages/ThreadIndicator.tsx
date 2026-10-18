@@ -1,4 +1,4 @@
-import { useThreadStore } from '../../stores/threadStore';
+import { useUIStore } from '../../stores/uiStore';
 import { usePalette } from '../../theme';
 import { relativeTime } from '../../lib/relativeTime';
 
@@ -12,7 +12,7 @@ interface ThreadIndicatorProps {
 
 export function ThreadIndicator({ replyCount, lastReplyAt, channelId, messageId, threadClosedAt }: ThreadIndicatorProps) {
   const P = usePalette();
-  const openThread = useThreadStore(s => s.openThread);
+  const openThread = useUIStore(s => s.openThreadView);
   const isClosed = !!threadClosedAt;
 
   return (

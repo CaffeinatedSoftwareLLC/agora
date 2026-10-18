@@ -69,7 +69,7 @@ type Panel =
   | { kind: 'sessions'; sessions: AgentSession[] }
   | { kind: 'live'; retry: (onLive: 'shelve' | 'keep') => void };
 
-export function useAgentCommands(channelId: string): { tryHandle: (text: string) => boolean; panel: ReactNode } {
+export function useAgentCommands(channelId: string, onAccepted?: () => void): { tryHandle: (text: string) => boolean; panel: ReactNode } {
   const [state, setState] = useState<Panel>({ kind: 'none' });
 
   const run = async (cmd: Command, onLive?: 'shelve' | 'keep') => {
@@ -83,6 +83,7 @@ export function useAgentCommands(channelId: string): { tryHandle: (text: string)
       const res = await api.post<{ action?: string; session?: AgentSession; sessions?: AgentSession[] }>(
         `/channels/${channelId}/agent-commands`, body,
       );
+      onAccepted?.();
       if (cmd.command === 'sessions') {
         setState({ kind: 'sessions', sessions: res.sessions ?? [] });
       } else {

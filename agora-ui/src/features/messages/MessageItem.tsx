@@ -1,3 +1,4 @@
+import { useUIStore } from '../../stores/uiStore';
 import { useState } from 'react';
 import type { Message } from '../../stores/messageStore';
 import { MessageActions } from './MessageActions';
@@ -9,7 +10,6 @@ import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
-import { useThreadStore } from '../../stores/threadStore';
 import { usePalette } from '../../theme';
 
 interface MessageItemProps {
@@ -44,7 +44,7 @@ function formatTimestamp(dateStr: string): string {
 export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, channelId }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
   const P = usePalette();
-  const openThread = useThreadStore(s => s.openThread);
+  const openThread = useUIStore(s => s.openThreadView);
   const canReply = !!(channelId && !message.deletedAt && !message.systemEvent);
   const handleReply = canReply ? () => openThread(channelId!, message.id) : undefined;
 

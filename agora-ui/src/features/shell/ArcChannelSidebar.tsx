@@ -1,12 +1,12 @@
+import { shellHistorySettled } from './shellHistory';
+import { useUIStore } from '../../stores/uiStore';
 import { useState, useMemo } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUnreadStore } from '../../stores/unreadStore';
-import { useMessageStore } from '../../stores/messageStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../lib/api';
 import { usePalette, hexToRgb } from '../../theme';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { ArcUserPanel } from './ArcUserPanel';
@@ -225,17 +225,11 @@ export function ArcChannelSidebar() {
     });
   };
 
-  const handleChannelClick = (channelId: string) => {
+  const handleChannelClick = async (channelId: string) => {
+    useUIStore.getState().onChannelSelect(channelId);
     setActiveChannel(channelId);
 
-    // ACK immediately if messages loaded
-    const messages = useMessageStore.getState().byChannel.get(channelId);
-    if (messages && messages.length > 0) {
-      const lastMsgId = messages[messages.length - 1].id;
-      useUnreadStore.getState().markRead(channelId, lastMsgId);
-      api.put(`/channels/${channelId}/ack`, { messageId: lastMsgId }).catch(() => {});
-    }
-
+    await shellHistorySettled();
     navigate(`/app/${channelId}`);
   };
 

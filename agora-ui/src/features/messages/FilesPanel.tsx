@@ -33,7 +33,7 @@ export function FilesPanel() {
   const P = usePalette();
   const channelId = useChannelStore(s => s.activeChannelId);
   const serverId = useServerStore(s => s.instanceServerId);
-  const toggleFiles = useUIStore(s => s.toggleFiles);
+  const toggleFiles = useUIStore(s => s.closeAux);
 
   const [text, setText] = useState('');
   const [query, setQuery] = useState('');

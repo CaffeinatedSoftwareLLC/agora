@@ -49,7 +49,7 @@ interface MessageState {
 
   loadMessages: (channelId: string) => Promise<void>;
   loadOlder: (channelId: string) => Promise<void>;
-  sendMessage: (channelId: string, content: string, authorId: string, authorUsername: string, attachmentIds?: string[]) => Promise<void>;
+  sendMessage: (channelId: string, content: string, authorId: string, authorUsername: string, attachmentIds?: string[]) => Promise<boolean>;
   editMessage: (channelId: string, msgId: string, content: string) => Promise<void>;
   deleteMessage: (channelId: string, msgId: string) => Promise<void>;
 
@@ -179,6 +179,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         }
         return { byChannel: nextByChannel };
       });
+      return true;
     } catch {
       // Mark as failed
       set((state) => {
@@ -189,6 +190,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         ));
         return { byChannel: nextByChannel };
       });
+      return false;
     }
   },
 

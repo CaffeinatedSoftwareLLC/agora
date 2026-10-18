@@ -1,3 +1,4 @@
+import { useUIStore } from '../../stores/uiStore';
 import { useEffect, useState } from 'react';
 import { useThreadStore, type ThreadSummary } from '../../stores/threadStore';
 import { usePalette } from '../../theme';
@@ -13,7 +14,7 @@ export function ActiveThreadsBar({ channelId }: ActiveThreadsBarProps) {
   const loadActiveThreads = useThreadStore(s => s.loadActiveThreads);
   const loadMoreThreads = useThreadStore(s => s.loadMoreThreads);
   const hasMoreThreads = useThreadStore(s => s.hasMoreThreads);
-  const openThread = useThreadStore(s => s.openThread);
+  const openThread = useUIStore(s => s.openThreadView);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {

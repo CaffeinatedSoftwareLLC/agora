@@ -1,3 +1,4 @@
+import { useDraftStore, sendDraft, type DraftKey } from '../../stores/draftStore';
 import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -40,7 +41,10 @@ export function FloatingMessageInput({
   const P = usePalette();
   const accentRgb = hexToRgb(accentColor);
 
-  const [content, setContent] = useState('');
+  const draftKey: DraftKey = `channel:${channelId}`;
+  const content = useDraftStore(s => s.drafts[draftKey] ?? '');
+  const setContent = (text: string) => useDraftStore.getState().setDraft(draftKey, text);
+  const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [showMentions, setShowMentions] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -53,7 +57,9 @@ export function FloatingMessageInput({
   const user = useAuthStore(s => s.user);
   const activeServerId = useServerStore(s => s.activeServerId);
   const socket = useSocket();
-  const agentCommands = useAgentCommands(channelId);
+  const agentCommands = useAgentCommands(channelId, () => {
+    if (useDraftStore.getState().getDraft(draftKey) === content) useDraftStore.getState().clearDraft(draftKey);
+  });
 
   // Upload store
   const addUpload = useUploadStore(s => s.addUpload);
@@ -89,14 +95,14 @@ export function FloatingMessageInput({
   }, [channelId, addUpload, uploads.length]);
 
   // Send handler
-  const handleSend = () => {
+  const handleSend = async () => {
+    if (sending) return;
     const trimmed = content.trim();
     const hasAttachments = completedIds.length > 0;
     if ((!trimmed && !hasAttachments) || !user) return;
 
     // /start, /end, /sessions, /resume go to the agent sessions route, not the channel
     if (!hasAttachments && agentCommands.tryHandle(trimmed)) {
-      setContent('');
       setShowMentions(false);
       return;
     }
@@ -105,16 +111,16 @@ export function FloatingMessageInput({
     const pending = uploads.filter(u => u.status === 'uploading');
     if (pending.length > 0) return; // Wait for uploads to finish
 
-    sendMessage(
-      channelId,
-      trimmed || '',
-      user.id,
-      user.username,
+    setSending(true);
+    const sent = await sendDraft(draftKey, () => sendMessage(
+      channelId, trimmed || '', user.id, user.username,
       hasAttachments ? completedIds : undefined,
-    );
-    setContent('');
-    setShowMentions(false);
-    clearCompleted(channelId);
+    ));
+    setSending(false);
+    if (sent) {
+      setShowMentions(false);
+      clearCompleted(channelId);
+    }
   };
 
   // Enter to send, Shift+Enter for newline
@@ -402,6 +408,8 @@ function UploadPreview({ upload, onRemove }: { upload: PendingUpload; onRemove: 
   useEffect(() => {
     if (!isImage) return;
     const url = URL.createObjectURL(upload.file);
+    // Object URLs are external resources tied to the selected File.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setThumbUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [upload.file, isImage]);

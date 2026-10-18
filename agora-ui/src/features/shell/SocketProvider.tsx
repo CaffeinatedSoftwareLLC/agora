@@ -1,3 +1,4 @@
+import { isFeedObscured } from './feedVisibility';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Socket } from 'socket.io-client';
 import { createSocket } from '../../lib/socketFactory';
@@ -78,7 +79,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         useMessageStore.getState().addMessage(data);
       }
       const activeChannelId = useChannelStore.getState().activeChannelId;
-      if (data.channelId !== activeChannelId) {
+      if (data.channelId !== activeChannelId || isFeedObscured()) {
         useUnreadStore.getState().incrementUnread(data.channelId);
         // Check if current user is mentioned — increment mention count
         const currentUserId = useAuthStore.getState().user?.id;

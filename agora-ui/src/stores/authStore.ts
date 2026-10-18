@@ -1,3 +1,4 @@
+import { useDraftStore } from './draftStore';
 import { create } from 'zustand';
 import { api, ApiError, setTokenGetter } from '../lib/api';
 import type { AuthResponse, RegisterRequest, User } from '../lib/contracts/auth';
@@ -102,6 +103,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   clearSession: () => {
     clearPersistedAuth();
+    useDraftStore.getState().clearAllDrafts();
+    useUIStore.getState().onChannelSelect(null);
     set({ token: null, user: null, status: 'idle' });
     useServerStore.getState().clear();
     useChannelStore.getState().clear();
