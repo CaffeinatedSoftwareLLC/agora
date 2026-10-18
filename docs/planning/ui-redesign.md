@@ -9,6 +9,13 @@
 
 ---
 
+
+## Status (2026-10-18): shipped
+
+Merged as PR #69 (with #67 blank-chat and theme fixes and #68 account theme sync) and deployed. Eryk confirmed on his Android phone: channel drawer with Back, agent strip and session sheet, full-screen thread with Back keeping the reading position, composer above the soft keyboard, theme shared across devices.
+
+Open: a thread chip shows its first protocol state until the thread is opened (the threads endpoint doesn't return the latest protocol); the phone thread view has both a Back bar and a close button; older settings pages still use dim text and light text on Terracotta primary; the working dot updates within 20 s.
+
 ## 1. Product Context & Design Principles
 
 Agora is an **owner-directed AI coding agent observability and steering console**, not a social chat app. The owner (Eryk) uses it both on desktop and from an Android phone over Tailscale. Every screen must optimize for four core jobs:
