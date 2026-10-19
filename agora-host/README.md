@@ -58,6 +58,30 @@ Windows account. Do not commit it. `host.local.json` is ignored here.
 }
 ```
 
+### How each CLI signs in (provider terms)
+
+Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-terms.md)):
+
+- `"auth": "subscription"` (the default): the CLI's own login in its `stateDir`. Only the
+  server owner can wake the agent: the owner's messages, `/start`, `/resume`, and hand-offs
+  between sessions the owner started. Everyone else is refused with a channel notice.
+- `"auth": "api_key"` with `"apiKeyEnv"`: the host passes that one variable from its own
+  environment to the child. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or
+  `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini). The host refuses to
+  start if the variable is unset, and never prints its value. Ordinary authority rules apply.
+- `"requireRunApproval": true`: every wake waits for the owner's **Approve run** card.
+- `adapter: "gemini"` must use `api_key`; on account login the host refuses to start and quotes
+  Google's Antigravity terms §6. `"allowSubscriptionAtOwnRisk": true` overrides that and forces
+  run approval; that reduces the terms risk but does not remove it. Gemini is not a hosted
+  adapter yet, so a gemini profile currently stops the host after this check.
+
+```json
+"claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", "...": "..." }
+```
+
+At start the host reports each profile's mode to Agora (`POST /agent-hosts/@me/profiles`,
+variable names only), and checks every claim against its own config as well.
+
 Profile names, adapter and `workdirAlias` must match the server's profiles.
 `model` and `effort` come from each claim. The host maps them to verified CLI
 flags; it refuses unsupported effort values. Native IDs must be explicit UUIDs.
@@ -117,8 +141,10 @@ session's reservations transactionally. A channel owner/director can force-relea
 an ID in the holder's channel; the holder receives a channel notice and a wake.
 
 The child inherits an OS-variable allowlist, not the host's environment. It does
-not inherit API keys, the host token, sibling tokens, `NODE_OPTIONS`, or nested
-agent flags. CLI authentication must live in that profile's state directory.
+not inherit API keys (except its own `apiKeyEnv` in `api_key` mode), the host token,
+sibling tokens, `NODE_OPTIONS`, or nested agent flags. Otherwise CLI authentication
+must live in that profile's state directory. The host never reads or copies those
+login files.
 Codex ignores user config and gets an explicit top-level MCP map override;
 Claude uses `--strict-mcp-config`. Project instructions and normal CLI policy
 still apply. Only locally listed `approvedTools` are preapproved, using the

@@ -2,8 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
 import type { Message } from '../../stores/messageStore';
-import { ToolApprovalCard } from './ToolApprovalCard';
-import { decisionError, isSleeping, sessionState, deriveChips, type AgentSession } from './agentSessions';
+import { RunApprovalCard, ToolApprovalCard } from './ToolApprovalCard';
+import { authLabel, classifyCommandError, decisionError, describeSession, ERRORS, isSleeping, sessionState, deriveChips, type AgentSession } from './agentSessions';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() }); });
 const post = vi.hoisted(() => vi.fn());
@@ -66,5 +66,44 @@ describe('sleeping sessions', () => {
       s({ profile: 'a', state: 'shelved' }), s({ profile: 'b', sleepingUntil: later }), s({ profile: 'c' }),
     ]);
     expect(chips.map(c => `${c.profile}:${c.state}`)).toEqual(['c:idle', 'b:sleeping', 'a:shelved']);
+  });
+});
+
+describe('run approval card (provider terms)', () => {
+  const run = (status: string): Message => ({
+    id: 'M'.repeat(26), channelId: 'C'.repeat(26), content: 'gem wants to run for: "eryk: hi".', authorId: null, authorUsername: null,
+    createdAt: '2026-10-19T10:00:00Z', systemEvent: 'agent_run_approval',
+    systemData: { kind: 'agent_run_approval', approvalId: 'A'.repeat(26), profile: 'gem', status },
+  } as unknown as Message);
+
+  it('sends approve or deny for a pending run', async () => {
+    post.mockResolvedValue({ id: 'A'.repeat(26), status: 'approved' });
+    render(<RunApprovalCard message={run('pending')} />);
+    expect(screen.getByText('Run request from gem')).toBeTruthy();
+    fireEvent.click(screen.getByText('Approve run'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${'C'.repeat(26)}/agent-run-approvals/${'A'.repeat(26)}`, { decision: 'approve' }));
+    fireEvent.click(screen.getByText('Deny'));
+    await waitFor(() => expect(post).toHaveBeenLastCalledWith(expect.any(String), { decision: 'deny' }));
+  });
+
+  it('shows the outcome without buttons once decided, and why a decision failed', async () => {
+    const { unmount } = render(<RunApprovalCard message={run('expired')} />);
+    expect(screen.getByText('EXPIRED')).toBeTruthy();
+    expect(screen.queryByText('Approve run')).toBeNull();
+    unmount();
+    post.mockRejectedValue(new ApiError(403, 'Only the server owner can approve agent runs'));
+    render(<RunApprovalCard message={run('pending')} />);
+    fireEvent.click(screen.getByText('Approve run'));
+    expect((await screen.findByRole('alert')).textContent).toBe('Only the server owner can approve agent runs');
+  });
+});
+
+describe('auth mode labels', () => {
+  it('labels subscription and API-key agents, in /sessions too', () => {
+    expect(authLabel('subscription')).toBe('subscription (owner only)');
+    expect(authLabel('api_key', true)).toBe('API key, approval per run');
+    expect(describeSession({ id: 'S'.repeat(26), profile: 'claude', botUsername: 'claude', state: 'live', endReason: null,
+      wakesUsed: 1, tokensUsed: 10, lastActiveAt: '2026-10-19T10:00:00Z', authMode: 'subscription' })).toContain('subscription (owner only)');
+    expect(classifyCommandError(new ApiError(403, 'subscription_owner_only'), 'start')).toEqual({ kind: 'error', text: ERRORS.subscription_owner_only });
   });
 });

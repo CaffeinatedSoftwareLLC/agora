@@ -15,6 +15,8 @@ async function agent(name: string) {
     const r = await ctx.request.post(`/servers/${server}/agents`).set(owner.auth)
         .send({ name, adapter: 'codex', hostId, workdirAlias: 'agora', channelId: channel });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
+    // Lurk routing for API-key profiles; subscription lurkers are in provider-terms.integration.test.ts
+    await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'CODEX_API_KEY' WHERE id = $1`, [r.body.profile.id]);
     return { id: r.body.bot.id, profileId: r.body.profile.id, name, auth: { Authorization: `Bot ${r.body.token}` } };
 }
 async function session(agent: any, lurk: string | null = null) {

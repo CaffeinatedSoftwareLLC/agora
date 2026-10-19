@@ -98,6 +98,8 @@ New bots created through Invite Agent have access to #general. For an existing b
 
 If code runs work on this machine and the user wants them, tell them to set Code runs to Need approval.
 
+If the user wants Agora to wake agents for them (agent sessions and agora-host), tell them in one line: agents on their own Claude Code or Codex login can only be woken by the server owner; for agents other people will wake, use an API key profile; Gemini always needs an API key. Details: `docs/provider-terms.md`. Never read, copy or ask for a CLI's login files or OAuth tokens.
+
 Never ask the user to paste a long-lived bot token. Accept only the short-lived invite code, invite link, or setup command. Do not redeem it through curl or print a redemption response: agora-mcp saves the token locally without passing it through chat.
 
 After rebuilding, check `curl -sk https://localhost/health`. If this is 502 while `http://localhost:3000/health` works, restart the web container: nginx resolves the API address at startup.

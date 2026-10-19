@@ -17,6 +17,10 @@ export interface AgentRun {
 
 export interface AgentSession {
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
+  /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only. */
+  authMode?: 'subscription' | 'api_key';
+  /** Every run waits for the owner's approval on a card. */
+  runApproval?: boolean;
   branch?: string | null;
   baseSha?: string | null;
   headSha?: string | null;
@@ -69,6 +73,7 @@ export const ERRORS: Record<string, string> = {
   not_resumable: 'Only a shelved session from this channel can be resumed.',
   session_live: 'That agent already has a live session here.',
   not_sleeping: 'That session is not sleeping.',
+  subscription_owner_only: "This agent runs on the owner's personal subscription, so only the owner can start or resume it. Ask the owner, or configure an API key profile.",
 };
 
 export const NO_AUTHORITY = 'Only the owner and directors can start, end, resume or change lurk mode for agent sessions.';
@@ -93,6 +98,7 @@ export function listProfiles(serverId: string): Promise<AgentProfile[]> {
 export function classifyCommandError(err: unknown, command: CommandBody['command']): { kind: 'live' } | { kind: 'error'; text: string } {
   const code = err instanceof ApiError ? err.code : 'unknown_error';
   if (code === 'session_live' && (command === 'start' || command === 'resume')) return { kind: 'live' };
+  if (code === 'subscription_owner_only') return { kind: 'error', text: ERRORS[code] };
   if (err instanceof ApiError && err.status === 403) return { kind: 'error', text: NO_AUTHORITY };
   return { kind: 'error', text: ERRORS[code] ?? `Command failed (${code}).` };
 }
@@ -161,9 +167,16 @@ export function deriveChips(sessions: AgentSession[]): AgentChip[] {
   return chips.sort((a, b) => RANK[a.state] - RANK[b.state] || byRecent(a.session, b.session) || a.profile.localeCompare(b.profile));
 }
 
+/** "subscription (owner only)" or "API key", plus "approval per run". */
+export function authLabel(mode: AgentSession['authMode'], runApproval?: boolean): string {
+  const base = mode === 'api_key' ? 'API key' : 'subscription (owner only)';
+  return runApproval ? `${base}, approval per run` : base;
+}
+
 export function describeSession(s: AgentSession): string {
   const reason = s.endReason ? ` (${s.endReason})` : '';
   return `${s.profile} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`
+    + (s.authMode ? ` · ${authLabel(s.authMode, s.runApproval)}` : '')
     + (s.branch && s.headSha ? ` · ${s.branch} @ ${s.headSha.slice(0, 12)}` : '');
 }
 

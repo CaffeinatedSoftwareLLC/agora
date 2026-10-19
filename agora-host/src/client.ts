@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
-import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi } from './types.js';
+import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type ProfileReport } from './types.js';
 
 export class HttpError extends Error {
     constructor(public readonly status: number) { super(`host_http_${status}`); }
@@ -81,6 +81,10 @@ export class Client implements HostApi {
                 await sleep(this.retryDelayMs * 2 ** attempt, signal);
             }
         }
+    }
+    /** How each profile's CLI signs in (terms.ts); only variable names, never keys. */
+    async reportProfiles(profiles: ProfileReport[]): Promise<void> {
+        await this.request('POST', 'profiles', { profiles });
     }
     complete(claim: Claim, body: Completion, signal?: AbortSignal) { return this.report(claim, 'complete', body, signal); }
     fail(claim: Claim, body: Failure, signal?: AbortSignal) { return this.report(claim, 'fail', body, signal); }

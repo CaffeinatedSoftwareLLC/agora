@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { PageSpinner } from '../../components/ui/PageSpinner';
 import { passkeyErrorMessage, passkeysSupported } from '../../lib/passkeys';
+import { NotAffiliated } from '../../components/ui/NotAffiliated';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -118,6 +119,7 @@ export function LoginPage() {
             </Link>
           </p>
         )}
+        <NotAffiliated className="mt-6" />
       </div>
     </div>
   );

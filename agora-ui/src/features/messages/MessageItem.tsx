@@ -8,7 +8,7 @@ import { FileAttachment } from './FileAttachment';
 import { ThreadIndicator } from './ThreadIndicator';
 import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
-import { ToolApprovalCard } from '../agents/ToolApprovalCard';
+import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
 import { usePalette } from '../../theme';
@@ -81,6 +81,10 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   // A hosted agent was denied a tool: approve once / always / deny (#73)
   if (message.systemEvent === 'agent_tool_approval') {
     return <ToolApprovalCard message={message} />;
+  }
+  // A profile with run approval asks the owner before every wake (docs/provider-terms.md)
+  if (message.systemEvent === 'agent_run_approval') {
+    return <RunApprovalCard message={message} />;
   }
 
   // Agent session notice (started / shelved / ended): left-aligned with the message column, console icon

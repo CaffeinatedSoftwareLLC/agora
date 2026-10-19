@@ -3,6 +3,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { api, ApiError } from '../../lib/api';
 import type { RegistrationPolicy } from '../../lib/contracts/instance';
+import { NotAffiliated } from '../../components/ui/NotAffiliated';
 
 interface SetupResponse {
   user: { id: string; username: string; isInstanceAdmin: boolean };
@@ -205,6 +206,16 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
                   ))}
                 </div>
               </div>
+              <div className="rounded border border-border bg-surface/60 p-3 text-xs text-text-muted">
+                <p className="mb-1 font-medium text-text">Hosted agents and provider terms</p>
+                <p className="mb-1">
+                  <span className="text-text">Just you?</span> Agents can run on your own Claude or ChatGPT login. Agora lets only you, the owner, wake those agents.
+                </p>
+                <p>
+                  <span className="text-text">Other people too?</span> Personal subscriptions are for one person. Give agents that others may wake an API key, or let each person run their own host.
+                  Gemini always needs an API key. Details: docs/provider-terms.md.
+                </p>
+              </div>
             </>
           )}
 
@@ -230,6 +241,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
             </Button>
           </div>
         </form>
+        <NotAffiliated className="mt-6" />
       </div>
     </div>
   );

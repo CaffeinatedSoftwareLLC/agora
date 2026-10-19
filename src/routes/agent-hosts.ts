@@ -47,6 +47,9 @@ function profileJson(r: any) {
         wakeBudget: r.wake_budget, tokenBudget: Number(r.token_budget), runTimeoutSec: r.run_timeout_sec,
         generation: r.generation, createdAt: r.created_at, updatedAt: r.updated_at,
         toolPresets: r.tool_presets ?? [], allowedTools: r.allowed_tools ?? [],
+        // Reported by the host (provider-terms.ts); 'subscription' until it reports
+        authMode: r.auth_mode ?? 'subscription', apiKeyEnv: r.api_key_env ?? null,
+        runApproval: !!r.run_approval, authReportedAt: r.auth_reported_at ?? null,
     };
 }
 
@@ -366,6 +369,35 @@ export async function agentHostRoutes(app: FastifyInstance) {
     });
 
     // ─── Host routes (AgentHost token) ───
+
+    // POST /agent-hosts/@me/profiles → 200 { updated: [name], unknown: [name] }
+    // At start the host reports how each profile's CLI is signed in: its own account login
+    // ('subscription') or an API key from an environment variable (only the NAME is sent).
+    // The server applies the subscription rule from this (src/lib/provider-terms.ts).
+    app.post('/agent-hosts/@me/profiles', {
+        schema: { body: { type: 'object', required: ['profiles'], additionalProperties: false, properties: {
+            profiles: { type: 'array', maxItems: 100, items: { type: 'object', required: ['name', 'adapter', 'authMode', 'runApproval'], additionalProperties: false, properties: {
+                name: profileFields.name,
+                adapter: { type: 'string', enum: ['codex', 'claude', 'gemini'] },
+                authMode: { type: 'string', enum: ['subscription', 'api_key'] },
+                apiKeyEnv: { type: ['string', 'null'], pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+                runApproval: { type: 'boolean' },
+            } } },
+        } } },
+    }, async (request, reply) => {
+        const host = request.agentHost!, db = request.dbClient!;
+        const updated: string[] = []; const unknown: string[] = [];
+        for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
+            if (p.authMode === 'api_key' && !p.apiKeyEnv) return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
+            const row = await db.query(
+                `UPDATE agent_profiles SET auth_mode = $4, api_key_env = $5, run_approval = $6, auth_reported_at = NOW()
+                 WHERE host_id = $1 AND server_id = $2 AND name = $3 AND adapter = $7 RETURNING id`,
+                [host.id, host.serverId, p.name, p.authMode, p.authMode === 'api_key' ? p.apiKeyEnv : null, p.runApproval, p.adapter]
+            );
+            (row.rows.length ? updated : unknown).push(p.name);
+        }
+        return reply.send({ updated, unknown });
+    });
 
     app.post('/agent-hosts/@me/workspaces/reconcile', {
         schema: { body: { type: 'object', required: ['sessionIds'], properties: {

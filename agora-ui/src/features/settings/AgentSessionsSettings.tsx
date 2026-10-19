@@ -3,6 +3,8 @@ import { useServerStore } from '../../stores/serverStore';
 import { api, serverApi, ApiError } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
+import { NotAffiliated } from '../../components/ui/NotAffiliated';
+import { authLabel } from '../agents/agentSessions';
 
 /**
  * Agent hosts and agents (docs/planning/agent-sessions-wbs.md, S6). The owner registers the
@@ -16,6 +18,8 @@ interface Profile {
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
+  /** Reported by the host at start (docs/provider-terms.md); subscription until then. */
+  authMode?: 'subscription' | 'api_key'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
 }
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh'];
@@ -88,9 +92,16 @@ export function AgentSessionsSettings() {
       {error && <p className="text-danger text-sm mb-4">{error}</p>}
       {secret && <OnceToken label={secret.label} token={secret.token} onDone={() => setSecret(null)} />}
 
+      <p className="text-text-muted text-xs mb-6">
+        Each agent runs its CLI on your own login (<em>subscription</em>) or on an API key, as set in the host's config.
+        Personal subscriptions are for one person, so only you can wake a subscription agent; give agents that other
+        members wake an API key. See docs/provider-terms.md.
+      </p>
+
       <HostsSection serverId={serverId} hosts={hosts} onChange={load} onToken={setSecret} onError={setError} />
       <AgentsSection serverId={serverId} hosts={activeHosts} profiles={profiles} channels={channels}
         onChange={load} onToken={setSecret} onError={setError} />
+      <NotAffiliated className="mt-8" />
     </div>
   );
 }
@@ -249,6 +260,7 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
           <span className="ml-2 text-xs text-text-muted">
             {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {profile.wakeBudget} wakes · {profile.tokenBudget.toLocaleString()} tokens per session
           </span>
+          <AuthBadge profile={profile} />
         </span>
         <button className="min-h-11 md:min-h-8 px-2 text-xs text-danger hover:underline" onClick={() => void remove()}>Delete</button>
       </div>
@@ -264,6 +276,21 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
       </div>
       <ToolPermissions serverId={serverId} profile={profile} onChange={onChange} onError={onError} />
     </li>
+  );
+}
+
+/** How the agent's CLI signs in, as its host reported it (docs/provider-terms.md). */
+function AuthBadge({ profile }: { profile: Profile }) {
+  const mode = profile.authMode ?? 'subscription';
+  const tone = mode === 'api_key' ? 'bg-online/20 text-online' : 'bg-warn/20 text-warn';
+  const detail = !profile.authReportedAt
+    ? 'not reported by its host yet, so treated as a subscription'
+    : mode === 'api_key' ? `key from ${profile.apiKeyEnv}` : 'only you can wake it';
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-muted" data-testid={`auth-${profile.name}`}>
+      <span className={`rounded px-1.5 py-0.5 font-semibold leading-none ${tone}`}>{authLabel(mode, profile.runApproval)}</span>
+      {detail}
+    </span>
   );
 }
 

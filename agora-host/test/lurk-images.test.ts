@@ -82,7 +82,7 @@ describe('passive turns', () => {
         const t = await tempDir(); cleanups.push(t.cleanup);
         await git(t.dir, ['init']);
         await git(t.dir, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'fixture']);
-        const c = config(t.dir), delivery = claim(); delivery.inbox[0].reason = 'lurk';
+        const c = config(t.dir), delivery = claim(); delivery.inbox[0] = { ...delivery.inbox[0], reason: 'lurk', authorBot: false, authority: 'owner' };
         const codex = await prepare(c, delivery); cleanups.push(codex.cleanup);
         expect(codex.args).not.toContain('--output-schema');
         c.profiles.builder.adapter = 'claude'; delivery.profile.adapter = 'claude';

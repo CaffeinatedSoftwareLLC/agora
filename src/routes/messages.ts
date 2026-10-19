@@ -232,7 +232,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         // Wake agents this post is addressed to, in the message's transaction. Placed after
         // every validation gate: a rejected post must not wake anyone.
-        await routeMessage(db, {
+        const termsNotices = await routeMessage(db, {
             channelId, messageId, threadId: null, authorId: userId, couldDirect, protocol,
             mentionedUserIds: mentionedUsers.map(u => u.id),
         });
@@ -298,6 +298,8 @@ export async function messageRoutes(app: FastifyInstance) {
             event: 'Message',
             data: message,
         });
+        // Wakes the subscription rule refused (src/lib/provider-terms.ts), after the message itself
+        for (const n of termsNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: 'Message', data: n.event });
 
         // Stash for idempotency cache (written in onResponse after COMMIT)
         if (request.idempotencyKey) {

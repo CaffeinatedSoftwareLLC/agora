@@ -1,5 +1,7 @@
 import { generateUlid } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
+import { postNotice, type Notice } from './agent-runs';
+import { subscriptionNotice } from './provider-terms';
 
 /**
  * Agent sessions: which posts wake which agent (docs/planning/agent-sessions-wbs.md,
@@ -15,6 +17,9 @@ import type { ProtocolInfo } from './protocol';
  *   and messages from someone who can direct reach every participant.
  * - opt-in lurkers hear otherwise unrouted channel posts and thread replies, except
  *   their own posts and posts by other lurkers. System notices never route here.
+ *
+ * Sessions on a 'subscription' profile (the CLI's own account login) only take wakes the
+ * server owner caused (src/lib/provider-terms.ts); anyone else's is refused with a notice.
  *
  * Members can read sessions through RLS but can't write them, so the writes here run as
  * the service role on the request's own connection.
@@ -38,6 +43,23 @@ interface LiveSession {
     botId: string;
     names: string[];
     lurkMode: string | null;
+    profileName: string;
+    /** Runs on the CLI's own account login: owner-triggered wakes only. */
+    subscription: boolean;
+    /** The server owner started (or last resumed) this session. */
+    startedByOwner: boolean;
+}
+
+/** Who wrote the message being routed, for the subscription rule. */
+interface RouteContext {
+    /** A message from the server owner (a person, with authority now). */
+    fromOwner: boolean;
+    /** The author is a person, not a bot. */
+    authorHuman: boolean;
+    /** The author's own live session in this channel, if it is an agent. */
+    authorSession: LiveSession | undefined;
+    /** Sessions refused because of the subscription rule; one notice each. */
+    refused: Map<string, LiveSession>;
 }
 
 /**
@@ -64,10 +86,12 @@ export async function asService<T>(client: any, fn: () => Promise<T>): Promise<T
 /** Live sessions in a channel, with the names a START or YIELD may use for each agent. */
 async function liveSessions(db: any, channelId: string): Promise<LiveSession[]> {
     const rows = await db.query(
-        `SELECT s.id, s.bot_id, s.lurk_mode, u.username, p.name AS profile_name
+        `SELECT s.id, s.bot_id, s.lurk_mode, u.username, p.name AS profile_name, p.auth_mode,
+                (s.started_by IS NOT NULL AND s.started_by = srv.owner_id) AS started_by_owner
          FROM agent_sessions s
          JOIN users u ON u.id = s.bot_id
          JOIN agent_profiles p ON p.id = s.profile_id
+         JOIN servers srv ON srv.id = s.server_id
          WHERE s.channel_id = $1 AND s.state = 'live'`,
         [channelId]
     );
@@ -76,7 +100,31 @@ async function liveSessions(db: any, channelId: string): Promise<LiveSession[]> 
         botId: r.bot_id.trim(),
         lurkMode: r.lurk_mode,
         names: [String(r.username).toLowerCase(), String(r.profile_name).toLowerCase()],
+        profileName: r.profile_name,
+        subscription: r.auth_mode !== 'api_key',
+        startedByOwner: !!r.started_by_owner,
     }));
+}
+
+/**
+ * The subscription rule (provider-terms.ts): may this message wake this session for this
+ * reason? api_key sessions always may (the caller already applied the authority rules).
+ */
+function termsAllow(target: LiveSession, reason: 'direct' | 'handoff' | 'protocol' | 'lurk', ctx: RouteContext): boolean {
+    if (!target.subscription) return true;
+    if (reason === 'direct' || reason === 'lurk') return ctx.fromOwner;
+    // Agent-to-agent: both sessions belong to the owner
+    return !!ctx.authorSession?.startedByOwner && target.startedByOwner;
+}
+
+/** Split targets by the subscription rule; refused ones (except passive lurk) get a notice. */
+function permitted(targets: LiveSession[], reason: 'direct' | 'handoff' | 'protocol' | 'lurk', ctx: RouteContext): string[] {
+    const ok: string[] = [];
+    for (const t of targets) {
+        if (termsAllow(t, reason, ctx)) ok.push(t.id);
+        else if (reason !== 'lurk') ctx.refused.set(t.id, t);
+    }
+    return ok;
 }
 
 function byName(sessions: LiveSession[], name: string): LiveSession | undefined {
@@ -118,35 +166,51 @@ async function closeThread(db: any, threadId: string, sessionIds: string[], canc
     }
 }
 
-/** Record the wakes a newly inserted message causes. */
-export async function routeMessage(db: any, msg: RoutedMessage): Promise<void> {
+/**
+ * Record the wakes a newly inserted message causes. Returns the notices for wakes the
+ * subscription rule refused, to emit after the transaction commits.
+ */
+export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[]> {
     // Cheap check first: most channels have no agent sessions
     const any: { rows: unknown[] } = await asService(db, () => db.query(
         `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND state = 'live' LIMIT 1`,
         [msg.channelId]
     ));
-    if (any.rows.length === 0) return;
+    if (any.rows.length === 0) return [];
 
-    await asService(db, async () => {
+    return asService(db, async () => {
         const sessions = await liveSessions(db, msg.channelId);
         const authorId = msg.authorId.trim();
         const authorSession = sessions.find(s => s.botId === authorId);
+        const author = await db.query(
+            `SELECT u.bot, (srv.owner_id = u.id) AS is_owner FROM users u
+             JOIN channels c ON c.id = $2 JOIN servers srv ON srv.id = c.server_id WHERE u.id = $1`,
+            [authorId, msg.channelId]
+        );
+        const authorHuman = author.rows[0]?.bot === false;
+        const ctx: RouteContext = {
+            fromOwner: authorHuman && !!author.rows[0]?.is_owner && msg.couldDirect,
+            authorHuman, authorSession, refused: new Map(),
+        };
 
         if (msg.threadId === null) {
-            await routeTopLevel(db, msg, sessions, authorSession);
+            await routeTopLevel(db, msg, sessions, authorSession, ctx);
         } else {
-            await routeThreadReply(db, msg, sessions, authorId);
+            await routeThreadReply(db, msg, sessions, authorId, ctx);
         }
         // Normal routing wins through the inbox's unique (session, message) key.
         // A lurker's output must never trigger a chain of passive interjections.
         if (!authorSession?.lurkMode) {
-            await addInbox(db, sessions.filter(s => s.lurkMode && s.botId !== authorId).map(s => s.id),
+            await addInbox(db, permitted(sessions.filter(s => s.lurkMode && s.botId !== authorId), 'lurk', ctx),
                 msg.messageId, msg.threadId, 'lurk');
         }
+        const notices: Notice[] = [];
+        for (const s of ctx.refused.values()) notices.push(await postNotice(db, msg.channelId, subscriptionNotice(s.profileName)));
+        return notices;
     });
 }
 
-async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], authorSession: LiveSession | undefined): Promise<void> {
+async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], authorSession: LiveSession | undefined, ctx: RouteContext): Promise<void> {
     // An agent with a live session opens a collaboration thread
     if (authorSession && msg.protocol?.state === 'START') {
         const peers = (msg.protocol.participants ?? [])
@@ -160,20 +224,25 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
              ON CONFLICT (thread_id) DO NOTHING`,
             [msg.messageId, msg.channelId, authorSession.id, [authorSession.id, ...peerIds]]
         );
-        await addInbox(db, peerIds, msg.messageId, msg.messageId, 'protocol');
+        const unique = peerIds.map(id => peers.find(p => p.id === id)!);
+        await addInbox(db, permitted(unique, 'protocol', ctx), msg.messageId, msg.messageId, 'protocol');
         return;
     }
 
     // Someone who can direct addresses an agent: by @mention, or the only agent here
-    if (!msg.couldDirect) return;
     const others = sessions.filter(s => s.botId !== msg.authorId.trim());
     const mentioned = new Set(msg.mentionedUserIds.map(id => id.trim()));
+    if (!msg.couldDirect) {
+        // A person without DirectAgents @mentions a subscription agent: say why nothing happens
+        if (ctx.authorHuman) for (const s of others) if (s.subscription && mentioned.has(s.botId)) ctx.refused.set(s.id, s);
+        return;
+    }
     let targets = others.filter(s => mentioned.has(s.botId));
     if (targets.length === 0 && others.length === 1 && sessions.length === 1) targets = others;
-    await addInbox(db, targets.map(t => t.id), msg.messageId, null, 'direct');
+    await addInbox(db, permitted(targets, 'direct', ctx), msg.messageId, null, 'direct');
 }
 
-async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string): Promise<void> {
+async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string, ctx: RouteContext): Promise<void> {
     const threadId = msg.threadId!;
     const binding = await db.query(
         `SELECT initiator_session_id, session_ids FROM agent_session_threads WHERE thread_id = $1 AND state = 'open'`,
@@ -209,8 +278,9 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
         switch (state) {
             case 'ACK': {
                 const initiator = bound.initiator_session_id.trim();
-                if (initiator !== author.id && participants.some(p => p.id === initiator)) {
-                    await addInbox(db, [initiator], msg.messageId, threadId, 'protocol');
+                const target = participants.find(p => p.id === initiator);
+                if (initiator !== author.id && target) {
+                    await addInbox(db, permitted([target], 'protocol', ctx), msg.messageId, threadId, 'protocol');
                 }
                 return;
             }
@@ -218,12 +288,12 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
             case 'CHECKPOINT': {
                 const target = msg.protocol.yieldTo ? byName(participants, msg.protocol.yieldTo) : undefined;
                 if (target && target.id !== author.id) {
-                    await addInbox(db, [target.id], msg.messageId, threadId, 'handoff');
+                    await addInbox(db, permitted([target], 'handoff', ctx), msg.messageId, threadId, 'handoff');
                 }
                 return;
             }
             case 'DECIDE':
-                await addInbox(db, others.map(o => o.id), msg.messageId, threadId, 'protocol');
+                await addInbox(db, permitted(others, 'protocol', ctx), msg.messageId, threadId, 'protocol');
                 return;
             default:
                 // START inside a thread, or CANCEL without authority: ordinary text
@@ -233,6 +303,6 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
 
     // Someone who can direct speaks in the thread: every other participant hears it
     if (msg.couldDirect) {
-        await addInbox(db, others.map(o => o.id), msg.messageId, threadId, 'direct');
+        await addInbox(db, permitted(others, 'direct', ctx), msg.messageId, threadId, 'direct');
     }
 }
