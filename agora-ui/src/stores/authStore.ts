@@ -11,6 +11,7 @@ import { useTypingStore } from './typingStore';
 import { usePresenceStore } from './presenceStore';
 import { useUnreadStore } from './unreadStore';
 import { useThreadStore } from './threadStore';
+import { passkeyApi } from '../lib/passkeys';
 
 /** `checking`: no user remembered in this browser, asking the server whether the cookie is good. */
 type AuthStatus = 'idle' | 'checking' | 'loading' | 'authenticated' | 'pending';
@@ -20,6 +21,8 @@ interface AuthState {
   status: AuthStatus;
   /** `login` is a username or an email. */
   login: (login: string, password: string) => Promise<void>;
+  /** Sign in with a passkey; `login` narrows it to one account's passkeys. */
+  loginWithPasskey: (login?: string) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   /** Signed in by another flow (the setup wizard): the server has already set the session cookie. */
   setAuthenticated: (user: User) => void;
@@ -98,6 +101,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           set({ status: 'pending', user: null });
           return;
         }
+      }
+      set({ status: 'idle' });
+      throw err;
+    }
+  },
+
+  loginWithPasskey: async (login) => {
+    set({ status: 'loading' });
+    try {
+      const res = await passkeyApi.signIn(login);
+      get().setAuthenticated(res.user);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'account_pending') {
+        set({ status: 'pending', user: null });
+        return;
       }
       set({ status: 'idle' });
       throw err;

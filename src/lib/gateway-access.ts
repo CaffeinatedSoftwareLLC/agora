@@ -60,6 +60,25 @@ export async function refreshGatewayAccess(io: Server, db: Pool): Promise<void> 
     }
 }
 
+/**
+ * Periodic backstop: re-check every human socket's session (account state,
+ * token_version, logout blacklist, expiry) without the per-channel checks.
+ */
+export async function revalidateHumanSessions(io: Server, db: Pool): Promise<void> {
+    for (const socket of io.sockets.sockets.values()) {
+        const { userId, isBot } = socket.data;
+        if (!userId || isBot) continue;
+        try {
+            let error = await socketAccountError(db, userId, false, socket.data.tokenVersion ?? 0);
+            if (!error && socket.data.jti && await isTokenBlacklisted(socket.data.jti)) error = 'Token revoked';
+            if (!error && socket.data.tokenExpiresAt <= Date.now()) error = 'token_expired';
+            if (error) disconnectForAccess(socket, error);
+        } catch {
+            // Transient failure: the next sweep, or the socket's own expiry timer, catches it
+        }
+    }
+}
+
 function disconnectForAccess(socket: Socket, code: string) {
     socket.emit('error', { code });
     socket.disconnect(true);

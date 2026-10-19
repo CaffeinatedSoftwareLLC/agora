@@ -1,4 +1,4 @@
-import { api, ApiError } from '../../lib/api';
+import { api, ApiError, inBackground } from '../../lib/api';
 
 /**
  * Agent session data and the /channels/:id/agent-commands call, shared by the message-box
@@ -75,8 +75,9 @@ export function runAgentCommand(channelId: string, body: CommandBody): Promise<C
   return api.post<CommandResponse>(`/channels/${channelId}/agent-commands`, body);
 }
 
+/** Polled and refreshed on notices, so it never counts as user activity (see inBackground). */
 export async function listSessions(channelId: string): Promise<AgentSession[]> {
-  return (await runAgentCommand(channelId, { command: 'sessions' })).sessions ?? [];
+  return (await inBackground(() => runAgentCommand(channelId, { command: 'sessions' }))).sessions ?? [];
 }
 
 export function listProfiles(serverId: string): Promise<AgentProfile[]> {

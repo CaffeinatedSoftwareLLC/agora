@@ -24,6 +24,19 @@ if (storageDriver !== 'disk' && storageDriver !== 's3') {
     throw new Error('STORAGE_DRIVER must be "disk" or "s3"');
 }
 
+/**
+ * Origins passkeys may be registered and used from: WEBAUTHN_ORIGINS if set, else the
+ * CORS_ORIGIN values plus https://localhost (and the Vite dev server outside production).
+ */
+function webauthnOrigins(): string[] {
+    const list = (v: string | undefined) => (v ?? '').split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean);
+    const explicit = list(process.env.WEBAUTHN_ORIGINS);
+    if (explicit.length) return explicit;
+    const defaults = [...list(process.env.CORS_ORIGIN), 'https://localhost'];
+    if (!isProduction) defaults.push('http://localhost:5173', 'http://localhost:3000');
+    return [...new Set(defaults)];
+}
+
 export const config = {
     dbUrl: process.env.DATABASE_URL ?? 'postgres://accord:accord@localhost:5432/accord_test',
     testDbUrl: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgres://accord:accord@localhost:5432/accord_test',
@@ -40,6 +53,12 @@ export const config = {
         maxFailures: parseInt(process.env.LOGIN_MAX_FAILURES ?? '10', 10),
         lockSeconds: parseInt(process.env.LOGIN_LOCK_MINUTES ?? '15', 10) * 60,
         globalPerMinute: parseInt(process.env.LOGIN_GLOBAL_PER_MINUTE ?? '60', 10),
+    },
+    // Passkeys (WebAuthn). A passkey is bound to the hostname it was registered on, so
+    // every origin the UI is served from must be listed; see docs/api-reference.md.
+    webauthn: {
+        rpName: process.env.WEBAUTHN_RP_NAME || 'Agora',
+        origins: webauthnOrigins(),
     },
     storage: {
         driver: storageDriver,

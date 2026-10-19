@@ -35,20 +35,55 @@ Most endpoints require a token in the `Authorization` header. Two auth schemes a
 Authorization: Bearer <accessToken>
 ```
 
-Tokens are JWTs issued by `/auth/login`, `/auth/register`, or `/instance/setup`. Account status must be `active` -- accounts with `pending` or `suspended` status receive `403`.
+Tokens are JWTs issued by `/auth/login`, `/auth/register`, `/auth/passkeys/login/verify` or `/instance/setup`, valid for 7 days. Account status must be `active` -- accounts with `pending` or `suspended` status receive `403`.
 
 ### Browser sessions (cookie)
 
-The web UI never holds the JWT. It sends `X-Agora-Session: cookie` with `/auth/login`, `/auth/register` and `/instance/setup`; those responses then omit `accessToken` and set two cookies instead:
+The web UI never holds the JWT. It sends `X-Agora-Session: cookie` with `/auth/login`, `/auth/register`, `/auth/passkeys/login/verify` and `/instance/setup`; those responses then omit `accessToken` and set two cookies instead:
 
 | Cookie | Flags | Purpose |
 |---|---|---|
-| `agora_session` | `HttpOnly; Secure; SameSite=Strict; Path=/`, 7 days | The JWT. Read by the API when a request has no `Authorization` header, and by the Socket.IO handshake. |
+| `agora_session` | `HttpOnly; Secure; SameSite=Strict; Path=/`, `Max-Age` = time left in the session | The JWT. Read by the API when a request has no `Authorization` header, and by the Socket.IO handshake. |
 | `agora_csrf` | `Secure; SameSite=Strict; Path=/` (readable by the page) | HMAC of the session's `jti`. |
 
 Every cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must send the `agora_csrf` value in `X-CSRF-Token`, or it gets `403 {"error":"csrf_failed"}`. The value is bound to the session, so a cookie planted by another site cannot be paired with it. `POST /auth/logout` is exempt and clears both cookies. A cookie-authenticated WebSocket handshake must come from the API's own host or a `CORS_ORIGIN` origin. `GET /auth/session` returns the current user (`{ user: { id, username, isInstanceAdmin } }`) or `401`.
 
 An `Authorization` header always wins over the cookie and needs no CSRF token, so bots, agent hosts, agora-mcp and scripts are unaffected. Browsers accept `Secure` cookies from `http://localhost`, so dev works over plain HTTP; serving the UI over plain HTTP on any other host needs `COOKIE_SECURE=false`.
+
+#### Session lifetime (idle timeout)
+
+A cookie session ends after **24 hours without activity** and **30 days after sign-in**, however active the user is (`SESSION_IDLE_SECONDS`, `SESSION_MAX_SECONDS` in `src/auth/tokens.ts`).
+
+- **Sliding renewal.** When a cookie-authenticated request arrives and the session's token is more than an hour old (`SESSION_RENEW_AFTER_SECONDS`), the response re-issues both cookies with a fresh 24-hour expiry, clipped to the 30-day cap. The JWT keeps its `jti` and its `authTime` (the original sign-in, Unix seconds), so the CSRF token is unchanged and logout and `logout-all` still revoke it. Because renewal happens at most hourly, a session can end up to an hour short of 24 hours after the last request, never later.
+- **Background requests don't count.** Requests sent with `X-Agora-Background: 1` are never renewed. The UI marks its own polling this way, so a tab left open does not keep a session alive.
+- **Errors.** An idle session gets `401 {"error":"session_idle_timeout"}` (or `Invalid token` once the JWT has expired); a session past its cap gets `401 {"error":"session_expired"}`.
+- **Sockets.** The Socket.IO handshake checks the session but does not renew it. A cookie socket is closed when its session would end: with `error {code:"session_renew"}` if HTTP activity may have renewed the cookie in the meantime (the client reconnects, and the handshake reads the current cookie), or `token_expired` at the 30-day cap. Every five minutes the gateway also re-checks open human sockets against the logout blacklist, `token_version` and account status.
+- **Bearer tokens** (API clients, agora-mcp) keep their 7-day expiry with no idle limit or renewal. Bot and agent-host tokens are unaffected.
+- On logout the session's `jti` stays blacklisted until its 30-day cap, so a renewed copy of the cookie can't outlive the revocation.
+
+### Passkeys (WebAuthn)
+
+Passkeys are optional and work alongside passwords. Registration and sign-in use [SimpleWebAuthn](https://simplewebauthn.dev/) (`@simplewebauthn/server` and `@simplewebauthn/browser`); Agora does no WebAuthn parsing or crypto of its own. User verification (PIN or biometric) is required. Users manage their passkeys under Settings > Account & security (`/account`).
+
+**Hostnames.** A passkey is bound to the RP ID it was registered under, which is the hostname. Agora takes the RP ID from the request's `Origin`, which must be in the allowed list:
+
+- `WEBAUTHN_ORIGINS`: comma-separated origins (e.g. `https://localhost,https://agora-home.tailnet.ts.net`). If unset: the `CORS_ORIGIN` values plus `https://localhost`, and outside production also `http://localhost:5173` and `http://localhost:3000`.
+- `WEBAUTHN_RP_NAME`: the name the browser shows (default `Agora`).
+
+A passkey registered at `https://localhost` only works at `https://localhost`; one registered on the Tailscale name only works there. Register one on each hostname you use. Requests from an origin not in the list get `400 {"error":"origin_not_allowed"}`.
+
+**Challenges** are kept in Redis for 5 minutes under an opaque `flowId`, and are single use (taken with `GETDEL`). An expired, reused, or wrong-purpose `flowId` gets `400 {"error":"challenge_invalid"}`. A registration flow belongs to the user who started it.
+
+**Checks.** The library verifies the challenge, origin, RP ID, signature, user presence and verification, and the signature counter (a counter that goes backwards, as from a cloned authenticator, is refused). Agora also checks that the passkey was registered for the RP ID of the current flow, that its owner matches the user handle and (when a username was given) the requested account, and that the account is active and not a bot. The stored counter, backup state and last-used time are updated on each sign-in.
+
+| Endpoint | Auth | Rate limit | Notes |
+|---|---|---|---|
+| `GET /auth/passkeys` | human | | `{ passkeys: [{ id, name, rpId, deviceType, backedUp, createdAt, lastUsedAt }] }` |
+| `POST /auth/passkeys/register/options` | human | 10/min | `{ flowId, options }`. Up to 20 passkeys per user. |
+| `POST /auth/passkeys/register/verify` | human | 10/min | Body `{ flowId, name?, response }`, returns `201 { passkey }`; `409 passkey_exists` |
+| `DELETE /auth/passkeys/:id` | human | | `204`; someone else's passkey is `404` |
+| `POST /auth/passkeys/login/options` | none | 20/min | Body `{ login? }`. Without `login`, any discoverable passkey for this hostname may answer. An unknown or ambiguous `login` gets the same username-less prompt. |
+| `POST /auth/passkeys/login/verify` | none | 10/min, plus the instance-wide login limit | Body `{ flowId, response }`. Same response, cookies and session as `POST /auth/login`. |
 
 ### Bot auth
 

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { hashPassword, verifyPassword } from '../auth/passwords';
-import { generateToken, verifyToken, extractToken } from '../auth/tokens';
+import { verifyToken, extractToken, sessionHardExpiry } from '../auth/tokens';
 import { blacklistToken } from '../auth/token-blacklist';
 import { generateUlid } from '../utils/ulid';
 import type { LoginLimiter } from '../auth/login-limit';
@@ -131,11 +131,9 @@ export async function authRoutes(app: FastifyInstance) {
         }
 
         // For open and invite_only: return token
-        const token = generateToken({ userId: id }, app.jwtSecret);
-
         return reply.status(201).send({
             user: { id, username },
-            ...deliverToken(request, reply, token, app.jwtSecret),
+            ...deliverToken(request, reply, { userId: id }, app.jwtSecret),
         });
     });
 
@@ -228,11 +226,9 @@ export async function authRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'account_suspended' });
         }
 
-        const token = generateToken({ userId: user.id.trim(), tokenVersion: user.token_version }, app.jwtSecret);
-
         return reply.status(200).send({
             user: { id: user.id.trim(), username: user.username, isInstanceAdmin: user.is_instance_admin },
-            ...deliverToken(request, reply, token, app.jwtSecret),
+            ...deliverToken(request, reply, { userId: user.id.trim(), tokenVersion: user.token_version }, app.jwtSecret),
         });
     });
 
@@ -258,7 +254,10 @@ export async function authRoutes(app: FastifyInstance) {
         if (payload.jti && payload.exp) {
             // Store failures must not be reported as successful revocation. Replays
             // of an already-revoked token do not trigger another global refresh.
-            request.gatewayAccessChanged = await blacklistToken(payload.jti, payload.exp);
+            // A cookie session's jti survives renewal, so its entry has to outlive
+            // any renewed copy: keep it until the session's 30-day cap.
+            const until = payload.authTime ? Math.max(payload.exp, sessionHardExpiry(payload)) : payload.exp;
+            request.gatewayAccessChanged = await blacklistToken(payload.jti, until);
         }
 
         return reply.status(200).send({ success: true });

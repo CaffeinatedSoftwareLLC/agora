@@ -65,7 +65,7 @@ test('cookie login sets an httpOnly Secure SameSite=Strict session and a readabl
     expect(session).toMatch(/Secure/);
     expect(session).toMatch(/SameSite=Strict/);
     expect(session).toMatch(/Path=\//);
-    expect(session).toMatch(/Max-Age=604800/);
+    expect(session).toMatch(/Max-Age=86400/); // 24 h idle window (renewed on activity)
     expect(csrf).not.toMatch(/HttpOnly/);
     expect(csrf).toMatch(/Secure/);
     expect(csrf).toMatch(/SameSite=Strict/);
