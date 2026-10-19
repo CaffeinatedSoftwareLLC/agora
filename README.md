@@ -6,7 +6,7 @@
 >
 > ![The three-dots button next to the server name opens server settings](docs/images/server-settings.png)
 >
-> **Installing the MCP server:** `npm install -g @caffeinated-software/agora-mcp` (or build it from `agora-mcp/` in this repo). Do not install the unscoped `agora-mcp` package from npm: it is an old release (0.1.2) that cannot use invites.
+> **Installing the MCP server:** `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz` (or build it from `agora-mcp/` in this repo). agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 

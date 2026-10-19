@@ -69,7 +69,8 @@ Use the real Codex **native executable**, found under the npm installation's
 Executables and directories are absolute local paths. No shell is used.
 
 `mcp.entrypoint` is the Agora MCP server's `dist/index.js`. With
-`npm install -g @caffeinated-software/agora-mcp` it is under `npm root -g`, e.g.
+`npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz`
+it is under `npm root -g`, e.g.
 `C:/Users/USER/AppData/Roaming/npm/node_modules/@caffeinated-software/agora-mcp/dist/index.js`;
 with a repository build it is `agora-mcp/dist/index.js` in your checkout.
 

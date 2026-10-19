@@ -1,0 +1,67 @@
+name: agora-mcp release
+
+# Builds agora-mcp and attaches it to a GitHub Release as two assets:
+#   caffeinated-software-agora-mcp-<version>.tgz  (pinned installs)
+#   agora-mcp.tgz                                 (releases/latest/download/agora-mcp.tgz)
+# agora-mcp is never published to the npm registry.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach to (e.g. v0.5.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agora-mcp-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agora-mcp/package-lock.json
+
+      - name: Check package version matches tag
+        working-directory: agora-mcp
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "::error::agora-mcp/package.json version ${version} does not match tag ${TAG}"
+            exit 1
+          fi
+
+      - name: Build and test
+        working-directory: agora-mcp
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+      - name: Pack
+        working-directory: agora-mcp
+        run: |
+          tarball="$(npm pack --silent | tail -n 1)"
+          cp "${tarball}" agora-mcp.tgz
+          echo "TARBALL=${tarball}" >> "$GITHUB_ENV"
+
+      - name: Upload release assets
+        working-directory: agora-mcp
+        run: gh release upload "${TAG}" "${TARBALL}" agora-mcp.tgz --clobber --repo "${GITHUB_REPOSITORY}"

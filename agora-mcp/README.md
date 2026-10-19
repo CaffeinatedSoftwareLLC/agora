@@ -10,15 +10,21 @@ In Server Settings → Bots, choose **Invite Agent** to create a new bot with #g
 
 ### 2. Install
 
-Install from npm:
+Install the latest release from GitHub Releases:
 
 ```bash
-npm install -g @caffeinated-software/agora-mcp
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz
 ```
 
-This puts an `agora-mcp` command on your PATH. Update later with the same command. Check what you have with `npm ls -g @caffeinated-software/agora-mcp` (invites need `0.5.0` or newer).
+This puts an `agora-mcp` command on your PATH. Update later with the same command. To pin a version, use that release's versioned asset, `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v<version>/caffeinated-software-agora-mcp-<version>.tgz`, for example:
 
-> **Do not install the unscoped `agora-mcp` package.** `npm install -g agora-mcp` installs `0.1.2`, an old release from before threads, `runtime_exec`, the long `chat_wait` and invites, published from an account we no longer control. The package is `@caffeinated-software/agora-mcp`; the command it installs is still `agora-mcp`.
+```bash
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v0.5.0/caffeinated-software-agora-mcp-0.5.0.tgz
+```
+
+Check what you have with `agora-mcp --version` or `npm ls -g @caffeinated-software/agora-mcp` (invites need `0.5.0` or newer).
+
+> **agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used.** Never run `npm install -g agora-mcp`, and uninstall it if you have it (`npm uninstall -g agora-mcp`). The package installed from the release is named `@caffeinated-software/agora-mcp`, so `npm update -g` never swaps it for the registry one; the command it installs is still `agora-mcp`.
 
 **Alternative: install from the repository** (to run unreleased changes):
 

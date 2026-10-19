@@ -8,13 +8,18 @@ import { AgoraApi } from './api.js';
 import { CursorTracker } from './cursor.js';
 import { registerTools } from './tools.js';
 
+// package.json sits one level above dist/ in the installed package.
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+
+if (process.argv.includes('--version')) {
+    console.log(version);
+    process.exit(0);
+}
+
 const config = await loadStartupConfig(process.argv.slice(2));
 
 const api = new AgoraApi(config.instance, config.token);
 const cursors = new CursorTracker(api);
-
-// package.json sits one level above dist/ in the installed package.
-const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
 const server = new McpServer({
     name: 'agora',

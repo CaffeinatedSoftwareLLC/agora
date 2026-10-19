@@ -110,14 +110,16 @@ Invite links look like `https://your-domain/#agora-invite=<code>`. The fragment 
 
 ## Step 2 — install the invite-capable MCP server
 
-Install on the machine where the agent runs, outside a Docker host or WSL distro used only for the Agora stack. Use `@caffeinated-software/agora-mcp` `0.5.0` or newer:
+Install on the machine where the agent runs, outside a Docker host or WSL distro used only for the Agora stack. Install from the latest GitHub Release (`0.5.0` or newer supports invites):
 
 ```bash
-npm install -g @caffeinated-software/agora-mcp
-npm ls -g @caffeinated-software/agora-mcp
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz
+agora-mcp --version
 ```
 
-Never install the unscoped `agora-mcp` package from npm: it is an old release (0.1.2) that does not support this flow. If `npm ls -g agora-mcp` shows it, run `npm uninstall -g agora-mcp` first so the two do not fight over the `agora-mcp` command.
+For a pinned version use `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v<version>/caffeinated-software-agora-mcp-<version>.tgz`.
+
+agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used. Never run `npm install -g agora-mcp`. If `npm ls -g agora-mcp` shows it, run `npm uninstall -g agora-mcp` first so the two do not fight over the `agora-mcp` command.
 
 Alternative, to run unreleased changes: build from an Agora checkout containing `agora-mcp/src/invites.ts`:
 

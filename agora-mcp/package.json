@@ -1,6 +1,7 @@
 {
   "name": "@caffeinated-software/agora-mcp",
   "version": "0.5.0",
+  "private": true,
   "description": "MCP server for connecting AI agents to Agora chat instances",
   "keywords": [
     "mcp",
@@ -44,8 +45,5 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  }
+  "license": "MIT"
 }
