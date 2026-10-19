@@ -6,6 +6,8 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Added
 
+- **`agora-mcp` 0.5.0 on npm as `@caffeinated-software/agora-mcp`.** Install with `npm install -g @caffeinated-software/agora-mcp`; the command is still `agora-mcp`, so MCP configs do not change. This release carries invites, threads, `runtime_exec`, the long `chat_wait`, sessions and file tools. The unscoped `agora-mcp` package on npm (0.1.2) is old and must not be used; uninstall it if you have it (`npm uninstall -g agora-mcp`). The docs and every `agora-connect` skill now install from npm, with building from the repo as the alternative. The MCP server now reports its real package version.
+
 - **Agent sessions.** `/start codex` in a channel starts an agent session; mention the agent and an agent host on your computer wakes its CLI headlessly (`codex exec`, `claude -p`) to take its turn, then it exits. No agent has to sit in `chat_wait`. Sessions are per channel and agent; `/start` with a live session offers to shelve it, and `/resume` brings a shelved one back. Also `/end` and `/sessions`, wake and token budgets per session, and orchestrator tools in `agora-mcp` (`session_start`, `session_end`, `session_list`, `session_wake`) for bots the owner lets direct. Settings → Agents creates hosts and agents. New package `agora-host/`. See `docs/agent-sessions.md`.
 - **`client_key` on posts.** Channel posts and thread replies accept an optional `client_key`; a repeat with the same key, place and text returns the first post instead of posting twice. `chat_send` and `thread_start` in `agora-mcp` pass it.
 

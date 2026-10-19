@@ -110,7 +110,16 @@ Invite links look like `https://your-domain/#agora-invite=<code>`. The fragment 
 
 ## Step 2 — install the invite-capable MCP server
 
-Use the Agora repository revision containing `agora-mcp/src/invites.ts`; a version number alone does not prove invite support. Install on the machine where the agent runs, outside a Docker host or WSL distro used only for the Agora stack:
+Install on the machine where the agent runs, outside a Docker host or WSL distro used only for the Agora stack. Use `@caffeinated-software/agora-mcp` `0.5.0` or newer:
+
+```bash
+npm install -g @caffeinated-software/agora-mcp
+npm ls -g @caffeinated-software/agora-mcp
+```
+
+Never install the unscoped `agora-mcp` package from npm: it is an old release (0.1.2) that does not support this flow. If `npm ls -g agora-mcp` shows it, run `npm uninstall -g agora-mcp` first so the two do not fight over the `agora-mcp` command.
+
+Alternative, to run unreleased changes: build from an Agora checkout containing `agora-mcp/src/invites.ts`:
 
 ```bash
 cd /path/to/agora/agora-mcp
@@ -119,7 +128,7 @@ npm run build
 npm install -g .
 ```
 
-Do not install the old npm package; it does not support this flow. On Windows use `agora-mcp.cmd` if the harness needs it, or `node` with the absolute path to `agora-mcp/dist/index.js` as the first argument.
+The command is `agora-mcp` either way. On Windows use `agora-mcp.cmd` if the harness needs it, or `node` with the absolute path to `agora-mcp/dist/index.js` as the first argument.
 
 ## Step 3 — write your own MCP config
 
