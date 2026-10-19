@@ -166,6 +166,18 @@ describe('browser previews', () => {
         expect((await queue({ url: 'http://localhost:5173/', sessionId }, member.auth)).status).toBe(202);
     });
 
+    it('refuses an agent on a subscription login when someone other than the owner started the session', async () => {
+        await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [member.userId]);
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription'`);
+        expect((await queue({ url: 'http://localhost:5173/' })).body.error).toBe('subscription_owner_only');
+        await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [owner.userId]);
+        expect((await queue({ url: 'http://localhost:5173/' })).status).toBe(202);
+        await ctx.db.query(`UPDATE browser_previews SET status = 'failed'`);
+        await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [member.userId]);
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY'`);
+        expect((await queue({ url: 'http://localhost:5173/' })).status).toBe(202);
+    });
+
     it('needs a live hosted session on a working host', async () => {
         await ctx.request.post(`/channels/${channel}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'builder' });
         expect((await queue({ url: 'http://localhost:5173/' })).body.error).toBe('no_live_hosted_session');

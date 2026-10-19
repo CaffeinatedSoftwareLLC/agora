@@ -156,7 +156,11 @@ function ArtifactView({ channelId, artifactId, pinned }: { channelId: string; ar
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: `1px solid ${P.border}` }}>
         <button type="button" className={button} style={toggle(source)} aria-pressed={source} onClick={() => setSource(s => !s)}>Source</button>
         {shown && shown.kind !== 'mermaid' && (
-          <button type="button" className={button} style={toggle(network)} aria-pressed={network} onClick={() => setNetwork(n => !n)}
+          <button type="button" className={button} style={toggle(network)} aria-pressed={network} onClick={() => {
+            if (network) { setNetwork(false); return; }
+            // Per viewer, never remembered: each time it is turned on, the person is told what it allows
+            if (window.confirm('Turn network on for this artifact?\n\nIt will be able to load scripts and send data to the internet (any https address). Only do this for artifacts you trust.')) setNetwork(true);
+          }}
             title="Let the artifact load images, fonts and scripts over https. Off by default.">
             Network {network ? 'on' : 'off'}
           </button>

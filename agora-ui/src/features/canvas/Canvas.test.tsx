@@ -83,6 +83,11 @@ describe('canvas pane', () => {
     useUIStore.getState().openCanvas({ channelId: 'c1', artifactId: A, version: null });
     const { container } = render(<CanvasPanel />);
     await waitFor(() => expect(container.querySelector('iframe')).toBeTruthy());
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+    fireEvent.click(screen.getByText('Network off'));
+    expect(confirm.mock.calls[0][0]).toContain('send data to the internet');
+    expect(container.querySelector('iframe')!.getAttribute('srcdoc')).not.toContain('connect-src https:');
+    confirm.mockReturnValueOnce(true);
     fireEvent.click(screen.getByText('Network off'));
     expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain('connect-src https:');
     fireEvent.click(screen.getByText('Source'));

@@ -42,13 +42,17 @@ describe('session port ranges', () => {
 describe('URL allowlist', () => {
     const range = { first: 42010, last: 42019 };
     it.each([
-        ['http://localhost:42010/', true], ['http://127.0.0.1:42019/app?x=1', true], ['http://[::1]:42015/', true], ['ws://localhost:42011/hmr', true],
+        ['http://localhost:42010/', true], ['http://127.0.0.1:42019/app?x=1', true], ['http://[::1]:42015/', true], ['ws://localhost:42011/hmr', false], ['wss://localhost:42011/hmr', false],
         ['http://localhost:42020/', false], ['http://localhost:3000/', false], ['http://localhost/', false], ['https://example.com:42010/', false],
         ['http://user:pw@localhost:42010/', false], ['file:///etc/passwd', false], ['data:text/html,hi', false], ['http://0.0.0.0:42010/', false],
     ])('%s → %s', (url, ok) => expect(allowedUrl(url, range)).toBe(ok));
     it('blocks everything off this machine at the browser level too', () => {
         const args = browserArgs('/tmp/profile', false);
         expect(args).toContain('--proxy-server=http://127.0.0.1:9');
+        // Loopback is not exempt from the dead proxy; only the session's own ports go direct (WebSockets skip Fetch interception)
+        const bypass = browserArgs('/tmp/profile', false, { first: 42000, last: 42001 }).find(x => x.startsWith('--proxy-bypass-list='))!;
+        expect(bypass.split('=')[1].split(';')).toEqual(['<-loopback>', 'localhost:42000', '127.0.0.1:42000', '[::1]:42000', 'localhost:42001', '127.0.0.1:42001', '[::1]:42001']);
+        expect(args.find(x => x.startsWith('--proxy-bypass-list='))).toBe('--proxy-bypass-list=<-loopback>');
         expect(args).toContain('--remote-debugging-pipe');
         expect(args).not.toContain('--no-sandbox');
         expect(browserArgs('/tmp/profile', true)).toContain('--no-sandbox');

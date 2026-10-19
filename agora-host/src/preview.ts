@@ -67,12 +67,12 @@ export function sessionPorts(preview: PreviewConfig, sessionId: string, active: 
     return run;
 }
 
-/** A loopback http(s)/ws(s) URL on a port in the range, with no credentials. */
+/** A loopback http(s) URL on a port in the range, with no credentials. WebSockets are not allowed: the page may not open them. */
 export function allowedUrl(raw: string, range: PortRange): boolean {
     let u: URL;
     try { u = new URL(raw); } catch { return false; }
-    if (!/^(?:https?|wss?):$/.test(u.protocol) || !LOOPBACK.has(u.hostname) || u.username || u.password) return false;
-    const port = Number(u.port || (/^(?:https|wss):$/.test(u.protocol) ? 443 : 80));
+    if (!/^https?:$/.test(u.protocol) || !LOOPBACK.has(u.hostname) || u.username || u.password) return false;
+    const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
     return port >= range.first && port <= range.last;
 }
 
@@ -126,14 +126,17 @@ const remoteText = (a: any): string => a?.value !== undefined ? (typeof a.value 
 const LEVELS: Record<string, ConsoleLine['level']> = { error: 'error', assert: 'error', warning: 'warning', warn: 'warning', info: 'info', debug: 'debug', verbose: 'debug' };
 
 /** Text the agent and the channel will read: one line per entry, no control characters, bounded. */
-const clean = (text: string) => text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, MAX_TEXT);
+const clean = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, MAX_TEXT);
 
-export function browserArgs(userDataDir: string, root = process.getuid?.() === 0): string[] {
+export function browserArgs(userDataDir: string, root = process.getuid?.() === 0, range?: PortRange): string[] {
+    // Chromium sends loopback direct by default, WebSockets included (they never reach Fetch interception).
+    // <-loopback> turns that off, so only the session's own ports are listed as direct; any other loopback port meets the dead proxy.
+    const direct = ['<-loopback>'];
+    if (range) for (let port = range.first; port <= range.last; port++) direct.push(`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`);
     return ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${userDataDir}`, '--no-first-run', '--no-default-browser-check',
         '--disable-extensions', '--disable-background-networking', '--disable-sync', '--disable-component-update', '--disable-default-apps',
         '--disable-features=Translate,MediaRouter,OptimizationHints', '--mute-audio', '--hide-scrollbars',
-        // Loopback goes direct (Chromium never proxies it); everything else meets a dead proxy
-        '--proxy-server=http://127.0.0.1:9', '--webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--proxy-server=http://127.0.0.1:9', `--proxy-bypass-list=${direct.join(';')}`, '--webrtc-ip-handling-policy=disable_non_proxied_udp',
         '--force-webrtc-ip-handling-policy',
         // Chromium refuses to run its own sandbox as root (containers); a normal host keeps it
         ...(root ? ['--no-sandbox'] : []), 'about:blank'];
@@ -145,7 +148,7 @@ export async function capture(browser: string, url: string, options: PreviewComm
     const profileDir = await mkdtemp(join(tmpdir(), 'agora-preview-'));
     let child: ChildProcess | undefined;
     try {
-        child = spawn(browser, browserArgs(profileDir), { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: true });
+        child = spawn(browser, browserArgs(profileDir, undefined, range), { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: true });
         const spawned = new Promise<never>((_, reject) => { child!.once('error', () => reject(new Error('browser_not_started'))); child!.once('exit', () => reject(new Error('browser_exited'))); });
         spawned.catch(() => {});
         const cdp = new CdpPipe(child.stdio[3] as Writable, child.stdio[4] as Readable);

@@ -74,10 +74,14 @@ export async function browserPreviewRoutes(app: FastifyInstance) {
             return reply.status(b.sessionId ? 403 : 400).send({ error: b.sessionId ? 'cannot_direct' : 'session_required' });
         }
         const r = await asService(db, async () => {
-            const s = (await db.query(`SELECT s.id, s.bot_id, s.state, p.host_id, p.generation FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id
+            const s = (await db.query(`SELECT s.id, s.bot_id, s.state, p.host_id, p.generation, p.auth_mode,
+                (s.started_by IS NOT NULL AND s.started_by = srv.owner_id) AS started_by_owner
+                FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN servers srv ON srv.id = s.server_id
                 WHERE s.channel_id = $1 AND s.state = 'live' AND ${request.isBot ? 's.bot_id = $2' : 's.id = $2'}
                 ORDER BY s.id DESC LIMIT 1 FOR UPDATE OF s`, [channelId, request.isBot ? request.userId : b.sessionId])).rows[0];
             if (!s || (request.isBot && b.sessionId && s.id.trim() !== b.sessionId)) return { status: 409, body: { error: 'no_live_hosted_session' } };
+            // A bot on a subscription login acts only inside a session the owner started (provider-terms.ts)
+            if (request.isBot && s.auth_mode !== 'api_key' && !s.started_by_owner) return { status: 403, body: { error: 'subscription_owner_only' } };
             if (!(await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND revoked_at IS NULL', [s.host_id])).rows.length) return { status: 409, body: { error: 'host_unavailable' } };
             if (b.threadId) {
                 const parent = (await db.query('SELECT thread_id, thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2 AND deleted_at IS NULL', [b.threadId, channelId])).rows[0];

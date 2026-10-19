@@ -51,9 +51,14 @@ interface UIState {
 }
 
 // Persist palette to localStorage
-const storedPalette = (typeof window !== 'undefined'
-  ? localStorage.getItem('agora:palette') as PaletteKey | null
-  : null) || 'aegean';
+function readStoredPalette(): PaletteKey | null {
+  try {
+    if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return null;
+    const v = localStorage.getItem('agora:palette');
+    return v === 'aegean' || v === 'terracotta' ? v : null;
+  } catch { return null; } // blocked or missing storage
+}
+const storedPalette: PaletteKey = readStoredPalette() || 'aegean';
 
 const isPalette = (v: unknown): v is PaletteKey => v === 'aegean' || v === 'terracotta';
 
