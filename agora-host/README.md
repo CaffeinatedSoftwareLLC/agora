@@ -225,8 +225,8 @@ codex-acp `main`); the tests use a fake agent. Not yet run against the real agen
 | Agent | `adapter` | `executable` / `acpArgs` | `auth` |
 | --- | --- | --- | --- |
 | Gemini CLI | `gemini` | `node.exe` / `[".../@google/gemini-cli/bundle/gemini.js", "--acp"]` | **`api_key` only** (`GEMINI_API_KEY`; `GOOGLE_API_KEY` for Vertex AI) |
-| Claude Code ([claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)) | `claude` | `node.exe` / `[".../@agentclientprotocol/claude-agent-acp/dist/index.js"]` | `subscription` (owner-only) or `api_key` |
-| Codex ([codex-acp](https://github.com/zed-industries/codex-acp)) | `codex` | the native `codex-acp.exe` from `@zed-industries/codex-acp-win32-x64` / `[]` | `subscription` (owner-only) or `api_key` |
+| Claude Code ([claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)) | `claude` | `node.exe` / `[".../@agentclientprotocol/claude-agent-acp/dist/index.js"]` | **`api_key` only** (`ANTHROPIC_API_KEY`; claude-agent-acp wraps the Agent SDK, not the unmodified `claude` binary) |
+| Codex ([codex-acp](https://github.com/zed-industries/codex-acp)) | `codex` | the native `codex-acp.exe` from `@zed-industries/codex-acp-win32-x64` / `[]` | **`api_key` only** (`CODEX_API_KEY` or `OPENAI_API_KEY`; codex-acp embeds Codex's core and reads the login itself) |
 
 ```json
 "gemini": { "adapter": "gemini", "protocol": "acp", "executable": "C:/Program Files/nodejs/node.exe",
@@ -258,12 +258,13 @@ profile calls only the `authenticate` method that reads its variable
 `ANTHROPIC_API_KEY` itself and needs none) and refuses to run with
 `acp_api_key_auth_unavailable` when the agent doesn't offer it, so it can't fall back
 to an account login in `stateDir`. codex-acp saves the key in its `CODEX_HOME`, like
-`codex login --with-api-key`; Gemini records the choice in its settings there. A `subscription` profile relies on the CLI's own
-login there and stays owner-only; an agent asking for sign-in fails the run with
+`codex login --with-api-key`; Gemini records the choice in its settings there. Every ACP profile must be `api_key`: the host refuses `subscription` over ACP
+for all adapters ([provider terms](../docs/provider-terms.md)); use `protocol: "cli"`
+for a subscription. An agent asking for sign-in fails the run with
 `acp_auth_required`. A gemini profile must be `api_key`: Agora never hosts a Google
 account login, and `allowSubscriptionAtOwnRisk` does not apply to ACP.
 
-**Permissions (#73, #93).** The host advertises no file system or terminal, so the
+**Permissions (#73, #93).** File calls (read, edit, delete, move) are answered only when every path they name is inside the run's worktree (links resolved); a call outside it, or without a known path, is refused with no approval card, whatever the rules say. The host advertises no file system or terminal, so the
 agent uses its own tools in the worktree and asks before anything it may not run
 alone (`session/request_permission`). The host answers at once from the claim's
 rules: a match gets `allow_once`; anything else gets `reject_once`, and the rule that

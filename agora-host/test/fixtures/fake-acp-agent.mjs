@@ -29,7 +29,7 @@ async function prompt(id, { sessionId }) {
     if (!env.ACP_NO_PREAMBLE) update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Let me check.' } });
     for (const [n, tool] of json('ACP_TOOLS', []).entries()) {
         const toolCallId = `call-${n}`;
-        update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: tool.title, kind: tool.kind, status: 'pending', rawInput: tool.rawInput,
+        update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: tool.title, kind: tool.kind, status: 'pending', rawInput: tool.rawInput, ...(tool.locations ? { locations: tool.locations } : {}),
             ...(tool.name ? { name: tool.name } : {}), content: tool.diff ? [{ type: 'diff', ...tool.diff }] : [] });
         const answer = await ask('session/request_permission', { sessionId, toolCall: { toolCallId },
             options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }, { optionId: 'always', name: 'Always', kind: 'allow_always' },

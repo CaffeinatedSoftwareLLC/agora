@@ -1,3 +1,5 @@
+import { realpath } from 'node:fs/promises';
+import path from 'node:path';
 import { TOOL_RULE } from '../types.js';
 import { ruleFor } from '../signals.js';
 
@@ -20,7 +22,7 @@ import { ruleFor } from '../signals.js';
  * agent itself, outside Agora's control.
  */
 
-export interface ToolCallInfo { kind?: string | null; title?: string | null; name?: string | null; rawInput?: unknown }
+export interface ToolCallInfo { kind?: string | null; title?: string | null; name?: string | null; rawInput?: unknown; locations?: string[] }
 export interface PermissionOption { optionId: string; kind: string }
 
 const IDENT = /^[A-Za-z][A-Za-z0-9_]{0,99}$/;
@@ -140,4 +142,54 @@ export function geminiPolicy(rules: Iterable<string>): string {
         else if (r === 'WebSearch' || r === 'web_search') allow({ toolName: 'google_web_search' });
     }
     return blocks.size ? `${[...blocks].join('\n\n')}\n` : '';
+}
+
+const FILE_KINDS = new Set(['read', 'edit', 'delete', 'move']);
+const FILE_TOOLS = new Set(['Read', ...EDIT_TOOLS]);
+const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+
+function within(root: string, target: string): boolean {
+    const rel = path.relative(norm(root), norm(target));
+    return rel === '' || (!path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`));
+}
+
+/** Resolve links of the deepest existing ancestor, so a new file under a link is judged by where the link leads. */
+async function realTarget(target: string): Promise<string> {
+    let head = target; const tail: string[] = [];
+    for (;;) {
+        try { return path.join(await realpath(head), ...tail.reverse()); } catch {
+            const parent = path.dirname(head);
+            if (parent === head) return target;
+            tail.push(path.basename(head)); head = parent;
+        }
+    }
+}
+
+/** Paths a file tool call says it touches: its locations and the path fields of its raw input. */
+function pathsOf(call: ToolCallInfo): unknown[] {
+    const out: unknown[] = [...(call.locations ?? [])];
+    const input = (call.rawInput && typeof call.rawInput === 'object' ? call.rawInput : {}) as Record<string, unknown>;
+    for (const k of ['file_path', 'path', 'notebook_path', 'filePath']) if (input[k] !== undefined) out.push(input[k]);
+    return out;
+}
+
+/**
+ * Whether a file tool call stays inside the run's worktree. Read/Write rules say nothing about
+ * where, so without this they would allow a CLI login file. A file call without a known
+ * path, or with any path outside `cwd` (after resolving links), is not allowed. Other calls pass.
+ */
+export async function locationsInside(call: ToolCallInfo, cwd: string): Promise<'ok' | 'outside' | 'unknown'> {
+    const rule = ruleForCall(call);
+    const bare = rule ? rule.replace(/\(.*$/, '') : '';
+    const paths = pathsOf(call);
+    const isFile = FILE_KINDS.has(call.kind ?? '') || FILE_TOOLS.has(bare);
+    if (!isFile && !(call.kind === 'search' && paths.length)) return 'ok';
+    if (!paths.length) return 'unknown';
+    const root = await realTarget(path.resolve(cwd));
+    for (const p of paths) {
+        if (typeof p !== 'string' || !p || p.includes('\0')) return 'unknown';
+        const abs = path.resolve(root, p);
+        if (!within(root, abs) || !within(root, await realTarget(abs))) return 'outside';
+    }
+    return 'ok';
 }

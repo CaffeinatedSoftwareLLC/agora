@@ -481,12 +481,18 @@ export async function heartbeat(pool: Pool, host: Host, runId: string, claimToke
             const s = await c.query(`SELECT channel_id FROM agent_sessions WHERE id = $1`, [run.session_id]);
             const channelId = s.rows[0]?.channel_id?.trim();
             if (channelId) notices.push({ channelId, eventName: 'AgentRunProgress', event: {
-                channelId, sessionId: run.session_id.trim(), runId: run.id.trim(), step: progress.step,
+                channelId, sessionId: run.session_id.trim(), runId: run.id.trim(), step: cleanStep(progress.step),
                 toolCalls: progress.toolCalls, planDone: progress.planDone ?? null, planTotal: progress.planTotal ?? null,
             } });
         }
         return { status: 200, body: { cancel: false, leaseUntil: new Date(lease.rows[0].lease_until).toISOString() } };
     });
+}
+
+/** The step is agent-controlled text: drop control, format and line-separator characters before broadcast. */
+export function cleanStep(step: string | null | undefined): string | null {
+    if (typeof step !== 'string') return null;
+    return step.replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
 }
 
 /** Why the host must stop this run, or null. */

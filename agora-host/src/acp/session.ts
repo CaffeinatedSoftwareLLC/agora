@@ -6,7 +6,7 @@ import { killTree, type RunningChild } from '../process.js';
 import { oneLine } from '../envelope.js';
 import { parseReset, RATE_LIMIT_TEXT } from '../signals.js';
 import type { Progress, RateLimit, Result } from '../types.js';
-import { allowedCall, outcome, reportable, ruleForCall, type ToolCallInfo } from './permissions.js';
+import { allowedCall, locationsInside, outcome, reportable, ruleForCall, type ToolCallInfo } from './permissions.js';
 import { AUTH_REQUIRED, Connection, METHOD_NOT_FOUND, RpcError } from './rpc.js';
 
 /**
@@ -163,6 +163,7 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (typeof u?.toolCallId !== 'string') return null;
         const call = calls.get(u.toolCallId) ?? {};
         for (const key of ['kind', 'title', 'name', 'status'] as const) if (typeof u[key] === 'string') call[key] = u[key];
+        if (Array.isArray(u.locations)) call.locations = u.locations.map((l: any) => l?.path).filter((x: unknown): x is string => typeof x === 'string').slice(0, 50);
         if (u.rawInput !== undefined && u.rawInput !== null) call.rawInput = u.rawInput;
         if (Array.isArray(u.content)) call.diffs = u.content.filter((c: any) => c?.type === 'diff').map((c: any) => inside(c.path)).filter(Boolean);
         if (calls.size < 5000) calls.set(u.toolCallId, call);
@@ -192,16 +193,23 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
                 return;
         }
     };
-    const permission = (params: unknown) => {
+    const permission = async (params: unknown) => {
         const p = permissionSchema.safeParse(params);
         if (!p.success) throw new RpcError(-32602, 'Invalid params');
         if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
         const call = track(p.data.toolCall) ?? {};
-        const allow = allowedCall(call, rules);
+        const place = await locationsInside(call, launch.cwd);
+        const allow = place === 'ok' && allowedCall(call, rules);
         if (!allow) {
-            const rule = ruleForCall(call);
-            if (reportable(rule) && !denied.includes(rule) && denied.length < 10) denied.push(rule);
-            step = `Denied ${rule ?? call.title ?? 'a tool call'}`;
+            if (place !== 'ok') {
+                // No card for a path problem: approving the tool would not change the answer
+                step = place === 'outside' ? 'Denied file access outside the workspace' : 'Denied file access without a known path';
+            } else {
+                const rule = ruleForCall(call);
+                if (reportable(rule) && !denied.includes(rule) && denied.length < 10) denied.push(rule);
+                // Never the agent's own text: the rule is built by the host, anything else is generic
+                step = `Denied ${reportable(rule) ? rule.slice(0, 80) : 'a tool call'}`;
+            }
         }
         return { outcome: outcome(p.data.options, allow) };
     };

@@ -77,6 +77,11 @@ describe('ACP agents', () => {
         await heartbeat(ctx.db, { id: hostId, serverId }, c.body.run.id, c.body.run.claimToken, notices, null, progress);
         expect(notices).toEqual([{ channelId, eventName: 'AgentRunProgress',
             event: { channelId, sessionId, runId: c.body.run.id, ...progress } }]);
+        // The step is the agent's own text: control characters never reach the channel
+        const dirty: Notice[] = [];
+        await heartbeat(ctx.db, { id: hostId, serverId }, c.body.run.id, c.body.run.claimToken, dirty, null,
+            { ...progress, step: 'ls\u001b[2J\u0007\r\nfake‮  step\u0085' });
+        expect((dirty[0].event as any).step).toBe('ls [2J fake step');
         const none: Notice[] = [];
         await heartbeat(ctx.db, { id: hostId, serverId }, c.body.run.id, c.body.run.claimToken, none, null);
         expect(none).toEqual([]);

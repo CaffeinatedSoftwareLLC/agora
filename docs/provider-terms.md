@@ -78,6 +78,8 @@ If you accept the risk anyway, set `"allowSubscriptionAtOwnRisk": true` on that 
 
 The host runs Gemini CLI only over the Agent Client Protocol (`gemini --acp`) with an API key: it calls Gemini's API-key sign-in method and never a Google login, and refuses to run if the agent doesn't offer that method ([agora-host README, "ACP agents"](../agora-host/README.md#acp-agents-agent-client-protocol)). A gemini profile on account login, with or without `allowSubscriptionAtOwnRisk`, is never hosted. The run approval itself works for any profile: set `"requireRunApproval": true`.
 
+Over ACP the host runs every adapter on an API key only: `claude-agent-acp` wraps the Claude Agent SDK, and `codex-acp` embeds Codex's core and reads the ChatGPT login itself, so neither is the unmodified official CLI that a subscription profile relies on. Config validation refuses `protocol: "acp"` with `auth: "subscription"` for Claude and Codex as well as Gemini; use `protocol: "cli"` (or the Claude Channel) for a subscription.
+
 ## Branding
 
 Agora says it "runs Claude Code / Codex / Gemini" in plain text and uses no look-alike names or logos. Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.

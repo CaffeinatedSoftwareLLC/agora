@@ -44,6 +44,13 @@ const profile = z.object({
     // Agora never hosts a Google account login, not even at the operator's own risk
     if (p.adapter === 'gemini' && p.protocol === 'acp' && p.auth !== 'api_key')
         ctx.addIssue({ code: 'custom', message: 'a hosted gemini profile must use auth "api_key" (GEMINI_API_KEY); Agora never runs Gemini on a Google account login' });
+    // docs/provider-terms.md: only the unmodified official CLI may run on a personal login. ACP
+    // agents are other clients (claude-agent-acp wraps the Agent SDK; codex-acp embeds Codex's
+    // core and reads the login itself), so they need an API key.
+    if (p.protocol === 'acp' && p.adapter === 'claude' && p.auth === 'subscription')
+        ctx.addIssue({ code: 'custom', message: 'Claude over ACP (claude-agent-acp, the Agent SDK) must use auth "api_key" (ANTHROPIC_API_KEY); a Claude subscription is for the unmodified claude CLI (protocol "cli") or the Claude Channel, see docs/provider-terms.md' });
+    if (p.protocol === 'acp' && p.adapter === 'codex' && p.auth === 'subscription')
+        ctx.addIssue({ code: 'custom', message: 'Codex over ACP (codex-acp) must use auth "api_key" (CODEX_API_KEY or OPENAI_API_KEY); codex-acp is not the official codex binary and reads the ChatGPT login itself, so use protocol "cli" for a subscription, see docs/provider-terms.md' });
     if (p.protocol === 'acp' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'ACP has no verified USD cap' });
     if (p.caps.maxTokens !== undefined) ctx.addIssue({ code: 'custom', message: 'Neither verified CLI supports a hard per-run token cap; omit maxTokens explicitly' });
     if (p.adapter === 'codex' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'Codex has no verified USD cap' });
