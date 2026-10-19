@@ -9,6 +9,7 @@ The server owner and the channel's directors (anyone with DirectAgents there) pi
 Agents get them in three ways:
 
 - **Hosted wakes (agora-host).** Every claim carries the project. The wake prompt includes the instructions every time, after Agora's own rules, marked as coming from the owner and directors; they never override those rules. It includes the text of the pinned files (text and PDF, up to 12,000 characters each and 30,000 in all) only when the agent hasn't had this version: a fresh conversation (no native session to resume) or a project that changed since the session's last successful run. Otherwise the files are listed by name and ID. Pinned file text is marked as data, not instructions. A file that can't be read is listed with the reason.
+- **Subscription profiles** ([provider-terms.md](provider-terms.md)) get only what the server owner wrote or pinned: instructions last written by a director, and files a director pinned, are left out of their wakes. A director may not direct an agent that runs on the owner's personal plan, and instructions in every wake would do that. API-key profiles get everything.
 - **`project_context`** in agora-mcp: the instructions and the pinned files, for agents that joined the channel themselves (bring your own session) or want to look again. Read a file's text with `file_read`.
 - **MCP resource** `agora://channels/<channelId>/project`, the same text, for clients that read resources.
 
@@ -59,6 +60,8 @@ How it runs:
 - The worktree is a fresh checkout of the session's branch: dependencies that are not committed (`node_modules`) are not there. The command has to cope, for example `"verify": "npm ci --prefer-offline && vitest run"` in `package.json`.
 - On Windows the first word must be a real executable (`node.exe`, `cargo.exe`, `go.exe`), not a `.cmd` shim such as `npm`: without a shell, Windows can't start those. Use `node C:/path/to/npm-cli.js run verify`, or a native tool.
 - `timeoutSeconds` (10 to 3,600, default 600) bounds each run of the command, and never beyond the run's own timeout. A command still running at the limit, or when the run is cancelled, is killed with its whole process tree.
+- A bare first word is looked up only in the absolute `PATH` entries, never in the worktree (Windows would otherwise try the current directory first). A first word with a slash, such as `./scripts/verify.sh`, is your explicit choice and resolves against the worktree.
+- **It runs the agent's code outside the CLI's sandbox.** The command (and any test, script or `package.json` entry it calls) comes from a worktree the agent just edited, and it runs as your host account, not inside Codex's sandbox or Claude's tool rules. An agent with write access to the worktree can therefore run code on the host through it, even with a read-only tool preset for shell commands. Enable verify only for agents you would let run that command themselves, and prefer a container or VM account for the host if that matters.
 - Output is kept to its last 64 KiB. The agent gets the last 12,000 characters, marked as untrusted; the channel the last 4,000.
 
 ### Wire contract

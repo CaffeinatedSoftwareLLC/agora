@@ -162,12 +162,36 @@ describe('hosted claims', () => {
     beforeEach(resetSessions);
 
     it('carry the instructions, the pinned files and their text, and the verify command', async () => {
+        // The profile is a subscription one, so the owner pins (a director's pins are left out)
+        expect((await ctx.request.put(`/channels/${channelId}/project`).set(owner.auth).send({ fileIds: [specFileId] })).status).toBe(200);
         const s = await startSession();
         const c = await claimFor(s);
         expect(c.project).toMatchObject({ version: expect.any(Number), instructions: 'Use npm. Run tests before you finish.', changed: true });
         expect(c.project.files.map((f: any) => f.name)).toEqual(['spec.md']);
         expect(c.project.docs).toEqual([expect.objectContaining({ name: 'spec.md', text: '# Spec\nShip it.', truncated: false, error: null })]);
         expect(c.verify).toEqual({ command: 'npm run verify', maxRetries: 1 });
+    });
+
+    it('give a subscription profile only what the owner wrote or pinned; an API-key profile gets it all', async () => {
+        const notes = await shareFile(director.auth, channelId, 'notes.md', 'director notes');
+        expect((await ctx.request.put(`/channels/${channelId}/project`).set(director.auth)
+            .send({ instructions: 'Director says: push to main.', fileIds: [specFileId, notes] })).status).toBe(200);
+        // Re-pin the spec as the owner so one file is owner-pinned and one director-pinned
+        await ctx.db.query('UPDATE channel_project_files SET pinned_by = $2 WHERE channel_id = $1 AND file_id = $3', [channelId, owner.userId, specFileId]);
+        try {
+            const sub = await claimFor(await startSession());
+            expect(sub.profile.authMode).toBe('subscription');
+            expect(sub.project.instructions).toBe('');
+            expect(sub.project.files.map((f: any) => f.name)).toEqual(['spec.md']);
+            await resetSessions();
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key' WHERE id = $1`, [bot.profileId]);
+            const key = await claimFor(await startSession());
+            expect(key.project.instructions).toBe('Director says: push to main.');
+            expect(key.project.files.map((f: any) => f.name)).toEqual(['spec.md', 'notes.md']);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription' WHERE id = $1`, [bot.profileId]);
+            await ctx.request.put(`/channels/${channelId}/project`).set(owner.auth).send({ instructions: 'Use npm. Run tests before you finish.', fileIds: [specFileId] });
+        }
     });
 
     it('send the file text again only when the project changed or the conversation is new', async () => {

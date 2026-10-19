@@ -6,7 +6,7 @@ import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permi
 import { lurkBatchReady } from './agent-lurk';
 import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, subscriptionNotice } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
-import { claimProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
+import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -311,7 +311,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
     const channelProject = await readProject(c, channelId);
-    const project = claimProject(channelProject, session.project_version_seen ?? null, !session.native_session_id);
+    // Subscription profiles take project context from the owner only (provider-terms.ts)
+    const wakeProject = subscription ? await ownerAuthoredProject(c, channelId, channelProject) : channelProject;
+    const project = claimProject(wakeProject, session.project_version_seen ?? null, !session.native_session_id);
     if (project) await c.query(`UPDATE agent_runs SET project_version = $2 WHERE id = $1`, [runId, project.version]);
 
     notices.push(await sessionUpdate(c, sessionId, true));

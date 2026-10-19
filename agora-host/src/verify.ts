@@ -1,5 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
-import { join } from 'node:path';
+import { statSync } from 'node:fs';
+import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
 import type { LocalProfile } from './config.js';
 import { osEnv } from './adapters.js';
@@ -35,25 +36,51 @@ export function verifyEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proce
     return { ...osEnv(source), CI: '1' };
 }
 
+/**
+ * The executable's absolute path. A bare name is looked up only in the absolute PATH
+ * entries, never in the worktree: Windows would otherwise try the current directory first,
+ * so an agent could drop a `node.exe` into its worktree and have the host run it. A name
+ * with a path separator is the owner's explicit choice and resolves against the worktree.
+ */
+export function resolveExecutable(name: string, cwd: string, env: NodeJS.ProcessEnv, platform = process.platform): string | null {
+    const isFile = (p: string) => { try { return statSync(p).isFile(); } catch { return false; } };
+    if (isAbsolute(name)) return name;
+    if (/[\\/]/.test(name)) return resolvePath(cwd, name);
+    const pathVar = Object.entries(env).find(([k]) => k.toUpperCase() === 'PATH')?.[1] ?? '';
+    const exts = platform === 'win32' && !extname(name) ? ['.exe', '.com'] : [''];
+    const root = resolvePath(cwd);
+    for (const dir of pathVar.split(platform === 'win32' ? ';' : delimiter)) {
+        if (!dir || !isAbsolute(dir) || resolvePath(dir) === root) continue;
+        for (const ext of exts) if (isFile(join(dir, name + ext))) return join(dir, name + ext);
+    }
+    return null;
+}
+
 export interface VerifyOutcome { passed: boolean; exitCode: number | null; timedOut: boolean; spawnFailed: boolean; output: string }
 
 /** Run the command in `cwd`; kill its whole process tree on timeout or abort. */
 export function runVerify(argv: string[], cwd: string, timeoutMs: number, signal: AbortSignal, env = verifyEnv()): Promise<VerifyOutcome> {
     return new Promise(resolve => {
         let output = ''; let timedOut = false; let settled = false;
+        // Declared before finish() can run, so an early return never hits a TDZ error
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let kill = () => {};
+        const stop = () => kill();
         const finish = (o: Omit<VerifyOutcome, 'output' | 'timedOut'>) => {
             if (settled) return;
             settled = true; clearTimeout(timer); signal.removeEventListener('abort', stop);
             resolve({ ...o, timedOut, output });
         };
         if (signal.aborted) { finish({ passed: false, exitCode: null, spawnFailed: false }); return; }
-        const child = spawn(argv[0], argv.slice(1), {
+        const executable = resolveExecutable(argv[0], cwd, env);
+        if (!executable) { finish({ passed: false, exitCode: null, spawnFailed: true }); return; }
+        const child = spawn(executable, argv.slice(1), {
             cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
         });
         const collect = (chunk: string) => { output += chunk; if (output.length > 2 * KEEP) output = output.slice(-KEEP); };
         child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
         child.stdout.on('data', collect); child.stderr.on('data', collect);
-        const kill = () => {
+        kill = () => {
             if (!child.pid || child.exitCode !== null) return;
             if (process.platform === 'win32') {
                 promisify(execFile)(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
@@ -62,8 +89,7 @@ export function runVerify(argv: string[], cwd: string, timeoutMs: number, signal
                 try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
             }
         };
-        const stop = () => kill();
-        const timer = setTimeout(() => { timedOut = true; kill(); }, timeoutMs);
+        timer = setTimeout(() => { timedOut = true; kill(); }, timeoutMs);
         signal.addEventListener('abort', stop, { once: true });
         child.on('error', () => finish({ passed: false, exitCode: null, spawnFailed: true }));
         child.on('close', code => finish({ passed: code === 0 && !timedOut && !signal.aborted, exitCode: code, spawnFailed: false }));

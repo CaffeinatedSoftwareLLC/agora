@@ -76,9 +76,10 @@ export async function channelFileIds(db: any, channelId: string, fileIds: string
 export async function saveProject(db: any, channelId: string, serverId: string, userId: string,
                                   change: { instructions?: string; fileIds?: string[] }): Promise<void> {
     await db.query(
-        `INSERT INTO channel_projects (channel_id, server_id, instructions, version, updated_by, updated_at)
-         VALUES ($1, $2, COALESCE($3, ''), 1, $4, NOW())
+        `INSERT INTO channel_projects (channel_id, server_id, instructions, instructions_by, version, updated_by, updated_at)
+         VALUES ($1, $2, COALESCE($3, ''), CASE WHEN $3::text IS NULL THEN NULL ELSE $4 END, 1, $4, NOW())
          ON CONFLICT (channel_id) DO UPDATE SET instructions = COALESCE($3, channel_projects.instructions),
+             instructions_by = CASE WHEN $3::text IS NULL THEN channel_projects.instructions_by ELSE $4 END,
              version = channel_projects.version + 1, updated_by = $4, updated_at = NOW()`,
         [channelId, serverId, change.instructions ?? null, userId]
     );
@@ -103,6 +104,21 @@ export async function saveVerify(db: any, channelId: string, serverId: string, u
              verify_max_retries = COALESCE($4, channel_projects.verify_max_retries), updated_by = $5, updated_at = NOW()`,
         [channelId, serverId, command, maxRetries ?? null, userId]
     );
+}
+
+/**
+ * For a subscription profile (docs/provider-terms.md): only what the server owner wrote or
+ * pinned. A director may not direct an agent that runs on the owner's personal plan, and
+ * instructions in every wake would do exactly that.
+ */
+export async function ownerAuthoredProject(db: any, channelId: string, project: Project): Promise<Project> {
+    const row = (await db.query(
+        `SELECT p.instructions_by = s.owner_id AS by_owner, s.owner_id FROM channel_projects p JOIN servers s ON s.id = p.server_id
+         WHERE p.channel_id = $1`, [channelId])).rows[0];
+    if (!row) return project;
+    const pinned = await db.query(`SELECT file_id FROM channel_project_files WHERE channel_id = $1 AND pinned_by = $2`, [channelId, row.owner_id]);
+    const ownerFiles = new Set(pinned.rows.map((r: any) => r.file_id.trim()));
+    return { ...project, instructions: row.by_owner ? project.instructions : '', files: project.files.filter(f => ownerFiles.has(f.id)) };
 }
 
 /** The part of a claim that carries the project (agora-host src/types.ts). */
@@ -169,7 +185,7 @@ export interface VerificationReport {
 export const verificationSchema = {
     type: 'object', additionalProperties: false, required: ['command', 'status', 'attempts'],
     properties: {
-        command: { type: 'string', minLength: 1, maxLength: 300 },
+        command: { type: 'string', minLength: 1, maxLength: 300, pattern: VERIFY_COMMAND_PATTERN },
         status: { type: 'string', enum: ['passed', 'failed', 'skipped'] },
         attempts: { type: 'integer', minimum: 0, maximum: MAX_VERIFY_RETRIES },
         exitCode: { type: ['integer', 'null'] },

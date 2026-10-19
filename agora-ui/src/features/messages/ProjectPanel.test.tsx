@@ -4,6 +4,11 @@ import { ProjectPanel } from './ProjectPanel';
 import { useChannelStore } from '../../stores/channelStore';
 import type { ChannelProject } from '../../lib/api';
 
+// Node 25's own localStorage shadows jsdom's; uiStore reads it on import
+vi.hoisted(() => {
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+});
+
 type Handler = (payload: unknown) => void;
 const handlers = new Map<string, Handler>();
 const socket = { on: (e: string, h: Handler) => { handlers.set(e, h); }, off: (e: string) => { handlers.delete(e); } };

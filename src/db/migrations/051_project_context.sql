@@ -18,6 +18,8 @@ CREATE TABLE channel_projects (
     -- Plain words only: the host splits on spaces and runs it without a shell
     verify_command      VARCHAR(300) CHECK (verify_command ~ '^[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$'),
     verify_max_retries  SMALLINT NOT NULL DEFAULT 2 CHECK (verify_max_retries BETWEEN 0 AND 5),
+    -- Who last wrote the instructions: subscription agents get them only from the owner
+    instructions_by     CHAR(26) REFERENCES users(id) ON DELETE SET NULL,
     updated_by          CHAR(26) REFERENCES users(id) ON DELETE SET NULL,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

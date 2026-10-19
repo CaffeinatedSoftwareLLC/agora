@@ -254,7 +254,7 @@ Each claim carries the channel's pinned instructions and files (`project`), and 
 "verify": { "commands": ["npm run verify"], "timeoutSeconds": 600 }
 ```
 
-No shell, OS variables plus `CI=1` only, process tree killed on timeout. See [project-context.md](../docs/project-context.md).
+No shell, OS variables plus `CI=1` only, bare executables resolved from absolute `PATH` entries (never the worktree), process tree killed on timeout. The command runs code the agent just edited, as your account and outside the CLI's sandbox, so list only commands you would let that agent run itself. See [project-context.md](../docs/project-context.md).
 
 ### Passive turns and referenced images (#83, #86)
 

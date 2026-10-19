@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Scheduler } from '../src/scheduler.js';
 import { configSchema } from '../src/config.js';
 import { projectSection, verifyPrompt, wakePrompt } from '../src/prompt.js';
-import { runVerify, verifyArgv, verifyEnv, type VerifyOutcome } from '../src/verify.js';
+import { resolveExecutable, runVerify, verifyArgv, verifyEnv, type VerifyOutcome } from '../src/verify.js';
 import type { Claim, HostApi, Result } from '../src/types.js';
 import { claim, config, id, successful } from './helpers.js';
 
@@ -86,6 +86,25 @@ describe('runVerify', () => {
     it('reports a command that cannot start', async () => {
         const r = await runVerify(['agora-no-such-command-xyz'], process.cwd(), 5000, new AbortController().signal);
         expect(r).toMatchObject({ passed: false, spawnFailed: true });
+    });
+    it('settles without spawning when the run was already stopped', async () => {
+        const abort = new AbortController(); abort.abort();
+        expect(await run('process.exit(0)', 10000, abort.signal)).toMatchObject({ passed: false, spawnFailed: false });
+    });
+    it('looks a bare name up in absolute PATH entries only, never in the worktree', async () => {
+        const { mkdtemp, writeFile, mkdir } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const root = await mkdtemp(join(tmpdir(), 'verify-'));
+        const work = join(root, 'work'), bin = join(root, 'bin');
+        await mkdir(work); await mkdir(bin);
+        const exe = process.platform === 'win32' ? 'tool.exe' : 'tool';
+        await writeFile(join(work, exe), ''); await writeFile(join(bin, exe), '');
+        const sep = process.platform === 'win32' ? ';' : ':';
+        expect(resolveExecutable('tool', work, { PATH: [work, '.', 'relative', bin].join(sep) })).toBe(join(bin, exe));
+        expect(resolveExecutable('tool', work, { PATH: [work, '.'].join(sep) })).toBeNull();
+        expect(resolveExecutable('./scripts/check', work, {})).toBe(join(work, 'scripts', 'check'));
+        expect(resolveExecutable(node, work, {})).toBe(node);
     });
     it('gives the command OS variables and CI=1, never API keys', () => {
         const env = verifyEnv({ PATH: '/bin', HOME: '/h', ANTHROPIC_API_KEY: 'sk', CLAUDE_CONFIG_DIR: '/c' });
