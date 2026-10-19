@@ -29,6 +29,11 @@ export const claimSchema = z.object({
         lurkMode: z.enum(['quiet', 'balanced', 'vocal']).nullable().default(null),
         // The server owner started or last resumed this session (terms.ts)
         startedByOwner: z.boolean().default(false),
+        // A task card's or subtask's session works only in this thread (docs/task-board.md)
+        threadId: id.nullable().default(null),
+        // A subtask: its summary is posted back to this parent session
+        parentSessionId: id.nullable().default(null),
+        scope: z.object({ kind: z.enum(['task', 'subtask']), title: z.string().max(200) }).nullable().default(null),
     }),
     profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude']),
         // null: leave the model or effort to the CLI's own default
@@ -42,7 +47,8 @@ export const claimSchema = z.object({
         runApproval: z.boolean().default(false) }),
     inbox: z.array(z.object({
         // 'command': the session notice a /start or /resume posts, so the agent says hello
-        messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command', 'lurk']),
+        // 'delegate': a subtask's brief (to the child) or its summary (back to the parent)
+        messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command', 'lurk', 'delegate']),
         authorId: id.nullable(), authorName: z.string().nullable(), authorBot: z.boolean(),
         authority: z.enum(['owner', 'director']).nullable(), content: z.string().max(4000).nullable(),
         createdAt: z.string().datetime(),

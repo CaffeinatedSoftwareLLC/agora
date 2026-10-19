@@ -11,7 +11,7 @@ const identity = ['-c', 'user.name=Agora', '-c', 'user.email=agora@localhost'];
 export interface Checkpoint { sha: string; ref: string }
 export interface ReviewCommand {
     id: string; claimToken: string; sessionId: string; profile: string; workdirAlias: string;
-    action: 'diff' | 'discard' | 'commit' | 'merge' | 'pr' | 'restore' | 'fork';
+    action: 'diff' | 'discard' | 'commit' | 'merge' | 'pr' | 'restore' | 'fork' | 'pr_status';
     payload: { path?: string; offset?: number; revision?: string; message?: string; checkpoint?: Checkpoint; forkSessionId?: string };
 }
 const CAP = 128 * 1024, PAGE = 16000;
@@ -114,6 +114,22 @@ const oneLine = (m: string) => cleanMessage(m).split('\n')[0].replace(/\t/g, ' '
 type Gh = (cwd: string, args: string[]) => Promise<string>;
 const gh: Gh = async (cwd,args) => (await exec('gh',args,{ cwd,windowsHide:true,timeout:60000,maxBuffer:16384,
     signal:gitSignal(),env:{...process.env,GH_PROMPT_DISABLED:'1',GIT_TERMINAL_PROMPT:'0'} })).stdout;
+/**
+ * The session branch's pull request, for its task card (docs/task-board.md). Reads only; gh
+ * uses the host owner's login. The branch name is ours (agora/<profile>/<session>), never a flag.
+ */
+async function prStatus(w: Workspace, runGh: Gh) {
+    let out: string;
+    try { out = await runGh(w.cwd, ['pr', 'view', w.branch, '--json', 'url,state,isDraft']); }
+    catch (err: any) { throw new Error(/no pull requests? found/i.test(String(err?.stderr ?? err?.message ?? '')) ? 'no_pull_request' : 'pr_status_failed'); }
+    let pr: { url?: unknown; state?: unknown; isDraft?: unknown };
+    try { pr = JSON.parse(out); } catch { throw new Error('pr_status_failed'); }
+    const state = String(pr.state ?? '').toUpperCase();
+    const prState = state === 'MERGED' ? 'merged' : state === 'CLOSED' ? 'closed' : state === 'OPEN' ? (pr.isDraft ? 'draft' : 'open') : null;
+    if (!prState) throw new Error('pr_status_failed');
+    const url = typeof pr.url === 'string' && /^https:\/\/\S+$/.test(pr.url) ? pr.url.slice(0, 2048) : undefined;
+    return { prState, ...(url ? { url } : {}), message: `Pull request is ${prState}` };
+}
 export function executeReview(local: LocalProfile, cmd: ReviewCommand, runGh: Gh = gh) {
     // Entire operation ends before the 180s server lease; no later Git steps run on expiry.
     return withGitSignal(AbortSignal.timeout(120000),()=>executeOperation(local,cmd,runGh));
@@ -163,6 +179,7 @@ async function executeOperation(local: LocalProfile, cmd: ReviewCommand, runGh: 
         const fork = await ensureWorkspace(local, { session: { id: p.forkSessionId }, profile: { name: cmd.profile } }, { sha: cp.sha, baseBranch: w.baseBranch });
         return { sessionId: fork.sessionId, branch: fork.branch, baseSha: fork.baseSha, headSha: cp.sha, message: 'Forked checkpoint into a new shelved session' };
     }
+    if (cmd.action === 'pr_status') return prStatus(w, runGh);
     if (await git(w.cwd, ['status', '--porcelain'])) throw new Error('commit_changes_first');
     const base = w.baseBranch;
     if (!base || base === w.branch) throw new Error('base_branch_unavailable');

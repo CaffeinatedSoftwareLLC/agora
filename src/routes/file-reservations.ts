@@ -16,8 +16,12 @@ const ACTIVE = `r.released_at IS NULL AND r.expires_at > clock_timestamp()`;
 
 async function liveSession(request: FastifyRequest, channelId: string) {
     if (!request.isBot) return fail(403, 'live_bot_session_required');
-    const result = await request.dbClient!.query(`SELECT * FROM agent_sessions
-        WHERE bot_id = $1 AND channel_id = $2 AND state = 'live' FOR UPDATE`, [request.userId, channelId]);
+    // An agent can be live in the channel and in task card or subtask threads: the session
+    // running now holds the reservation, else the channel session
+    const result = await request.dbClient!.query(`SELECT * FROM agent_sessions s
+        WHERE bot_id = $1 AND channel_id = $2 AND state = 'live'
+        ORDER BY EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') DESC, (thread_id IS NULL) DESC, id
+        LIMIT 1 FOR UPDATE OF s`, [request.userId, channelId]);
     return result.rows[0] ?? fail(409, 'no_live_session');
 }
 async function checkThread(db: any, channelId: string, threadId: string | null) {

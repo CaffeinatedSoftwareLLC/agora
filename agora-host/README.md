@@ -245,6 +245,20 @@ is trusted local software running under your Windows account.
 This package does not deploy or modify the server. S2 integration, real CLI
 resume/usage and tree-kill verification, and the S7 phone/deployment test remain
 release gates.
+### Task cards and subtasks
+
+A task card's or subtask's session works in one thread (`session.threadId`), and
+`session.scope` says which (`task` or `subtask`, with a title). The wake prompt
+tells the agent to post only in that thread. For a subtask, it adds that the
+brief is all the agent has (a clean context, no native session or summary) and
+that only its JSON summary is posted back to the parent. Inbox reason `delegate`
+marks a subtask's brief or its summary. Every non-lurk prompt mentions
+`subtask_start`. Add `subtask_start` (and the `task_*` tools, for orchestrators)
+to a profile's `approvedTools` to let it delegate. The workspace command
+`pr_status` runs `gh pr view <session branch> --json url,state,isDraft` in the
+session worktree and returns only the state and an https URL. See
+[task-board.md](../docs/task-board.md).
+
 ### Passive turns and referenced images (#83, #86)
 
 Lurk deliveries carry `session.lurkMode` and inbox reason `lurk`. A purely passive batch uses the dial's interjection rules and permits exact `[pass]` without forcing a JSON schema. `[pass]` completes successfully, preserves token usage and leaves the prior session summary intact. Normal addressed work still requires its usual response.

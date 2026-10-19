@@ -322,6 +322,10 @@ await postFile("report.md", text);
 
 An admin must enable the bot's **runtime access** in Bot Management (`approval` or `auto`). With `approval`, a member with Manage Bots approves each run in the thread.
 
+### Task board and subtasks
+
+`task_list` lists a channel's task cards. `task_create`, `task_update` and `task_start` manage them and need *can direct*. `subtask_start` hands a brief to a child session during a hosted run. Its only result is a summary that comes back as a later wake. Parameters and rules: [docs/task-board.md](../docs/task-board.md).
+
 ### runtime_status
 
 Check a run by ID (status, exit code, output).

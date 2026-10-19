@@ -131,6 +131,18 @@ it('pushes only the session branch without force and calls gh with explicit base
     expect((await git(repo,['ls-remote','origin'])).trim()).toContain(`refs/heads/${w.branch}`);
     expect((await git(repo,['ls-remote','origin','refs/heads/main'])).trim()).toBe('');
 });
+it('reads the session branch PR for its task card, even with uncommitted changes, and only keeps https links',async()=>{
+    const {w,local}=await setup();await writeFile(join(w.cwd,'file.txt'),'uncommitted');
+    const status=(gh:(cwd:string,args:string[])=>Promise<string>)=>executeReview(local,{id:id(12),claimToken:'token',sessionId:w.sessionId,profile:'builder',workdirAlias:'agora',action:'pr_status',payload:{}},gh);
+    const gh=vi.fn(async()=>JSON.stringify({url:'https://github.com/example/repo/pull/2',state:'OPEN',isDraft:true}));
+    expect(await status(gh)).toEqual({prState:'draft',url:'https://github.com/example/repo/pull/2',message:'Pull request is draft'});
+    // The branch is passed as the positional argument; nothing from the phone reaches gh
+    expect(gh).toHaveBeenCalledWith(w.cwd,['pr','view',w.branch,'--json','url,state,isDraft']);
+    expect(await status(async()=>JSON.stringify({url:'javascript:alert(1)',state:'MERGED'}))).toEqual({prState:'merged',message:'Pull request is merged'});
+    await expect(status(async()=>{throw Object.assign(new Error('exit 1'),{stderr:'no pull requests found for branch "x"'});})).rejects.toThrow('no_pull_request');
+    await expect(status(async()=>{throw Object.assign(new Error('exit 1'),{stderr:'HTTP 401: Bad credentials /home/me/.config'});})).rejects.toThrow('pr_status_failed');
+    await expect(status(async()=>JSON.stringify({state:'WEIRD'}))).rejects.toThrow('pr_status_failed');
+});
 it.each([true,false])('scheduler checkpoints changed files before reporting a run (success=%s)',async(success)=>{
     const {c,w,delivery}=await setup();
     const api={claim:vi.fn(),heartbeat:vi.fn(),complete:vi.fn(),fail:vi.fn()};

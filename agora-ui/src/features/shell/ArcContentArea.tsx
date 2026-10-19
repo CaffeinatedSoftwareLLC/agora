@@ -24,6 +24,7 @@ export function ArcContentArea() {
   const toggleMembers = useUIStore(s => s.toggleAux);
   const filesOpen = useUIStore(s => s.aux === 'files');
   const toggleFiles = useUIStore(s => s.toggleAux);
+  const tasksOpen = useUIStore(s => s.aux === 'tasks');
   const openThreadView = useUIStore(s => s.openThreadView);
 
   const accentColor = P.accent;
@@ -103,6 +104,31 @@ export function ArcContentArea() {
           >
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: P.primary }} />
             <span className="sr-only">{paletteName}</span>
+          </button>
+
+          {/* Task board toggle */}
+          <button
+            onClick={() => toggleFiles('tasks')}
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            style={{
+              color: tasksOpen ? accentColor : P.muted,
+              background: tasksOpen ? `${accentColor}1f` : 'transparent',
+            }}
+            title="Task board"
+            aria-label="Task board"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M9 3v18M15 3v18M5 8h2M11 8h2M11 12h2M17 8h2" />
+            </svg>
           </button>
 
           {/* Files panel toggle */}

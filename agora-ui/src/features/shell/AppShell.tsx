@@ -10,6 +10,7 @@ import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 import { ThreadPanel } from '../messages/ThreadPanel';
 import { FilesPanel } from '../messages/FilesPanel';
+import { TasksPanel } from '../tasks/TasksPanel';
 import { OverlayManager } from './OverlayManager';
 import { useShellViewport } from './viewport';
 import './shell.css';
@@ -111,6 +112,7 @@ export function AppShell() {
             aria-label={aux} aria-modal={compact ? true : undefined} inert={!!overlay}>
             {aux === 'thread' && <ThreadPanel />}
             {aux === 'files' && <FilesPanel />}
+            {aux === 'tasks' && <TasksPanel />}
             {aux === 'members' && <MembersSidebar />}
           </aside>
         </>}

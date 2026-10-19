@@ -44,6 +44,27 @@ export interface AgentSession {
     lastActiveAt: string;
     /** Sleeping through a rate limit until then; messages for it are held. */
     sleepingUntil?: string | null;
+    /** A task card's or subtask's session works in this thread. */
+    threadId?: string | null;
+    /** A subtask's parent session. */
+    parentSessionId?: string | null;
+    title?: string | null;
+    tokenBudget?: number;
+}
+
+/** A card on a channel's task board (docs/task-board.md). */
+export interface TaskCard {
+    id: string; channelId: string; title: string; description: string;
+    status: 'todo' | 'in_progress' | 'review' | 'done';
+    profile: { id: string; name: string } | null;
+    threadId: string | null;
+    session: { id: string; state: 'live' | 'shelved' | 'ended'; running: boolean; branch: string | null; headSha: string | null; tokensUsed: number; tokenBudget: number } | null;
+    prUrl: string | null; prState: 'open' | 'draft' | 'merged' | 'closed' | null;
+}
+
+export interface SubtaskRequest {
+    parentSessionId: string; title: string; brief: string;
+    profile?: string; reportThreadId?: string; tokenBudget?: number; client_key?: string;
 }
 
 export interface AgentCommandResult {
@@ -259,6 +280,21 @@ export class AgoraApi {
     /** Session commands: start, end, resume (need can_direct) and sessions (listing). */
     async agentCommand(channelId: string, body: AgentCommand): Promise<AgentCommandResult> {
         return this.request('POST', `/channels/${channelId}/agent-commands`, body);
+    }
+    async tasks(channelId: string): Promise<{ cards: TaskCard[]; canManage: boolean }> {
+        return this.request('GET', `/channels/${channelId}/tasks`);
+    }
+    async createTask(channelId: string, body: { title: string; description?: string; profile?: string; start?: boolean }): Promise<{ action: string; card: TaskCard }> {
+        return this.request('POST', `/channels/${channelId}/tasks`, body);
+    }
+    async updateTask(channelId: string, taskId: string, body: { title?: string; description?: string; status?: TaskCard['status']; profile?: string | null }): Promise<{ card: TaskCard }> {
+        return this.request('PATCH', `/channels/${channelId}/tasks/${encodeURIComponent(taskId)}`, body);
+    }
+    async startTask(channelId: string, taskId: string): Promise<{ action: string; card: TaskCard }> {
+        return this.request('POST', `/channels/${channelId}/tasks/${encodeURIComponent(taskId)}/start`);
+    }
+    async startSubtask(channelId: string, body: SubtaskRequest): Promise<{ action: string; session: AgentSession }> {
+        return this.request('POST', `/channels/${channelId}/subtasks`, body);
     }
     async fileReservation(channelId: string, body: {
         action: 'reserve' | 'renew' | 'release'; paths?: string[]; reservationId?: string;
