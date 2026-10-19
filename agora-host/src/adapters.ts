@@ -68,7 +68,8 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, [...claim.profile.allowedTools, ...claim.run.grantedTools], config.presets);
     try {
         const env = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
-        const server = { command: config.mcp.executable, args: [config.mcp.entrypoint] };
+        // Hosted runs are not bring-your-own sessions: no presence socket (agora-mcp src/socket.ts)
+        const server = { command: config.mcp.executable, args: [config.mcp.entrypoint, '--no-presence'] };
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];

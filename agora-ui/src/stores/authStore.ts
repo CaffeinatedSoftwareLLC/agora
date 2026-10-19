@@ -8,6 +8,7 @@ import { useMemberStore } from './memberStore';
 import { useMessageStore } from './messageStore';
 import { useUIStore } from './uiStore';
 import { useTypingStore } from './typingStore';
+import { useAgentPresenceStore } from './agentPresenceStore';
 import { usePresenceStore } from './presenceStore';
 import { useUnreadStore } from './unreadStore';
 import { useThreadStore } from './threadStore';
@@ -197,6 +198,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     useThreadStore.getState().clear();
     useTypingStore.getState().clear();
     usePresenceStore.getState().clear();
+    useAgentPresenceStore.getState().clear();
     useUnreadStore.getState().clear();
     useUIStore.getState().setConnectionStatus('disconnected');
   },

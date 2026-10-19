@@ -250,7 +250,7 @@ export function registerTools(
     server: McpServer,
     api: AgoraApi,
     cursors: CursorTracker,
-    config: { defaultChannel?: string },
+    config: { defaultChannel?: string; listening?: { start(): void; stop(): void } },
 ) {
     let botInfo: BotInfo | null = null;
 
@@ -459,23 +459,29 @@ export function registerTools(
                 ? collected.some(m => wakesAgent(m, self))
                 : collected.length > 0;
 
-            while (Date.now() < deadline && !extra.signal.aborted) {
-                const { messages } = await readUnread(ch.id, thread, 200);
-                collected.push(...messages);
-                if (done()) {
-                    return {
-                        content: [{
-                            type: 'text' as const,
-                            text: `${label(ch.name, thread)} — ${collected.length} new message(s):\n\n${formatMessages(collected)}`,
-                        }],
-                    };
+            // Shown in Agora as "listening" while the wait is open (src/socket.ts)
+            config.listening?.start();
+            try {
+                while (Date.now() < deadline && !extra.signal.aborted) {
+                    const { messages } = await readUnread(ch.id, thread, 200);
+                    collected.push(...messages);
+                    if (done()) {
+                        return {
+                            content: [{
+                                type: 'text' as const,
+                                text: `${label(ch.name, thread)} — ${collected.length} new message(s):\n\n${formatMessages(collected)}`,
+                            }],
+                        };
+                    }
+                    await keepAlive();
+                    const remaining = deadline - Date.now();
+                    if (remaining <= 0) break;
+                    // Poll briskly for the first minute, then ease off for long idle waits
+                    const interval = Date.now() - start < 60_000 ? 2000 : 5000;
+                    await new Promise(r => setTimeout(r, Math.min(interval, remaining)));
                 }
-                await keepAlive();
-                const remaining = deadline - Date.now();
-                if (remaining <= 0) break;
-                // Poll briskly for the first minute, then ease off for long idle waits
-                const interval = Date.now() - start < 60_000 ? 2000 : 5000;
-                await new Promise(r => setTimeout(r, Math.min(interval, remaining)));
+            } finally {
+                config.listening?.stop();
             }
 
             const waited = Math.round((Date.now() - start) / 1000);

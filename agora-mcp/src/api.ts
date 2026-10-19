@@ -374,6 +374,15 @@ export class AgoraApi {
         return this.request('GET', `/files/${fileId}/text${qs ? `?${qs}` : ''}`);
     }
 
+    /** Claude Code Channel: post a Claude Code permission prompt as an owner-only approval card. */
+    async relayPermission(channelId: string, body: { relayId: string; toolName: string; description: string; inputPreview: string }): Promise<{ id: string; relayId: string; status: string }> {
+        return this.request('POST', `/channels/${channelId}/permission-relays`, body);
+    }
+
+    async getPermissionRelay(channelId: string, requestId: string): Promise<{ id: string; relayId: string; status: string }> {
+        return this.request('GET', `/channels/${channelId}/permission-relays/${requestId}`);
+    }
+
     async getRun(runId: string): Promise<RuntimeRun> {
         return this.request('GET', `/runtime/runs/${runId}`);
     }

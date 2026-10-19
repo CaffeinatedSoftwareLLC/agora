@@ -6,6 +6,8 @@ export interface ReadyPayload {
   channels: Channel[];
   unreads: { channelId: string; lastReadId: string | null; mentionCount: number }[];
   onlineUserIds: string[];
+  /** Bring-your-own-session agents connected now, per channel (older servers omit it). */
+  agentPresence?: AgentPresencePayload[];
 }
 
 export interface MessageAttachmentPayload {
@@ -88,6 +90,20 @@ export interface TypingPayload {
   channelId: string;
   userId: string;
   username: string;
+}
+
+/**
+ * A bring-your-own-session agent (the user's own Claude Code, Codex or Gemini connected
+ * through agora-mcp): `listening` = Claude Code Channel connected, or a chat_wait open;
+ * `connected` = MCP server running, not waiting; `offline` = gone. Server:
+ * src/lib/agent-presence.ts.
+ */
+export interface AgentPresencePayload {
+  userId: string;
+  username: string;
+  channelId: string;
+  status: 'offline' | 'connected' | 'listening';
+  mode: 'channel' | 'mcp' | null;
 }
 
 export interface PresenceUpdatePayload {

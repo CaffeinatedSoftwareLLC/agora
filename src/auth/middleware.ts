@@ -29,6 +29,9 @@ const BOT_ALLOWED_ROUTES = new Set([
     // The extracted text of a file in a channel the bot can access (not the file itself)
     'GET /files/:fileId/text',
     'PATCH /channels/:id/messages/:msgId/thread',
+    // Claude Code Channel: relay a permission prompt as an owner-only card, and read its answer
+    'POST /channels/:id/permission-relays',
+    'GET /channels/:id/permission-relays/:requestId',
     'GET /bots/@me/cursors',
     'PUT /bots/@me/cursors/:channelId',
     'GET /bots/@me/thread-cursors',

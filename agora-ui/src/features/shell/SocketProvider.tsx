@@ -9,6 +9,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useTypingStore } from '../../stores/typingStore';
 import { usePresenceStore } from '../../stores/presenceStore';
+import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { useUnreadStore } from '../../stores/unreadStore';
 import { useThreadStore } from '../../stores/threadStore';
 import type {
@@ -18,6 +19,7 @@ import type {
   MessageDeletePayload,
   TypingPayload,
   PresenceUpdatePayload,
+  AgentPresencePayload,
   ThreadMetadataUpdatePayload,
   BotMessageStreamPayload,
 } from '../../lib/contracts/ws-events';
@@ -62,6 +64,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       useTypingStore.getState().clear();
       useUnreadStore.getState().setUnreads(data.unreads || []);
       usePresenceStore.getState().setOnlineUsers(data.onlineUserIds || []);
+      useAgentPresenceStore.getState().setAll(data.agentPresence || []);
 
       // Every reconnect (a phone waking, a network change) sends Ready. The views only load
       // history when they mount, so reload what is on screen instead of leaving it blank.
@@ -130,6 +133,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     s.on('PresenceUpdate', (data: PresenceUpdatePayload) => {
       usePresenceStore.getState().setPresence(data.userId, data.status);
+    });
+
+    s.on('AgentPresence', (data: AgentPresencePayload) => {
+      useAgentPresenceStore.getState().update(data);
     });
 
     s.on('connect_error', (err) => {

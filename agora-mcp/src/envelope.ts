@@ -37,7 +37,8 @@ const LINE_BREAK = new RegExp(`${ch(0x0d)}${ch(0x0a)}|[${charClass([0x0a, 0x0d, 
 const INVISIBLE = new RegExp(`[${charClass([[0x00, 0x08], [0x0e, 0x1f], [0x7f, 0x84], [0x86, 0x9f], [0x200b, 0x200f],
     [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], 0xfeff])}]`, 'g');
 
-function strip(text: string): string {
+/** Drops invisible controls (zero-width, bidi overrides, C0/C1) and keeps line breaks. */
+export function strip(text: string): string {
     return text.replace(INVISIBLE, '');
 }
 
