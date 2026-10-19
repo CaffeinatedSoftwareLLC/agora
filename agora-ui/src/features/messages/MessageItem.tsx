@@ -13,6 +13,7 @@ import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
 import { PermissionRelayCard } from '../agents/PermissionRelayCard';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
+import { ArtifactCard } from '../canvas/ArtifactCard';
 import { usePalette } from '../../theme';
 
 interface MessageItemProps {
@@ -177,6 +178,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             ))}
           </div>
         )}
+        {message.artifact && (channelId ?? message.channelId) && (
+          <ArtifactCard artifact={message.artifact} channelId={channelId ?? message.channelId} />
+        )}
         {!!(message.replyCount && message.replyCount > 0 && channelId) && (
           <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} threadClosedAt={message.threadClosedAt} />
         )}
@@ -244,6 +248,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
               <FileAttachment key={att.id} attachment={att} />
             ))}
           </div>
+        )}
+        {message.artifact && (channelId ?? message.channelId) && (
+          <ArtifactCard artifact={message.artifact} channelId={channelId ?? message.channelId} />
         )}
         {!!(message.replyCount && message.replyCount > 0 && channelId) && (
           <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} threadClosedAt={message.threadClosedAt} />

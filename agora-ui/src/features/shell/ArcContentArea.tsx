@@ -23,6 +23,7 @@ export function ArcContentArea() {
   const membersOpen = useUIStore(s => s.aux === 'members');
   const toggleMembers = useUIStore(s => s.toggleAux);
   const filesOpen = useUIStore(s => s.aux === 'files');
+  const canvasOpen = useUIStore(s => s.aux === 'canvas');
   const toggleFiles = useUIStore(s => s.toggleAux);
   const openThreadView = useUIStore(s => s.openThreadView);
 
@@ -103,6 +104,23 @@ export function ArcContentArea() {
           >
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: P.primary }} />
             <span className="sr-only">{paletteName}</span>
+          </button>
+
+          {/* Canvas: the artifacts agents and people published here */}
+          <button
+            onClick={() => canvasOpen ? useUIStore.getState().closeAux() : useUIStore.getState().openCanvas({ channelId: activeChannelId, artifactId: null, version: null })}
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            style={{
+              color: canvasOpen ? accentColor : P.muted,
+              background: canvasOpen ? `${accentColor}1f` : 'transparent',
+            }}
+            title="Canvas: artifacts in this channel"
+            aria-label="Canvas: artifacts in this channel"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
           </button>
 
           {/* Files panel toggle */}

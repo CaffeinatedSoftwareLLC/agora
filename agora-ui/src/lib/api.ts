@@ -401,6 +401,26 @@ export const fileSearchApi = {
     api.get<{ id: string; name: string }[]>(`/servers/${serverId}/file-tags`),
 };
 
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg';
+export interface ArtifactSummary {
+  id: string; title: string; kind: ArtifactKind; latestVersion: number | null;
+  updatedAt: string; createdByUsername: string | null;
+}
+export interface ArtifactVersionInfo {
+  version: number; messageId: string; threadId: string | null; authorUsername: string | null; authorBot: boolean;
+  title: string; kind: ArtifactKind; size: number; createdAt: string;
+}
+export interface ArtifactDetail { id: string; title: string; kind: ArtifactKind; latestVersion: number | null; versions: ArtifactVersionInfo[] }
+export interface ArtifactVersion { artifactId: string; version: number; title: string; kind: ArtifactKind; content: string; authorUsername: string | null; createdAt: string }
+
+/** Canvas artifacts (docs/canvas-and-preview.md). Posting one goes through the message routes. */
+export const canvasApi = {
+  list: (channelId: string) => api.get<{ artifacts: ArtifactSummary[] }>(`/channels/${channelId}/artifacts?limit=50`),
+  get: (channelId: string, artifactId: string) => api.get<ArtifactDetail>(`/channels/${channelId}/artifacts/${artifactId}`),
+  version: (channelId: string, artifactId: string, version: number) =>
+    api.get<ArtifactVersion>(`/channels/${channelId}/artifacts/${artifactId}/versions/${version}`),
+};
+
 export const aiApi = {
   listTags: (serverId: string) =>
     api.get<{ tags: AIFileTag[]; max: number; queue: AITaggingQueue }>(`/servers/${serverId}/ai/tags`),

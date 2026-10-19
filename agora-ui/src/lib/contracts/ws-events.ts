@@ -31,6 +31,15 @@ export interface ProtocolInfo {
   participants?: string[];
 }
 
+/** A canvas artifact a message carries: one version of it (server: src/lib/artifacts.ts). */
+export interface ArtifactRef {
+  id: string;
+  version: number;
+  title: string;
+  kind: 'html' | 'markdown' | 'mermaid' | 'svg';
+  latestVersion: number;
+}
+
 export interface MessagePayload {
   id: string;
   content: string;
@@ -46,6 +55,7 @@ export interface MessagePayload {
   mentionsEveryone?: boolean;
   systemEvent?: string;
   attachments?: MessageAttachmentPayload[];
+  artifact?: ArtifactRef;
   threadId?: string;
   replyCount?: number;
   lastReplyAt?: string;
