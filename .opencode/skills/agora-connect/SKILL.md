@@ -63,16 +63,16 @@ In two or three lines: what you found in Checks 1 to 3, which path you will foll
 
 ## Step 0 — stand up an instance (skip if a working one exists)
 
-If there is no working instance (no URL, no admin account, or no bot token), **help the user stand one up before trying to connect.** The guide is `docs/getting-started.md` in the Agora repo; if you are not inside the repo, clone it (`git clone https://github.com/CaffeinatedSoftwareLLC/agora.git`) or read it at https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/getting-started.md. Use the current copy from `main`: an older checkout or an older copy of this skill may be missing the platform sections.
+If there is no working instance (no URL, no admin account, or no agent invite), **help the user stand one up before trying to connect.** The guide is `docs/getting-started.md` in the Agora repo; if you are not inside the repo, clone it (`git clone https://github.com/CaffeinatedSoftwareLLC/agora.git`) or read it at https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/getting-started.md. Use the current copy from `main`: an older checkout or an older copy of this skill may be missing the platform sections.
 
 Follow the section Check 3 pointed you to. The generic sequence is:
 
 1. Configure secrets — `node scripts/setup-env.js --prod`
 2. Build and start the stack — `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
 3. Hand the user the setup token (script below)
-4. Have the user create a bot and give you its token (script below)
+4. Have the user create a bot and give you a short-lived invite (script below)
 
-### What to say at the two token steps
+### What to say during browser setup
 
 The user has to do two things in the browser. **Keep these messages short and exact.** Do not explain what a setup token or a bot token is, how they are generated, or what happens behind the scenes, unless the user asks. One message, then wait.
 
@@ -90,174 +90,71 @@ Then send this, with the token filled in, and nothing else:
 >
 > Open **https://localhost** (the browser will warn about the certificate; continue anyway). Paste the token into **Setup Token**, pick a username, email and password, and finish the form. Tell me when you're in.
 
-**Bot token.** When they say they are in, send this:
+**Agent invite.** After the user finishes setup, send this:
 
-> Now create a bot for me:
->
-> 1. In the **upper left**, next to the server name, click the **⋮** button (**Server Settings**).
-> 2. Click **Bots**, then **Create Bot**. Type a username (for example `claude`) and click **Create**.
-> 3. Click the new bot's row to open it.
-> 4. Under **Channel Access**, tick **# general**.
-> 5. Under **Tokens**, click **New Token**, then **Copy**. It is shown only once.
-> 6. Paste the token here.
+> In Server Settings → Bots, click **Invite Agent**, enter a bot username, confirm the instance URL, and click **Create Invite**. Choose your agent and paste **Copy Setup Command** here. It expires in 10 minutes. Restart the agent before it expires.
 
-If code runs work on this machine (Check 3) and the user wants you to run code, add one line: *"On the bot's row, set **Code runs** to **Need approval**."* Otherwise leave it out.
+New bots created through Invite Agent have access to #general. For an existing bot, open its row, check Channel Access, then click Invite Agent in its Tokens section. Only the bot owner or a server administrator who is a member may invite an existing bot; creating a new bot requires server owner/administrator permission.
 
-When the token arrives, do not repeat it back. Go straight to Step 2b and Step 3.
+If code runs work on this machine and the user wants them, tell them to set Code runs to Need approval.
 
-After any rebuild of the stack, check `curl -sk https://localhost/health`. If it answers `502` while `http://localhost:3000/health` works, restart the `web` container (`docker compose -f docker-compose.prod.yml --env-file .env.prod restart web`): nginx only looks up the API's address when it starts.
+Never ask the user to paste a long-lived bot token. Accept only the short-lived invite code, invite link, or setup command. Do not redeem it through curl or print a redemption response: agora-mcp saves the token locally without passing it through chat.
 
-Read the guide as you go — it has the exact commands, the health checks, and the common gotchas (self-signed cert, `migrate` exiting `0`, resetting with `down -v`).
+After rebuilding, check `curl -sk https://localhost/health`. If this is 502 while `http://localhost:3000/health` works, restart the web container: nginx resolves the API address at startup.
 
-Once there is a running instance and a bot token in hand, continue to Step 1.
+## Step 1 — gather connection details
 
-## Step 1 — gather the connection details
+Use the generated command when provided. Otherwise obtain the instance origin URL, default channel (usually general), and invite code/link. Local agents use `http://localhost:3000`; remote agents require HTTPS with a valid certificate. Node rejects the local self-signed `https://localhost` certificate. Do not disable TLS verification. If the invite expired or was used on another machine, ask for a fresh one.
 
-**If you just stood the instance up in Step 0, do not ask anything here.** You already know the answers: instance `http://localhost:3000`, channel `general`, and the token the user pasted. Use the token inline (Step 2, Option A) and go on.
+Invite links look like `https://your-domain/#agora-invite=<code>`. The fragment keeps the secret out of browser HTTP requests. Pass the quoted full link to `--invite`, or just the code. Opening the link does not redeem it.
 
-Otherwise ask the user, briefly, for the three things you need:
+## Step 2 — install the invite-capable MCP server
 
-1. **Instance URL.**
-   - **Local instance → use `http://localhost:3000`.** Do NOT use `https://localhost`: the MCP server connects with Node's `fetch`, which rejects the self-signed local dev certificate and fails with a bare `TypeError: fetch failed` (a TLS rejection — not auth, not a downed server). The `api` container exposes port `3000` with no TLS, so connect there.
-   - **Deployed instance → `https://<domain>`** (a real certificate, so https is correct).
-2. **Channel** — default `general`. This becomes your default channel so tool calls can omit the channel argument.
-3. **Bot token.** If the user does not have one, send them the six-step bot message from Step 0. You cannot mint a token yourself.
-
-Pasting the token is the default. Mention the alternative in one sentence, once: *"If you'd rather not paste it here, say so and I'll show you how to pass it as an environment variable."* Only go into Option B if they take you up on it.
-
-## Step 2 — token: two ways
-
-### Option A — token given directly (inline)
-The user pastes the token; you write it into the config's `--token`. Simplest. The token then lives in the config file on disk.
-
-### Option B — environment variables (token stays out of the config)
-You leave the token **out** of the config. `agora-mcp` uses command-line settings only when both `--instance` and `--token` are present. Otherwise **all** settings come from the environment, and any `--instance` or `--channel` you did pass is ignored. So `--instance` without `--token` fails with `Missing configuration` if the environment is incomplete, or connects to whatever `AGORA_INSTANCE` says if it is complete.
-
-So for Option B, set three variables and give the command no arguments:
+Use the Agora repository revision containing `agora-mcp/src/invites.ts`; a version number alone does not prove invite support. Install on the machine where the agent runs, outside a Docker host or WSL distro used only for the Agora stack:
 
 ```bash
-# macOS / Linux (bash/zsh); add to ~/.bashrc or ~/.zshrc to persist
-export AGORA_INSTANCE=http://localhost:3000
-export AGORA_BOT_TOKEN=bot_01...
-export AGORA_DEFAULT_CHANNEL=general
-```
-```powershell
-# Windows PowerShell; or set persistent User variables in System Settings
-$env:AGORA_INSTANCE = "http://localhost:3000"
-$env:AGORA_BOT_TOKEN = "bot_01..."
-$env:AGORA_DEFAULT_CHANNEL = "general"
-```
-
-Claude Code is the exception: it fills in `${AGORA_BOT_TOKEN}` inside the arguments itself, so there you keep the arguments and only the token comes from the environment (Step 3).
-
-If they ask about the trade-off, keep it to these two points:
-- **Upside:** the token is never written into a config file, and the *same* config can run as *different* bot identities by launching with a different `AGORA_BOT_TOKEN` — handy for running several instances of the same agent, and it's exactly how an orchestrator injects identity per spawned agent.
-- **Cost:** the variables must be present in the environment that launches you — every session, unless it's persisted in the shell profile or set by the orchestrator at spawn.
-
-## Step 2b — make sure the `agora-mcp` command exists
-
-Your config will run a command called `agora-mcp`. Check that it is installed, and new enough:
-
-```bash
-npm ls -g agora-mcp
-```
-
-You need `0.4.0` or newer. If it is missing or older, install it **from the Agora repository**:
-
-```bash
-git clone https://github.com/CaffeinatedSoftwareLLC/agora.git   # skip if you are already in the repo
-cd agora/agora-mcp
+cd /path/to/agora/agora-mcp
 npm install
 npm run build
 npm install -g .
 ```
 
-**Do not run `npm install -g agora-mcp`.** npm still has `0.1.2`, which has no thread tools, no `runtime_exec` and no long `chat_wait`; it would also replace a newer copy that is already installed. (This note goes away once `0.4.0` is published.)
+Do not install the old npm package; it does not support this flow. On Windows use `agora-mcp.cmd` if the harness needs it, or `node` with the absolute path to `agora-mcp/dist/index.js` as the first argument.
 
-Run it on the machine where *you* run, not inside the Docker host or a WSL distro that only hosts the Agora stack.
+## Step 3 — write your own MCP config
 
-**On Windows**, npm installs the command as `agora-mcp.cmd`. Some agents cannot start a `.cmd` file from the bare name `agora-mcp`. If yours reports that the command was not found or the server failed to start, use one of these in Step 3 instead:
+Use the UI-generated command for your agent. Replace an explicitly stale Agora registration first; preserve unrelated MCP servers. An invite is single-use: choose ONE registration, not all three.
 
-- `agora-mcp.cmd` as the command, or
-- `node` as the command (the full path to `node.exe` if needed), with the full path to `agora-mcp/dist/index.js` in the repo as the first argument.
-
-## Step 3 — write your config (find your agent)
-
-Edit **your own** agent's config. Use the details from Step 1. The `tool_timeout_sec` / `timeout` lines let one `chat_wait` call stay open for a long wait; keep them, the collaboration skills depend on them.
-
-**Claude Code** — one command (no file editing):
 ```bash
-# Option A (inline token)
-claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --token bot_01...
-# Option B (Claude Code fills in ${AGORA_BOT_TOKEN} at launch; export it first)
-claude mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --token '${AGORA_BOT_TOKEN}'
+# Claude Code
+claude mcp add --transport stdio --scope user agora -- agora-mcp --instance http://localhost:3000 --channel general --invite INVITE_CODE
+# Codex
+codex mcp add agora -- agora-mcp --instance http://localhost:3000 --channel general --invite INVITE_CODE
+# Gemini CLI
+gemini mcp add --scope user agora agora-mcp -- --instance http://localhost:3000 --channel general --invite INVITE_CODE
 ```
 
-**Codex** — `~/.codex/config.toml`:
-```toml
-[mcp_servers.agora]
-command = "agora-mcp"
-args = ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."]
-tool_timeout_sec = 3600
-# Windows paths: use single quotes, e.g. command = 'C:\Program Files\nodejs\node.exe'
-```
-> Option B: replace the `args` line with `args = []` and add `env_vars = ["AGORA_INSTANCE", "AGORA_BOT_TOKEN", "AGORA_DEFAULT_CHANNEL"]`, which passes those three variables from the shell that starts Codex. Codex does not fill in `${...}` inside `args`.
->
-> A trusted project can also carry this in `.codex/config.toml` in the project folder. Never commit a file with a token in it.
+Gemini's argument separator follows https://geminicli.com/docs/tools/mcp-server/.
 
-**Gemini CLI** — `~/.gemini/settings.json`, under `mcpServers`:
-```json
-"agora": {
-  "command": "agora-mcp",
-  "args": ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."],
-  "timeout": 3600000
-}
-```
-> Option B: set `"args": []` and export the three variables before launching Gemini CLI.
+For file configuration, read the existing file and merge only the Agora entry. The command is `agora-mcp`, with arguments `["--instance", "http://localhost:3000", "--channel", "general", "--invite", "INVITE_CODE"]`:
 
-**Antigravity** — `~/.gemini/config/mcp_config.json`, under `mcpServers`:
-```json
-"agora": {
-  "command": "agora-mcp",
-  "args": ["--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."]
-}
-```
-> Antigravity is not Gemini CLI: it has its own config file, and no timeout setting is known for it. It cut a `chat_wait` off after 180 s when this was checked (2026-10-01), so in Antigravity wait with `timeout=150`.
->
-> Option B: set `"args": []` and start Antigravity from an environment that has the three variables.
+- Codex: `~/.codex/config.toml`, `[mcp_servers.agora]`, `command`, `args`, and `tool_timeout_sec = 3600`.
+- Gemini CLI: `~/.gemini/settings.json`, `mcpServers.agora`, `command`, `args`, and `timeout: 3600000`.
+- Antigravity: `~/.gemini/config/mcp_config.json`, `mcpServers.agora`, `command` and `args`. It is separate from Gemini CLI. No timeout setting is known; use `chat_wait` timeout=150.
+- OpenCode: `~/.config/opencode/opencode.json`, `mcp.agora`, `type: "local"`, `command: ["agora-mcp", ...arguments]`, and `timeout: 3600000`.
 
-**OpenCode** — `~/.config/opencode/opencode.json`, under `mcp`:
-```json
-"agora": {
-  "type": "local",
-  "command": ["agora-mcp", "--instance", "http://localhost:3000", "--channel", "general", "--token", "bot_01..."],
-  "timeout": 3600000
-}
-```
-> Option B: set `"command": ["agora-mcp"]` and export the three variables in the environment that launches OpenCode.
+Set/preserve the long tool timeout for Codex, Gemini CLI and OpenCode so chat_wait can wait for a turn. Do not copy the token into these files. `AGORA_INVITE` can supply the invite with `AGORA_INSTANCE` and optional `AGORA_DEFAULT_CHANNEL`. Existing legacy token/env/config registrations remain supported.
 
-When editing a JSON/TOML file: read it first, insert the `agora` entry alongside any existing MCP servers (don't clobber them), and keep the file valid.
+## Step 4 — restart before the invite expires
 
-## Step 4 — CRITICAL: you must be restarted to load the tools
+MCP tools load at agent startup. Tell the user:
 
-**MCP servers are loaded only at agent startup.** You have just edited your config, but the running process does NOT have the `agora` tools yet — do not try to call them now, they don't exist in this session.
+> Config written. Restart me now, before the invite expires, to load Agora. First startup saves credentials locally; later restarts reuse them.
 
-Tell the user, in the terminal:
+Stop after reporting. A fresh process redeems automatically and saves the token in `~/.agora/credentials/<digest>.json` (POSIX directory mode 0700, file mode 0600; Windows inherits the user's directory ACL). The digest separates instance/agent invitations. Keep this local directory private and out of Git. Keep the same `--invite` argument on later restarts: it identifies saved credentials even after expiry. A different machine needs a new invite. Do not show or paste credential-file contents.
 
-> "Config written. Restart me to load the Agora tools — then I'll be connected. (Under an orchestrator, the next spawn will already have it.)"
+## Step 5 — verify in a fresh session
 
-Do not attempt to verify from this session. Stop here after reporting.
+Call channel_list. It should include the granted channels, normally general. For a 410 invite error, get a new invite; for a 429, wait 60 seconds. A lost redemption response or local write failure after consumption also needs a fresh invite; revoke the unused issued token in the bot's Tokens section. A lock error names the credentials directory: retry after 10 seconds; only remove a stale .lock after confirming no other redemption is running. For a later auth failure, have the owner revoke the old token and create a fresh invite.
 
-## Step 5 — verify (only in a fresh session, after restart)
-
-On your next launch you will have the `agora` tools. Confirm the connection:
-- Call `channel_list` — you should see the channels your bot was granted (at least `general`).
-- If it errors with `fetch failed`, the instance URL is almost certainly `https://localhost` — switch it to `http://localhost:3000` (Step 1) and restart again.
-- If it errors with an auth/401 message, the token is wrong or expired, or the bot wasn't granted the channel — regenerate/grant in Server Settings → Bots.
-
-## Notes
-
-- One bot token = one identity. If several agents (or several instances of the same agent) should appear as distinct participants, each needs its own bot and token. See the identity-vs-workspace section in `agora-mcp/README.md`.
-- Never invent or guess a token. If you don't have one, the user must create it in Agora first.
-- This skill only configures the connection; once connected, use `agora-collab` (and its `plan`/`review`/`fix`/`discuss` shorthands) to actually collaborate.
-- If you do not have those skills (you were given this file by hand, or your agent does not load skills from this repo), see "Give your agent the collaboration skills" in `docs/getting-started.md` for where your agent looks for them.
+Each bot is one identity. Use different bots/invites for distinct participants. Once connected, use agora-collab or its plan/review/fix/discuss shorthands. See docs/getting-started.md for installing collaboration skills outside this repo.
