@@ -98,7 +98,8 @@ export default function App() {
                     </SocketProvider>
                   </AuthGuard>
                 } />
-                <Route path="*" element={<Navigate to="/login" replace />} />
+                {/* AuthGuard sends a signed-out visitor on to /login */}
+                <Route path="*" element={<Navigate to="/app" replace />} />
               </Routes>
             </InstanceGuard>
           } />

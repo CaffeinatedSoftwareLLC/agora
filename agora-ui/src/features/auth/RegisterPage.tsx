@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { useInstance } from '../../hooks/useInstance';
 import { ApiError } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
+import { PageSpinner } from '../../components/ui/PageSpinner';
 
 export function RegisterPage() {
   const navigate = useNavigate();
@@ -53,6 +54,11 @@ export function RegisterPage() {
       }
     }
   };
+
+  // A visitor who is already signed in (or may be: the cookie is being checked)
+  // never sees the form
+  if (status === 'checking') return <PageSpinner />;
+  if (status === 'authenticated') return <Navigate to="/app" replace />;
 
   return (
     <div className="flex items-center justify-center min-h-screen px-4">

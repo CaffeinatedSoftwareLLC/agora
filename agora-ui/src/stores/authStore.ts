@@ -12,7 +12,8 @@ import { usePresenceStore } from './presenceStore';
 import { useUnreadStore } from './unreadStore';
 import { useThreadStore } from './threadStore';
 
-type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'pending';
+/** `checking`: no user remembered in this browser, asking the server whether the cookie is good. */
+type AuthStatus = 'idle' | 'checking' | 'loading' | 'authenticated' | 'pending';
 
 interface AuthState {
   user: User | null;
@@ -24,6 +25,8 @@ interface AuthState {
   setAuthenticated: (user: User) => void;
   /** Ask the server whether the session cookie is still good; signs out locally if not. */
   verifySession: () => Promise<void>;
+  /** On load with no remembered user: the cookie may still be valid (other origin, cleared storage). */
+  restoreSession: () => Promise<void>;
   logout: () => void;
   logoutAll: () => Promise<void>;
   clearSession: () => void;
@@ -42,7 +45,7 @@ const LEGACY_TOKEN_KEY = 'agora_token';
  * because the point of the change is that a token page scripts could read may
  * already have been copied; revoking it ends that copy too.
  */
-function retireLegacyToken() {
+function retireLegacyToken(): boolean {
   let legacy: string | null = null;
   try {
     legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
@@ -54,14 +57,18 @@ function retireLegacyToken() {
   if (legacy) {
     fetch('/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${legacy}` } }).catch(() => {});
   }
+  return legacy !== null;
 }
 
-function loadPersistedUser(): { user: User | null; status: AuthStatus } {
+function loadPersistedUser(legacyRetired: boolean): { user: User | null; status: AuthStatus } {
   try {
     const userJson = localStorage.getItem(USER_KEY);
     if (userJson) return { user: JSON.parse(userJson), status: 'authenticated' };
   } catch { /* corrupted storage — start fresh */ }
-  return { user: null, status: 'idle' };
+  // The remembered user is only a cache: the httpOnly cookie may still be valid
+  // when it is missing, so ask the server before showing the login page. A user
+  // whose legacy token was just revoked signs in again, as that migration intends.
+  return { user: null, status: legacyRetired ? 'idle' : 'checking' };
 }
 
 function persistUser(user: User) {
@@ -72,8 +79,9 @@ function clearPersistedUser() {
   try { localStorage.removeItem(USER_KEY); } catch { /* not fatal */ }
 }
 
-retireLegacyToken();
-const initialAuth = loadPersistedUser();
+const initialAuth = loadPersistedUser(retireLegacyToken());
+/** The server has confirmed the cookie since this page loaded. */
+let sessionVerified = false;
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: initialAuth.user,
@@ -117,13 +125,32 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   verifySession: async () => {
-    if (get().status !== 'authenticated') return;
+    if (get().status !== 'authenticated' || sessionVerified) return;
     try {
       const res = await api.get<{ user: User }>('/auth/session');
-      if (get().status === 'authenticated') get().setAuthenticated(res.user);
+      sessionVerified = true;
+      if (get().status === 'authenticated' && res.user) get().setAuthenticated(res.user);
     } catch (err) {
       // Only a definite answer signs out; a network blip leaves the session alone
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) get().clearSession();
+    }
+  },
+
+  restoreSession: async () => {
+    if (get().status !== 'checking') return;
+    try {
+      const res = await api.get<{ user: User }>('/auth/session');
+      if (get().status !== 'checking') return;
+      if (res.user) {
+        sessionVerified = true;
+        get().setAuthenticated(res.user);
+      } else {
+        set({ status: 'idle' });
+      }
+    } catch {
+      // 401/403 means no session. Anything else can't be retried from here, and
+      // the login page is the one place the user can act, so show it.
+      if (get().status === 'checking') set({ status: 'idle' });
     }
   },
 
@@ -140,6 +167,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   clearSession: () => {
+    sessionVerified = false;
     clearPersistedUser();
     useDraftStore.getState().clearAllDrafts();
     useUIStore.getState().onChannelSelect(null);
@@ -155,3 +183,5 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     useUIStore.getState().setConnectionStatus('disconnected');
   },
 }));
+
+if (initialAuth.status === 'checking') void useAuthStore.getState().restoreSession();
