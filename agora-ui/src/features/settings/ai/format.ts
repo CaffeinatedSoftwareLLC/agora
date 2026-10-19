@@ -4,12 +4,13 @@ export const CAPABILITY_INFO: Record<AICapability, { label: string; description:
   chat: { label: 'Chat', description: 'Built-in assistant replies in channels and threads' },
   search: { label: 'Search', description: 'Grounded web search with citations' },
   image: { label: 'Image', description: 'Image generation' },
-  tts: { label: 'Speech', description: 'Text-to-speech (audio overviews)' },
+  tts: { label: 'Speech', description: 'Text-to-speech (audio overviews; read-aloud when Voice says so)' },
+  stt: { label: 'Transcription', description: 'Speech-to-text for the microphone button (e.g. a local faster-whisper server)' },
   video: { label: 'Video', description: 'Video generation' },
   decide: { label: 'Decide', description: 'Decision model (optional): routing, search screening, file tags' },
 };
 
-export const CAPABILITY_ORDER: AICapability[] = ['chat', 'search', 'image', 'tts', 'video', 'decide'];
+export const CAPABILITY_ORDER: AICapability[] = ['chat', 'search', 'image', 'tts', 'stt', 'video', 'decide'];
 
 /** micro-USD → "$0.0042" (4 decimals under $1, else 2). */
 export function formatMicros(micros: number | null | undefined): string {

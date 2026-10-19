@@ -8,6 +8,9 @@ import { useSocket } from '../../hooks/useSocket';
 import { MentionAutocomplete } from '../live/MentionAutocomplete';
 import { usePalette, hexToRgb } from '../../theme';
 import { useAgentCommands } from './AgentCommands';
+import { MicButton } from '../voice/MicButton';
+import { ReadingAloud } from '../voice/ReadingAloud';
+import { appendDictation } from '../voice/appendDictation';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -240,6 +243,18 @@ export function FloatingMessageInput({
     }
   };
 
+  // Dictated text goes into the draft for the person to check, never straight out
+  const handleDictation = (text: string) => {
+    const draft = useDraftStore.getState().getDraft(draftKey);
+    setContent(appendDictation(draft, text));
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
   const hasContent = content.trim().length > 0;
   const hasAttachments = completedIds.length > 0;
   const hasPendingUploads = uploads.some(u => u.status === 'uploading');
@@ -263,6 +278,8 @@ export function FloatingMessageInput({
       />
 
       {agentCommands.panel}
+
+      <ReadingAloud />
 
       {/* Mention autocomplete (positioned above the input) */}
       <div className="relative">
@@ -307,7 +324,7 @@ export function FloatingMessageInput({
           </div>
         )}
 
-        {/* Single row: [+ attach 44x44] [textarea 1-4 rows] [send 44x44] */}
+        {/* Single row: [+ attach 44x44] [textarea 1-4 rows] [mic 44x44] [send 44x44] */}
         <div className="flex items-end gap-1.5 px-2 py-1.5 md:px-2.5 md:py-2">
           <button
             type="button"
@@ -344,6 +361,8 @@ export function FloatingMessageInput({
             maxLength={4000}
             disabled={!user}
           />
+
+          <MicButton channelId={channelId} onText={handleDictation} />
 
           {/* Solid primary Send button */}
           <button

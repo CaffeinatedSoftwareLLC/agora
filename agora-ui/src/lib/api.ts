@@ -240,7 +240,7 @@ export interface AIUsageStats {
   error_count: number;
 }
 
-export type AICapability = 'chat' | 'search' | 'image' | 'tts' | 'video' | 'decide';
+export type AICapability = 'chat' | 'search' | 'image' | 'tts' | 'video' | 'decide' | 'stt';
 
 export interface AIAdapter {
   id: string;
@@ -299,7 +299,7 @@ export type AIConnectionResult = { ok: boolean; error?: string };
 /** One audited change to the server's AI settings (providers, routes, assistant). */
 export interface AIChange {
   id: string;
-  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update'
+  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update' | 'ai_voice_update'
     | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag';
   targetType: string;
   targetId: string | null;
@@ -307,6 +307,82 @@ export interface AIChange {
   createdAt: string;
   actor: { id: string; username: string; bot: boolean } | null;
 }
+
+// ─── Voice in and out (docs/voice.md) ───
+
+/** Where speech is turned into text (input) or text into speech (output) for a member. */
+export type VoiceEngine = 'server' | 'browser' | 'off';
+
+export interface AIVoiceSettings {
+  voiceInputEnabled: boolean;
+  /** Without a Transcription route: let browsers recognise speech themselves (Chrome/Safari send audio to Google/Apple). */
+  browserSttFallback: boolean;
+  maxRecordingSeconds: number;
+  sttLanguage: string | null;
+  readAloudEnabled: boolean;
+  /** Read replies with the server's Speech route (also used by audio overviews). */
+  readAloudServer: boolean;
+  browserTtsFallback: boolean;
+  readAloudVoice: string | null;
+  readAloudMaxChars: number;
+}
+
+export type AIVoiceRouteState =
+  | { configured: true; enabled: boolean; provider: string; adapter: string; model: string }
+  | { configured: false; enabled: false; provider: null; adapter: null; model: null };
+
+export interface AIVoiceView extends AIVoiceSettings {
+  routes: { stt: AIVoiceRouteState; tts: AIVoiceRouteState };
+  engines: { input: VoiceEngine; output: VoiceEngine };
+  warnings: string[];
+}
+
+/** What a member's client uses in a channel. */
+export interface ChannelVoice {
+  input: VoiceEngine;
+  output: VoiceEngine;
+  maxRecordingSeconds: number;
+  language: string | null;
+  maxChars: number;
+}
+
+export const voiceApi = {
+  getSettings: (serverId: string) =>
+    api.get<AIVoiceView>(`/servers/${serverId}/ai/voice`),
+
+  patchSettings: (serverId: string, data: Partial<AIVoiceSettings>) =>
+    api.patch<AIVoiceView>(`/servers/${serverId}/ai/voice`, data),
+
+  forChannel: (channelId: string) =>
+    api.get<ChannelVoice>(`/channels/${channelId}/voice`),
+
+  /** Send a recorded clip; the server passes it to its Transcription route. */
+  transcribe: async (channelId: string, clip: Blob): Promise<string> => {
+    const res = await fetch(`/channels/${channelId}/voice/transcribe`, {
+      method: 'POST',
+      headers: { ...sessionHeaders('POST'), 'Content-Type': clip.type || 'audio/webm' },
+      credentials: 'same-origin',
+      body: clip,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, data.error || 'transcription_failed');
+    return data.text ?? '';
+  },
+
+  /** A message voiced by the server's Speech route (MP3). */
+  speech: async (channelId: string, messageId: string): Promise<Blob> => {
+    const res = await fetch(`/channels/${channelId}/messages/${messageId}/speech`, {
+      method: 'POST',
+      headers: sessionHeaders('POST'),
+      credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data.error || 'speech_failed');
+    }
+    return res.blob();
+  },
+};
 
 /** What a decision model can be used for. Each is switched on separately. */
 export type AIDecisionUse = 'routing' | 'search_screening' | 'file_tagging' | 'file_ranking';

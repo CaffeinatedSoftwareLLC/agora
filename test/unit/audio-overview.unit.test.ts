@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     isAudioOverviewRequest, formatTranscript, parseScript, overviewMessage, formatClock, scriptRequest,
-    MAX_SCRIPT_CHARS,
+    MAX_SCRIPT_CHARS, OVERVIEW_SPEAKERS, overviewSpeakers,
 } from '../../src/ai/audio-overview';
 
 /** WBS 5.1: audio overview intent, transcript, and script handling. */
@@ -90,5 +90,12 @@ describe('script and message text', () => {
             .toBe('🎙️ **Audio overview** of this thread (1:35), voiced by AI.\n\n**Alex:** Hi.');
         expect(overviewMessage(null, [{ speaker: 'Alex', text: 'A.' }, { speaker: 'Sam', text: 'B.' }], false))
             .toBe('🎙️ **Audio overview** of this channel, voiced by AI.\n\n**Alex:** A.\n\n**Sam:** B.');
+    });
+});
+
+describe('overviewSpeakers', () => {
+    it('uses Gemini voices on Gemini and Audio API voices on an OpenAI-compatible Speech route (OpenAI, Kokoro)', () => {
+        expect(overviewSpeakers('gemini')).toEqual(OVERVIEW_SPEAKERS);
+        expect(overviewSpeakers('openai')).toEqual([{ speaker: 'Alex', voice: 'nova' }, { speaker: 'Sam', voice: 'onyx' }]);
     });
 });

@@ -14,6 +14,7 @@ import { PermissionRelayCard } from '../agents/PermissionRelayCard';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
 import { usePalette } from '../../theme';
+import { browserSpeechSupported, primeAudio, useVoiceStore } from '../voice/voiceStore';
 
 interface MessageItemProps {
   message: Message;
@@ -52,6 +53,18 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   const openThread = useUIStore(s => s.openThreadView);
   const canReply = !!(channelId && !message.deletedAt && !message.systemEvent);
   const handleReply = canReply ? () => openThread(channelId!, message.id) : undefined;
+  const voiceOutput = useVoiceStore(s => (channelId ? s.channels[channelId]?.output : undefined));
+  const readingAloud = useVoiceStore(s => s.speaking === message.id);
+  const canReadAloud = !!(channelId && message.content?.trim() && !message.pending && !message.failed && !message.streaming
+    && (voiceOutput === 'server' || (voiceOutput === 'browser' && browserSpeechSupported())));
+  const handleReadAloud = canReadAloud
+    ? () => {
+        primeAudio();
+        const voice = useVoiceStore.getState();
+        if (readingAloud) voice.stop();
+        else voice.speak({ id: message.id, channelId: channelId!, content: message.content });
+      }
+    : undefined;
 
   const clearLongPress = () => {
     if (longPressTimerRef.current !== null) {
@@ -154,6 +167,8 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             onDelete={() => onDelete(message.id)}
             onReply={handleReply}
             messageContent={message.content ?? ''}
+            onReadAloud={handleReadAloud}
+            readingAloud={readingAloud}
             sheetOpen={sheetOpen}
             onSheetOpenChange={setSheetOpen}
           />
@@ -202,6 +217,8 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
           onDelete={() => onDelete(message.id)}
           onReply={handleReply}
           messageContent={message.content ?? ''}
+          onReadAloud={handleReadAloud}
+          readingAloud={readingAloud}
           sheetOpen={sheetOpen}
           onSheetOpenChange={setSheetOpen}
         />

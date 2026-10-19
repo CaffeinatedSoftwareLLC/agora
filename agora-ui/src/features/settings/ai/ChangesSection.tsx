@@ -40,6 +40,8 @@ function describe(c: AIChange): string {
       return `Files queued for tagging: ${d.created ?? 0} new, ${d.requeued ?? 0} to re-tag, ${d.retried ?? 0} retried`;
     case 'ai_decision_update':
       return `Decision model settings: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
+    case 'ai_voice_update':
+      return `Voice settings: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
     default:
       return c.action;
   }

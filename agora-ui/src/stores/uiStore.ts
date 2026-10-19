@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useThreadStore } from './threadStore';
 import type { PaletteKey } from '../theme/palettes';
 import { api } from '../lib/api';
+import { useVoiceStore } from '../features/voice/voiceStore';
 
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
 
@@ -17,7 +18,7 @@ interface UIState {
   paletteKey: PaletteKey;
   setPalette: (key: PaletteKey) => void;
   togglePalette: () => void;
-  /** Load the account's saved preferences (theme) after sign-in. */
+  /** Load the account's saved preferences (theme, read-aloud) after sign-in. */
   loadPreferences: () => Promise<void>;
 
   navOpen: boolean;
@@ -70,7 +71,8 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
   loadPreferences: async () => {
     try {
-      const prefs = await api.get<{ palette?: unknown }>('/users/@me/preferences');
+      const prefs = await api.get<{ palette?: unknown; readAloud?: unknown }>('/users/@me/preferences');
+      useVoiceStore.getState().applyPreference(prefs.readAloud);
       if (isPalette(prefs.palette) && prefs.palette !== get().paletteKey) {
         try { localStorage.setItem('agora:palette', prefs.palette); } catch { /* private mode */ }
         set({ paletteKey: prefs.palette });

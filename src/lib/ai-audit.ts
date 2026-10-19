@@ -16,6 +16,7 @@ export type AiAuditAction =
     | 'ai_route_update' | 'ai_route_delete'
     | 'ai_assistant_update'
     | 'ai_decision_update'
+    | 'ai_voice_update'
     | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag';
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
@@ -49,7 +50,7 @@ export function changedFields(before: Record<string, unknown> | null, after: Rec
 export async function auditAiChange(db: Queryable, request: FastifyRequest, entry: {
     serverId: string;
     action: AiAuditAction;
-    targetType: 'ai_provider' | 'ai_route' | 'ai_assistant' | 'ai_decision' | 'ai_tag';
+    targetType: 'ai_provider' | 'ai_route' | 'ai_assistant' | 'ai_decision' | 'ai_voice' | 'ai_tag';
     targetId: string | null;
     changes: Record<string, unknown>;
 }): Promise<void> {
