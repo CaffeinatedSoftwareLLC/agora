@@ -60,3 +60,35 @@ Gemini is not yet a hosted adapter (the host runs `codex` and `claude` profiles)
 ## Branding
 
 Agora says it "runs Claude Code / Codex / Gemini" in plain text and uses no look-alike names or logos. Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.
+
+## Per-provider policy and what the terms watcher checks
+
+The sections below are Agora's implementation policy per provider. The [terms watcher](provider-terms-watch.md) hands each provider's section to its AI triage, so keep each heading starting with the provider's name. Review baseline: 2026-10-19. Detailed evidence and open questions: [subscription use](subscription-use.md) and [harness research, section 1](planning/harness-research.md#1-provider-terms-what-agora-may-and-may-not-do).
+
+## Anthropic
+
+Users connect an unmodified official Claude Code client under their own login.
+Never collect or relay Claude subscription credentials or use one person's plan to
+serve other users. Hosted subscription runs are owner-only. Channels must gate
+incoming instructions on the owner's identity. The terms watcher uses API keys.
+Watch legal/compliance, SDK authentication, consumer terms, Channels and subscription support.
+
+## OpenAI
+
+Prefer API keys for automation. Never share a user's subscription login or read
+their auth.json for model requests. Sign in with ChatGPT eligibility for shared
+Agora clients still needs confirmation. Watch authentication, non-interactive mode,
+SIWC and consumer terms; changes may affect hosted wakes and per-user billing.
+
+## Google
+
+Gemini hosted automation requires an API key. Never drive account-login workflows
+from other agents or pool subscription access. Watch Antigravity terms, headless
+documentation, Gemini CLI terms/privacy and Gemini API terms; documented headless
+features alone do not resolve restrictions on third-party services.
+
+## Review changes
+
+The [terms watcher](provider-terms-watch.md) provides diffs and optional AI triage.
+A human must review changes affecting authentication, automation, redistribution,
+pricing, account sharing or privacy before changing Agora's policy.

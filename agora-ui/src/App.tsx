@@ -11,6 +11,7 @@ import { PendingQueue } from './features/admin/PendingQueue';
 import { UserTable } from './features/admin/UserTable';
 import { InstanceSettings } from './features/admin/InstanceSettings';
 import { StorageSettings } from './features/admin/StorageSettings';
+import { ProviderTerms } from './features/admin/ProviderTerms';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
 import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
@@ -49,6 +50,7 @@ export default function App() {
                           <Route index element={<AdminDashboard />} />
                           <Route path="pending" element={<PendingQueue />} />
                           <Route path="users" element={<UserTable />} />
+                          <Route path="provider-terms" element={<ProviderTerms />} />
                           <Route path="settings" element={<Navigate to="/settings/instance" replace />} />
                           <Route path="storage" element={<Navigate to="/settings/storage" replace />} />
                         </Routes>

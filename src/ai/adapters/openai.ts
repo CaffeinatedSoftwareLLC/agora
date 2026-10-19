@@ -31,6 +31,7 @@ export const openaiAdapter: Adapter = {
         for (const m of req.messages) apiMessages.push({ role: m.role, content: m.content });
 
         const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/chat/completions'), {
+            signal: req.signal,
             method: 'POST',
             headers: headers(creds),
             body: JSON.stringify({

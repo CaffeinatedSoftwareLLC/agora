@@ -1,4 +1,5 @@
 import { useUIStore } from '../../stores/uiStore';
+import { ProviderTermsNotice } from './ProviderTermsNotice';
 import { useState, useRef } from 'react';
 import type { Message } from '../../stores/messageStore';
 import { MessageActions } from './MessageActions';
@@ -103,6 +104,8 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
       </div>
     );
   }
+
+  if (message.systemEvent === 'provider_terms') return <ProviderTermsNotice content={message.content} />;
 
   // Other system events (e.g. loop guard)
   if (message.systemEvent) {

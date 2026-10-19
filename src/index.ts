@@ -6,6 +6,7 @@ import { verifyEncryptionKeyAtStartup } from './lib/key-fingerprint';
 import { storage } from './lib/storage';
 import { startFileCleanupWorker } from './workers/file-cleanup';
 import { startFileTaggingWorker } from './workers/file-tagging';
+import { startTermsWatchWorker } from './workers/terms-watch';
 import { sweepExpiredRuns, type Notice } from './lib/agent-runs';
 
 async function main() {
@@ -39,6 +40,8 @@ async function main() {
     // File tagging worker: idle unless a server has switched file tagging on
     // (stopped in shutdown below: hooks cannot be added once the server is listening)
     const stopTagging = startFileTaggingWorker({ db, store: storage, encryptionKey: config.encryptionKey, log: app.log });
+    const stopTermsWatch = startTermsWatchWorker({ db, log: app.log,
+        emit: n => app.io.to(`channel:${n.channelId}`).emit('Message', n.event) });
 
     // Agent runs: expire claims whose host stopped heartbeating, then retry or drop their work
     const runSweeper = setInterval(() => {
@@ -58,6 +61,7 @@ async function main() {
     const shutdown = async () => {
         console.log('Shutting down...');
         clearInterval(runSweeper);
+        await stopTermsWatch();
         // Let a tagging job in flight finish its write before the pool goes away
         await stopTagging().catch(() => {});
         await app.close();
