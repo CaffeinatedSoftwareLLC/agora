@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { verifyToken, extractToken } from './tokens';
 import { isTokenBlacklisted } from './token-blacklist';
 import { parseBotToken, verifyBotSecret } from './bot-tokens';
+import { isSafeMethod, sessionTokenFromHeaders, validCsrf } from './session-cookie';
 
 const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/file-reservations',
@@ -132,8 +133,11 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         return;
     }
 
-    // Existing JWT auth path
-    const token = extractToken(request.headers.authorization);
+    // JWT auth path: an Authorization header (API clients) or, when there is none,
+    // the browser's httpOnly session cookie
+    const headerToken = extractToken(authHeader);
+    const cookieToken = authHeader ? null : sessionTokenFromHeaders(request.headers);
+    const token = headerToken ?? cookieToken;
     if (!token) {
         return reply.status(401).send({ error: 'Missing or invalid authorization header' });
     }
@@ -149,6 +153,15 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     // Check token blacklist (logout revocation)
     if (payload.jti && await isTokenBlacklisted(payload.jti)) {
         return reply.status(401).send({ error: 'Token revoked' });
+    }
+
+    // A browser sends the session cookie on its own, so state-changing requests made
+    // with it must also carry the session's CSRF token (see session-cookie.ts)
+    if (cookieToken) {
+        request.cookieAuth = true;
+        if (!isSafeMethod(request.method) && !(payload.jti && validCsrf(request, payload.jti, request.server.jwtSecret))) {
+            return reply.status(403).send({ error: 'csrf_failed' });
+        }
     }
 
     // Check account_status — reject non-active users

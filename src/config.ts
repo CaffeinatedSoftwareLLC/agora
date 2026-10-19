@@ -32,6 +32,9 @@ export const config = {
     port: parseInt(process.env.PORT ?? '3000', 10),
     trustProxy: process.env.TRUST_PROXY === 'true',
     corsOrigin: process.env.CORS_ORIGIN || undefined,
+    // Browser session cookies are Secure. Browsers accept Secure cookies from http://localhost,
+    // so dev works; set COOKIE_SECURE=false only to serve the UI over plain HTTP on another host.
+    cookieSecure: process.env.COOKIE_SECURE !== 'false',
     // Failed logins per account before a lock, how long it lasts, and attempts per minute instance-wide
     loginLimits: {
         maxFailures: parseInt(process.env.LOGIN_MAX_FAILURES ?? '10', 10),

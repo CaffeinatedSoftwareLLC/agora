@@ -19,19 +19,42 @@ export class ApiError extends Error {
   }
 }
 
-// Get token from auth store without circular import
-let getToken: () => string | null = () => null;
-export function setTokenGetter(fn: () => string | null) { getToken = fn; }
+// The session is an httpOnly cookie the browser sends by itself (same-origin requests).
+// State-changing requests echo the readable agora_csrf cookie in X-CSRF-Token, which
+// the API checks against the session. X-Agora-Session asks login/register/setup to
+// set the cookies instead of returning the token in the body.
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  for (const part of document.cookie.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
+  }
+  return null;
+}
+
+/** Headers every API request from the UI carries. */
+export function sessionHeaders(method: string): Record<string, string> {
+  const headers: Record<string, string> = { 'X-Agora-Session': 'cookie' };
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
+    const csrf = readCookie('agora_csrf');
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+  }
+  return headers;
+}
+
+/** For plain fetch() GETs (file downloads): the session cookie goes along by itself. */
+export function getAuthHeaders(): Record<string, string> {
+  return sessionHeaders('GET');
+}
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers = sessionHeaders(method);
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const res = await fetch(path, {
     method,
     headers,
+    credentials: 'same-origin',
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -85,14 +108,11 @@ export async function uploadFile(channelId: string, file: File): Promise<{
   formData.append('channel_id', channelId);
   formData.append('file', file);
 
-  const token = getToken();
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
   // DO NOT set Content-Type — browser sets it with boundary for FormData
-
   const res = await fetch('/files/upload', {
     method: 'POST',
-    headers,
+    headers: sessionHeaders('POST'),
+    credentials: 'same-origin',
     body: formData,
   });
 
@@ -101,10 +121,6 @@ export async function uploadFile(channelId: string, file: File): Promise<{
   return data;
 }
 
-export function getAuthHeaders(): Record<string, string> {
-  const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
 
 // ─── Bot Management API ───
 
@@ -476,8 +492,7 @@ export const runtimeApi = {
 
   /** Plain-text code download (410 once pruned by retention). */
   code: async (runId: string): Promise<string> => {
-    const token = getToken();
-    const res = await fetch(`/runtime/runs/${runId}/code`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const res = await fetch(`/runtime/runs/${runId}/code`, { headers: getAuthHeaders(), credentials: 'same-origin' });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new ApiError(res.status, data.error || 'unknown_error');

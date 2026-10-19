@@ -6,7 +6,6 @@ import type { RegistrationPolicy } from '../../lib/contracts/instance';
 
 interface SetupResponse {
   user: { id: string; username: string; isInstanceAdmin: boolean };
-  accessToken: string;
 }
 
 export function SetupWizard({ onComplete }: { onComplete: () => void }) {
@@ -51,13 +50,9 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
         registrationPolicy,
       });
 
-      // Store the token so the user is immediately authenticated
+      // The response set the session cookie, so the admin is signed in already
       const { useAuthStore } = await import('../../stores/authStore');
-      useAuthStore.setState({
-        token: res.accessToken,
-        user: res.user,
-        status: 'authenticated',
-      });
+      useAuthStore.getState().setAuthenticated(res.user);
 
       onComplete();
     } catch (err) {

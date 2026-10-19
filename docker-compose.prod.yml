@@ -68,6 +68,7 @@ services:
       # The browser's origin. Follows DOMAIN unless CORS_ORIGIN is set explicitly.
       CORS_ORIGIN: ${CORS_ORIGIN:-https://${DOMAIN:-localhost}}
       TRUST_PROXY: "true"
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
       LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-10}
       LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
       LOGIN_GLOBAL_PER_MINUTE: ${LOGIN_GLOBAL_PER_MINUTE:-60}

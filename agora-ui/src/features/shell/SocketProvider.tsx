@@ -25,16 +25,17 @@ import { SocketContext } from './SocketContext';
 
 export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
-  const token = useAuthStore(s => s.token);
+  // Reconnect for each new sign-in (a different user, or the same one after signing out)
+  const sessionUserId = useAuthStore(s => (s.status === 'authenticated' ? s.user?.id ?? null : null));
   const clearSession = useAuthStore(s => s.clearSession);
   const setServers = useServerStore(s => s.setServers);
   const setChannels = useChannelStore(s => s.setChannels);
   const setConnectionStatus = useUIStore(s => s.setConnectionStatus);
 
   useEffect(() => {
-    if (!token) return;
+    if (!sessionUserId) return;
 
-    const s = createSocket(token);
+    const s = createSocket();
 
     s.on('connect', () => {
       setConnectionStatus('connected');
@@ -157,7 +158,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       s.disconnect();
       setSocket(null);
     };
-  }, [token, clearSession, setServers, setChannels, setConnectionStatus]);
+  }, [sessionUserId, clearSession, setServers, setChannels, setConnectionStatus]);
 
   return (
     <SocketContext.Provider value={socket}>

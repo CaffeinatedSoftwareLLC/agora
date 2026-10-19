@@ -3,9 +3,9 @@ import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 
 export function AdminGuard({ children }: { children: ReactNode }) {
-  const { token, user } = useAuthStore();
+  const { status, user } = useAuthStore();
 
-  if (!token) {
+  if (status !== 'authenticated') {
     return <Navigate to="/login" replace />;
   }
 
