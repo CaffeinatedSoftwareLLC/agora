@@ -53,7 +53,7 @@ describe('argv/config isolation', () => {
         expect(JSON.stringify(launch.env)).not.toContain(c.hostToken);
         expect(JSON.stringify(launch.env)).not.toContain('bot_sibling');
         const mcp = launch.args.find(a => a.startsWith('mcp_servers='))!;
-        expect(mcp).toContain('required=true'); expect(mcp).not.toContain('chat_wait');
+        expect(mcp).toContain('required=true'); expect(mcp).toContain('--no-presence'); expect(mcp).not.toContain('chat_wait');
         expect(mcp).toContain('chat_send={approval_mode="approve"}');
         delivery.session.nativeSessionId = '12345678-1234-1234-1234-123456789abc';
         const resumed = await prepare(c, delivery); cleanups.push(resumed.cleanup);

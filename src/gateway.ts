@@ -8,6 +8,7 @@ import { originAllowed, sessionTokenFromHeaders } from './auth/session-cookie';
 import { socketAccountError, visibleChannels, gatewayAccessRevision, revalidateHumanSessions } from './lib/gateway-access';
 import { canViewChannel } from './lib/channel-access';
 import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
+import { agentPresence, type AgentPresencePayload } from './lib/agent-presence';
 
 /** How often open human sockets are re-checked against revocation and account state. */
 const SESSION_SWEEP_MS = 5 * 60 * 1000;
@@ -202,11 +203,31 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     socket.join(`channel:${row.channel_id.trim()}`);
                 }
 
+                const channelIds: string[] = channels.rows.map((r: any) => r.channel_id.trim());
+
                 // Emit simplified BotReady (not human Ready)
                 socket.emit('BotReady', {
                     botId: userId.trim(),
-                    channels: channels.rows.map((r: any) => r.channel_id.trim()),
+                    channels: channelIds,
                 });
+
+                // Bring-your-own-session presence (src/lib/agent-presence.ts): agora-mcp says
+                // whether it is the Claude Code Channel or the plain MCP server.
+                const mode = socket.handshake.auth?.mode;
+                if (mode === 'channel' || mode === 'mcp') {
+                    const botId = userId.trim();
+                    const name = await db.query('SELECT username FROM users WHERE id = $1', [botId]);
+                    if (!socket.connected) return;
+                    const broadcast = (events: AgentPresencePayload[]) => {
+                        for (const e of events) socket.to(`channel:${e.channelId}`).emit('AgentPresence', e);
+                    };
+                    broadcast(agentPresence.connect(botId, name.rows[0]?.username ?? '', socket.id, mode, channelIds));
+                    socket.on('Listening', (data: { listening?: unknown }) => {
+                        if (typeof data?.listening !== 'boolean') return;
+                        broadcast(agentPresence.setListening(botId, socket.id, data.listening));
+                    });
+                    socket.on('disconnect', () => { broadcast(agentPresence.disconnect(botId, socket.id)); });
+                }
             } catch {
                 socket.disconnect();
             }
@@ -317,6 +338,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     mentionCount: r.mention_count,
                 })),
                 onlineUserIds,
+                agentPresence: agentPresence.inChannels(channelRoomIds),
             });
 
             // --- Presence: track this connection ---

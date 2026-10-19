@@ -7,26 +7,49 @@ import { loadStartupConfig } from './invites.js';
 import { AgoraApi } from './api.js';
 import { CursorTracker } from './cursor.js';
 import { registerTools } from './tools.js';
+import { connectSocket, ListeningReporter } from './socket.js';
+import { channelServerOptions, parseChannelOptions, startChannel } from './channel-server.js';
 
 // package.json sits one level above dist/ in the installed package.
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
-if (process.argv.includes('--version')) {
+const args = process.argv.slice(2);
+if (args.includes('--version')) {
     console.log(version);
     process.exit(0);
 }
 
-const config = await loadStartupConfig(process.argv.slice(2));
+const options = parseChannelOptions(args, process.env);
+const config = await loadStartupConfig(args);
 
 const api = new AgoraApi(config.instance, config.token);
 const cursors = new CursorTracker(api);
 
-const server = new McpServer({
-    name: 'agora',
-    version,
-});
+// Channel mode (docs/claude-channel.md): declare the claude/channel capability so Claude Code
+// registers a listener for pushed messages. Claude Code delivers `instructions` to Claude.
+const server = options.channelMode
+    ? new McpServer({ name: 'agora', version }, channelServerOptions(options))
+    : new McpServer({ name: 'agora', version });
 
-registerTools(server, api, cursors, { defaultChannel: config.defaultChannel });
+const listening = !options.channelMode && options.presence ? new ListeningReporter() : undefined;
+registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, listening });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// Opened after stdio is up, so no pushed message is sent before Claude Code is listening.
+// The socket reports "connected / listening" to Agora, and in channel mode carries the messages.
+if (options.channelMode) {
+    startChannel(server.server, connectSocket(config.instance, config.token, 'channel'), api,
+        { ...options, defaultChannel: config.defaultChannel });
+} else if (listening) {
+    listening.attach(connectSocket(config.instance, config.token, 'mcp'));
+}
+
+// The socket's reconnect timers would keep the process alive after Claude Code (or any
+// client) goes away; stdin closing means the session is over.
+if (options.channelMode || listening) {
+    const exit = () => process.exit(0);
+    process.stdin.once('end', exit);
+    process.stdin.once('close', exit);
+}

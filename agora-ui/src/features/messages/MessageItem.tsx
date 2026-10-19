@@ -10,6 +10,7 @@ import { ThreadIndicator } from './ThreadIndicator';
 import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
 import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
+import { PermissionRelayCard } from '../agents/PermissionRelayCard';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
 import { usePalette } from '../../theme';
@@ -86,6 +87,10 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   // A profile with run approval asks the owner before every wake (docs/provider-terms.md)
   if (message.systemEvent === 'agent_run_approval') {
     return <RunApprovalCard message={message} />;
+  }
+
+  if (message.systemEvent === 'agent_permission_relay') {
+    return <PermissionRelayCard message={message} />;
   }
 
   // Agent session notice (started / shelved / ended): left-aligned with the message column, console icon

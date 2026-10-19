@@ -4,11 +4,12 @@ import type { AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
 import { useChannelStore } from '../../stores/channelStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useThreadStore } from '../../stores/threadStore';
+import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { ProtocolBadge } from '../messages/ProtocolBadge';
 import { latestProtocol } from '../messages/latestProtocol';
 import {
-  STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions,
-  type AgentProfile, type AgentSession,
+  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownSessionChips, ownSessionDetail,
+  type AgentProfile, type AgentSession, type OwnSessionStatus,
 } from './agentSessions';
 import { SessionSheet, StateDot, type SheetMode } from './SessionSheet';
 
@@ -113,6 +114,8 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
   }), [activeThreads, channelMessages, repliesByThread]);
 
   const chips = useMemo(() => deriveChips(sessions), [sessions]);
+  const present = useAgentPresenceStore(s => s.byChannel.get(channelId));
+  const ownChips = useMemo(() => ownSessionChips(present?.values() ?? [], sessions), [present, sessions]);
 
   const openStart = () => {
     setSheet({ mode: { kind: 'start' }, key: Date.now(), channelId });
@@ -148,6 +151,23 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
           </button>
         );
       })}
+
+      {ownChips.map(chip => (
+        <span
+          key={`own-${chip.userId}`}
+          role="img"
+          className={`${CHIP_TARGET} cursor-default`}
+          title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}`}
+          aria-label={`${chip.username}: ${OWN_SESSION_LABEL[chip.status].toLowerCase()}`}
+          data-testid="own-session-chip"
+        >
+          <span className={`${CHIP_PILL} border-dashed`}>
+            <OwnSessionDot status={chip.status} />
+            <span className="font-medium">{chip.username}</span>
+            <span className="text-xs text-text-muted">{chip.status === 'listening' ? 'listening' : chip.status === 'connected' ? 'connected' : 'offline'}</span>
+          </span>
+        </span>
+      ))}
 
       <button type="button" className={CHIP_TARGET} aria-haspopup="dialog" aria-label="Start an agent" onClick={openStart}>
         <span className={`${CHIP_PILL} border-dashed text-text-muted group-hover:text-text`}>+ Agent</span>
@@ -194,4 +214,10 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
       )}
     </div>
   );
+}
+
+/** A ring, not a filled dot, so a user's own session never reads as a hosted one. */
+function OwnSessionDot({ status }: { status: OwnSessionStatus }) {
+  const tone = status === 'listening' ? 'border-online bg-online/40 motion-safe:animate-pulse' : status === 'connected' ? 'border-online' : 'border-text-dim';
+  return <span aria-hidden="true" className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full border-2 ${tone}`} />;
 }

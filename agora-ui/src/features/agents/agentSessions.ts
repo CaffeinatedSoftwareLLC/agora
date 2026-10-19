@@ -203,6 +203,7 @@ const DECISION_ERRORS: Record<string, string> = {
   already_decided: 'Someone already answered this.',
   expired: 'This request expired. Wake the agent again to retry.',
   cannot_direct: 'Only the owner and directors can approve agent tools.',
+  owner_only: 'Only the server owner can answer this.',
 };
 
 /** A failed tool-approval decision (ToolApprovalCard) as a sentence. */
@@ -211,4 +212,45 @@ export function decisionError(err: unknown): string {
   if (DECISION_ERRORS[err.code]) return DECISION_ERRORS[err.code];
   if (err.status === 403) return err.code.startsWith('Only') ? err.code : 'You cannot approve agent tools here.';
   return err.code;
+}
+
+/**
+ * Bring-your-own-session agents (docs/claude-channel.md): the user's own CLI session
+ * connected through agora-mcp, shown apart from host-managed sessions. An agent with a live
+ * hosted session in the channel is left out: its hosted chip already stands for it, and a
+ * hosted run's own MCP server does not report presence.
+ */
+export type OwnSessionStatus = 'listening' | 'connected' | 'offline';
+
+export interface OwnSessionChip {
+  userId: string;
+  username: string;
+  status: OwnSessionStatus;
+  mode: 'channel' | 'mcp' | null;
+}
+
+export const OWN_SESSION_LABEL: Record<OwnSessionStatus, string> = {
+  listening: 'Own session, listening',
+  connected: 'Own session, connected but not waiting for messages',
+  offline: 'Own session, offline',
+};
+
+const OWN_RANK: Record<OwnSessionStatus, number> = { listening: 0, connected: 1, offline: 2 };
+
+export function ownSessionChips(
+  present: Iterable<{ userId: string; username: string; status: OwnSessionStatus; mode: 'channel' | 'mcp' | null }>,
+  sessions: AgentSession[],
+): OwnSessionChip[] {
+  const hosted = new Set(sessions.filter(s => s.state === 'live' && s.botId).map(s => s.botId!.trim()));
+  return [...present]
+    .filter(p => !hosted.has(p.userId.trim()))
+    .map(p => ({ userId: p.userId, username: p.username, status: p.status, mode: p.mode }))
+    .sort((a, b) => OWN_RANK[a.status] - OWN_RANK[b.status] || a.username.localeCompare(b.username));
+}
+
+/** "Claude Code Channel" or "chat_wait", for the chip's tooltip. */
+export function ownSessionDetail(chip: OwnSessionChip): string {
+  if (chip.status === 'offline') return 'Its agora-mcp has disconnected.';
+  if (chip.mode === 'channel') return 'Claude Code Channel: instructions are pushed into the session.';
+  return chip.status === 'listening' ? 'Waiting in chat_wait for new messages.' : 'agora-mcp is running; the agent is not waiting for messages right now.';
 }
