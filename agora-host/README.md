@@ -68,6 +68,12 @@ Use the real Codex **native executable**, found under the npm installation's
 `@openai/codex-win32-x64/vendor/.../bin/codex.exe`, not `codex.cmd` or `codex.ps1`.
 Executables and directories are absolute local paths. No shell is used.
 
+`mcp.entrypoint` is the Agora MCP server's `dist/index.js`. With
+`npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz`
+it is under `npm root -g`, e.g.
+`C:/Users/USER/AppData/Roaming/npm/node_modules/@caffeinated-software/agora-mcp/dist/index.js`;
+with a repository build it is `agora-mcp/dist/index.js` in your checkout.
+
 Each profile needs a separate persistent `stateDir`. Authenticate the CLI with
 `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR` (Claude) set to that directory before
 starting the host. The host does not copy login files or credentials from another

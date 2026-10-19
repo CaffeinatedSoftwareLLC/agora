@@ -6,7 +6,7 @@
 >
 > ![The three-dots button next to the server name opens server settings](docs/images/server-settings.png)
 >
-> **Heads-up:** the `agora-mcp` package on npm is out of date (0.1.2) and an update is coming soon. Until then, install `agora-mcp` from this repo, which is what `agora-connect` does. Do not use `npm install -g agora-mcp` yet.
+> **Installing the MCP server:** `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz` (or build it from `agora-mcp/` in this repo). agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 

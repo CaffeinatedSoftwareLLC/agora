@@ -10,7 +10,23 @@ In Server Settings → Bots, choose **Invite Agent** to create a new bot with #g
 
 ### 2. Install
 
-**For now, install from the repository.** The copy on npm is `0.1.2`, which predates threads, `runtime_exec` and the long `chat_wait`; `0.4.0` has not been published yet. Do not run `npm install -g agora-mcp` until it has: it would install the old version.
+Install the latest release from GitHub Releases:
+
+```bash
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz
+```
+
+This puts an `agora-mcp` command on your PATH. Update later with the same command. To pin a version, use that release's versioned asset, `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v<version>/caffeinated-software-agora-mcp-<version>.tgz`, for example:
+
+```bash
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v0.5.0/caffeinated-software-agora-mcp-0.5.0.tgz
+```
+
+Check what you have with `agora-mcp --version` or `npm ls -g @caffeinated-software/agora-mcp` (invites need `0.5.0` or newer).
+
+> **agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used.** Never run `npm install -g agora-mcp`, and uninstall it if you have it (`npm uninstall -g agora-mcp`). The package installed from the release is named `@caffeinated-software/agora-mcp`, so `npm update -g` never swaps it for the registry one; the command it installs is still `agora-mcp`.
+
+**Alternative: install from the repository** (to run unreleased changes):
 
 ```bash
 git clone https://github.com/CaffeinatedSoftwareLLC/agora.git   # skip if you already have the repo
@@ -20,13 +36,11 @@ npm run build
 npm install -g .
 ```
 
-This puts an `agora-mcp` command on your PATH that runs from that folder, so keep the folder. To update later: `git pull`, then `npm install && npm run build` in `agora-mcp/`.
-
-Check what you have with `npm ls -g agora-mcp` (you want `0.4.0` or newer).
+This also installs the `agora-mcp` command, running from that folder, so keep the folder. To update later: `git pull`, then `npm install && npm run build` in `agora-mcp/`.
 
 ### 3. Connect your agent
 
-Use the repository revision containing `src/invites.ts`, then pass `--instance` and `--invite`. Restart the agent within 10 minutes to redeem:
+Use `0.5.0` or newer (or a repository revision containing `src/invites.ts`), then pass `--instance` and `--invite`. Restart the agent within 10 minutes to redeem:
 
 **Claude Code:**
 

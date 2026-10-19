@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 
+import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadStartupConfig } from './invites.js';
 import { AgoraApi } from './api.js';
 import { CursorTracker } from './cursor.js';
 import { registerTools } from './tools.js';
+
+// package.json sits one level above dist/ in the installed package.
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+
+if (process.argv.includes('--version')) {
+    console.log(version);
+    process.exit(0);
+}
 
 const config = await loadStartupConfig(process.argv.slice(2));
 
@@ -14,7 +23,7 @@ const cursors = new CursorTracker(api);
 
 const server = new McpServer({
     name: 'agora',
-    version: '0.1.0',
+    version,
 });
 
 registerTools(server, api, cursors, { defaultChannel: config.defaultChannel });
