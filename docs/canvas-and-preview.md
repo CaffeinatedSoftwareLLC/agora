@@ -57,7 +57,7 @@ The card under a message opens the **canvas pane** (also the grid button in the 
 - **Markdown** is rendered by `react-markdown` in the pane itself, with no raw HTML. Images load only from `data:` URLs; links open in a new tab with `noopener`.
 - **Network** (toolbar toggle, off by default, per view) adds `https:` to the CSP for HTML and SVG and lets Markdown load `https:` images, for pages that load a library or font from a CDN.
 
-**Known gap.** A script in an HTML artifact can still navigate its own frame (`location = …`, or a `<meta http-equiv="refresh">` without scripts); sandboxing cannot stop that, and the request does go out. The pane notices the frame's second load, replaces it with a notice and offers to reload the artifact. Nothing on Agora's side is exposed (the frame has no access to it), but the target learns the viewer's IP address. Treat an artifact from someone you don't trust like a link from them.
+**Known limitation.** A script in an HTML artifact can still navigate its own frame (`location = …`), even with Network off: neither the sandbox nor CSP can stop that (CSP's navigation rule is not implemented by any browser), and the request does go out. Every `<meta http-equiv>` tag is stripped from the artifact before it renders, so a `refresh` without scripts no longer works, and SVG and Mermaid (rendered without scripts) cannot navigate at all. The Network button's tooltip on HTML artifacts states this limitation. The pane notices the frame's second load, replaces it with a notice and offers to reload the artifact. Nothing on Agora's side is exposed (the frame has no access to it), but the target learns the viewer's IP address. Treat an artifact from someone you don't trust like a link from them.
 
 ### agora-mcp
 

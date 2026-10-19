@@ -12,8 +12,7 @@ import type { Claim } from './types.js';
  * - A profile on `api_key` gets its key from this host's environment (`apiKeyEnv`), passed
  *   to the child only. The key is never logged, stored or sent to Agora.
  * - Gemini (CLI or Antigravity) must use an API key: Google's terms call third-party access
- *   through its account login a breach. `allowSubscriptionAtOwnRisk` overrides that and
- *   forces owner approval of every run.
+ *   through its account login a breach. Gemini is hosted only over ACP with an API key.
  * - The host never reads, copies or relays a CLI's own login files or OAuth tokens.
  */
 
@@ -29,8 +28,8 @@ export const API_KEY_ENVS: Record<'codex' | 'claude' | 'gemini', string[]> = {
 export const GEMINI_SUBSCRIPTION_REFUSAL =
     'a gemini profile must use auth "api_key" (GEMINI_API_KEY). Google\'s Antigravity terms, section 6: '
     + '"Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach", '
-    + 'and accounts have been suspended for it. To run on your Google login anyway, set "allowSubscriptionAtOwnRisk": true; '
-    + `every run then waits for your approval in Agora. That reduces the risk but does not remove it. See ${TERMS_DOC}`;
+    + 'and accounts have been suspended for it. Agora never hosts a Google account login: run Gemini over ACP with an API key '
+    + `("protocol": "acp", "acpArgs": ["--acp"], "auth": "api_key", "apiKeyEnv": "GEMINI_API_KEY"). See ${TERMS_DOC}`;
 
 export const GEMINI_NOT_HOSTED =
     'Gemini is hosted only over ACP with an API key: set "protocol": "acp" and "acpArgs": ["--acp"] on the gemini profile (agora-host README, "ACP agents").';

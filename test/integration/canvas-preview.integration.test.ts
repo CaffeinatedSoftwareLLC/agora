@@ -178,6 +178,22 @@ describe('browser previews', () => {
         expect((await queue({ url: 'http://localhost:5173/' })).status).toBe(202);
     });
 
+    it('lets a siwc agent preview a session its plan owner started, even when that is not the server owner', async () => {
+        try {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'siwc', api_key_env = NULL, plan_owner_id = $1`, [member.userId]);
+            await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [member.userId]);
+            const q = await queue({ url: 'http://localhost:5173/' });
+            expect(q.status, JSON.stringify(q.body)).toBe(202);
+            await ctx.db.query(`UPDATE browser_previews SET status = 'failed'`);
+            // The server owner is not this plan's owner
+            await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [owner.userId]);
+            expect((await queue({ url: 'http://localhost:5173/' })).body.error).toBe('plan_owner_only');
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY', plan_owner_id = NULL`);
+            await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [owner.userId]);
+        }
+    });
+
     it('needs a live hosted session on a working host', async () => {
         await ctx.request.post(`/channels/${channel}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'builder' });
         expect((await queue({ url: 'http://localhost:5173/' })).body.error).toBe('no_live_hosted_session');

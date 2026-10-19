@@ -81,10 +81,9 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
   [docs/codex-chatgpt-plan.md](../docs/codex-chatgpt-plan.md).
 - `"requireRunApproval": true`: every wake waits for the owner's **Approve run** card.
 - `adapter: "gemini"` must use `api_key`; on account login the host refuses to start and quotes
-  Google's Antigravity terms §6. `"allowSubscriptionAtOwnRisk": true` overrides that and forces
-  run approval; that reduces the terms risk but does not remove it. The host runs Gemini only
-  over ACP with an API key ([ACP agents](#acp-agents-agent-client-protocol)); a gemini
-  profile on account login, at own risk or not, still stops the host after this check.
+  Google's Antigravity terms §6. The host runs Gemini only over ACP with an API key
+  ([ACP agents](#acp-agents-agent-client-protocol)). The old `allowSubscriptionAtOwnRisk` flag
+  opens no path: a gemini profile on account login is never hosted.
 
 ```json
 "claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", "...": "..." },
@@ -275,7 +274,7 @@ for a subscription. An agent asking for sign-in fails the run with
 `acp_auth_required`. A gemini profile must be `api_key`: Agora never hosts a Google
 account login, and `allowSubscriptionAtOwnRisk` does not apply to ACP.
 
-**Permissions (#73, #93).** File calls (read, edit, delete, move) are answered only when every path they name is inside the run's worktree (links resolved); a call outside it, or without a known path, is refused with no approval card, whatever the rules say. The host advertises no file system or terminal, so the
+**Permissions (#73, #93).** File calls (read, edit, delete, move) are answered only when every path they name is inside the run's worktree (links resolved); a call outside it, or without a known path, is refused with no approval card, whatever the rules say. A command rule such as `Bash(git status:*)` means the `git` found through absolute `PATH` entries outside the worktree and repository: `./git status`, `bin\git.exe status` or an absolute path inside the repository are refused (as is a bare `git` on Windows when the working directory holds a `git.exe`); an absolute path outside them matches only a rule naming that exact path. The host advertises no file system or terminal, so the
 agent uses its own tools in the worktree and asks before anything it may not run
 alone (`session/request_permission`). The host answers at once from the claim's
 rules: a match gets `allow_once`; anything else gets `reject_once`, and the rule that

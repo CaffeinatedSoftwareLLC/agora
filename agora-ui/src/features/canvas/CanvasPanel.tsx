@@ -161,7 +161,9 @@ function ArtifactView({ channelId, artifactId, pinned }: { channelId: string; ar
             // Per viewer, never remembered: each time it is turned on, the person is told what it allows
             if (window.confirm('Turn network on for this artifact?\n\nIt will be able to load scripts and send data to the internet (any https address). Only do this for artifacts you trust.')) setNetwork(true);
           }}
-            title="Let the artifact load images, fonts and scripts over https. Off by default.">
+            title={shown.kind === 'html'
+              ? 'Let the artifact load images, fonts and scripts over https. Off by default. Known limitation: even with network off, a script in an HTML artifact can navigate its own frame, which sends one request (your IP address) before the frame is reset.'
+              : 'Let the artifact load images, fonts and scripts over https. Off by default.'}>
             Network {network ? 'on' : 'off'}
           </button>
         )}
@@ -190,9 +192,11 @@ function Rendered({ doc, network }: { doc: ArtifactVersion; network: boolean }) 
 }
 
 /**
- * The artifact's frame: sandboxed, opaque origin, CSP inside the document. A script can
- * still navigate its own frame away; the second load gives that away, and the frame is
- * reset instead of showing the other page.
+ * The artifact's frame: sandboxed, opaque origin, CSP inside the document, `<meta http-equiv>`
+ * stripped (frame.ts). A script can still navigate its own frame away, and that request goes
+ * out even with Network off (no browser enforces a CSP navigation rule); the second load gives
+ * it away, and the frame is reset instead of showing the other page. Known limitation,
+ * stated in the Network button and docs/canvas-and-preview.md.
  */
 export function SandboxFrame({ title, kind, srcDoc }: { title: string; kind: 'html' | 'svg' | 'mermaid'; srcDoc: string }) {
   const P = usePalette();
@@ -207,7 +211,7 @@ export function SandboxFrame({ title, kind, srcDoc }: { title: string; kind: 'ht
   if (navigatedDoc === srcDoc) {
     return (
       <div className="p-4 text-[13px]" style={{ color: P.muted }}>
-        <p>This artifact tried to open another page, so the frame was reset.</p>
+        <p>This artifact tried to open another page, so the frame was reset. That page may already have received one request from your browser (it learns your IP address), even with network off.</p>
         <button type="button" className="mt-2 min-h-11 md:min-h-8 rounded-lg px-3 font-medium" style={{ background: P.surface, color: P.text, border: `1px solid ${P.border}` }}
           onClick={() => { loads.current = { doc: '', count: 0 }; setNavigatedDoc(null); setGeneration(g => g + 1); }}>Reload it</button>
       </div>

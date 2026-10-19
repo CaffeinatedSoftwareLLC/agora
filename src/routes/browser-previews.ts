@@ -11,6 +11,7 @@ import { storage } from '../lib/storage';
 import { decryptFile } from '../lib/encryption';
 import { config } from '../config';
 import { generateUlid } from '../utils/ulid';
+import { PLAN_OWNER_ONLY, PLAN_OWNER_SQL, SUBSCRIPTION_OWNER_ONLY } from '../lib/provider-terms';
 
 const ID = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' } as const;
 /** Seconds the host has to screenshot and upload before the claim expires. */
@@ -75,13 +76,15 @@ export async function browserPreviewRoutes(app: FastifyInstance) {
         }
         const r = await asService(db, async () => {
             const s = (await db.query(`SELECT s.id, s.bot_id, s.state, p.host_id, p.generation, p.auth_mode,
-                (s.started_by IS NOT NULL AND s.started_by = srv.owner_id) AS started_by_owner
+                (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner
                 FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN servers srv ON srv.id = s.server_id
                 WHERE s.channel_id = $1 AND s.state = 'live' AND ${request.isBot ? 's.bot_id = $2' : 's.id = $2'}
                 ORDER BY s.id DESC LIMIT 1 FOR UPDATE OF s`, [channelId, request.isBot ? request.userId : b.sessionId])).rows[0];
             if (!s || (request.isBot && b.sessionId && s.id.trim() !== b.sessionId)) return { status: 409, body: { error: 'no_live_hosted_session' } };
-            // A bot on a subscription login acts only inside a session the owner started (provider-terms.ts)
-            if (request.isBot && s.auth_mode !== 'api_key' && !s.started_by_owner) return { status: 403, body: { error: 'subscription_owner_only' } };
+            // A bot on a personal plan acts only inside a session its plan owner started (provider-terms.ts)
+            if (request.isBot && s.auth_mode !== 'api_key' && !s.started_by_owner) {
+                return { status: 403, body: { error: s.auth_mode === 'siwc' ? PLAN_OWNER_ONLY : SUBSCRIPTION_OWNER_ONLY } };
+            }
             if (!(await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND revoked_at IS NULL', [s.host_id])).rows.length) return { status: 409, body: { error: 'host_unavailable' } };
             if (b.threadId) {
                 const parent = (await db.query('SELECT thread_id, thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2 AND deleted_at IS NULL', [b.threadId, channelId])).rows[0];

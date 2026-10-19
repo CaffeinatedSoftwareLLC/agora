@@ -58,38 +58,87 @@ export function resolveExecutable(name: string, cwd: string, env: NodeJS.Process
 
 export interface VerifyOutcome { passed: boolean; exitCode: number | null; timedOut: boolean; spawnFailed: boolean; output: string }
 
-/** Run the command in `cwd`; kill its whole process tree on timeout or abort. */
-export function runVerify(argv: string[], cwd: string, timeoutMs: number, signal: AbortSignal, env = verifyEnv()): Promise<VerifyOutcome> {
+/** How long to wait for the pipes to close after the tree was killed before giving up on them. */
+const CLOSE_GRACE_MS = 1000;
+
+/**
+ * Kill a verify command's whole tree, whether or not its first process is still alive (#111
+ * review): a script can exit after starting a descendant that keeps running and holds the
+ * output pipes. On POSIX the command runs in its own process group, which outlives its
+ * leader, so the group is killed. On Windows `taskkill /T` only finds a tree through a live
+ * root, so the host also sweeps every process descended from the root's PID that started
+ * after the command did (the start time guards against PID reuse). Rejects when it cannot
+ * establish that the processes are gone.
+ */
+export async function killVerifyTree(pid: number, startedAt: number, platform = process.platform): Promise<void> {
+    if (platform !== 'win32') {
+        try { process.kill(-pid, 'SIGKILL'); } catch (e: any) { if (e?.code !== 'ESRCH') throw e; }
+        return;
+    }
+    const system = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+    await promisify(execFile)(join(system, 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 5000 }).catch(() => {});
+    // Only integers go into the script
+    const script = [
+        `$root=${Math.trunc(pid)}; $since=[DateTimeOffset]::FromUnixTimeMilliseconds(${Math.trunc(startedAt) - 1000}).UtcDateTime`,
+        '$all=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate)',
+        '$kill=New-Object System.Collections.Generic.List[int]; $queue=New-Object System.Collections.Generic.Queue[int]; $queue.Enqueue($root)',
+        'while($queue.Count){ $p=$queue.Dequeue(); foreach($c in $all){ $id=[int]$c.ProcessId',
+        '  if($c.ParentProcessId -eq $p -and $id -ne $p -and $c.CreationDate -and $c.CreationDate.ToUniversalTime() -ge $since -and -not $kill.Contains($id)){ $kill.Add($id); $queue.Enqueue($id) } } }',
+        'foreach($id in $kill){ Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }',
+        'if($kill.Count){ Get-Process -Id $kill -ErrorAction SilentlyContinue | Wait-Process -Timeout 3 -ErrorAction SilentlyContinue',
+        '  if(@(Get-Process -Id $kill -ErrorAction SilentlyContinue).Count){ exit 1 } }',
+    ].join('\n');
+    await promisify(execFile)(join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, timeout: 20000 });
+}
+
+/**
+ * Run the command in `cwd`. On timeout or abort the whole process tree is killed and the
+ * outcome settles even if a descendant still holds the output pipes: they are destroyed after
+ * a short grace. A stopped command never passes, and when the host cannot confirm the tree is
+ * gone the output says so.
+ */
+export function runVerify(argv: string[], cwd: string, timeoutMs: number, signal: AbortSignal, env = verifyEnv(),
+    deps: { killTree?: typeof killVerifyTree; spawn?: typeof spawn } = {}): Promise<VerifyOutcome> {
+    const killTree = deps.killTree ?? killVerifyTree;
     return new Promise(resolve => {
-        let output = ''; let timedOut = false; let settled = false;
+        let output = ''; let timedOut = false; let settled = false; let stopping = false;
         // Declared before finish() can run, so an early return never hits a TDZ error
         let timer: ReturnType<typeof setTimeout> | undefined;
-        let kill = () => {};
-        const stop = () => kill();
+        let grace: ReturnType<typeof setTimeout> | undefined;
+        let terminate = () => {};
+        const stop = () => terminate();
         const finish = (o: Omit<VerifyOutcome, 'output' | 'timedOut'>) => {
             if (settled) return;
-            settled = true; clearTimeout(timer); signal.removeEventListener('abort', stop);
-            resolve({ ...o, timedOut, output });
+            settled = true; clearTimeout(timer); clearTimeout(grace); signal.removeEventListener('abort', stop);
+            resolve({ ...o, passed: o.passed && !stopping, timedOut, output });
         };
         if (signal.aborted) { finish({ passed: false, exitCode: null, spawnFailed: false }); return; }
         const executable = resolveExecutable(argv[0], cwd, env);
         if (!executable) { finish({ passed: false, exitCode: null, spawnFailed: true }); return; }
-        const child = spawn(executable, argv.slice(1), {
+        const startedAt = Date.now();
+        const child = (deps.spawn ?? spawn)(executable, argv.slice(1), {
             cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
         });
         const collect = (chunk: string) => { output += chunk; if (output.length > 2 * KEEP) output = output.slice(-KEEP); };
         child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
         child.stdout.on('data', collect); child.stderr.on('data', collect);
-        kill = () => {
-            if (!child.pid || child.exitCode !== null) return;
-            if (process.platform === 'win32') {
-                promisify(execFile)(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
-                    ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000 }).catch(() => child.kill('SIGKILL'));
-            } else {
-                try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
-            }
+        terminate = () => {
+            if (settled || stopping) return;
+            stopping = true;
+            const done = (confirmed: boolean) => {
+                if (settled) return;
+                if (!confirmed) output += '\n[agora-host: could not confirm that every process of this command stopped]\n';
+                // A descendant may still hold the pipes, so 'close' might never come
+                grace = setTimeout(() => {
+                    child.stdout.destroy(); child.stderr.destroy();
+                    finish({ passed: false, exitCode: child.exitCode, spawnFailed: false });
+                }, CLOSE_GRACE_MS);
+            };
+            if (!child.pid) { done(true); return; }
+            killTree(child.pid, startedAt).then(() => done(true), () => { try { child.kill('SIGKILL'); } catch { /* gone */ } done(false); });
         };
-        timer = setTimeout(() => { timedOut = true; kill(); }, timeoutMs);
+        timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
         signal.addEventListener('abort', stop, { once: true });
         child.on('error', () => finish({ passed: false, exitCode: null, spawnFailed: true }));
         child.on('close', code => finish({ passed: code === 0 && !timedOut && !signal.aborted, exitCode: code, spawnFailed: false }));

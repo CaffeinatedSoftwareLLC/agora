@@ -107,18 +107,19 @@ export async function saveVerify(db: any, channelId: string, serverId: string, u
 }
 
 /**
- * For a subscription profile (docs/provider-terms.md): only what the server owner wrote or
- * pinned. A director may not direct an agent that runs on the owner's personal plan, and
- * instructions in every wake would do exactly that.
+ * For a plan-owned profile (docs/provider-terms.md): only what the plan owner wrote or pinned
+ * (the server owner for 'subscription', the connected user for 'siwc'; PLAN_OWNER_SQL). A
+ * director may not direct an agent that runs on someone's personal plan, and instructions in
+ * every wake would do exactly that. No plan owner (a siwc profile not connected yet): nothing.
  */
-export async function ownerAuthoredProject(db: any, channelId: string, project: Project): Promise<Project> {
-    const row = (await db.query(
-        `SELECT p.instructions_by = s.owner_id AS by_owner, s.owner_id FROM channel_projects p JOIN servers s ON s.id = p.server_id
-         WHERE p.channel_id = $1`, [channelId])).rows[0];
+export async function ownerAuthoredProject(db: any, channelId: string, project: Project, planOwnerId: string | null): Promise<Project> {
+    const row = (await db.query(`SELECT instructions_by FROM channel_projects WHERE channel_id = $1`, [channelId])).rows[0];
     if (!row) return project;
-    const pinned = await db.query(`SELECT file_id FROM channel_project_files WHERE channel_id = $1 AND pinned_by = $2`, [channelId, row.owner_id]);
+    if (!planOwnerId) return { ...project, instructions: '', files: [] };
+    const pinned = await db.query(`SELECT file_id FROM channel_project_files WHERE channel_id = $1 AND pinned_by = $2`, [channelId, planOwnerId]);
     const ownerFiles = new Set(pinned.rows.map((r: any) => r.file_id.trim()));
-    return { ...project, instructions: row.by_owner ? project.instructions : '', files: project.files.filter(f => ownerFiles.has(f.id)) };
+    const byOwner = row.instructions_by?.trim() === planOwnerId.trim();
+    return { ...project, instructions: byOwner ? project.instructions : '', files: project.files.filter(f => ownerFiles.has(f.id)) };
 }
 
 /** The part of a claim that carries the project (agora-host src/types.ts). */

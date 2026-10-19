@@ -78,7 +78,11 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
 }
 
 /** `prompt` replaces the wake prompt: a verify fix turn resuming the same conversation (verify.ts). */
-export async function prepare(config: Config, claim: Claim, prompt?: string): Promise<Launch> {
+/**
+ * `active` is every session this host is running (the scheduler's set), so a preview port range
+ * held by a running session is never handed to this one; when none is free, preparing fails.
+ */
+export async function prepare(config: Config, claim: Claim, prompt?: string, active: ReadonlySet<string> = new Set()): Promise<Launch> {
     const local = config.profiles[claim.profile.name];
     if (!local || local.adapter !== claim.profile.adapter || local.workdirAlias !== claim.profile.workdirAlias) throw new Error('unmapped_profile');
     // Subscription profiles run only for the owner, siwc ones for their plan owner; run approval when required (terms.ts)
@@ -113,7 +117,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string): Pr
     const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, rules, config.presets);
     try {
         // This session's own preview ports: the only ones browser_preview will load
-        const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([claim.session.id])) : undefined;
+        const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([...active, claim.session.id])) : undefined;
         const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,
             ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}) };
         // The plan's OAuth access token reaches app-server only through its environment

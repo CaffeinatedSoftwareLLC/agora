@@ -194,6 +194,30 @@ describe('hosted claims', () => {
         }
     });
 
+    it('give a siwc profile what its plan owner wrote or pinned, not the server owner', async () => {
+        const notes = await shareFile(director.auth, channelId, 'plan-notes.md', 'plan owner notes');
+        expect((await ctx.request.put(`/channels/${channelId}/project`).set(director.auth)
+            .send({ instructions: 'Plan owner says: use pnpm.', fileIds: [specFileId, notes] })).status).toBe(200);
+        // The spec is pinned by the server owner, the notes by the plan owner (the director)
+        await ctx.db.query('UPDATE channel_project_files SET pinned_by = $2 WHERE channel_id = $1 AND file_id = $3', [channelId, owner.userId, specFileId]);
+        try {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'siwc', plan_owner_id = $2 WHERE id = $1`, [bot.profileId, director.userId]);
+            const id = generateUlid();
+            await ctx.db.query(`INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+                [id, serverId, channelId, bot.botId, bot.profileId, director.userId]);
+            const sent = await ctx.request.post(`/channels/${channelId}/messages`).set(director.auth).send({ content: '@coder go' });
+            expect([200, 201]).toContain(sent.status);
+            const c = await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(hostAuth);
+            expect(c.status, JSON.stringify(c.body)).toBe(200);
+            expect(c.body.profile).toMatchObject({ authMode: 'siwc', planOwnerId: director.userId });
+            expect(c.body.project.instructions).toBe('Plan owner says: use pnpm.');
+            expect(c.body.project.files.map((f: any) => f.name)).toEqual(['plan-notes.md']);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription', plan_owner_id = NULL WHERE id = $1`, [bot.profileId]);
+            await ctx.request.put(`/channels/${channelId}/project`).set(owner.auth).send({ instructions: 'Use npm. Run tests before you finish.', fileIds: [specFileId] });
+        }
+    });
+
     it('send the file text again only when the project changed or the conversation is new', async () => {
         const s = await startSession();
         const first = await claimFor(s);

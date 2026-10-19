@@ -1,6 +1,6 @@
-import { access, readFile, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -96,6 +96,57 @@ describe('ACP permission rules', () => {
         const link = join(t.dir, 'link');
         const linked = await symlink(join(t.dir, '..'), link, 'junction').then(() => true, () => false);
         if (linked) expect(await where({ kind: 'read', locations: [join(link, 'auth.json')] })).toBe('outside');
+    });
+    it('binds command grants to trusted executables on PATH, never a repository file', async () => {
+        const repo = await tempDir(); cleanups.push(repo.cleanup);
+        const bin = await tempDir(); cleanups.push(bin.cleanup);
+        const win = process.platform === 'win32';
+        const exe = win ? 'git.exe' : 'git';
+        await writeFile(join(bin.dir, exe), '');
+        await mkdir(join(repo.dir, 'tools'));
+        await writeFile(join(repo.dir, 'tools', exe), '');
+        const env = { PATH: ['.', 'relative/bin', join(repo.dir, 'tools'), bin.dir].join(delimiter), PATHEXT: '.EXE;.CMD' };
+        const rules = new Set(['Bash(git status:*)']);
+        const run = async (command: string, extra: Partial<{ rules: Set<string>; roots: string[] }> = {}) => {
+            const call = { kind: 'execute', rawInput: { command } };
+            const place = await locationsInside(call, repo.dir, { rules, env, ...extra });
+            return place === 'ok' && allowedCall(call, extra.rules ?? rules);
+        };
+        // The PATH program: allowed; `.`, relative and in-repo PATH entries are skipped
+        expect(await run('git status')).toBe(true);
+        expect(await run('git.exe status -s')).toBe(win);
+        // Paths are never shortened to the granted name, POSIX or Windows form
+        expect(await run('./git status')).toBe(false);
+        expect(await run('.\\git.exe status')).toBe(false);
+        expect(await run('tools/git status')).toBe(false);
+        expect(await run(`${join(repo.dir, 'tools', exe)} status`)).toBe(false);
+        expect(await run(`${join(repo.dir, 'tools', exe).replace(/\\/g, '/')} status`)).toBe(false);
+        expect(await run('C:/untrusted/repo/git.exe status')).toBe(false);
+        expect(await run('/untrusted/repo/git status')).toBe(false);
+        // An absolute path counts only when the grant names it exactly and it is outside the repository
+        const trusted = join(bin.dir, exe);
+        expect(await run(`${trusted} status`)).toBe(false);
+        expect(await run(`${trusted} status`, { rules: new Set([`Bash(${trusted} status:*)`]) })).toBe(true);
+        const inRepo = join(repo.dir, 'tools', exe);
+        expect(await run(`${inRepo} status`, { rules: new Set([`Bash(${inRepo} status:*)`]) })).toBe(false);
+        // The profile's own checkout counts as the repository too
+        expect(await run(`${trusted} status`, { rules: new Set([`Bash(${trusted} status:*)`]), roots: [bin.dir] })).toBe(false);
+        // An argv array: the wrapping shell must be trusted too, not only the script it runs
+        const argv = async (command: string[]) => {
+            const call = { kind: 'execute', rawInput: { command } };
+            return (await locationsInside(call, repo.dir, { rules, env })) === 'ok' && allowedCall(call, rules);
+        };
+        expect(await argv(['git', 'status'])).toBe(true);
+        expect(await argv(['./git', 'status'])).toBe(false);
+        expect(await argv(['./bash', '-lc', 'git status'])).toBe(false);
+        expect(await argv([join(repo.dir, 'tools', 'bash'), '-lc', 'git status'])).toBe(false);
+        // A command missing from PATH is refused
+        expect(await run('gitx status', { rules: new Set(['Bash(gitx status:*)']) })).toBe(false);
+        // Windows looks in the current directory before PATH: a repo git.exe there refuses `git`
+        await writeFile(join(repo.dir, exe), '');
+        expect(await run('git status')).toBe(!win);
+        // A bare Bash grant already allows any command
+        expect(await run('./git status', { rules: new Set(['Bash']) })).toBe(true);
     });
     it('turns the rules into a Gemini policy file', () => {
         const toml = geminiPolicy(['mcp__agora__chat_send', 'mcp__docs', 'Bash(git status:*)', 'Bash(npm test)', 'Edit', 'Write', 'Read', 'WebSearch']);

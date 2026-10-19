@@ -6,7 +6,9 @@ import { allowedUrl, browserArgs, capture, CdpPipe, runPreview, sessionPorts, ty
 import { Client } from '../src/client.js';
 import { Scheduler } from '../src/scheduler.js';
 import type { HostApi } from '../src/types.js';
-import { config, id, tempDir } from './helpers.js';
+import { claim, config, deferred, id, tempDir } from './helpers.js';
+import { prepare } from '../src/adapters.js';
+import { git } from '../src/workspaces.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()!(); });
@@ -31,6 +33,35 @@ describe('session port ranges', () => {
         await sessionPorts(p, id(1), new Set(), 1); await sessionPorts(p, id(2), new Set(), 2); await sessionPorts(p, id(3), new Set(), 3);
         expect(await sessionPorts(p, id(4), new Set([id(1)]), 4)).toEqual({ first: 42010, last: 42019 });
         await expect(sessionPorts(p, id(5), new Set([id(1), id(3), id(4)]), 5)).rejects.toThrow('preview_ports_exhausted');
+    });
+    it('never hands the range of a running session to another: with one slot, the second session is refused', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        await git(t.dir, ['init']);
+        await git(t.dir, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'fixture']);
+        const c = { ...config(t.dir), preview: await previewConfig({ slots: 1 }) };
+        const a = claim(), b = claim(); b.session.id = id(20); b.run.id = id(21);
+        const launch = await prepare(c, a, undefined, new Set([a.session.id])); cleanups.push(launch.cleanup);
+        expect(launch.env.AGORA_PREVIEW_PORTS).toBe('42000-42009');
+        await expect(prepare(c, b, undefined, new Set([a.session.id, b.session.id]))).rejects.toThrow('preview_ports_exhausted');
+        // A still owns the slot
+        expect(await sessionPorts(c.preview, a.session.id, new Set([a.session.id]))).toEqual({ first: 42000, last: 42009 });
+    });
+    it('the scheduler prepares each run with every session it is running', async () => {
+        const seen: string[][] = [];
+        const children: Array<ReturnType<typeof deferred<any>>> = [];
+        const runner = { start: vi.fn(() => { const d = deferred<any>(); children.push(d); return { result: d.promise, tokensUsed: () => 0, kill: async () => d.resolve({ success: false }) }; }) };
+        const api = { claim: vi.fn(async () => null), heartbeat: vi.fn(async () => ({ cancel: false as const, leaseUntil: '2026-10-17T21:03:00.000Z' })),
+            complete: vi.fn(async () => {}), fail: vi.fn(async () => {}) };
+        const s = new Scheduler(config(), api as unknown as HostApi, runner as any, { now: () => Date.now(), tickMs: 10,
+            prepare: async (_c, _claim, _p, active) => { seen.push([...(active ?? [])].sort()); return { executable: 'fake', args: [], env: {}, cwd: '', stdin: '', adapter: 'codex', cleanup: async () => {} }; } });
+        const a = claim(), b = claim(); b.session.id = id(20); b.run.id = id(21);
+        vi.useFakeTimers(); vi.setSystemTime(0);
+        const ra = s.submit(a, 0); await vi.advanceTimersByTimeAsync(0);
+        const rb = s.submit(b, 0); await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+        expect(seen).toEqual([[a.session.id], [a.session.id, b.session.id].sort()]);
+        for (const d of children) d.resolve({ success: true, nativeSessionId: null, tokensUsed: 0, summary: 'ok' });
+        await Promise.all([ra, rb]);
     });
     it('allocates concurrent requests without handing out a slot twice', async () => {
         const p = await previewConfig();

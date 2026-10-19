@@ -198,12 +198,13 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (!p.success) throw new RpcError(-32602, 'Invalid params');
         if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
         const call = track(p.data.toolCall) ?? {};
-        const place = await locationsInside(call, launch.cwd);
+        const place = await locationsInside(call, launch.cwd, { rules, env: launch.env, roots: launch.workspace ? [launch.workspace.workdir] : [] });
         const allow = place === 'ok' && allowedCall(call, rules);
         if (!allow) {
             if (place !== 'ok') {
                 // No card for a path problem: approving the tool would not change the answer
-                step = place === 'outside' ? 'Denied file access outside the workspace' : 'Denied file access without a known path';
+                step = place === 'untrusted' ? 'Denied a command that is not a trusted executable on PATH'
+                    : place === 'outside' ? 'Denied file access outside the workspace' : 'Denied file access without a known path';
             } else {
                 const rule = ruleForCall(call);
                 if (reportable(rule) && !denied.includes(rule) && denied.length < 10) denied.push(rule);

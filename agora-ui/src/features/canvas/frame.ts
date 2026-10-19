@@ -24,7 +24,25 @@ export function artifactCsp(network: boolean): string {
   ].join('; ');
 }
 
-const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+/** A `<meta …>` tag, reading quoted attribute values whole so a `>` inside one doesn't end it. */
+const META_TAG = /<meta\b(?:[^>"']|"[^"]*"|'[^']*')*>?/gi;
+
+/**
+ * Drop every `<meta http-equiv>` from the artifact's markup: a `refresh` would navigate the
+ * frame without any script (and send a request even with Network off). Any http-equiv tag
+ * goes, whatever its value says (values may hide behind character references); its own CSP
+ * could only have narrowed ours. Repeated until nothing changes, so removing one tag cannot
+ * stitch a new one together. A script can still navigate its frame (docs/canvas-and-preview.md).
+ */
+export function stripMetaHttpEquiv(content: string): string {
+  for (let prev = ''; prev !== content;) {
+    prev = content;
+    content = content.replace(META_TAG, tag => (/http-equiv/i.test(tag) ? '' : tag));
+  }
+  return content;
+}
+
+const escapeAttr =(s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 /** SVG (and rendered Mermaid) gets a page that centres it and scales it down to fit. */
 const SVG_PAGE_STYLE = 'html,body{margin:0;height:100%;background:#fff}body{display:flex;align-items:flex-start;justify-content:center;padding:16px;box-sizing:border-box}svg{max-width:100%;height:auto}';
@@ -34,7 +52,8 @@ const SVG_PAGE_STYLE = 'html,body{margin:0;height:100%;background:#fff}body{disp
  * the parser ignores its second doctype, merges its <html> attributes and keeps its <head>
  * content in the head. Its own CSP meta, if any, can only narrow ours.
  */
-export function buildSrcDoc(kind: Extract<ArtifactKind, 'html' | 'svg'>, content: string, network = false): string {
+export function buildSrcDoc(kind: Extract<ArtifactKind, 'html' | 'svg'>, raw: string, network = false): string {
+  const content = stripMetaHttpEquiv(raw);
   const head = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(artifactCsp(network))}">`
     + '<meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1">';
   if (kind === 'svg') return `${head}<style>${SVG_PAGE_STYLE}</style><body>${content}</body>`;

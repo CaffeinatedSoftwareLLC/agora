@@ -23,7 +23,7 @@ interface Active {
 }
 export interface SchedulerOptions {
     now?: () => number; tickMs?: number; safetyMs?: number; commandPollMs?: number;
-    prepare?: (config: Config, claim: Claim, prompt?: string) => Promise<Launch>;
+    prepare?: (config: Config, claim: Claim, prompt?: string, active?: ReadonlySet<string>) => Promise<Launch>;
     /** Runs a verify command; tests replace it (verify.ts runVerify). */
     runVerify?: typeof runVerify;
     log?: (code: string) => void;
@@ -95,7 +95,7 @@ export class Scheduler {
         try {
             if (deadline <= this.now()) return;
             interval = setInterval(tick, this.options.tickMs ?? 100);
-            launch = await (this.options.prepare ?? prepare)(this.config, claim);
+            launch = await (this.options.prepare ?? prepare)(this.config, claim, undefined, new Set(this.active.keys()));
             if (launch.unknownPresets?.length) this.log('unknown_tool_preset');
             if (this.stopping || a.stop || this.now() >= deadline) return;
             // Codex reports its file changes; Claude and ACP agents are compared against the disk
@@ -124,6 +124,8 @@ export class Scheduler {
             // A provider-terms refusal is reported by its own code and never retried
             result = { ...empty, error: err instanceof TermsRefusal ? err.code : 'host_launch_failed' };
             if (err instanceof TermsRefusal) this.log(err.code);
+            // Every preview range belongs to a running session: never take one away, refuse this run
+            if (err instanceof Error && err.message === 'preview_ports_exhausted') this.log('preview_ports_exhausted');
             if (err instanceof Error && err.message === 'process_tree_kill_failed') {
                 a.noReport = true; this.log('process_tree_kill_failed'); await this.stop();
             }
@@ -198,7 +200,7 @@ export class Scheduler {
                 const resumed = { ...claim, session: { ...claim.session, nativeSessionId: current.nativeSessionId } };
                 let next: Launch;
                 try { next = await (this.options.prepare ?? prepare)(this.config, resumed,
-                    verifyPrompt(claim, attempts, spec.command, out.exitCode, out.timedOut, out.output.slice(-AGENT_TAIL))); }
+                    verifyPrompt(claim, attempts, spec.command, out.exitCode, out.timedOut, out.output.slice(-AGENT_TAIL)), new Set(this.active.keys())); }
                 catch { return done({ ...failed, reason: 'fix_turn_failed' }); }
                 let r: Result;
                 try {

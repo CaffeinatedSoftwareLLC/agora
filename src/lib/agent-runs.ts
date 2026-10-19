@@ -349,8 +349,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
     const channelProject = await readProject(c, channelId);
-    // Subscription profiles take project context from the owner only (provider-terms.ts)
-    const wakeProject = subscription ? await ownerAuthoredProject(c, channelId, channelProject) : channelProject;
+    // Plan-owned profiles take project context from their plan owner only (provider-terms.ts)
+    const wakeProject = subscription ? await ownerAuthoredProject(c, channelId, channelProject, planOwnerId) : channelProject;
     const project = claimProject(wakeProject, session.project_version_seen ?? null, !session.native_session_id);
     if (project) await c.query(`UPDATE agent_runs SET project_version = $2 WHERE id = $1`, [runId, project.version]);
 
