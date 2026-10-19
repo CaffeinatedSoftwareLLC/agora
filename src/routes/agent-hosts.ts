@@ -9,6 +9,7 @@ import { noticePathList } from '../lib/file-reservations';
 import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
 import { allowedToolsSchema, deniedToolsSchema, toolPresetsSchema } from '../lib/agent-permissions';
 import { agentImageRoutes } from './agent-images';
+import { agentPlanRoutes } from './agent-plans';
 import { checkpointSchema } from '../lib/agent-checkpoints';
 
 /**
@@ -51,6 +52,8 @@ function profileJson(r: any) {
         // Reported by the host (provider-terms.ts); 'subscription' until it reports
         authMode: r.auth_mode ?? 'subscription', apiKeyEnv: r.api_key_env ?? null,
         runApproval: !!r.run_approval, authReportedAt: r.auth_reported_at ?? null,
+        // 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md)
+        planOwnerId: r.plan_owner_id?.trim() ?? null,
     };
 }
 
@@ -110,6 +113,7 @@ async function releaseRequestClient(request: FastifyRequest) {
 
 export async function agentHostRoutes(app: FastifyInstance) {
     await agentImageRoutes(app);
+    await agentPlanRoutes(app);
     // ─── Hosts (owner) ───
 
     // POST /servers/:serverId/agent-hosts → 201 { host, token } (the token is shown once)
@@ -380,7 +384,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
             profiles: { type: 'array', maxItems: 100, items: { type: 'object', required: ['name', 'adapter', 'authMode', 'runApproval'], additionalProperties: false, properties: {
                 name: profileFields.name,
                 adapter: { type: 'string', enum: ['codex', 'claude', 'gemini'] },
-                authMode: { type: 'string', enum: ['subscription', 'api_key'] },
+                authMode: { type: 'string', enum: ['subscription', 'api_key', 'siwc'] },
                 apiKeyEnv: { type: ['string', 'null'], pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
                 runApproval: { type: 'boolean' },
             } } },
@@ -390,6 +394,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const updated: string[] = []; const unknown: string[] = [];
         for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
             if (p.authMode === 'api_key' && !p.apiKeyEnv) return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
+            // Sign in with ChatGPT drives Codex app-server (docs/codex-chatgpt-plan.md)
+            if (p.authMode === 'siwc' && p.adapter !== 'codex') return reply.status(400).send({ error: 'siwc is only for codex profiles' });
             const row = await db.query(
                 `UPDATE agent_profiles SET auth_mode = $4, api_key_env = $5, run_approval = $6, auth_reported_at = NOW()
                  WHERE host_id = $1 AND server_id = $2 AND name = $3 AND adapter = $7 RETURNING id`,

@@ -5,8 +5,11 @@ import { Client } from './client.js';
 import { ProcessRunner } from './process.js';
 import { Scheduler } from './scheduler.js';
 import { describeAuth, HostConfigError, profileReport } from './terms.js';
+import { siwcCommand } from './siwc/cli.js';
 
 async function main() {
+    // agora-host siwc <login|status|logout> --profile <name> --config <file> (docs/codex-chatgpt-plan.md)
+    if (process.argv[2] === 'siwc') { process.exitCode = await siwcCommand(process.argv.slice(3)); return; }
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
     const config = await loadConfig(process.argv[3]);
     for (const [name, profile] of Object.entries(config.profiles)) {
@@ -26,6 +29,6 @@ main().catch(err => {
     // Never print raw config, API responses, CLI output or exceptions containing credentials.
     // A HostConfigError's message is fixed text (provider terms, missing key variable names).
     if (err instanceof HostConfigError) console.error(err.message);
-    console.error('Host failed. Check local config, executable versions and CLI login. Usage: agora-host --config <absolute-file>');
+    console.error('Host failed. Check local config, executable versions and CLI login. Usage: agora-host --config <absolute-file> | agora-host siwc <login|status|logout> --profile <name> --config <absolute-file>');
     process.exitCode = 1;
 });

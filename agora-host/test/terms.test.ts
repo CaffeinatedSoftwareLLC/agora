@@ -152,7 +152,8 @@ describe('never touches CLI login files', () => {
     it('has no reference to CLI credential files in its source', async () => {
         const dir = join(__dirname, '../src');
         const forbidden = /auth\.json|\.credentials\.json|oauth_creds|credentials\.db|accounts\.json|google_accounts|keychain/i;
-        for (const file of await readdir(dir)) {
+        // Sign in with ChatGPT (src/siwc) keeps Agora's own OAuth registration, not a CLI's login
+        for (const file of (await readdir(dir, { recursive: true })).filter(f => f.endsWith('.ts'))) {
             const text = await readFile(join(dir, file), 'utf8');
             expect(forbidden.test(text), file).toBe(false);
         }

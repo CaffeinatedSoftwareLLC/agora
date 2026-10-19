@@ -38,7 +38,9 @@ export const claimSchema = z.object({
         toolPresets: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/)).max(10).default([]),
         allowedTools: z.array(rule).max(100).default([]),
         // The server's view of the auth mode; the local profile's `auth` is what the host enforces
-        authMode: z.enum(['subscription', 'api_key']).default('subscription'),
+        authMode: z.enum(['subscription', 'api_key', 'siwc']).default('subscription'),
+        // Whose plan a subscription or siwc profile runs on; `startedByOwner` means started by them
+        planOwnerId: id.nullable().default(null),
         runApproval: z.boolean().default(false) }),
     inbox: z.array(z.object({
         // 'command': the session notice a /start or /resume posts, so the agent says hello
@@ -77,5 +79,10 @@ export interface HostApi {
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;
     reportProfiles?(profiles: ProfileReport[]): Promise<void>;
+    claimPlanRequest?(signal?: AbortSignal): Promise<PlanRequest | null>;
+    reportPlan?(profile: string, body: { status: PlanStatus; error?: string | null; accountLabel?: string | null }, signal?: AbortSignal): Promise<{ planOwnerId: string | null }>;
 }
-export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key'; apiKeyEnv: string | null; runApproval: boolean }
+export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv: string | null; runApproval: boolean }
+/** A Settings → Agents request for this host to connect or disconnect a ChatGPT plan. */
+export interface PlanRequest { profile: string; action: 'connect' | 'disconnect'; requestedBy: string | null }
+export type PlanStatus = 'in_progress' | 'connected' | 'scope_missing' | 'failed' | 'disconnected';

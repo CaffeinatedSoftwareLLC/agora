@@ -20,9 +20,10 @@ const profile = z.object({
     approvedTools: z.array(tool).default([]),
     caps: z.object({ maxTokens: z.number().int().positive().optional(), maxBudgetUsd: z.number().positive().optional() }).strict().default({}),
     allowUntestedVersion: z.boolean().default(false),
-    // How the CLI signs in (docs/provider-terms.md): its own account login, or an API key
-    // read from this host's environment variable `apiKeyEnv` and passed to the child.
-    auth: z.enum(['subscription', 'api_key']).default('subscription'),
+    // How the CLI signs in (docs/provider-terms.md): its own account login, an API key
+    // read from this host's environment variable `apiKeyEnv` and passed to the child, or
+    // (codex only) a ChatGPT plan through Sign in with ChatGPT (docs/codex-chatgpt-plan.md).
+    auth: z.enum(['subscription', 'api_key', 'siwc']).default('subscription'),
     apiKeyEnv: z.string().optional(),
     // Gemini only: run on a Google account login anyway, with owner approval of every run
     allowSubscriptionAtOwnRisk: z.boolean().default(false),
@@ -31,8 +32,10 @@ const profile = z.object({
 }).strict().superRefine((p, ctx) => {
     if (p.auth === 'api_key' && (!p.apiKeyEnv || !API_KEY_ENVS[p.adapter].includes(p.apiKeyEnv)))
         ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')} for ${p.adapter}` });
-    if (p.auth === 'subscription' && p.apiKeyEnv !== undefined)
+    if (p.auth !== 'api_key' && p.apiKeyEnv !== undefined)
         ctx.addIssue({ code: 'custom', message: 'apiKeyEnv is only used with auth "api_key"' });
+    if (p.auth === 'siwc' && p.adapter !== 'codex')
+        ctx.addIssue({ code: 'custom', message: 'auth "siwc" (Sign in with ChatGPT) is only for codex profiles' });
     if (p.allowSubscriptionAtOwnRisk && (p.adapter !== 'gemini' || p.auth !== 'subscription'))
         ctx.addIssue({ code: 'custom', message: 'allowSubscriptionAtOwnRisk applies only to a gemini profile with auth "subscription"' });
     if (p.caps.maxTokens !== undefined) ctx.addIssue({ code: 'custom', message: 'Neither verified CLI supports a hard per-run token cap; omit maxTokens explicitly' });
@@ -46,6 +49,9 @@ export const configSchema = z.object({
     maxConcurrent: z.number().int().min(1).max(16).default(2),
     // Redefine a built-in tool preset (readonly, dev, research) or add one (#73)
     presets: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), presetSchema).default({}),
+    // Sign in with ChatGPT (auth "siwc"): where this host keeps its host id and credentials
+    // (default ~/.agora-host/siwc) and the loopback callback port (0: any free port)
+    siwc: z.object({ dir: absolute.optional(), callbackPort: z.number().int().min(0).max(65535).default(1455) }).strict().default({}),
 }).strict();
 export type Config = z.infer<typeof configSchema>;
 export type LocalProfile = Config['profiles'][string];

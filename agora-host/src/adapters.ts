@@ -8,7 +8,11 @@ import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { checkTerms, GEMINI_NOT_HOSTED, HostConfigError } from './terms.js';
+import { checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
+import { accessToken, type AccessToken } from './siwc/session.js';
+import { SiwcError } from './siwc/oauth.js';
+import { DEFAULT_DIR } from './siwc/store.js';
+import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -19,6 +23,20 @@ export interface Launch {
     sandbox?: 'read-only' | 'workspace-write';
     /** Preset names the claim used that this host doesn't define. */
     unknownPresets?: string[];
+    /** auth "siwc": drive `codex app-server` on a ChatGPT plan instead of `codex exec`. */
+    appServer?: AppServerPlan;
+}
+
+/** Where this host keeps Sign in with ChatGPT state (config `siwc.dir`). */
+export const siwcDir = (config: Config) => config.siwc?.dir ?? DEFAULT_DIR;
+
+/** A fresh access token for a siwc profile; sign-in problems become terms refusals with their code. */
+async function siwcToken(config: Config, profile: string, force = false): Promise<AccessToken> {
+    try { return await accessToken({ dir: siwcDir(config), profile, force }); }
+    catch (err) {
+        if (err instanceof SiwcError && /^siwc_[a-z_]+$/.test(err.code)) throw new TermsRefusal(err.code as SiwcRunError, err.message);
+        throw err;
+    }
 }
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
@@ -47,8 +65,14 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
 export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     const local = config.profiles[claim.profile.name];
     if (!local || local.adapter !== claim.profile.adapter || local.workdirAlias !== claim.profile.workdirAlias) throw new Error('unmapped_profile');
-    // Subscription profiles run only for the owner; run approval when required (terms.ts)
+    // Subscription profiles run only for the owner, siwc ones for their plan owner; run approval when required (terms.ts)
     checkTerms(local, claim);
+    let plan: AccessToken | undefined;
+    if (local.auth === 'siwc') {
+        plan = await siwcToken(config, claim.profile.name);
+        // The Agora user this host saved at sign-in must be the one the server says owns the plan
+        checkTerms(local, claim, plan.agoraUserId);
+    }
     const token = config.botTokens[claim.profile.botId];
     if (!token) throw new Error('missing_bot_token');
     const efforts = local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -67,7 +91,9 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     // Presets and allowed tools come with every claim (#73): no restart after an edit
     const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, [...claim.profile.allowedTools, ...claim.run.grantedTools], config.presets);
     try {
-        const env = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
+        const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
+        // The plan's OAuth access token reaches app-server only through its environment
+        if (plan) env.ACCESS_TOKEN = plan.accessToken;
         // Hosted runs are not bring-your-own sessions: no presence socket (agora-mcp src/socket.ts)
         const server = { command: config.mcp.executable, args: [config.mcp.entrypoint, '--no-presence'] };
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
@@ -79,6 +105,23 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
             const tools = [...new Set([...local.approvedTools, ...perms.codex.mcpTools])].map(t => `${t}={approval_mode="approve"}`).join(',');
             const mcp = `{agora={command=${JSON.stringify(server.command)},args=${JSON.stringify(server.args)},env_vars=["AGORA_INSTANCE","AGORA_BOT_TOKEN","AGORA_DEFAULT_CHANNEL"],required=true,tools={${tools}}}}`;
             await writeFile(paths[1], `mcp_servers=${mcp}\n`, { mode: 0o600 });
+            if (plan) {
+                // codex app-server with OpenAI's ChatGPT-plan provider; model, effort, sandbox and
+                // output schema go over JSON-RPC (siwc/appserver.ts)
+                args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS,
+                    '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                    ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
+                    ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
+                    ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
+                const profileName = claim.profile.name;
+                const appServer: AppServerPlan = {
+                    threadId: claim.session.nativeSessionId, prompt: wakePrompt(claim),
+                    outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
+                    refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
+                };
+                return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: 'codex', stdin: '', cleanup, lurk: isLurkRun(claim),
+                    sandbox: perms.codex.sandbox, unknownPresets: perms.unknownPresets, appServer };
+            }
             args = ['exec', '--ignore-user-config', '-s', perms.codex.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
                 ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),

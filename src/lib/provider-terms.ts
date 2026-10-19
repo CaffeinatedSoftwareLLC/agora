@@ -24,11 +24,42 @@ import type { Notice } from './agent-runs';
  * on account login) also needs the owner to approve each wake on a card first.
  */
 
-export type AuthMode = 'subscription' | 'api_key';
+export type AuthMode = 'subscription' | 'api_key' | 'siwc';
 
 export function subscriptionNotice(agent: string): string {
     return `${agent} runs on the owner's personal subscription; ask the owner, or configure an API key profile.`;
 }
+
+/**
+ * Plan-owned profiles (docs/codex-chatgpt-plan.md). A 'subscription' profile's plan belongs
+ * to the server owner; a 'siwc' profile's to the person who connected their ChatGPT plan to
+ * it (agent_profiles.plan_owner_id). Only the plan owner can wake either. api_key: nobody's.
+ *
+ * SQL for a profile's plan owner, given `p` (agent_profiles) and `srv` (servers) in scope.
+ */
+export const PLAN_OWNER_SQL = `(CASE p.auth_mode WHEN 'subscription' THEN srv.owner_id WHEN 'siwc' THEN p.plan_owner_id END)`;
+
+/** The channel notice for a wake the plan-owner rule refused. */
+export function planNotice(agent: string, authMode: string | null | undefined, connected = true): string {
+    if (authMode !== 'siwc') return subscriptionNotice(agent);
+    if (!connected) return `${agent} isn't connected to a ChatGPT plan yet; connect it in Settings → Agents (Continue with ChatGPT), or configure an API key profile.`;
+    return `${agent} runs on its plan owner's ChatGPT plan; only they can wake it. Ask them, or configure an API key profile.`;
+}
+
+export const PLAN_OWNER_ONLY = 'plan_owner_only';
+export const PLAN_OWNER_ONLY_MESSAGE =
+    "This agent runs on its plan owner's ChatGPT plan, so only they can start or resume it. Ask them, or configure an API key profile.";
+
+/** Why a host refused or failed a run on a 'siwc' profile (agora-host/src/siwc). */
+export const SIWC_ERRORS: Record<string, string> = {
+    plan_owner_only: "runs on its plan owner's ChatGPT plan; its host refused a wake from someone else.",
+    siwc_not_connected: "isn't connected to a ChatGPT plan on its host. Its plan owner connects it in Settings → Agents, or runs `agora-host siwc login` on the host.",
+    siwc_scope_missing: "is signed in to ChatGPT, but plan use wasn't allowed. Its plan owner can Continue with ChatGPT again and allow it, or use an API key profile.",
+    siwc_not_eligible: "can't use this ChatGPT plan: OpenAI said plan use is unavailable for this account, workspace or region (subscription_sharing_user_not_eligible). It needs ChatGPT Plus or Pro, or an API key profile.",
+    siwc_usage_limit: "reached its ChatGPT plan's usage limit for apps. Check https://chatgpt.com/settings/usage.",
+    siwc_reauth_required: 'lost its ChatGPT sign-in (expired or disconnected). Its plan owner connects it again in Settings → Agents.',
+    siwc_plan_owner_mismatch: 'is connected on its host for a different Agora user than the server records. Its plan owner connects it again in Settings → Agents.',
+};
 
 export const SUBSCRIPTION_OWNER_ONLY = 'subscription_owner_only';
 export const SUBSCRIPTION_OWNER_ONLY_MESSAGE =
