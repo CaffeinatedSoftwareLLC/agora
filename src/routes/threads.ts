@@ -11,6 +11,7 @@ import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
+import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact } from '../lib/artifacts';
 
 export async function threadRoutes(app: FastifyInstance) {
 
@@ -20,20 +21,23 @@ export async function threadRoutes(app: FastifyInstance) {
         schema: {
             body: {
                 type: 'object',
-                required: ['content'],
                 properties: {
                     content: { type: 'string', minLength: 1, maxLength: 4000 },
                     client_key: { type: 'string', minLength: 1, maxLength: 100 },
+                    // A rendered document for the canvas pane (src/lib/artifacts.ts)
+                    artifact: artifactBodySchema,
                 },
+                anyOf: [{ required: ['content'] }, { required: ['artifact'] }],
             },
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
         const isBot = request.isBot;
-        const { client_key: clientKey } = request.body as any;
+        const { client_key: clientKey, artifact } = request.body as any;
         // Terminal escapes and private keys never reach the database (#88)
-        const content = sanitizeMessageText((request.body as any).content);
+        const rawContent = (request.body as any).content;
+        const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, isBot);
@@ -41,7 +45,7 @@ export async function threadRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
         // Nothing left after cleaning (only escape codes)
-        if (!content) return reply.status(400).send({ error: 'empty_content' });
+        if (!content && !artifact) return reply.status(400).send({ error: 'empty_content' });
 
         // Fetch parent message
         const parent = await db.query(
@@ -60,6 +64,12 @@ export async function threadRoutes(app: FastifyInstance) {
         // Reject replies to closed threads
         if (parent.rows[0].thread_closed_at !== null) {
             return reply.status(409).send({ error: 'Thread is closed' });
+        }
+
+        // Before the insert: a request that fails later still commits what it wrote
+        if (artifact) {
+            const bad = await checkArtifact(db, channelId, artifact);
+            if (bad) return reply.status(bad.status).send({ error: bad.error });
         }
 
         // A repeat of an earlier reply (same author and client_key) returns that reply.
@@ -191,6 +201,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Resolve @mentions (shared helper)
         const { mentionedUsers } = await resolveMentions(db, replyId, channelId, serverId, userId, content);
+        const artifactRef = artifact ? await attachArtifact(db, { channelId, messageId: replyId, authorId: userId, input: artifact }) : null;
 
         // Wake agents this reply is addressed to (same transaction as the reply)
         const termsNotices = await routeMessage(db, {
@@ -247,6 +258,7 @@ export async function threadRoutes(app: FastifyInstance) {
             threadId: msgId.trim(),
             mentions: mentionedUserIds,
             mentionsEveryone,
+            ...(artifactRef ? { artifact: artifactRef } : {}),
             ...(protocol ? { protocol } : {}),
         };
 
@@ -360,6 +372,7 @@ export async function threadRoutes(app: FastifyInstance) {
         }
 
         const authorities = await readAuthorities(db, channelId, result.rows);
+        const artifacts = await artifactsForMessages(db, messageIds);
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -374,6 +387,7 @@ export async function threadRoutes(app: FastifyInstance) {
             createdAt: row.created_at,
             threadId: row.thread_id?.trim() || null,
             attachments: attachmentsMap[row.id.trim()] || [],
+            ...(artifacts.has(row.id.trim()) ? { artifact: artifacts.get(row.id.trim()) } : {}),
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
             ...(row.system_data ? { systemData: row.system_data } : {}),
             ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),

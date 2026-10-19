@@ -32,6 +32,14 @@ const BOT_ALLOWED_ROUTES = new Set([
     // Claude Code Channel: relay a permission prompt as an owner-only card, and read its answer
     'POST /channels/:id/permission-relays',
     'GET /channels/:id/permission-relays/:requestId',
+    // Canvas artifacts: read what agents and people posted (docs/canvas-and-preview.md)
+    'GET /channels/:id/artifacts',
+    'GET /channels/:id/artifacts/:artifactId',
+    'GET /channels/:id/artifacts/:artifactId/versions/:version',
+    // Browser preview of the bot's own hosted session, and the screenshot it posted
+    'POST /channels/:id/browser-previews',
+    'GET /channels/:id/browser-previews/:previewId',
+    'GET /channels/:id/browser-previews/:previewId/screenshot',
     'GET /bots/@me/cursors',
     'PUT /bots/@me/cursors/:channelId',
     'GET /bots/@me/thread-cursors',

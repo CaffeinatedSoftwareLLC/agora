@@ -30,6 +30,8 @@ import { agentCommandRoutes } from './routes/agent-commands';
 import { workspaceReviewRoutes } from './routes/workspace-review';
 import { agentToolRequestRoutes } from './routes/agent-tool-requests';
 import { permissionRelayRoutes } from './routes/permission-relays';
+import { artifactRoutes } from './routes/artifacts';
+import { browserPreviewRoutes } from './routes/browser-previews';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
@@ -356,6 +358,8 @@ export async function buildApp(opts?: {
     await app.register(fileReservationRoutes);
     await app.register(agentToolRequestRoutes);
     await app.register(permissionRelayRoutes);
+    await app.register(artifactRoutes);
+    await app.register(browserPreviewRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

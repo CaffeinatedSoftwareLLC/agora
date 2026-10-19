@@ -11,6 +11,7 @@ import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-age
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
+import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact, removeArtifactVersion } from '../lib/artifacts';
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -31,10 +32,13 @@ export async function messageRoutes(app: FastifyInstance) {
                         items: { type: 'string', minLength: 26, maxLength: 26 },
                         maxItems: 10,
                     },
+                    // A rendered document for the canvas pane (src/lib/artifacts.ts)
+                    artifact: artifactBodySchema,
                 },
                 anyOf: [
                     { required: ['content'] },
                     { required: ['attachments'] },
+                    { required: ['artifact'] },
                 ],
             },
         },
@@ -42,7 +46,7 @@ export async function messageRoutes(app: FastifyInstance) {
         const { id: channelId } = request.params as any;
         const userId = request.userId;
         const isBot = request.isBot;
-        const { content: rawContent, attachments: attachmentIds, client_key: clientKey, require_direct: requireDirect } = request.body as any;
+        const { content: rawContent, attachments: attachmentIds, client_key: clientKey, require_direct: requireDirect, artifact } = request.body as any;
         // Terminal escapes and private keys never reach the database (#88)
         const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
         const db = request.dbClient!;
@@ -52,7 +56,12 @@ export async function messageRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
         // Nothing left after cleaning (only escape codes)
-        if (rawContent && !content && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
+        if (rawContent && !content && !attachmentIds?.length && !artifact) return reply.status(400).send({ error: 'empty_content' });
+        // Before the insert: a request that fails later still commits what it wrote
+        if (artifact) {
+            const bad = await checkArtifact(db, channelId, artifact);
+            if (bad) return reply.status(bad.status).send({ error: bad.error });
+        }
 
         // A repeat of an earlier post (same author and client_key) returns that post.
         // Checked before rate limits and the loop guard, so a retry doesn't count twice.
@@ -230,6 +239,8 @@ export async function messageRoutes(app: FastifyInstance) {
             }));
         }
 
+        const artifactRef = artifact ? await attachArtifact(db, { channelId, messageId, authorId: userId, input: artifact }) : null;
+
         // Wake agents this post is addressed to, in the message's transaction. Placed after
         // every validation gate: a rejected post must not wake anyone.
         const termsNotices = await routeMessage(db, {
@@ -288,6 +299,7 @@ export async function messageRoutes(app: FastifyInstance) {
             mentions: mentionedUserIds,
             mentionsEveryone,
             attachments: resolvedAttachments,
+            ...(artifactRef ? { artifact: artifactRef } : {}),
             ...(protocol ? { protocol } : {}),
         };
 
@@ -383,6 +395,7 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         const authorities = await readAuthorities(db, channelId, result.rows);
+        const artifacts = await artifactsForMessages(db, messageIds);
         const messages = result.rows.map((row: any) => ({
             id: row.id.trim(),
             content: row.content,
@@ -396,6 +409,7 @@ export async function messageRoutes(app: FastifyInstance) {
             deletedAt: row.deleted_at,
             createdAt: row.created_at,
             attachments: attachmentsMap[row.id.trim()] || [],
+            ...(artifacts.has(row.id.trim()) ? { artifact: artifacts.get(row.id.trim()) } : {}),
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
             ...(row.system_data ? { systemData: row.system_data } : {}),
             ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),
@@ -510,6 +524,8 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const deleted = result.rows[0];
         const threadId = msg.rows[0].thread_id?.trim() || undefined;
+        // The artifact version this post carried goes with it
+        await removeArtifactVersion(db, msgId);
 
         // If this was a thread reply, update the parent's metadata
         if (threadId) {
