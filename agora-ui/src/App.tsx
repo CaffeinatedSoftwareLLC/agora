@@ -26,6 +26,7 @@ import { ModerationGuard } from './features/moderation/ModerationGuard';
 import { ModerationLayout } from './features/moderation/ModerationLayout';
 import { MemberList } from './features/moderation/MemberList';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import { AccountPage } from './features/account/AccountPage';
 
 export default function App() {
   useApplyPalette();
@@ -55,6 +56,7 @@ export default function App() {
                     </AdminGuard>
                   </AuthGuard>
                 } />
+                <Route path="/account" element={<AuthGuard><AccountPage /></AuthGuard>} />
                 {/* Shared SocketProvider for /app and /settings */}
                 <Route path="/app/*" element={
                   <AuthGuard>

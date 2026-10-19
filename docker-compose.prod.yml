@@ -69,6 +69,9 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-https://${DOMAIN:-localhost}}
       TRUST_PROXY: "true"
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Passkeys: origins they may be registered/used from (default: CORS_ORIGIN + https://localhost)
+      WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
+      WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-Agora}
       LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-10}
       LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
       LOGIN_GLOBAL_PER_MINUTE: ${LOGIN_GLOBAL_PER_MINUTE:-60}

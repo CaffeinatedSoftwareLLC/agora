@@ -1,8 +1,14 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { verifyToken, extractToken } from './tokens';
+import { verifyToken, extractToken, sessionLimitError, sessionNeedsRenewal, generateSessionToken } from './tokens';
 import { isTokenBlacklisted } from './token-blacklist';
 import { parseBotToken, verifyBotSecret } from './bot-tokens';
-import { isSafeMethod, sessionTokenFromHeaders, validCsrf } from './session-cookie';
+import { isSafeMethod, sessionTokenFromHeaders, setSessionCookies, validCsrf } from './session-cookie';
+
+/**
+ * Sent by the UI on its own timers (polling). Such requests are not user activity,
+ * so they never renew a cookie session; a tab left open does not keep it alive.
+ */
+export const BACKGROUND_HEADER = 'x-agora-background';
 
 const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/file-reservations',
@@ -159,6 +165,8 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     // with it must also carry the session's CSRF token (see session-cookie.ts)
     if (cookieToken) {
         request.cookieAuth = true;
+        const limit = sessionLimitError(payload);
+        if (limit) return reply.status(401).send({ error: limit });
         if (!isSafeMethod(request.method) && !(payload.jti && validCsrf(request, payload.jti, request.server.jwtSecret))) {
             return reply.status(403).send({ error: 'csrf_failed' });
         }
@@ -185,6 +193,17 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     }
     if (status === 'suspended') {
         return reply.status(403).send({ error: 'account_suspended' });
+    }
+
+    // Sliding renewal: activity on a cookie session pushes its idle deadline out again,
+    // never past 30 days from login. Same jti, so CSRF and revocation are unchanged.
+    if (cookieToken && request.headers[BACKGROUND_HEADER] !== '1' && sessionNeedsRenewal(payload)) {
+        const renewed = generateSessionToken(
+            { userId: payload.userId, tokenVersion: payload.tokenVersion ?? 0 },
+            request.server.jwtSecret,
+            { jti: payload.jti, authTime: payload.authTime ?? payload.iat },
+        );
+        setSessionCookies(reply, renewed.token, renewed.jti, renewed.exp, request.server.jwtSecret);
     }
 }
 

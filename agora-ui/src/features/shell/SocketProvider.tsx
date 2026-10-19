@@ -147,6 +147,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     s.on('error', (error: { code?: string }) => {
+      // The socket outlived the session it connected with, but the cookie may have
+      // been renewed by activity since. Reconnecting sends the current cookie; if the
+      // session really is over, the handshake fails and connect_error signs out.
+      if (error?.code === 'session_renew') {
+        setTimeout(() => { if (!s.connected) s.connect(); }, 0);
+        return;
+      }
       if (['Token revoked', 'token_expired', 'account_suspended'].includes(error?.code ?? '')) clearSession();
     });
 

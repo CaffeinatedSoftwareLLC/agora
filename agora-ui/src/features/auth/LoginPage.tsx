@@ -6,11 +6,14 @@ import { ApiError } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { PageSpinner } from '../../components/ui/PageSpinner';
+import { passkeyErrorMessage, passkeysSupported } from '../../lib/passkeys';
 
 export function LoginPage() {
   const navigate = useNavigate();
   const { data: instance } = useInstance();
-  const { login, status } = useAuthStore();
+  const { login, loginWithPasskey, status } = useAuthStore();
+  const [canUsePasskey] = useState(passkeysSupported);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -40,6 +43,22 @@ export function LoginPage() {
       } else {
         setError('An unexpected error occurred.');
       }
+    }
+  };
+
+  const handlePasskey = async () => {
+    setError('');
+    setPasskeyBusy(true);
+    try {
+      // A typed username narrows the prompt to that account; otherwise any passkey
+      // saved for this site may answer
+      await loginWithPasskey(identifier.trim() || undefined);
+      navigate(useAuthStore.getState().status === 'pending' ? '/pending' : '/app');
+    } catch (err) {
+      const message = passkeyErrorMessage(err);
+      if (message) setError(message);
+    } finally {
+      setPasskeyBusy(false);
     }
   };
 
@@ -78,10 +97,18 @@ export function LoginPage() {
 
           {error && <p className="text-sm text-danger">{error}</p>}
 
-          <Button type="submit" fullWidth loading={status === 'loading'}>
+          <Button type="submit" fullWidth loading={status === 'loading' && !passkeyBusy}>
             Sign in
           </Button>
         </form>
+
+        {canUsePasskey && (
+          <div className="mt-3">
+            <Button type="button" variant="secondary" fullWidth loading={passkeyBusy} onClick={handlePasskey}>
+              Sign in with a passkey
+            </Button>
+          </div>
+        )}
 
         {instance?.registrationPolicy !== 'invite_only' && (
           <p className="text-center text-text-muted text-sm mt-4">

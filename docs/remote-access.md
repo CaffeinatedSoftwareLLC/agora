@@ -71,6 +71,8 @@ In `.env.prod`, keep `DOMAIN` as it is (empty or `localhost` for a local stack) 
 CORS_ORIGIN=https://agora-home.<your-tailnet>.ts.net
 ```
 
+Passkeys are bound to the hostname they were added on. To use them on both `https://localhost` and the tailnet name, also set `WEBAUTHN_ORIGINS=https://localhost,https://agora-home.<your-tailnet>.ts.net` and add a passkey on each (see "Passkeys" in `docs/api-reference.md`).
+
 ```bash
 docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d --build
 ```

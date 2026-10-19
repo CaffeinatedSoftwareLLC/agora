@@ -32,9 +32,23 @@ function readCookie(name: string): string | null {
   return null;
 }
 
+let backgroundDepth = 0;
+
+/**
+ * Run requests the UI makes on its own (polling, refreshes on a timer) as background
+ * requests. They carry X-Agora-Background, so the server does not count them as
+ * activity: the 24 h idle timeout is not reset by a tab left open. Headers are built
+ * synchronously when a request starts, so requests started inside `fn` are covered.
+ */
+export function inBackground<T>(fn: () => Promise<T>): Promise<T> {
+  backgroundDepth++;
+  try { return fn(); } finally { backgroundDepth--; }
+}
+
 /** Headers every API request from the UI carries. */
 export function sessionHeaders(method: string): Record<string, string> {
   const headers: Record<string, string> = { 'X-Agora-Session': 'cookie' };
+  if (backgroundDepth > 0) headers['X-Agora-Background'] = '1';
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
     const csrf = readCookie('agora_csrf');
     if (csrf) headers['X-CSRF-Token'] = csrf;

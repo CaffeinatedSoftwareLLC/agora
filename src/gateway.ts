@@ -1,13 +1,16 @@
 import { FastifyInstance } from 'fastify';
 import { Server } from 'socket.io';
-import { verifyToken } from './auth/tokens';
+import { verifyToken, sessionEndsAt, sessionHardExpiry, sessionLimitError } from './auth/tokens';
 import { isTokenBlacklisted } from './auth/token-blacklist';
 import { parseBotToken, verifyBotSecret } from './auth/bot-tokens';
 import { config } from './config';
 import { originAllowed, sessionTokenFromHeaders } from './auth/session-cookie';
-import { socketAccountError, visibleChannels, gatewayAccessRevision } from './lib/gateway-access';
+import { socketAccountError, visibleChannels, gatewayAccessRevision, revalidateHumanSessions } from './lib/gateway-access';
 import { canViewChannel } from './lib/channel-access';
 import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
+
+/** How often open human sockets are re-checked against revocation and account state. */
+const SESSION_SWEEP_MS = 5 * 60 * 1000;
 
 // In-memory presence: userId → Set of socket IDs (supports multiple tabs/devices)
 export const onlineUsers = new Map<string, Set<string>>();
@@ -21,6 +24,15 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     installGatewayGate(io);
     const jwtSecret = app.jwtSecret;
     const db = app.db;
+
+    // Revocation is pushed to sockets when it happens (gatewayAccessChanged); this
+    // sweep is the backstop for anything that changed without going through a request
+    // here (another API process, a direct DB edit, a Redis blacklist entry).
+    const sweep = setInterval(() => {
+        void readGatewayAccess(io, () => revalidateHumanSessions(io, db)).catch(() => {});
+    }, SESSION_SWEEP_MS);
+    sweep.unref();
+    app.addHook('onClose', async () => { clearInterval(sweep); });
 
     // Initialization gate — reject connections before instance is set up
     io.use(async (_socket, next) => {
@@ -42,12 +54,14 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         socket.data.accessRevision = gatewayAccessRevision(io);
         const type = socket.handshake.auth?.type;
         let token = socket.handshake.auth?.token;
+        let fromCookie = false;
 
         // Browsers authenticate with the httpOnly session cookie instead of a token in
         // the handshake. Socket.IO's CORS setting does not cover the websocket transport,
         // so the handshake's Origin is checked here (cross-site WebSocket hijacking).
         if ((typeof token !== 'string' || !token) && type !== 'bot') {
             token = sessionTokenFromHeaders(socket.handshake.headers);
+            fromCookie = !!token;
             if (token && !originAllowed(socket.handshake.headers)) {
                 return next(new Error('Origin not allowed'));
             }
@@ -105,6 +119,14 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             socket.data.tokenVersion = payload.tokenVersion ?? 0;
             socket.data.jti = payload.jti;
             socket.data.tokenExpiresAt = payload.exp * 1000;
+            socket.data.cookieSession = fromCookie;
+            if (fromCookie) {
+                // The handshake is not activity: it never renews the session, it only
+                // checks it. The socket ends when the cookie would, see 'connection'.
+                if (sessionLimitError(payload)) return next(new Error('token_expired'));
+                socket.data.tokenExpiresAt = sessionEndsAt(payload);
+                socket.data.sessionHardExpiresAt = sessionHardExpiry(payload) * 1000;
+            }
 
             // Check token blacklist (logout revocation)
             if (payload.jti && await isTokenBlacklisted(payload.jti)) {
@@ -140,9 +162,21 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         const userId = (socket as any).userId;
         if (!socket.data.isBot) {
             const remaining = socket.data.tokenExpiresAt - Date.now();
-            if (!Number.isFinite(remaining) || remaining <= 0) { socket.disconnect(true); return; }
-            const expiry = setTimeout(() => {
+            // A cookie session within seconds of its end is treated as ended, so a
+            // reconnect right at the deadline can't spin
+            const floor = socket.data.cookieSession ? 5_000 : 0;
+            if (!Number.isFinite(remaining) || remaining <= floor) {
                 socket.emit('error', { code: 'token_expired' });
+                socket.disconnect(true);
+                return;
+            }
+            const expiry = setTimeout(() => {
+                // A cookie session may have been renewed over HTTP since this socket
+                // connected, and the socket can't see the new cookie. Ask the client to
+                // reconnect: the handshake reads the current cookie, and fails if the
+                // session really is over. At the 30-day cap there is nothing to renew.
+                const renewable = socket.data.cookieSession && socket.data.tokenExpiresAt < socket.data.sessionHardExpiresAt;
+                socket.emit('error', { code: renewable ? 'session_renew' : 'token_expired' });
                 socket.disconnect(true);
             }, Math.min(remaining, 2_147_483_647));
             expiry.unref();

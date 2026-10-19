@@ -5,6 +5,7 @@ import multipart from '@fastify/multipart';
 import { config } from './config';
 import { instanceRoutes } from './routes/instance';
 import { authRoutes } from './routes/auth';
+import { passkeyRoutes } from './routes/passkeys';
 import { serverRoutes } from './routes/servers';
 import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
@@ -327,6 +328,7 @@ export async function buildApp(opts?: {
     // Register route modules
     await app.register(instanceRoutes);
     await app.register(authRoutes);
+    await app.register(passkeyRoutes);
     await app.register(serverRoutes);
     await app.register(channelRoutes);
     await app.register(messageRoutes);

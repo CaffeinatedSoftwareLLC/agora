@@ -1,7 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { hashPassword } from '../auth/passwords';
-import { generateToken } from '../auth/tokens';
 import { deliverToken } from '../auth/session-cookie';
 import { getSetupToken } from '../instance/setup-token';
 import { resetInitializedCache } from '../instance/check-initialized';
@@ -146,16 +145,14 @@ export async function instanceRoutes(app: FastifyInstance) {
         // 7. Reset the initialized cache so subsequent requests see the change
         resetInitializedCache();
 
-        // 8. Generate access token
-        const accessToken = generateToken({ userId }, app.jwtSecret);
-
+        // 8. Sign the admin in
         return reply.status(201).send({
             user: {
                 id: userId,
                 username,
                 isInstanceAdmin: true,
             },
-            ...deliverToken(request, reply, accessToken, app.jwtSecret),
+            ...deliverToken(request, reply, { userId }, app.jwtSecret),
         });
     });
 }

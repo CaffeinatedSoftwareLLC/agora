@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { IncomingHttpHeaders } from 'http';
 import { config } from '../config';
-import { TOKEN_TTL_SECONDS, verifyToken } from './tokens';
+import { generateSessionToken, generateToken } from './tokens';
 
 /**
  * Browser sessions (issue #77).
@@ -16,6 +16,10 @@ import { TOKEN_TTL_SECONDS, verifyToken } from './tokens';
  *   state-changing request. Its value is an HMAC of the session's jti, so it is bound
  *   to that one session: a cookie planted from a sibling host can't produce a valid
  *   pair, and the server keeps no CSRF state.
+ *
+ * Lifetime: a cookie session dies after SESSION_IDLE_SECONDS (24 h) without a
+ * request and SESSION_MAX_SECONDS (30 days) after login. requireAuth re-issues the
+ * cookie (same jti, so the CSRF token is unchanged) once it is an hour old.
  *
  * A client opts into cookies by sending `X-Agora-Session: cookie` to the login,
  * register and setup routes. A custom header can't be sent cross-site without a CORS
@@ -81,11 +85,12 @@ function cookie(name: string, value: string, maxAge: number, httpOnly: boolean):
     return parts.join('; ');
 }
 
-/** Set the session and CSRF cookies for a freshly issued token. */
-export function setSessionCookies(reply: FastifyReply, token: string, jti: string, secret: string): void {
+/** Set the session and CSRF cookies for a freshly issued session token expiring at `exp`. */
+export function setSessionCookies(reply: FastifyReply, token: string, jti: string, exp: number, secret: string): void {
+    const maxAge = Math.max(0, exp - Math.floor(Date.now() / 1000));
     reply.header('set-cookie', [
-        cookie(SESSION_COOKIE, token, TOKEN_TTL_SECONDS, true),
-        cookie(CSRF_COOKIE, csrfTokenFor(jti, secret), TOKEN_TTL_SECONDS, false),
+        cookie(SESSION_COOKIE, token, maxAge, true),
+        cookie(CSRF_COOKIE, csrfTokenFor(jti, secret), maxAge, false),
     ]);
 }
 
@@ -115,12 +120,18 @@ export function originAllowed(headers: IncomingHttpHeaders): boolean {
 }
 
 /**
- * Hand a freshly signed token to the client: in cookies for a browser that asked for
- * them (the body then carries no token), otherwise in the body as `accessToken`.
+ * Sign in: a browser that asked for cookies gets a new cookie session (24 h idle,
+ * 30-day cap) and no token in the body; anyone else gets a 7-day Bearer token in the
+ * body as `accessToken`.
  */
-export function deliverToken(request: FastifyRequest, reply: FastifyReply, token: string, secret: string): { accessToken?: string } {
-    if (!wantsCookieSession(request)) return { accessToken: token };
-    const { jti } = verifyToken(token, secret);
-    setSessionCookies(reply, token, jti, secret);
+export function deliverToken(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    payload: { userId: string; tokenVersion?: number },
+    secret: string,
+): { accessToken?: string } {
+    if (!wantsCookieSession(request)) return { accessToken: generateToken(payload, secret) };
+    const { token, jti, exp } = generateSessionToken(payload, secret);
+    setSessionCookies(reply, token, jti, exp, secret);
     return {};
 }

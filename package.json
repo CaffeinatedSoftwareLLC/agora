@@ -23,6 +23,7 @@
     "@breezystack/lamejs": "1.2.7",
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
+    "@simplewebauthn/server": "^13.3.3",
     "argon2": "^0.41.0",
     "bullmq": "^5.70.1",
     "dockerode": "^4.0.12",
