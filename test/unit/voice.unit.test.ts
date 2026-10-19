@@ -190,3 +190,22 @@ describe('speech cache', () => {
         clearSpeechCache();
     });
 });
+
+describe('openai adapter audio calls: signal and redirects', () => {
+    it('always passes an abort signal and refuses to follow redirects', async () => {
+        const fetchMock = vi.fn(async () => new Response(new Uint8Array(4), { headers: { 'Content-Type': 'audio/wav' } }));
+        vi.stubGlobal('fetch', fetchMock);
+        await openaiAdapter.tts!({ apiKey: 'k' }, { model: 'm', text: 'hi' });
+        await openaiAdapter.transcribe!({ apiKey: 'k' }, { model: 'm', audio: Buffer.alloc(4), mime: 'audio/webm' }).catch(() => {});
+        for (const call of fetchMock.mock.calls as unknown as [string, RequestInit][]) {
+            expect(call[1].signal).toBeInstanceOf(AbortSignal);
+            expect(call[1].redirect).toBe('manual');
+        }
+    });
+
+    it('treats a 3xx from the provider as an error', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 307, headers: { Location: 'http://10.0.0.1/' } })));
+        await expect(openaiAdapter.tts!({}, { model: 'm', text: 'hi' })).rejects.toThrow(/redirect/i);
+        await expect(openaiAdapter.transcribe!({}, { model: 'm', audio: Buffer.alloc(4), mime: 'audio/webm' })).rejects.toThrow(/redirect/i);
+    });
+});

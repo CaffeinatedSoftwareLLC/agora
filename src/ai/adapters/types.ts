@@ -90,6 +90,7 @@ export interface SpeechRequest {
     model: string;
     text: string;
     voice?: string;
+    signal?: AbortSignal;
 }
 
 /** Speech-to-text: one recorded clip (voice input). */

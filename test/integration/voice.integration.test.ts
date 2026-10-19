@@ -3,6 +3,10 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { pcmToWav } from '../../src/ai/adapters/audio';
 import { clearSpeechCache } from '../../src/ai/voice';
 
+const WEBM = () => Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(16)]);
+const OGG = () => Buffer.concat([Buffer.from('OggS'), Buffer.alloc(16)]);
+const M4A = () => Buffer.concat([Buffer.alloc(4), Buffer.from('ftypM4A '), Buffer.alloc(16)]);
+
 /**
  * Voice in and out (cloud handoff C4): admin settings, the engines a member's client
  * is told to use, push-to-talk transcription through the `stt` route, and messages
@@ -158,7 +162,7 @@ describe('POST /channels/:id/voice/transcribe', () => {
 
     it('transcribes a recorded clip through the stt route and records usage', async () => {
         const fetchMock = mockAudioApi({ text: '  please rerun the failing test ' });
-        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/webm;codecs=opus').send(Buffer.from('opus-bytes'));
+        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/webm;codecs=opus').send(WEBM());
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ text: 'please rerun the failing test' });
 
@@ -183,20 +187,20 @@ describe('POST /channels/:id/voice/transcribe', () => {
 
     it('is refused to people who cannot send in the channel', async () => {
         mockAudioApi();
-        const outside = await ctx.request.post(url()).set(outsider.auth).set('Content-Type', 'audio/webm').send(Buffer.from('x'));
+        const outside = await ctx.request.post(url()).set(outsider.auth).set('Content-Type', 'audio/webm').send(WEBM());
         expect(outside.status).toBe(404);
         // A member whose roles lack Send Messages in the channel
         const server = await ctx.db.query('SELECT everyone_role_id FROM servers WHERE id = $1', [serverId]);
         await ctx.request.put(`/channels/${channelId}/overrides/roles/${server.rows[0].everyone_role_id.trim()}`).set(owner.auth)
             .send({ allow: '0', deny: String(1n << 11n) });
-        const muted = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/webm').send(Buffer.from('x'));
+        const muted = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/webm').send(WEBM());
         expect(muted.status).toBe(403);
         await ctx.request.delete(`/channels/${channelId}/overrides/roles/${server.rows[0].everyone_role_id.trim()}`).set(owner.auth);
     });
 
     it('reports provider failures as 502 and records them', async () => {
         mockAudioApi({ fail: true });
-        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/mp4').send(Buffer.from('aac'));
+        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/mp4').send(M4A());
         expect(res.status).toBe(502);
         expect(res.body.error).toContain('model is loading');
         const failed = await ctx.db.query("SELECT 1 FROM ai_usage_events WHERE server_id = $1 AND capability = 'stt' AND error IS NOT NULL", [serverId]);
@@ -206,7 +210,7 @@ describe('POST /channels/:id/voice/transcribe', () => {
     it('keeps to the route\'s daily budget', async () => {
         await putRoute('stt', { dailyRequestLimit: 2 }); // two calls already today
         const fetchMock = mockAudioApi();
-        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/ogg').send(Buffer.from('ogg'));
+        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/ogg').send(OGG());
         expect(res.status).toBe(429);
         expect(res.body.code).toBe('budget_exceeded');
         expect(fetchMock).not.toHaveBeenCalled();
@@ -216,7 +220,7 @@ describe('POST /channels/:id/voice/transcribe', () => {
     it('stops when the admin turns voice input off', async () => {
         await ctx.request.patch(adminVoice()).set(owner.auth).send({ voiceInputEnabled: false });
         const fetchMock = mockAudioApi();
-        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/webm').send(Buffer.from('x'));
+        const res = await ctx.request.post(url()).set(member.auth).set('Content-Type', 'audio/webm').send(WEBM());
         expect(res.status).toBe(403);
         expect(fetchMock).not.toHaveBeenCalled();
         expect((await ctx.request.get(`/channels/${channelId}/voice`).set(member.auth)).body.input).toBe('off');

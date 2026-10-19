@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
+import { Transform } from 'node:stream';
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { config } from '../config';
 import { requireAdmin } from './ai-config';
 import { auditAiChange, changedFields } from '../lib/ai-audit';
 import { checkChannelPermissions } from '../lib/channel-access';
@@ -20,6 +22,29 @@ import {
 
 /** The Audio API's upload limit; a 10-minute Opus clip is a few MB. */
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+/**
+ * Upper bound on the audio a recording of `seconds` can need: 128 KB/s covers 48 kHz 16-bit
+ * mono WAV, far above the Opus/AAC a browser records (~4-16 KB/s), plus room for container headers.
+ */
+const AUDIO_BYTES_PER_SECOND = 128 * 1024;
+const AUDIO_MARGIN_BYTES = 256 * 1024;
+export function audioByteCap(maxRecordingSeconds: number): number {
+    return Math.min(MAX_AUDIO_BYTES, maxRecordingSeconds * AUDIO_BYTES_PER_SECOND + AUDIO_MARGIN_BYTES);
+}
+
+/** The container the first bytes say this is (webm, ogg, wav, mp3, m4a/aac, flac), or null. */
+export function sniffAudio(b: Buffer): string | null {
+    if (b.length < 12) return null;
+    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'webm';
+    if (b.toString('latin1', 0, 4) === 'OggS') return 'ogg';
+    if (b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WAVE') return 'wav';
+    if (b.toString('latin1', 0, 4) === 'fLaC') return 'flac';
+    if (b.toString('latin1', 4, 8) === 'ftyp') return 'm4a';
+    if (b.toString('latin1', 0, 3) === 'ID3') return 'mp3';
+    if (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) return 'mp3'; // MPEG/ADTS frame sync
+    return null;
+}
+
 /** Read-aloud audio is sent as MP3 (a phone may be on mobile data); speech needs little. */
 const SPEECH_MP3_KBPS = 48;
 
@@ -74,7 +99,56 @@ async function voiceRoute(db: any, reply: FastifyReply, serverId: string, capabi
     return resolved.value;
 }
 
+/**
+ * Provider calls can take a while: don't hold the request's transaction (and its pool
+ * connection) open across them. Commits what the handler has done and gives the client back.
+ */
+async function releaseRequestClient(request: FastifyRequest) {
+    const client = request.dbClient;
+    if (!client) return;
+    request.dbClient = null;
+    try {
+        await client.query('COMMIT');
+        request.txCommitted = true;
+    } catch {
+        await client.query('ROLLBACK').catch(() => {});
+        request.txCommitted = false;
+    }
+    client.release();
+}
+
+/** Record usage in its own short transaction once the request's client has been released. */
+async function recordUsageFresh(app: FastifyInstance, rec: Parameters<typeof recordUsage>[1]) {
+    const client = await (app as any).db.connect();
+    try {
+        await client.query('BEGIN');
+        await recordUsage(client, rec);
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
 export async function voiceRoutes(app: FastifyInstance) {
+    // Rate limits run twice: by address at onRequest (before auth knows the user), and by user
+    // in preHandler, which is after auth has set request.userId. Off when rate limiting is off.
+    const limitedBy = (name: string, ipMax: number, userMax: number) => {
+        const check = (app as any).createRateLimit
+            ? (app as any).createRateLimit({ max: userMax, timeWindow: '1 minute', keyGenerator: (r: any) => `${name}:${r.userId ?? r.ip}` })
+            : null;
+        return {
+            config: { rateLimit: { max: ipMax, timeWindow: '1 minute' } },
+            // The plugin's own handler skips a request it already counted at onRequest, so count by user directly
+            preHandler: check ? [async (request: FastifyRequest, reply: FastifyReply) => {
+                const r = await check(request);
+                if (r.isAllowed || !r.isExceeded) return;
+                return reply.status(429).header('Retry-After', String(r.ttlInSeconds)).send({ error: 'Rate limit exceeded, retry later', code: 'rate_limited' });
+            }] : [],
+        };
+    };
 
     // Recorded clips arrive as the raw body (audio/webm, audio/mp4, ...). Scoped to this plugin.
     app.addContentTypeParser(/^audio\//, { parseAs: 'buffer', bodyLimit: MAX_AUDIO_BYTES }, (_request, body, done) => done(null, body));
@@ -145,7 +219,31 @@ export async function voiceRoutes(app: FastifyInstance) {
     // POST /channels/:id/voice/transcribe (raw audio body) → 200 { text }
     app.post('/channels/:id/voice/transcribe', {
         bodyLimit: MAX_AUDIO_BYTES,
-        config: { rateLimit: { max: 30, timeWindow: '1 minute', keyGenerator: (request: any) => request.userId } },
+        ...limitedBy('transcribe', 300, 30),
+        // The cap follows the server's recording limit; refuse on Content-Length, then while the body streams
+        preParsing: async (request, _reply, payload) => {
+            let cap = audioByteCap(120);
+            try {
+                const row = await request.dbClient?.query(
+                    `SELECT v.max_recording_seconds FROM ai_voice_settings v JOIN channels c ON c.server_id = v.server_id WHERE c.id = $1`,
+                    [(request.params as any).id]
+                );
+                if (row?.rows[0]) cap = audioByteCap(row.rows[0].max_recording_seconds);
+            } catch { /* the default cap still applies */ }
+            const tooBig = () => Object.assign(new Error(`The recording is too long (limit ${Math.round(cap / 1024)} KB)`), { statusCode: 413 });
+            const declared = Number(request.headers['content-length']);
+            if (Number.isFinite(declared) && declared > cap) throw tooBig();
+            let seen = 0;
+            const limiter = new Transform({
+                transform(chunk, _enc, cb) {
+                    seen += chunk.length;
+                    if (seen > cap) return cb(tooBig());
+                    cb(null, chunk);
+                },
+            });
+            payload.on('error', e => limiter.destroy(e));
+            return payload.pipe(limiter);
+        },
     }, async (request, reply) => {
         const serverId = await channelForVoice(request, reply, Permissions.ViewChannel | Permissions.SendMessages);
         if (!serverId) return reply;
@@ -157,11 +255,16 @@ export async function voiceRoutes(app: FastifyInstance) {
         }
         const audio = request.body as Buffer;
         if (audio.length === 0) return reply.status(400).send({ error: 'The recording is empty' });
+        if (!sniffAudio(audio)) return reply.status(415).send({ error: 'That is not a recognised audio recording (webm, ogg, wav, mp3, m4a or flac)' });
 
         const settings = await loadVoiceSettings(db, serverId);
         if (!settings.voiceInputEnabled) return reply.status(403).send({ error: 'Voice input is turned off on this server', code: 'voice_off' });
         const route = await voiceRoute(db, reply, serverId, 'stt');
         if (!route) return reply;
+
+        const channelId = (request.params as any).id as string;
+        const userId = request.userId;
+        await releaseRequestClient(request);
 
         const started = Date.now();
         let error: string | null = null;
@@ -170,14 +273,15 @@ export async function voiceRoutes(app: FastifyInstance) {
             result = await route.adapter.transcribe!(route.credentials, {
                 // The Audio API takes ISO 639-1 only ("pt", not "pt-BR")
                 model: route.model, audio, mime, language: settings.sttLanguage?.split('-')[0],
+                signal: AbortSignal.timeout(config.voiceProviderTimeoutMs),
             });
         } catch (err) {
             error = err instanceof Error ? err.message : String(err);
         }
-        await recordUsage(db, {
+        await recordUsageFresh(app, {
             serverId, capability: 'stt', providerId: route.providerId, adapter: route.adapter.id, model: route.model,
             route: route.route, usage: result?.usage ?? { inputTokens: 0, outputTokens: 0 },
-            latencyMs: Date.now() - started, channelId: (request.params as any).id, userId: request.userId, error,
+            latencyMs: Date.now() - started, channelId, userId, error,
         });
         if (!result) return reply.status(502).send({ error: error ?? 'Transcription failed', code: 'provider_error' });
         return reply.send({ text: result.text });
@@ -185,7 +289,7 @@ export async function voiceRoutes(app: FastifyInstance) {
 
     // POST /channels/:id/messages/:msgId/speech → audio (MP3 when the engine returns WAV)
     app.post('/channels/:id/messages/:msgId/speech', {
-        config: { rateLimit: { max: 60, timeWindow: '1 minute', keyGenerator: (request: any) => request.userId } },
+        ...limitedBy('speech', 600, 60),
     }, async (request, reply) => {
         const serverId = await channelForVoice(request, reply, Permissions.ViewChannel);
         if (!serverId) return reply;
@@ -224,12 +328,17 @@ export async function voiceRoutes(app: FastifyInstance) {
         const text = speakableText(row.content, settings.readAloudMaxChars, names);
         if (!text) return reply.status(422).send({ error: 'This message has nothing to read aloud', code: 'nothing_to_read' });
 
+        const userId = request.userId;
+        await releaseRequestClient(request);
+
         const started = Date.now();
         let error: string | null = null;
         let audio: { data: Buffer; mime: string } | null = null;
         let usage = { inputTokens: 0, outputTokens: 0 };
         try {
-            const result = await route.adapter.tts!(route.credentials, { model: route.model, text, voice });
+            const result = await route.adapter.tts!(route.credentials, {
+                model: route.model, text, voice, signal: AbortSignal.timeout(config.voiceProviderTimeoutMs),
+            });
             usage = result.usage;
             audio = result.mime === 'audio/wav'
                 ? { data: pcmToMp3(wavToPcm(result.data), SPEECH_MP3_KBPS), mime: 'audio/mpeg' }
@@ -237,9 +346,9 @@ export async function voiceRoutes(app: FastifyInstance) {
         } catch (err) {
             error = err instanceof Error ? err.message : String(err);
         }
-        await recordUsage(db, {
+        await recordUsageFresh(app, {
             serverId, capability: 'tts', providerId: route.providerId, adapter: route.adapter.id, model: route.model,
-            route: route.route, usage, latencyMs: Date.now() - started, channelId, userId: request.userId, messageId: msgId, error,
+            route: route.route, usage, latencyMs: Date.now() - started, channelId, userId, messageId: msgId, error,
         });
         if (!audio) return reply.status(502).send({ error: error ?? 'Speech failed', code: 'provider_error' });
 

@@ -18,6 +18,18 @@ const AUDIO_EXTENSIONS: Record<string, string> = {
     'audio/x-wav': 'wav',
     'audio/flac': 'flac',
 };
+/** Used when the caller passes no signal: a stalled provider must not hold a request forever. */
+const DEFAULT_AUDIO_TIMEOUT_MS = 60_000;
+
+/** The provider URL is checked once (url-guard); following a redirect would skip that check. */
+function refuseRedirect(res: Response, what: string) {
+    if (res.status >= 300 && res.status < 400) throw new Error(`${what} redirected (HTTP ${res.status}); redirects are not followed`);
+}
+
+function audioSignal(signal?: AbortSignal): AbortSignal {
+    return signal ?? AbortSignal.timeout(DEFAULT_AUDIO_TIMEOUT_MS);
+}
+
 export const TRANSCRIBABLE_MIME_TYPES = Object.keys(AUDIO_EXTENSIONS);
 
 function headers(creds: ProviderCredentials): Record<string, string> {
@@ -89,6 +101,8 @@ export const openaiAdapter: Adapter = {
         let res: Response;
         try {
             res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/audio/speech'), {
+                signal: audioSignal(req.signal),
+                redirect: 'manual',
                 method: 'POST',
                 headers: headers(creds),
                 body: JSON.stringify({ model: req.model, input: req.text, voice: req.voice ?? DEFAULT_VOICE, response_format: 'wav' }),
@@ -96,8 +110,14 @@ export const openaiAdapter: Adapter = {
         } catch (err) {
             throw new Error(networkError(err));
         }
+        refuseRedirect(res, 'OpenAI speech');
         if (!res.ok) throw new Error(await apiError('OpenAI speech', res));
-        const data = Buffer.from(await res.arrayBuffer());
+        let data: Buffer;
+        try {
+            data = Buffer.from(await res.arrayBuffer());
+        } catch (err) {
+            throw new Error(networkError(err));
+        }
         // A server that ignores response_format still says what it sent
         const mime = data.toString('ascii', 0, 4) === 'RIFF' ? 'audio/wav' : (res.headers.get('content-type') ?? 'audio/mpeg').split(';')[0].trim();
         // The Audio API reports no token usage for speech
@@ -116,7 +136,8 @@ export const openaiAdapter: Adapter = {
         let res: Response;
         try {
             res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/audio/transcriptions'), {
-                signal: req.signal,
+                signal: audioSignal(req.signal),
+                redirect: 'manual',
                 method: 'POST',
                 // fetch sets the multipart Content-Type (with its boundary) itself
                 headers: creds.apiKey ? { Authorization: `Bearer ${creds.apiKey}` } : {},
@@ -125,8 +146,14 @@ export const openaiAdapter: Adapter = {
         } catch (err) {
             throw new Error(networkError(err));
         }
+        refuseRedirect(res, 'OpenAI transcription');
         if (!res.ok) throw new Error(await apiError('OpenAI transcription', res));
-        const json: any = await res.json();
+        let json: any;
+        try {
+            json = await res.json();
+        } catch (err) {
+            throw new Error(networkError(err));
+        }
         if (typeof json?.text !== 'string') throw new Error('OpenAI transcription returned no text');
         // gpt-4o-transcribe reports tokens; whisper models report seconds, which aren't tokens
         const usage = json.usage?.type === 'tokens'
