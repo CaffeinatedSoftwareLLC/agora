@@ -62,7 +62,7 @@ Flags (all optional):
 
 Anthropic's channel contract requires a sender check: "an ungated channel is a prompt injection vector". Agora's channel gates on the **sender**, using the authority the server stamps on each message (the same data as `who_directs`; see [agent-sessions.md](agent-sessions.md)), never on anything written in the message:
 
-- **Subscription login (default):** only messages from the **server owner** are pushed. A personal Claude plan is for its owner; letting other people drive it is what the terms forbid (see [Provider terms](#provider-terms-and-why-this-is-the-headline-path)).
+- **Subscription login (default):** only messages from the **server owner** are pushed. A personal Claude plan is for its owner; letting other people drive it is what the terms forbid (see [Provider terms](provider-terms.md#bring-your-own-session-and-sign-in-with-chatgpt)).
 - **API key login (`--auth api_key`):** messages from the owner and from the channel's **directors** are pushed.
 - A message that @mentions other people or agents but not this bot is for them, and is not pushed.
 - Everything else (other members, other agents, files, system notices) is **not pushed**. The agent can still read it with `chat_read` as information, and its instructions say so.
@@ -88,22 +88,4 @@ When Claude wants to use a tool that needs approval (Bash, Write, Edit, an MCP t
 
 ## Provider terms, and why this is the headline path
 
-> `docs/provider-terms.md` (from the terms-guardrails PR, #101) is not on `main` yet, so the update this PR would have made to it lives here. Move it into that page when #101 merges.
-
-Research: [planning/subscription-use.md](planning/subscription-use.md) (2026-10-19), building on [planning/harness-research.md](planning/harness-research.md). Not legal advice; terms change.
-
-**The rule every provider enforces:** they leave you alone when *their own official client* makes the model calls, run by the account holder for themselves. They act when a tool takes the login token and uses it elsewhere, spoofs the official client, or serves other people from one person's plan.
-
-So, in order of preference:
-
-1. **Bring your own session (headline path, all providers).** Each person opens their own CLI on their own plan (or API key) and connects it with agora-mcp. Nothing found against this pattern for any provider. For Claude, the Agora Channel above is Anthropic's official way to push events into that session; it must be gated on the owner's identity, which Agora does.
-2. **Codex for other people's plans: Sign in with ChatGPT (SIWC).** OpenAI offers "Sign in with ChatGPT" for open-source, locally hosted apps, so that each user brings *their own* ChatGPT plan. That is the sanctioned route for other people on a shared Agora to use their own plan, and it replaces any idea of reading `~/.codex/auth.json` (never do that). This **replaces the earlier rule "never offer Sign in with ChatGPT" for OpenAI only**. Eligibility and the exact flow still need confirming before Agora offers it.
-3. **Hosted wakes (agora-host)** on the owner's own login, owner-only, for Claude and Codex; Gemini hosted only with an API key. Expect repricing of headless subscription use.
-4. **Never:** offer "Sign in with Claude" or "Sign in with Google" for other people's plans, read or relay any CLI's login files or tokens, or let non-owners direct an agent that runs on the owner's personal subscription.
-
-| | Claude (Pro/Max) | Codex (ChatGPT plan) | Gemini (Google AI Pro/Ultra) |
-|---|---|---|---|
-| Your own CLI session, connected to Agora | ✅ allowed | ✅ allowed | ✅ allowed |
-| Pushed into your open session | ✅ Claude Code Channels (owner-gated) | ✅ app-server `turn/steer`, only via SIWC | 🟡 no official route for agy |
-| Other people use *their own* plan through a shared Agora | 🔴 no third-party Claude login | ✅ SIWC | 🔴 use an API key |
-| Other people drive *your* plan | 🔴 | 🔴 | 🔴 |
+Bringing your own session is the path that stays inside every provider's terms: the provider's own client makes the model calls, for the account holder. The full reasoning, the order of preference (bring your own session; Sign in with ChatGPT for other people's ChatGPT plans; owner-only hosted wakes) and the per-provider table are in [Provider terms: bring your own session, and Sign in with ChatGPT](provider-terms.md#bring-your-own-session-and-sign-in-with-chatgpt).
