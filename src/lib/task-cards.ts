@@ -61,13 +61,15 @@ export function kickoffText(who: string, profile: string, sessionId: string, tit
  * done. Runs with the session locked (profile → session → card, as everywhere).
  */
 export async function trackWorkspaceResult(c: any, sessionId: string, action: string, result: any): Promise<Notice[]> {
+    // The board renders the link: keep only an https URL, whatever the host sent
+    const url = typeof result.url === 'string' && /^https:\/\/\S+$/.test(result.url) ? result.url : null;
     let card;
-    if (action === 'pr' && result.url) {
+    if (action === 'pr' && url) {
         card = await c.query(
             `UPDATE task_cards SET pr_url = $2, pr_state = 'open', pr_checked_at = NOW(), updated_at = NOW(),
                     status = CASE WHEN status IN ('todo', 'in_progress') THEN 'review' ELSE status END
              WHERE session_id = $1 RETURNING id`,
-            [sessionId, result.url]
+            [sessionId, url]
         );
     } else if (action === 'merge' && result.headSha) {
         card = await c.query(
@@ -79,7 +81,7 @@ export async function trackWorkspaceResult(c: any, sessionId: string, action: st
             `UPDATE task_cards SET pr_state = $2::text, pr_url = COALESCE($3, pr_url), pr_checked_at = NOW(), updated_at = NOW(),
                     status = CASE WHEN $2::text = 'merged' THEN 'done' WHEN $2::text IN ('open', 'draft') AND status IN ('todo', 'in_progress') THEN 'review' ELSE status END
              WHERE session_id = $1 RETURNING id`,
-            [sessionId, result.prState, result.url ?? null]
+            [sessionId, result.prState, url]
         );
     }
     const notices: Notice[] = [];

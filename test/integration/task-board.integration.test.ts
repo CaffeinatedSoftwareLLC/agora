@@ -226,8 +226,9 @@ describe('task board', () => {
         const c = await next();
         expect(c.action).toBe('pr_status');
         expect((await result(c, { prState: 'bogus' })).status).toBe(400);
-        expect((await result(c, { prState: 'merged', url: 'https://github.com/o/r/pull/7', message: 'Pull request is merged' })).status).toBe(200);
-        expect((await tasks()).body.cards[0]).toMatchObject({ status: 'done', prState: 'merged' });
+        // A non-https URL from the host is not stored: the board renders the link
+        expect((await result(c, { prState: 'merged', url: 'javascript:alert(1)', message: 'Pull request is merged' })).status).toBe(200);
+        expect((await tasks()).body.cards[0]).toMatchObject({ status: 'done', prState: 'merged', prUrl: 'https://github.com/o/r/pull/7' });
     });
 });
 
