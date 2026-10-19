@@ -26,6 +26,7 @@ import { roleRoutes } from './routes/roles';
 import { agentHostRoutes } from './routes/agent-hosts';
 import { fileReservationRoutes } from './routes/file-reservations';
 import { agentCommandRoutes } from './routes/agent-commands';
+import { workspaceReviewRoutes } from './routes/workspace-review';
 import { agentToolRequestRoutes } from './routes/agent-tool-requests';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
@@ -348,6 +349,7 @@ export async function buildApp(opts?: {
     await app.register(roleRoutes);
     await app.register(agentHostRoutes);
     await app.register(agentCommandRoutes);
+    await app.register(workspaceReviewRoutes);
     await app.register(fileReservationRoutes);
     await app.register(agentToolRequestRoutes);
 

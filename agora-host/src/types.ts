@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Checkpoint, ReviewCommand } from './review.js';
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 const seconds = z.number().finite().positive().max(86400);
@@ -61,10 +62,12 @@ export interface Result {
     rateLimit?: RateLimit;
 }
 export interface RateLimit { resetAt: string | null }
-export interface Completion { claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
-export interface Failure { claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: RateLimit }
+export interface Completion { checkpoint?: Checkpoint; claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
+export interface Failure { checkpoint?: Checkpoint; claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: RateLimit }
 export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; reason: string };
 export interface HostApi {
+    claimWorkspaceCommand?(signal?: AbortSignal): Promise<ReviewCommand | null>;
+    workspaceCommandResult?(cmd: ReviewCommand, success: boolean, result: object, signal?: AbortSignal): Promise<void>;
     imageMessages?(claim: Claim, signal?: AbortSignal): Promise<{ maxBytes: number; messages: Array<{ id: string; content: string }> }>;
     uploadImage?(claim: Claim, image: { messageId: string; reference: string; filename: string; buffer: Buffer }, signal?: AbortSignal): Promise<void>;
     workspaceStates?(sessionIds: string[]): Promise<string[]>;

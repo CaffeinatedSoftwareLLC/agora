@@ -5,6 +5,7 @@ import { readAuthorities } from './direct-agents';
 import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
 import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, subscriptionNotice } from './provider-terms';
+import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -153,6 +154,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     );
     const session = s.rows[0];
     if (!session || session.state !== 'live' || session.asleep) return null;
+    if ((await c.query(`SELECT 1 FROM agent_workspace_commands WHERE session_id=$1 AND status IN ('queued','claimed')`, [sessionId])).rows.length) return null;
     const active = await c.query(`SELECT 1 FROM agent_runs WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     if (active.rows.length > 0) return null;
     // The host may have been revoked while its long poll was waiting
@@ -493,7 +495,7 @@ async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     return null;
 }
 
-export interface CompleteBody { claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
+export interface CompleteBody { checkpoint?: CheckpointReport; claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
 
 export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -505,6 +507,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
             || !body.branch?.endsWith(`/${run.session_id.trim()}`)
             || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(body.baseSha ?? '')
             || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(body.headSha ?? ''))) return { status: 400, body: { error: 'invalid_workspace_report' } };
+        if (!await recordCheckpoint(c,run,body.checkpoint,notices)) return { status:400,body:{error:'invalid_checkpoint_binding'} };
         const tokens = await chargeUsage(c, run, body.tokensUsed);
 
         await c.query(
@@ -548,13 +551,14 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
     });
 }
 
-export interface FailBody { claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null } }
+export interface FailBody { checkpoint?: CheckpointReport; claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null } }
 
 export async function fail(pool: Pool, host: Host, runId: string, body: FailBody, notices: Notice[]) {
     return inTx(pool, async c => {
-        const check = await checkRun(c, host, runId, body.claimToken, 'failed', notices);
+        const check = await checkRun(c, host, runId, body.claimToken, 'failed', notices, true);
         if (!check.ok) return { status: check.status, body: check.body };
         const run = check.run;
+        if (!await recordCheckpoint(c,run,body.checkpoint,notices)) return { status:400,body:{error:'invalid_checkpoint_binding'} };
         const tokens = await chargeUsage(c, run, body.tokensUsed);
 
         await c.query(
