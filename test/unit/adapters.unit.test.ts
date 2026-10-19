@@ -381,7 +381,7 @@ describe('adapter registry', () => {
     });
 
     it('each adapter implements exactly the capabilities it lists', () => {
-        const methods = { chat: 'streamChat', search: 'search', image: 'generateImage', tts: 'tts', video: 'generateVideo', decide: 'decide' } as const;
+        const methods = { chat: 'streamChat', search: 'search', image: 'generateImage', tts: 'tts', video: 'generateVideo', decide: 'decide', stt: 'transcribe' } as const;
         for (const { id } of listAdapters()) {
             const adapter = getAdapter(id)! as unknown as Record<string, unknown>;
             for (const [capability, method] of Object.entries(methods)) {

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
+import { SpeakerIcon } from './MessageActions';
 
 interface MessageActionSheetProps {
   isOpen: boolean;
@@ -9,6 +10,8 @@ interface MessageActionSheetProps {
   isOwn: boolean;
   onReply?: () => void;
   onCopy?: () => void;
+  onReadAloud?: () => void;
+  readingAloud?: boolean;
   onEdit: () => void;
   onDelete: () => void;
 }
@@ -19,6 +22,8 @@ export function MessageActionSheet({
   isOwn,
   onReply,
   onCopy,
+  onReadAloud,
+  readingAloud,
   onEdit,
   onDelete,
 }: MessageActionSheetProps) {
@@ -107,6 +112,17 @@ export function MessageActionSheet({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
               </svg>
               <span>Copy text</span>
+            </button>
+          )}
+
+          {onReadAloud && (
+            <button
+              type="button"
+              onClick={() => dismissAndRun(onReadAloud)}
+              className="w-full min-h-12 px-4 py-2.5 rounded-xl flex items-center gap-3 text-[15px] font-medium text-text hover:bg-surface-hover transition-colors text-left"
+            >
+              <SpeakerIcon className="w-5 h-5 text-text-muted shrink-0" reading={readingAloud} />
+              <span>{readingAloud ? 'Stop reading' : 'Read aloud'}</span>
             </button>
           )}
 

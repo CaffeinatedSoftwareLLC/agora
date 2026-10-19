@@ -44,6 +44,8 @@ export const config = {
     jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-do-not-use-in-prod',
     port: parseInt(process.env.PORT ?? '3000', 10),
     trustProxy: process.env.TRUST_PROXY === 'true',
+    // How long one speech/transcription call to a provider may take before it is abandoned
+    voiceProviderTimeoutMs: parseInt(process.env.VOICE_PROVIDER_TIMEOUT_MS ?? '60000', 10),
     corsOrigin: process.env.CORS_ORIGIN || undefined,
     // Browser session cookies are Secure. Browsers accept Secure cookies from http://localhost,
     // so dev works; set COOKIE_SECURE=false only to serve the UI over plain HTTP on another host.

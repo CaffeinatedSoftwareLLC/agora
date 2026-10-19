@@ -35,6 +35,7 @@ import { taskBoardRoutes } from './routes/task-board';
 import { subtaskRoutes } from './routes/subtasks';
 import { artifactRoutes } from './routes/artifacts';
 import { browserPreviewRoutes } from './routes/browser-previews';
+import { voiceRoutes } from './routes/voice';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
@@ -366,6 +367,7 @@ export async function buildApp(opts?: {
     await app.register(subtaskRoutes);
     await app.register(artifactRoutes);
     await app.register(browserPreviewRoutes);
+    await app.register(voiceRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

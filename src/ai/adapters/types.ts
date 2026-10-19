@@ -3,7 +3,7 @@
  * providers are rows in `ai_providers` that name an adapter and hold credentials.
  */
 
-export const CAPABILITIES = ['chat', 'search', 'image', 'tts', 'video', 'decide'] as const;
+export const CAPABILITIES = ['chat', 'search', 'image', 'tts', 'video', 'decide', 'stt'] as const;
 export type Capability = typeof CAPABILITIES[number];
 
 export interface ProviderCredentials {
@@ -90,6 +90,23 @@ export interface SpeechRequest {
     model: string;
     text: string;
     voice?: string;
+    signal?: AbortSignal;
+}
+
+/** Speech-to-text: one recorded clip (voice input). */
+export interface TranscriptionRequest {
+    model: string;
+    audio: Buffer;
+    /** The clip's MIME type without parameters (audio/webm, audio/mp4, audio/ogg, audio/wav, audio/mpeg). */
+    mime: string;
+    /** ISO 639-1 hint; the provider detects the language without it. */
+    language?: string;
+    signal?: AbortSignal;
+}
+
+export interface TranscriptionResult {
+    text: string;
+    usage: Usage;
 }
 
 export interface SpeechSpeaker {
@@ -203,6 +220,7 @@ export interface Adapter extends AdapterInfo {
      */
     ttsDialogue?(creds: ProviderCredentials, req: DialogueRequest): Promise<MediaResult>;
     generateVideo?(creds: ProviderCredentials, req: VideoRequest): Promise<MediaResult>;
+    transcribe?(creds: ProviderCredentials, req: TranscriptionRequest): Promise<TranscriptionResult>;
     /**
      * True when the provider's terms require search results to be shown unmodified and
      * forbid passing them to another model (Gemini grounding). Such results are never
