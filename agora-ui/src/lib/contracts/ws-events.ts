@@ -123,6 +123,17 @@ export interface BotMessageStreamPayload {
     attachments?: MessagePayload['attachments'];
 }
 
+/** What an ACP agent's run is doing now, from host heartbeats. Not stored; `step` is agent text. */
+export interface AgentRunProgressPayload {
+  channelId: string;
+  sessionId: string;
+  runId: string;
+  step: string | null;
+  toolCalls: number;
+  planDone: number | null;
+  planTotal: number | null;
+}
+
 export interface AgentSessionUpdatePayload {
   channelId: string;
   sessionId: string;

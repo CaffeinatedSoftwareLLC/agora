@@ -14,7 +14,7 @@ import { authLabel } from '../agents/agentSessions';
 
 interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null }
 interface Profile {
-  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude';
+  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
@@ -194,6 +194,8 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
               <select className={input} value={form.adapter} onChange={set('adapter')}>
                 <option value="codex">Codex</option>
                 <option value="claude">Claude Code</option>
+                {/* The host runs it over ACP (gemini --acp) and only with an API key */}
+                <option value="gemini">Gemini CLI (ACP, API key)</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-text-muted">Host

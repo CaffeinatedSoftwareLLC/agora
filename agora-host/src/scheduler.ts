@@ -7,6 +7,7 @@ import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from '
 import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
 import { attachRunImages } from './images.js';
 import { TermsRefusal } from './terms.js';
+import { ACP_FATAL } from './acp/session.js';
 import { snapshotTree, checkpoint, executeReview, type Checkpoint } from './review.js';
 
 interface Active { claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void> }
@@ -68,7 +69,7 @@ export class Scheduler {
             if (this.now() >= timeout) { void stopChild('run_timeout'); return; }
             if (a.stop || beat || this.now() < nextHeartbeat) return;
             const started = this.now(); nextHeartbeat = started + claim.run.heartbeatSeconds * 1000;
-            beat = this.api.heartbeat(claim, beatAbort.signal, a.child?.tokensUsed?.()).then(async response => {
+            beat = this.api.heartbeat(claim, beatAbort.signal, a.child?.tokensUsed?.(), a.child?.progress?.()).then(async response => {
                 if (response.cancel) await stopChild('cancelled');
                 else if (!a.stop) deadline = started + claim.run.leaseSeconds * 1000 - this.safetyMs;
             }).catch(async err => {
@@ -84,12 +85,14 @@ export class Scheduler {
             launch = await (this.options.prepare ?? prepare)(this.config, claim);
             if (launch.unknownPresets?.length) this.log('unknown_tool_preset');
             if (this.stopping || a.stop || this.now() >= deadline) return;
-            const before = launch.adapter === 'claude' ? await worktreeSnapshot(launch.cwd) : null;
+            // Codex reports its file changes; Claude and ACP agents are compared against the disk
+            const snapshot = launch.adapter === 'claude' || !!launch.acp;
+            const before = snapshot ? await worktreeSnapshot(launch.cwd) : null;
             if (launch.workspace) beforeTree = await snapshotTree(launch.workspace);
             if (this.stopping || a.stop || this.now() >= deadline) return;
             a.child = this.runner.start(launch);
             result = await a.child.result; finished = true;
-            if (launch.adapter === 'claude') result.changedPaths = changedSince(before, await worktreeSnapshot(launch.cwd));
+            if (snapshot) result.changedPaths = [...new Set([...changedSince(before, await worktreeSnapshot(launch.cwd)), ...(result.changedPaths ?? [])])].slice(0, 1000);
             // Keep the lease watchdog/heartbeats alive while attachments upload. A bad
             // reference must not lose a successful CLI result or trigger another agent turn.
             if (!a.stop && !this.stopping && !a.noReport) {
@@ -134,7 +137,7 @@ export class Scheduler {
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
                             ...(savedCheckpoint ? { checkpoint: savedCheckpoint } : {}),
                             message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
-                            retryable: a.stop !== 'cancelled' && !['host_launch_failed', 'subscription_owner_only', 'run_not_approved'].includes(result.error ?? ''),
+                            retryable: a.stop !== 'cancelled' && !['host_launch_failed', 'subscription_owner_only', 'run_not_approved'].includes(result.error ?? '') && !ACP_FATAL.has(result.error ?? ''),
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
                             ...(rateLimited ? { rateLimit: result.rateLimit } : {}) }, reportAbort);
                     }

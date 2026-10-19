@@ -22,7 +22,9 @@ export const MAX_ATTEMPTS = 3;
 export const MAX_BATCH = 20;
 
 /** A channel event to emit after the transaction that produced it commits. */
-export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' }
+export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' | 'AgentRunProgress' }
+/** What an ACP run reports with its heartbeats; the step is the agent's own text. */
+export interface RunProgress { step: string | null; toolCalls: number; planDone?: number | null; planTotal?: number | null }
 
 export interface Host { id: string; serverId: string }
 
@@ -459,7 +461,7 @@ export async function checkRun(c: PoolClient, host: Host, runId: string, claimTo
     return { ok: true, run };
 }
 
-export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null) {
+export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null, progress?: RunProgress) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, claimToken, null, notices);
         if (!check.ok) return { status: check.status, body: check.body };
@@ -474,6 +476,15 @@ export async function heartbeat(pool: Pool, host: Host, runId: string, claimToke
             `UPDATE agent_runs SET lease_until = NOW() + make_interval(secs => $2) WHERE id = $1 RETURNING lease_until`,
             [runId, LEASE_SECONDS]
         );
+        if (progress) {
+            // Live only: the channel shows it next to "is working…"; nothing is stored
+            const s = await c.query(`SELECT channel_id FROM agent_sessions WHERE id = $1`, [run.session_id]);
+            const channelId = s.rows[0]?.channel_id?.trim();
+            if (channelId) notices.push({ channelId, eventName: 'AgentRunProgress', event: {
+                channelId, sessionId: run.session_id.trim(), runId: run.id.trim(), step: progress.step,
+                toolCalls: progress.toolCalls, planDone: progress.planDone ?? null, planTotal: progress.planTotal ?? null,
+            } });
+        }
         return { status: 200, body: { cancel: false, leaseUntil: new Date(lease.rows[0].lease_until).toISOString() } };
     });
 }

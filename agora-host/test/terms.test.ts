@@ -66,11 +66,11 @@ describe('auth mode configuration', () => {
         expect(await load({ adapter: 'gemini', allowSubscriptionAtOwnRisk: true })).toBe('ok');
     });
 
-    it('forces run approval for Gemini at own risk, and the host does not run Gemini yet', async () => {
+    it('forces run approval for Gemini at own risk, and the host runs Gemini only over ACP', async () => {
         const gemini = configSchema.parse(raw(process.cwd(), { adapter: 'gemini', allowSubscriptionAtOwnRisk: true })).profiles.builder;
         expect(needsRunApproval(gemini)).toBe(true);
         expect(needsRunApproval(config().profiles.builder)).toBe(false);
-        await expect(verifyProfile(gemini)).rejects.toThrow(/not a hosted adapter yet/);
+        await expect(verifyProfile(gemini)).rejects.toThrow(/hosted only over ACP with an API key/);
     });
 });
 
@@ -152,7 +152,8 @@ describe('never touches CLI login files', () => {
     it('has no reference to CLI credential files in its source', async () => {
         const dir = join(__dirname, '../src');
         const forbidden = /auth\.json|\.credentials\.json|oauth_creds|credentials\.db|accounts\.json|google_accounts|keychain/i;
-        for (const file of await readdir(dir)) {
+        for (const file of await readdir(dir, { recursive: true })) {
+            if (!file.endsWith('.ts')) continue;
             const text = await readFile(join(dir, file), 'utf8');
             expect(forbidden.test(text), file).toBe(false);
         }

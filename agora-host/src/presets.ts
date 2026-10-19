@@ -40,7 +40,7 @@ export const BUILTIN_PRESETS: Record<string, Preset> = {
 };
 
 /** Rules that only mean something to Codex; never passed to Claude. */
-const CODEX_WORDS = new Set(['write', 'network', 'web_search']);
+export const CODEX_WORDS = new Set(['write', 'network', 'web_search']);
 
 export interface Permissions {
     /** Claude `--allowedTools` rules, beyond the Agora MCP tools in `approvedTools`. */

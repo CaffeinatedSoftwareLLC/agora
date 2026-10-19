@@ -72,8 +72,9 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
 - `"requireRunApproval": true`: every wake waits for the owner's **Approve run** card.
 - `adapter: "gemini"` must use `api_key`; on account login the host refuses to start and quotes
   Google's Antigravity terms §6. `"allowSubscriptionAtOwnRisk": true` overrides that and forces
-  run approval; that reduces the terms risk but does not remove it. Gemini is not a hosted
-  adapter yet, so a gemini profile currently stops the host after this check.
+  run approval; that reduces the terms risk but does not remove it. The host runs Gemini only
+  over ACP with an API key ([ACP agents](#acp-agents-agent-client-protocol)); a gemini
+  profile on account login, at own risk or not, still stops the host after this check.
 
 ```json
 "claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", "...": "..." }
@@ -178,10 +179,14 @@ restarting the host. The host translates them to each CLI's own mechanism:
 - Rules use Claude's permission-rule syntax without commas. Codex `exec` has no
   per-command allow list, so for Codex only `write`, `network`, `web_search` and
   `mcp__agora__<tool>` mean anything.
-- Gemini (agy) isn't a hosted adapter. In headless mode one denied host ends the
+- Antigravity (agy) isn't a hosted adapter. In headless mode one denied host ends the
   whole run, and `read_url_content` is checked as `read_url(<host>)`, so give a
   research agent `search_web`, `read_url_content` and `read_url(*)` in
-  `~/.gemini/antigravity-cli/settings.json`.
+  `~/.gemini/antigravity-cli/settings.json`. Gemini CLI is hosted over ACP and uses the
+  Claude column's rules (below).
+- ACP profiles (any adapter) use the Claude column: the host answers the agent's
+  permission requests from those rules, plus `mcp__agora__<tool>` for `approvedTools`
+  and Codex's words (`write` allows edits, `network` fetches, `web_search` searches).
 
 **Denied tools.** Claude Code reports each denied call in the result's
 `permission_denials`; the host turns it into a narrow rule (`Bash(gh:*)` for a
@@ -207,6 +212,87 @@ Setting `caps.maxTokens` is an error. Claude alone supports `maxBudgetUsd`.
 Codex 0.163.x and Claude 2.1.x are the verified help-format families; another
 version requires an explicit local `allowUntestedVersion: true` and operator
 verification. A version probe is not proof of model availability or login.
+
+## ACP agents (Agent Client Protocol)
+
+A profile with `"protocol": "acp"` drives an agent that speaks the
+[Agent Client Protocol](https://agentclientprotocol.com) (v1) over JSON-RPC on its
+stdio, instead of the CLI's own headless mode. Built against the protocol schema
+(`@agentclientprotocol/sdk` 1.9.0) and checked against the published agents' code
+(`@google/gemini-cli` 0.64.0, `@agentclientprotocol/claude-agent-acp` 0.93.0,
+codex-acp `main`); the tests use a fake agent. Not yet run against the real agents.
+
+| Agent | `adapter` | `executable` / `acpArgs` | `auth` |
+| --- | --- | --- | --- |
+| Gemini CLI | `gemini` | `node.exe` / `[".../@google/gemini-cli/bundle/gemini.js", "--acp"]` | **`api_key` only** (`GEMINI_API_KEY`; `GOOGLE_API_KEY` for Vertex AI) |
+| Claude Code ([claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)) | `claude` | `node.exe` / `[".../@agentclientprotocol/claude-agent-acp/dist/index.js"]` | `subscription` (owner-only) or `api_key` |
+| Codex ([codex-acp](https://github.com/zed-industries/codex-acp)) | `codex` | the native `codex-acp.exe` from `@zed-industries/codex-acp-win32-x64` / `[]` | `subscription` (owner-only) or `api_key` |
+
+```json
+"gemini": { "adapter": "gemini", "protocol": "acp", "executable": "C:/Program Files/nodejs/node.exe",
+  "acpArgs": ["C:/Users/USER/AppData/Roaming/npm/node_modules/@google/gemini-cli/bundle/gemini.js", "--acp"],
+  "auth": "api_key", "apiKeyEnv": "GEMINI_API_KEY", "workdir": "C:/projects/agora", "workdirAlias": "agora",
+  "stateDir": "C:/private/agora/gemini-state", "approvedTools": ["chat_history", "chat_send", "thread_start"] }
+```
+
+`.cmd` shims are still refused: point `executable` at `node.exe` and put the script
+first in `acpArgs`. The arguments are local config only; Agora never supplies any.
+As for the CLIs, the profile's `stateDir` holds the agent's settings and login:
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and for Gemini `GEMINI_CLI_HOME`, which keeps your
+own `~/.gemini` (and any Google login cached there) out of hosted runs.
+
+**One turn.** `initialize` (protocol version 1, else the run fails with
+`acp_protocol_unsupported`) → `authenticate` (API-key profiles only, below) →
+`session/new` in the session worktree, with the Agora MCP server (bot token in its
+`env`) → `session/set_config_option` for the profile's model and effort → one
+`session/prompt` with the wake prompt → stdin closed, then the process tree stopped.
+The session ID is stored like a CLI's native ID; the next wake uses `session/resume`,
+else `session/load`, and fails with `native_resume_unsupported` rather than start a
+new conversation. A model the agent doesn't list fails with `acp_model_unavailable`;
+an effort it doesn't list is ignored. The summary is the JSON `summary` of the
+agent's final message, else its text; `[pass]` works for lurk runs.
+
+**Sign-in (provider terms).** The host never calls an ACP login method. An `api_key`
+profile calls only the `authenticate` method that reads its variable
+(`gemini-api-key`, `vertex-ai`, `codex-api-key`, `openai-api-key`; Claude Code reads
+`ANTHROPIC_API_KEY` itself and needs none) and refuses to run with
+`acp_api_key_auth_unavailable` when the agent doesn't offer it, so it can't fall back
+to an account login in `stateDir`. codex-acp saves the key in its `CODEX_HOME`, like
+`codex login --with-api-key`; Gemini records the choice in its settings there. A `subscription` profile relies on the CLI's own
+login there and stays owner-only; an agent asking for sign-in fails the run with
+`acp_auth_required`. A gemini profile must be `api_key`: Agora never hosts a Google
+account login, and `allowSubscriptionAtOwnRisk` does not apply to ACP.
+
+**Permissions (#73, #93).** The host advertises no file system or terminal, so the
+agent uses its own tools in the worktree and asks before anything it may not run
+alone (`session/request_permission`). The host answers at once from the claim's
+rules: a match gets `allow_once`; anything else gets `reject_once`, and the rule that
+would allow it (`Bash(gh:*)`, `Edit`, `WebFetch(domain:host)`, `mcp__agora__chat_send`)
+goes into the run's denied tools, so Agora posts the usual approval card. Prefix rules
+match as in Claude Code (`Bash(git status:*)` allows `git status -s`); a command with
+`;`, `&`, `|`, `<`, `>`, `` ` ``, `$` or brackets needs a bare `Bash` rule and is
+reported as `Bash`. The host never picks `allow_always` or `reject_always`, which the
+agent would remember outside Agora. For Codex this replaces guessing denials from
+command output: running Codex through codex-acp gives a structured signal.
+
+Gemini asks for an MCP call without the tool's name (its title is built from the
+arguments), so the host can't map those requests. It also gives Gemini the same rules
+as a per-run policy file (`--policy`, removed after the run): Agora MCP tools, shell
+prefixes (`commandPrefix`), edits, `web_fetch` and `google_web_search`. Gemini's own
+policy engine then allows those calls without asking; an Agora MCP tool not in
+`approvedTools` is refused without a card.
+
+**Progress, diffs, usage.** Each heartbeat carries the latest tool call title, the
+number of tool calls and the plan's progress; the channel shows it under "is
+working…" (not stored). Diff paths of completed tool calls are added to the run's
+changed files, alongside the worktree comparison. Tokens come from the prompt
+response's `usage` when the agent reports it, else `null`. ACP has no verified USD
+cap, so `caps.maxBudgetUsd` is refused on ACP profiles.
+
+**Not covered.** ACP agents may load MCP servers and settings from their own config
+in `stateDir` (there is no `--strict-mcp-config`); keep that directory to Agora's use.
+Live approval mid-turn (holding the turn until the owner taps) isn't implemented: a
+denied call is retried on the next run after approval.
 
 ## Execution and recovery
 

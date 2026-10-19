@@ -10,7 +10,7 @@ const tool = z.enum(['chat_history', 'chat_read', 'chat_send', 'channel_list', '
     'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake', 'session_lurk',
     'file_reserve', 'file_renew', 'file_release', 'file_reservations']);
 const profile = z.object({
-    // gemini is accepted so the provider-terms rule can be checked; it isn't hosted yet (terms.ts)
+    // gemini runs only with protocol "acp" and an API key (terms.ts, acp/session.ts)
     adapter: z.enum(['codex', 'claude', 'gemini']), workdir: absolute, workdirAlias: z.string().min(1),
     executable, stateDir: absolute,
     sandbox: z.enum(['read-only', 'workspace-write']).default('workspace-write'),
@@ -28,6 +28,11 @@ const profile = z.object({
     allowSubscriptionAtOwnRisk: z.boolean().default(false),
     // Every wake waits for the owner to approve it on a card in the channel
     requireRunApproval: z.boolean().default(false),
+    // "acp": drive an Agent Client Protocol agent (gemini --acp, claude-code-acp, codex-acp) over
+    // JSON-RPC on its stdio instead of the CLI's own headless mode (acp/session.ts)
+    protocol: z.enum(['cli', 'acp']).default('cli'),
+    // Fixed local arguments for the ACP agent, e.g. ["--acp"]; Agora never supplies any
+    acpArgs: z.array(z.string().min(1).max(1000).regex(/^[^\r\n\0]*$/)).max(20).default([]),
 }).strict().superRefine((p, ctx) => {
     if (p.auth === 'api_key' && (!p.apiKeyEnv || !API_KEY_ENVS[p.adapter].includes(p.apiKeyEnv)))
         ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')} for ${p.adapter}` });
@@ -35,6 +40,11 @@ const profile = z.object({
         ctx.addIssue({ code: 'custom', message: 'apiKeyEnv is only used with auth "api_key"' });
     if (p.allowSubscriptionAtOwnRisk && (p.adapter !== 'gemini' || p.auth !== 'subscription'))
         ctx.addIssue({ code: 'custom', message: 'allowSubscriptionAtOwnRisk applies only to a gemini profile with auth "subscription"' });
+    if (p.protocol !== 'acp' && p.acpArgs.length) ctx.addIssue({ code: 'custom', message: 'acpArgs is only used with protocol "acp"' });
+    // Agora never hosts a Google account login, not even at the operator's own risk
+    if (p.adapter === 'gemini' && p.protocol === 'acp' && p.auth !== 'api_key')
+        ctx.addIssue({ code: 'custom', message: 'a hosted gemini profile must use auth "api_key" (GEMINI_API_KEY); Agora never runs Gemini on a Google account login' });
+    if (p.protocol === 'acp' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'ACP has no verified USD cap' });
     if (p.caps.maxTokens !== undefined) ctx.addIssue({ code: 'custom', message: 'Neither verified CLI supports a hard per-run token cap; omit maxTokens explicitly' });
     if (p.adapter === 'codex' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'Codex has no verified USD cap' });
 });

@@ -30,6 +30,18 @@ describe('run activity', () => {
     expect(screen.getByText('src/a.ts')).toBeInTheDocument();
     unmount(); expect(socket.off).toHaveBeenCalledWith('AgentSessionUpdate', handler);
   });
+  it('shows an ACP agent\'s live progress for the current run only', async () => {
+    const s = session(); post.mockResolvedValue({ sessions: [s] });
+    render(<RunActivity channelId="channel" />);
+    await screen.findByText(/claude is working/);
+    const handler = socket.on.mock.calls.find(c => c[0] === 'AgentRunProgress')![1];
+    act(() => handler({ channelId: 'channel', sessionId: 'session', runId: 'old-run', step: 'stale', toolCalls: 1, planDone: null, planTotal: null }));
+    expect(screen.queryByText(/stale/)).toBeNull();
+    act(() => handler({ channelId: 'other', sessionId: 'session', runId: 'run', step: 'elsewhere', toolCalls: 1, planDone: null, planTotal: null }));
+    expect(screen.queryByText(/elsewhere/)).toBeNull();
+    act(() => handler({ channelId: 'channel', sessionId: 'session', runId: 'run', step: 'Edit src/a.ts', toolCalls: 3, planDone: 1, planTotal: 2 }));
+    expect(screen.getByLabelText('claude progress')).toHaveTextContent('Edit src/a.ts · 3 tool calls · plan 1/2');
+  });
   it('shows a failed run and a budget pause', async () => {
     const s = session(); post.mockResolvedValue({ sessions: [{ ...s, run: { ...s.run, status: 'failed', error: 'cli_failed' } }, session({ id: 'paused', profile: 'codex', state: 'shelved', endReason: 'budget' })] });
     render(<RunActivity channelId="channel" />);

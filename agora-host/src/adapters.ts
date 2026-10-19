@@ -6,26 +6,33 @@ import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
-import { resolvePermissions } from './presets.js';
+import { CODEX_WORDS, resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { checkTerms, GEMINI_NOT_HOSTED, HostConfigError } from './terms.js';
+import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError } from './terms.js';
+import { probeAcp, SESSION_ID, type AcpPlan } from './acp/session.js';
+import { geminiPolicy } from './acp/permissions.js';
 
 export interface Launch {
     lurk?: boolean;
     workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
-    adapter: 'codex' | 'claude'; cleanup(): Promise<void>;
+    adapter: 'codex' | 'claude' | 'gemini'; cleanup(): Promise<void>;
     /** Codex's sandbox for this run, so denials can be read from its output. */
     sandbox?: 'read-only' | 'workspace-write';
     /** Preset names the claim used that this host doesn't define. */
     unknownPresets?: string[];
+    /** protocol "acp": one ACP session turn instead of the CLI's headless mode. */
+    acp?: AcpPlan;
 }
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
+const STATE_DIR_ENV = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' } as const;
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
 export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(source)) if (osKeys.has(key.toUpperCase()) && value !== undefined) env[key] = value;
-    if (profile.adapter !== 'gemini') env[profile.adapter === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = profile.stateDir;
+    // Each CLI keeps its settings and login in the profile's stateDir. For Gemini that also keeps
+    // the user's own ~/.gemini (and any Google login cached there) out of hosted runs.
+    env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
     // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md)
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
         const key = source[profile.apiKeyEnv];
@@ -34,6 +41,8 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     return env;
 }
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
+    // ACP: the protocol version is the gate, not the CLI's version string
+    if (profile.protocol === 'acp') return probeAcp({ executable: profile.executable, args: profile.acpArgs, cwd: profile.workdir, env: childEnv(profile) });
     if (profile.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
     const { stdout } = await promisify(execFile)(profile.executable, ['--version'], {
         env: childEnv(profile), cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096,
@@ -51,25 +60,45 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     checkTerms(local, claim);
     const token = config.botTokens[claim.profile.botId];
     if (!token) throw new Error('missing_bot_token');
-    const efforts = local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
+    const acp = local.protocol === 'acp';
+    // An ACP agent lists its own reasoning levels; acp/session.ts matches the effort against them
+    const efforts = acp ? null : local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
     const { model, effort } = claim.profile;
-    if (effort !== null && !efforts.includes(effort)) throw new Error('unsupported_effort');
-    if (claim.session.nativeSessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
+    if (effort !== null && efforts && !efforts.includes(effort)) throw new Error('unsupported_effort');
+    // ACP session IDs are the agent's own; the CLIs use UUIDs
+    const nativeId = acp ? SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
     const workspace = await ensureWorkspace(local, claim);
     const dir = await mkdtemp(join(local.stateDir, 'run-'));
-    const paths = ['mcp.json', 'mcp.toml', 'schema.json'].map(p => join(dir, p));
+    const paths = ['mcp.json', 'mcp.toml', 'schema.json', 'policy.toml'].map(p => join(dir, p));
     const cleanup = async () => {
         // Only remove these known files and the empty directory we created; no recursive deletion.
         await Promise.all(paths.map(p => unlink(p).catch(() => {})));
         await rmdir(dir).catch(() => {});
     };
     // Presets and allowed tools come with every claim (#73): no restart after an edit
-    const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, [...claim.profile.allowedTools, ...claim.run.grantedTools], config.presets);
+    const rules = [...claim.profile.allowedTools, ...claim.run.grantedTools];
+    const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, rules, config.presets);
     try {
         const env = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
         // Hosted runs are not bring-your-own sessions: no presence socket (agora-mcp src/socket.ts)
         const server = { command: config.mcp.executable, args: [config.mcp.entrypoint, '--no-presence'] };
+        if (acp) {
+            // The agent starts the Agora MCP server from session/new, so no MCP config is written
+            const acpRules = [...new Set([...perms.claude, ...local.approvedTools.map(t => `mcp__agora__${t}`), ...rules.filter(r => CODEX_WORDS.has(r))])];
+            const acpPlan: AcpPlan = {
+                prompt: wakePrompt(claim), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
+                mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
+                authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
+            };
+            let args = local.acpArgs;
+            const policy = local.adapter === 'gemini' ? geminiPolicy(acpRules) : '';
+            if (policy) { await writeFile(paths[3], policy, { mode: 0o600 }); args = [...args, '--policy', paths[3]]; }
+            return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: '', cleanup,
+                lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
+        }
+        if (local.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];

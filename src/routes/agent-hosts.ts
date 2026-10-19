@@ -58,7 +58,8 @@ const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
     botId: ID,
     hostId: ID,
-    adapter: { type: 'string', enum: ['codex', 'claude'] },
+    // gemini: hosted over ACP with an API key only (agora-host src/acp/)
+    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini'] },
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64 },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
     workdirAlias: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 64 },
@@ -465,12 +466,20 @@ export async function agentHostRoutes(app: FastifyInstance) {
 
     // POST /agent-hosts/@me/runs/:runId/heartbeat → 200 { cancel, leaseUntil? | reason? }
     app.post('/agent-hosts/@me/runs/:runId/heartbeat', {
-        schema: { body: { type: 'object', required: ['claimToken'], properties: { ...claimBody, tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 } } } },
+        schema: { body: { type: 'object', required: ['claimToken'], properties: { ...claimBody, tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 },
+            // What an ACP run is doing now (agora-host src/acp/session.ts); relayed live, not stored
+            progress: { type: 'object', additionalProperties: false, required: ['step', 'toolCalls'], properties: {
+                step: { type: ['string', 'null'], maxLength: 200 },
+                toolCalls: { type: 'integer', minimum: 0, maximum: 1000000 },
+                planDone: { type: ['integer', 'null'], minimum: 0, maximum: 10000 },
+                planTotal: { type: ['integer', 'null'], minimum: 0, maximum: 10000 },
+            } } } } },
     }, async (request, reply) => {
         await releaseRequestClient(request);
         const notices: Notice[] = [];
         const { runId } = request.params as any;
-        const r = await heartbeat(app.db, request.agentHost!, runId, (request.body as any).claimToken, notices, (request.body as any).tokensUsed);
+        const body = request.body as any;
+        const r = await heartbeat(app.db, request.agentHost!, runId, body.claimToken, notices, body.tokensUsed, body.progress);
         queueNotices(request, notices);
         return reply.status(r.status).send(r.body);
     });

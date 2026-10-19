@@ -1,15 +1,41 @@
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parseOutput, type Launch } from './adapters.js';
-import type { Result } from './types.js';
+import type { Progress, Result } from './types.js';
+import { startAcp } from './acp/session.js';
 
-export interface RunningChild { result: Promise<Result>; kill(): Promise<void>; tokensUsed?(): number | null }
+export interface RunningChild { result: Promise<Result>; kill(): Promise<void>; tokensUsed?(): number | null; progress?(): Progress | null }
 export interface Runner { start(launch: Launch): RunningChild }
+
+/** Stop a child and all its descendants, then wait for it to close. */
+export async function killTree(child: ChildProcess, isClosed: () => boolean, closedEvent: Promise<void>): Promise<void> {
+    try {
+        if (process.platform === 'win32') {
+            await promisify(execFile)(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
+                ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000 });
+        } else process.kill(-child.pid!, 'SIGKILL');
+    } catch {
+        if (!isClosed()) {
+            child.kill('SIGKILL');
+            // Root-only kill cannot establish that its descendants are gone.
+            throw new Error('process_tree_kill_failed');
+        }
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+        await Promise.race([closedEvent, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('process_tree_close_timeout')), 5000); })]);
+    } finally { clearTimeout(timer!); }
+}
+
 export class ProcessRunner implements Runner {
     start(launch: Launch): RunningChild {
+        // protocol "acp": a JSON-RPC conversation with the agent, not one headless CLI turn
+        if (launch.acp) return startAcp(launch as Launch & { acp: NonNullable<Launch['acp']> });
+        const adapter = launch.adapter;
+        if (adapter === 'gemini') throw new Error('gemini_requires_acp');
         const child = spawn(launch.executable, launch.args, {
             cwd: launch.cwd, env: launch.env, shell: false, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
@@ -36,7 +62,7 @@ export class ProcessRunner implements Runner {
                         try {
                             await killed;
                             resolve(overflow ? { success: false, nativeSessionId: null, summary: null, tokensUsed: null, error: 'output_limit' }
-                                : parseOutput(launch.adapter, stdout, code, launch.sandbox, launch.lurk));
+                                : parseOutput(adapter, stdout, code, launch.sandbox, launch.lurk));
                         } catch { reject(new Error('process_tree_kill_failed')); }
                         finally { stdout = ''; }
                     })();
@@ -45,29 +71,11 @@ export class ProcessRunner implements Runner {
         });
         const kill = (): Promise<void> => {
             if (closed || !child.pid) return Promise.resolve();
-            if (killed) return killed;
-            killed = (async () => {
-                try {
-                    if (process.platform === 'win32') {
-                        await promisify(execFile)(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
-                            ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000 });
-                    } else process.kill(-child.pid!, 'SIGKILL');
-                } catch {
-                    if (!closed) {
-                        child.kill('SIGKILL');
-                        // Root-only kill cannot establish that its descendants are gone.
-                        throw new Error('process_tree_kill_failed');
-                    }
-                }
-                let timer: ReturnType<typeof setTimeout>;
-                try {
-                    await Promise.race([closedEvent, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('process_tree_close_timeout')), 5000); })]);
-                } finally { clearTimeout(timer!); }
-            })();
+            killed ??= killTree(child, () => closed, closedEvent);
             return killed;
         };
         child.stdin.end(launch.stdin);
-        return { result, kill, tokensUsed: () => parseOutput(launch.adapter, stdout.slice(0, stdout.lastIndexOf('\n') + 1), null).tokensUsed };
+        return { result, kill, tokensUsed: () => parseOutput(adapter, stdout.slice(0, stdout.lastIndexOf('\n') + 1), null).tokensUsed };
     }
 }
 

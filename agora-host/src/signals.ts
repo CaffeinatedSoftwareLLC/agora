@@ -16,7 +16,7 @@ import { TOOL_RULE, type RateLimit } from './types.js';
 export interface Signals { deniedTools: string[]; rateLimit: RateLimit | null }
 
 const MAX_DENIED = 10;
-const RATE_LIMIT_TEXT = /rate.?limit|usage limit|limit reached|hit your (usage )?limit|too many requests|\b429\b/i;
+export const RATE_LIMIT_TEXT = /rate.?limit|usage limit|limit reached|hit your (usage )?limit|too many requests|\b429\b/i;
 
 /** The rule that would allow a denied tool call, or null when no safe rule exists. */
 export function ruleFor(toolName: unknown, input: unknown): string | null {
