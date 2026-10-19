@@ -40,9 +40,14 @@ async function siwcToken(config: Config, profile: string, force = false): Promis
 }
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
-export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+/** Only the variables the OS needs to find programs and home/temp directories. */
+export function osEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(source)) if (osKeys.has(key.toUpperCase()) && value !== undefined) env[key] = value;
+    return env;
+}
+export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    const env = osEnv(source);
     if (profile.adapter !== 'gemini') env[profile.adapter === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = profile.stateDir;
     // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md)
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
@@ -62,7 +67,8 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
     return version[0];
 }
 
-export async function prepare(config: Config, claim: Claim): Promise<Launch> {
+/** `prompt` replaces the wake prompt: a verify fix turn resuming the same conversation (verify.ts). */
+export async function prepare(config: Config, claim: Claim, prompt?: string): Promise<Launch> {
     const local = config.profiles[claim.profile.name];
     if (!local || local.adapter !== claim.profile.adapter || local.workdirAlias !== claim.profile.workdirAlias) throw new Error('unmapped_profile');
     // Subscription profiles run only for the owner, siwc ones for their plan owner; run approval when required (terms.ts)
@@ -142,7 +148,7 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup, lurk: isLurkRun(claim),
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }

@@ -14,6 +14,7 @@ export function claim(): Claim {
         profile: { id: id(4), name: 'builder', botId: id(5), adapter: 'codex', model: 'gpt-6.1-sol', effort: 'high', workdirAlias: 'agora', toolPresets: [], allowedTools: [], authMode: 'subscription', runApproval: false },
         inbox: [{ messageId: id(6), threadId: id(7), reason: 'handoff', authorId: id(8), authorName: 'Claude',
             authorBot: true, authority: null, content: 'Review the changes.', createdAt: '2026-10-17T21:00:00.000Z' }],
+        project: null, verify: null,
     };
 }
 export function config(dir = process.cwd()): Config {

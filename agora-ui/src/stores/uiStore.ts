@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
 
-export type AuxView = 'thread' | 'files' | 'members';
+export type AuxView = 'thread' | 'files' | 'members' | 'project';
 export interface Overlay {
   kind: 'session-sheet' | 'message-actions' | 'modal';
   id: string;

@@ -22,6 +22,8 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/threads',
     // Who may give agents instructions in the channel
     'GET /channels/:id/directors',
+    // The channel's project context (agora-mcp's project_context); changing it is for people only
+    'GET /channels/:id/project',
     // Agent sessions: the route itself requires can_direct for anything but listing
     'POST /channels/:id/agent-commands',
     // File search returns names, tags and scores, never file content

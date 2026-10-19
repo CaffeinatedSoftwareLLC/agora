@@ -2,13 +2,14 @@ import { readFile, access, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import { presetSchema } from './presets.js';
+import { VERIFY_COMMAND } from './verify.js';
 import { API_KEY_ENVS, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError } from './terms.js';
 
 const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
 const tool = z.enum(['chat_history', 'chat_read', 'chat_send', 'channel_list', 'thread_start', 'thread_list',
     'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake', 'session_lurk',
-    'file_reserve', 'file_renew', 'file_release', 'file_reservations']);
+    'file_reserve', 'file_renew', 'file_release', 'file_reservations', 'project_context']);
 const profile = z.object({
     // gemini is accepted so the provider-terms rule can be checked; it isn't hosted yet (terms.ts)
     adapter: z.enum(['codex', 'claude', 'gemini']), workdir: absolute, workdirAlias: z.string().min(1),
@@ -29,6 +30,12 @@ const profile = z.object({
     allowSubscriptionAtOwnRisk: z.boolean().default(false),
     // Every wake waits for the owner to approve it on a card in the channel
     requireRunApproval: z.boolean().default(false),
+    // Verify before yield (verify.ts): the exact commands this host may run in a session
+    // worktree when a channel's owner asks for one. Without this, no verify command runs.
+    verify: z.object({
+        commands: z.array(z.string().max(300).regex(VERIFY_COMMAND, 'verify commands are plain words separated by single spaces')).max(20),
+        timeoutSeconds: z.number().int().min(10).max(3600).default(600),
+    }).strict().optional(),
 }).strict().superRefine((p, ctx) => {
     if (p.auth === 'api_key' && (!p.apiKeyEnv || !API_KEY_ENVS[p.adapter].includes(p.apiKeyEnv)))
         ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')} for ${p.adapter}` });

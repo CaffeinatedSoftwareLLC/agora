@@ -401,6 +401,31 @@ export const fileSearchApi = {
     api.get<{ id: string; name: string }[]>(`/servers/${serverId}/file-tags`),
 };
 
+/** A channel's project context and verify command (docs/project-context.md). */
+export interface ChannelProject {
+  channelId: string;
+  instructions: string;
+  version: number;
+  files: { id: string; name: string; mime: string; size: number }[];
+  verify: { command: string; maxRetries: number } | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  /** The viewer may change instructions and files (the owner and directors). */
+  canEdit: boolean;
+  /** The viewer may set the verify command (the server owner). */
+  canEditVerify: boolean;
+}
+
+export const projectApi = {
+  get: (channelId: string) => api.get<ChannelProject>(`/channels/${channelId}/project`),
+  /** Either field may be left out; fileIds replaces the pinned list, in order. */
+  update: (channelId: string, change: { instructions?: string; fileIds?: string[] }) =>
+    api.put<ChannelProject>(`/channels/${channelId}/project`, change),
+  /** command null turns verify off. */
+  setVerify: (channelId: string, command: string | null, maxRetries?: number) =>
+    api.put<ChannelProject>(`/channels/${channelId}/project/verify`, { command, ...(maxRetries === undefined ? {} : { maxRetries }) }),
+};
+
 export const aiApi = {
   listTags: (serverId: string) =>
     api.get<{ tags: AIFileTag[]; max: number; queue: AITaggingQueue }>(`/servers/${serverId}/ai/tags`),
