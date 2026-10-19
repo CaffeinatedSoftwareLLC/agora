@@ -8,6 +8,7 @@ import { FileAttachment } from './FileAttachment';
 import { ThreadIndicator } from './ThreadIndicator';
 import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
+import { ToolApprovalCard } from '../agents/ToolApprovalCard';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
 import { usePalette } from '../../theme';
@@ -75,6 +76,11 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   }
   if (message.systemEvent?.startsWith('runtime_')) {
     return <RuntimeCard message={message} />;
+  }
+
+  // A hosted agent was denied a tool: approve once / always / deny (#73)
+  if (message.systemEvent === 'agent_tool_approval') {
+    return <ToolApprovalCard message={message} />;
   }
 
   // Agent session notice (started / shelved / ended): left-aligned with the message column, console icon

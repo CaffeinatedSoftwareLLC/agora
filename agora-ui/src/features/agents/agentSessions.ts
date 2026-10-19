@@ -31,6 +31,8 @@ export interface AgentSession {
   lastActiveAt: string;
   /** A host has claimed a run for this session and is working now. */
   running?: boolean;
+  /** The agent hit its rate limit and sleeps until then; its messages are held (#87). */
+  sleepingUntil?: string | null;
   tokenBudget?: number;
   run?: AgentRun | null;
   recentRuns?: AgentRun[];
@@ -48,7 +50,8 @@ export type CommandBody =
   | { command: 'end'; profile: string }
   | { command: 'sessions' }
   | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number }
-  | { command: 'budget'; sessionId: string; tokenBudget: number };
+  | { command: 'budget'; sessionId: string; tokenBudget: number }
+  | { command: 'wake'; sessionId: string };
 
 export interface CommandResponse {
   action?: string;
@@ -63,6 +66,7 @@ export const ERRORS: Record<string, string> = {
   no_live_session: 'That agent has no live session here.',
   not_resumable: 'Only a shelved session from this channel can be resumed.',
   session_live: 'That agent already has a live session here.',
+  not_sleeping: 'That session is not sleeping.',
 };
 
 export const NO_AUTHORITY = 'Only the owner and directors can start, end or resume agent sessions.';
@@ -103,7 +107,7 @@ function trim1(x: number): string {
   return (Math.round(x * 10) / 10).toFixed(1).replace(/\.0$/, '');
 }
 
-export type ChipState = 'working' | 'idle' | 'shelved' | 'ended';
+export type ChipState = 'working' | 'idle' | 'sleeping' | 'shelved' | 'ended';
 
 export interface AgentChip {
   profile: string;
@@ -117,16 +121,22 @@ export interface AgentChip {
 export const STATE_LABEL: Record<ChipState, string> = {
   working: 'Live and working',
   idle: 'Live and idle',
+  sleeping: 'Sleeping (rate limited)',
   shelved: 'Shelved',
   ended: 'Ended',
 };
 
-export function sessionState(s: AgentSession): ChipState {
-  if (s.state === 'live') return s.running ? 'working' : 'idle';
+export function sessionState(s: AgentSession, now = Date.now()): ChipState {
+  if (s.state === 'live') return s.running ? 'working' : isSleeping(s, now) ? 'sleeping' : 'idle';
   return s.state;
 }
 
-const RANK: Record<ChipState, number> = { working: 0, idle: 1, shelved: 2, ended: 3 };
+/** Live and sleeping through a rate limit that hasn't reset yet. */
+export function isSleeping(s: AgentSession, now = Date.now()): boolean {
+  return s.state === 'live' && !!s.sleepingUntil && Date.parse(s.sleepingUntil) > now;
+}
+
+const RANK: Record<ChipState, number> = { working: 0, idle: 1, sleeping: 2, shelved: 3, ended: 4 };
 
 function byRecent(a: AgentSession, b: AgentSession): number {
   return (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
@@ -160,6 +170,7 @@ const ACTION_TEXT: Record<string, string> = {
   resumed: 'Session resumed.',
   kept: 'Kept the live session.',
   ended: 'Session ended.',
+  woken: 'Woken. Held messages go out on its next run.',
 };
 
 export function actionText(action: string | undefined): string {
@@ -169,4 +180,18 @@ export function actionText(action: string | undefined): string {
 export function elapsedTime(startedAt: string, now: number): string {
   const seconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000)) || 0;
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+const DECISION_ERRORS: Record<string, string> = {
+  already_decided: 'Someone already answered this.',
+  expired: 'This request expired. Wake the agent again to retry.',
+  cannot_direct: 'Only the owner and directors can approve agent tools.',
+};
+
+/** A failed tool-approval decision (ToolApprovalCard) as a sentence. */
+export function decisionError(err: unknown): string {
+  if (!(err instanceof ApiError)) return 'Request failed';
+  if (DECISION_ERRORS[err.code]) return DECISION_ERRORS[err.code];
+  if (err.status === 403) return err.code.startsWith('Only') ? err.code : 'You cannot approve agent tools here.';
+  return err.code;
 }

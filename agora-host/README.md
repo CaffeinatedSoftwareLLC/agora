@@ -122,8 +122,52 @@ this list. Add orchestrator tools only after the owner grants the bot authority.
 Codex uses `approval_policy=never` with `read-only` or `workspace-write`; Claude
 uses `manual` permissions with `--permission-prompts none`. Neither adapter uses
 sandbox or permission bypass flags. Any other action that needs approval fails
-normally. Claude filesystem edits may require operator-configured normal local
-permission rules; the host does not auto-approve them.
+normally, and is reported back to Agora as an approval request (below).
+
+## Tool presets and approvals (#73)
+
+The owner picks tool presets per agent in Settings → Agents. Every claim carries
+the profile's presets, its "always allowed" rules and any rules approved once for
+this run, so an edit applies from the next wake without touching this config or
+restarting the host. The host translates them to each CLI's own mechanism:
+
+| Preset | Claude (`--allowedTools`) | Codex | Gemini / agy (not hosted; settings.json) |
+| --- | --- | --- | --- |
+| `readonly` | `Read`, `Glob`, `Grep`, `Bash(git status/diff/log/show:*)` | `-s read-only` | read tools only |
+| `dev` | read tools, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash(…:*)` and `PowerShell(…:*)` for git, gh, npm, npx, node | `-s workspace-write`, `sandbox_workspace_write.network_access=true` | shell allow rules for git, gh, npm |
+| `research` | `WebSearch`, `WebFetch` | `web_search="live"` | `search_web`, `read_url_content`, `read_url(*)` |
+
+- Without any preset the profile's local `sandbox` and `approvedTools` decide, as
+  before. With presets, Codex's sandbox follows them (`read-only` unless one
+  grants `workspace-write`), so `research` alone runs Codex read-only.
+- Redefine a preset or add one with a top-level `presets` object, e.g.
+  `"presets": { "dev": { "claude": ["Bash(cargo:*)"], "codex": { "sandbox": "workspace-write" } } }`.
+  A preset name the host doesn't know is skipped and logged as `unknown_tool_preset`.
+- Rules use Claude's permission-rule syntax without commas. Codex `exec` has no
+  per-command allow list, so for Codex only `write`, `network`, `web_search` and
+  `mcp__agora__<tool>` mean anything.
+- Gemini (agy) isn't a hosted adapter. In headless mode one denied host ends the
+  whole run, and `read_url_content` is checked as `read_url(<host>)`, so give a
+  research agent `search_web`, `read_url_content` and `read_url(*)` in
+  `~/.gemini/antigravity-cli/settings.json`.
+
+**Denied tools.** Claude Code reports each denied call in the result's
+`permission_denials`; the host turns it into a narrow rule (`Bash(gh:*)` for a
+shell command, `WebFetch(domain:host)` for a fetch, else the tool name) and sends
+it with the run's report. Agora posts an approval card: the owner or a director
+can approve it once (granted to the session's next run, and the agent is woken to
+retry) and the owner can always allow it (added to the profile). Codex gives no
+denial signal: the host guesses `write` (read-only sandbox, "access denied"
+output) and `network` (DNS/connect errors) from failed commands' output, and
+misses denials that fail silently. Codex's Windows sandbox may block network even
+with `network_access=true` (seen with `unelevated` on 0.163).
+
+**Rate limits (#87).** A Claude `rate_limit_event` with status `rejected` (its
+`resetsAt` gives the reset time), a 429, or a Codex `turn.failed`/`error` about a
+usage limit ("try again in 2 hours", "try again at 3:45 PM") is reported as
+`rate_limited`. The session sleeps until the reset (30 minutes if unknown, at most
+24 hours), its messages are held, and the first claim after it delivers them in
+one batch. The rate-limited attempt costs neither a retry nor a wake.
 
 Neither tested CLI advertises a hard per-run token cap. Omitting `maxTokens`
 explicitly selects timeout + server session accounting, with a startup warning.

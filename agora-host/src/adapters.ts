@@ -6,11 +6,17 @@ import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
+import { resolvePermissions } from './presets.js';
+import { detectSignals } from './signals.js';
 
 export interface Launch {
     workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
     adapter: 'codex' | 'claude'; cleanup(): Promise<void>;
+    /** Codex's sandbox for this run, so denials can be read from its output. */
+    sandbox?: 'read-only' | 'workspace-write';
+    /** Preset names the claim used that this host doesn't define. */
+    unknownPresets?: string[];
 }
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
@@ -48,6 +54,8 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
         await Promise.all(paths.map(p => unlink(p).catch(() => {})));
         await rmdir(dir).catch(() => {});
     };
+    // Presets and allowed tools come with every claim (#73): no restart after an edit
+    const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, [...claim.profile.allowedTools, ...claim.run.grantedTools], config.presets);
     try {
         const env = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
         const server = { command: config.mcp.executable, args: [config.mcp.entrypoint] };
@@ -57,27 +65,31 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
         if (local.adapter === 'codex') {
             // A top-level CLI override replaces the MCP map: inherited servers/tokens are not passed through.
             // approval_mode "approve" pre-approves a listed tool; Codex 0.163 accepts auto|prompt|writes|approve.
-            const tools = local.approvedTools.map(t => `${t}={approval_mode="approve"}`).join(',');
+            const tools = [...new Set([...local.approvedTools, ...perms.codex.mcpTools])].map(t => `${t}={approval_mode="approve"}`).join(',');
             const mcp = `{agora={command=${JSON.stringify(server.command)},args=${JSON.stringify(server.args)},env_vars=["AGORA_INSTANCE","AGORA_BOT_TOKEN","AGORA_DEFAULT_CHANNEL"],required=true,tools={${tools}}}}`;
             await writeFile(paths[1], `mcp_servers=${mcp}\n`, { mode: 0o600 });
-            args = ['exec', '--ignore-user-config', '-s', local.sandbox,
+            args = ['exec', '--ignore-user-config', '-s', perms.codex.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
+                ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
                 ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : []),
                 ...(model !== null ? ['-m', model] : []),
                 ...(effort !== null ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
                 ...(claim.session.nativeSessionId ? ['resume', claim.session.nativeSessionId] : []),
                 '--json', '--output-schema', paths[2], '-'];
         } else {
+            const allowed = [...new Set([...local.approvedTools.map(t => `mcp__agora__${t}`), ...perms.claude])];
             args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'manual', '--permission-prompts', 'none',
                 '--strict-mcp-config', '--mcp-config', paths[0],
                 ...(model !== null ? ['--model', model] : []),
                 ...(effort !== null ? ['--effort', effort] : []),
                 '--json-schema', JSON.stringify(resultSchema),
-                ...(local.approvedTools.length ? ['--allowedTools', local.approvedTools.map(t => `mcp__agora__${t}`).join(',')] : []),
+                ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup };
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup,
+            ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }
 
@@ -96,7 +108,7 @@ function summary(value: unknown): string | null {
     return value && typeof value === 'object' && typeof (value as { summary?: unknown }).summary === 'string'
         ? (value as { summary: string }).summary.slice(0, 16000) : null;
 }
-export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCode: number | null): Result {
+export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCode: number | null, sandbox?: string): Result {
     const changedPaths = new Set<string>();
     let nativeSessionId: string | null = null; let tokensUsed: number | null = null; let final: string | null = null; let success = false;
     try {
@@ -138,5 +150,8 @@ export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCod
         }
     } catch { success = false; }
     success &&= exitCode === 0;
-    return { success, nativeSessionId, tokensUsed, summary: final, changedPaths: [...changedPaths], ...(success ? {} : { error: 'cli_failed_or_invalid_output' }) };
+    // Only for a finished process; heartbeats parse partial output just for usage
+    const { deniedTools, rateLimit } = exitCode === null ? { deniedTools: [], rateLimit: null } : detectSignals(adapter, stdout, !success, sandbox);
+    return { success, nativeSessionId, tokensUsed, summary: final, changedPaths: [...changedPaths], ...(success ? {} : { error: 'cli_failed_or_invalid_output' }),
+        ...(deniedTools.length ? { deniedTools } : {}), ...(rateLimit ? { rateLimit } : {}) };
 }

@@ -1,6 +1,7 @@
 import { readFile, access, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
+import { presetSchema } from './presets.js';
 
 const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
@@ -27,6 +28,8 @@ export const configSchema = z.object({
     mcp: z.object({ executable, entrypoint: absolute }).strict(),
     profiles: z.record(z.string().min(1), profile), botTokens: z.record(z.string(), z.string().regex(/^bot_[^\s]+$/)),
     maxConcurrent: z.number().int().min(1).max(16).default(2),
+    // Redefine a built-in tool preset (readonly, dev, research) or add one (#73)
+    presets: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), presetSchema).default({}),
 }).strict();
 export type Config = z.infer<typeof configSchema>;
 export type LocalProfile = Config['profiles'][string];

@@ -40,6 +40,8 @@ export interface AgentSession {
     wakesUsed: number;
     tokensUsed: number;
     lastActiveAt: string;
+    /** Sleeping through a rate limit until then; messages for it are held. */
+    sleepingUntil?: string | null;
 }
 
 export interface AgentCommandResult {

@@ -15,9 +15,19 @@ interface Profile {
   id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
+  toolPresets?: string[]; allowedTools?: string[];
 }
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh'];
+
+/** Built-in tool presets (agora-host/src/presets.ts); the host config can redefine them. */
+const PRESETS: { name: string; label: string; detail: string }[] = [
+  { name: 'readonly', label: 'Read-only', detail: 'read files and git history' },
+  { name: 'dev', label: 'Dev', detail: 'edit files, git, gh, npm' },
+  { name: 'research', label: 'Research', detail: 'web search and fetch' },
+];
+/** Same rule shape the server accepts: a Claude permission rule or a Codex word (write, network, web_search). */
+const TOOL_RULE = /^[A-Za-z][A-Za-z0-9_]{0,99}(\([^(),\r\n]{1,200}\))?$/;
 const input = 'min-h-11 md:min-h-9 bg-bg border border-border rounded px-3 py-1.5 text-sm text-text placeholder:text-text-muted/70 focus:outline-none focus:ring-2 focus:ring-primary';
 
 function errorText(err: unknown): string {
@@ -252,6 +262,67 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
         </select>
         {dirty && <Button variant="secondary" onClick={() => void save()}>Save</Button>}
       </div>
+      <ToolPermissions serverId={serverId} profile={profile} onChange={onChange} onError={onError} />
     </li>
+  );
+}
+
+/**
+ * Tool presets and always-allowed tools (#73). Saved on the server; the host reads them at
+ * its next claim, so no host restart. Approving "always" on a tool card adds to the list.
+ */
+function ToolPermissions({ serverId, profile, onChange, onError }: {
+  serverId: string; profile: Profile; onChange: () => void; onError: (e: string) => void;
+}) {
+  const presets = profile.toolPresets ?? [];
+  const allowed = profile.allowedTools ?? [];
+  const [rule, setRule] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = TOOL_RULE.test(rule.trim()) && !allowed.includes(rule.trim());
+
+  const patch = async (body: { toolPresets?: string[]; allowedTools?: string[] }) => {
+    setBusy(true);
+    try { await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, body); onChange(); }
+    catch (err) { onError(errorText(err)); }
+    finally { setBusy(false); }
+  };
+  const toggle = (name: string) => void patch({ toolPresets: presets.includes(name) ? presets.filter(p => p !== name) : [...presets, name] });
+
+  return (
+    <div className="mt-3 border-t border-border pt-2">
+      <div className="mb-1 text-xs font-semibold text-text-muted">Tools</div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1" role="group" aria-label={`Tool presets for ${profile.name}`}>
+        {PRESETS.map(p => (
+          <label key={p.name} className="flex min-h-11 md:min-h-8 items-center gap-2 text-sm text-text">
+            <input type="checkbox" checked={presets.includes(p.name)} disabled={busy} onChange={() => toggle(p.name)} />
+            {p.label} <span className="text-xs text-text-muted">{p.detail}</span>
+          </label>
+        ))}
+        {presets.filter(n => !PRESETS.some(p => p.name === n)).map(n => (
+          <label key={n} className="flex min-h-11 md:min-h-8 items-center gap-2 text-sm text-text">
+            <input type="checkbox" checked disabled={busy} onChange={() => toggle(n)} /> {n} <span className="text-xs text-text-muted">from host config</span>
+          </label>
+        ))}
+      </div>
+      <p className="mt-1 text-xs text-text-muted">
+        {presets.length === 0 ? 'No preset: the host config alone decides.' : 'Changes apply from the next wake; no host restart.'}
+      </p>
+      {allowed.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1" aria-label={`Always allowed tools for ${profile.name}`}>
+          {allowed.map(t => (
+            <li key={t} className="flex items-center gap-1 rounded border border-border bg-bg px-2 font-mono text-xs text-text">
+              <span className="break-all">{t}</span>
+              <button className="min-h-11 min-w-11 md:min-h-7 md:min-w-7 text-danger" disabled={busy} aria-label={`Remove ${t}`}
+                onClick={() => void patch({ allowedTools: allowed.filter(a => a !== t) })}>×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-2 flex items-center gap-2">
+        <input className={`${input} flex-1 font-mono`} value={rule} placeholder="Always allow, e.g. Bash(cargo:*)" maxLength={310}
+          aria-label={`Add an always-allowed tool for ${profile.name}`} onChange={e => setRule(e.target.value)} />
+        <Button variant="secondary" disabled={!valid || busy} onClick={() => { const t = rule.trim(); setRule(''); void patch({ allowedTools: [...allowed, t] }); }}>Add</Button>
+      </div>
+    </div>
   );
 }

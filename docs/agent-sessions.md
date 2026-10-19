@@ -66,6 +66,19 @@ Then talk to it: `@codex look at the failing test in auth.spec.ts`. With only on
 
 - Each profile has a **wake budget** (default 50) and a **token budget** (default 2,000,000) per session, and a run timeout (default 15 minutes). When a session runs out, it is shelved with a notice; raise the budget and `/resume` it.
 - A failed wake is retried up to 3 times with the same messages; then the channel gets a notice.
+- When an agent's CLI hits its rate limit, the session **sleeps** until the limit resets (a notice says how long; the chip shows *Sleeping*). Messages addressed to it are held and delivered together in one turn when it wakes. Other live sessions of the same agent share its CLI login and sleep too. *Wake now* in its session sheet wakes it early.
+
+## Tools and approvals
+
+Settings → Agents → each agent → **Tools**: pick presets (*Read-only*, *Dev* for editing with git, gh and npm, *Research* for web search and fetch) and keep a list of tools that are always allowed. The host reads them at every wake, so there is nothing to edit on the PC and no restart. What each preset means per CLI is in [agora-host/README.md](../agora-host/README.md#tool-presets-and-approvals-73).
+
+When a run is denied a tool, the channel gets a **Tool request** card, also on the phone:
+
+- **Approve once**: the owner or a director. The agent's next run may use the tool, and the agent is woken to retry.
+- **Always allow**: the owner only. The tool is added to the agent's always-allowed list.
+- **Deny**: the owner or a director. Cards expire after 24 hours.
+
+Claude Code reports denials exactly. Codex doesn't, so its denials are guessed from command output and some go unnoticed.
 - Delivery is at least once. After a crash the agent may get the same messages again; it passes a `client_key` with each post so repeats don't post twice, as long as it follows the instruction.
 
 ## Safety

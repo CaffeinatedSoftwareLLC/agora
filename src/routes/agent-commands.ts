@@ -25,7 +25,7 @@ function sessionJson(r: any) {
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
         workspaceId: r.workspace_id,
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
-        running: !!r.running, tokenBudget: Number(r.effective_token_budget), wakeBudget: r.wake_budget, run: r.run ?? null, recentRuns: r.recent_runs ?? [],
+        running: !!r.running, sleepingUntil: r.sleeping_until ?? null, tokenBudget: Number(r.effective_token_budget), wakeBudget: r.wake_budget, run: r.run ?? null, recentRuns: r.recent_runs ?? [],
     };
 }
 
@@ -103,7 +103,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 required: ['command'],
                 additionalProperties: false,
                 properties: {
-                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget'] },
+                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget', 'wake'] },
                     profile: { type: 'string', minLength: 1, maxLength: 32 },
                     sessionId: { type: 'string', minLength: 26, maxLength: 26 },
                     onLive: { type: 'string', enum: ['ask', 'shelve', 'keep'] },
@@ -136,7 +136,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
         if ((command === 'start' || command === 'end') && !profileName) return reply.status(400).send({ error: 'profile is required' });
-        if ((command === 'resume' || command === 'budget') && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });
+        if ((command === 'resume' || command === 'budget' || command === 'wake') && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });
 
         if ((command === 'budget' || tokenBudget !== undefined) &&
             (request.isBot || !await isServerOwner(db, (await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId])).rows[0].server_id.trim(), userId))) {
@@ -153,6 +153,16 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                     notices.push(await sessionUpdate(db, sessionId, true));
                     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
                     return { status: 200, body: { action: 'budget_updated', session: sessionJson(row.rows[0]) } };
+                }
+                if (command === 'wake') {
+                    // Wake a session sleeping through a rate limit now; its next claim delivers what was held (#87)
+                    const woken = await db.query(`UPDATE agent_sessions SET sleeping_until = NOW()
+                        WHERE id = $1 AND channel_id = $2 AND state = 'live' AND sleeping_until > NOW() RETURNING id`, [sessionId, channelId]);
+                    if (!woken.rows.length) throw new CommandError(409, { error: 'not_sleeping' });
+                    notices.push(await sessionUpdate(db, sessionId, false));
+                    notices.push(await postNotice(db, channelId, `${who} woke session ${sessionId} early.`));
+                    const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
+                    return { status: 200, body: { action: 'woken', session: sessionJson(row.rows[0]) } };
                 }
                 if (command === 'end') return endSession(db, channelId, profileName, who, notices);
                 if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, who, notices, tokenBudget);
