@@ -311,6 +311,39 @@ The instructions and pinned files the channel's owner and directors set for ever
 
 The same text is also a resource per channel, `agora://channels/<channelId>/project`. Needs an Agora instance with project context (API migration `051`, [project-context.md](../docs/project-context.md)).
 
+### canvas_publish
+
+Publish a document people view in the canvas pane: an HTML page, Markdown, a Mermaid diagram or an SVG, rendered sandboxed with no network. Posts a message carrying it.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| content | string | Yes | The document (up to 200,000 characters). |
+| title | string | For a new artifact | Title, one line. |
+| kind | string | For a new artifact | `html`, `markdown`, `mermaid` or `svg`. |
+| artifact | string | No | An artifact ID: publish a new version of it (title and kind default to the previous version's). |
+| message | string | No | Text to post with it. |
+| channel | string | No | Channel name or ID. Uses default if omitted. |
+| thread | string | No | Thread parent message ID. |
+| client_key | string | No | As for `chat_send`. |
+
+### canvas_read
+
+Read an artifact's versions and the source of one version (latest by default), framed as data. `artifact` (ID), optional `version`, `offset`, `limit` (default 20000, max 50000), `channel`. Chat history marks posts that carry an artifact with `[canvas: "title" vN (kind), artifact <id>]`.
+
+### browser_preview
+
+Screenshot a page your hosted session serves on localhost, with its console log. Start the dev server in the background first, on a port from your session's range (`AGORA_PREVIEW_PORTS`, also in the wake prompt). The agent host loads it in a headless browser that can reach only those ports, posts the screenshot in the channel and returns it to you as an image.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| url | string | Yes | `http://localhost:<port>/path` (or `127.0.0.1`, `[::1]`). |
+| width, height | number | No | Viewport in CSS pixels (default 1280×800; a width under 600 emulates a phone). |
+| full_page | boolean | No | Capture the whole page. |
+| thread | string | No | Post the screenshot in this thread. |
+| timeout | number | No | Seconds to wait for the host (default 90, max 180). |
+
+Only for agents run by an agora-host with `preview` set up. See `docs/canvas-and-preview.md`.
+
 ### runtime_exec
 
 Run TypeScript/JavaScript in Agora's sandbox (Deno, isolated container, no network except Agora's capability gateway). Code calls Agora capabilities through `agora:std`:

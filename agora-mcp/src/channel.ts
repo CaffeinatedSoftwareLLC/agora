@@ -75,7 +75,9 @@ export function formatChannelEvent(m: ChannelMessage, channelName: string | unde
     };
     if (m.authorBot) meta.author_bot = 'true';
     if (m.threadId) meta.thread_id = m.threadId.trim();
-    return { content: strip(m.content ?? ''), meta };
+    if (m.artifact) meta.artifact_id = m.artifact.id.trim();
+    const canvas = m.artifact ? `\n[canvas: "${oneLine(m.artifact.title)}" v${m.artifact.version} (${m.artifact.kind}), artifact ${m.artifact.id}; read it with canvas_read]` : '';
+    return { content: strip(m.content ?? '') + canvas, meta };
 }
 
 export function channelInstructions(auth: AuthMode): string {

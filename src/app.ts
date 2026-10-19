@@ -33,6 +33,8 @@ import { permissionRelayRoutes } from './routes/permission-relays';
 import { channelProjectRoutes } from './routes/channel-projects';
 import { taskBoardRoutes } from './routes/task-board';
 import { subtaskRoutes } from './routes/subtasks';
+import { artifactRoutes } from './routes/artifacts';
+import { browserPreviewRoutes } from './routes/browser-previews';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
@@ -362,6 +364,8 @@ export async function buildApp(opts?: {
     await app.register(channelProjectRoutes);
     await app.register(taskBoardRoutes);
     await app.register(subtaskRoutes);
+    await app.register(artifactRoutes);
+    await app.register(browserPreviewRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

@@ -10,6 +10,7 @@ Technical documentation for contributors and developers working on Agora.
 - [Frontend Architecture](frontend-architecture.md) — React app structure, Zustand stores, feature modules, routing, threads
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot), files
 - [Project context and verify before yield](project-context.md) — pinned channel instructions and files for agents, and the owner's verify command agora-host runs after a run
+- [Canvas and Browser Preview](canvas-and-preview.md) — artifacts rendered in a sandboxed pane, and screenshots of a session's local dev server
 - [Arc v2 Design Spec](design/arc-v2-spec.md) — visual design principles (partly built; DM/Explore/reaction parts are obsolete, see its status note)
 
 ## Planning (AI runtime initiative)

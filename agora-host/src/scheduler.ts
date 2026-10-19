@@ -11,6 +11,7 @@ import { planLoop } from './siwc/requests.js';
 import { snapshotTree, checkpoint, executeReview, type Checkpoint } from './review.js';
 import { verifyPrompt } from './prompt.js';
 import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
+import { runPreview } from './preview.js';
 
 interface Active {
     claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void>;
@@ -249,9 +250,32 @@ export class Scheduler {
             }
         }
     }
+    /**
+     * Browser previews poll on a loop of their own: an agent asks for one mid-run and waits
+     * for it, so it must not queue behind run claims or workspace commands.
+     */
+    private async previewLoop(): Promise<void> {
+        const api = this.api;
+        if (!api.claimPreview || !api.previewResult) return;
+        while (!this.stopping) {
+            try {
+                const cmd = await api.claimPreview(this.abort.signal);
+                if (!cmd) { await this.pause(this.options.commandPollMs ?? 2000); continue; }
+                // Ends well inside the server's 90s lease, leaving time for the upload
+                const outcome = await runPreview(this.config, cmd, new Set(this.active.keys()), AbortSignal.any([this.abort.signal, AbortSignal.timeout(45000)]));
+                if (!outcome.success) this.log(`preview_${outcome.error}`);
+                await api.previewResult(cmd, outcome, this.abort.signal);
+            } catch (err) {
+                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                // An older server without previews: stop polling for them
+                else if (err instanceof HttpError && err.status === 404) { this.log('previews_unsupported'); return; }
+                else if (!this.stopping) { this.log('preview_failed'); await this.pause(2000); }
+            }
+        }
+    }
     async run(): Promise<void> {
         let nextReconcile = 0;
-        const commands = this.commandLoop();
+        const commands = this.commandLoop(), previews = this.previewLoop();
         // Settings → Agents "Continue with ChatGPT": sign-ins run on this machine (siwc/requests.ts)
         const plans = planLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });
         while (!this.stopping) {
@@ -277,7 +301,7 @@ export class Scheduler {
                 }
             }
         }
-        await commands;
+        await commands; await previews;
         await plans;
         await this.drain();
     }

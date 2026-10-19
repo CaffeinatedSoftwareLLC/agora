@@ -99,6 +99,23 @@ export interface Message {
     replyCount?: number;
     lastReplyAt?: string | null;
     threadClosedAt?: string | null;
+    /** A canvas artifact this post carries (one version of it). */
+    artifact?: ArtifactRef;
+}
+
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg';
+export interface ArtifactRef { id: string; version: number; title: string; kind: ArtifactKind; latestVersion: number }
+export interface ArtifactInfo {
+    id: string; title: string; kind: ArtifactKind; latestVersion: number | null;
+    versions: { version: number; messageId: string; threadId: string | null; authorUsername: string | null; title: string; kind: ArtifactKind; size: number; createdAt: string }[];
+}
+export interface ArtifactVersion { artifactId: string; version: number; title: string; kind: ArtifactKind; content: string; authorUsername: string | null; createdAt: string }
+
+export interface BrowserPreview {
+    id: string; sessionId: string; url: string;
+    status: 'queued' | 'claimed' | 'succeeded' | 'failed';
+    result: { error?: string; title?: string; console?: { level: string; text: string }[] } | null;
+    messageId: string | null; fileId: string | null;
 }
 
 export interface ThreadSummary {
@@ -433,6 +450,32 @@ export class AgoraApi {
 
     async getPermissionRelay(channelId: string, requestId: string): Promise<{ id: string; relayId: string; status: string }> {
         return this.request('GET', `/channels/${channelId}/permission-relays/${requestId}`);
+    }
+
+    /** Post a canvas artifact (or its next version), with optional text, to a channel or thread. */
+    async postArtifact(channelId: string, body: { content?: string; artifact: { id?: string; title?: string; kind?: ArtifactKind; content: string } },
+        opts: { threadId?: string; clientKey?: string; idempotencyKey?: string } = {}): Promise<Message> {
+        const headers: Record<string, string> = opts.idempotencyKey ? { 'idempotency-key': opts.idempotencyKey } : {};
+        const path = opts.threadId ? `/channels/${channelId}/messages/${opts.threadId}/replies` : `/channels/${channelId}/messages`;
+        return this.request('POST', path, { ...body, ...(opts.clientKey ? { client_key: opts.clientKey } : {}) }, headers);
+    }
+    async getArtifact(channelId: string, artifactId: string): Promise<ArtifactInfo> {
+        return this.request('GET', `/channels/${channelId}/artifacts/${encodeURIComponent(artifactId)}`);
+    }
+    async getArtifactVersion(channelId: string, artifactId: string, version: number): Promise<ArtifactVersion> {
+        return this.request('GET', `/channels/${channelId}/artifacts/${encodeURIComponent(artifactId)}/versions/${version}`);
+    }
+    async requestPreview(channelId: string, body: { url: string; threadId?: string; width?: number; height?: number; fullPage?: boolean }): Promise<{ id: string; status: string }> {
+        return this.request('POST', `/channels/${channelId}/browser-previews`, body);
+    }
+    async getPreview(channelId: string, previewId: string): Promise<BrowserPreview> {
+        return this.request('GET', `/channels/${channelId}/browser-previews/${previewId}`);
+    }
+    /** The PNG a finished preview posted. */
+    async getPreviewScreenshot(channelId: string, previewId: string): Promise<Buffer> {
+        const res = await fetch(`${this.baseUrl}/channels/${channelId}/browser-previews/${previewId}/screenshot`, { headers: { Authorization: `Bot ${this.token}` } });
+        if (!res.ok) throw new AgoraApiError(`Agora API ${res.status} GET screenshot`, res.status, null, null);
+        return Buffer.from(await res.arrayBuffer());
     }
 
     async getRun(runId: string): Promise<RuntimeRun> {

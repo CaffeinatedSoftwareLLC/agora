@@ -5,7 +5,9 @@ import { api } from '../lib/api';
 
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
 
-export type AuxView = 'thread' | 'files' | 'members' | 'project' | 'tasks';
+export type AuxView = 'thread' | 'files' | 'members' | 'project' | 'tasks' | 'canvas';
+/** What the canvas pane shows: an artifact (a version, or the latest when null), or the channel's list. */
+export interface CanvasTarget { channelId: string; artifactId: string | null; version: number | null }
 export interface Overlay {
   kind: 'session-sheet' | 'message-actions' | 'modal';
   id: string;
@@ -29,6 +31,10 @@ interface UIState {
   toggleAux: (kind: AuxView) => void;
   closeAux: () => void;
   openThreadView: (channelId: string, threadId: string) => void;
+  canvas: CanvasTarget | null;
+  /** The pane the canvas replaced, so closing it goes back (e.g. to the thread it was opened from). */
+  canvasReturn: AuxView | null;
+  openCanvas: (target: CanvasTarget) => void;
   onChannelSelect: (channelId: string | null) => void;
   openOverlay: (overlay: Overlay) => void;
   closeOverlay: () => void;
@@ -45,9 +51,14 @@ interface UIState {
 }
 
 // Persist palette to localStorage
-const storedPalette = (typeof window !== 'undefined'
-  ? localStorage.getItem('agora:palette') as PaletteKey | null
-  : null) || 'aegean';
+function readStoredPalette(): PaletteKey | null {
+  try {
+    if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return null;
+    const v = localStorage.getItem('agora:palette');
+    return v === 'aegean' || v === 'terracotta' ? v : null;
+  } catch { return null; } // blocked or missing storage
+}
+const storedPalette: PaletteKey = readStoredPalette() || 'aegean';
 
 const isPalette = (v: unknown): v is PaletteKey => v === 'aegean' || v === 'terracotta';
 
@@ -85,17 +96,22 @@ export const useUIStore = create<UIState>((set, get) => ({
   closeNav: () => set({ navOpen: false }),
   openAux: (kind) => set({ aux: kind, navOpen: false }),
   toggleAux: (kind) => set(s => ({ aux: s.aux === kind ? null : kind, navOpen: false })),
-  closeAux: () => set({ aux: null }),
+  // Closing a canvas opened from a thread goes back to the thread
+  closeAux: () => set(s => ({ aux: s.aux === 'canvas' ? s.canvasReturn : null, canvasReturn: null })),
   openThreadView: (channelId, threadId) => {
     useThreadStore.getState().openThread(channelId, threadId);
     set({ aux: 'thread', navOpen: false });
   },
+  canvas: null,
+  canvasReturn: null,
+  openCanvas: (target) => set(s => ({ canvas: target, aux: 'canvas', navOpen: false,
+    canvasReturn: s.aux === 'canvas' ? s.canvasReturn : s.aux === 'thread' ? 'thread' : null })),
   onChannelSelect: (channelId) => {
     if (useThreadStore.getState().openThreadChannelId !== channelId) {
       useThreadStore.getState().closeThread();
     }
     const overlay = get().activeOverlay;
-    set({ navOpen: false, aux: null, activeOverlay: null, activeModal: null });
+    set({ navOpen: false, aux: null, activeOverlay: null, activeModal: null, canvas: null, canvasReturn: null });
     overlay?.onClose();
   },
   openOverlay: (overlay) => {

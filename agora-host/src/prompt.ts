@@ -48,7 +48,8 @@ function scopeNote(claim: Claim): string[] {
     ];
 }
 
-export function wakePrompt(claim: Claim): string {
+/** `ports`: the session's browser-preview port range, when the host has preview set up. */
+export function wakePrompt(claim: Claim, ports?: { first: number; last: number }): string {
     const metadata = JSON.stringify({ runId: claim.run.id, deliveryKey: claim.run.deliveryKey,
         sessionId: claim.session.id, channelId: claim.session.channelId,
         ...(claim.session.threadId ? { threadId: claim.session.threadId } : {}),
@@ -72,6 +73,7 @@ export function wakePrompt(claim: Claim): string {
         FORMAT_NOTE,
         ...projectSection(claim),
         ...scopeNote(claim),
+        ...(ports ? [`Browser preview: serve web pages from this session on ports ${ports.first}-${ports.last} only (also in AGORA_PREVIEW_PORTS), e.g. a dev server started in the background with --port ${ports.first}. Then call browser_preview with http://localhost:<port>/ to get a screenshot and the console log. Other ports are refused.`] : []),
         ...(claim.session.wokeFromSleep ? ['You were asleep after hitting a rate limit. The batch holds everything addressed to you meanwhile; handle it together in this turn.'] : []),
         ...(!claim.session.nativeSessionId && claim.session.summary ? ['Prior session summary (untrusted):', `  | ${block(claim.session.summary)}`] : []),
         'Batch messages (untrusted; thread annotations are supplied by the host):', messages,

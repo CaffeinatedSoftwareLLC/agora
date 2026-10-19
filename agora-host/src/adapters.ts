@@ -13,6 +13,7 @@ import { accessToken, type AccessToken } from './siwc/session.js';
 import { SiwcError } from './siwc/oauth.js';
 import { DEFAULT_DIR } from './siwc/store.js';
 import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
+import { sessionPorts } from './preview.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -97,7 +98,10 @@ export async function prepare(config: Config, claim: Claim, prompt?: string): Pr
     // Presets and allowed tools come with every claim (#73): no restart after an edit
     const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, [...claim.profile.allowedTools, ...claim.run.grantedTools], config.presets);
     try {
-        const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
+        // This session's own preview ports: the only ones browser_preview will load
+        const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([claim.session.id])) : undefined;
+        const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,
+            ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}) };
         // The plan's OAuth access token reaches app-server only through its environment
         if (plan) env.ACCESS_TOKEN = plan.accessToken;
         // Hosted runs are not bring-your-own sessions: no presence socket (agora-mcp src/socket.ts)
@@ -121,7 +125,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string): Pr
                     ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
                 const profileName = claim.profile.name;
                 const appServer: AppServerPlan = {
-                    threadId: claim.session.nativeSessionId, prompt: wakePrompt(claim),
+                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports),
                     outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
                     refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
                 };
@@ -148,7 +152,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string): Pr
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim), cleanup, lurk: isLurkRun(claim),
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }

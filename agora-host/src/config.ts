@@ -9,7 +9,7 @@ const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
 const tool = z.enum(['chat_history', 'chat_read', 'chat_send', 'channel_list', 'thread_start', 'thread_list',
     'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake', 'session_lurk',
-    'file_reserve', 'file_renew', 'file_release', 'file_reservations', 'project_context']);
+    'file_reserve', 'file_renew', 'file_release', 'file_reservations', 'project_context', 'canvas_publish', 'canvas_read', 'browser_preview']);
 const profile = z.object({
     // gemini is accepted so the provider-terms rule can be checked; it isn't hosted yet (terms.ts)
     adapter: z.enum(['codex', 'claude', 'gemini']), workdir: absolute, workdirAlias: z.string().min(1),
@@ -59,6 +59,14 @@ export const configSchema = z.object({
     // Sign in with ChatGPT (auth "siwc"): where this host keeps its host id and credentials
     // (default ~/.agora-host/siwc) and the loopback callback port (0: any free port)
     siwc: z.object({ dir: absolute.optional(), callbackPort: z.number().int().min(0).max(65535).default(1455) }).strict().default({}),
+    // Browser preview (src/preview.ts): a local Chromium/Chrome/Edge, and each session gets
+    // portsPerSession ports from portBase up for the dev servers it wants screenshotted
+    preview: z.object({
+        browser: executable, stateDir: absolute,
+        portBase: z.number().int().min(1024).max(65000).default(42000),
+        portsPerSession: z.number().int().min(1).max(100).default(10),
+        slots: z.number().int().min(1).max(1000).default(100),
+    }).strict().refine(p => p.portBase + p.slots * p.portsPerSession - 1 <= 65535, 'preview ports must end at or below 65535').optional(),
 }).strict();
 export type Config = z.infer<typeof configSchema>;
 export type LocalProfile = Config['profiles'][string];
@@ -83,6 +91,7 @@ export async function loadConfig(path: string): Promise<Config> {
         if (!(await stat(p.workdir)).isDirectory()) throw new Error('Configured workdir is not a directory');
     }
     await access(config.mcp.executable); await access(config.mcp.entrypoint);
+    if (config.preview) await access(config.preview.browser);
     const states = Object.values(config.profiles).map(p => resolve(p.stateDir).toLowerCase());
     if (new Set(states).size !== states.length) throw new Error('Each profile must have its own CLI stateDir');
     return config;
