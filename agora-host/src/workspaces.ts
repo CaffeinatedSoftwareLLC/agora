@@ -1,18 +1,23 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve, win32 } from 'node:path';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, HostApi } from './types.js';
 
 const exec = promisify(execFile);
+const gitContext = new AsyncLocalStorage<AbortSignal>();
+export const withGitSignal = <T>(signal: AbortSignal, fn: () => Promise<T>) => gitContext.run(signal,fn);
+export const gitSignal = () => gitContext.getStore();
 export async function git(cwd: string, args: string[]): Promise<string> {
-    return (await exec('git', ['-c', 'core.longpaths=true', ...args], { cwd, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })).stdout;
+    return (await exec('git', ['-c', 'core.longpaths=true', ...args], { cwd, windowsHide: true, timeout: 60000,
+        signal: gitSignal(), env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, maxBuffer: 4 * 1024 * 1024 })).stdout;
 }
 export function samePath(a: string, b: string, platform = process.platform): boolean {
     return platform === 'win32' ? win32.resolve(a).toLowerCase() === win32.resolve(b).toLowerCase() : resolve(a) === resolve(b);
 }
-export interface Workspace { sessionId: string; profile: string; workdir: string; cwd: string; commonDir: string; branch: string; baseSha: string; warning?: string }
+export interface Workspace { sessionId: string; profile: string; workdir: string; cwd: string; commonDir: string; branch: string; baseSha: string; baseBranch?: string; warning?: string }
 const metadata = (local: LocalProfile, sessionId: string) => join(local.stateDir, `wt-${sessionId.slice(-10)}.json`);
 async function exists(path: string) { try { await lstat(path); return true; } catch (e: any) { if (e.code === 'ENOENT') return false; throw e; } }
 async function common(cwd: string) { return realpath((await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()); }
@@ -22,7 +27,7 @@ async function hasBranch(cwd: string, branch: string) {
         throw e;
     }
 }
-async function validate(w: Workspace) {
+export async function validateWorkspace(w: Workspace) {
     // A parent checkout also answers is-inside-work-tree=true. Require the exact root.
     if ((await lstat(w.cwd)).isSymbolicLink()
         || !samePath(await realpath(w.cwd), (await git(w.cwd, ['rev-parse', '--show-toplevel'])).trim())
@@ -34,7 +39,7 @@ function checkRecord(w: Workspace, local: LocalProfile, profile: string, session
         || !samePath(w.cwd, join(local.stateDir, `wt-${sessionId.slice(-10)}`))
         || w.branch !== `agora/${profile}/${sessionId}` || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(w.baseSha)) throw new Error('workspace_mapping_changed');
 }
-export async function ensureWorkspace(local: LocalProfile, claim: Claim): Promise<Workspace> {
+export async function ensureWorkspace(local: LocalProfile, claim: { session: Pick<Claim['session'], 'id'>; profile: Pick<Claim['profile'], 'name'> }, seed?: { sha: string; baseBranch?: string }): Promise<Workspace> {
     const sessionId = claim.session.id, profile = claim.profile.name;
     if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(sessionId) || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(profile)) throw new Error('invalid_workspace_identity');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
@@ -46,7 +51,9 @@ export async function ensureWorkspace(local: LocalProfile, claim: Claim): Promis
     } else {
         w = { sessionId, profile, workdir: local.workdir, cwd: join(local.stateDir, `wt-${sessionId.slice(-10)}`),
             commonDir: await common(local.workdir), branch: `agora/${profile}/${sessionId}`,
-            baseSha: (await git(local.workdir, ['rev-parse', 'HEAD'])).trim() };
+            baseSha: seed?.sha ?? (await git(local.workdir, ['rev-parse', 'HEAD'])).trim(),
+            baseBranch: seed?.baseBranch ?? (await git(local.workdir, ['symbolic-ref', '--short', 'HEAD']).catch(() => '')).trim() };
+        if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(w.baseSha)) throw new Error('invalid_workspace_base');
         if (await exists(w.cwd)) throw new Error('untracked_workspace_path');
         if (await hasBranch(local.workdir, w.branch)) throw new Error('workspace_branch_without_metadata');
         // Write the original base before creation; a restart must never replace it with a newer HEAD.
@@ -58,11 +65,11 @@ export async function ensureWorkspace(local: LocalProfile, claim: Claim): Promis
         if (branchExists) await git(local.workdir, ['worktree', 'prune']);
         await git(local.workdir, ['worktree', 'add', ...(branchExists ? [] : ['-b', w.branch]), w.cwd, branchExists ? w.branch : w.baseSha]);
     }
-    await validate(w);
+    await validateWorkspace(w);
     return w;
 }
 export async function workspaceHead(w: Workspace) {
-    await validate(w);
+    await validateWorkspace(w);
     return { branch: w.branch, baseSha: w.baseSha, headSha: (await git(w.cwd, ['rev-parse', 'HEAD'])).trim() };
 }
 export async function reconcileWorkspaces(config: Config, api: HostApi, active: ReadonlySet<string>, log: (code: string) => void) {
@@ -79,7 +86,7 @@ export async function reconcileWorkspaces(config: Config, api: HostApi, active: 
                 if (!states.includes(w.sessionId)) continue; // server confirms ended, host ownership and no claimed run
                 if (!await exists(w.cwd)) { await unlink(join(local.stateDir, file)); continue; }
                 if (!samePath(await common(local.workdir), w.commonDir)) throw new Error('workspace_repository_changed');
-                await validate(w);
+                await validateWorkspace(w);
                 const status = await git(w.cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
                 if (status) {
                     const paths: string[] = [], entries = status.split('\0').filter(Boolean);
@@ -94,6 +101,7 @@ export async function reconcileWorkspaces(config: Config, api: HostApi, active: 
                     log('dirty_workspace_kept'); continue;
                 }
                 // Never force removal; retain branch refs, including commits ahead of the saved base.
+                if ((await git(w.cwd, ['for-each-ref', '--format=%(refname)', `refs/agora/checkpoints/${w.sessionId}/`])).trim()) continue;
                 await git(local.workdir, ['worktree', 'remove', w.cwd]);
                 await unlink(join(local.stateDir, file));
             } catch { log('workspace_reconcile_failed'); }

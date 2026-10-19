@@ -7,10 +7,11 @@ import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from '
 import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
 import { attachRunImages } from './images.js';
 import { TermsRefusal } from './terms.js';
+import { snapshotTree, checkpoint, executeReview, type Checkpoint } from './review.js';
 
 interface Active { claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void> }
 export interface SchedulerOptions {
-    now?: () => number; tickMs?: number; safetyMs?: number;
+    now?: () => number; tickMs?: number; safetyMs?: number; commandPollMs?: number;
     prepare?: (config: Config, claim: Claim) => Promise<Launch>;
     log?: (code: string) => void;
 }
@@ -54,6 +55,7 @@ export class Scheduler {
         let nextHeartbeat = this.now() + claim.run.heartbeatSeconds * 1000;
         let launch: Launch | undefined; let beat: Promise<void> | undefined;
         let result: Result | undefined; let finished = false;
+        let beforeTree: string | undefined, savedCheckpoint: Checkpoint | undefined;
         let interval: ReturnType<typeof setInterval> | undefined;
         const beatAbort = new AbortController();
         const stopChild = async (reason: string, noReport = false) => {
@@ -83,6 +85,7 @@ export class Scheduler {
             if (launch.unknownPresets?.length) this.log('unknown_tool_preset');
             if (this.stopping || a.stop || this.now() >= deadline) return;
             const before = launch.adapter === 'claude' ? await worktreeSnapshot(launch.cwd) : null;
+            if (launch.workspace) beforeTree = await snapshotTree(launch.workspace);
             if (this.stopping || a.stop || this.now() >= deadline) return;
             a.child = this.runner.start(launch);
             result = await a.child.result; finished = true;
@@ -107,6 +110,10 @@ export class Scheduler {
             }
         }
         finally {
+            if (finished && launch?.workspace && beforeTree) {
+                try { savedCheckpoint = await checkpoint(launch.workspace, claim.run.id, beforeTree); }
+                catch { this.log('checkpoint_failed'); }
+            }
             if (interval) clearInterval(interval);
             // Finish any heartbeat before reporting; no post-completion heartbeat race.
             beatAbort.abort(); await beat;
@@ -118,12 +125,14 @@ export class Scheduler {
                         let head = {};
                         if (launch?.workspace) { try { head = await workspaceHead(launch.workspace); } catch { this.log('workspace_head_failed'); } }
                         await this.api.complete(claim, { claimToken: claim.run.claimToken, nativeSessionId: result.nativeSessionId,
+                            ...(savedCheckpoint ? { checkpoint: savedCheckpoint } : {}),
                             tokensUsed: result.tokensUsed, summary: result.summary, changedPaths: result.changedPaths, ...head,
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}) }, reportAbort);
                     } else {
                         // A rate limit puts the session to sleep server-side instead of spending a retry (#87)
                         const rateLimited = !a.stop && finished && !!result.rateLimit;
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
+                            ...(savedCheckpoint ? { checkpoint: savedCheckpoint } : {}),
                             message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
                             retryable: a.stop !== 'cancelled' && !['host_launch_failed', 'subscription_owner_only', 'run_not_approved'].includes(result.error ?? ''),
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
@@ -137,8 +146,46 @@ export class Scheduler {
             try { await launch?.cleanup(); } catch { this.log('run_cleanup_failed'); }
         }
     }
+    private pause(ms: number) {
+        return new Promise<void>(resolve => {
+            const end = () => { clearTimeout(timer); resolve(); };
+            const timer = setTimeout(() => { this.abort.signal.removeEventListener('abort', end); resolve(); }, ms);
+            this.abort.signal.addEventListener('abort', end, { once: true });
+        });
+    }
+    /**
+     * Workspace commands poll on their own loop so a phone diff doesn't wait behind the 25s
+     * run long poll. The server serialises commands and runs per session.
+     */
+    private async commandLoop(): Promise<void> {
+        const api = this.api;
+        if (!api.claimWorkspaceCommand || !api.workspaceCommandResult) return;
+        while (!this.stopping) {
+            try {
+                const cmd = await api.claimWorkspaceCommand(this.abort.signal);
+                if (!cmd) { await this.pause(this.options.commandPollMs ?? 2000); continue; }
+                let success = false, result: object;
+                try {
+                    const local = this.config.profiles[cmd.profile];
+                    if (!local || this.active.has(cmd.sessionId)) throw new Error('session_busy_or_profile_unavailable');
+                    result = await executeReview(local, cmd); success = true;
+                } catch (err) {
+                    // Git/gh errors contain local paths and command output. Send only known codes.
+                    const code = err instanceof Error ? err.message : '';
+                    result = { error: /^[a-z][a-z_]{0,100}$/.test(code) ? code : 'workspace_command_failed' };
+                }
+                await api.workspaceCommandResult(cmd, success, result, this.abort.signal);
+            } catch (err) {
+                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                // An older server without the command queue: leave runs working, stop polling.
+                else if (err instanceof HttpError && err.status === 404) { this.log('workspace_commands_unsupported'); return; }
+                else if (!this.stopping) { this.log('workspace_command_failed'); await this.pause(2000); }
+            }
+        }
+    }
     async run(): Promise<void> {
         let nextReconcile = 0;
+        const commands = this.commandLoop();
         while (!this.stopping) {
             try {
                 if (this.now() >= nextReconcile) {
@@ -162,6 +209,7 @@ export class Scheduler {
                 }
             }
         }
+        await commands;
         await this.drain();
     }
 }

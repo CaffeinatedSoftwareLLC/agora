@@ -9,6 +9,7 @@ import { noticePathList } from '../lib/file-reservations';
 import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
 import { allowedToolsSchema, deniedToolsSchema, toolPresetsSchema } from '../lib/agent-permissions';
 import { agentImageRoutes } from './agent-images';
+import { checkpointSchema } from '../lib/agent-checkpoints';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -409,7 +410,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
             JOIN agent_profiles p ON p.id = s.profile_id
             WHERE s.id = ANY($1) AND s.server_id = $2 AND s.state = 'ended'
             AND (p.host_id = $3 OR EXISTS (SELECT 1 FROM agent_runs owned WHERE owned.session_id = s.id AND owned.host_id = $3))
-            AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')`,
+            AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')
+            AND NOT EXISTS (SELECT 1 FROM agent_workspace_commands c WHERE c.session_id=s.id AND c.status IN ('queued','claimed'))`,
             [(request.body as any).sessionIds, host.serverId, host.id]);
         return reply.send(rows.rows.map(r => r.id.trim()));
     });
@@ -489,6 +491,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     headSha: { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' },
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                     deniedTools: deniedToolsSchema,
+                    checkpoint: checkpointSchema,
                 },
             },
         },
@@ -514,6 +517,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     retryable: { type: 'boolean' },
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                     deniedTools: deniedToolsSchema,
+                    checkpoint: checkpointSchema,
                     // error 'rate_limited': the session sleeps until resetAt (#87)
                     rateLimit: { type: 'object', additionalProperties: false, properties: { resetAt: { type: ['string', 'null'], maxLength: 40 } } },
                 },

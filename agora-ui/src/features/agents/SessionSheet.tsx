@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionBudget } from './SessionBudget';
+import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import {
@@ -211,6 +212,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           </div>
         )}
         {current && <SessionBudget key={current.id} session={current} channelId={channelId} onChanged={onChanged} />}
+        {current && <SessionWorkspace key={`workspace-${current.id}`} sessionId={current.id} channelId={channelId} running={current.running} onChanged={onChanged} />}
         {current?.recentRuns && current.recentRuns.length > 0 && <details className="text-sm">
           <summary className="cursor-pointer">Recent runs</summary>
           <ul className="space-y-2 py-2">
@@ -290,6 +292,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                   <button type="button" className={BTN_SMALL} onClick={() => copy(s.id)} aria-label={`Copy session ID ${s.id}`}>
                     {copiedId === s.id ? 'Copied' : 'Copy ID'}
                   </button>
+                  {s.id !== current?.id && <div className="w-full"><SessionWorkspace sessionId={s.id} channelId={channelId} running={s.running} onChanged={onChanged} /></div>}
                 </li>
               ))}
             </ul>

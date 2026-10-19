@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
 import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type ProfileReport } from './types.js';
+import type { ReviewCommand } from './review.js';
 
 export class HttpError extends Error {
     constructor(public readonly status: number) { super(`host_http_${status}`); }
@@ -47,6 +48,25 @@ export class Client implements HostApi {
     }
     async workspaceStates(sessionIds: string[]): Promise<string[]> {
         return z.array(z.string()).parse(await this.request('POST', 'workspaces/reconcile', { sessionIds }));
+    }
+    async claimWorkspaceCommand(signal?: AbortSignal): Promise<ReviewCommand | null> {
+        const data = await this.request('GET', 'workspace-commands/next', undefined, signal);
+        if (data === null) return null;
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), claimToken: z.string().min(10),
+            sessionId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
+            workdirAlias: z.string(), action: z.enum(['diff','discard','commit','merge','pr','restore','fork']),
+            payload: z.object({ path: z.string().max(4096).optional(), offset: z.number().int().min(0).max(131072).optional(),
+                revision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+                message: z.string().max(2000).optional(), forkSessionId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).optional(),
+                checkpoint: z.object({ sha:z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),ref:z.string().max(128) }).optional() }),
+        }).parse(data);
+    }
+    async workspaceCommandResult(cmd: ReviewCommand, success: boolean, result: object, signal?: AbortSignal): Promise<void> {
+        // Retrying the report is safe; never retry the repository operation.
+        for (let attempt=0;;attempt++) {
+            try { await this.request('POST',`workspace-commands/${cmd.id}/result`,{claimToken:cmd.claimToken,success,result},signal); return; }
+            catch (e) { if (attempt>=2 || signal?.aborted || e instanceof HttpError && e.status<500) throw e; await sleep(this.retryDelayMs,signal); }
+        }
     }
     async workspaceWarning(sessionId: string, paths: string[]): Promise<void> {
         await this.request('POST', 'workspaces/warning', { sessionId, paths });

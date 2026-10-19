@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client, HttpError } from '../src/client.js';
-import { claim } from './helpers.js';
+import { claim, id } from './helpers.js';
 
 let server: Server | undefined;
 afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(r => server!.close(() => r())); server = undefined; } });
@@ -17,6 +17,19 @@ async function fake(handler: (path: string, body: string, auth: string | undefin
     return `http://127.0.0.1:${address.port}`;
 }
 describe('HTTP contract against a fake local server', () => {
+    it('claims workspace commands once and retries only their result report',async()=>{
+        const cmd={id:id(20),claimToken:'claim-token',sessionId:id(2),profile:'builder',workdirAlias:'agora',action:'diff',payload:{path:'a.ts'}};
+        let claims=0,reports=0;const bodies:string[]=[];
+        const url=await fake((path,body,auth)=>{
+            expect(auth).toBe('AgentHost ah_test');
+            if(path.endsWith('/next')) { claims++; return {status:200,body:cmd}; }
+            expect(path).toBe(`/agent-hosts/@me/workspace-commands/${cmd.id}/result`);reports++;bodies.push(body);
+            return {status:reports===1?503:200,body:{ok:true}};
+        });
+        const client=new Client(url,'ah_test',fetch,undefined,1);const c=await client.claimWorkspaceCommand();
+        expect(claims).toBe(1);await client.workspaceCommandResult(c!,true,{diff:'+hello'});
+        expect(reports).toBe(2);expect(bodies[0]).toBe(bodies[1]);expect(JSON.parse(bodies[0]).claimToken).toBe(cmd.claimToken);
+    });
     it('discovers eligible posts and uploads multipart bytes with host and claim credentials', async () => {
         const c = claim(); let uploads = 0;
         const url = await fake((path, body, auth) => {
