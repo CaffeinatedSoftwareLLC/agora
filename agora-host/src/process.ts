@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parseOutput, type Launch } from './adapters.js';
 import { startAppServer } from './siwc/appserver.js';
-import type { Result } from './types.js';
+import type { Progress, Result } from './types.js';
 import { startAcp } from './acp/session.js';
 
 export interface RunningChild { result: Promise<Result>; kill(): Promise<void>; tokensUsed?(): number | null; progress?(): Progress | null }
