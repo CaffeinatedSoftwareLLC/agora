@@ -6,7 +6,8 @@ import type { Claim, HostApi, Result } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
 import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
 import { attachRunImages } from './images.js';
-import { TermsRefusal } from './terms.js';
+import { NON_RETRYABLE, TermsRefusal } from './terms.js';
+import { planLoop } from './siwc/requests.js';
 import { snapshotTree, checkpoint, executeReview, type Checkpoint } from './review.js';
 
 interface Active { claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void> }
@@ -134,7 +135,7 @@ export class Scheduler {
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
                             ...(savedCheckpoint ? { checkpoint: savedCheckpoint } : {}),
                             message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
-                            retryable: a.stop !== 'cancelled' && !['host_launch_failed', 'subscription_owner_only', 'run_not_approved'].includes(result.error ?? ''),
+                            retryable: a.stop !== 'cancelled' && !NON_RETRYABLE.has(result.error ?? ''),
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
                             ...(rateLimited ? { rateLimit: result.rateLimit } : {}) }, reportAbort);
                     }
@@ -186,6 +187,8 @@ export class Scheduler {
     async run(): Promise<void> {
         let nextReconcile = 0;
         const commands = this.commandLoop();
+        // Settings → Agents "Continue with ChatGPT": sign-ins run on this machine (siwc/requests.ts)
+        const plans = planLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });
         while (!this.stopping) {
             try {
                 if (this.now() >= nextReconcile) {
@@ -210,6 +213,7 @@ export class Scheduler {
             }
         }
         await commands;
+        await plans;
         await this.drain();
     }
 }

@@ -4,12 +4,15 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parseOutput, type Launch } from './adapters.js';
+import { startAppServer } from './siwc/appserver.js';
 import type { Result } from './types.js';
 
 export interface RunningChild { result: Promise<Result>; kill(): Promise<void>; tokensUsed?(): number | null }
 export interface Runner { start(launch: Launch): RunningChild }
 export class ProcessRunner implements Runner {
     start(launch: Launch): RunningChild {
+        // auth "siwc": a JSON-RPC conversation with codex app-server, not a one-shot exec
+        if (launch.appServer) return startAppServer(launch as Launch & { appServer: NonNullable<Launch['appServer']> });
         const child = spawn(launch.executable, launch.args, {
             cwd: launch.cwd, env: launch.env, shell: false, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],

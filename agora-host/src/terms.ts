@@ -40,8 +40,15 @@ export class HostConfigError extends Error {}
 
 /** The host refused a claim because of the provider-terms rules. Never retried. */
 export class TermsRefusal extends Error {
-    constructor(public readonly code: 'subscription_owner_only' | 'run_not_approved', message: string) { super(message); }
+    constructor(public readonly code: 'subscription_owner_only' | 'run_not_approved' | 'plan_owner_only' | SiwcRunError, message: string) { super(message); }
 }
+
+/** Why a run on a ChatGPT plan (auth "siwc") can't start or didn't finish. */
+export type SiwcRunError = 'siwc_not_connected' | 'siwc_scope_missing' | 'siwc_reauth_required' | 'siwc_not_eligible'
+    | 'siwc_usage_limit' | 'siwc_plan_owner_mismatch' | 'siwc_refresh_unavailable';
+/** Result errors a retry can't fix. siwc_refresh_unavailable stays retryable (network). */
+export const NON_RETRYABLE = new Set(['host_launch_failed', 'subscription_owner_only', 'run_not_approved', 'plan_owner_only',
+    'siwc_not_connected', 'siwc_scope_missing', 'siwc_reauth_required', 'siwc_not_eligible', 'siwc_plan_owner_mismatch']);
 
 /** Every wake needs the owner's approval: asked for, or forced for Gemini on account login. */
 export function needsRunApproval(profile: LocalProfile): boolean {
@@ -52,7 +59,22 @@ export function needsRunApproval(profile: LocalProfile): boolean {
  * Check a claim against the local profile's auth mode before anything starts. The server
  * applies the same rules; this catches a stale server-side mode or a server bug.
  */
-export function checkTerms(profile: LocalProfile, claim: Claim): void {
+export function checkTerms(profile: LocalProfile, claim: Claim, boundUser: string | null = null): void {
+    if (profile.auth === 'siwc') {
+        // A ChatGPT plan is its owner's: only their own messages and commands, and hand-offs
+        // inside sessions they started (docs/codex-chatgpt-plan.md)
+        const owner = claim.profile.planOwnerId;
+        const refuse = () => new TermsRefusal('plan_owner_only', `${claim.profile.name} runs on its plan owner's ChatGPT plan; only they can wake it.`);
+        if (!owner) throw new TermsRefusal('siwc_not_connected', `${claim.profile.name} is not connected to a ChatGPT plan.`);
+        // The server's binding must match the one this host saved at sign-in
+        if (boundUser && boundUser !== owner) throw new TermsRefusal('siwc_plan_owner_mismatch', `${claim.profile.name} is connected for another Agora user on this host.`);
+        if (!claim.session.startedByOwner) throw refuse();
+        for (const item of claim.inbox) {
+            if (item.reason === 'command') continue;
+            if (item.reason === 'handoff' || item.reason === 'protocol') { if (!item.authorBot) throw refuse(); continue; }
+            if (item.authorBot || item.authority === null || item.authorId !== owner) throw refuse();
+        }
+    }
     if (profile.auth === 'subscription') {
         const refuse = () => new TermsRefusal('subscription_owner_only',
             `${claim.profile.name} runs on the owner's personal subscription; only the owner can wake it.`);
@@ -82,6 +104,7 @@ export function profileReport(profiles: Record<string, LocalProfile>) {
 /** One line for the start-up log. */
 export function describeAuth(name: string, profile: LocalProfile): string {
     const approval = needsRunApproval(profile) ? '; every run needs the owner\'s approval' : '';
+    if (profile.auth === 'siwc') return `Profile ${name}: ChatGPT plan via Sign in with ChatGPT (codex app-server); only its plan owner can wake it${approval}.`;
     return profile.auth === 'api_key'
         ? `Profile ${name}: API key from ${profile.apiKeyEnv}${approval}.`
         : `Profile ${name}: account login (subscription); only the server owner can wake it${approval}.`;

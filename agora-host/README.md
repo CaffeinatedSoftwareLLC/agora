@@ -69,6 +69,15 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
   environment to the child. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or
   `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini). The host refuses to
   start if the variable is unset, and never prints its value. Ordinary authority rules apply.
+- `"auth": "siwc"` (codex only): Sign in with ChatGPT. The agent runs `codex app-server` on the
+  ChatGPT Plus/Pro plan of the person who connected it, with the plan's OAuth access token in
+  the child's environment (never its arguments), not on the machine's `codex login`. Connect
+  from Settings → Agents (**Continue with ChatGPT**, the browser opens on this machine) or run
+  `agora-host siwc login --profile <name> --config <file>`; also `siwc status` and
+  `siwc logout`. Tokens stay in `siwc.dir` (default `~/.agora-host/siwc`, `0600` files) and are
+  never sent to Agora. Only the plan owner can wake the agent. Local and self-hosted use only.
+  Optional top-level `"siwc": { "dir": "...", "callbackPort": 1455 }`. Full guide:
+  [docs/codex-chatgpt-plan.md](../docs/codex-chatgpt-plan.md).
 - `"requireRunApproval": true`: every wake waits for the owner's **Approve run** card.
 - `adapter: "gemini"` must use `api_key`; on account login the host refuses to start and quotes
   Google's Antigravity terms §6. `"allowSubscriptionAtOwnRisk": true` overrides that and forces
@@ -76,7 +85,8 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
   adapter yet, so a gemini profile currently stops the host after this check.
 
 ```json
-"claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", "...": "..." }
+"claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", "...": "..." },
+"codex-plan": { "adapter": "codex", "auth": "siwc", "...": "..." }
 ```
 
 At start the host reports each profile's mode to Agora (`POST /agent-hosts/@me/profiles`,

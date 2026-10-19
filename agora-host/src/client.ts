@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
-import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type ProfileReport } from './types.js';
+import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type ProfileReport } from './types.js';
 import type { ReviewCommand } from './review.js';
 
 export class HttpError extends Error {
@@ -105,6 +105,17 @@ export class Client implements HostApi {
     /** How each profile's CLI signs in (terms.ts); only variable names, never keys. */
     async reportProfiles(profiles: ProfileReport[]): Promise<void> {
         await this.request('POST', 'profiles', { profiles });
+    }
+    /** A Settings → Agents request to connect or disconnect a ChatGPT plan on this host. */
+    async claimPlanRequest(signal?: AbortSignal): Promise<PlanRequest | null> {
+        const data = await this.request('GET', 'plan-requests/next', undefined, signal);
+        if (data === null) return null;
+        return z.object({ profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/), action: z.enum(['connect', 'disconnect']),
+            requestedBy: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).nullable() }).parse(data);
+    }
+    /** The sign-in state of one profile. Never a token: a status, a fixed error code, the account's email. */
+    async reportPlan(profile: string, body: { status: PlanStatus; error?: string | null; accountLabel?: string | null }, signal?: AbortSignal) {
+        return z.object({ planOwnerId: z.string().nullable() }).parse(await this.request('POST', `plans/${encodeURIComponent(profile)}`, body, signal));
     }
     complete(claim: Claim, body: Completion, signal?: AbortSignal) { return this.report(claim, 'complete', body, signal); }
     fail(claim: Claim, body: Failure, signal?: AbortSignal) { return this.report(claim, 'fail', body, signal); }

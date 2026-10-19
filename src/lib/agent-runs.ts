@@ -4,7 +4,7 @@ import { generateUlid } from '../utils/ulid';
 import { readAuthorities } from './direct-agents';
 import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, subscriptionNotice } from './provider-terms';
+import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 
 /**
@@ -97,12 +97,14 @@ export interface ClaimResult {
         wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
         wokeFromSleep: boolean;
         lurkMode: 'quiet' | 'balanced' | 'vocal' | null;
-        /** The server owner started or last resumed this session (provider-terms.ts). */
+        /** The profile's plan owner started or last resumed this session (provider-terms.ts). */
         startedByOwner: boolean;
     };
     profile: {
         id: string; name: string; botId: string; adapter: string;
-        authMode: 'subscription' | 'api_key'; runApproval: boolean;
+        authMode: 'subscription' | 'api_key' | 'siwc'; runApproval: boolean;
+        /** Whose plan a 'subscription' or 'siwc' profile runs on; null for api_key or not yet connected. */
+        planOwnerId: string | null;
         model: string | null; effort: string | null; workdirAlias: string;
         toolPresets: string[]; allowedTools: string[];
     };
@@ -143,7 +145,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
                 COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
                 p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep,
-                p.auth_mode, p.run_approval, (s.started_by IS NOT NULL AND s.started_by = srv.owner_id) AS started_by_owner
+                p.auth_mode, p.run_approval, ${PLAN_OWNER_SQL} AS plan_owner_id,
+                (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner
          FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN channels ch ON ch.id = s.channel_id
@@ -248,7 +251,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
 
     // 4. Recheck each row; rows that fail are acknowledged without work
     const subscription = session.auth_mode !== 'api_key';
-    const kept = await recheckRows(c, channelId, rows, subscription ? { startedByOwner: !!session.started_by_owner } : null);
+    const planOwnerId: string | null = session.plan_owner_id?.trim() ?? null;
+    const kept = await recheckRows(c, channelId, rows, subscription ? { startedByOwner: !!session.started_by_owner, planOwnerId } : null);
     // Turning lurk off invalidates pending passive work, including retry batches.
     for (let i = kept.length - 1; i >= 0; i--) {
         if (kept[i].row.reason === 'lurk' && !session.lurk_mode) kept.splice(i, 1);
@@ -261,9 +265,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         if (isRetry) {
             await c.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE id = $1`, [batchId]);
         }
-        // Work dropped only because someone other than the owner started this subscription session
+        // Work dropped only because someone other than the plan owner started this session
         if (subscription && !session.started_by_owner && rows.some((r: any) => r.reason !== 'lurk')) {
-            notices.push(await postNotice(c, channelId, subscriptionNotice(session.profile_name)));
+            notices.push(await postNotice(c, channelId, planNotice(session.profile_name, session.auth_mode, !!planOwnerId)));
         }
         return null;
     }
@@ -322,7 +326,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         },
         profile: {
             id: session.profile_id.trim(), name: session.profile_name, botId, adapter: session.adapter,
-            authMode: subscription ? 'subscription' : 'api_key', runApproval: !!session.run_approval,
+            authMode: session.auth_mode === 'siwc' ? 'siwc' : subscription ? 'subscription' : 'api_key', runApproval: !!session.run_approval,
+            planOwnerId: subscription ? planOwnerId : null,
             model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
             toolPresets: session.tool_presets ?? [], allowedTools: session.allowed_tools ?? [],
         },
@@ -344,10 +349,10 @@ async function botCanAct(c: PoolClient, botId: string, channelId: string): Promi
 }
 
 /**
- * `terms` is set for a subscription profile (provider-terms.ts): only the owner's own
- * messages, the owner's commands, and hand-offs inside a session the owner started count.
+ * `terms` is set for a plan-owned profile (provider-terms.ts): only the plan owner's own
+ * messages, the plan owner's commands, and hand-offs inside a session they started count.
  */
-async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms: { startedByOwner: boolean } | null = null) {
+async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms: { startedByOwner: boolean; planOwnerId: string | null } | null = null) {
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
@@ -379,8 +384,8 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
         if (row.reason === 'command' && m.author_id) continue;
         if ((row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
         if (terms) {
-            if (!terms.startedByOwner) continue;
-            if ((row.reason === 'direct' || row.reason === 'lurk') && (authority !== 'owner' || m.author_bot)) continue;
+            if (!terms.startedByOwner || !terms.planOwnerId) continue;
+            if ((row.reason === 'direct' || row.reason === 'lurk') && (!authority || m.author_bot || m.author_id?.trim() !== terms.planOwnerId)) continue;
             if ((row.reason === 'handoff' || row.reason === 'protocol') && !m.author_bot) continue;
         }
         kept.push({
@@ -584,7 +589,7 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
  */
 async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: string, notices: Notice[]) {
     const s = await c.query(
-        `SELECT s.state, s.channel_id, p.name AS profile_name FROM agent_sessions s
+        `SELECT s.state, s.channel_id, p.name AS profile_name, p.auth_mode FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
         [run.session_id]
     );
@@ -604,7 +609,8 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     await c.query(`UPDATE agent_batches SET status = 'failed', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
     await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
     // The host refused the run under the provider-terms rules (agora-host/src/terms.ts)
-    const text = error === 'subscription_owner_only' ? subscriptionNotice(session.profile_name)
+    const text = error === 'subscription_owner_only' ? planNotice(session.profile_name, 'subscription')
+        : Object.hasOwn(SIWC_ERRORS, error) ? `${session.profile_name} ${SIWC_ERRORS[error]}`
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));

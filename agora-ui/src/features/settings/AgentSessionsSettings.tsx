@@ -5,6 +5,7 @@ import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
 import { NotAffiliated } from '../../components/ui/NotAffiliated';
 import { authLabel } from '../agents/agentSessions';
+import { ChatGPTPlanConnect, type PlanConnection } from './ChatGPTPlanConnect';
 
 /**
  * Agent hosts and agents (docs/planning/agent-sessions-wbs.md, S6). The owner registers the
@@ -19,7 +20,9 @@ interface Profile {
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
   /** Reported by the host at start (docs/provider-terms.md); subscription until then. */
-  authMode?: 'subscription' | 'api_key'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
+  authMode?: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
+  /** 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md). */
+  planOwnerId?: string | null;
 }
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh'];
@@ -57,6 +60,7 @@ export function AgentSessionsSettings() {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [plans, setPlans] = useState<PlanConnection[]>([]);
   const [error, setError] = useState('');
   const [secret, setSecret] = useState<{ label: string; token: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -69,10 +73,13 @@ export function AgentSessionsSettings() {
       api.get<Host[]>(`/servers/${serverId}/agent-hosts`),
       api.get<Profile[]>(`/servers/${serverId}/agent-profiles`),
       serverApi.getChannels(serverId),
-    ]).then(([h, p, c]) => {
+      // ChatGPT plan connections; an older server without them just shows none
+      api.get<PlanConnection[]>(`/servers/${serverId}/agent-plans`).catch(() => [] as PlanConnection[]),
+    ]).then(([h, p, c, pl]) => {
       if (cancelled) return;
       setHosts(h);
       setProfiles(p);
+      setPlans(pl);
       setChannels(c.filter(ch => ch.channelType === 3));
       setError('');
     }).catch(err => { if (!cancelled) setError(errorText(err)); });
@@ -95,11 +102,12 @@ export function AgentSessionsSettings() {
       <p className="text-text-muted text-xs mb-6">
         Each agent runs its CLI on your own login (<em>subscription</em>) or on an API key, as set in the host's config.
         Personal subscriptions are for one person, so only you can wake a subscription agent; give agents that other
-        members wake an API key. See docs/provider-terms.md.
+        members wake an API key. A Codex agent can also run on a ChatGPT plan through Sign in with ChatGPT; only the
+        person who connected their plan can wake it. See docs/provider-terms.md and docs/codex-chatgpt-plan.md.
       </p>
 
       <HostsSection serverId={serverId} hosts={hosts} onChange={load} onToken={setSecret} onError={setError} />
-      <AgentsSection serverId={serverId} hosts={activeHosts} profiles={profiles} channels={channels}
+      <AgentsSection serverId={serverId} hosts={activeHosts} profiles={profiles} channels={channels} plans={plans}
         onChange={load} onToken={setSecret} onError={setError} />
       <NotAffiliated className="mt-8" />
     </div>
@@ -148,8 +156,8 @@ function HostsSection({ serverId, hosts, onChange, onToken, onError }: {
   );
 }
 
-function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken, onError }: {
-  serverId: string; hosts: Host[]; profiles: Profile[]; channels: Channel[]; onChange: () => void;
+function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, onToken, onError }: {
+  serverId: string; hosts: Host[]; profiles: Profile[]; channels: Channel[]; plans: PlanConnection[]; onChange: () => void;
   onToken: (s: { label: string; token: string }) => void; onError: (e: string) => void;
 }) {
   const [form, setForm] = useState({ name: '', adapter: 'codex', hostId: '', workdirAlias: 'agora', workspaceId: 'primary', model: '', effort: 'high', channelId: '' });
@@ -177,7 +185,8 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
       <ul className="mb-4 flex flex-col gap-2">
         {profiles.length === 0 && <li className="text-text-muted text-sm">No agents yet.</li>}
         {profiles.map(p => (
-          <ProfileRow key={p.id} serverId={serverId} profile={p} host={hosts.find(h => h.id === p.hostId)} onChange={onChange} onError={onError} />
+          <ProfileRow key={p.id} serverId={serverId} profile={p} host={hosts.find(h => h.id === p.hostId)} plan={plans.find(x => x.profileId === p.id)}
+            onChange={onChange} onError={onError} />
         ))}
       </ul>
 
@@ -233,8 +242,8 @@ function AgentsSection({ serverId, hosts, profiles, channels, onChange, onToken,
   );
 }
 
-function ProfileRow({ serverId, profile, host, onChange, onError }: {
-  serverId: string; profile: Profile; host: Host | undefined; onChange: () => void; onError: (e: string) => void;
+function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
+  serverId: string; profile: Profile; host: Host | undefined; plan?: PlanConnection; onChange: () => void; onError: (e: string) => void;
 }) {
   const [model, setModel] = useState(profile.model ?? '');
   const [effort, setEffort] = useState(profile.effort ?? '');
@@ -274,6 +283,10 @@ function ProfileRow({ serverId, profile, host, onChange, onError }: {
         </select>
         {dirty && <Button variant="secondary" onClick={() => void save()}>Save</Button>}
       </div>
+      {profile.adapter === 'codex' && host && (
+        <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}
+          siwcMode={profile.authMode === 'siwc'} onChange={onChange} />
+      )}
       <ToolPermissions serverId={serverId} profile={profile} onChange={onChange} onError={onError} />
     </li>
   );
@@ -285,7 +298,9 @@ function AuthBadge({ profile }: { profile: Profile }) {
   const tone = mode === 'api_key' ? 'bg-online/20 text-online' : 'bg-warn/20 text-warn';
   const detail = !profile.authReportedAt
     ? 'not reported by its host yet, so treated as a subscription'
-    : mode === 'api_key' ? `key from ${profile.apiKeyEnv}` : 'only you can wake it';
+    : mode === 'api_key' ? `key from ${profile.apiKeyEnv}`
+    : mode === 'siwc' ? (profile.planOwnerId ? 'only the person who connected their plan can wake it' : 'no ChatGPT plan connected yet')
+    : 'only you can wake it';
   return (
     <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-muted" data-testid={`auth-${profile.name}`}>
       <span className={`rounded px-1.5 py-0.5 font-semibold leading-none ${tone}`}>{authLabel(mode, profile.runApproval)}</span>
