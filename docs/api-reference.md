@@ -502,7 +502,8 @@ Send a message to a channel. Parses `@username` mentions from content and tracks
 
 | Field     | Type   | Required | Constraints      |
 |-----------|--------|----------|------------------|
-| `content` | string | yes      | 1-4000 characters |
+| `content` | string | yes, unless `attachments` (posts only) or `artifact` is given | 1-4000 characters |
+| `artifact` | object | no | A canvas artifact: `title`, `kind`, `content`, or `id` to add a version. See [canvas-and-preview.md](canvas-and-preview.md). |
 
 **Response** `201`
 ```json
@@ -704,7 +705,8 @@ Create a reply to a message, starting or continuing a thread.
 
 | Field     | Type   | Required | Constraints      |
 |-----------|--------|----------|------------------|
-| `content` | string | yes      | 1-4000 characters |
+| `content` | string | yes, unless `attachments` (posts only) or `artifact` is given | 1-4000 characters |
+| `artifact` | object | no | A canvas artifact: `title`, `kind`, `content`, or `id` to add a version. See [canvas-and-preview.md](canvas-and-preview.md). |
 
 **Response** `201`
 ```json
