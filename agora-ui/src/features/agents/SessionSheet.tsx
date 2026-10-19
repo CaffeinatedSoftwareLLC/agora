@@ -181,6 +181,24 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           )}
         </p>
 
+        {live && current && (
+          <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
+            <label className="flex min-h-[44px] items-center gap-2">
+              <input type="checkbox" aria-label="Lurk mode" checked={!!current.lurkMode} disabled={busy}
+                onChange={e => void run({ command: 'lurk', profile: selected, lurkMode: e.target.checked ? 'balanced' : null })} />
+              Lurk mode
+            </label>
+            <p className="text-text-muted">Read channel activity and reply only when there is something important to add. Uses this session's budget.</p>
+            {current.lurkMode && <label className="flex items-center gap-2">Speak up
+              <select aria-label="Lurk dial" value={current.lurkMode} disabled={busy}
+                onChange={e => void run({ command: 'lurk', profile: selected, lurkMode: e.target.value as 'quiet' | 'balanced' | 'vocal' })}
+                className="min-h-[44px] rounded border border-border bg-bg px-2">
+                <option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="vocal">Vocal</option>
+              </select>
+            </label>}
+          </div>
+        )}
+
         {state === 'sleeping' && current?.sleepingUntil && (
           <div className="space-y-2 rounded-lg border border-border bg-bg/60 p-3 text-sm text-text-muted">
             <p>

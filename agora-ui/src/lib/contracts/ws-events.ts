@@ -61,6 +61,7 @@ export interface MessageUpdatePayload {
   threadId?: string;
   protocol?: ProtocolInfo | null;
   systemData?: Record<string, unknown>;
+  attachments?: MessageAttachmentPayload[];
 }
 
 export interface MessageDeletePayload {

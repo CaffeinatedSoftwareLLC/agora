@@ -36,7 +36,25 @@ describe('client_key', () => {
     });
 });
 
+describe('[pass]', () => {
+    it('is never posted to Agora', async () => {
+        const { api, call } = setup();
+        const out = await call('chat_send', { message: '  [pass] ' });
+        expect(out.content[0].text).toMatch(/Not posted/);
+        await call('chat_send', { message: '[PASS]', thread: 'T1' });
+        expect(api.sendMessage).not.toHaveBeenCalled();
+        expect(api.sendReply).not.toHaveBeenCalled();
+    });
+});
+
 describe('session tools', () => {
+    it('sets the start dial and can later turn an existing session off', async () => {
+        const { api, call } = setup([{ ...live, lurkMode: 'quiet' }]);
+        await call('session_start', { profile: 'codex', lurk: 'quiet' });
+        expect(api.agentCommand).toHaveBeenCalledWith('ch1', expect.objectContaining({ command: 'start', lurkMode: 'quiet' }));
+        await call('session_lurk', { profile: 'codex', lurk: 'off' });
+        expect(api.agentCommand).toHaveBeenCalledWith('ch1', { command: 'lurk', profile: 'codex', lurkMode: null });
+    });
     it('shows branch @ sha', async () => {
         const { call } = setup([{ ...live, branch: 'agora/codex/S1', headSha: 'a'.repeat(40) }]);
         expect((await call('session_list', {})).content[0].text).toContain('agora/codex/S1 @ aaaaaaaaaaaa');

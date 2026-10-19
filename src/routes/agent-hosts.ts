@@ -8,6 +8,7 @@ import { asService } from '../lib/agent-sessions';
 import { noticePathList } from '../lib/file-reservations';
 import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
 import { allowedToolsSchema, deniedToolsSchema, toolPresetsSchema } from '../lib/agent-permissions';
+import { agentImageRoutes } from './agent-images';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -104,6 +105,7 @@ async function releaseRequestClient(request: FastifyRequest) {
 }
 
 export async function agentHostRoutes(app: FastifyInstance) {
+    await agentImageRoutes(app);
     // ─── Hosts (owner) ───
 
     // POST /servers/:serverId/agent-hosts → 201 { host, token } (the token is shown once)

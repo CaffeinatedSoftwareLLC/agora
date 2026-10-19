@@ -17,6 +17,26 @@ async function fake(handler: (path: string, body: string, auth: string | undefin
     return `http://127.0.0.1:${address.port}`;
 }
 describe('HTTP contract against a fake local server', () => {
+    it('discovers eligible posts and uploads multipart bytes with host and claim credentials', async () => {
+        const c = claim(); let uploads = 0;
+        const url = await fake((path, body, auth) => {
+            expect(auth).toBe('AgentHost ah_test');
+            if (path.endsWith('/discover')) {
+                expect(JSON.parse(body)).toEqual({ claimToken: c.run.claimToken });
+                return { status: 200, body: { maxBytes: 100, messages: [{ id: 'm1', content: '`a.png`' }] } };
+            }
+            expect(path).toBe(`/agent-hosts/@me/runs/${c.run.id}/images`);
+            expect(body).toContain('name="claimToken"'); expect(body).toContain(c.run.claimToken);
+            expect(body).toContain('name="messageId"'); expect(body).toContain('m1');
+            expect(body).toContain('name="reference"'); expect(body).toContain('a.png');
+            expect(body).toContain('filename="a.png"'); expect(body).toContain('image-bytes'); uploads++;
+            return { status: 201, body: { ok: true } };
+        });
+        const client = new Client(url, 'ah_test');
+        expect((await client.imageMessages(c)).messages).toHaveLength(1);
+        await client.uploadImage(c, { messageId: 'm1', reference: 'a.png', filename: 'a.png', buffer: Buffer.from('image-bytes') });
+        expect(uploads).toBe(1);
+    });
     it('claims once, records send time and sends only AgentHost credentials', async () => {
         let calls = 0;
         const url = await fake((path, body, auth) => {

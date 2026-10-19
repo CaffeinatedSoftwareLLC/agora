@@ -22,6 +22,7 @@ function sessionJson(r: any) {
     return {
         id: r.id.trim(), profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
+        lurkMode: r.lurk_mode ?? null,
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
         workspaceId: r.workspace_id,
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
@@ -103,7 +104,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 required: ['command'],
                 additionalProperties: false,
                 properties: {
-                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget', 'wake'] },
+                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget', 'wake', 'lurk'] },
+                    lurkMode: { type: ['string', 'null'], enum: ['quiet', 'balanced', 'vocal', null] },
                     profile: { type: 'string', minLength: 1, maxLength: 32 },
                     sessionId: { type: 'string', minLength: 26, maxLength: 26 },
                     onLive: { type: 'string', enum: ['ask', 'shelve', 'keep'] },
@@ -114,7 +116,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const { command, profile: profileName, sessionId, onLive = 'ask', fresh = false, tokenBudget } = request.body as any;
+        const { command, profile: profileName, sessionId, onLive = 'ask', fresh = false, tokenBudget, lurkMode } = request.body as any;
         const db = request.dbClient!;
         const userId = request.userId;
 
@@ -135,7 +137,9 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             // Only the owner and directors can start, end or resume agent sessions
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
-        if ((command === 'start' || command === 'end') && !profileName) return reply.status(400).send({ error: 'profile is required' });
+        if (['start', 'end', 'lurk'].includes(command) && !profileName) return reply.status(400).send({ error: 'profile is required' });
+        if (command === 'lurk' && lurkMode === undefined) return reply.status(400).send({ error: 'lurkMode is required' });
+        if (lurkMode !== undefined && command !== 'lurk' && command !== 'start') return reply.status(400).send({ error: 'lurkMode requires start or lurk' });
         if ((command === 'resume' || command === 'budget' || command === 'wake') && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });
 
         if ((command === 'budget' || tokenBudget !== undefined) &&
@@ -147,6 +151,18 @@ export async function agentCommandRoutes(app: FastifyInstance) {
         const notices: Notice[] = [];
         try {
             const result = await asService(db, async () => {
+                if (command === 'lurk') {
+                    const profile = await profileByName(db, channelId, profileName);
+                    const live = await liveFor(db, channelId, profile.bot_id.trim());
+                    if (!live) throw new CommandError(404, { error: 'no_live_session' });
+                    await db.query('UPDATE agent_sessions SET lurk_mode = $2 WHERE id = $1', [live.id, lurkMode]);
+                    if (lurkMode === null) await db.query(`UPDATE agent_inbox SET acked_at = NOW()
+                        WHERE session_id = $1 AND reason = 'lurk' AND batch_id IS NULL AND acked_at IS NULL`, [live.id]);
+                    notices.push(await sessionUpdate(db, live.id.trim(), !!live.running));
+                    notices.push(await postNotice(db, channelId, `${who} set ${profile.name}'s lurk mode to ${lurkMode ?? 'off'}.`));
+                    const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [live.id]);
+                    return { status: 200, body: { action: 'lurk_updated', session: sessionJson(row.rows[0]) } };
+                }
                 if (command === 'budget') {
                     const updated = await db.query(`UPDATE agent_sessions SET token_budget = $3 WHERE id = $1 AND channel_id = $2 AND state <> 'ended' RETURNING id`, [sessionId, channelId, tokenBudget]);
                     if (!updated.rows.length) throw new CommandError(404, { error: 'not_resumable' });
@@ -166,7 +182,12 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 }
                 if (command === 'end') return endSession(db, channelId, profileName, who, notices);
                 if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, who, notices, tokenBudget);
-                return startSession(db, channelId, profileName, onLive, fresh, userId, who, notices);
+                const started = await startSession(db, channelId, profileName, onLive, fresh, userId, who, notices);
+                if (lurkMode !== undefined) {
+                    await db.query('UPDATE agent_sessions SET lurk_mode = $2 WHERE id = $1', [started.body.session.id, lurkMode]);
+                    started.body.session.lurkMode = lurkMode;
+                }
+                return started;
             });
             request.pendingEvents ??= [];
             for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });

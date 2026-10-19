@@ -326,7 +326,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
       nextByChannel.set(payload.channelId, current.map((m) =>
         m.id === payload.id
-          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined, ...(payload.systemData ? { systemData: payload.systemData } : {}) }
+          ? { ...m, content: payload.content, editedAt: payload.editedAt, protocol: payload.protocol ?? undefined, ...(payload.systemData ? { systemData: payload.systemData } : {}), ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}) }
           : m
       ));
       return { byChannel: nextByChannel };

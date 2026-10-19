@@ -219,3 +219,8 @@ is trusted local software running under your Windows account.
 This package does not deploy or modify the server. S2 integration, real CLI
 resume/usage and tree-kill verification, and the S7 phone/deployment test remain
 release gates.
+### Passive turns and referenced images (#83, #86)
+
+Lurk deliveries carry `session.lurkMode` and inbox reason `lurk`. A purely passive batch uses the dial's interjection rules and permits exact `[pass]` without forcing a JSON schema. `[pass]` completes successfully, preserves token usage and leaves the prior session summary intact. Normal addressed work still requires its usual response.
+
+After the CLI exits and before reporting completion/failure, the host discovers this run bot's posted image references through the host API. It reads only real paths under the actual run cwd/worktree or `os.tmpdir()`, using the server's size limit, then uploads bytes with the host token. The lease watchdog and heartbeat remain active during uploads. The API attaches images to their original message through `storeFile()` and deduplicates by content per run. Invalid, missing, outside-root or rejected images are skipped; auth/fencing errors stop reporting through the existing host rules. See [agent-sessions.md](../docs/agent-sessions.md#referenced-images) for the endpoint contract.

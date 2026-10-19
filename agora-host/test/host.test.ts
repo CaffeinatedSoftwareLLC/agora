@@ -13,6 +13,8 @@ it('drives one complete delivery through the HTTP client and scheduler with a fa
         if (req.url!.includes('/next')) {
             if (!claimed) { claimed = true; res.end(JSON.stringify(claim())); }
             else { res.writeHead(401); res.end('{}'); }
+        } else if (req.url!.endsWith('/images/discover')) {
+            res.end('{"maxBytes":26214400,"messages":[]}');
         } else {
             reports.push(JSON.parse(text)); res.end('{"ok":true}');
         }

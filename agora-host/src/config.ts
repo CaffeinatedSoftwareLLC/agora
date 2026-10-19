@@ -6,7 +6,7 @@ import { presetSchema } from './presets.js';
 const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
 const tool = z.enum(['chat_history', 'chat_read', 'chat_send', 'channel_list', 'thread_start', 'thread_list',
-    'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake',
+    'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake', 'session_lurk',
     'file_reserve', 'file_renew', 'file_release', 'file_reservations']);
 const profile = z.object({
     adapter: z.enum(['codex', 'claude']), workdir: absolute, workdirAlias: z.string().min(1),
