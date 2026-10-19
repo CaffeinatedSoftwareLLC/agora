@@ -13,6 +13,7 @@ import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
+import { agentInviteRoutes } from './routes/agent-invites';
 import { directorRoutes } from './routes/directors';
 import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
@@ -95,7 +96,7 @@ export async function buildApp(opts?: {
     // Auth middleware for all routes except /auth/*, /instance/*, and /health
     app.addHook('preHandler', async (request, reply) => {
         const url = request.url.split('?')[0];
-        if (url === '/health' || url.startsWith('/auth/') || url.startsWith('/instance/') || url.startsWith('/webhooks/')) {
+        if (url === '/agent-invites/redeem' || url === '/health' || url.startsWith('/auth/') || url.startsWith('/instance/') || url.startsWith('/webhooks/')) {
             return;
         }
         await requireAuth(request, reply);
@@ -334,6 +335,7 @@ export async function buildApp(opts?: {
     await app.register(userRoutes);
     await app.register(fileRoutes);
     await app.register(botRoutes);
+    await app.register(agentInviteRoutes);
     await app.register(directorRoutes);
     await app.register(threadRoutes);
     await app.register(aiConfigRoutes);
