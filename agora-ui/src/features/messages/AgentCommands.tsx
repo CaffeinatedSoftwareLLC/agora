@@ -14,10 +14,11 @@ import {
 type Command =
   | { command: 'start'; profile: string; fresh: boolean }
   | { command: 'end'; profile: string }
+  | { command: 'lurk'; profile: string; lurkMode: 'quiet' | 'balanced' | 'vocal' | null }
   | { command: 'sessions' }
   | { command: 'resume'; sessionId: string };
 
-const USAGE = '/start <profile> [--new] · /end <profile> · /sessions · /resume <session id>';
+const USAGE = '/start <profile> [--new] · /end <profile> · /sessions · /resume <session id> · /lurk <profile> [quiet|balanced|vocal|off]';
 
 /** Parse a message-box line. Returns null when it isn't one of these commands. */
 export function parseAgentCommand(text: string): Command | 'usage' | null {
@@ -25,6 +26,11 @@ export function parseAgentCommand(text: string): Command | 'usage' | null {
   const name = parts[0]?.toLowerCase();
   const args = parts.slice(1);
   switch (name) {
+    case '/lurk': {
+      const dial = args[1]?.toLowerCase() ?? 'balanced';
+      if (!args[0] || args.length > 2 || !['quiet', 'balanced', 'vocal', 'off'].includes(dial)) return 'usage';
+      return { command: 'lurk', profile: args[0].toLowerCase(), lurkMode: dial === 'off' ? null : dial as 'quiet' | 'balanced' | 'vocal' };
+    }
     case '/start': {
       const fresh = args.includes('--new');
       const profile = args.find(a => !a.startsWith('--'));

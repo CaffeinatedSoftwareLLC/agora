@@ -20,7 +20,8 @@ export interface Director {
 }
 
 export interface AgentCommand {
-    command: 'start' | 'end' | 'sessions' | 'resume';
+    command: 'start' | 'end' | 'sessions' | 'resume' | 'lurk';
+    lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
     profile?: string;
     sessionId?: string;
     onLive?: 'ask' | 'shelve' | 'keep';
@@ -28,6 +29,7 @@ export interface AgentCommand {
 }
 
 export interface AgentSession {
+    lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
     branch?: string | null;
     baseSha?: string | null;
     headSha?: string | null;
@@ -45,7 +47,7 @@ export interface AgentSession {
 }
 
 export interface AgentCommandResult {
-    action?: 'started' | 'resumed' | 'kept' | 'ended';
+    action?: 'started' | 'resumed' | 'kept' | 'ended' | 'lurk_updated';
     session?: AgentSession;
     sessions?: AgentSession[];
 }

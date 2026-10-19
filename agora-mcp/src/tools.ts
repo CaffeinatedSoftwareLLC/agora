@@ -327,6 +327,10 @@ export function registerTools(
             client_key: clientKeyParam,
         },
         async ({ channel, message, thread, client_key }) => {
+            // A lurk run's [pass] means silence; it must never reach the channel
+            if (message.trim().toLowerCase() === '[pass]') {
+                return { content: [{ type: 'text' as const, text: 'Not posted: [pass] means stay silent. Finish the turn without posting.' }] };
+            }
             const ch = await resolveChannel(channel);
             const idempotencyKey = randomUUID();
             const msg = thread
@@ -655,12 +659,26 @@ export function registerTools(
             profile: z.string().describe('Profile name, e.g. "codex"'),
             on_live: z.enum(['ask', 'keep', 'shelve']).optional().describe('What to do if the agent is already live here'),
             fresh: z.boolean().optional().describe('Start a new session instead of resuming a shelved one'),
+            lurk: z.enum(['quiet', 'balanced', 'vocal', 'off']).optional().describe('Passive listening dial for this session'),
         },
-        async ({ channel, profile, on_live, fresh }) => {
+        async ({ channel, profile, on_live, fresh, lurk }) => {
             const ch = await resolveChannel(channel);
             const res = await explainCannotDirect(ch.name, () =>
-                api.agentCommand(ch.id, { command: 'start', profile, onLive: on_live, fresh }));
+                api.agentCommand(ch.id, { command: 'start', profile, onLive: on_live, fresh,
+                    ...(lurk !== undefined ? { lurkMode: lurk === 'off' ? null : lurk } : {}) }));
             return { content: [{ type: 'text' as const, text: `Session ${res.action}: ${res.session ? formatSession(res.session) : ''}` }] };
+        },
+    );
+
+    server.tool(
+        'session_lurk',
+        'Set or clear passive listening for an existing live session. Requires can_direct, like session_start. Lurkers reply only for important corrections and consume the session budget.',
+        { channel: z.string().optional(), profile: z.string(), lurk: z.enum(['quiet', 'balanced', 'vocal', 'off']) },
+        async ({ channel, profile, lurk }) => {
+            const ch = await resolveChannel(channel);
+            const res = await explainCannotDirect(ch.name, () => api.agentCommand(ch.id,
+                { command: 'lurk', profile, lurkMode: lurk === 'off' ? null : lurk }));
+            return { content: [{ type: 'text' as const, text: `Lurk mode: ${res.session?.lurkMode ?? 'off'}` }] };
         },
     );
 

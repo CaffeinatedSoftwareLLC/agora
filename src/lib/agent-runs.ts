@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import { readAuthorities } from './direct-agents';
 import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
+import { lurkBatchReady } from './agent-lurk';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -91,6 +92,7 @@ export interface ClaimResult {
         nativeSessionId: string | null; summary: string | null;
         wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
         wokeFromSleep: boolean;
+        lurkMode: 'quiet' | 'balanced' | 'vocal' | null;
     };
     profile: {
         id: string; name: string; botId: string; adapter: string;
@@ -201,11 +203,14 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         )).rows;
     } else {
         candidates = (await c.query(
-            `SELECT id, thread_id FROM agent_inbox
+            `SELECT id, thread_id, reason, created_at, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::float8 AS db_now_ms
+             FROM agent_inbox
              WHERE session_id = $1 AND batch_id IS NULL AND acked_at IS NULL
              ORDER BY id LIMIT $2`,
             [sessionId, MAX_BATCH]
         )).rows;
+        // Measure the window on the database clock that stamped created_at, not the API's
+        if (!lurkBatchReady(candidates, candidates[0]?.db_now_ms)) return null;
         batchId = generateUlid();
         attempt = 1;
     }
@@ -230,6 +235,10 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
 
     // 4. Recheck each row; rows that fail are acknowledged without work
     const kept = await recheckRows(c, channelId, rows);
+    // Turning lurk off invalidates pending passive work, including retry batches.
+    for (let i = kept.length - 1; i >= 0; i--) {
+        if (kept[i].row.reason === 'lurk' && !session.lurk_mode) kept.splice(i, 1);
+    }
     const dropped = rows.filter((r: any) => !kept.some(k => k.row.id === r.id));
     if (dropped.length > 0) {
         await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE id = ANY($1)`, [dropped.map((r: any) => r.id)]);
@@ -279,6 +288,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
             nativeSessionId: session.native_session_id ?? null, summary: session.summary ?? null,
             wakesUsed: session.wakes_used + 1, wakeBudget: session.wake_budget,
             tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget), wokeFromSleep,
+            lurkMode: session.lurk_mode ?? null,
         },
         profile: {
             id: session.profile_id.trim(), name: session.profile_name, botId, adapter: session.adapter,
@@ -371,7 +381,7 @@ export type RunCheck =
  * Load a run for a host call and apply the fencing rules, in the contract's order. Locks the
  * run row. `finished` says which terminal status a repeat of this call may find.
  */
-async function checkRun(c: PoolClient, host: Host, runId: string, claimToken: string, finished: 'succeeded' | 'failed' | null,
+export async function checkRun(c: PoolClient, host: Host, runId: string, claimToken: string, finished: 'succeeded' | 'failed' | null,
                         notices: Notice[], lockProfile = false): Promise<RunCheck> {
     // Lock order, everywhere: profile → session → run → batch → inbox. Commands, claims and
     // the sweeper lock the session first too, so /end and a completion can't deadlock, and a
@@ -468,7 +478,8 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
         await fileDeniedTools(c, run, body.deniedTools, notices);
         const posted = await c.query(`SELECT 1 FROM messages m JOIN agent_sessions s ON s.bot_id = m.author_id
             WHERE s.id = $1 AND m.channel_id = s.channel_id AND m.created_at >= $2 LIMIT 1`, [run.session_id, run.created_at]);
-        if (!posted.rows.length) {
+        const addressed = await c.query(`SELECT 1 FROM agent_inbox WHERE batch_id = $1 AND reason <> 'lurk' AND acked_at IS NULL LIMIT 1`, [run.batch_id]);
+        if (!posted.rows.length && addressed.rows.length > 0) {
             await c.query(`UPDATE agent_runs SET error = 'nothing_posted' WHERE id = $1`, [runId]);
             const name = await c.query(`SELECT p.name, s.channel_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
             notices.push(await postNotice(c, name.rows[0].channel_id.trim(), `${name.rows[0].name} finished without posting a reply. The run may be blocked; check its permissions or wake it again.`));

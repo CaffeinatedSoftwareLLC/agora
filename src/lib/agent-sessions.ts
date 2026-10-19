@@ -13,7 +13,8 @@ import type { ProtocolInfo } from './protocol';
  *   wakes the other participants → 'protocol';
  * - in a bound thread, protocol messages from participants hand off (YIELD, ACK, DECIDE),
  *   and messages from someone who can direct reach every participant.
- * Nothing else wakes an agent: other bots' chatter, unbound threads and system notices.
+ * - opt-in lurkers hear otherwise unrouted channel posts and thread replies, except
+ *   their own posts and posts by other lurkers. System notices never route here.
  *
  * Members can read sessions through RLS but can't write them, so the writes here run as
  * the service role on the request's own connection.
@@ -36,6 +37,7 @@ interface LiveSession {
     id: string;
     botId: string;
     names: string[];
+    lurkMode: string | null;
 }
 
 /**
@@ -62,7 +64,7 @@ export async function asService<T>(client: any, fn: () => Promise<T>): Promise<T
 /** Live sessions in a channel, with the names a START or YIELD may use for each agent. */
 async function liveSessions(db: any, channelId: string): Promise<LiveSession[]> {
     const rows = await db.query(
-        `SELECT s.id, s.bot_id, u.username, p.name AS profile_name
+        `SELECT s.id, s.bot_id, s.lurk_mode, u.username, p.name AS profile_name
          FROM agent_sessions s
          JOIN users u ON u.id = s.bot_id
          JOIN agent_profiles p ON p.id = s.profile_id
@@ -72,6 +74,7 @@ async function liveSessions(db: any, channelId: string): Promise<LiveSession[]> 
     return rows.rows.map((r: any) => ({
         id: r.id.trim(),
         botId: r.bot_id.trim(),
+        lurkMode: r.lurk_mode,
         names: [String(r.username).toLowerCase(), String(r.profile_name).toLowerCase()],
     }));
 }
@@ -81,7 +84,7 @@ function byName(sessions: LiveSession[], name: string): LiveSession | undefined 
     return sessions.find(s => s.names.includes(wanted));
 }
 
-async function addInbox(db: any, sessionIds: string[], messageId: string, threadId: string | null, reason: 'direct' | 'handoff' | 'protocol'): Promise<void> {
+async function addInbox(db: any, sessionIds: string[], messageId: string, threadId: string | null, reason: 'direct' | 'handoff' | 'protocol' | 'lurk'): Promise<void> {
     for (const sessionId of new Set(sessionIds)) {
         await db.query(
             `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason)
@@ -93,8 +96,8 @@ async function addInbox(db: any, sessionIds: string[], messageId: string, thread
 }
 
 /**
- * Close a bound thread: its unclaimed inbox rows are acknowledged without work. With
- * `cancel`, runs in progress for its participants are asked to stop.
+ * Close a bound thread: its unclaimed directed/protocol rows are acknowledged without
+ * work; passive observations survive. With `cancel`, participants' runs are asked to stop.
  */
 async function closeThread(db: any, threadId: string, sessionIds: string[], cancel: boolean): Promise<void> {
     await db.query(
@@ -103,7 +106,7 @@ async function closeThread(db: any, threadId: string, sessionIds: string[], canc
     );
     await db.query(
         `UPDATE agent_inbox SET acked_at = NOW()
-         WHERE thread_id = $1 AND batch_id IS NULL AND acked_at IS NULL`,
+         WHERE thread_id = $1 AND reason <> 'lurk' AND batch_id IS NULL AND acked_at IS NULL`,
         [threadId]
     );
     if (cancel && sessionIds.length > 0) {
@@ -133,6 +136,12 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<void> {
             await routeTopLevel(db, msg, sessions, authorSession);
         } else {
             await routeThreadReply(db, msg, sessions, authorId);
+        }
+        // Normal routing wins through the inbox's unique (session, message) key.
+        // A lurker's output must never trigger a chain of passive interjections.
+        if (!authorSession?.lurkMode) {
+            await addInbox(db, sessions.filter(s => s.lurkMode && s.botId !== authorId).map(s => s.id),
+                msg.messageId, msg.threadId, 'lurk');
         }
     });
 }

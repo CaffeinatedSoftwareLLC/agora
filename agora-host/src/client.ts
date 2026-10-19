@@ -51,6 +51,23 @@ export class Client implements HostApi {
     async workspaceWarning(sessionId: string, paths: string[]): Promise<void> {
         await this.request('POST', 'workspaces/warning', { sessionId, paths });
     }
+    async imageMessages(claim: Claim, signal?: AbortSignal) {
+        return z.object({ maxBytes: z.number().int().positive(), messages: z.array(z.object({ id: z.string(), content: z.string() })) })
+            .parse(await this.request('POST', `runs/${claim.run.id}/images/discover`, { claimToken: claim.run.claimToken }, signal));
+    }
+    async uploadImage(claim: Claim, image: { messageId: string; reference: string; filename: string; buffer: Buffer }, signal?: AbortSignal): Promise<void> {
+        const form = new FormData();
+        form.append('claimToken', claim.run.claimToken);
+        form.append('messageId', image.messageId);
+        form.append('reference', image.reference);
+        form.append('file', new Blob([new Uint8Array(image.buffer)]), image.filename);
+        const response = await this.fetcher(new URL(`/agent-hosts/@me/runs/${claim.run.id}/images`, this.origin), {
+            method: 'POST', headers: { Authorization: `AgentHost ${this.token}` }, body: form, redirect: 'error',
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+        });
+        await response.body?.cancel();
+        if (!response.ok) throw new HttpError(response.status);
+    }
     async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat> {
         return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`, { claimToken: claim.run.claimToken, tokensUsed }, signal));
     }

@@ -4,12 +4,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
-import { wakePrompt } from './prompt.js';
+import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
 
 export interface Launch {
+    lurk?: boolean;
     workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
     adapter: 'codex' | 'claude'; cleanup(): Promise<void>;
@@ -76,19 +77,19 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
                 ...(model !== null ? ['-m', model] : []),
                 ...(effort !== null ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
                 ...(claim.session.nativeSessionId ? ['resume', claim.session.nativeSessionId] : []),
-                '--json', '--output-schema', paths[2], '-'];
+                '--json', ...(!isLurkRun(claim) ? ['--output-schema', paths[2]] : []), '-'];
         } else {
             const allowed = [...new Set([...local.approvedTools.map(t => `mcp__agora__${t}`), ...perms.claude])];
             args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'manual', '--permission-prompts', 'none',
                 '--strict-mcp-config', '--mcp-config', paths[0],
                 ...(model !== null ? ['--model', model] : []),
                 ...(effort !== null ? ['--effort', effort] : []),
-                '--json-schema', JSON.stringify(resultSchema),
+                ...(!isLurkRun(claim) ? ['--json-schema', JSON.stringify(resultSchema)] : []),
                 ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup,
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }
@@ -104,11 +105,12 @@ function sumUsage(usage: unknown, keys: string[]): number | null {
     return Number.isSafeInteger(total) ? total : null;
 }
 function summary(value: unknown): string | null {
+    if (typeof value === 'string' && value.trim() === '[pass]') return '[pass]';
     if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return null; } }
     return value && typeof value === 'object' && typeof (value as { summary?: unknown }).summary === 'string'
         ? (value as { summary: string }).summary.slice(0, 16000) : null;
 }
-export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCode: number | null, sandbox?: string): Result {
+export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCode: number | null, sandbox?: string, lurk = false): Result {
     const changedPaths = new Set<string>();
     let nativeSessionId: string | null = null; let tokensUsed: number | null = null; let final: string | null = null; let success = false;
     try {
@@ -130,7 +132,7 @@ export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCod
             nativeSessionId = typeof r.session_id === 'string' ? r.session_id : null;
             tokensUsed = sumUsage(r.usage, ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']) ?? tokensUsed;
             final = summary(r.structured_output ?? r.result);
-            success = !invalid && r.type === 'result' && r.subtype === 'success' && r.is_error === false && final !== null;
+            success = !invalid && r.type === 'result' && r.subtype === 'success' && r.is_error === false && (final !== null || lurk);
         } else {
             for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
                 const e = JSON.parse(line);
@@ -146,12 +148,12 @@ export function parseOutput(adapter: 'codex' | 'claude', stdout: string, exitCod
                 }
                 if (e.type === 'turn.failed') success = false;
             }
-            success &&= final !== null;
+            success &&= final !== null || lurk;
         }
     } catch { success = false; }
     success &&= exitCode === 0;
     // Only for a finished process; heartbeats parse partial output just for usage
     const { deniedTools, rateLimit } = exitCode === null ? { deniedTools: [], rateLimit: null } : detectSignals(adapter, stdout, !success, sandbox);
-    return { success, nativeSessionId, tokensUsed, summary: final, changedPaths: [...changedPaths], ...(success ? {} : { error: 'cli_failed_or_invalid_output' }),
+    return { success, nativeSessionId, tokensUsed, summary: final === '[pass]' ? null : final, changedPaths: [...changedPaths], ...(success ? {} : { error: 'cli_failed_or_invalid_output' }),
         ...(deniedTools.length ? { deniedTools } : {}), ...(rateLimit ? { rateLimit } : {}) };
 }

@@ -23,11 +23,11 @@ agent host on your PC ── long-polls /agent-hosts ────┘
 | Action | Who |
 |---|---|
 | Create hosts and agents, edit profiles | The server owner (Settings → Agents) |
-| `/start`, `/end`, `/resume` | The owner, members with **DirectAgents**, and bots the owner allowed to direct in that channel |
+| `/start`, `/end`, `/resume`, `/lurk` | The owner, members with **DirectAgents**, and bots the owner allowed to direct in that channel |
 | `/sessions` | Anyone who can see the channel |
 | Wake an agent | A post from someone who can direct that mentions the agent (or with only one agent live in the channel); hand-offs inside an agora-collab thread between its participants |
 
-Other bots' messages, members without DirectAgents and system notices never wake an agent.
+Opt-in **lurk mode** also wakes an agent for otherwise unrouted channel posts and thread replies, including messages from members without DirectAgents and ordinary bots. It ignores its own posts and other lurking sessions' bots to prevent loops. System notices never wake a lurker. Ordinary direct/protocol routing takes precedence, so a message produces at most one inbox row per session.
 
 ## Set it up
 
@@ -57,10 +57,26 @@ Type these in a channel's message box:
 | `/end codex` | Ends the session: queued work is dropped and a run in progress is stopped. History stays. |
 | `/sessions` | Lists this channel's sessions with their state, wakes and tokens |
 | `/resume <session id>` | Brings back a shelved session (IDs are in `/sessions`) |
+| `/lurk codex [quiet\|balanced\|vocal]` | Enables passive listening for codex's live session here; default is balanced |
+| `/lurk codex off` | Disables passive listening and drops pending unclaimed lurk observations |
 
 Then talk to it: `@codex look at the failing test in auth.spec.ts`. With only one agent live in the channel, you can leave the mention out.
 
-**Orchestrators.** An agent can run other agents through agora-mcp's `session_start`, `session_end`, `session_list` and `session_wake`, but only in channels where the owner turned on *can direct* for its bot (Settings → Bots). Without it `session_start`, `session_end` and `session_wake` fail with "<bot> can't direct agents in #<channel>" (the server answers 403 `cannot_direct`), and `session_wake` posts nothing; `session_list` needs only access.
+The session sheet also has a **Lurk mode** switch and **Speak up** dial. The setting belongs to that session, survives shelving/resume, and starts off for a fresh session. Lurk batches collect for two seconds from the oldest pending observation (up to 20 messages per wake); direct work does not wait for that window. Continuous chatter cannot postpone the oldest observation indefinitely.
+
+For a purely passive batch, the host asks the agent to read everything and speak only for something important: a bug, wrong claim, or missed step. **Quiet** requires a serious issue, **balanced** a material correction, and **vocal** permits useful actionable corrections. Otherwise it outputs exactly `[pass]` and posts nothing. A successful silent lurk turn has no “finished without posting” warning. Mixed batches that include direct/protocol work use the normal response rules. Passive wakes consume the same wake and token budgets, including heartbeat accounting.
+
+MCP callers can pass `lurk: "quiet" | "balanced" | "vocal" | "off"` to `session_start`, or use `session_lurk` with the same dial to change an existing live session. Both require the same channel authority as `/start`. The API command is `{ command: "lurk", profile: "codex", lurkMode: "balanced" }`; use `null` for off.
+
+## Referenced images
+
+After a hosted CLI exits, the host checks messages posted by that bot in the session's channel during the active run. Local `.png`, `.jpg`, `.jpeg`, `.gif` and `.webp` paths in Markdown links, code spans, quoted text or bare paths become attachments on their source message, so channel and thread placement stay intact. Remote image URLs are ignored.
+
+Relative paths resolve from the run's actual cwd (its session worktree). Absolute paths are accepted only inside that cwd or the system temporary directory. The host resolves symlinks/junctions, checks directory boundaries and opened-file identity, and rejects files outside those roots, missing/changed files, devices, network paths and alternate data streams. It reads no more than the instance's `files.max_size_bytes` setting. Invalid references are skipped without failing the completed CLI turn.
+
+The host token authorizes `POST /agent-hosts/@me/runs/:runId/images/discover` with a claim token to fetch eligible messages and the size limit. `POST /agent-hosts/@me/runs/:runId/images` takes multipart fields `claimToken`, `messageId`, `reference`, then `file` bytes. The API never reads a supplied local path: it verifies host ownership, the current claim/lease, session/bot access, and that the exact reference occurs in an eligible, undeleted message. Finished/cancelled runs cannot upload. All images go through `storeFile()` for instance limits, magic-byte validation, quota, EXIF processing and encryption. Canonical paths are deduplicated on the host; image bytes are durably deduplicated by SHA-256 per run on the server. At most ten attachments may belong to one message.
+
+**Orchestrators.** An agent can run other agents through agora-mcp's `session_start`, `session_end`, `session_list`, `session_lurk` and `session_wake`, but only in channels where the owner turned on *can direct* for its bot (Settings → Bots). Without it the write tools fail with "<bot> can't direct agents in #<channel>" (the server answers 403 `cannot_direct`), and `session_wake` posts nothing; `session_list` needs only access.
 
 ## Limits and budgets
 

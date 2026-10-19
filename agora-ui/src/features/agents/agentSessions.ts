@@ -16,6 +16,7 @@ export interface AgentRun {
 }
 
 export interface AgentSession {
+  lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
   branch?: string | null;
   baseSha?: string | null;
   headSha?: string | null;
@@ -48,6 +49,7 @@ export interface AgentProfile {
 export type CommandBody =
   | { command: 'start'; profile: string; fresh?: boolean; onLive?: 'shelve' | 'keep' }
   | { command: 'end'; profile: string }
+  | { command: 'lurk'; profile: string; lurkMode: 'quiet' | 'balanced' | 'vocal' | null }
   | { command: 'sessions' }
   | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number }
   | { command: 'budget'; sessionId: string; tokenBudget: number }
@@ -69,7 +71,7 @@ export const ERRORS: Record<string, string> = {
   not_sleeping: 'That session is not sleeping.',
 };
 
-export const NO_AUTHORITY = 'Only the owner and directors can start, end or resume agent sessions.';
+export const NO_AUTHORITY = 'Only the owner and directors can start, end, resume or change lurk mode for agent sessions.';
 
 export function runAgentCommand(channelId: string, body: CommandBody): Promise<CommandResponse> {
   return api.post<CommandResponse>(`/channels/${channelId}/agent-commands`, body);
@@ -166,6 +168,7 @@ export function describeSession(s: AgentSession): string {
 }
 
 const ACTION_TEXT: Record<string, string> = {
+  lurk_updated: 'Lurk mode updated.',
   budget_updated: 'Token budget updated. Resume the session when ready.',
   started: 'Session started.',
   resumed: 'Session resumed.',

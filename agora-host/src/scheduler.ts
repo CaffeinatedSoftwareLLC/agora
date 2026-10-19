@@ -5,6 +5,7 @@ import { fatalAuth, fenced, HttpError } from './client.js';
 import type { Claim, HostApi, Result } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
 import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
+import { attachRunImages } from './images.js';
 
 interface Active { claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void> }
 export interface SchedulerOptions {
@@ -85,6 +86,17 @@ export class Scheduler {
             a.child = this.runner.start(launch);
             result = await a.child.result; finished = true;
             if (launch.adapter === 'claude') result.changedPaths = changedSince(before, await worktreeSnapshot(launch.cwd));
+            // Keep the lease watchdog/heartbeats alive while attachments upload. A bad
+            // reference must not lose a successful CLI result or trigger another agent turn.
+            if (!a.stop && !this.stopping && !a.noReport) {
+                try { await attachRunImages(this.api, claim, launch.cwd,
+                    AbortSignal.any([this.abort.signal, AbortSignal.timeout(Math.max(1, Math.ceil(deadline - this.now())))]), this.log); }
+                catch (err) {
+                    if (fatalAuth(err)) { a.noReport = true; await this.stop(); }
+                    else if (fenced(err)) a.noReport = true;
+                    else this.log('image_discovery_failed');
+                }
+            }
         } catch (err) {
             result = { ...empty, error: 'host_launch_failed' };
             if (err instanceof Error && err.message === 'process_tree_kill_failed') {

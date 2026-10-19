@@ -36,7 +36,7 @@ export class ProcessRunner implements Runner {
                         try {
                             await killed;
                             resolve(overflow ? { success: false, nativeSessionId: null, summary: null, tokensUsed: null, error: 'output_limit' }
-                                : parseOutput(launch.adapter, stdout, code, launch.sandbox));
+                                : parseOutput(launch.adapter, stdout, code, launch.sandbox, launch.lurk));
                         } catch { reject(new Error('process_tree_kill_failed')); }
                         finally { stdout = ''; }
                     })();

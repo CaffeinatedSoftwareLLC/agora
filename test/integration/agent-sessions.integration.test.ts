@@ -508,7 +508,7 @@ describe('host API (S2)', () => {
         const m = await post(owner.auth, '@codex weather please');
         const c = await claim();
         expect(c.status).toBe(200);
-        expect(c.body.session).toMatchObject({ id: s, summary: 'earlier work', wakesUsed: 1 });
+        expect(c.body.session).toMatchObject({ id: s, summary: 'earlier work', wakesUsed: 1, lurkMode: null });
         expect(c.body.profile).toMatchObject({ name: 'codex', adapter: 'codex', workdirAlias: 'agora' });
         expect(c.body.inbox).toEqual([expect.objectContaining({
             messageId: m.id, reason: 'direct', authority: 'owner', content: '@codex weather please',

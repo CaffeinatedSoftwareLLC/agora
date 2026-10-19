@@ -23,6 +23,7 @@ export const claimSchema = z.object({
         tokensUsed: z.number().nonnegative(), tokenBudget: z.number().nonnegative(),
         // The session slept through a rate limit; the batch holds what arrived meanwhile (#87)
         wokeFromSleep: z.boolean().default(false),
+        lurkMode: z.enum(['quiet', 'balanced', 'vocal']).nullable().default(null),
     }),
     profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude']),
         // null: leave the model or effort to the CLI's own default
@@ -33,7 +34,7 @@ export const claimSchema = z.object({
         allowedTools: z.array(rule).max(100).default([]) }),
     inbox: z.array(z.object({
         // 'command': the session notice a /start or /resume posts, so the agent says hello
-        messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command']),
+        messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command', 'lurk']),
         authorId: id.nullable(), authorName: z.string().nullable(), authorBot: z.boolean(),
         authority: z.enum(['owner', 'director']).nullable(), content: z.string().max(4000).nullable(),
         createdAt: z.string().datetime(),
@@ -57,6 +58,8 @@ export interface Completion { claimToken: string; nativeSessionId: string | null
 export interface Failure { claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: RateLimit }
 export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; reason: string };
 export interface HostApi {
+    imageMessages?(claim: Claim, signal?: AbortSignal): Promise<{ maxBytes: number; messages: Array<{ id: string; content: string }> }>;
+    uploadImage?(claim: Claim, image: { messageId: string; reference: string; filename: string; buffer: Buffer }, signal?: AbortSignal): Promise<void>;
     workspaceStates?(sessionIds: string[]): Promise<string[]>;
     workspaceWarning?(sessionId: string, paths: string[]): Promise<void>;
     claim(signal?: AbortSignal): Promise<{ claim: Claim; sentAt: number } | null>;
