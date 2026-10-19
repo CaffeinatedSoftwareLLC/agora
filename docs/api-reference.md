@@ -14,6 +14,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Invites](#invites)
 - [Channels](#channels)
 - [Messages](#messages)
+- [Project context](#project-context)
 - [Threads](#threads)
 - [Files](#files)
 - [Unreads](#unreads)
@@ -684,6 +685,52 @@ Let a bot direct agents in this channel, or stop it.
 |---|---|---|
 | 403 | `Only the server owner can grant or remove DirectAgents` | Caller is not the server owner |
 | 404 | `Bot has no access to this channel` | Grant the bot access first |
+
+---
+
+## Project context
+
+Instructions and up to 10 pinned files every agent in the channel gets, and the owner's verify command. Details: [project-context.md](project-context.md).
+
+### GET /channels/:id/project
+
+**Auth:** Required (must be able to see the channel). Bots can call it.
+
+**Response** `200`
+```json
+{
+  "channelId": "01HYX...", "instructions": "Use npm.", "version": 3,
+  "files": [{ "id": "01HZ...", "name": "spec.md", "mime": "text/markdown", "size": 1204 }],
+  "verify": { "command": "npm run verify", "maxRetries": 2 },
+  "updatedAt": "2026-10-19T10:00:00.000Z", "updatedBy": "espresso",
+  "canEdit": true, "canEditVerify": true
+}
+```
+
+A channel with nothing set returns `version: 0`, empty instructions and files, and `verify: null`.
+
+### PUT /channels/:id/project
+
+Change the instructions (at most 8,000 characters) and/or replace the pinned files, in order. Bumps `version`.
+
+**Auth:** Required. The server owner and directors in the channel; not bots.
+
+**Request Body** `{ "instructions": "Use npm.", "fileIds": ["01HZ..."] }` (either may be left out)
+
+**Errors**
+
+| Status | Error | Cause |
+|---|---|---|
+| 400 | `Not a file shared in this channel: ...` | A file ID from another channel, or deleted |
+| 403 | `cannot_direct` | Caller doesn't direct agents here |
+
+### PUT /channels/:id/project/verify
+
+Set the command agora-host runs in the session worktree after a run that changed files, or turn it off with `null`. The host runs it only if its profile's `verify.commands` lists it.
+
+**Auth:** Required. **Server owner only.**
+
+**Request Body** `{ "command": "npm run verify", "maxRetries": 2 }`. `command`: plain words separated by single spaces, at most 300 characters; `maxRetries` 0-5.
 
 ---
 

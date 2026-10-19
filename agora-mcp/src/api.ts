@@ -152,6 +152,17 @@ export interface FileText {
     injectionChecked: boolean;
 }
 
+/** A channel's pinned instructions and files (GET /channels/:id/project, docs/project-context.md). */
+export interface ProjectContext {
+    channelId: string;
+    instructions: string;
+    version: number;
+    files: Array<{ id: string; name: string; mime: string; size: number }>;
+    verify: { command: string; maxRetries: number } | null;
+    updatedAt: string | null;
+    updatedBy: string | null;
+}
+
 export interface ThreadCursor {
     threadId: string;
     channelId: string;
@@ -224,6 +235,11 @@ export class AgoraApi {
     async getDirectors(channelId: string): Promise<Director[]> {
         const res = await this.request<{ directors: Director[] }>('GET', `/channels/${channelId}/directors`);
         return res.directors;
+    }
+
+    /** The channel's project context: instructions and pinned files. */
+    async getProject(channelId: string): Promise<ProjectContext> {
+        return this.request('GET', `/channels/${channelId}/project`);
     }
 
     async getMessages(

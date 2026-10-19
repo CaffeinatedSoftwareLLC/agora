@@ -40,6 +40,17 @@ export const claimSchema = z.object({
         // The server's view of the auth mode; the local profile's `auth` is what the host enforces
         authMode: z.enum(['subscription', 'api_key']).default('subscription'),
         runApproval: z.boolean().default(false) }),
+    // The channel's pinned instructions and files (docs/project-context.md). `docs` holds the
+    // files' text only when `changed`: a fresh conversation, or a version this session hasn't had.
+    // The server counts characters, zod UTF-16 units: limits are twice the server's.
+    project: z.object({
+        version: z.number().int().nonnegative(), instructions: z.string().max(16000), changed: z.boolean(),
+        files: z.array(z.object({ id, name: z.string().max(510), mime: z.string().max(254), size: z.number().nonnegative() })).max(10),
+        docs: z.array(z.object({ id, name: z.string().max(510), text: z.string().max(12000), truncated: z.boolean(),
+            error: z.string().max(400).nullable() })).max(10).default([]),
+    }).nullable().default(null),
+    // The owner's verify command; run only if this host's profile lists it (verify.ts)
+    verify: z.object({ command: z.string().min(1).max(300), maxRetries: z.number().int().min(0).max(5) }).nullable().default(null),
     inbox: z.array(z.object({
         // 'command': the session notice a /start or /resume posts, so the agent says hello
         messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command', 'lurk']),
@@ -60,10 +71,22 @@ export interface Result {
     deniedTools?: string[];
     /** The CLI hit its account's rate limit; resetAt when the CLI said (#87). */
     rateLimit?: RateLimit;
+    /** What the verify step found, when the claim asked for one (verify.ts). */
+    verification?: Verification;
+}
+export interface Verification {
+    command: string; status: 'passed' | 'failed' | 'skipped';
+    /** Follow-up turns the agent was given to fix a failure. */
+    attempts: number;
+    exitCode?: number | null;
+    /** not_allowed, timeout, no_session, fix_turn_failed, spawn_failed */
+    reason?: string;
+    /** The end of the output of a failed command. */
+    output?: string;
 }
 export interface RateLimit { resetAt: string | null }
-export interface Completion { checkpoint?: Checkpoint; claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
-export interface Failure { checkpoint?: Checkpoint; claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: RateLimit }
+export interface Completion { checkpoint?: Checkpoint; claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[]; verification?: Verification }
+export interface Failure { checkpoint?: Checkpoint; claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: RateLimit; verification?: Verification }
 export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; reason: string };
 export interface HostApi {
     claimWorkspaceCommand?(signal?: AbortSignal): Promise<ReviewCommand | null>;

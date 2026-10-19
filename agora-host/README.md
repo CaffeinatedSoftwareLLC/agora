@@ -46,8 +46,9 @@ Windows account. Do not commit it. `host.local.json` is ignored here.
       "workdir": "C:/projects/agora",
       "workdirAlias": "agora",
       "stateDir": "C:/private/agora/claude-state",
-      "approvedTools": ["chat_history", "chat_send", "thread_start", "thread_list", "thread_close", "who_directs"],
-      "caps": { "maxBudgetUsd": 2 }
+      "approvedTools": ["chat_history", "chat_send", "thread_start", "thread_list", "thread_close", "who_directs", "project_context"],
+      "caps": { "maxBudgetUsd": 2 },
+      "verify": { "commands": ["npm run verify"], "timeoutSeconds": 600 }
     }
   },
   "botTokens": {
@@ -245,6 +246,16 @@ is trusted local software running under your Windows account.
 This package does not deploy or modify the server. S2 integration, real CLI
 resume/usage and tree-kill verification, and the S7 phone/deployment test remain
 release gates.
+### Project context and verify before yield
+
+Each claim carries the channel's pinned instructions and files (`project`), and the prompt includes them; pinned file text only when the agent hasn't had that version yet. When a channel's owner sets a verify command and the run succeeded and changed files, the host runs it in the worktree and gives the agent the failure output as a resumed follow-up turn, up to the channel's limit, then reports the result. It runs only commands the profile lists itself:
+
+```json
+"verify": { "commands": ["npm run verify"], "timeoutSeconds": 600 }
+```
+
+No shell, OS variables plus `CI=1` only, process tree killed on timeout. See [project-context.md](../docs/project-context.md).
+
 ### Passive turns and referenced images (#83, #86)
 
 Lurk deliveries carry `session.lurkMode` and inbox reason `lurk`. A purely passive batch uses the dial's interjection rules and permits exact `[pass]` without forcing a JSON schema. `[pass]` completes successfully, preserves token usage and leaves the prior session summary intact. Normal addressed work still requires its usual response.

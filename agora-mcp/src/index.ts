@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { loadStartupConfig } from './invites.js';
 import { AgoraApi } from './api.js';
 import { CursorTracker } from './cursor.js';
-import { registerTools } from './tools.js';
+import { registerResources, registerTools } from './tools.js';
 import { connectSocket, ListeningReporter } from './socket.js';
 import { channelServerOptions, parseChannelOptions, startChannel } from './channel-server.js';
 
@@ -33,6 +33,7 @@ const server = options.channelMode
 
 const listening = !options.channelMode && options.presence ? new ListeningReporter() : undefined;
 registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, listening });
+registerResources(server, api);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

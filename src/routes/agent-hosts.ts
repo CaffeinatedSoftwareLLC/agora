@@ -10,6 +10,9 @@ import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, typ
 import { allowedToolsSchema, deniedToolsSchema, toolPresetsSchema } from '../lib/agent-permissions';
 import { agentImageRoutes } from './agent-images';
 import { checkpointSchema } from '../lib/agent-checkpoints';
+import { attachProjectDocs, verificationSchema } from '../lib/channel-projects';
+import { storage } from '../lib/storage';
+import { config } from '../config';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -451,6 +454,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 throw err;
             }
             if (claim) {
+                // Pinned file text, read after the claim committed (src/lib/channel-projects.ts)
+                await attachProjectDocs({ db: app.db, store: storage, encryptionKey: config.encryptionKey }, claim);
                 queueNotices(request, notices);
                 return reply.status(200).send(claim);
             }
@@ -492,6 +497,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                     deniedTools: deniedToolsSchema,
                     checkpoint: checkpointSchema,
+                    verification: verificationSchema,
                 },
             },
         },
@@ -518,6 +524,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                     deniedTools: deniedToolsSchema,
                     checkpoint: checkpointSchema,
+                    verification: verificationSchema,
                     // error 'rate_limited': the session sleeps until resetAt (#87)
                     rateLimit: { type: 'object', additionalProperties: false, properties: { resetAt: { type: ['string', 'null'], maxLength: 40 } } },
                 },

@@ -24,6 +24,7 @@ export function ArcContentArea() {
   const toggleMembers = useUIStore(s => s.toggleAux);
   const filesOpen = useUIStore(s => s.aux === 'files');
   const toggleFiles = useUIStore(s => s.toggleAux);
+  const projectOpen = useUIStore(s => s.aux === 'project');
   const openThreadView = useUIStore(s => s.openThreadView);
 
   const accentColor = P.accent;
@@ -103,6 +104,31 @@ export function ArcContentArea() {
           >
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: P.primary }} />
             <span className="sr-only">{paletteName}</span>
+          </button>
+
+          {/* Project context panel toggle (docs/project-context.md) */}
+          <button
+            onClick={() => toggleFiles('project')}
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            style={{
+              color: projectOpen ? accentColor : P.muted,
+              background: projectOpen ? `${accentColor}1f` : 'transparent',
+            }}
+            title="Project context for agents"
+            aria-label="Project context for agents"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z" />
+            </svg>
           </button>
 
           {/* Files panel toggle */}

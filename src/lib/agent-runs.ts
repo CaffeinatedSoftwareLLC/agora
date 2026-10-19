@@ -6,6 +6,7 @@ import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permi
 import { lurkBatchReady } from './agent-lurk';
 import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, subscriptionNotice } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
+import { claimProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -106,6 +107,10 @@ export interface ClaimResult {
         model: string | null; effort: string | null; workdirAlias: string;
         toolPresets: string[]; allowedTools: string[];
     };
+    /** The channel's pinned instructions and files (channel-projects.ts); null when there are none. */
+    project: ClaimProject | null;
+    /** The owner's verify command for this channel; the host runs it only if its config allows it. */
+    verify: { command: string; maxRetries: number } | null;
     inbox: Array<{
         messageId: string; threadId: string | null; reason: string;
         authorId: string | null; authorName: string | null; authorBot: boolean;
@@ -305,6 +310,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     );
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
+    const channelProject = await readProject(c, channelId);
+    const project = claimProject(channelProject, session.project_version_seen ?? null, !session.native_session_id);
+    if (project) await c.query(`UPDATE agent_runs SET project_version = $2 WHERE id = $1`, [runId, project.version]);
 
     notices.push(await sessionUpdate(c, sessionId, true));
     return {
@@ -326,6 +334,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
             model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
             toolPresets: session.tool_presets ?? [], allowedTools: session.allowed_tools ?? [],
         },
+        project,
+        // Lurk runs only read along; they never get a verify step
+        verify: kept.every(k => k.entry.reason === 'lurk') ? null : channelProject.verify,
         inbox: kept.map(k => k.entry),
     };
 }
@@ -495,7 +506,7 @@ async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     return null;
 }
 
-export interface CompleteBody { checkpoint?: CheckpointReport; claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
+export interface CompleteBody { checkpoint?: CheckpointReport; claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[]; verification?: VerificationReport }
 
 export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -517,6 +528,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
             [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])], body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
         );
         await fileDeniedTools(c, run, body.deniedTools, notices);
+        await recordVerification(c, run, body.verification, notices);
         const posted = await c.query(`SELECT 1 FROM messages m JOIN agent_sessions s ON s.bot_id = m.author_id
             WHERE s.id = $1 AND m.channel_id = s.channel_id AND m.created_at >= $2 LIMIT 1`, [run.session_id, run.created_at]);
         const addressed = await c.query(`SELECT 1 FROM agent_inbox WHERE batch_id = $1 AND reason <> 'lurk' AND acked_at IS NULL LIMIT 1`, [run.batch_id]);
@@ -536,11 +548,13 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
                 branch = CASE WHEN p.generation = $4 THEN COALESCE($5, s.branch) ELSE s.branch END,
                 base_sha = CASE WHEN p.generation = $4 THEN COALESCE($6, s.base_sha) ELSE s.base_sha END,
                 head_sha = CASE WHEN p.generation = $4 THEN COALESCE($7, s.head_sha) ELSE s.head_sha END,
+                project_version_seen = COALESCE($8, s.project_version_seen),
                 last_active_at = NOW()
              FROM agent_profiles p
              WHERE s.id = $1 AND p.id = s.profile_id
              RETURNING s.state, s.tokens_used, s.channel_id, COALESCE(s.token_budget, p.token_budget) AS token_budget, p.name AS profile_name`,
-            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation, body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
+            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation, body.branch ?? null, body.baseSha ?? null, body.headSha ?? null,
+             run.project_version ?? null]
         );
         notices.push(await sessionUpdate(c, run.session_id, false));
         const session = s.rows[0];
@@ -551,7 +565,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
     });
 }
 
-export interface FailBody { checkpoint?: CheckpointReport; claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null } }
+export interface FailBody { checkpoint?: CheckpointReport; claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null }; verification?: VerificationReport }
 
 export async function fail(pool: Pool, host: Host, runId: string, body: FailBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -568,6 +582,7 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         );
         await enforceTokenBudget(c, run.session_id.trim(), notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
+        await recordVerification(c, run, body.verification, notices);
         if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {
             notices.push(await sessionUpdate(c, run.session_id, false));
             return { status: 200, body: { ok: true, sleeping: true } };
@@ -576,6 +591,14 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         await settleBatch(c, run, !!body.retryable && !run.cancel_requested, body.error, notices);
         return { status: 200, body: { ok: true } };
     });
+}
+
+/** Keep the host's verify result on the run and post it in the channel (docs/project-context.md). */
+async function recordVerification(c: PoolClient, run: any, v: VerificationReport | undefined, notices: Notice[]) {
+    if (!v) return;
+    await c.query(`UPDATE agent_runs SET verification = $2 WHERE id = $1`, [run.id, JSON.stringify(v)]);
+    const s = await c.query(`SELECT s.channel_id, p.name FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
+    notices.push(await postNotice(c, s.rows[0].channel_id.trim(), verificationNotice(s.rows[0].name, v)));
 }
 
 /**
