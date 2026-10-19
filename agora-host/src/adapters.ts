@@ -8,6 +8,7 @@ import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
+import { checkTerms, GEMINI_NOT_HOSTED, HostConfigError } from './terms.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -24,10 +25,16 @@ const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE'
 export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(source)) if (osKeys.has(key.toUpperCase()) && value !== undefined) env[key] = value;
-    env[profile.adapter === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = profile.stateDir;
+    if (profile.adapter !== 'gemini') env[profile.adapter === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = profile.stateDir;
+    // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md)
+    if (profile.auth === 'api_key' && profile.apiKeyEnv) {
+        const key = source[profile.apiKeyEnv];
+        if (key) env[profile.apiKeyEnv] = key;
+    }
     return env;
 }
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
+    if (profile.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
     const { stdout } = await promisify(execFile)(profile.executable, ['--version'], {
         env: childEnv(profile), cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096,
     });
@@ -40,6 +47,8 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
 export async function prepare(config: Config, claim: Claim): Promise<Launch> {
     const local = config.profiles[claim.profile.name];
     if (!local || local.adapter !== claim.profile.adapter || local.workdirAlias !== claim.profile.workdirAlias) throw new Error('unmapped_profile');
+    // Subscription profiles run only for the owner; run approval when required (terms.ts)
+    checkTerms(local, claim);
     const token = config.botTokens[claim.profile.botId];
     if (!token) throw new Error('missing_bot_token');
     const efforts = local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];

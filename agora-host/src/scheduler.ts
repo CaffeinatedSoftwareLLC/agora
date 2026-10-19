@@ -6,6 +6,7 @@ import type { Claim, HostApi, Result } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
 import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
 import { attachRunImages } from './images.js';
+import { TermsRefusal } from './terms.js';
 
 interface Active { claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void> }
 export interface SchedulerOptions {
@@ -98,7 +99,9 @@ export class Scheduler {
                 }
             }
         } catch (err) {
-            result = { ...empty, error: 'host_launch_failed' };
+            // A provider-terms refusal is reported by its own code and never retried
+            result = { ...empty, error: err instanceof TermsRefusal ? err.code : 'host_launch_failed' };
+            if (err instanceof TermsRefusal) this.log(err.code);
             if (err instanceof Error && err.message === 'process_tree_kill_failed') {
                 a.noReport = true; this.log('process_tree_kill_failed'); await this.stop();
             }
@@ -122,7 +125,7 @@ export class Scheduler {
                         const rateLimited = !a.stop && finished && !!result.rateLimit;
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
                             message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
-                            retryable: a.stop !== 'cancelled' && result.error !== 'host_launch_failed',
+                            retryable: a.stop !== 'cancelled' && !['host_launch_failed', 'subscription_owner_only', 'run_not_approved'].includes(result.error ?? ''),
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
                             ...(rateLimited ? { rateLimit: result.rateLimit } : {}) }, reportAbort);
                     }

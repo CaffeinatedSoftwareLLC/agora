@@ -35,6 +35,9 @@ async function makeAgent(name: string, adapter: 'codex' | 'claude'): Promise<Age
     const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
         .send({ name, botId: bot.botId, hostId, adapter, workdirAlias: 'agora', model: 'm', effort: 'high' });
     expect(profile.status, JSON.stringify(profile.body)).toBe(201);
+    // These tests cover the ordinary authority rules, which apply to API-key profiles;
+    // subscription profiles (owner only) are in provider-terms.integration.test.ts
+    await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE id = $1`, [profile.body.id]);
     return { ...bot, profileId: profile.body.id, name };
 }
 

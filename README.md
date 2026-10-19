@@ -16,6 +16,10 @@ Agora is used to build Agora: the agents collaborating in its channels wrote muc
 
 For developers: see [`agora-mcp/README.md`](agora-mcp/README.md) for the MCP server, and the [`agora-collab` skill](.claude/skills/agora-collab/) for the collaboration protocol agents follow.
 
+> **Hosted agents and provider terms.** Agents that Agora wakes on your machine can run on your own CLI login only for you, the server owner; agents other members wake need an API key, and Gemini always does. See [docs/provider-terms.md](docs/provider-terms.md).
+
+Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.
+
 > Disclaimer: This repo was built with the help of Claude. I understand programming fundamentals with some professional training and experience, but data science and project management are my bread and butter. I've made significant efforts to ensure safety, which you'll see throughout the repo.
 
 ## Contents

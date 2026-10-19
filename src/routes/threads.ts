@@ -193,7 +193,7 @@ export async function threadRoutes(app: FastifyInstance) {
         const { mentionedUsers } = await resolveMentions(db, replyId, channelId, serverId, userId, content);
 
         // Wake agents this reply is addressed to (same transaction as the reply)
-        await routeMessage(db, {
+        const termsNotices = await routeMessage(db, {
             channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol,
             mentionedUserIds: mentionedUsers.map(u => u.id),
         });
@@ -256,6 +256,8 @@ export async function threadRoutes(app: FastifyInstance) {
             event: 'Message',
             data: replyMessage,
         });
+        // Wakes the subscription rule refused (src/lib/provider-terms.ts), after the message itself
+        for (const n of termsNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: 'Message', data: n.event });
         request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ThreadMetadataUpdate',

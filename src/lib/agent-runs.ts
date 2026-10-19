@@ -4,6 +4,7 @@ import { generateUlid } from '../utils/ulid';
 import { readAuthorities } from './direct-agents';
 import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
+import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, subscriptionNotice } from './provider-terms';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -86,6 +87,8 @@ export interface ClaimResult {
         id: string; claimToken: string; attempt: number; deliveryKey: string;
         leaseSeconds: number; leaseUntil: string; heartbeatSeconds: number; timeoutSeconds: number;
         grantedTools: string[];
+        /** The owner approved this run on its card (profiles with run approval). */
+        ownerApproved: boolean;
     };
     session: {
         id: string; channelId: string; channelName: string;
@@ -93,9 +96,12 @@ export interface ClaimResult {
         wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
         wokeFromSleep: boolean;
         lurkMode: 'quiet' | 'balanced' | 'vocal' | null;
+        /** The server owner started or last resumed this session (provider-terms.ts). */
+        startedByOwner: boolean;
     };
     profile: {
         id: string; name: string; botId: string; adapter: string;
+        authMode: 'subscription' | 'api_key'; runApproval: boolean;
         model: string | null; effort: string | null; workdirAlias: string;
         toolPresets: string[]; allowedTools: string[];
     };
@@ -114,11 +120,14 @@ export async function claimNext(pool: Pool, host: Host, notices: Notice[]): Prom
          WHERE p.host_id = $1 AND p.server_id = $2 AND s.state = 'live'
            AND (s.sleeping_until IS NULL OR s.sleeping_until <= NOW())
            AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')
+           -- Waiting for the owner to answer a run approval card
+           AND NOT (p.run_approval AND EXISTS (SELECT 1 FROM agent_run_approvals a WHERE a.session_id = s.id AND a.status = 'pending'
+                    AND a.created_at > NOW() - make_interval(hours => $3)))
            AND (EXISTS (SELECT 1 FROM agent_batches b WHERE b.session_id = s.id AND b.status = 'retry')
                 OR EXISTS (SELECT 1 FROM agent_inbox i WHERE i.session_id = s.id AND i.batch_id IS NULL AND i.acked_at IS NULL))
          ORDER BY s.last_active_at
          LIMIT 10`,
-        [host.id, host.serverId]
+        [host.id, host.serverId, RUN_APPROVAL_TTL_HOURS]
     );
     for (const row of candidates.rows) {
         const result = await inTx(pool, c => claimSession(c, host, row.id.trim(), notices));
@@ -132,10 +141,12 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const s = await c.query(
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
                 COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
-                p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep
+                p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep,
+                p.auth_mode, p.run_approval, (s.started_by IS NOT NULL AND s.started_by = srv.owner_id) AS started_by_owner
          FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN channels ch ON ch.id = s.channel_id
+         JOIN servers srv ON srv.id = s.server_id
          WHERE s.id = $1 AND p.host_id = $2 AND s.server_id = $3
          FOR UPDATE OF s SKIP LOCKED`,
         [sessionId, host.id, host.serverId]
@@ -234,7 +245,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const deliveryKey: string = isRetry ? retry.rows[0].delivery_key : deliveryKeyFor(rows.map((r: any) => r.id.trim()));
 
     // 4. Recheck each row; rows that fail are acknowledged without work
-    const kept = await recheckRows(c, channelId, rows);
+    const subscription = session.auth_mode !== 'api_key';
+    const kept = await recheckRows(c, channelId, rows, subscription ? { startedByOwner: !!session.started_by_owner } : null);
     // Turning lurk off invalidates pending passive work, including retry batches.
     for (let i = kept.length - 1; i >= 0; i--) {
         if (kept[i].row.reason === 'lurk' && !session.lurk_mode) kept.splice(i, 1);
@@ -247,7 +259,22 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         if (isRetry) {
             await c.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE id = $1`, [batchId]);
         }
+        // Work dropped only because someone other than the owner started this subscription session
+        if (subscription && !session.started_by_owner && rows.some((r: any) => r.reason !== 'lurk')) {
+            notices.push(await postNotice(c, channelId, subscriptionNotice(session.profile_name)));
+        }
         return null;
+    }
+
+    // Profiles with run approval: the owner approves each wake on a card first
+    let ownerApproved = false; let takeApproval = false;
+    if (session.run_approval) {
+        const first = kept.find(k => k.entry.content)?.entry;
+        const preview = first ? `${first.authorName ?? 'notice'}: ${first.content}` : null;
+        const gate = await runApprovalGate(c, { id: sessionId, server_id: session.server_id, channel_id: channelId, profile_name: session.profile_name },
+            batchId, isRetry, preview, notices);
+        if (gate === 'waiting') return null;
+        ownerApproved = true; takeApproval = gate === 'approved';
     }
 
     // 5. Reserve the wake, create the batch (if new) and the run
@@ -264,6 +291,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         );
     }
     await c.query(`UPDATE agent_sessions SET wakes_used = wakes_used + 1 WHERE id = $1`, [sessionId]);
+    if (takeApproval) await consumeRunApproval(c, sessionId, batchId);
 
     const runId = generateUlid();
     const claimToken = 'rt_' + randomBytes(32).toString('hex');
@@ -281,17 +309,18 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         run: {
             id: runId, claimToken, attempt, deliveryKey,
             leaseSeconds: LEASE_SECONDS, leaseUntil: new Date(lease.rows[0].lease_until).toISOString(),
-            heartbeatSeconds: HEARTBEAT_SECONDS, timeoutSeconds: session.run_timeout_sec, grantedTools,
+            heartbeatSeconds: HEARTBEAT_SECONDS, timeoutSeconds: session.run_timeout_sec, grantedTools, ownerApproved,
         },
         session: {
             id: sessionId, channelId, channelName: session.channel_name,
             nativeSessionId: session.native_session_id ?? null, summary: session.summary ?? null,
             wakesUsed: session.wakes_used + 1, wakeBudget: session.wake_budget,
             tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget), wokeFromSleep,
-            lurkMode: session.lurk_mode ?? null,
+            lurkMode: session.lurk_mode ?? null, startedByOwner: !!session.started_by_owner,
         },
         profile: {
             id: session.profile_id.trim(), name: session.profile_name, botId, adapter: session.adapter,
+            authMode: subscription ? 'subscription' : 'api_key', runApproval: !!session.run_approval,
             model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
             toolPresets: session.tool_presets ?? [], allowedTools: session.allowed_tools ?? [],
         },
@@ -312,7 +341,11 @@ async function botCanAct(c: PoolClient, botId: string, channelId: string): Promi
     return row.rows.length > 0;
 }
 
-async function recheckRows(c: PoolClient, channelId: string, rows: any[]) {
+/**
+ * `terms` is set for a subscription profile (provider-terms.ts): only the owner's own
+ * messages, the owner's commands, and hand-offs inside a session the owner started count.
+ */
+async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms: { startedByOwner: boolean } | null = null) {
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
@@ -343,6 +376,11 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[]) {
         // A session notice from /start or /resume: no author, valid while the session is live
         if (row.reason === 'command' && m.author_id) continue;
         if ((row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
+        if (terms) {
+            if (!terms.startedByOwner) continue;
+            if ((row.reason === 'direct' || row.reason === 'lurk') && (authority !== 'owner' || m.author_bot)) continue;
+            if ((row.reason === 'handoff' || row.reason === 'protocol') && !m.author_bot) continue;
+        }
         kept.push({
             row,
             entry: {
@@ -561,8 +599,11 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     }
     await c.query(`UPDATE agent_batches SET status = 'failed', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
     await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
-    notices.push(await postNotice(c, session.channel_id.trim(),
-        `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`));
+    // The host refused the run under the provider-terms rules (agora-host/src/terms.ts)
+    const text = error === 'subscription_owner_only' ? subscriptionNotice(session.profile_name)
+        : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
+        : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
+    notices.push(await postNotice(c, session.channel_id.trim(), text));
 }
 
 /**

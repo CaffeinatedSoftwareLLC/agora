@@ -5,6 +5,7 @@ import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agent
 import { asService } from '../lib/agent-sessions';
 import { postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { cardText, REQUEST_TTL_HOURS } from '../lib/agent-permissions';
+import { runCardText, RUN_APPROVAL_TTL_HOURS } from '../lib/provider-terms';
 
 /**
  * Approve or deny a tool a hosted agent was denied (#73), from the card in the channel.
@@ -13,6 +14,12 @@ import { cardText, REQUEST_TTL_HOURS } from '../lib/agent-permissions';
  *   session's next run, and the agent is woken to retry.
  * - always: the server owner only; the rule is added to the agent's profile.
  * - deny: the owner or a director.
+ *
+ * On a 'subscription' profile (src/lib/provider-terms.ts) only the owner's approval wakes
+ * the agent; a director's "once" is kept for the next run the owner triggers.
+ *
+ * Run approvals (agent-run-approvals): a profile with run approval posts a card before each
+ * wake; only the server owner approves or denies it.
  */
 
 const ID = { type: 'string', minLength: 26, maxLength: 26 } as const;
@@ -59,7 +66,7 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                 // Lock order, as everywhere: profile → session → request
                 await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 ${decision === 'always' ? 'FOR UPDATE' : 'FOR SHARE'}`, [ref.profile_id]);
                 const s = await db.query(
-                    `SELECT s.state, p.name FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
+                    `SELECT s.state, p.name, p.auth_mode FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
                     [ref.session_id]
                 );
                 const r = await db.query(
@@ -99,8 +106,10 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                         });
                     }
                 }
-                // An approval wakes a live agent to retry; the notice is its batch
-                if (decision !== 'deny' && s.rows[0].state === 'live') {
+                // An approval wakes a live agent to retry; the notice is its batch. A subscription
+                // agent runs only when the owner triggers it, so a director's approval waits.
+                const mayWake = s.rows[0].auth_mode === 'api_key' || await isServerOwner(db, ref.server_id.trim(), userId);
+                if (decision !== 'deny' && s.rows[0].state === 'live' && mayWake) {
                     const notice = await postNotice(db, channelId,
                         `${who} ${decision === 'always' ? 'always allowed' : 'approved once'} \`${req.tool}\` for ${profile}. Retry the step that needed it.`);
                     notices.push(notice);
@@ -111,6 +120,94 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                     notices.push(await sessionUpdate(db, ref.session_id, false));
                 }
                 return { id: requestId, status };
+            });
+            request.pendingEvents ??= [];
+            for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
+            return reply.send(result);
+        } catch (err) {
+            if (err instanceof Refusal) return reply.status(err.status).send(err.body);
+            throw err;
+        }
+    });
+
+    // POST /channels/:id/agent-run-approvals/:approvalId → 200 { id, status }
+    // Owner only: the card stands for one wake of an agent the owner approves run by run.
+    app.post('/channels/:id/agent-run-approvals/:approvalId', {
+        schema: {
+            params: { type: 'object', properties: { id: ID, approvalId: ID } },
+            body: {
+                type: 'object', required: ['decision'], additionalProperties: false,
+                properties: { decision: { type: 'string', enum: ['approve', 'deny'] } },
+            },
+        },
+    }, async (request, reply) => {
+        const { id: channelId, approvalId } = request.params as { id: string; approvalId: string };
+        const { decision } = request.body as { decision: 'approve' | 'deny' };
+        const db = request.dbClient!;
+        const userId = request.userId!;
+        if (request.isBot) return reply.status(403).send({ error: 'Only the server owner can approve agent runs' });
+        const access = await canViewChannel(db, channelId, userId, false);
+        if (!access.allowed) return reply.status(403).send({ error: 'Channel access denied' });
+
+        const notices: Notice[] = [];
+        try {
+            const result = await asService(db, async () => {
+                const found = await db.query(
+                    `SELECT a.session_id, a.server_id, s.profile_id FROM agent_run_approvals a
+                     JOIN agent_sessions s ON s.id = a.session_id
+                     WHERE a.id = $1 AND s.channel_id = $2`,
+                    [approvalId, channelId]
+                );
+                const ref = found.rows[0];
+                if (!ref) throw new Refusal(404, { error: 'Request not found' });
+                if (!await isServerOwner(db, ref.server_id.trim(), userId)) {
+                    throw new Refusal(403, { error: 'Only the server owner can approve agent runs' });
+                }
+                // Lock order, as everywhere: profile → session → approval
+                await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE`, [ref.profile_id]);
+                const s = await db.query(
+                    `SELECT s.state, p.name FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
+                    [ref.session_id]
+                );
+                const r = await db.query(
+                    `SELECT *, created_at < NOW() - make_interval(hours => $2) AS expired FROM agent_run_approvals WHERE id = $1 FOR UPDATE`,
+                    [approvalId, RUN_APPROVAL_TTL_HOURS]
+                );
+                const row = r.rows[0];
+                if (row.status !== 'pending') throw new Refusal(409, { error: 'already_decided', status: row.status });
+                if (row.expired && decision === 'approve') throw new Refusal(410, { error: 'expired' });
+
+                const status = decision === 'approve' ? 'approved' : 'denied';
+                await db.query(
+                    `UPDATE agent_run_approvals SET status = $2, decided_by = $3, decided_at = NOW() WHERE id = $1`,
+                    [approvalId, status, userId]
+                );
+                // A denial drops the waiting work; the next message addressed to the agent asks again
+                if (status === 'denied') {
+                    await db.query(
+                        `UPDATE agent_inbox SET acked_at = NOW() WHERE session_id = $1 AND acked_at IS NULL
+                           AND (batch_id IS NULL OR batch_id IN (SELECT id FROM agent_batches WHERE session_id = $1 AND status = 'retry'))`,
+                        [ref.session_id]
+                    );
+                    await db.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE session_id = $1 AND status = 'retry'`, [ref.session_id]);
+                }
+                const who = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'the owner';
+                if (row.message_id) {
+                    const content = runCardText(s.rows[0].name, status, who);
+                    const updated = await db.query(
+                        `UPDATE messages SET content = $2, system_data = system_data || $3::jsonb, edited_at = NOW()
+                         WHERE id = $1 RETURNING system_data, edited_at`,
+                        [row.message_id, content, JSON.stringify({ status, decidedBy: userId })]
+                    );
+                    if (updated.rows[0]) {
+                        notices.push({
+                            channelId: channelId.trim(), eventName: 'MessageUpdate',
+                            event: { id: row.message_id.trim(), channelId: channelId.trim(), content, editedAt: updated.rows[0].edited_at, systemData: updated.rows[0].system_data },
+                        });
+                    }
+                }
+                if (s.rows[0].state === 'live') notices.push(await sessionUpdate(db, ref.session_id, false));
+                return { id: approvalId, status };
             });
             request.pendingEvents ??= [];
             for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });

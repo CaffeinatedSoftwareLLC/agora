@@ -16,6 +16,8 @@ export const claimSchema = z.object({
         leaseUntil: z.string().datetime(), heartbeatSeconds: seconds, timeoutSeconds: seconds,
         // Tools the owner approved once for this run after a denial (#73)
         grantedTools: z.array(rule).max(50).default([]),
+        // The owner approved this run on its card (profiles with run approval)
+        ownerApproved: z.boolean().default(false),
     }),
     session: z.object({
         id, channelId: id, channelName: z.string(), nativeSessionId: z.string().min(1).nullable(),
@@ -24,6 +26,8 @@ export const claimSchema = z.object({
         // The session slept through a rate limit; the batch holds what arrived meanwhile (#87)
         wokeFromSleep: z.boolean().default(false),
         lurkMode: z.enum(['quiet', 'balanced', 'vocal']).nullable().default(null),
+        // The server owner started or last resumed this session (terms.ts)
+        startedByOwner: z.boolean().default(false),
     }),
     profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude']),
         // null: leave the model or effort to the CLI's own default
@@ -31,7 +35,10 @@ export const claimSchema = z.object({
         effort: z.string().min(1).max(30).nullable(), workdirAlias: z.string().min(1),
         // Edited in Settings → Agents and read at every claim, so no host restart (#73)
         toolPresets: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/)).max(10).default([]),
-        allowedTools: z.array(rule).max(100).default([]) }),
+        allowedTools: z.array(rule).max(100).default([]),
+        // The server's view of the auth mode; the local profile's `auth` is what the host enforces
+        authMode: z.enum(['subscription', 'api_key']).default('subscription'),
+        runApproval: z.boolean().default(false) }),
     inbox: z.array(z.object({
         // 'command': the session notice a /start or /resume posts, so the agent says hello
         messageId: id, threadId: id.nullable(), reason: z.enum(['direct', 'handoff', 'protocol', 'command', 'lurk']),
@@ -66,4 +73,6 @@ export interface HostApi {
     heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat>;
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;
+    reportProfiles?(profiles: ProfileReport[]): Promise<void>;
 }
+export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key'; apiKeyEnv: string | null; runApproval: boolean }

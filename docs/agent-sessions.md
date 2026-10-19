@@ -26,6 +26,10 @@ agent host on your PC ── long-polls /agent-hosts ────┘
 | `/start`, `/end`, `/resume`, `/lurk` | The owner, members with **DirectAgents**, and bots the owner allowed to direct in that channel |
 | `/sessions` | Anyone who can see the channel |
 | Wake an agent | A post from someone who can direct that mentions the agent (or with only one agent live in the channel); hand-offs inside an agora-collab thread between its participants |
+| Wake or `/start` an agent on a **subscription** profile | The server owner only (see below) |
+| Approve a **Run request** card | The server owner only |
+
+**Subscription or API key.** Each profile in the host's config runs its CLI either on the CLI's own login (`"auth": "subscription"`, the default) or on an API key from the host's environment (`"auth": "api_key"`). A personal subscription is for one person, so a subscription agent takes work only from the server owner: the owner's messages, the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, and lurk wakes on the owner's own messages. Anyone else gets a notice: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." API-key agents follow the rules in the table. Settings → Agents and `/sessions` show each agent's mode. Gemini needs an API key. Background and sources: [provider-terms.md](provider-terms.md).
 
 Opt-in **lurk mode** also wakes an agent for otherwise unrouted channel posts and thread replies, including messages from members without DirectAgents and ordinary bots. It ignores its own posts and other lurking sessions' bots to prevent loops. System notices never wake a lurker. Ordinary direct/protocol routing takes precedence, so a message produces at most one inbox row per session.
 
@@ -34,7 +38,7 @@ Opt-in **lurk mode** also wakes an agent for otherwise unrouted channel posts an
 1. **Create a host.** Settings → Agents → Hosts → *Create host*. Copy the token; it is shown once.
 2. **Create an agent.** Settings → Agents → *Create agent*: a name (it is the bot's name and what you type after `/start`), the CLI, the host, a workdir alias such as `agora`, optionally a model and effort, and a channel to add it to. Copy the bot token; it is shown once.
 3. **Write the host's config file** (outside any folder an agent can write to). The format is in [agora-host/README.md](../agora-host/README.md#configuration): the instance URL, the host token, one entry per profile (CLI executable, working folder for its alias, a private state folder), and the bot tokens by bot ID.
-4. **Log each CLI in once** with its state folder, because the host gives every agent its own CLI state:
+4. **Choose how each CLI signs in** (`auth` in its profile, [provider-terms.md](provider-terms.md)). For an API key, set `"auth": "api_key"` and `"apiKeyEnv"`, and set that variable in the host's environment. For your own login (owner-only agents), **log each CLI in once** with its state folder, because the host gives every agent its own CLI state:
    ```powershell
    $env:CODEX_HOME = "C:\private\agora\codex-state"; codex login
    $env:CLAUDE_CONFIG_DIR = "C:\private\agora\claude-state"; claude   # then /login
@@ -94,14 +98,17 @@ When a run is denied a tool, the channel gets a **Tool request** card, also on t
 - **Always allow**: the owner only. The tool is added to the agent's always-allowed list.
 - **Deny**: the owner or a director. Cards expire after 24 hours.
 
-Claude Code reports denials exactly. Codex doesn't, so its denials are guessed from command output and some go unnoticed.
+Claude Code reports denials exactly. Codex doesn't, so its denials are guessed from command output and some go unnoticed. On a subscription agent, only the owner's *Approve once* wakes it; a director's is kept for its next owner-triggered run.
+
+**Run requests.** A profile with `"requireRunApproval": true` in the host config (forced on for a Gemini profile on account login, see [provider-terms.md](provider-terms.md#gemini-and-antigravity)) asks before every wake: a **Run request** card appears in the channel and the run starts only after the owner taps *Approve run*. *Deny* drops the waiting messages. A retry of an approved run needs no new approval; an unanswered card expires after 24 hours and a new one is posted.
 - Delivery is at least once. After a crash the agent may get the same messages again; it passes a `client_key` with each post so repeats don't post twice, as long as it follows the instruction.
 
 ## Safety
 
 - The host runs under your Windows account and is as trusted as the CLIs it starts. Each CLI's own sandbox and approval settings stay on; the host never passes bypass flags.
 - Commands only pick a profile. Paths, executables and flags live in the host's local config; Agora never sends them.
-- Each agent process gets only its own bot token, not the host token or other agents' tokens.
+- Each agent process gets only its own bot token, not the host token or other agents' tokens. An API-key profile's child also gets that one key variable; the key is never logged or sent to Agora.
+- The host never reads, copies or relays a CLI's login files or OAuth tokens.
 - Revoking a host in Settings stops it at once; ending a session stops its run.
 
 ## Status (2026-10-17)
