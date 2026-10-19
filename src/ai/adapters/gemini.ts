@@ -278,6 +278,7 @@ export const geminiAdapter: Adapter = {
             method: 'POST',
             headers: headers(creds),
             body: JSON.stringify(buildBody(req, req.maxTokens ?? 4096)),
+            signal: req.signal,
         });
 
         if (!res.ok) {

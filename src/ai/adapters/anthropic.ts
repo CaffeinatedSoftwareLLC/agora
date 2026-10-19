@@ -30,6 +30,7 @@ export const anthropicAdapter: Adapter = {
         if (req.systemPrompt) body.system = req.systemPrompt;
 
         const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/v1/messages'), {
+            signal: req.signal,
             method: 'POST',
             headers: headers(creds),
             body: JSON.stringify(body),

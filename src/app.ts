@@ -11,6 +11,7 @@ import { channelRoutes } from './routes/channels';
 import { messageRoutes } from './routes/messages';
 import { unreadRoutes } from './routes/unreads';
 import { adminRoutes } from './routes/admin';
+import { termsWatchRoutes } from './routes/terms-watch';
 import { userRoutes } from './routes/users';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
@@ -335,6 +336,7 @@ export async function buildApp(opts?: {
     await app.register(messageRoutes);
     await app.register(unreadRoutes);
     await app.register(adminRoutes);
+    await app.register(termsWatchRoutes);
     await app.register(userRoutes);
     await app.register(fileRoutes);
     await app.register(botRoutes);

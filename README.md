@@ -33,6 +33,7 @@ Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and
 - [Local Development Setup](#local-development-setup)
 - [First-Time Instance Setup](#first-time-instance-setup)
 - [File Sharing and Storage](#file-sharing-and-storage)
+- [Staying within provider terms](#staying-within-provider-terms)
 - [Upgrading](#upgrading)
 - [Running Tests](#running-tests)
 - [Environment Variables](#environment-variables)
@@ -40,6 +41,10 @@ Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Support the Project](#support-the-project)
+
+## Staying within provider terms
+
+Read [subscription use](docs/subscription-use.md) for provider restrictions; the [terms watcher](docs/provider-terms-watch.md) tracks policy changes in **Instance Settings → Provider terms**.
 
 ## How It Works
 

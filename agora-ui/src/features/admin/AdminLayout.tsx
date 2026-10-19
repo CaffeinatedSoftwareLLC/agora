@@ -5,6 +5,7 @@ const navItems = [
   { to: '/admin', label: 'Dashboard', end: true },
   { to: '/admin/pending', label: 'Pending Users', end: false },
   { to: '/admin/users', label: 'All Users', end: false },
+  { to: '/admin/provider-terms', label: 'Provider terms', end: false },
 ];
 
 export function AdminLayout({ children }: { children: ReactNode }) {

@@ -18,6 +18,7 @@ export interface ConversationMessage {
 }
 
 export interface ChatRequest {
+    signal?: AbortSignal;
     model: string;
     messages: ConversationMessage[];
     systemPrompt?: string;
