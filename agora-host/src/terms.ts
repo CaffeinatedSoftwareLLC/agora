@@ -33,7 +33,19 @@ export const GEMINI_SUBSCRIPTION_REFUSAL =
     + `every run then waits for your approval in Agora. That reduces the risk but does not remove it. See ${TERMS_DOC}`;
 
 export const GEMINI_NOT_HOSTED =
-    'Gemini is not a hosted adapter yet. Its profile passed the provider-terms check, but the host can only run codex and claude profiles.';
+    'Gemini is hosted only over ACP with an API key: set "protocol": "acp" and "acpArgs": ["--acp"] on the gemini profile (agora-host README, "ACP agents").';
+
+/**
+ * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An
+ * api_key profile on ACP must use it, so the agent can't fall back to an account login.
+ * Claude Code reads ANTHROPIC_API_KEY itself, so claude needs none.
+ */
+export const ACP_API_KEY_METHODS: Record<string, string> = {
+    GEMINI_API_KEY: 'gemini-api-key',
+    GOOGLE_API_KEY: 'vertex-ai',
+    CODEX_API_KEY: 'codex-api-key',
+    OPENAI_API_KEY: 'openai-api-key',
+};
 
 /** A configuration problem whose message is fixed text, safe to print. */
 export class HostConfigError extends Error {}
@@ -71,7 +83,8 @@ export function checkTerms(profile: LocalProfile, claim: Claim, boundUser: strin
         if (!claim.session.startedByOwner) throw refuse();
         for (const item of claim.inbox) {
             if (item.reason === 'command') continue;
-            if (item.reason === 'handoff' || item.reason === 'protocol') { if (!item.authorBot) throw refuse(); continue; }
+            // delegate: a subtask's brief or summary, posted by the server for a session it delegated
+            if (item.reason === 'handoff' || item.reason === 'protocol' || item.reason === 'delegate') { if (!item.authorBot) throw refuse(); continue; }
             if (item.authorBot || item.authority === null || item.authorId !== owner) throw refuse();
         }
     }
@@ -82,7 +95,8 @@ export function checkTerms(profile: LocalProfile, claim: Claim, boundUser: strin
         for (const item of claim.inbox) {
             // The session notice of the owner's /start or /resume; the server gates who sends it
             if (item.reason === 'command') continue;
-            if (item.reason === 'handoff' || item.reason === 'protocol') {
+            // delegate: a subtask's brief or summary, posted by the server for a session it delegated
+            if (item.reason === 'handoff' || item.reason === 'protocol' || item.reason === 'delegate') {
                 if (!item.authorBot) throw refuse();
                 continue;
             }

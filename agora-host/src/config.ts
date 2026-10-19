@@ -11,7 +11,7 @@ const tool = z.enum(['chat_history', 'chat_read', 'chat_send', 'channel_list', '
     'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake', 'session_lurk',
     'file_reserve', 'file_renew', 'file_release', 'file_reservations', 'project_context', 'canvas_publish', 'canvas_read', 'browser_preview']);
 const profile = z.object({
-    // gemini is accepted so the provider-terms rule can be checked; it isn't hosted yet (terms.ts)
+    // gemini runs only with protocol "acp" and an API key (terms.ts, acp/session.ts)
     adapter: z.enum(['codex', 'claude', 'gemini']), workdir: absolute, workdirAlias: z.string().min(1),
     executable, stateDir: absolute,
     sandbox: z.enum(['read-only', 'workspace-write']).default('workspace-write'),
@@ -36,6 +36,11 @@ const profile = z.object({
         commands: z.array(z.string().max(300).regex(VERIFY_COMMAND, 'verify commands are plain words separated by single spaces')).max(20),
         timeoutSeconds: z.number().int().min(10).max(3600).default(600),
     }).strict().optional(),
+    // "acp": drive an Agent Client Protocol agent (gemini --acp, claude-code-acp, codex-acp) over
+    // JSON-RPC on its stdio instead of the CLI's own headless mode (acp/session.ts)
+    protocol: z.enum(['cli', 'acp']).default('cli'),
+    // Fixed local arguments for the ACP agent, e.g. ["--acp"]; Agora never supplies any
+    acpArgs: z.array(z.string().min(1).max(1000).regex(/^[^\r\n\0]*$/)).max(20).default([]),
 }).strict().superRefine((p, ctx) => {
     if (p.auth === 'api_key' && (!p.apiKeyEnv || !API_KEY_ENVS[p.adapter].includes(p.apiKeyEnv)))
         ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')} for ${p.adapter}` });
@@ -43,8 +48,22 @@ const profile = z.object({
         ctx.addIssue({ code: 'custom', message: 'apiKeyEnv is only used with auth "api_key"' });
     if (p.auth === 'siwc' && p.adapter !== 'codex')
         ctx.addIssue({ code: 'custom', message: 'auth "siwc" (Sign in with ChatGPT) is only for codex profiles' });
+    if (p.auth === 'siwc' && p.protocol === 'acp')
+        ctx.addIssue({ code: 'custom', message: 'auth "siwc" runs codex app-server; use protocol "cli"' });
     if (p.allowSubscriptionAtOwnRisk && (p.adapter !== 'gemini' || p.auth !== 'subscription'))
         ctx.addIssue({ code: 'custom', message: 'allowSubscriptionAtOwnRisk applies only to a gemini profile with auth "subscription"' });
+    if (p.protocol !== 'acp' && p.acpArgs.length) ctx.addIssue({ code: 'custom', message: 'acpArgs is only used with protocol "acp"' });
+    // Agora never hosts a Google account login, not even at the operator's own risk
+    if (p.adapter === 'gemini' && p.protocol === 'acp' && p.auth !== 'api_key')
+        ctx.addIssue({ code: 'custom', message: 'a hosted gemini profile must use auth "api_key" (GEMINI_API_KEY); Agora never runs Gemini on a Google account login' });
+    // docs/provider-terms.md: only the unmodified official CLI may run on a personal login. ACP
+    // agents are other clients (claude-agent-acp wraps the Agent SDK; codex-acp embeds Codex's
+    // core and reads the login itself), so they need an API key.
+    if (p.protocol === 'acp' && p.adapter === 'claude' && p.auth === 'subscription')
+        ctx.addIssue({ code: 'custom', message: 'Claude over ACP (claude-agent-acp, the Agent SDK) must use auth "api_key" (ANTHROPIC_API_KEY); a Claude subscription is for the unmodified claude CLI (protocol "cli") or the Claude Channel, see docs/provider-terms.md' });
+    if (p.protocol === 'acp' && p.adapter === 'codex' && p.auth === 'subscription')
+        ctx.addIssue({ code: 'custom', message: 'Codex over ACP (codex-acp) must use auth "api_key" (CODEX_API_KEY or OPENAI_API_KEY); codex-acp is not the official codex binary and reads the ChatGPT login itself, so use protocol "cli" for a subscription, see docs/provider-terms.md' });
+    if (p.protocol === 'acp' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'ACP has no verified USD cap' });
     if (p.caps.maxTokens !== undefined) ctx.addIssue({ code: 'custom', message: 'Neither verified CLI supports a hard per-run token cap; omit maxTokens explicitly' });
     if (p.adapter === 'codex' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'Codex has no verified USD cap' });
 });

@@ -13,8 +13,9 @@ async function main() {
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
     const config = await loadConfig(process.argv[3]);
     for (const [name, profile] of Object.entries(config.profiles)) {
-        await verifyProfile(profile);
-        console.log(`Verified ${profile.adapter}; hard token cap unavailable; using lease, timeout and server session budget.`);
+        const version = await verifyProfile(profile);
+        const via = profile.protocol === 'acp' ? ` over ACP (${version})` : '';
+        console.log(`Verified ${profile.adapter}${via}; hard token cap unavailable; using lease, timeout and server session budget.`);
         console.log(describeAuth(name, profile));
     }
     const client = new Client(config.instance, config.hostToken);

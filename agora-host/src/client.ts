@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
-import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type ProfileReport } from './types.js';
+import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type Progress, type ProfileReport } from './types.js';
 import type { ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 
@@ -123,8 +123,10 @@ export class Client implements HostApi {
         await response.body?.cancel();
         if (!response.ok) throw new HttpError(response.status);
     }
-    async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat> {
-        return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`, { claimToken: claim.run.claimToken, tokensUsed }, signal));
+    async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null, progress?: Progress | null): Promise<Heartbeat> {
+        // progress: what an ACP run is doing; older servers ignore it
+        return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`,
+            { claimToken: claim.run.claimToken, tokensUsed, ...(progress ? { progress } : {}) }, signal));
     }
     private async report(claim: Claim, action: 'complete' | 'fail', body: Completion | Failure, signal?: AbortSignal) {
         for (let attempt = 0; ; attempt++) {

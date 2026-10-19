@@ -36,7 +36,8 @@ export const claimSchema = z.object({
         parentSessionId: id.nullable().default(null),
         scope: z.object({ kind: z.enum(['task', 'subtask']), title: z.string().max(200) }).nullable().default(null),
     }),
-    profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude']),
+    // gemini runs only over ACP with an API key (acp/session.ts, terms.ts)
+    profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude', 'gemini']),
         // null: leave the model or effort to the CLI's own default
         model: z.string().max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).nullable(),
         effort: z.string().min(1).max(30).nullable(), workdirAlias: z.string().min(1),
@@ -94,6 +95,8 @@ export interface Verification {
     output?: string;
 }
 export interface RateLimit { resetAt: string | null }
+/** What an ACP run is doing now, sent with heartbeats (acp/session.ts). Untrusted agent text. */
+export interface Progress { step: string | null; toolCalls: number; planDone: number | null; planTotal: number | null }
 export interface Completion { checkpoint?: Checkpoint; claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[]; verification?: Verification }
 export interface Failure { checkpoint?: Checkpoint; claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: RateLimit; verification?: Verification }
 export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; reason: string };
@@ -107,7 +110,7 @@ export interface HostApi {
     workspaceStates?(sessionIds: string[]): Promise<string[]>;
     workspaceWarning?(sessionId: string, paths: string[]): Promise<void>;
     claim(signal?: AbortSignal): Promise<{ claim: Claim; sentAt: number } | null>;
-    heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat>;
+    heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null, progress?: Progress | null): Promise<Heartbeat>;
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;
     reportProfiles?(profiles: ProfileReport[]): Promise<void>;

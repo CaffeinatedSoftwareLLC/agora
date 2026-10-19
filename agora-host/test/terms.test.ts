@@ -66,11 +66,11 @@ describe('auth mode configuration', () => {
         expect(await load({ adapter: 'gemini', allowSubscriptionAtOwnRisk: true })).toBe('ok');
     });
 
-    it('forces run approval for Gemini at own risk, and the host does not run Gemini yet', async () => {
+    it('forces run approval for Gemini at own risk, and the host runs Gemini only over ACP', async () => {
         const gemini = configSchema.parse(raw(process.cwd(), { adapter: 'gemini', allowSubscriptionAtOwnRisk: true })).profiles.builder;
         expect(needsRunApproval(gemini)).toBe(true);
         expect(needsRunApproval(config().profiles.builder)).toBe(false);
-        await expect(verifyProfile(gemini)).rejects.toThrow(/not a hosted adapter yet/);
+        await expect(verifyProfile(gemini)).rejects.toThrow(/hosted only over ACP with an API key/);
     });
 });
 

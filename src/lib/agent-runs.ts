@@ -24,7 +24,9 @@ export const MAX_ATTEMPTS = 3;
 export const MAX_BATCH = 20;
 
 /** A channel event to emit after the transaction that produced it commits. */
-export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' | 'ThreadMetadataUpdate' | 'TaskCardUpdate' }
+export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' | 'ThreadMetadataUpdate' | 'TaskCardUpdate' | 'AgentRunProgress' }
+/** What an ACP run reports with its heartbeats; the step is the agent's own text. */
+export interface RunProgress { step: string | null; toolCalls: number; planDone?: number | null; planTotal?: number | null }
 
 export interface Host { id: string; serverId: string }
 
@@ -560,7 +562,7 @@ export async function checkRun(c: PoolClient, host: Host, runId: string, claimTo
     return { ok: true, run };
 }
 
-export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null) {
+export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null, progress?: RunProgress) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, claimToken, null, notices);
         if (!check.ok) return { status: check.status, body: check.body };
@@ -575,8 +577,23 @@ export async function heartbeat(pool: Pool, host: Host, runId: string, claimToke
             `UPDATE agent_runs SET lease_until = NOW() + make_interval(secs => $2) WHERE id = $1 RETURNING lease_until`,
             [runId, LEASE_SECONDS]
         );
+        if (progress) {
+            // Live only: the channel shows it next to "is working…"; nothing is stored
+            const s = await c.query(`SELECT channel_id FROM agent_sessions WHERE id = $1`, [run.session_id]);
+            const channelId = s.rows[0]?.channel_id?.trim();
+            if (channelId) notices.push({ channelId, eventName: 'AgentRunProgress', event: {
+                channelId, sessionId: run.session_id.trim(), runId: run.id.trim(), step: cleanStep(progress.step),
+                toolCalls: progress.toolCalls, planDone: progress.planDone ?? null, planTotal: progress.planTotal ?? null,
+            } });
+        }
         return { status: 200, body: { cancel: false, leaseUntil: new Date(lease.rows[0].lease_until).toISOString() } };
     });
+}
+
+/** The step is agent-controlled text: drop control, format and line-separator characters before broadcast. */
+export function cleanStep(step: string | null | undefined): string | null {
+    if (typeof step !== 'string') return null;
+    return step.replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
 }
 
 /** Why the host must stop this run, or null. */

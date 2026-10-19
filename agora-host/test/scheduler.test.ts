@@ -44,7 +44,7 @@ describe('scheduler with fake processes', () => {
         const s = setup(); s.api.heartbeat.mockResolvedValue({ cancel: true, reason: 'ended' } as never);
         const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(30010); await work;
         expect(s.children[0].kill).toHaveBeenCalled();
-        expect(s.api.heartbeat).toHaveBeenCalledWith(expect.anything(), expect.anything(), 123);
+        expect(s.api.heartbeat).toHaveBeenCalledWith(expect.anything(), expect.anything(), 123, undefined);
         expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'cancelled', retryable: false }), expect.anything());
     });
     it('run timeout kills and reports retryable failure', async () => {
@@ -86,6 +86,18 @@ describe('scheduler with fake processes', () => {
         }));
         const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(110010); await work;
         expect(s.children[0].kill).toHaveBeenCalled(); expect(s.api.fail).not.toHaveBeenCalled();
+    });
+    it('sends an ACP run\'s progress with heartbeats and never retries an ACP login failure', async () => {
+        const s = setup(); const progress = { step: 'Edit src/a.ts', toolCalls: 3, planDone: 1, planTotal: 2 };
+        s.runner.start.mockImplementationOnce(() => {
+            const finish = deferred<Result>();
+            const c = { result: finish.promise, finish, tokensUsed: () => null, progress: () => progress, kill: vi.fn(async () => {}) };
+            s.children.push(c as never); return c;
+        });
+        const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(30010);
+        expect(s.api.heartbeat).toHaveBeenCalledWith(expect.anything(), expect.anything(), null, progress);
+        s.children[0].finish.resolve({ success: false, nativeSessionId: null, tokensUsed: null, summary: null, error: 'acp_auth_required' }); await work;
+        expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'acp_auth_required', retryable: false }), expect.anything());
     });
     it('shutdown kills children and drains without releasing work as success', async () => {
         const s = setup(); const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(0);

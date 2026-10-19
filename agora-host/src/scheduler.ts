@@ -8,6 +8,7 @@ import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
 import { attachRunImages } from './images.js';
 import { NON_RETRYABLE, TermsRefusal } from './terms.js';
 import { planLoop } from './siwc/requests.js';
+import { ACP_FATAL } from './acp/session.js';
 import { snapshotTree, checkpoint, executeReview, type Checkpoint } from './review.js';
 import { verifyPrompt } from './prompt.js';
 import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
@@ -81,7 +82,7 @@ export class Scheduler {
             if (a.stop || beat || this.now() < nextHeartbeat) return;
             const started = this.now(); nextHeartbeat = started + claim.run.heartbeatSeconds * 1000;
             const used = a.child?.tokensUsed?.();
-            beat = this.api.heartbeat(claim, beatAbort.signal, a.tokenBase ? a.tokenBase + (used ?? 0) : used).then(async response => {
+            beat = this.api.heartbeat(claim, beatAbort.signal, a.tokenBase ? a.tokenBase + (used ?? 0) : used, a.child?.progress?.()).then(async response => {
                 if (response.cancel) await stopChild('cancelled');
                 else if (!a.stop) deadline = started + claim.run.leaseSeconds * 1000 - this.safetyMs;
             }).catch(async err => {
@@ -97,12 +98,14 @@ export class Scheduler {
             launch = await (this.options.prepare ?? prepare)(this.config, claim);
             if (launch.unknownPresets?.length) this.log('unknown_tool_preset');
             if (this.stopping || a.stop || this.now() >= deadline) return;
-            const before = launch.adapter === 'claude' ? await worktreeSnapshot(launch.cwd) : null;
+            // Codex reports its file changes; Claude and ACP agents are compared against the disk
+            const snapshot = launch.adapter === 'claude' || !!launch.acp;
+            const before = snapshot ? await worktreeSnapshot(launch.cwd) : null;
             if (launch.workspace) beforeTree = await snapshotTree(launch.workspace);
             if (this.stopping || a.stop || this.now() >= deadline) return;
             a.child = this.runner.start(launch);
             result = await a.child.result; finished = true;
-            if (launch.adapter === 'claude') result.changedPaths = changedSince(before, await worktreeSnapshot(launch.cwd));
+            if (snapshot) result.changedPaths = [...new Set([...changedSince(before, await worktreeSnapshot(launch.cwd)), ...(result.changedPaths ?? [])])].slice(0, 1000);
             // Verify before yield: only after a successful run that changed files
             if (claim.verify && result.success && !launch.lurk && result.changedPaths?.length && !a.stop && !this.stopping)
                 result = await this.verify(a, launch, result, before, () => timeout - this.now());
@@ -151,7 +154,7 @@ export class Scheduler {
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
                             ...(savedCheckpoint ? { checkpoint: savedCheckpoint } : {}),
                             message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
-                            retryable: a.stop !== 'cancelled' && !NON_RETRYABLE.has(result.error ?? ''),
+                            retryable: a.stop !== 'cancelled' && !NON_RETRYABLE.has(result.error ?? '') && !ACP_FATAL.has(result.error ?? ''),
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
                             ...(rateLimited ? { rateLimit: result.rateLimit } : {}) }, reportAbort);
                     }
@@ -204,7 +207,7 @@ export class Scheduler {
                     a.child = this.runner.start(next);
                     r = await a.child.result;
                 } finally { try { await next.cleanup(); } catch { this.log('run_cleanup_failed'); } }
-                if (next.adapter === 'claude') r.changedPaths = changedSince(before, await worktreeSnapshot(first.cwd));
+                if (next.adapter === 'claude' || next.acp) r.changedPaths = [...new Set([...changedSince(before, await worktreeSnapshot(first.cwd)), ...(r.changedPaths ?? [])])].slice(0, 1000);
                 for (const p of r.changedPaths ?? []) changed.add(p);
                 for (const t of r.deniedTools ?? []) denied.add(t);
                 if (r.tokensUsed !== null) tokens = (tokens ?? 0) + r.tokensUsed;
