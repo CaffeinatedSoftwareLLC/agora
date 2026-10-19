@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Checkpoint, ReviewCommand } from './review.js';
+import type { PreviewCommand, PreviewOutcome } from './preview.js';
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 const seconds = z.number().finite().positive().max(86400);
@@ -68,6 +69,8 @@ export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; 
 export interface HostApi {
     claimWorkspaceCommand?(signal?: AbortSignal): Promise<ReviewCommand | null>;
     workspaceCommandResult?(cmd: ReviewCommand, success: boolean, result: object, signal?: AbortSignal): Promise<void>;
+    claimPreview?(signal?: AbortSignal): Promise<PreviewCommand | null>;
+    previewResult?(cmd: PreviewCommand, outcome: PreviewOutcome, signal?: AbortSignal): Promise<void>;
     imageMessages?(claim: Claim, signal?: AbortSignal): Promise<{ maxBytes: number; messages: Array<{ id: string; content: string }> }>;
     uploadImage?(claim: Claim, image: { messageId: string; reference: string; filename: string; buffer: Buffer }, signal?: AbortSignal): Promise<void>;
     workspaceStates?(sessionIds: string[]): Promise<string[]>;

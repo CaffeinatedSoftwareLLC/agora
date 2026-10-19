@@ -245,6 +245,31 @@ is trusted local software running under your Windows account.
 This package does not deploy or modify the server. S2 integration, real CLI
 resume/usage and tree-kill verification, and the S7 phone/deployment test remain
 release gates.
+### Browser preview
+
+With a `preview` block in the config, agents can screenshot pages their session
+serves on localhost (`browser_preview` in agora-mcp):
+
+```json
+"preview": {
+  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "stateDir": "C:/private/agora/preview",
+  "portBase": 42000,
+  "portsPerSession": 10,
+  "slots": 100
+}
+```
+
+`browser` is any Chromium-based browser, driven headless over
+`--remote-debugging-pipe` (no extra dependency). Each session gets its own
+`portsPerSession` ports from `portBase`, kept in `stateDir/preview-ports.json`;
+the run receives them in `AGORA_PREVIEW_PORTS` and its wake prompt, and only
+loopback URLs on those ports load. The page's own requests are held to the same
+ports, and everything else meets a dead proxy. Previews poll on their own loop,
+so an agent can ask for one mid-run. Add `canvas_publish`, `canvas_read` and
+`browser_preview` to `approvedTools` for the agents that should use them. See
+[canvas-and-preview.md](../docs/canvas-and-preview.md).
+
 ### Passive turns and referenced images (#83, #86)
 
 Lurk deliveries carry `session.lurkMode` and inbox reason `lurk`. A purely passive batch uses the dial's interjection rules and permits exact `[pass]` without forcing a JSON schema. `[pass]` completes successfully, preserves token usage and leaves the prior session summary intact. Normal addressed work still requires its usual response.
