@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { hashPassword } from '../auth/passwords';
 import { generateToken } from '../auth/tokens';
+import { deliverToken } from '../auth/session-cookie';
 import { getSetupToken } from '../instance/setup-token';
 import { resetInitializedCache } from '../instance/check-initialized';
 import { DEFAULT_EVERYONE_PERMS } from '../permissions';
@@ -154,7 +155,7 @@ export async function instanceRoutes(app: FastifyInstance) {
                 username,
                 isInstanceAdmin: true,
             },
-            accessToken,
+            ...deliverToken(request, reply, accessToken, app.jwtSecret),
         });
     });
 }

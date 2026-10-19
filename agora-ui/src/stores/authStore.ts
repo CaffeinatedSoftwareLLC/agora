@@ -1,6 +1,6 @@
 import { useDraftStore } from './draftStore';
 import { create } from 'zustand';
-import { api, ApiError, setTokenGetter } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import type { AuthResponse, RegisterRequest, User } from '../lib/contracts/auth';
 import { useServerStore } from './serverStore';
 import { useChannelStore } from './channelStore';
@@ -15,43 +15,67 @@ import { useThreadStore } from './threadStore';
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'pending';
 
 interface AuthState {
-  token: string | null;
   user: User | null;
   status: AuthStatus;
   /** `login` is a username or an email. */
   login: (login: string, password: string) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
+  /** Signed in by another flow (the setup wizard): the server has already set the session cookie. */
+  setAuthenticated: (user: User) => void;
+  /** Ask the server whether the session cookie is still good; signs out locally if not. */
+  verifySession: () => Promise<void>;
   logout: () => void;
   logoutAll: () => Promise<void>;
   clearSession: () => void;
 }
 
-// Restore persisted session from localStorage
-function loadPersistedAuth(): { token: string | null; user: User | null; status: AuthStatus } {
+// The session itself is an httpOnly cookie this code can't read. Only the user's
+// id/name is kept here, so a reload can render at once; verifySession() and the
+// socket handshake find out if the cookie has expired or been revoked.
+const USER_KEY = 'agora_user';
+/** Where the login token was kept before sessions moved to a cookie (#77). */
+const LEGACY_TOKEN_KEY = 'agora_token';
+
+/**
+ * One-time migration: a token left in localStorage by an older build is revoked
+ * and deleted, and that user signs in again. It is not exchanged for a cookie,
+ * because the point of the change is that a token page scripts could read may
+ * already have been copied; revoking it ends that copy too.
+ */
+function retireLegacyToken() {
+  let legacy: string | null = null;
   try {
-    const token = localStorage.getItem('agora_token');
-    const userJson = localStorage.getItem('agora_user');
-    if (token && userJson) {
-      return { token, user: JSON.parse(userJson), status: 'authenticated' };
+    legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+    if (legacy) {
+      localStorage.removeItem(LEGACY_TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
     }
+  } catch { /* storage unavailable */ }
+  if (legacy) {
+    fetch('/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${legacy}` } }).catch(() => {});
+  }
+}
+
+function loadPersistedUser(): { user: User | null; status: AuthStatus } {
+  try {
+    const userJson = localStorage.getItem(USER_KEY);
+    if (userJson) return { user: JSON.parse(userJson), status: 'authenticated' };
   } catch { /* corrupted storage — start fresh */ }
-  return { token: null, user: null, status: 'idle' };
+  return { user: null, status: 'idle' };
 }
 
-function persistAuth(token: string, user: User) {
-  localStorage.setItem('agora_token', token);
-  localStorage.setItem('agora_user', JSON.stringify(user));
+function persistUser(user: User) {
+  try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch { /* not fatal */ }
 }
 
-function clearPersistedAuth() {
-  localStorage.removeItem('agora_token');
-  localStorage.removeItem('agora_user');
+function clearPersistedUser() {
+  try { localStorage.removeItem(USER_KEY); } catch { /* not fatal */ }
 }
 
-const initialAuth = loadPersistedAuth();
+retireLegacyToken();
+const initialAuth = loadPersistedUser();
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-  token: initialAuth.token,
   user: initialAuth.user,
   status: initialAuth.status,
 
@@ -59,12 +83,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ status: 'loading' });
     try {
       const res = await api.post<AuthResponse>('/auth/login', { login, password });
-      persistAuth(res.accessToken, res.user);
-      set({ token: res.accessToken, user: res.user, status: 'authenticated' });
+      get().setAuthenticated(res.user);
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === 'account_pending') {
-          set({ status: 'pending', token: null, user: null });
+          set({ status: 'pending', user: null });
           return;
         }
       }
@@ -77,15 +100,30 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ status: 'loading' });
     try {
       const res = await api.post<AuthResponse & { status?: string }>('/auth/register', data);
-      if (res.accessToken) {
-        persistAuth(res.accessToken, res.user);
-        set({ token: res.accessToken, user: res.user, status: 'authenticated' });
+      if (res.status === 'pending') {
+        set({ status: 'pending', user: null });
       } else {
-        set({ status: 'pending', token: null, user: null });
+        get().setAuthenticated(res.user);
       }
     } catch (err) {
       set({ status: 'idle' });
       throw err;
+    }
+  },
+
+  setAuthenticated: (user) => {
+    persistUser(user);
+    set({ user, status: 'authenticated' });
+  },
+
+  verifySession: async () => {
+    if (get().status !== 'authenticated') return;
+    try {
+      const res = await api.get<{ user: User }>('/auth/session');
+      if (get().status === 'authenticated') get().setAuthenticated(res.user);
+    } catch (err) {
+      // Only a definite answer signs out; a network blip leaves the session alone
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) get().clearSession();
     }
   },
 
@@ -102,10 +140,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   clearSession: () => {
-    clearPersistedAuth();
+    clearPersistedUser();
     useDraftStore.getState().clearAllDrafts();
     useUIStore.getState().onChannelSelect(null);
-    set({ token: null, user: null, status: 'idle' });
+    set({ user: null, status: 'idle' });
     useServerStore.getState().clear();
     useChannelStore.getState().clear();
     useMemberStore.getState().clear();
@@ -117,6 +155,3 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     useUIStore.getState().setConnectionStatus('disconnected');
   },
 }));
-
-// Wire up the API client to read the token from the store
-setTokenGetter(() => useAuthStore.getState().token);

@@ -8,6 +8,8 @@ declare module 'fastify' {
         userId: string;
         /** True when the request was authenticated with a Bot token. */
         isBot: boolean;
+        /** True when a human was authenticated by the browser session cookie, not a header. */
+        cookieAuth?: boolean;
         /** Set when the request was authenticated with an AgentHost token (only on /agent-hosts/@me/*). */
         agentHost?: { id: string; serverId: string };
         /** True when the user has instance admin privileges. Set by requireInstanceAdmin. */

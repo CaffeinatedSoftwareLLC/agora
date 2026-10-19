@@ -5,6 +5,7 @@ import { blacklistToken } from '../auth/token-blacklist';
 import { generateUlid } from '../utils/ulid';
 import type { LoginLimiter } from '../auth/login-limit';
 import { requireAuth } from '../auth/middleware';
+import { clearSessionCookies, deliverToken, sessionTokenFromHeaders } from '../auth/session-cookie';
 
 export async function authRoutes(app: FastifyInstance) {
     // POST /auth/register — policy-aware registration
@@ -134,7 +135,7 @@ export async function authRoutes(app: FastifyInstance) {
 
         return reply.status(201).send({
             user: { id, username },
-            accessToken: token,
+            ...deliverToken(request, reply, token, app.jwtSecret),
         });
     });
 
@@ -231,13 +232,18 @@ export async function authRoutes(app: FastifyInstance) {
 
         return reply.status(200).send({
             user: { id: user.id.trim(), username: user.username, isInstanceAdmin: user.is_instance_admin },
-            accessToken: token,
+            ...deliverToken(request, reply, token, app.jwtSecret),
         });
     });
 
-    // POST /auth/logout — revoke the current token
+    // POST /auth/logout — revoke the current token (header or session cookie) and clear
+    // the cookies. No CSRF token needed: a forged logout only signs the user out, and
+    // SameSite=Strict keeps the cookie off cross-site requests anyway.
     app.post('/auth/logout', async (request, reply) => {
-        const raw = extractToken(request.headers.authorization);
+        const headerToken = extractToken(request.headers.authorization);
+        const cookieToken = sessionTokenFromHeaders(request.headers);
+        if (cookieToken) clearSessionCookies(reply);
+        const raw = headerToken ?? cookieToken;
         if (!raw) {
             return reply.status(401).send({ error: 'Missing token' });
         }
@@ -262,6 +268,20 @@ export async function authRoutes(app: FastifyInstance) {
     app.post('/auth/logout-all', { preHandler: [requireAuth] }, async (request, reply) => {
         await request.dbClient!.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [request.userId]);
         request.gatewayAccessChanged = true;
+        if (request.cookieAuth) clearSessionCookies(reply);
         return reply.status(200).send({ success: true });
+    });
+
+    // GET /auth/session — who the current session belongs to. The UI calls it on load to
+    // check that its session cookie is still good.
+    app.get('/auth/session', { preHandler: [requireAuth] }, async (request, reply) => {
+        if (request.isBot || !request.userId) return reply.status(403).send({ error: 'forbidden' });
+        const result = await request.dbClient!.query(
+            'SELECT id, username, is_instance_admin FROM users WHERE id = $1',
+            [request.userId]
+        );
+        const row = result.rows[0];
+        if (!row) return reply.status(401).send({ error: 'Invalid token' });
+        return { user: { id: row.id.trim(), username: row.username, isInstanceAdmin: row.is_instance_admin } };
     });
 }

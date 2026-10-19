@@ -37,6 +37,19 @@ Authorization: Bearer <accessToken>
 
 Tokens are JWTs issued by `/auth/login`, `/auth/register`, or `/instance/setup`. Account status must be `active` -- accounts with `pending` or `suspended` status receive `403`.
 
+### Browser sessions (cookie)
+
+The web UI never holds the JWT. It sends `X-Agora-Session: cookie` with `/auth/login`, `/auth/register` and `/instance/setup`; those responses then omit `accessToken` and set two cookies instead:
+
+| Cookie | Flags | Purpose |
+|---|---|---|
+| `agora_session` | `HttpOnly; Secure; SameSite=Strict; Path=/`, 7 days | The JWT. Read by the API when a request has no `Authorization` header, and by the Socket.IO handshake. |
+| `agora_csrf` | `Secure; SameSite=Strict; Path=/` (readable by the page) | HMAC of the session's `jti`. |
+
+Every cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must send the `agora_csrf` value in `X-CSRF-Token`, or it gets `403 {"error":"csrf_failed"}`. The value is bound to the session, so a cookie planted by another site cannot be paired with it. `POST /auth/logout` is exempt and clears both cookies. A cookie-authenticated WebSocket handshake must come from the API's own host or a `CORS_ORIGIN` origin. `GET /auth/session` returns the current user (`{ user: { id, username, isInstanceAdmin } }`) or `401`.
+
+An `Authorization` header always wins over the cookie and needs no CSRF token, so bots, agent hosts, agora-mcp and scripts are unaffected. Browsers accept `Secure` cookies from `http://localhost`, so dev works over plain HTTP; serving the UI over plain HTTP on any other host needs `COOKIE_SECURE=false`.
+
 ### Bot auth
 
 ```

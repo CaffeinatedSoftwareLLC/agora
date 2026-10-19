@@ -102,9 +102,11 @@ Calls `GET /instance/status` via the `useInstance()` hook on mount. Shows:
 
 ### AuthGuard (`features/auth/AuthGuard.tsx`)
 
-Reads `token` and `status` from `authStore`. Redirects:
+Reads `status` from `authStore`. Redirects:
 - `status === 'pending'` --> `/pending`
-- No token and not authenticated --> `/login`
+- Not authenticated --> `/login`
+
+Once per page load it calls `verifySession()` (`GET /auth/session`), which signs out locally if the session cookie has expired or been revoked.
 
 ### AdminGuard (`features/admin/AdminGuard.tsx`)
 
@@ -122,7 +124,6 @@ All application state lives in 11 Zustand stores. Stores are vanilla `create()` 
 
 ```typescript
 interface AuthState {
-  token: string | null;
   user: User | null;               // { id, username, isInstanceAdmin? }
   status: 'idle' | 'loading' | 'authenticated' | 'pending';
   login(email: string, password: string): Promise<void>;
@@ -131,10 +132,12 @@ interface AuthState {
 }
 ```
 
-- On login/register success: sets `token`, `user`, and `status: 'authenticated'`
-- On `account_pending` error: sets `status: 'pending'` (no token)
+- The session is an httpOnly cookie (`agora_session`) the UI cannot read; only `user` is kept in localStorage (`agora_user`) so a reload renders at once
+- On login/register success: sets `user` and `status: 'authenticated'`
+- On `account_pending` error: sets `status: 'pending'`
 - On `logout()`: clears own state **and** calls `clear()` on all other stores
-- Wires the API client's token getter at module load via `setTokenGetter()`
+- At module load, a token left in localStorage (`agora_token`) by an older build is revoked and removed, and that user signs in again
+- `lib/api.ts` sends `X-Agora-Session: cookie` on every request and echoes the `agora_csrf` cookie as `X-CSRF-Token` on state-changing ones
 
 ### serverStore
 
@@ -338,16 +341,16 @@ interface ThreadState {
 ### Socket Factory (`lib/socketFactory.ts`)
 
 ```typescript
-export function createSocket(token: string): Socket {
+export function createSocket(): Socket {
   return io('/', {
     transports: ['websocket'],   // No HTTP polling fallback
-    auth: { token },
+    withCredentials: true,       // The handshake carries the session cookie
     autoConnect: false,          // Manual connect after event handlers are set up
   });
 }
 ```
 
-A new socket is created each time the token changes. There is no singleton -- the factory returns a fresh instance, and the old one is cleaned up by `SocketProvider`.
+A new socket is created for each sign-in. There is no singleton -- the factory returns a fresh instance, and the old one is cleaned up by `SocketProvider`.
 
 ### SocketProvider (`features/shell/SocketProvider.tsx`)
 
@@ -355,10 +358,10 @@ The `SocketProvider` wraps the entire `/app/*` route subtree. It owns the socket
 
 **Lifecycle:**
 
-1. When `token` is available, create a socket via `createSocket(token)`
+1. When the user is authenticated, create a socket via `createSocket()`
 2. Register all event handlers
 3. Call `s.connect()` -- connection is manual since `autoConnect: false`
-4. On unmount (or token change), remove all listeners and disconnect
+4. On unmount (or a new sign-in), remove all listeners and disconnect
 
 **Connection status tracking:**
 

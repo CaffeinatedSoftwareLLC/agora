@@ -1,9 +1,11 @@
 import { io, type Socket } from 'socket.io-client';
 
-export function createSocket(token: string): Socket {
+// Same-origin: the handshake carries the httpOnly session cookie, which the gateway
+// reads in place of a token.
+export function createSocket(): Socket {
   return io('/', {
     transports: ['websocket'],
-    auth: { token },
+    withCredentials: true,
     autoConnect: false,
   });
 }

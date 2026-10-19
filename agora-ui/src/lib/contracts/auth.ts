@@ -13,9 +13,9 @@ export interface User {
   isInstanceAdmin?: boolean;
 }
 
+/** The UI asks for a cookie session, so the token itself is never in the body. */
 export interface AuthResponse {
   user: User;
-  accessToken: string;
 }
 
 export interface PendingResponse {

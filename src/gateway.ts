@@ -4,6 +4,7 @@ import { verifyToken } from './auth/tokens';
 import { isTokenBlacklisted } from './auth/token-blacklist';
 import { parseBotToken, verifyBotSecret } from './auth/bot-tokens';
 import { config } from './config';
+import { originAllowed, sessionTokenFromHeaders } from './auth/session-cookie';
 import { socketAccountError, visibleChannels, gatewayAccessRevision } from './lib/gateway-access';
 import { canViewChannel } from './lib/channel-access';
 import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
@@ -39,8 +40,18 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     // Auth middleware — verify JWT or bot token from handshake
     io.use(async (socket, next) => {
         socket.data.accessRevision = gatewayAccessRevision(io);
-        const token = socket.handshake.auth?.token;
         const type = socket.handshake.auth?.type;
+        let token = socket.handshake.auth?.token;
+
+        // Browsers authenticate with the httpOnly session cookie instead of a token in
+        // the handshake. Socket.IO's CORS setting does not cover the websocket transport,
+        // so the handshake's Origin is checked here (cross-site WebSocket hijacking).
+        if ((typeof token !== 'string' || !token) && type !== 'bot') {
+            token = sessionTokenFromHeaders(socket.handshake.headers);
+            if (token && !originAllowed(socket.handshake.headers)) {
+                return next(new Error('Origin not allowed'));
+            }
+        }
 
         if (typeof token !== 'string' || !token) {
             return next(new Error('Authentication required'));
