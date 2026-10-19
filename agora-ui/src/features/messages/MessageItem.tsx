@@ -11,6 +11,7 @@ import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
 import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
 import { PermissionRelayCard } from '../agents/PermissionRelayCard';
+import { TaskThreadNotice } from '../tasks/TaskThreadNotice';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
 import { usePalette } from '../../theme';
@@ -91,6 +92,11 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
 
   if (message.systemEvent === 'agent_permission_relay') {
     return <PermissionRelayCard message={message} />;
+  }
+
+  // A task card's or subtask's thread (docs/task-board.md)
+  if ((message.systemEvent === 'task_card' || message.systemEvent === 'subtask') && channelId) {
+    return <TaskThreadNotice message={message} channelId={channelId} />;
   }
 
   // Agent session notice (started / shelved / ended): left-aligned with the message column, console icon

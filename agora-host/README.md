@@ -265,6 +265,19 @@ Each claim carries the channel's pinned instructions and files (`project`), and 
 ```
 
 No shell, OS variables plus `CI=1` only, bare executables resolved from absolute `PATH` entries (never the worktree), process tree killed on timeout. The command runs code the agent just edited, as your account and outside the CLI's sandbox, so list only commands you would let that agent run itself. See [project-context.md](../docs/project-context.md).
+### Task cards and subtasks
+
+A task card's or subtask's session works in one thread (`session.threadId`), and
+`session.scope` says which (`task` or `subtask`, with a title). The wake prompt
+tells the agent to post only in that thread. For a subtask, it adds that the
+brief is all the agent has (a clean context, no native session or summary) and
+that only its JSON summary is posted back to the parent. Inbox reason `delegate`
+marks a subtask's brief or its summary. Every non-lurk prompt mentions
+`subtask_start`. Add `subtask_start` (and the `task_*` tools, for orchestrators)
+to a profile's `approvedTools` to let it delegate. The workspace command
+`pr_status` runs `gh pr view <session branch> --json url,state,isDraft` in the
+session worktree and returns only the state and an https URL. See
+[task-board.md](../docs/task-board.md).
 
 ### Passive turns and referenced images (#83, #86)
 

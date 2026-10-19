@@ -17,6 +17,9 @@ import { planNotice, PLAN_OWNER_SQL } from './provider-terms';
  *   and messages from someone who can direct reach every participant.
  * - opt-in lurkers hear otherwise unrouted channel posts and thread replies, except
  *   their own posts and posts by other lurkers. System notices never route here.
+ * - a session scoped to a thread (a task card's or a subtask's, docs/task-board.md) takes no
+ *   part in the rules above; in its own thread, a message from someone who can direct
+ *   wakes it ('direct').
  *
  * Sessions on a plan-owned profile ('subscription': the CLI's own account login, owned by the
  * server owner; 'siwc': a ChatGPT plan connected through Sign in with ChatGPT, owned by the
@@ -91,8 +94,11 @@ export async function asService<T>(client: any, fn: () => Promise<T>): Promise<T
     }
 }
 
-/** Live sessions in a channel, with the names a START or YIELD may use for each agent. */
-async function liveSessions(db: any, channelId: string): Promise<LiveSession[]> {
+/**
+ * Live channel sessions (or, with `threadId`, the live sessions scoped to that thread), with
+ * the names a START or YIELD may use for each agent.
+ */
+async function liveSessions(db: any, channelId: string, threadId: string | null = null): Promise<LiveSession[]> {
     const rows = await db.query(
         `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, u.username, p.name AS profile_name, p.auth_mode,
                 ${PLAN_OWNER_SQL} AS plan_owner_id,
@@ -101,8 +107,9 @@ async function liveSessions(db: any, channelId: string): Promise<LiveSession[]> 
          JOIN users u ON u.id = s.bot_id
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN servers srv ON srv.id = s.server_id
-         WHERE s.channel_id = $1 AND s.state = 'live'`,
-        [channelId]
+         WHERE s.channel_id = $1 AND s.state = 'live' AND s.thread_id IS NOT DISTINCT FROM $2
+         ORDER BY s.id`,
+        [channelId, threadId]
     );
     return rows.rows.map((r: any) => ({
         id: r.id.trim(),
@@ -252,6 +259,11 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
 
 async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string, ctx: RouteContext): Promise<void> {
     const threadId = msg.threadId!;
+    // A task card's or subtask's own thread: someone who can direct speaks to its agent
+    if (msg.couldDirect) {
+        const scoped = (await liveSessions(db, msg.channelId, threadId)).filter(s => s.botId !== authorId);
+        await addInbox(db, permitted(scoped, 'direct', ctx), msg.messageId, threadId, 'direct');
+    }
     const binding = await db.query(
         `SELECT initiator_session_id, session_ids FROM agent_session_threads WHERE thread_id = $1 AND state = 'open'`,
         [threadId]

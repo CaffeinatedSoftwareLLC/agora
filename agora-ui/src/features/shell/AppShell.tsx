@@ -11,6 +11,7 @@ import { MembersSidebar } from '../servers/MembersSidebar';
 import { ThreadPanel } from '../messages/ThreadPanel';
 import { FilesPanel } from '../messages/FilesPanel';
 import { ProjectPanel } from '../messages/ProjectPanel';
+import { TasksPanel } from '../tasks/TasksPanel';
 import { OverlayManager } from './OverlayManager';
 import { useShellViewport } from './viewport';
 import './shell.css';
@@ -113,6 +114,7 @@ export function AppShell() {
             {aux === 'thread' && <ThreadPanel />}
             {aux === 'files' && <FilesPanel />}
             {aux === 'project' && <ProjectPanel />}
+            {aux === 'tasks' && <TasksPanel />}
             {aux === 'members' && <MembersSidebar />}
           </aside>
         </>}

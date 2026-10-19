@@ -31,6 +31,8 @@ import { workspaceReviewRoutes } from './routes/workspace-review';
 import { agentToolRequestRoutes } from './routes/agent-tool-requests';
 import { permissionRelayRoutes } from './routes/permission-relays';
 import { channelProjectRoutes } from './routes/channel-projects';
+import { taskBoardRoutes } from './routes/task-board';
+import { subtaskRoutes } from './routes/subtasks';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
@@ -358,6 +360,8 @@ export async function buildApp(opts?: {
     await app.register(agentToolRequestRoutes);
     await app.register(permissionRelayRoutes);
     await app.register(channelProjectRoutes);
+    await app.register(taskBoardRoutes);
+    await app.register(subtaskRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

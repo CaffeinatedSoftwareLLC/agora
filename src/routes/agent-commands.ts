@@ -3,7 +3,7 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE } from '../lib/provider-terms';
 
 /**
@@ -17,13 +17,16 @@ import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBS
  * An agent on a 'subscription' profile (the CLI's own account login) can only be started or
  * resumed by the server owner, and one on a 'siwc' profile (a ChatGPT plan connected through
  * Sign in with ChatGPT) only by that plan's owner (src/lib/provider-terms.ts).
+ *
+ * /start, /end and lurk by profile name act on the agent's channel session. Sessions scoped
+ * to a thread (task cards and subtasks, docs/task-board.md) are ended and resumed by ID.
  */
 
-class CommandError extends Error {
+export class CommandError extends Error {
     constructor(public status: number, public body: any) { super(body?.error ?? 'error'); }
 }
 
-function sessionJson(r: any) {
+export function sessionJson(r: any) {
     return {
         id: r.id.trim(), profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
@@ -31,13 +34,14 @@ function sessionJson(r: any) {
         authMode: r.auth_mode ?? 'subscription', runApproval: !!r.run_approval,
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
         workspaceId: r.workspace_id,
+        threadId: r.thread_id?.trim() ?? null, parentSessionId: r.parent_session_id?.trim() ?? null, title: r.title ?? null,
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
         running: !!r.running, sleepingUntil: r.sleeping_until ?? null, tokenBudget: Number(r.effective_token_budget), wakeBudget: r.wake_budget, run: r.run ?? null, recentRuns: r.recent_runs ?? [],
     };
 }
 
 // running: a host has claimed a run for this session and is working on it now
-const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_username, COALESCE(s.token_budget, p.token_budget) AS effective_token_budget, p.wake_budget,
+export const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_username, COALESCE(s.token_budget, p.token_budget) AS effective_token_budget, p.wake_budget,
         p.auth_mode, p.run_approval, p.plan_owner_id,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
             'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
@@ -49,7 +53,7 @@ const SESSION_SELECT = `SELECT s.*, p.name AS profile_name, u.username AS bot_us
         EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') AS running
     FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
 
-async function profileByName(db: any, channelId: string, name: string) {
+export async function profileByName(db: any, channelId: string, name: string) {
     // Lock order is profile → session (as in profile edits and completions): take the
     // profile first, before any session lock, so /start can't deadlock with a PATCH.
     const row = await db.query(
@@ -66,7 +70,7 @@ async function profileByName(db: any, channelId: string, name: string) {
  * A subscription profile runs on the owner's own CLI login: only the owner starts or resumes it.
  * A siwc profile runs on its plan owner's ChatGPT plan: only that person does.
  */
-async function requireOwnerForSubscription(db: any, authMode: string | null, serverId: string, userId: string, planOwnerId: string | null = null) {
+export async function requireOwnerForSubscription(db: any, authMode: string | null, serverId: string, userId: string, planOwnerId: string | null = null) {
     if (authMode === 'api_key') return;
     if (authMode === 'siwc') {
         if (!planOwnerId || planOwnerId.trim() !== userId) throw new CommandError(403, { error: PLAN_OWNER_ONLY, message: PLAN_OWNER_ONLY_MESSAGE });
@@ -77,15 +81,17 @@ async function requireOwnerForSubscription(db: any, authMode: string | null, ser
     }
 }
 
-async function botInChannel(db: any, botId: string, channelId: string) {
+export async function botInChannel(db: any, botId: string, channelId: string) {
     const row = await db.query(
         `SELECT 1 FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2`, [botId, channelId]
     );
     if (row.rows.length === 0) throw new CommandError(400, { error: 'bot_not_in_channel' });
 }
 
-async function liveFor(db: any, channelId: string, botId: string) {
-    const row = await db.query(`${SESSION_SELECT} WHERE s.channel_id = $1 AND s.bot_id = $2 AND s.state = 'live' FOR UPDATE OF s`, [channelId, botId]);
+/** The agent's live channel session, or with `threadId` its live session in that thread. */
+async function liveFor(db: any, channelId: string, botId: string, threadId: string | null = null) {
+    const row = await db.query(`${SESSION_SELECT} WHERE s.channel_id = $1 AND s.bot_id = $2 AND s.state = 'live'
+        AND s.thread_id IS NOT DISTINCT FROM $3 FOR UPDATE OF s`, [channelId, botId, threadId]);
     return row.rows[0] ?? null;
 }
 
@@ -107,13 +113,16 @@ async function stopSession(db: any, sessionId: string, to: 'shelved' | 'ended', 
     );
 }
 
-/** Post the session notice and queue it as the agent's first wake. */
-async function announce(db: any, channelId: string, sessionId: string, text: string, notices: Notice[]) {
-    const notice = await postNotice(db, channelId, text);
-    notices.push(notice);
+/**
+ * Post the session notice and queue it as the agent's first wake. A session scoped to a
+ * thread hears it in that thread.
+ */
+export async function announce(db: any, channelId: string, sessionId: string, text: string, notices: Notice[], threadId: string | null = null) {
+    const posted = await postSessionNotice(db, channelId, threadId, text);
+    notices.push(...posted);
     await db.query(
-        `INSERT INTO agent_inbox (id, session_id, message_id, reason) VALUES ($1, $2, $3, 'command')`,
-        [generateUlid(), sessionId, notice.event.id]
+        `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason) VALUES ($1, $2, $3, $4, 'command')`,
+        [generateUlid(), sessionId, posted[0].event.id, threadId]
     );
 }
 
@@ -147,9 +156,10 @@ export async function agentCommandRoutes(app: FastifyInstance) {
 
         if (command === 'sessions') {
             // Channel access was checked above; bots aren't server members, so read past RLS
+            // Channel sessions first: task card and subtask sessions are listed on the board too
             const rows = await asService(db, () => db.query(
                 `${SESSION_SELECT} WHERE s.channel_id = $1
-                 ORDER BY (s.state = 'live') DESC, s.last_active_at DESC LIMIT 25`,
+                 ORDER BY (s.thread_id IS NULL) DESC, (s.state = 'live') DESC, s.last_active_at DESC LIMIT 25`,
                 [channelId]
             ));
             return reply.send({ sessions: rows.rows.map(sessionJson) });
@@ -159,7 +169,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             // Only the owner and directors can start, end or resume agent sessions
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
-        if (['start', 'end', 'lurk'].includes(command) && !profileName) return reply.status(400).send({ error: 'profile is required' });
+        if (['start', 'lurk'].includes(command) && !profileName) return reply.status(400).send({ error: 'profile is required' });
+        if (command === 'end' && !profileName && !sessionId) return reply.status(400).send({ error: 'profile or sessionId is required' });
         if (command === 'lurk' && lurkMode === undefined) return reply.status(400).send({ error: 'lurkMode is required' });
         if (lurkMode !== undefined && command !== 'lurk' && command !== 'start') return reply.status(400).send({ error: 'lurkMode requires start or lurk' });
         if ((command === 'resume' || command === 'budget' || command === 'wake') && !sessionId) return reply.status(400).send({ error: 'sessionId is required' });
@@ -202,7 +213,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
                     return { status: 200, body: { action: 'woken', session: sessionJson(row.rows[0]) } };
                 }
-                if (command === 'end') return endSession(db, channelId, profileName, who, notices);
+                if (command === 'end') return sessionId && !profileName
+                    ? endSessionById(db, channelId, sessionId, who, notices) : endSession(db, channelId, profileName, who, notices);
                 if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, userId, who, notices, tokenBudget);
                 const started = await startSession(db, channelId, profileName, onLive, fresh, userId, who, notices);
                 if (lurkMode !== undefined) {
@@ -242,15 +254,15 @@ async function startSession(db: any, channelId: string, profileName: string, onL
     // "Shelve and start new" starts fresh; otherwise pick up this profile's latest shelved session here
     if (!fresh && !shelvedNow) {
         const shelved = await db.query(
-            `${SESSION_SELECT} WHERE s.channel_id = $1 AND s.profile_id = $2 AND s.state = 'shelved'
+            `${SESSION_SELECT} WHERE s.channel_id = $1 AND s.profile_id = $2 AND s.state = 'shelved' AND s.thread_id IS NULL
              ORDER BY s.last_active_at DESC LIMIT 1 FOR UPDATE OF s`,
             [channelId, profile.id]
         );
         if (shelved.rows[0]) {
             const previous = shelved.rows[0];
-            if (Number(previous.tokens_used) >= Number(previous.effective_token_budget) || previous.wakes_used >= previous.wake_budget)
-                throw new CommandError(409, { error: 'budget_exhausted' });
             const id = previous.id.trim();
+            if (previous.wakes_used >= previous.wake_budget || await budgetExhausted(db, id))
+                throw new CommandError(409, { error: 'budget_exhausted' });
             // Resuming makes it the resumer's session: started_by decides the subscription rule
             await db.query(
                 `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
@@ -272,6 +284,21 @@ async function startSession(db: any, channelId: string, profileName: string, onL
         `${who} started a ${profile.name} session (${id})${shelvedNow ? '; the previous one is shelved' : ''}.`, notices);
     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [id]);
     return { status: 201, body: { action: 'started', session: sessionJson(row.rows[0]) } };
+}
+
+/** End one session by ID: how a task card's or subtask's session is stopped. */
+async function endSessionById(db: any, channelId: string, sessionId: string, who: string, notices: Notice[]) {
+    // Profile before session, as everywhere else
+    const profileOf = await db.query(`SELECT profile_id FROM agent_sessions WHERE id = $1 AND channel_id = $2`, [sessionId, channelId]);
+    if (!profileOf.rows[0]) throw new CommandError(404, { error: 'no_live_session' });
+    await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE`, [profileOf.rows[0].profile_id]);
+    const live = (await db.query(`${SESSION_SELECT} WHERE s.id = $1 AND s.channel_id = $2 FOR UPDATE OF s`, [sessionId, channelId])).rows[0];
+    if (!live || live.state === 'ended') throw new CommandError(404, { error: 'no_live_session' });
+    await stopSession(db, sessionId, 'ended', 'user');
+    notices.push(await sessionUpdate(db, sessionId, false));
+    notices.push(...await postSessionNotice(db, channelId, live.thread_id?.trim() ?? null, `${who} ended ${live.profile_name}'s session (${sessionId}).`));
+    const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
+    return { status: 200, body: { action: 'ended', session: sessionJson(row.rows[0]) } };
 }
 
 async function endSession(db: any, channelId: string, profileName: string, who: string, notices: Notice[]) {
@@ -300,12 +327,14 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
         await db.query('UPDATE agent_sessions SET token_budget = $2 WHERE id = $1', [sessionId, tokenBudget]);
         t.effective_token_budget = tokenBudget;
     }
-    if (Number(t.tokens_used) >= Number(t.effective_token_budget) || t.wakes_used >= t.wake_budget)
+    if (t.wakes_used >= t.wake_budget || await budgetExhausted(db, sessionId))
         throw new CommandError(409, { error: 'budget_exhausted' });
     const botId = t.bot_id.trim();
     await botInChannel(db, botId, channelId);
 
-    const live = await liveFor(db, channelId, botId);
+    // A task card's or subtask's session competes only with the agent's other session in its thread
+    const threadId: string | null = t.thread_id?.trim() ?? null;
+    const live = await liveFor(db, channelId, botId, threadId);
     if (live) {
         if (onLive === 'keep') return { status: 200, body: { action: 'kept', session: sessionJson(live) } };
         if (onLive !== 'shelve') throw new CommandError(409, { error: 'session_live', session: sessionJson(live) });
@@ -315,7 +344,7 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
         `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
         [sessionId, userId]
     );
-    await announce(db, channelId, sessionId, `${who} resumed ${t.profile_name}'s session (${sessionId}).`, notices);
+    await announce(db, channelId, sessionId, `${who} resumed ${t.profile_name}'s session (${sessionId}).`, notices, threadId);
     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
     return { status: 200, body: { action: 'resumed', session: sessionJson(row.rows[0]) } };
 }

@@ -123,6 +123,17 @@ export interface BotMessageStreamPayload {
     attachments?: MessagePayload['attachments'];
 }
 
+/** A task card changed (docs/task-board.md); `card` is the board's full view of it. */
+export interface TaskCardUpdatePayload {
+  channelId: string;
+  card: import('../../features/tasks/taskBoard').TaskCard;
+}
+
+export interface TaskCardDeletePayload {
+  channelId: string;
+  id: string;
+}
+
 export interface AgentSessionUpdatePayload {
   channelId: string;
   sessionId: string;

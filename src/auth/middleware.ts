@@ -26,6 +26,13 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/project',
     // Agent sessions: the route itself requires can_direct for anything but listing
     'POST /channels/:id/agent-commands',
+    // Task board (docs/task-board.md): reading is open to the channel, changes need can_direct
+    'GET /channels/:id/tasks',
+    'POST /channels/:id/tasks',
+    'PATCH /channels/:id/tasks/:taskId',
+    'POST /channels/:id/tasks/:taskId/start',
+    // Subtask delegation: only during the bot's own hosted run in the channel
+    'POST /channels/:id/subtasks',
     // File search returns names, tags and scores, never file content
     'GET /channels/:id/files/search',
     // The extracted text of a file in a channel the bot can access (not the file itself)
