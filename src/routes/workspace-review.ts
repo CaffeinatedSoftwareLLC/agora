@@ -8,6 +8,8 @@ import { generateUlid } from '../utils/ulid';
 
 const ID = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' } as const;
 const SHA = { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' } as const;
+/** Actions only the server owner may queue: rewinding history, forking, and opening a PR with the owner's `gh` login. */
+const OWNER_ONLY = ['restore','fork','pr'];
 const response = (httpStatus: number, body?: object) => ({ httpStatus, body });
 async function respondService(request: FastifyRequest, reply: FastifyReply, fn: () => Promise<any>) {
     const value = await asService(request.dbClient!,fn);
@@ -46,7 +48,8 @@ export async function workspaceReviewRoutes(app: FastifyInstance) {
         const r = await asService(db, async () => {
             const s = await boundSession(db, id, sessionId);
             if (!s) return { status: 404, body: { error: 'session_not_found' } };
-            if (['restore','fork'].includes(b.action) && !await isServerOwner(db, s.server_id.trim(), request.userId)) return { status: 403, body: { error: 'owner_only' } };
+            // 'pr' runs `gh` with the owner's GitHub login on the host, so directors may not trigger it.
+            if (OWNER_ONLY.includes(b.action) && !await isServerOwner(db, s.server_id.trim(), request.userId)) return { status: 403, body: { error: 'owner_only' } };
             if (!(await db.query('SELECT 1 FROM agent_hosts WHERE id=$1 AND revoked_at IS NULL', [s.host_id])).rows.length) return { status: 409, body: { error: 'host_unavailable' } };
             const busy = await db.query(`SELECT 1 FROM agent_runs WHERE session_id=$1 AND status='claimed'
                 UNION ALL SELECT 1 FROM agent_workspace_commands WHERE session_id=$1 AND status IN ('queued','claimed')`, [sessionId]);
@@ -110,7 +113,7 @@ export async function workspaceReviewRoutes(app: FastifyInstance) {
                 if (!s || !c) continue;
                 const permitted = c.action === 'diff' ? await canViewChannel(db,s.channel_id.trim(),c.requested_by.trim(),false) : null;
                 const authority = c.action === 'diff' ? permitted?.allowed : await stampAuthority(db,s.channel_id.trim(),c.requested_by.trim(),false);
-                const ownerOK = !['restore','fork'].includes(c.action) || await isServerOwner(db,s.server_id.trim(),c.requested_by.trim());
+                const ownerOK = !OWNER_ONLY.includes(c.action) || await isServerOwner(db,s.server_id.trim(),c.requested_by.trim());
                 if (s.host_id.trim() !== host.id || s.generation !== c.profile_generation || !authority || !ownerOK) {
                     await db.query(`UPDATE agent_workspace_commands SET status='failed',result='{"error":"binding_or_authority_changed"}',finished_at=NOW() WHERE id=$1`,[c.id]);
                     emit(request,await postNotice(db,s.channel_id.trim(),'Workspace command rejected: session binding or authority changed.')); continue;

@@ -22,13 +22,13 @@ it('loads checkpoints only when opened and exposes run/message links',async()=>{
     expect(screen.getByText('Run run123')).toBeTruthy();expect(screen.getByText('Message message456')).toBeTruthy();
     expect(screen.getByText('Restore to here')).toBeTruthy();expect(screen.getByText('Fork from here')).toBeTruthy();
 });
-it('hides mutations from readers and restore/fork from directors',async()=>{
+it('hides mutations from readers and restore/fork/PR from directors',async()=>{
     canManage=false;isOwner=false;
     const {unmount}=render(<SessionWorkspace channelId="channel" sessionId="session" onChanged={()=>{}} />);await open();
     expect(screen.queryByText('Commit all')).toBeNull();expect(screen.queryByText('Restore to here')).toBeNull();unmount();
     canManage=true;
     render(<SessionWorkspace channelId="channel" sessionId="session" onChanged={()=>{}} />);await open();
-    expect(screen.getByText('Commit all')).toBeTruthy();expect(screen.queryByText('Restore to here')).toBeNull();
+    expect(screen.getByText('Commit all')).toBeTruthy();expect(screen.queryByText('Restore to here')).toBeNull();expect(screen.queryByText('Open GitHub PR')).toBeNull();
 });
 it('queues a diff, polls for the host result, renders literal diff text and requires confirmation to discard',async()=>{
     render(<SessionWorkspace channelId="channel" sessionId="session" onChanged={()=>{}} />);await open();

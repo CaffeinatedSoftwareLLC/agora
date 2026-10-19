@@ -110,7 +110,7 @@ export function SessionWorkspace({ channelId, sessionId, running = false, onChan
         <div className="flex flex-wrap gap-2">
           <button type="button" className={button} disabled={disabled||!message.trim()} onClick={()=>void run({action:'commit',message})}>Commit all</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>setConfirm({action:'merge',message:message||undefined})}>Squash merge</button>
-          <button type="button" className={button} disabled={disabled} onClick={()=>void run({action:'pr',message:message||undefined})}>Open GitHub PR</button>
+          {checkpoints.isOwner && <button type="button" className={button} disabled={disabled} onClick={()=>void run({action:'pr',message:message||undefined})}>Open GitHub PR</button>}
         </div>
       </div>}
       <h4 className="text-sm font-semibold">Checkpoints</h4>

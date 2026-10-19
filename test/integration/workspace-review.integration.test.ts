@@ -51,16 +51,24 @@ it('requires user auth and channel access; only human owner/directors mutate',as
     const c=(await next()).body;expect(c.sessionId).toBe(sessionId);expect(c.profile).toBe('builder');expect(c.workdirAlias).toBe('agora');
     expect((await result(c,true,{files:['a'],next:null,truncated:false})).status).toBe(200);
 });
-it('allows director commit/merge/PR/discard, but restore and fork need the owner',async()=>{
+it('allows director commit/merge/discard, but restore, fork and PR need the owner',async()=>{
     const cp=(await saveCheckpoint()).checkpoint;
     await ctx.db.query(`INSERT INTO channel_member_overrides (channel_id,user_id,allow,deny) VALUES ($1,$2,$3,0)`,[channel,member.userId,Permissions.DirectAgents.toString()]);
-    for(const action of ['commit','merge','pr','discard']) {
+    for(const action of ['commit','merge','discard']) {
         const q=await queue({action,message:'test',path:'a.txt'},member.auth);expect(q.status,JSON.stringify(q.body)).toBe(202);
         const c=(await next()).body;expect((await result(c)).status).toBe(200);
     }
     expect((await queue({action:'restore',checkpointId:cp.id},member.auth)).status).toBe(403);
     expect((await queue({action:'fork',checkpointId:cp.id},member.auth)).status).toBe(403);
     const view=await ctx.request.get(`${root()}/checkpoints`).set(member.auth);expect(view.body).toMatchObject({canManage:true,isOwner:false});
+});
+it('opening a GitHub PR is owner-only: it uses the owner gh login on the host',async()=>{
+    await ctx.db.query(`INSERT INTO channel_member_overrides (channel_id,user_id,allow,deny) VALUES ($1,$2,$3,0)`,[channel,member.userId,Permissions.DirectAgents.toString()]);
+    const denied=await queue({action:'pr',message:'test'},member.auth);
+    expect(denied.status).toBe(403);expect(denied.body.error).toBe('owner_only');
+    expect((await next()).status).toBe(204);
+    const q=await queue({action:'pr',message:'test'},owner.auth);expect(q.status,JSON.stringify(q.body)).toBe(202);
+    const c=(await next()).body;expect(c.action).toBe('pr');expect((await result(c,true,{message:'opened',url:'https://github.com/o/r/pull/1'})).status).toBe(200);
 });
 it('binds commands and results to a session, channel, host and claim token',async()=>{
     const q=await queue({action:'diff'});expect(q.status).toBe(202);const c=(await next()).body;
