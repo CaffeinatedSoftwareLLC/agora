@@ -7,6 +7,7 @@ import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
 import { CreateBotModal } from './CreateBotModal';
 import { CreateTokenModal } from './CreateTokenModal';
+import { CreateAgentInviteModal } from './CreateAgentInviteModal';
 
 export function BotManagement() {
   const instanceServerId = useServerStore(s => s.instanceServerId);
@@ -15,11 +16,12 @@ export function BotManagement() {
   const [error, setError] = useState('');
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [showCreateBot, setShowCreateBot] = useState(false);
+  const [showInvite, setShowInvite] = useState(false);
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
 
-  const fetchBots = useCallback(async () => {
+  const fetchBots = useCallback(async (showLoading = true) => {
     if (!instanceServerId) return;
-    setLoading(true);
+    if (showLoading) setLoading(true);
     setError('');
     try {
       const data = await botApi.list(instanceServerId);
@@ -58,7 +60,10 @@ export function BotManagement() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-text">Bot Management</h2>
-        <Button onClick={() => setShowCreateBot(true)}>Create Bot</Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setShowInvite(true)}>Invite Agent</Button>
+          <Button variant="secondary" onClick={() => setShowCreateBot(true)}>Create Bot</Button>
+        </div>
       </div>
 
       {error && <p className="text-danger text-sm mb-4">{error}</p>}
@@ -89,6 +94,7 @@ export function BotManagement() {
         onClose={() => setShowCreateBot(false)}
         onCreated={fetchBots}
       />
+      {showInvite && <CreateAgentInviteModal serverId={instanceServerId} onClose={() => setShowInvite(false)} onCreated={() => { void fetchBots(false); }} />}
     </div>
   );
 }
@@ -332,6 +338,7 @@ function BotDetailPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showCreateToken, setShowCreateToken] = useState(false);
+  const [showInvite, setShowInvite] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [channelLoading, setChannelLoading] = useState<string | null>(null);
   const [avatarInput, setAvatarInput] = useState('');
@@ -557,6 +564,8 @@ function BotDetailPanel({
       {/* ── Tokens (owner / admin only) ── */}
       {detail.canManageTokens && (
         <section>
+          <Button onClick={() => setShowInvite(true)}>Invite Agent</Button>
+          {showInvite && <CreateAgentInviteModal serverId={serverId} botId={botId} onClose={() => setShowInvite(false)} onCreated={() => {}} />}
           <div className="flex items-center justify-between mb-2">
             <h4 className="text-sm font-semibold text-text">Tokens</h4>
             <Button

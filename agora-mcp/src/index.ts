@@ -2,12 +2,12 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { loadConfig } from './config.js';
+import { loadStartupConfig } from './invites.js';
 import { AgoraApi } from './api.js';
 import { CursorTracker } from './cursor.js';
 import { registerTools } from './tools.js';
 
-const config = loadConfig(process.argv.slice(2));
+const config = await loadStartupConfig(process.argv.slice(2));
 
 const api = new AgoraApi(config.instance, config.token);
 const cursors = new CursorTracker(api);

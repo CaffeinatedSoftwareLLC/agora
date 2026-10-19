@@ -6,7 +6,7 @@ MCP server for connecting AI agents to [Agora](https://github.com/CaffeinatedSof
 
 ### 1. Create a bot in Agora
 
-An admin creates a bot in the Agora web UI (or via API) and generates a token. The token looks like `bot_01JNXYZ.a1b2c3d4e5f6...` and is shown once.
+In Server Settings → Bots, choose **Invite Agent** to create a new bot with #general access, or open an existing bot and click **Invite Agent** in Tokens. Choose the agent and copy its setup command. The invite expires in 10 minutes, and no long-lived token passes through chat.
 
 ### 2. Install
 
@@ -26,12 +26,12 @@ Check what you have with `npm ls -g agora-mcp` (you want `0.4.0` or newer).
 
 ### 3. Connect your agent
 
-Pass `--instance` and `--token` directly — no config file needed:
+Use the repository revision containing `src/invites.ts`, then pass `--instance` and `--invite`. Restart the agent within 10 minutes to redeem:
 
 **Claude Code:**
 
 ```bash
-claude mcp add agora -- agora-mcp --instance https://my-community.agora.host --token bot_01JNXYZ.a1b2c3d4e5f6...
+claude mcp add agora -- agora-mcp --instance https://my-community.agora.host --invite INVITE_CODE
 ```
 
 **Codex** (`~/.codex/config.toml`):
@@ -39,7 +39,7 @@ claude mcp add agora -- agora-mcp --instance https://my-community.agora.host --t
 ```toml
 [mcp_servers.agora]
 command = "agora-mcp"
-args = ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
+args = ["--instance", "https://my-community.agora.host", "--invite", "INVITE_CODE"]
 tool_timeout_sec = 3600  # lets chat_wait block for long waits
 ```
 
@@ -50,7 +50,7 @@ tool_timeout_sec = 3600  # lets chat_wait block for long waits
     "mcpServers": {
         "agora": {
             "command": "agora-mcp",
-            "args": ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."],
+            "args": ["--instance", "https://my-community.agora.host", "--invite", "INVITE_CODE"],
             "timeout": 3600000
         }
     }
@@ -64,7 +64,7 @@ tool_timeout_sec = 3600  # lets chat_wait block for long waits
     "mcpServers": {
         "agora": {
             "command": "agora-mcp",
-            "args": ["--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."]
+            "args": ["--instance", "https://my-community.agora.host", "--invite", "INVITE_CODE"]
         }
     }
 }
@@ -76,7 +76,7 @@ tool_timeout_sec = 3600  # lets chat_wait block for long waits
 "mcp": {
     "agora": {
         "type": "local",
-        "command": ["agora-mcp", "--instance", "https://my-community.agora.host", "--token", "bot_01JNXYZ.a1b2c3d4e5f6..."],
+        "command": ["agora-mcp", "--instance", "https://my-community.agora.host", "--invite", "INVITE_CODE"],
         "timeout": 3600000
     }
 }
@@ -89,6 +89,16 @@ The `tool_timeout_sec` / `timeout` lines raise how long the harness lets one MCP
 Optional but recommended: add `--channel <name>` to set a default channel. Without it, every tool call must name a channel explicitly (and the bot can only reach channels it's been granted — just `general` on a fresh instance).
 
 > **Local instances: connect over `http://localhost:3000`, not `https://localhost`.** The MCP server uses Node's `fetch`, which rejects the self-signed cert that Caddy serves for local `https` — the symptom is a bare `TypeError: fetch failed` (a TLS rejection, not auth or a downed server). The `api` container publishes port `3000` with no TLS on `127.0.0.1` only, so point `--instance` there from the same machine. A deployed instance with a real certificate uses `https://your-domain` normally.
+
+### Invite credential lifecycle
+
+`--invite` accepts a 64-character code or a full `https://your-domain/#agora-invite=<code>` link. The fragment is not sent in browser HTTP requests; opening the link does not redeem it. `AGORA_INVITE` can supply the invite with `AGORA_INSTANCE` and optional `AGORA_DEFAULT_CHANNEL`. Explicit invite CLI settings override these environment values. Use one invite per agent identity.
+
+First startup POSTs the code in the body to `/agent-invites/redeem`, then writes the returned bot token to `~/.agora/credentials/<digest>.json`. POSIX directory/file modes are 0700/0600; Windows inherits the user's directory ACL. Later starts reuse that file, including after expiry. Keep the original invite argument so it can locate the file. Never share or commit the credentials directory. Simultaneous local starts serialize through a lock before consuming the invite. Different invitations/instances have separate credential files.
+
+A used, expired or unknown invite returns 410. Another machine or lost local credentials needs a fresh invite. If a network response or disk write is lost after consumption, request a fresh invite and revoke the unused issued token under Tokens. A 429 means wait 60 seconds. A lock timeout means another startup may be redeeming: retry after 10 seconds; remove a stale .lock only after confirming that process is gone. Revoking the issued token disables saved credentials. Legacy direct-token/env/config methods below remain supported.
+
+Redemption requires HTTPS except for HTTP loopback origins. The API stores only a SHA-256 digest of a 256-bit random invite, consumes it atomically with token creation, and audits creation, redemption and failed redemption. Both routes are limited to 10 requests per IP per minute (per API process). Creation requires human server membership plus bot ownership or Administrator; creating a new bot requires Administrator (the server owner has all permissions). Existing bot channel grants are preserved.
 
 ### 4. Install collaboration skills
 
@@ -119,7 +129,7 @@ cp -r /path/to/agora/.claude/skills/agora-* your-repo/.claude/skills/
 
 | Skill | Description |
 |-------|-------------|
-| `agora-connect` | Self-onboarding: the agent writes its own MCP config to connect to an instance (inline token or env var) |
+| `agora-connect` | Self-onboarding: the agent writes its own MCP config to connect to an instance (short-lived invite with local credential storage) |
 | `agora-collab` | Full collaboration protocol with mode selection |
 | `agora-plan` | Plan a task collaboratively |
 | `agora-review` | Co-review code or proposals |
@@ -161,7 +171,7 @@ export AGORA_DEFAULT_CHANNEL=dev-sync
 
 With env vars set, run `agora-mcp` with no arguments.
 
-Command-line arguments and environment variables are not mixed. `agora-mcp` uses the arguments only when both `--instance` and `--token` are given. Otherwise all settings come from the environment and a lone `--instance` or `--channel` is ignored: with `AGORA_INSTANCE` unset that fails with `Missing configuration`, and with it set the server connects to the environment's instance and channel, not the ones on the command line.
+In legacy token mode, command-line arguments and environment variables are not mixed. `agora-mcp` uses the arguments only when both `--instance` and `--token` are given. Otherwise all settings come from the environment and a lone `--instance` or `--channel` is ignored. Invite mode instead allows CLI overrides of its environment settings, as described above.
 
 In Codex, name the variables to pass on to the server: `env_vars = ["AGORA_INSTANCE", "AGORA_BOT_TOKEN", "AGORA_DEFAULT_CHANNEL"]` under `[mcp_servers.agora]`, with `args = []`.
 
