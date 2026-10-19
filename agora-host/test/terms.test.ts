@@ -2,7 +2,8 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configSchema, loadConfig } from '../src/config.js';
-import { childEnv, verifyProfile } from '../src/adapters.js';
+import { childEnv, osEnv, verifyProfile } from '../src/adapters.js';
+import { verifyEnv } from '../src/verify.js';
 import { Scheduler } from '../src/scheduler.js';
 import { checkTerms, describeAuth, needsRunApproval, profileReport, TermsRefusal, HostConfigError } from '../src/terms.js';
 import type { HostApi } from '../src/types.js';
@@ -77,9 +78,22 @@ describe('auth mode configuration', () => {
 describe('child environment', () => {
     it('passes only the profile\'s own key variable in api_key mode', () => {
         const p = { ...config().profiles.builder, auth: 'api_key' as const, apiKeyEnv: 'CODEX_API_KEY' };
-        const env = childEnv(p, { Path: 'p', CODEX_API_KEY: 'k1', OPENAI_API_KEY: 'k2', ANTHROPIC_API_KEY: 'k3' });
-        expect(env).toEqual({ Path: 'p', CODEX_HOME: p.stateDir, CODEX_API_KEY: 'k1' });
-        expect(childEnv(config().profiles.builder, { Path: 'p', CODEX_API_KEY: 'k1' })).toEqual({ Path: 'p', CODEX_HOME: p.stateDir });
+        const win = process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {};
+        const env = childEnv(p, { Path: '/p', CODEX_API_KEY: 'k1', OPENAI_API_KEY: 'k2', ANTHROPIC_API_KEY: 'k3' });
+        expect(env).toEqual({ Path: '/p', CODEX_HOME: p.stateDir, CODEX_API_KEY: 'k1', ...win });
+        expect(childEnv(config().profiles.builder, { Path: '/p', CODEX_API_KEY: 'k1' })).toEqual({ Path: '/p', CODEX_HOME: p.stateDir, ...win });
+    });
+
+    it('never lets a bare program name resolve in the working directory', () => {
+        // Windows: cmd.exe, SearchPath and libuv skip the current directory with this set
+        const winEnv = osEnv({ Path: 'C:/Windows/System32;.;;relative/bin;"C:/Program Files/Git/cmd"', PATHEXT: '.EXE' }, 'win32');
+        expect(winEnv).toEqual({ Path: 'C:/Windows/System32;"C:/Program Files/Git/cmd"', PATHEXT: '.EXE', NoDefaultCurrentDirectoryInExePath: '1' });
+        // POSIX: an empty or relative PATH entry means the current directory too
+        expect(osEnv({ PATH: '/usr/bin::.:bin:/bin' }, 'linux')).toEqual({ PATH: '/usr/bin:/bin' });
+        // Every spawned agent CLI and verify command gets it
+        const child = childEnv(config().profiles.builder, { Path: '/usr/bin' });
+        expect(child.NoDefaultCurrentDirectoryInExePath).toBe(process.platform === 'win32' ? '1' : undefined);
+        expect(verifyEnv({ Path: '/usr/bin' }).NoDefaultCurrentDirectoryInExePath).toBe(process.platform === 'win32' ? '1' : undefined);
     });
 
     it('reports modes to Agora by variable name only', () => {

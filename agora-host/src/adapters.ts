@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Config, LocalProfile } from './config.js';
@@ -46,10 +46,23 @@ async function siwcToken(config: Config, profile: string, force = false): Promis
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
 const STATE_DIR_ENV = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' } as const;
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
-/** Only the variables the OS needs to find programs and home/temp directories. */
-export function osEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+/**
+ * Only the variables the OS needs to find programs and home/temp directories, made so a bare
+ * program name never resolves to a file in the working directory (a worktree the agent writes):
+ * - PATH keeps absolute entries only; `.`, an empty entry or any relative one means "here".
+ * - Windows: NoDefaultCurrentDirectoryInExePath=1 stops cmd.exe, SearchPath and libuv (Node's
+ *   child_process) from trying the current directory before PATH. PowerShell never does.
+ */
+export function osEnv(source: NodeJS.ProcessEnv = process.env, platform = process.platform): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(source)) if (osKeys.has(key.toUpperCase()) && value !== undefined) env[key] = value;
+    const absolute = platform === 'win32' ? win32.isAbsolute : posix.isAbsolute;
+    for (const [key, value] of Object.entries(source)) {
+        if (!osKeys.has(key.toUpperCase()) || value === undefined) continue;
+        env[key] = key.toUpperCase() === 'PATH'
+            ? value.split(platform === 'win32' ? ';' : ':').filter(e => !!e && absolute(e.replace(/^"(.*)"$/, '$1'))).join(platform === 'win32' ? ';' : ':')
+            : value;
+    }
+    if (platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
     return env;
 }
 export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

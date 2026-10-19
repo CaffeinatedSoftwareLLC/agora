@@ -77,9 +77,10 @@ describe('argv/config isolation', () => {
         expect(launch.env.CLAUDE_CONFIG_DIR).toBe(c.profiles.builder.stateDir);
     });
     it('excludes every inherited credential and automation configuration', () => {
-        const env = childEnv(config().profiles.builder, { Path: 'trusted-path', SystemRoot: 'os', AGORA_HOST_TOKEN: 'host',
+        const env = childEnv(config().profiles.builder, { Path: '/trusted/path', SystemRoot: 'os', AGORA_HOST_TOKEN: 'host',
             AGORA_BOT_TOKEN: 'other', OPENAI_API_KEY: 'secret', NODE_OPTIONS: '--require malicious.js', CLAUDECODE: 'parent' });
-        expect(env).toEqual({ Path: 'trusted-path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir });
+        expect(env).toEqual({ Path: '/trusted/path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir,
+            ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) });
     });
     it('rejects missing/mismatched local mappings, unsupported effort, and ambiguous resume', async () => {
         const { c, delivery } = await setup(); delivery.profile.workdirAlias = 'untrusted';

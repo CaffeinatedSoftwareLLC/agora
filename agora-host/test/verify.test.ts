@@ -160,7 +160,7 @@ describe('runVerify', () => {
         expect(resolveExecutable(node, work, {})).toBe(node);
     });
     it('gives the command OS variables and CI=1, never API keys', () => {
-        const env = verifyEnv({ PATH: '/bin', HOME: '/h', ANTHROPIC_API_KEY: 'sk', CLAUDE_CONFIG_DIR: '/c' });
+        const env = verifyEnv({ PATH: '/bin', HOME: '/h', ANTHROPIC_API_KEY: 'sk', CLAUDE_CONFIG_DIR: '/c' }); delete env.NoDefaultCurrentDirectoryInExePath;
         expect(env).toEqual({ PATH: '/bin', HOME: '/h', CI: '1' });
     });
 });
