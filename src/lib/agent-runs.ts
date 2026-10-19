@@ -102,13 +102,19 @@ export async function postSessionNotice(c: PoolClient | any, channelId: string, 
 // ─── Claim ───
 
 export async function sessionUpdate(c: PoolClient, sessionId: string, running: boolean): Promise<Notice> {
-    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason, s.sleeping_until,
+    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason, s.sleeping_until, s.kind, s.working, s.tool_calls,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
             'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
          FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS run
         FROM agent_sessions s WHERE s.id = $1`, [sessionId]);
-    const channelId = result.rows[0].channel_id.trim();
-    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), running: result.rows[0].run?.status === 'claimed' && running, run: result.rows[0].run, state: result.rows[0].state, endReason: result.rows[0].end_reason, sleepingUntil: result.rows[0].sleeping_until ?? null } };
+    const row = result.rows[0];
+    const channelId = row.channel_id.trim();
+    // A terminal session (#112) has no runs: "running" is what its agora-mcp last reported
+    const terminal = row.kind === 'terminal';
+    return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), kind: row.kind,
+        running: terminal ? row.state === 'live' && !!row.working : row.run?.status === 'claimed' && running,
+        ...(terminal ? { toolCalls: row.tool_calls } : {}),
+        run: row.run, state: row.state, endReason: row.end_reason, sleepingUntil: row.sleeping_until ?? null } };
 }
 
 export interface ClaimResult {

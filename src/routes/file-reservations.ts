@@ -10,17 +10,20 @@ class ReservationError extends Error {
     constructor(public status: number, public body: any) { super(body.error); }
 }
 const fail = (status: number, error: string): never => { throw new ReservationError(status, { error }); };
-const SELECT = `SELECT r.*, s.channel_id, p.name AS profile_name FROM agent_file_reservations r
-    JOIN agent_sessions s ON s.id = r.session_id JOIN agent_profiles p ON p.id = s.profile_id`;
+// A terminal session has no profile: its holder is named after the bot
+const SELECT = `SELECT r.*, s.channel_id, COALESCE(p.name, u.username || ' (terminal)') AS profile_name FROM agent_file_reservations r
+    JOIN agent_sessions s ON s.id = r.session_id LEFT JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
 const ACTIVE = `r.released_at IS NULL AND r.expires_at > clock_timestamp()`;
 
 async function liveSession(request: FastifyRequest, channelId: string) {
     if (!request.isBot) return fail(403, 'live_bot_session_required');
-    // An agent can be live in the channel and in task card or subtask threads: the session
-    // running now holds the reservation, else the channel session
+    // An agent can be live in the channel, in task card or subtask threads, and in its user's
+    // terminal (#112): the hosted session running now holds the reservation, else the terminal
+    // session (its hosted channel session takes no wakes meanwhile), else the channel session
     const result = await request.dbClient!.query(`SELECT * FROM agent_sessions s
         WHERE bot_id = $1 AND channel_id = $2 AND state = 'live'
-        ORDER BY EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') DESC, (thread_id IS NULL) DESC, id
+        ORDER BY EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') DESC,
+            (kind = 'terminal') DESC, (thread_id IS NULL) DESC, id
         LIMIT 1 FOR UPDATE OF s`, [request.userId, channelId]);
     return result.rows[0] ?? fail(409, 'no_live_session');
 }
@@ -81,7 +84,7 @@ export async function fileReservationRoutes(app: FastifyInstance) {
                     if (!updated.rows.length) fail(404, 'reservation_not_found');
                     const notice = await postNotice(db, channelId, `Reservation ${b.reservationId} held by ${held.profile_name} (session ${held.session_id.trim()}) was force-released by a channel owner/director. Paths: ${noticePathList(held.paths)}`);
                     await db.query(`INSERT INTO agent_inbox (id, session_id, message_id, reason)
-                        SELECT $1, id, $2, 'command' FROM agent_sessions WHERE id = $3 AND state = 'live'`, [generateUlid(), notice.event.id, held.session_id]);
+                        SELECT $1, id, $2, 'command' FROM agent_sessions WHERE id = $3 AND state = 'live' AND kind = 'hosted'`, [generateUlid(), notice.event.id, held.session_id]);
                     return { released: [b.reservationId], notice };
                 }
                 const session = await liveSession(request, channelId);

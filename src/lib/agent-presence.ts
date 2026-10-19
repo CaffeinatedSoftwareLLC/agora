@@ -35,6 +35,11 @@ export class AgentPresence {
         return { status: conns.some(c => c.listening) ? 'listening' : 'connected', mode };
     }
 
+    /** Bots with at least one presence socket in this process. */
+    bots(): string[] {
+        return [...this.sockets.keys()];
+    }
+
     /** A socket connected. Returns the events to broadcast (one per channel), if the status changed. */
     connect(botId: string, username: string, socketId: string, mode: AgentPresenceMode, channels: string[]): AgentPresencePayload[] {
         const before = this.status(botId);

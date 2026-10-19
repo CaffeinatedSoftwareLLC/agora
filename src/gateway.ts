@@ -9,6 +9,8 @@ import { socketAccountError, visibleChannels, gatewayAccessRevision, revalidateH
 import { canViewChannel } from './lib/channel-access';
 import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
 import { agentPresence, type AgentPresencePayload } from './lib/agent-presence';
+import { attachTerminal, endTerminal, heartbeatTerminals, sweepStaleTerminals, terminalActivity, terminalGraceMs, HEARTBEAT_MS } from './lib/terminal-sessions';
+import type { Notice } from './lib/agent-runs';
 
 /** How often open human sockets are re-checked against revocation and account state. */
 const SESSION_SWEEP_MS = 5 * 60 * 1000;
@@ -34,6 +36,24 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     }, SESSION_SWEEP_MS);
     sweep.unref();
     app.addHook('onClose', async () => { clearInterval(sweep); });
+
+    // Terminal sessions (src/lib/terminal-sessions.ts): a bot whose last presence socket left
+    // keeps its terminal sessions through a grace period; the heartbeat keeps this process's
+    // bots fresh, and the sweep ends rows nobody heartbeats.
+    const emitNotices = (notices: Notice[]) => {
+        for (const n of notices) io.to(`channel:${n.channelId}`).emit(n.eventName ?? 'Message', n.event);
+    };
+    const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const terminalBeat = setInterval(() => {
+        void heartbeatTerminals(db, agentPresence.bots())
+            .then(() => sweepStaleTerminals(db)).then(emitNotices).catch(() => {});
+    }, HEARTBEAT_MS);
+    terminalBeat.unref();
+    app.addHook('onClose', async () => {
+        clearInterval(terminalBeat);
+        for (const t of graceTimers.values()) clearTimeout(t);
+        graceTimers.clear();
+    });
 
     // Initialization gate — reject connections before instance is set up
     io.use(async (_socket, next) => {
@@ -226,7 +246,32 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                         if (typeof data?.listening !== 'boolean') return;
                         broadcast(agentPresence.setListening(botId, socket.id, data.listening));
                     });
-                    socket.on('disconnect', () => { broadcast(agentPresence.disconnect(botId, socket.id)); });
+                    // Terminal session (#112): back from a short drop, or new
+                    const pending = graceTimers.get(botId);
+                    if (pending) { clearTimeout(pending); graceTimers.delete(botId); }
+                    socket.on('disconnect', () => {
+                        broadcast(agentPresence.disconnect(botId, socket.id));
+                        if (agentPresence.status(botId).status !== 'offline' || graceTimers.has(botId)) return;
+                        const timer = setTimeout(() => {
+                            graceTimers.delete(botId);
+                            if (agentPresence.status(botId).status !== 'offline') return;
+                            void endTerminal(db, botId).then(emitNotices).catch(() => {});
+                        }, terminalGraceMs());
+                        timer.unref();
+                        graceTimers.set(botId, timer);
+                    });
+                    // agora-mcp: working (calling tools) or idle, and the tool calls it saw
+                    socket.on('Activity', (data: { working?: unknown; toolCalls?: unknown }) => {
+                        if (typeof data?.working !== 'boolean') return;
+                        const calls = Number.isSafeInteger(data.toolCalls) && (data.toolCalls as number) >= 0 ? data.toolCalls as number : null;
+                        void terminalActivity(db, botId, data.working, calls).then(emitNotices).catch(() => {});
+                    });
+                    // Chat keeps working if this fails; the agent just shows no terminal session
+                    try {
+                        const { attached, notices } = await attachTerminal(db, botId, channelIds, mode);
+                        emitNotices(notices);
+                        if (socket.connected) socket.emit('TerminalSession', { sessions: attached });
+                    } catch { /* presence still works */ }
                 }
             } catch {
                 socket.disconnect();

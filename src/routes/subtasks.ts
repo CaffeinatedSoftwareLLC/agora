@@ -63,9 +63,11 @@ export async function subtaskRoutes(app: FastifyInstance) {
                 }
 
                 // Lock order: profiles → session, as in /start and run completion
-                const meta = (await db.query(`SELECT profile_id FROM agent_sessions WHERE id = $1 AND channel_id = $2 AND bot_id = $3`,
+                const meta = (await db.query(`SELECT profile_id, kind FROM agent_sessions WHERE id = $1 AND channel_id = $2 AND bot_id = $3`,
                     [b.parentSessionId, channelId, botId])).rows[0];
                 if (!meta) throw new CommandError(404, { error: 'parent_not_found' });
+                // A terminal session (#112) is the user's own CLI: it can't spawn hosted children
+                if (meta.kind === 'terminal') throw new CommandError(409, { error: 'terminal_session' });
                 const childProfile = b.profile ? await profileByName(db, channelId, b.profile)
                     : (await db.query('SELECT * FROM agent_profiles WHERE id = $1 FOR SHARE', [meta.profile_id])).rows[0];
                 await db.query('SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE', [meta.profile_id]);

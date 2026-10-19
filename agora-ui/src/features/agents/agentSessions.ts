@@ -16,6 +16,19 @@ export interface AgentRun {
 }
 
 export interface AgentSession {
+  /**
+   * 'terminal' (#112): the user's own CLI connected through agora-mcp with presence. It has
+   * no profile, host, runs or budget, and lives while agora-mcp is connected.
+   */
+  kind?: 'hosted' | 'terminal';
+  /** Terminal sessions: tool calls agora-mcp has seen. */
+  toolCalls?: number;
+  /** Terminal sessions: false when the CLI's token use is unknown (shown as "n/a"). */
+  usageKnown?: boolean;
+  /** Terminal sessions: Claude Code Channel ('channel') or plain MCP with chat_wait ('mcp'). */
+  terminalMode?: 'channel' | 'mcp' | null;
+  /** Terminal sessions: false. Agora can't stop a user's own CLI. */
+  budgetEnforced?: boolean;
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
   /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only, siwc = plan-owner-triggered only. */
   authMode?: 'subscription' | 'api_key' | 'siwc';
@@ -38,7 +51,7 @@ export interface AgentSession {
   running?: boolean;
   /** The agent hit its rate limit and sleeps until then; its messages are held (#87). */
   sleepingUntil?: string | null;
-  tokenBudget?: number;
+  tokenBudget?: number | null;
   run?: AgentRun | null;
   recentRuns?: AgentRun[];
   /** A task card's or subtask's session works only in this thread (docs/task-board.md). */
@@ -56,7 +69,7 @@ export interface AgentProfile {
 }
 
 export type CommandBody =
-  | { command: 'start'; profile: string; fresh?: boolean; onLive?: 'shelve' | 'keep' }
+  | { command: 'start'; profile: string; fresh?: boolean; onLive?: 'shelve' | 'keep' | 'standby' }
   | { command: 'end'; profile: string }
   | { command: 'end'; sessionId: string }
   | { command: 'lurk'; profile: string; lurkMode: 'quiet' | 'balanced' | 'vocal' | null }
@@ -86,7 +99,13 @@ export const ERRORS: Record<string, string> = {
   card_not_found: 'That card no longer exists.',
   no_assignee: 'Assign an agent to the card first.',
   empty_title: 'Give the card a title.',
+  terminal_connected: 'That agent is already connected from a terminal, which answers here. A hosted session would wait on standby until the terminal disconnects.',
+  terminal_session: "That is the user's own terminal session. It ends when they close their CLI.",
 };
+
+/** Tooltip for hosted-only actions on a terminal session (#112). */
+export const HOSTED_ONLY = 'Hosted sessions only. A terminal session is the user\'s own CLI in their own checkout: no worktree, diff review, checkpoints, verify or subtasks.';
+export const TERMINAL_BUDGET = 'No budget: this is the user\'s own CLI, and Agora can\'t stop it.';
 
 export const NO_AUTHORITY = 'Only the owner and directors can start, end, resume or change lurk mode for agent sessions.';
 
@@ -107,9 +126,10 @@ export function listProfiles(serverId: string): Promise<AgentProfile[]> {
  * What a failed command means for the UI: a live-session conflict on start/resume asks the
  * user to shelve or keep; anything else is a plain sentence.
  */
-export function classifyCommandError(err: unknown, command: CommandBody['command']): { kind: 'live' } | { kind: 'error'; text: string } {
+export function classifyCommandError(err: unknown, command: CommandBody['command']): { kind: 'live' } | { kind: 'terminal' } | { kind: 'error'; text: string } {
   const code = err instanceof ApiError ? err.code : 'unknown_error';
   if (code === 'session_live' && (command === 'start' || command === 'resume')) return { kind: 'live' };
+  if (code === 'terminal_connected' && command === 'start') return { kind: 'terminal' };
   if (code === 'subscription_owner_only' || code === 'plan_owner_only') return { kind: 'error', text: ERRORS[code] };
   if (err instanceof ApiError && err.status === 403) return { kind: 'error', text: NO_AUTHORITY };
   return { kind: 'error', text: ERRORS[code] ?? `Command failed (${code}).` };
@@ -128,7 +148,8 @@ function trim1(x: number): string {
   return (Math.round(x * 10) / 10).toFixed(1).replace(/\.0$/, '');
 }
 
-export type ChipState = 'working' | 'idle' | 'sleeping' | 'shelved' | 'ended';
+/** 'standby': live, but the agent is connected from a terminal, which answers instead (#112). */
+export type ChipState = 'working' | 'idle' | 'sleeping' | 'standby' | 'shelved' | 'ended';
 
 export interface AgentChip {
   profile: string;
@@ -143,6 +164,7 @@ export const STATE_LABEL: Record<ChipState, string> = {
   working: 'Live and working',
   idle: 'Live and idle',
   sleeping: 'Sleeping (rate limited)',
+  standby: 'On standby (connected from a terminal)',
   shelved: 'Shelved',
   ended: 'Ended',
 };
@@ -157,20 +179,28 @@ export function isSleeping(s: AgentSession, now = Date.now()): boolean {
   return s.state === 'live' && !!s.sleepingUntil && Date.parse(s.sleepingUntil) > now;
 }
 
-const RANK: Record<ChipState, number> = { working: 0, idle: 1, sleeping: 2, shelved: 3, ended: 4 };
+const RANK: Record<ChipState, number> = { working: 0, idle: 1, sleeping: 2, standby: 3, shelved: 4, ended: 5 };
 
 function byRecent(a: AgentSession, b: AgentSession): number {
   return (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
 }
 
+/** Bots with a live terminal session in this list. */
+export function terminalBots(sessions: AgentSession[]): Set<string> {
+  return new Set(sessions.filter(s => s.kind === 'terminal' && s.state === 'live' && s.botId).map(s => s.botId!.trim()));
+}
+
 /**
  * One chip per profile with sessions in the channel: live first, then shelved, then ended.
  * Task card and subtask sessions work in their own threads and show on the task board.
+ * Terminal sessions show as the agent's own-session chip (ownSessionChips); a live hosted
+ * session of an agent connected from a terminal is on standby.
  */
 export function deriveChips(sessions: AgentSession[]): AgentChip[] {
+  const terminal = terminalBots(sessions);
   const groups = new Map<string, AgentSession[]>();
   for (const s of sessions) {
-    if (s.threadId) continue;
+    if (s.threadId || s.kind === 'terminal') continue;
     const list = groups.get(s.profile);
     if (list) list.push(s); else groups.set(s.profile, [s]);
   }
@@ -178,7 +208,8 @@ export function deriveChips(sessions: AgentSession[]): AgentChip[] {
   for (const [profile, list] of groups) {
     list.sort(byRecent);
     const session = list.find(s => s.state === 'live') ?? list[0];
-    chips.push({ profile, state: sessionState(session), session, sessions: list });
+    const standby = session.state === 'live' && !session.running && !!session.botId && terminal.has(session.botId.trim());
+    chips.push({ profile, state: standby ? 'standby' : sessionState(session), session, sessions: list });
   }
   return chips.sort((a, b) => RANK[a.state] - RANK[b.state] || byRecent(a.session, b.session) || a.profile.localeCompare(b.profile));
 }
@@ -189,7 +220,16 @@ export function authLabel(mode: AgentSession['authMode'], runApproval?: boolean)
   return runApproval ? `${base}, approval per run` : base;
 }
 
+/** "tokens n/a" for a CLI that doesn't report them. */
+export function terminalUsage(s: AgentSession): string {
+  const calls = s.toolCalls ?? 0;
+  return `${calls} tool ${calls === 1 ? 'call' : 'calls'} · ${s.usageKnown ? `${compactTokens(s.tokensUsed)} tokens` : 'tokens n/a'}`;
+}
+
 export function describeSession(s: AgentSession): string {
+  if (s.kind === 'terminal') {
+    return `${s.profile} · terminal · ${s.state}${s.state === 'live' ? (s.running ? ' (working)' : ' (idle)') : ''} · ${terminalUsage(s)} · no budget (own CLI)`;
+  }
   const reason = s.endReason ? ` (${s.endReason})` : '';
   return `${s.profile} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`
     + (s.authMode ? ` · ${authLabel(s.authMode, s.runApproval)}` : '')
@@ -202,6 +242,7 @@ const ACTION_TEXT: Record<string, string> = {
   started: 'Session started.',
   resumed: 'Session resumed.',
   kept: 'Kept the live session.',
+  kept_terminal: 'Kept the terminal session; no hosted session started.',
   ended: 'Session ended.',
   woken: 'Woken. Held messages go out on its next run.',
 };
@@ -243,6 +284,8 @@ export interface OwnSessionChip {
   username: string;
   status: OwnSessionStatus;
   mode: 'channel' | 'mcp' | null;
+  /** Its live terminal session (#112), when the server has one. */
+  session?: AgentSession;
 }
 
 export const OWN_SESSION_LABEL: Record<OwnSessionStatus, string> = {
@@ -257,16 +300,26 @@ export function ownSessionChips(
   present: Iterable<{ userId: string; username: string; status: OwnSessionStatus; mode: 'channel' | 'mcp' | null }>,
   sessions: AgentSession[],
 ): OwnSessionChip[] {
-  const hosted = new Set(sessions.filter(s => s.state === 'live' && s.botId && !s.threadId).map(s => s.botId!.trim()));
-  return [...present]
-    .filter(p => !hosted.has(p.userId.trim()))
-    .map(p => ({ userId: p.userId, username: p.username, status: p.status, mode: p.mode }))
+  const terminal = new Map(sessions.filter(s => s.kind === 'terminal' && s.state === 'live' && s.botId).map(s => [s.botId!.trim(), s]));
+  const hosted = new Set(sessions.filter(s => s.kind !== 'terminal' && s.state === 'live' && s.botId && !s.threadId).map(s => s.botId!.trim()));
+  const chips: OwnSessionChip[] = [...present]
+    // A hosted chip already stands for an agent without a terminal session
+    .filter(p => terminal.has(p.userId.trim()) || !hosted.has(p.userId.trim()))
+    .map(p => ({ userId: p.userId, username: p.username, status: p.status, mode: p.mode, session: terminal.get(p.userId.trim()) }));
+  // A terminal session in its reconnect grace period, or before presence arrived
+  for (const [botId, session] of terminal) {
+    if (!chips.some(c => c.userId.trim() === botId)) {
+      chips.push({ userId: botId, username: session.botUsername, status: 'connected', mode: session.terminalMode ?? null, session });
+    }
+  }
+  return chips
     .sort((a, b) => OWN_RANK[a.status] - OWN_RANK[b.status] || a.username.localeCompare(b.username));
 }
 
 /** "Claude Code Channel" or "chat_wait", for the chip's tooltip. */
 export function ownSessionDetail(chip: OwnSessionChip): string {
   if (chip.status === 'offline') return 'Its agora-mcp has disconnected.';
+  if (chip.session?.running) return `Working in its terminal: ${terminalUsage(chip.session)}.`;
   if (chip.mode === 'channel') return 'Claude Code Channel: instructions are pushed into the session.';
   return chip.status === 'listening' ? 'Waiting in chat_wait for new messages.' : 'agora-mcp is running; the agent is not waiting for messages right now.';
 }

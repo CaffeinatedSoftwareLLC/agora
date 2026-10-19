@@ -2,6 +2,7 @@ import { generateUlid } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
 import { postNotice, type Notice } from './agent-runs';
 import { planNotice, PLAN_OWNER_SQL } from './provider-terms';
+import { noticeStandby } from './terminal-sessions';
 
 /**
  * Agent sessions: which posts wake which agent (docs/planning/agent-sessions-wbs.md,
@@ -20,6 +21,12 @@ import { planNotice, PLAN_OWNER_SQL } from './provider-terms';
  * - a session scoped to a thread (a task card's or a subtask's, docs/task-board.md) takes no
  *   part in the rules above; in its own thread, a message from someone who can direct
  *   wakes it ('direct').
+ *
+ * - single responder (#112): while an agent has a live terminal session in the channel (its
+ *   user's own CLI, connected through agora-mcp; src/lib/terminal-sessions.ts), its hosted
+ *   channel session here takes no wakes. The terminal agent hears the message itself. The
+ *   first time that happens, a notice says why. A terminal agent also counts as a live agent
+ *   for "only one agent live in the channel".
  *
  * Sessions on a plan-owned profile ('subscription': the CLI's own account login, owned by the
  * server owner; 'siwc': a ChatGPT plan connected through Sign in with ChatGPT, owned by the
@@ -107,7 +114,7 @@ async function liveSessions(db: any, channelId: string, threadId: string | null 
          JOIN users u ON u.id = s.bot_id
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN servers srv ON srv.id = s.server_id
-         WHERE s.channel_id = $1 AND s.state = 'live' AND s.thread_id IS NOT DISTINCT FROM $2
+         WHERE s.channel_id = $1 AND s.state = 'live' AND s.kind = 'hosted' AND s.thread_id IS NOT DISTINCT FROM $2
          ORDER BY s.id`,
         [channelId, threadId]
     );
@@ -201,15 +208,23 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
     if (any.rows.length === 0) return [];
 
     return asService(db, async () => {
-        const sessions = await liveSessions(db, msg.channelId);
         const authorId = msg.authorId.trim();
+        // Single responder: an agent connected from a terminal answers there, not through its hosted session
+        const terminalBots = new Set<string>((await db.query(
+            `SELECT bot_id FROM agent_sessions WHERE channel_id = $1 AND state = 'live' AND kind = 'terminal'`,
+            [msg.channelId]
+        )).rows.map((r: any) => r.bot_id.trim()));
+        const all = await liveSessions(db, msg.channelId);
+        const standby = all.filter(s => terminalBots.has(s.botId));
+        const sessions = all.filter(s => !terminalBots.has(s.botId));
         const authorSession = sessions.find(s => s.botId === authorId);
         const author = await db.query(`SELECT u.bot FROM users u WHERE u.id = $1`, [authorId]);
         const authorHuman = author.rows[0]?.bot === false;
         const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, refused: new Map() };
 
         if (msg.threadId === null) {
-            await routeTopLevel(db, msg, sessions, authorSession, ctx);
+            const agents = new Set([...sessions.map(s => s.botId), ...terminalBots]).size;
+            await routeTopLevel(db, msg, sessions, authorSession, ctx, agents);
         } else {
             await routeThreadReply(db, msg, sessions, authorId, ctx);
         }
@@ -220,12 +235,18 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
                 msg.messageId, msg.threadId, 'lurk');
         }
         const notices: Notice[] = [];
+        // Someone who can direct addressed an agent on standby: say once why its hosted session stays quiet
+        if (msg.couldDirect) {
+            for (const s of standby) {
+                if (s.botId !== authorId && msg.mentionedUserIds.some(id => id.trim() === s.botId)) await noticeStandby(db, msg.channelId, s.botId, notices);
+            }
+        }
         for (const s of ctx.refused.values()) notices.push(await postNotice(db, msg.channelId, planNotice(s.profileName, s.authMode, !!s.planOwnerId)));
         return notices;
     });
 }
 
-async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], authorSession: LiveSession | undefined, ctx: RouteContext): Promise<void> {
+async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], authorSession: LiveSession | undefined, ctx: RouteContext, agents: number): Promise<void> {
     // An agent with a live session opens a collaboration thread
     if (authorSession && msg.protocol?.state === 'START') {
         const peers = (msg.protocol.participants ?? [])
@@ -253,7 +274,7 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
         return;
     }
     let targets = others.filter(s => mentioned.has(s.botId));
-    if (targets.length === 0 && others.length === 1 && sessions.length === 1) targets = others;
+    if (targets.length === 0 && others.length === 1 && sessions.length === 1 && agents === 1) targets = others;
     await addInbox(db, permitted(targets, 'direct', ctx), msg.messageId, null, 'direct');
 }
 
