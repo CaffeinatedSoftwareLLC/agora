@@ -5,7 +5,8 @@ import { hashPassword } from '../auth/passwords';
 import { generateBotToken } from '../auth/bot-tokens';
 import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { claimNext, complete, fail, heartbeat, HostRevokedError, type Notice } from '../lib/agent-runs';
+import { noticePathList } from '../lib/file-reservations';
+import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -40,7 +41,7 @@ function hostJson(r: any) {
 function profileJson(r: any) {
     return {
         id: r.id.trim(), name: r.name, botId: r.bot_id.trim(), hostId: r.host_id.trim(),
-        adapter: r.adapter, model: r.model ?? null, effort: r.effort ?? null, workdirAlias: r.workdir_alias,
+        adapter: r.adapter, model: r.model ?? null, effort: r.effort ?? null, workdirAlias: r.workdir_alias, workspaceId: r.workspace_id,
         wakeBudget: r.wake_budget, tokenBudget: Number(r.token_budget), runTimeoutSec: r.run_timeout_sec,
         generation: r.generation, createdAt: r.created_at, updatedAt: r.updated_at,
     };
@@ -54,6 +55,7 @@ const profileFields = {
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64 },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
     workdirAlias: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 64 },
+    workspaceId: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' },
     wakeBudget: { type: 'integer', minimum: 1, maximum: 100000 },
     tokenBudget: { type: 'integer', minimum: 1 },
     runTimeoutSec: { type: 'integer', minimum: 60, maximum: 7200 },
@@ -172,11 +174,11 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 if (bad) return { status: 400, body: { error: bad } };
                 const row = await db.query(
                     `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias,
-                                                 wake_budget, token_budget, run_timeout_sec, created_by)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 2000000), COALESCE($12, 900), $13)
+                                                 wake_budget, token_budget, run_timeout_sec, created_by, workspace_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 2000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'))
                      RETURNING *`,
                     [generateUlid(), serverId, b.name, b.botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null,
-                     b.workdirAlias, b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, request.userId]
+                     b.workdirAlias, b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, request.userId, b.workspaceId ?? null]
                 );
                 return { status: 201, body: profileJson(row.rows[0]) };
             });
@@ -222,6 +224,10 @@ export async function agentHostRoutes(app: FastifyInstance) {
             );
             const p = cur.rows[0];
             if (!p) return { status: 404, body: { error: 'Profile not found' } };
+            if (b.workspaceId !== undefined && b.workspaceId !== p.workspace_id) {
+                const used = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state <> 'ended' LIMIT 1`, [profileId]);
+                if (used.rows.length) return { status: 409, body: { error: 'End this profile\'s sessions before changing its workspace' } };
+            }
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
 
@@ -241,6 +247,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         model = CASE WHEN $7::boolean THEN $8 ELSE model END,
                         effort = CASE WHEN $9::boolean THEN $10 ELSE effort END,
                         workdir_alias = COALESCE($11, workdir_alias),
+                        workspace_id = COALESCE($16, workspace_id),
                         wake_budget = COALESCE($12, wake_budget), token_budget = COALESCE($13, token_budget),
                         run_timeout_sec = COALESCE($14, run_timeout_sec),
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
@@ -248,7 +255,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                      WHERE id = $1 AND server_id = $2 RETURNING *`,
                     [profileId, serverId, b.name ?? null, b.botId ?? null, b.hostId ?? null, b.adapter ?? null,
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
-                     b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible]
+                     b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null]
                 );
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
@@ -294,6 +301,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     adapter: profileFields.adapter,
                     hostId: profileFields.hostId,
                     workdirAlias: profileFields.workdirAlias,
+                    workspaceId: profileFields.workspaceId,
                     model: profileFields.model,
                     effort: profileFields.effort,
                     channelId: ID,
@@ -330,9 +338,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     );
                 }
                 const profile = await db.query(
-                    `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias, created_by)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-                    [generateUlid(), serverId, b.name, botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null, b.workdirAlias, request.userId]
+                    `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias, created_by, workspace_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, 'primary')) RETURNING *`,
+                    [generateUlid(), serverId, b.name, botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null, b.workdirAlias, request.userId, b.workspaceId ?? null]
                 );
                 return {
                     status: 201,
@@ -347,6 +355,36 @@ export async function agentHostRoutes(app: FastifyInstance) {
     });
 
     // ─── Host routes (AgentHost token) ───
+
+    app.post('/agent-hosts/@me/workspaces/reconcile', {
+        schema: { body: { type: 'object', required: ['sessionIds'], properties: {
+            sessionIds: { type: 'array', maxItems: 100, items: ID },
+        } } },
+    }, async (request, reply) => {
+        const host = request.agentHost!;
+        const rows = await request.dbClient!.query(`SELECT s.id FROM agent_sessions s
+            JOIN agent_profiles p ON p.id = s.profile_id
+            WHERE s.id = ANY($1) AND s.server_id = $2 AND s.state = 'ended'
+            AND (p.host_id = $3 OR EXISTS (SELECT 1 FROM agent_runs owned WHERE owned.session_id = s.id AND owned.host_id = $3))
+            AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')`,
+            [(request.body as any).sessionIds, host.serverId, host.id]);
+        return reply.send(rows.rows.map(r => r.id.trim()));
+    });
+    app.post('/agent-hosts/@me/workspaces/warning', {
+        schema: { body: { type: 'object', required: ['sessionId', 'paths'], properties: {
+            sessionId: ID, paths: { type: 'array', minItems: 1, maxItems: 10000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
+        } } },
+    }, async (request, reply) => {
+        const host = request.agentHost!, db = request.dbClient!, b = request.body as any;
+        const rows = await db.query(`SELECT s.channel_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id
+            WHERE s.id = $1 AND s.server_id = $2 AND s.state = 'ended'
+            AND (p.host_id = $3 OR EXISTS (SELECT 1 FROM agent_runs owned WHERE owned.session_id = s.id AND owned.host_id = $3))`, [b.sessionId, host.serverId, host.id]);
+        if (!rows.rows[0]) return reply.status(404).send({ error: 'unknown_ended_session' });
+        const notice = await postNotice(db, rows.rows[0].channel_id.trim(),
+            `Kept worktree for ended session ${b.sessionId}: uncommitted files:\n${noticePathList(b.paths, '\n')}`);
+        queueNotices(request, [notice]);
+        return reply.send({ ok: true });
+    });
 
     // GET /agent-hosts/@me/runs/next?wait=0..25 → 200 claim | 204
     app.get('/agent-hosts/@me/runs/next', {
@@ -403,6 +441,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     tokensUsed: { type: ['integer', 'null'], minimum: 0, maximum: 9007199254740991 },
                     // Same limit as agora-host's result parser
                     summary: { type: ['string', 'null'], maxLength: 16000 },
+                    branch: { type: 'string', pattern: '^agora/[a-z0-9][a-z0-9_-]{0,31}/[0-9A-HJKMNP-TV-Z]{26}$' },
+                    baseSha: { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' },
+                    headSha: { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' },
                     changedPaths: { type: 'array', maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 4096 } },
                 },
             },

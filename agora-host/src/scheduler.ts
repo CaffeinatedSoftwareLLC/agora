@@ -4,6 +4,7 @@ import { prepare, type Launch } from './adapters.js';
 import { fatalAuth, fenced, HttpError } from './client.js';
 import type { Claim, HostApi, Result } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
+import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
 
 interface Active { claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void> }
 export interface SchedulerOptions {
@@ -97,8 +98,11 @@ export class Scheduler {
                 const reportAbort = AbortSignal.timeout(Math.max(1, Math.ceil(deadline - this.now())));
                 try {
                     if (finished && result.success) {
+                        // A failed branch check (e.g. the agent switched branches) must not lose the completion.
+                        let head = {};
+                        if (launch?.workspace) { try { head = await workspaceHead(launch.workspace); } catch { this.log('workspace_head_failed'); } }
                         await this.api.complete(claim, { claimToken: claim.run.claimToken, nativeSessionId: result.nativeSessionId,
-                            tokensUsed: result.tokensUsed, summary: result.summary, changedPaths: result.changedPaths }, reportAbort);
+                            tokensUsed: result.tokensUsed, summary: result.summary, changedPaths: result.changedPaths, ...head }, reportAbort);
                     } else {
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? result.error ?? 'cli_failed',
                             message: 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
@@ -113,10 +117,15 @@ export class Scheduler {
         }
     }
     async run(): Promise<void> {
+        let nextReconcile = 0;
         while (!this.stopping) {
             try {
+                if (this.now() >= nextReconcile) {
+                    await reconcileWorkspaces(this.config, this.api, new Set(this.active.keys()), this.log);
+                    nextReconcile = this.now() + 60000;
+                }
                 if (this.size >= this.config.maxConcurrent) {
-                    await Promise.race([...this.active.values()].map(a => a.done)); continue;
+                    await Promise.race([...this.active.values()].map(a => a.done).concat(new Promise<void>(r => setTimeout(r, 1000)))); continue;
                 }
                 const delivery = await this.api.claim(this.abort.signal);
                 if (delivery && !this.stopping) void this.submit(delivery.claim, delivery.sentAt);

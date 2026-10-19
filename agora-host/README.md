@@ -78,6 +78,38 @@ is passed through the child environment and inherited by its Agora MCP server.
 The temporary files are removed after that turn; CLI session state remains for
 native resume. Node's file modes do not replace Windows ACLs.
 
+Each session now runs in `<stateDir>/wt-<last10(sessionId)>`, on
+`agora/<profile>/<sessionId>`, starting from the mapped workdir's HEAD. The
+adjacent `.json` record preserves its original base SHA across wakes and host
+restarts. Reuse requires the exact worktree root, common Git directory and branch.
+Keep `stateDir` short on Windows: Git itself still rejects overlong Git-directory
+paths even with `core.longpaths=true`; long tracked filenames are supported.
+
+At startup and every 60 seconds (after an in-flight claim poll, up to 25 seconds),
+the host checks ended sessions with the server. It skips active/claimed runs,
+removes only clean worktrees, and retains branch refs. Dirty worktrees remain on
+disk and get a channel warning listing uncommitted files. Repeated identical
+warnings are suppressed after a successful post. Missing/incompatible metadata,
+repository mappings or branch identities fail safely without force-removal.
+
+For advisory file reservations, add `file_reserve`, `file_renew`, `file_release`
+and `file_reservations` to a profile's `approvedTools` as needed. The server's
+owner-assigned `workspaceId` identifies the repository across profiles/hosts;
+the host's `workdirAlias` remains only a local directory mapping. All existing
+profiles use workspace `primary` within their server. Give unrelated repositories
+different workspace IDs in Agents settings; end existing sessions before changing
+an ID. The server snapshots this identity when each session starts.
+
+Reserve repository-relative exact filenames or explicit directory prefixes ending
+in `/`, e.g. `src/app.ts` or `src/routes/`. Separators, Unicode and case are
+normalized (case folding is conservative on Linux). Absolute paths, `..`, globs,
+Windows trailing dots/spaces and control characters are rejected. Reservations
+are advisory; no hooks or edit enforcement are installed. TTL defaults to 900
+seconds, maximum 3600. Expired rows immediately stop blocking/listing and cannot
+be renewed; writes mark expired rows released. `/end` releases all of that
+session's reservations transactionally. A channel owner/director can force-release
+an ID in the holder's channel; the holder receives a channel notice and a wake.
+
 The child inherits an OS-variable allowlist, not the host's environment. It does
 not inherit API keys, the host token, sibling tokens, `NODE_OPTIONS`, or nested
 agent flags. CLI authentication must live in that profile's state directory.

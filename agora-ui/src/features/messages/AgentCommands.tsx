@@ -98,7 +98,7 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
             : (
               <ul className="space-y-1">
                 {state.sessions.map(s => (
-                  <li key={s.id} className="truncate">
+                  <li key={s.id} className="break-words [overflow-wrap:anywhere]">
                     <span className="font-medium">{describe(s)}</span>
                     <span className="ml-2 font-mono text-xs text-text-muted select-all">{s.id}</span>
                   </li>

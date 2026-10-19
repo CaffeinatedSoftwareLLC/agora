@@ -28,6 +28,9 @@ export interface AgentCommand {
 }
 
 export interface AgentSession {
+    branch?: string | null;
+    baseSha?: string | null;
+    headSha?: string | null;
     id: string;
     profile: string;
     botId: string;
@@ -43,6 +46,11 @@ export interface AgentCommandResult {
     action?: 'started' | 'resumed' | 'kept' | 'ended';
     session?: AgentSession;
     sessions?: AgentSession[];
+}
+
+export interface FileReservation {
+    id: string; serverId: string; workspaceId: string; sessionId: string; channelId: string;
+    holder: string; threadId: string | null; paths: string[]; reason: string | null; expiresAt: string;
 }
 
 export interface Message {
@@ -247,6 +255,15 @@ export class AgoraApi {
     /** Session commands: start, end, resume (need can_direct) and sessions (listing). */
     async agentCommand(channelId: string, body: AgentCommand): Promise<AgentCommandResult> {
         return this.request('POST', `/channels/${channelId}/agent-commands`, body);
+    }
+    async fileReservation(channelId: string, body: {
+        action: 'reserve' | 'renew' | 'release'; paths?: string[]; reservationId?: string;
+        ttlSeconds?: number; reason?: string; threadId?: string; force?: boolean;
+    }): Promise<{ reservation?: FileReservation; released?: string[] }> {
+        return this.request('POST', `/channels/${channelId}/file-reservations`, body);
+    }
+    async fileReservations(channelId: string): Promise<{ reservations: FileReservation[] }> {
+        return this.request('GET', `/channels/${channelId}/file-reservations`);
     }
 
     async getCursors(): Promise<Cursor[]> {

@@ -4,6 +4,8 @@ import { isTokenBlacklisted } from './token-blacklist';
 import { parseBotToken, verifyBotSecret } from './bot-tokens';
 
 const BOT_ALLOWED_ROUTES = new Set([
+    'GET /channels/:id/file-reservations',
+    'POST /channels/:id/file-reservations',
     'GET /channels/:id/messages',
     'POST /channels/:id/messages',
     'PATCH /channels/:id/messages/:msgId',

@@ -34,10 +34,12 @@ export interface Result {
     error?: string;
     changedPaths?: string[];
 }
-export interface Completion { claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[] }
+export interface Completion { claimToken: string; nativeSessionId: string | null; tokensUsed: number | null; summary: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string }
 export interface Failure { claimToken: string; error: string; message: string; tokensUsed: number | null; retryable: boolean; changedPaths?: string[] }
 export type Heartbeat = { cancel: false; leaseUntil: string } | { cancel: true; reason: string };
 export interface HostApi {
+    workspaceStates?(sessionIds: string[]): Promise<string[]>;
+    workspaceWarning?(sessionId: string, paths: string[]): Promise<void>;
     claim(signal?: AbortSignal): Promise<{ claim: Claim; sentAt: number } | null>;
     heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat>;
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;

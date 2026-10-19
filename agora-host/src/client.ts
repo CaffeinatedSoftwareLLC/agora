@@ -45,6 +45,12 @@ export class Client implements HostApi {
         const data = await this.request('GET', 'runs/next?wait=25', undefined, signal, 30000);
         return data === null ? null : { claim: claimSchema.parse(data), sentAt };
     }
+    async workspaceStates(sessionIds: string[]): Promise<string[]> {
+        return z.array(z.string()).parse(await this.request('POST', 'workspaces/reconcile', { sessionIds }));
+    }
+    async workspaceWarning(sessionId: string, paths: string[]): Promise<void> {
+        await this.request('POST', 'workspaces/warning', { sessionId, paths });
+    }
     async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat> {
         return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`, { claimToken: claim.run.claimToken, tokensUsed }, signal));
     }
