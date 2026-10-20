@@ -115,6 +115,28 @@ test('paused bot is disconnected and cannot reconnect', async () => {
     expect((await rejected).message).toBe('bot_paused');
 });
 
+// Extra check (beta security pass): deleting a bot must cut its live socket off
+test('deleting a bot disconnects its live socket and it receives no later messages', async () => {
+    const b = await bot();
+    const { socket } = await ready(b.token, true);
+    const ownerSide = await ready(owner.token);
+    const received: any[] = [];
+    socket.on('Message', m => received.push(m));
+    let dropped = false;
+    socket.on('disconnect', () => { dropped = true; });
+    expect((await ctx.request.delete(`/servers/${server.serverId}/bots/${b.id}`).set(owner.auth)).status).toBe(200);
+    const seen = event(ownerSide.socket, 'Message');
+    expect((await ctx.request.post(`/channels/${server.generalChannelId}/messages`).set(owner.auth).send({ content: 'after the bot was deleted' })).status).toBe(201);
+    expect((await seen).content).toBe('after the bot was deleted');
+    await new Promise(r => setTimeout(r, 300));
+    expect(received.map(m => m.content)).toEqual([]);
+    expect(dropped).toBe(true);
+    const retry = connect(b.token, true);
+    const rejected = event(retry, 'connect_error');
+    retry.connect();
+    expect((await rejected).message).toBeTruthy();
+});
+
 test('bot allowlist removal disconnects a live bot', async () => {
     const b = await bot();
     const { socket } = await ready(b.token, true);

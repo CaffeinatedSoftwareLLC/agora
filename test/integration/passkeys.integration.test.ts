@@ -102,6 +102,29 @@ describe('registration', () => {
         expect(res.body.error).toBe('passkey_invalid');
     });
 
+    // beta-test-plan §6.3 Passkeys: a wrong origin gets the fixed code on both ceremonies, and no
+    // ceremony starts; another user's delete is a 404 that leaves the passkey in place
+    test('a foreign origin gets 400 origin_not_allowed for sign-up and sign-in, and nothing is stored', async () => {
+        const before = (await ctx.db.query('SELECT count(*)::int AS n FROM user_passkeys')).rows[0].n;
+        for (const origin of ['https://evil.example', 'http://localhost:5174', 'null']) {
+            const reg = await registerOptions(alice.auth, origin);
+            expect(reg.status, origin).toBe(400);
+            expect(reg.body, origin).toEqual({ error: 'origin_not_allowed' });
+            const login = await ctx.request.post('/auth/passkeys/login/options').set('Origin', origin).send({});
+            expect(login.status, origin).toBe(400);
+            expect(login.body, origin).toEqual({ error: 'origin_not_allowed' });
+        }
+        expect((await ctx.db.query('SELECT count(*)::int AS n FROM user_passkeys')).rows[0].n).toBe(before);
+    });
+
+    test("another user's passkey delete is a 404 and the passkey stays", async () => {
+        const { passkey } = await addPasskey(alice.auth, 'Desk key');
+        const res = await ctx.request.delete(`/auth/passkeys/${passkey.id}`).set(bob.auth);
+        expect(res.status).toBe(404);
+        expect((await ctx.db.query('SELECT count(*)::int AS n FROM user_passkeys WHERE id = $1', [passkey.id])).rows[0].n).toBe(1);
+        expect((await ctx.request.delete(`/auth/passkeys/${passkey.id}`).set(alice.auth)).status).toBe(204);
+    });
+
     test('the same authenticator cannot be registered twice', async () => {
         const { key } = await addPasskey(alice.auth, 'Phone');
         const opts = await registerOptions(alice.auth);

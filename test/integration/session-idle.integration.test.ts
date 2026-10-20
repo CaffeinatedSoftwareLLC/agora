@@ -196,3 +196,36 @@ describe('sockets', () => {
         expect(codes).toEqual(['session_renew', 'token_expired']);
     }, 15_000);
 });
+
+/**
+ * beta-test-plan §6.3 Idle/cap: a real cookie login kept "alive" only by background polling
+ * still ends 24 h after the last foreground request. The clock (Date only) is moved forward.
+ * A current cookie's JWT expires at the idle deadline, so the refusal is `Invalid token`
+ * (docs/api-reference.md); `session_idle_timeout` is what a pre-#77 7-day cookie gets.
+ */
+describe('beta §6.3: background polling never keeps a session alive', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    test('polling for 24 h gets no new cookie, and the session ends at the idle deadline', async () => {
+        const login = await ctx.request.post('/auth/login').set('X-Agora-Session', 'cookie').send({ login: 'idleuser', password: 'TestPass123!' });
+        expect(login.status).toBe(200);
+        const set = cookiesOf(login);
+        const cookie = `agora_session=${set.agora_session}; agora_csrf=${set.agora_csrf}`;
+        const start = Date.now();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        for (const hours of [2, 8, 16, 23.9]) {
+            vi.setSystemTime(start + hours * HOUR * 1000);
+            const res = await ctx.request.get('/auth/session').set('Cookie', cookie).set('X-Agora-Background', '1');
+            expect(res.status, `background poll at ${hours} h`).toBe(200);
+            expect(res.headers['set-cookie'], `background poll at ${hours} h`).toBeUndefined();
+        }
+        vi.setSystemTime(start + (SESSION_IDLE_SECONDS + 5) * 1000);
+        const after = await ctx.request.get('/auth/session').set('Cookie', cookie).set('X-Agora-Background', '1');
+        expect(after.status).toBe(401);
+        expect(after.body.error).toBe('Invalid token');
+        // A foreground request can't revive it either
+        const foreground = await ctx.request.get('/auth/session').set('Cookie', cookie);
+        expect(foreground.status).toBe(401);
+        expect(foreground.headers['set-cookie']).toBeUndefined();
+    });
+});

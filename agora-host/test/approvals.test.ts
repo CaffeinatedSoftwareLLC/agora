@@ -102,6 +102,18 @@ describe('app-server approval requests', () => {
         expect(huge.answers(31)[0].result).toEqual({ decision: 'decline' });
     });
 
+    // beta-test-plan §6.2 "Codex app-server approvals": over 8 KB is declined with no card, even when a rule allows it
+    it('declines a command over 8 KB without a card or an after-run card, whatever the rules', async () => {
+        const ask = asker('once');
+        const cmd = `git log ${'y'.repeat(8200)}`;
+        expect(cmd.length).toBeGreaterThan(8192);
+        const { answers, result } = await run([command(32, cmd, { cwd: tmp.dir })], { rules: ['Bash(git:*)', 'Bash'], ask });
+        expect(answers(32)).toHaveLength(1);
+        expect(answers(32)[0].result).toEqual({ decision: 'decline' });
+        expect(ask).not.toHaveBeenCalled();
+        expect(result.deniedTools).toBeUndefined();
+    });
+
     it('declines a request from another turn without a card', async () => {
         const ask = asker('once');
         const { answers } = await run([{ ...command(5, 'git push', { cwd: tmp.dir }), otherTurn: true }], { rules: ['Bash(git:*)'], ask });

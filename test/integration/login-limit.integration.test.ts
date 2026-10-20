@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { setupTestApp, cleanDatabase, authedUser } from '../helpers';
 import { getRedis } from '../../src/auth/token-blacklist';
 import { LoginLimiter, failureKey } from '../../src/auth/login-limit';
+import { config } from '../../src/config';
 
 const PASSWORD = 'TestPass123!';
 
@@ -174,5 +175,43 @@ describe('instance-wide login budget', () => {
         const res = await login(ctx, 'alice', PASSWORD);
         expect(res.status).toBe(429);
         expect(res.headers['retry-after']).toBe('60');
+    });
+});
+
+/**
+ * beta-test-plan §6.3 Login limits: the production default of 10 failures, behind a proxy whose
+ * X-Forwarded-For is trusted, with every attempt claiming a different client address.
+ */
+describe('beta §6.3: a forged X-Forwarded-For does not get around the lock', () => {
+    let ctx: Awaited<ReturnType<typeof setupTestApp>>;
+    let trustProxy: boolean;
+
+    beforeAll(async () => {
+        trustProxy = config.trustProxy;
+        (config as { trustProxy: boolean }).trustProxy = true;
+        ctx = await setupTestApp({ loginLimits: { maxFailures: 10, lockSeconds: 15 * 60, globalPerMinute: 1000 } });
+        await cleanDatabase(ctx.db);
+        await clearLoginKeys();
+    });
+    afterAll(async () => {
+        (config as { trustProxy: boolean }).trustProxy = trustProxy;
+        await clearLoginKeys();
+        await ctx.close();
+    });
+
+    it('10 bad attempts from 10 "addresses" lock the account for the right password from an 11th', async () => {
+        await authedUser(ctx.request, 'mallory');
+        for (let i = 0; i < 10; i++) {
+            const res = await ctx.request.post('/auth/login').set('X-Forwarded-For', `203.0.113.${i + 1}`)
+                .send({ login: 'mallory', password: 'wrong-password' });
+            expect(res.status, `attempt ${i + 1}`).toBe(401);
+        }
+        for (const forged of ['198.51.100.7', '127.0.0.1', '10.0.0.1, 127.0.0.1']) {
+            const res = await ctx.request.post('/auth/login').set('X-Forwarded-For', forged).send({ login: 'mallory', password: PASSWORD });
+            expect(res.status, forged).toBe(429);
+            expect(res.body.error).toBe('too_many_attempts');
+            expect(res.body.accessToken).toBeUndefined();
+            expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+        }
     });
 });

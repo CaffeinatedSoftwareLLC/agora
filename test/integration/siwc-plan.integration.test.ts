@@ -294,3 +294,63 @@ describe('the plan owner rule', () => {
         expect(await inbox(planSession)).toEqual(['protocol']);
     });
 });
+
+/**
+ * beta-test-plan §6.1 "siwc is plan-owner-only" and "siwc tokens stay on the host": refusals
+ * carry plan_owner_only and change nothing; someone else's approve-once doesn't wake the agent
+ * and is kept for the plan owner's next run; a token in a host report never reaches the DB.
+ */
+describe('beta §6.1: plan-owner refusals leave nothing behind', () => {
+    const sessions = async () =>
+        (await ctx.db.query(`SELECT count(*)::int AS n FROM agent_sessions WHERE profile_id = $1`, [codex.profileId])).rows[0].n;
+
+    it('a refused /start creates no session and nothing to claim; a refused /resume says plan_owner_only and changes nothing', async () => {
+        await bindTo(director.userId);
+        const refused = await cmd(owner.auth, { command: 'start', profile: 'planbot' });
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('plan_owner_only');
+        expect(await sessions()).toBe(0);
+        expect((await claim()).status).toBe(204);
+
+        const s = await startSession(codex, director.userId);
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'shelved', end_reason = 'user' WHERE id = $1`, [s]);
+        const resume = await cmd(owner.auth, { command: 'resume', sessionId: s });
+        expect(resume.status).toBe(403);
+        expect(resume.body.error).toBe('plan_owner_only');
+        const row = (await ctx.db.query(`SELECT state, started_by FROM agent_sessions WHERE id = $1`, [s])).rows[0];
+        expect(row.state).toBe('shelved');
+        expect(row.started_by.trim()).toBe(director.userId);
+        expect(await inbox(s)).toEqual([]);
+        expect((await claim()).status).toBe(204);
+    });
+
+    it("someone else's approve-once wakes nothing and is granted to the plan owner's next run", async () => {
+        await bindTo(owner.userId);
+        const s = await startSession(codex, owner.userId);
+        const id = generateUlid();
+        await ctx.db.query(`INSERT INTO agent_tool_requests (id, server_id, session_id, profile_id, tool) VALUES ($1, $2, $3, $4, 'Bash(gh:*)')`,
+            [id, serverId, s, codex.profileId]);
+        const res = await ctx.request.post(`/channels/${channelId}/agent-tool-requests/${id}`).set(director.auth).send({ decision: 'once' });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(await inbox(s)).toEqual([]);
+        expect((await claim()).status).toBe(204);
+        await post(owner.auth, '@planbot retry it');
+        const c = await claim();
+        expect(c.status).toBe(200);
+        expect(c.body.run.grantedTools).toEqual(['Bash(gh:*)']);
+    });
+
+    it('a host report carrying a token is stripped to status and email: no token reaches the database', async () => {
+        const res = await ctx.request.post('/agent-hosts/@me/plans/planbot').set(hostAuth)
+            .send({ status: 'connected', accountLabel: 'eryk@example.com', access_token: 'at_CANARY_siwc', refresh_token: 'rt_CANARY_siwc' });
+        // Fastify's schema drops properties the body schema doesn't list (additionalProperties: false)
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(res.body).toEqual({ planOwnerId: owner.userId });
+        const rows = await ctx.db.query(`SELECT row_to_json(c)::text AS j FROM agent_plan_connections c`);
+        expect(rows.rows.map((r: any) => r.j).join('\n')).not.toMatch(/CANARY_siwc/);
+        const profile = await ctx.db.query(`SELECT row_to_json(p)::text AS j FROM agent_profiles p WHERE id = $1`, [codex.profileId]);
+        expect(profile.rows[0].j).not.toMatch(/CANARY_siwc/);
+        const plans = await ctx.request.get(`/servers/${serverId}/agent-plans`).set(owner.auth);
+        expect(JSON.stringify(plans.body)).not.toMatch(/CANARY_siwc/);
+    });
+});
