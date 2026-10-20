@@ -20,5 +20,5 @@ export function useExpandedNoticeRuns(userId: string | undefined) {
       return { userId: prev.userId, keys: next };
     });
   }, []);
-  return { isExpanded, toggle };
+  return { isExpanded, toggle, keys };
 }

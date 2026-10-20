@@ -10,7 +10,7 @@ import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
 import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
-import { computeNoticeRuns, isHiddenInRun } from './systemNotices';
+import { computeNoticeRuns, isHiddenInRun, resizeRunRows } from './systemNotices';
 import { NoticeRunToggle } from './SystemNoticeRun';
 import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 
@@ -48,7 +48,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   // Consecutive plain system notices fold into one "N system notices" row (#118).
   // Every message keeps its own virtual row; hidden members of a collapsed run render empty (0px).
   const noticeRuns = useMemo(() => computeNoticeRuns(messages ?? []), [messages]);
-  const { isExpanded: isRunExpanded, toggle: toggleRun } = useExpandedNoticeRuns(userId);
+  const { isExpanded: isRunExpanded, toggle: toggleRun, keys: expandedKeys } = useExpandedNoticeRuns(userId);
   const estimateAt = (index: number): number => {
     if (!messages?.[index]) return 48;
     const run = noticeRuns[index];
@@ -68,6 +68,17 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     overscan: 15,
     getItemKey: (index) => messages?.[index]?.id ?? String(index),
   });
+
+  // A run opened or closed: drop the cached heights of its rows, offscreen ones included
+  const prevExpandedRef = useRef(expandedKeys);
+  useLayoutEffect(() => {
+    const prev = prevExpandedRef.current;
+    prevExpandedRef.current = expandedKeys;
+    if (prev === expandedKeys) return;
+    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)));
+    if (changed.size > 0) resizeRunRows(virtualizer, noticeRuns, changed, estimateAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedKeys]);
 
   // Load messages on channel change
   useEffect(() => {

@@ -109,3 +109,15 @@ export function toggleRunKey(keys: readonly string[], key: string): string[] {
   if (keys.includes(key)) return keys.filter(k => k !== key);
   return [...keys, key].slice(-EXPANDED_RUNS_CAP);
 }
+
+/** The part of the virtualizer resizeRunRows needs (@tanstack/virtual-core's Virtualizer). */
+export interface ResizableList { resizeItem(index: number, size: number): void }
+
+/**
+ * A run was expanded or collapsed: replace the virtualizer's cached heights for its rows with
+ * the new estimates. Offscreen rows are never re-measured, so without this a collapsed run
+ * keeps its expanded height as blank scroll space. Visible rows get measured again anyway.
+ */
+export function resizeRunRows(list: ResizableList, runs: readonly (NoticeRun | null)[], keys: ReadonlySet<string>, estimate: (index: number) => number): void {
+  runs.forEach((run, index) => { if (run && keys.has(run.key)) list.resizeItem(index, estimate(index)); });
+}
