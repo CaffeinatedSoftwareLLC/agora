@@ -395,3 +395,28 @@ so an agent can ask for one mid-run. Add `canvas_publish`, `canvas_read` and
 Lurk deliveries carry `session.lurkMode` and inbox reason `lurk`. A purely passive batch uses the dial's interjection rules and permits exact `[pass]` without forcing a JSON schema. `[pass]` completes successfully, preserves token usage and leaves the prior session summary intact. Normal addressed work still requires its usual response.
 
 After the CLI exits and before reporting completion/failure, the host discovers this run bot's posted image references through the host API. It reads only real paths under the actual run cwd/worktree or `os.tmpdir()`, using the server's size limit, then uploads bytes with the host token. The lease watchdog and heartbeat remain active during uploads. The API attaches images to their original message through `storeFile()` and deduplicates by content per run. Invalid, missing, outside-root or rejected images are skipped; auth/fencing errors stop reporting through the existing host rules. See [agent-sessions.md](../docs/agent-sessions.md#referenced-images) for the endpoint contract.
+
+## Start automatically
+
+By default the host runs only while its terminal is open. To bring hosted agents back after a reboot, opt in once per machine:
+
+```bash
+agora-host autostart enable --config /absolute/path/to/host.json
+agora-host autostart status --config /absolute/path/to/host.json
+agora-host autostart disable
+```
+
+(From a source checkout, use `node dist/index.js autostart ...`.) The config path must be absolute and readable. The command runs `node <this install>/dist/index.js --config <file>` with the Node binary you ran it with, from the `agora-host` folder, and writes `host.log` and `host.err.log` next to the config. It is always per-user: it refuses to run as root or from an elevated Windows shell, and `enable` is safe to repeat. Stop a host you started by hand first, or two hosts will compete for leases. `enable` also starts it now; `disable` removes the startup entry (a running host keeps running until you stop it).
+
+| OS | What it installs | Restarts after a crash |
+| --- | --- | --- |
+| Windows | Task Scheduler task `AgoraHost` at logon (no admin), run hidden through `wscript.exe` and `agora-host-autostart.vbs` next to the config | yes, every minute |
+| Linux | systemd user unit `~/.config/systemd/user/agora-host.service` | `Restart=on-failure` |
+| macOS | LaunchAgent `~/Library/LaunchAgents/com.agora.host.plist`, loaded with `launchctl bootstrap gui/$UID` | `KeepAlive` |
+
+Notes:
+
+- It starts when you **log in**, not at boot. On a headless Linux box, run `sudo loginctl enable-linger $USER` once so your user units start at boot without a login.
+- Paths containing quotes or newlines (and, on Windows, `% ^ & | < > !`) are rejected rather than escaped.
+- The unit and LaunchAgent capture your current `PATH`, so the agent CLIs the host launches stay findable. Run `enable` again after moving Node or installing a CLI somewhere new.
+- Changing the config path or moving the install means running `enable` again.

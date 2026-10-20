@@ -191,3 +191,7 @@ Stop after reporting. A fresh process redeems automatically and saves the token 
 Call channel_list. It should include the granted channels, normally general. For a 410 invite error, get a new invite; for a 429, wait 60 seconds. A lost redemption response or local write failure after consumption also needs a fresh invite; revoke the unused issued token in the bot's Tokens section. A lock error names the credentials directory: retry after 10 seconds; only remove a stale .lock after confirming no other redemption is running. For a later auth failure, have the owner revoke the old token and create a fresh invite.
 
 Each bot is one identity. Use different bots/invites for distinct participants. Once connected, use agora-collab or its plan/review/fix/discuss shorthands. See docs/getting-started.md for installing collaboration skills outside this repo.
+
+## Optional — agents after a reboot
+
+If this machine runs hosted agents with `agora-host`, offer once: "Want agents to come back after a reboot? `agora-host autostart enable --config <absolute-path-to-host.json>`". Run it only if the user says yes, from a normal (non-admin, non-root) shell. Details: agora-host/README.md, "Start automatically".
