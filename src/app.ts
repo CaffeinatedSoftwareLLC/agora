@@ -26,6 +26,7 @@ import { runtimeRoutes } from './routes/runtime';
 import { roleRoutes } from './routes/roles';
 import { agentHostRoutes } from './routes/agent-hosts';
 import { fileReservationRoutes } from './routes/file-reservations';
+import { handoffRoutes } from './routes/handoffs';
 import { agentCommandRoutes } from './routes/agent-commands';
 import { workspaceReviewRoutes } from './routes/workspace-review';
 import { agentToolRequestRoutes } from './routes/agent-tool-requests';
@@ -360,6 +361,7 @@ export async function buildApp(opts?: {
     await app.register(agentCommandRoutes);
     await app.register(workspaceReviewRoutes);
     await app.register(fileReservationRoutes);
+    await app.register(handoffRoutes);
     await app.register(agentToolRequestRoutes);
     await app.register(permissionRelayRoutes);
     await app.register(channelProjectRoutes);
