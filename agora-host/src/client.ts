@@ -139,6 +139,15 @@ export class Client implements HostApi {
             }
         }
     }
+    /** A card for one approval request a running Codex turn holds (siwc/approvals.ts). */
+    async openToolRequest(claim: Claim, body: { tool: string; requestKey: string; waitSeconds: number; detail: string | null }, signal?: AbortSignal) {
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).nullable(), status: z.string().max(20) })
+            .parse(await this.request('POST', `runs/${claim.run.id}/tool-requests`, { claimToken: claim.run.claimToken, ...body }, signal));
+    }
+    async toolRequest(claim: Claim, requestId: string, close?: 'timeout' | 'resolved' | 'stopped', signal?: AbortSignal) {
+        return z.object({ status: z.string().max(20) }).parse(await this.request('POST', `runs/${claim.run.id}/tool-requests/${encodeURIComponent(requestId)}`,
+            { claimToken: claim.run.claimToken, ...(close ? { close } : {}) }, signal));
+    }
     /** How each profile's CLI signs in (terms.ts); only variable names, never keys. */
     async reportProfiles(profiles: ProfileReport[]): Promise<void> {
         await this.request('POST', 'profiles', { profiles });

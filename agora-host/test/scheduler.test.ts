@@ -104,3 +104,29 @@ describe('scheduler with fake processes', () => {
         await s.scheduler.stop(); await work; expect(s.api.complete).not.toHaveBeenCalled(); expect(s.api.fail).not.toHaveBeenCalled();
     });
 });
+
+describe('Codex app-server approvals (#93)', () => {
+    it('hands an app-server run the card flow, which posts a card bound to the run and relays its decision', async () => {
+        const children: Array<{ finish: ReturnType<typeof deferred<Result>> }> = [];
+        let launched: any;
+        const runner = { start: vi.fn((launch: any) => { launched = launch; const finish = deferred<Result>(); children.push({ finish });
+            return { result: finish.promise, kill: vi.fn(async () => {}) }; }) };
+        const api = {
+            claim: vi.fn(async () => null), heartbeat: vi.fn(async () => ({ cancel: false as const, leaseUntil: '2026-10-17T21:03:00.000Z' })),
+            complete: vi.fn(async () => {}), fail: vi.fn(async () => {}),
+            openToolRequest: vi.fn(async () => ({ id: id(30), status: 'pending' })),
+            toolRequest: vi.fn(async () => ({ status: 'once' })),
+        };
+        const plan = { threadId: null, prompt: 'p', outputSchema: null, model: null, effort: null, sandbox: 'workspace-write', refresh: async () => 't', rules: [], roots: [] };
+        const scheduler = new Scheduler({ ...config(), approvalWaitSeconds: 120 }, api as HostApi, runner, { now: () => Date.now(), tickMs: 10,
+            prepare: async () => ({ executable: 'fake', args: [], env: {}, cwd: '', stdin: '', adapter: 'codex', cleanup: async () => {}, appServer: plan as any }) });
+        const work = scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(0);
+        expect(launched.appServer.ask).toBeTypeOf('function');
+        const decision = launched.appServer.ask({ tool: 'Bash(gh:*)', key: 'b'.repeat(64), detail: 'gh pr list' }, new AbortController().signal);
+        await vi.advanceTimersByTimeAsync(2500);
+        await expect(decision).resolves.toBe('once');
+        expect(api.openToolRequest).toHaveBeenCalledWith(expect.objectContaining({ run: expect.objectContaining({ id: id(1) }) }),
+            { tool: 'Bash(gh:*)', requestKey: 'b'.repeat(64), waitSeconds: 120, detail: 'gh pr list' });
+        children[0].finish.resolve(successful); await work;
+    });
+});

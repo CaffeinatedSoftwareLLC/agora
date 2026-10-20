@@ -13,6 +13,7 @@ import { snapshotTree, checkpoint, commitRun, executeReview, type Checkpoint } f
 import { verifyPrompt } from './prompt.js';
 import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
 import { runPreview } from './preview.js';
+import { cardAsker } from './siwc/approvals.js';
 
 interface Active {
     claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void>;
@@ -103,6 +104,8 @@ export class Scheduler {
             const before = snapshot ? await worktreeSnapshot(launch.cwd) : null;
             if (launch.workspace) beforeTree = await snapshotTree(launch.workspace);
             if (this.stopping || a.stop || this.now() >= deadline) return;
+            // Codex app-server approvals outside the rules wait for a tool-request card (#93)
+            if (launch.appServer) launch.appServer.ask = cardAsker(this.api, claim, { waitMs: (this.config.approvalWaitSeconds ?? 300) * 1000 });
             a.child = this.runner.start(launch);
             result = await a.child.result; finished = true;
             if (snapshot) result.changedPaths = [...new Set([...changedSince(before, await worktreeSnapshot(launch.cwd)), ...(result.changedPaths ?? [])])].slice(0, 1000);

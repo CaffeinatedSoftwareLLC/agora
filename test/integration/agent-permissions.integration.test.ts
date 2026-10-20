@@ -272,3 +272,99 @@ describe('rate-limited agents sleep and replay (#87)', () => {
         expect(retry.body.run.attempt).toBe(2);
     });
 });
+
+describe('live tool requests: a running Codex turn waits on its card (#93)', () => {
+    const key = (c: string) => c.repeat(64);
+    const open = (c: any, body: Record<string, unknown>) =>
+        ctx.request.post(runUrl(c, 'tool-requests')).set(hostAuth).send({ claimToken: c.body.run.claimToken, waitSeconds: 60, ...body });
+    const poll = (c: any, requestId: string, close?: string) =>
+        ctx.request.post(runUrl(c, `tool-requests/${requestId}`)).set(hostAuth).send({ claimToken: c.body.run.claimToken, ...(close ? { close } : {}) });
+    async function running() {
+        const sessionId = await startSession();
+        await ask('@codex open a PR');
+        const c = await claim();
+        expect(c.status).toBe(200);
+        return { c, sessionId };
+    }
+
+    it('posts one card per request, bound to its key, and relays an owner\'s "once" to that request only', async () => {
+        const { c, sessionId } = await running();
+        const first = await open(c, { tool: 'Bash(gh:*)', requestKey: key('a'), detail: 'gh pr create --title `x`\nrm -rf /' });
+        expect(first.status, JSON.stringify(first.body)).toBe(200);
+        expect(first.body.status).toBe('pending');
+        // The same request again (a retried call) is the same card; another request is another card
+        expect((await open(c, { tool: 'Bash(gh:*)', requestKey: key('a') })).body.id).toBe(first.body.id);
+        const second = await open(c, { tool: 'Bash(gh:*)', requestKey: key('b') });
+        expect(second.body.id).not.toBe(first.body.id);
+        const posted = await cards();
+        expect(posted).toHaveLength(2);
+        expect(posted[0].system_data).toMatchObject({ kind: 'agent_tool_approval', live: true, status: 'pending', tool: 'Bash(gh:*)', detail: "gh pr create --title 'x' rm -rf /" });
+        expect(posted[0].content).toContain('is waiting for `Bash(gh:*)`');
+        expect((await poll(c, first.body.id)).body.status).toBe('pending');
+
+        const inboxBefore = (await ctx.db.query('SELECT count(*)::int AS n FROM agent_inbox WHERE session_id = $1', [sessionId])).rows[0].n;
+        expect((await decide(first.body.id, 'once')).status).toBe(200);
+        expect((await poll(c, first.body.id)).body.status).toBe('once');
+        expect((await poll(c, second.body.id)).body.status).toBe('pending');
+        // The waiting step runs: no wake notice, no inbox row, nothing granted to a later run
+        expect((await ctx.db.query('SELECT count(*)::int AS n FROM agent_inbox WHERE session_id = $1', [sessionId])).rows[0].n).toBe(inboxBefore);
+        const row = (await ctx.db.query('SELECT consumed_by_run FROM agent_tool_requests WHERE id = $1', [first.body.id])).rows[0];
+        expect(row.consumed_by_run.trim()).toBe(c.body.run.id);
+        await ctx.request.post(runUrl(c, 'complete')).set(hostAuth).send({ claimToken: c.body.run.claimToken });
+        // The undecided card expired with the run and can't approve anything now
+        expect((await ctx.db.query('SELECT status FROM agent_tool_requests WHERE id = $1', [second.body.id])).rows[0].status).toBe('expired');
+        expect((await decide(second.body.id, 'once')).status).toBe(409);
+        await ask('@codex again');
+        const next = await claim();
+        expect(next.body.run.grantedTools).toEqual([]);
+    });
+
+    it('expires a card when the host stops waiting; it can no longer approve', async () => {
+        const { c } = await running();
+        const r = await open(c, { tool: 'write', requestKey: key('c'), detail: 'edit src/a.ts' });
+        const closed = await poll(c, r.body.id, 'timeout');
+        expect(closed.body.status).toBe('expired');
+        const [card] = await cards();
+        expect(card.system_data.status).toBe('expired');
+        expect(card.content).toContain('Nobody answered in time');
+        expect((await decide(r.body.id, 'once')).status).toBe(409);
+    });
+
+    it('refuses an approval once the wait is over, but still takes a denial', async () => {
+        const { c } = await running();
+        const r = await open(c, { tool: 'network', requestKey: key('d') });
+        await ctx.db.query(`UPDATE agent_tool_requests SET waiting_until = NOW() - interval '1 second' WHERE id = $1`, [r.body.id]);
+        expect((await decide(r.body.id, 'once')).status).toBe(410);
+        expect((await decide(r.body.id, 'always')).status).toBe(410);
+        expect((await decide(r.body.id, 'deny')).status).toBe(200);
+        expect((await poll(c, r.body.id)).body.status).toBe('denied');
+    });
+
+    it('"always" adds the rule to the profile, answers the waiting request, and later requests need no card', async () => {
+        const { c } = await running();
+        const r = await open(c, { tool: 'Bash(gh:*)', requestKey: key('e') });
+        expect((await decide(r.body.id, 'always')).status).toBe(200);
+        expect((await poll(c, r.body.id)).body.status).toBe('always');
+        const profile = await ctx.db.query('SELECT allowed_tools FROM agent_profiles WHERE id = $1', [profileId]);
+        expect(profile.rows[0].allowed_tools).toContain('Bash(gh:*)');
+        expect((await open(c, { tool: 'Bash(gh:*)', requestKey: key('f') })).body).toEqual({ id: null, status: 'always' });
+    });
+
+    it('keeps after-run cards working next to live ones', async () => {
+        const { c } = await running();
+        await open(c, { tool: 'Bash(gh:*)', requestKey: key('1') });
+        const done = await ctx.request.post(runUrl(c, 'complete')).set(hostAuth).send({ claimToken: c.body.run.claimToken, deniedTools: ['Bash(gh:*)'] });
+        expect(done.status, JSON.stringify(done.body)).toBe(200);
+        const statuses = (await cards()).map(card => [card.system_data.live === true, card.system_data.status]);
+        expect(statuses).toEqual([[true, 'expired'], [false, 'pending']]);
+    });
+
+    it('rejects a stale claim, a malformed key and an unknown request', async () => {
+        const { c } = await running();
+        expect((await ctx.request.post(runUrl(c, 'tool-requests')).set(hostAuth)
+            .send({ claimToken: 'wrong-token-value', tool: 'network', requestKey: key('2'), waitSeconds: 60 })).status).toBe(409);
+        expect((await open(c, { tool: 'network', requestKey: 'not-a-key' })).status).toBe(400);
+        expect((await open(c, { tool: 'Bash(a,b)', requestKey: key('3') })).status).toBe(400);
+        expect((await poll(c, generateUlid())).status).toBe(404);
+    });
+});

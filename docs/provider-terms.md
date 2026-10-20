@@ -70,6 +70,15 @@ How it works:
 - Both plan-owned modes use one code path: each profile has a plan owner (the server owner for `subscription`, `agent_profiles.plan_owner_id` for `siwc`), and only that person's wakes count.
 - Resuming a session makes it the resumer's. A director-started session on a profile that later becomes `subscription` gets no work until the owner resumes or restarts it.
 - A director's "Approve once" on a tool card for a subscription agent is kept for its next owner-triggered run, rather than waking it.
+- A `siwc` Codex run asks before anything its sandbox doesn't allow (#93). A request outside the profile's rules becomes a tool card while the turn waits; on a `siwc` profile only the plan owner (on `subscription`, the server owner) can approve that waiting step, since it spends their plan. The host never lets Codex remember an approval (`acceptForSession`): "Always" goes to the profile's allow list, which the owner controls.
+
+Which Codex path reports denials reliably:
+
+| Path | Profile | Denied tool signal |
+|---|---|---|
+| `codex app-server` | `"auth": "siwc"` | **Reliable.** Structured approval requests (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`); each becomes a tool card while the turn waits ([agora-host README](../agora-host/README.md#codex-app-server-approvals-93)). |
+| codex-acp | `"protocol": "acp"` | **Reliable.** ACP `session/request_permission`; denied at once and reported as an after-run card. |
+| `codex exec --json` | `subscription` or `api_key` (`"protocol": "cli"`) | **Best effort.** No denial event: denials are guessed from failed commands' output and silent failures are missed. |
 
 What it does not cover: an owner-started API-key agent that a director instructs can still hand work to an owner-started subscription agent through agora-collab. If that matters on your instance, don't mix the two in one channel. And none of this checks whether a CLI is actually logged in to the account you think: Agora never looks at login files.
 

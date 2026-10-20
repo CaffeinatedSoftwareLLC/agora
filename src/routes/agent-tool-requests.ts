@@ -4,7 +4,7 @@ import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
-import { cardText, REQUEST_TTL_HOURS } from '../lib/agent-permissions';
+import { cardText, liveCardText, REQUEST_TTL_HOURS } from '../lib/agent-permissions';
 import { runCardText, RUN_APPROVAL_TTL_HOURS } from '../lib/provider-terms';
 
 /**
@@ -17,6 +17,11 @@ import { runCardText, RUN_APPROVAL_TTL_HOURS } from '../lib/provider-terms';
  *
  * On a 'subscription' profile (src/lib/provider-terms.ts) only the owner's approval wakes
  * the agent; a director's "once" is kept for the next run the owner triggers.
+ *
+ * Live requests (#93): a running Codex turn waits on this card for one request. Approving it
+ * lets that one step run; nothing is granted to a later run. It can be approved only while the
+ * host still waits and the run is still going; otherwise it is expired (410). On a
+ * subscription or siwc profile only the person whose approval may wake the agent approves it.
  *
  * Run approvals (agent-run-approvals): a profile with run approval posts a card before each
  * wake; only the server owner approves or denies it.
@@ -70,16 +75,32 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                     [ref.session_id]
                 );
                 const r = await db.query(
-                    `SELECT *, created_at < NOW() - make_interval(hours => $2) AS expired FROM agent_tool_requests WHERE id = $1 FOR UPDATE`,
+                    `SELECT t.*, t.created_at < NOW() - make_interval(hours => $2) AS expired,
+                            (t.request_key IS NOT NULL) AS live,
+                            (t.request_key IS NOT NULL AND (t.waiting_until IS NULL OR t.waiting_until <= NOW() OR ar.status IS DISTINCT FROM 'claimed')) AS live_over
+                     FROM agent_tool_requests t LEFT JOIN agent_runs ar ON ar.id = t.run_id WHERE t.id = $1 FOR UPDATE OF t`,
                     [requestId, REQUEST_TTL_HOURS]
                 );
                 const req = r.rows[0];
-                if (req.status !== 'pending') throw new Refusal(409, { error: 'already_decided', status: req.status });
-                if (req.expired && decision !== 'deny') throw new Refusal(410, { error: 'expired' });
+                if (req.status !== 'pending' && req.status !== 'waiting') throw new Refusal(409, { error: 'already_decided', status: req.status });
+                if ((req.expired || req.live_over) && decision !== 'deny') throw new Refusal(410, { error: 'expired' });
+
+                // An approval wakes a live agent to retry, or lets a waiting step run. A subscription
+                // agent runs only when the owner triggers it (a siwc agent: its plan owner), so
+                // anyone else's approval waits, and can't release a step held on the plan.
+                const mode = s.rows[0].auth_mode;
+                const mayWake = mode === 'api_key'
+                    || (mode === 'siwc' ? s.rows[0].plan_owner_id?.trim() === userId : await isServerOwner(db, ref.server_id.trim(), userId));
+                if (req.live && decision !== 'deny' && !mayWake) {
+                    throw new Refusal(403, { error: mode === 'siwc' ? 'Only the plan owner can approve a waiting step' : 'Only the server owner can approve a waiting step' });
+                }
 
                 const status = decision === 'deny' ? 'denied' : decision;
                 await db.query(
-                    `UPDATE agent_tool_requests SET status = $2, decided_by = $3, decided_at = NOW() WHERE id = $1`,
+                    // A live "once" is used up by the step that waits for it: never granted to a later run
+                    `UPDATE agent_tool_requests SET status = $2::text, decided_by = $3, decided_at = NOW(),
+                            consumed_by_run = CASE WHEN request_key IS NOT NULL AND $2::text = 'once' THEN run_id ELSE consumed_by_run END
+                     WHERE id = $1`,
                     [requestId, status, userId]
                 );
                 if (decision === 'always') {
@@ -93,7 +114,9 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                 const who = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'someone';
                 const profile = s.rows[0].name;
                 if (req.message_id) {
-                    const content = cardText(profile, req.tool, status, who);
+                    const content = req.live
+                        ? liveCardText(profile, req.tool, status, (await db.query('SELECT system_data FROM messages WHERE id = $1', [req.message_id])).rows[0]?.system_data?.detail ?? null, { who })
+                        : cardText(profile, req.tool, status, who);
                     const updated = await db.query(
                         `UPDATE messages SET content = $2, system_data = system_data || $3::jsonb, edited_at = NOW()
                          WHERE id = $1 RETURNING system_data, edited_at`,
@@ -106,13 +129,8 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                         });
                     }
                 }
-                // An approval wakes a live agent to retry; the notice is its batch. A subscription
-                // agent runs only when the owner triggers it (a siwc agent: its plan owner), so
-                // anyone else's approval waits.
-                const mode = s.rows[0].auth_mode;
-                const mayWake = mode === 'api_key'
-                    || (mode === 'siwc' ? s.rows[0].plan_owner_id?.trim() === userId : await isServerOwner(db, ref.server_id.trim(), userId));
-                if (decision !== 'deny' && s.rows[0].state === 'live' && mayWake) {
+                // The notice is the woken agent's batch; a live request's run is still going instead
+                if (!req.live && decision !== 'deny' && s.rows[0].state === 'live' && mayWake) {
                     const notice = await postNotice(db, channelId,
                         `${who} ${decision === 'always' ? 'always allowed' : 'approved once'} \`${req.tool}\` for ${profile}. Retry the step that needed it.`);
                     notices.push(notice);

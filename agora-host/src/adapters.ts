@@ -6,7 +6,7 @@ import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
-import { CODEX_WORDS, resolvePermissions } from './presets.js';
+import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
 import { detectSignals } from './signals.js';
 import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
 import { accessToken, type AccessToken } from './siwc/session.js';
@@ -113,6 +113,19 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
     return version[0];
 }
 
+/**
+ * The rules a Codex app-server approval request is judged by (siwc/approvals.ts): what the owner
+ * allowed for this agent ("always" rules and this run's one-time grants), the Agora MCP tools,
+ * and the capability words the presets turned on. A preset's Claude rules are left out: for Codex
+ * a preset is its sandbox, and an approved request runs outside it, so `dev`'s `Bash(node:*)`
+ * must not let any escalated `node` command through without the owner saying so.
+ */
+export function appServerRules(rules: string[], perms: Permissions, approvedTools: string[]): string[] {
+    return [...new Set([...rules, ...approvedTools.map(t => `mcp__agora__${t}`),
+        ...(perms.codex.sandbox === 'workspace-write' ? ['write'] : []), ...(perms.codex.network ? ['network'] : []),
+        ...(perms.codex.webSearch ? ['web_search'] : [])])];
+}
+
 /** `prompt` replaces the wake prompt: a verify fix turn resuming the same conversation (verify.ts). */
 /**
  * `active` is every session this host is running (the scheduler's set), so a preview port range
@@ -190,8 +203,10 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             if (plan) {
                 // codex app-server with OpenAI's ChatGPT-plan provider; model, effort, sandbox and
                 // output schema go over JSON-RPC (siwc/appserver.ts)
+                // "on-request": Codex asks before anything outside its sandbox, and the host
+                // answers from the rules or a tool-request card (siwc/approvals.ts, #93)
                 args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS,
-                    '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                    '-c', 'approval_policy="on-request"', '-c', `mcp_servers=${mcp}`,
                     ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                     ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
                     ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
@@ -200,6 +215,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                     threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports, workspace.branch),
                     outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
                     refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
+                    rules: appServerRules(rules, perms, local.approvedTools), roots: [workspace.workdir, local.workdir],
                 };
                 return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: 'codex', stdin: '', cleanup, lurk: isLurkRun(claim),
                     sandbox: perms.codex.sandbox, unknownPresets: perms.unknownPresets, appServer };

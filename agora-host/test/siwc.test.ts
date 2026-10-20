@@ -309,6 +309,9 @@ describe('app-server launch', () => {
             expect(launch.stdin).not.toContain('at_secret_value');
             expect(launch.env.ACCESS_TOKEN).toBe('at_secret_value');
             expect(launch.env.CODEX_HOME).toBe(join(tmp.dir, 'state'));
+            // Codex asks before leaving its sandbox (#93); "never" would deny silently
+            expect(launch.args).toContain('approval_policy="on-request"');
+            expect(launch.args).not.toContain('approval_policy="never"');
         } finally { await launch.cleanup(); }
     });
     it('refuses before launching when the plan is not connected or bound to someone else', async () => {
@@ -345,7 +348,7 @@ describe('app-server conversation (fake app-server)', () => {
             env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ACCESS_TOKEN: token, FAKE_LOG: log, FAKE_MODE: mode },
             stdin: '', adapter: 'codex', cleanup: async () => {},
             appServer: { threadId: null, prompt: 'Do the work', outputSchema: { type: 'object' }, model: 'gpt-test', effort: 'high', sandbox: 'workspace-write',
-                refresh: async () => 'at_fresh', rpcTimeoutMs: 10000, ...plan },
+                refresh: async () => 'at_fresh', rpcTimeoutMs: 10000, rules: [], roots: [], ...plan },
         };
         const result = await startAppServer(launch).result;
         const lines = (await readFile(log, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
@@ -361,9 +364,9 @@ describe('app-server conversation (fake app-server)', () => {
         const init = lines.find(l => l.method === 'initialize');
         expect(init.params.clientInfo).toMatchObject({ name: 'Agora', title: 'Agora' });
         expect(lines.some(l => l.method === 'initialized')).toBe(true);
-        expect(lines.find(l => l.method === 'thread/start').params).toMatchObject({ model: 'gpt-test', approvalPolicy: 'never', sandbox: 'workspace-write', cwd: tmp.dir });
+        expect(lines.find(l => l.method === 'thread/start').params).toMatchObject({ model: 'gpt-test', approvalPolicy: 'on-request', sandbox: 'workspace-write', cwd: tmp.dir });
         expect(lines.find(l => l.method === 'turn/start').params).toMatchObject({ input: [{ type: 'text', text: 'Do the work' }], effort: 'high' });
-        // The approval request was declined, not approved
+        // An approval request no rule allows and no card can answer is declined
         expect(lines.find(l => l.id === 900).result).toEqual({ decision: 'decline' });
     });
 
