@@ -68,6 +68,13 @@ export const claimSchema = z.object({
         authority: z.enum(['owner', 'director']).nullable(), content: z.string().max(4000).nullable(),
         createdAt: z.string().datetime(),
     })).min(1).max(20),
+    // Handoff offers in this batch addressed to this session, and handoffs that made it a
+    // thread's owner (server src/lib/handoffs.ts); handoff.ts turns them into prompt lines
+    handoffs: z.array(z.object({
+        offerId: id, threadId: id, from: z.string().max(128), status: z.enum(['pending', 'accepted']),
+        branch: z.string().max(128).nullable().catch(null),
+        headSha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/).nullable().catch(null), senderRunning: z.boolean(),
+    })).max(5).default([]).catch([]),
 }).refine(c => c.run.heartbeatSeconds < c.run.leaseSeconds - 10, 'heartbeat must precede lease safety margin');
 export type Claim = z.infer<typeof claimSchema>;
 export interface Result {

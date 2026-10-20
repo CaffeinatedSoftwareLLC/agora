@@ -13,6 +13,10 @@ export const BACKGROUND_HEADER = 'x-agora-background';
 const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/file-reservations',
     'POST /channels/:id/file-reservations',
+    // Ownership handoffs (#84, src/routes/handoffs.ts)
+    'POST /channels/:id/handoffs',
+    'POST /channels/:id/handoffs/:offerId',
+    'GET /channels/:id/threads/:threadId/handoffs',
     'GET /channels/:id/messages',
     'POST /channels/:id/messages',
     'PATCH /channels/:id/messages/:msgId',

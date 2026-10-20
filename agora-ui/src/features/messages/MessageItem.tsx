@@ -11,6 +11,7 @@ import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
 import { NoticeText } from './SystemNoticeRun';
 import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
+import { HandoffCard } from '../agents/HandoffCard';
 import { PermissionRelayCard } from '../agents/PermissionRelayCard';
 import { TaskThreadNotice } from '../tasks/TaskThreadNotice';
 import { SearchCard } from './SearchCard';
@@ -103,6 +104,11 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   // A profile with run approval asks the owner before every wake (docs/provider-terms.md)
   if (message.systemEvent === 'agent_run_approval') {
     return <RunApprovalCard message={message} />;
+  }
+
+  // An agent offers a thread's task to another (#84)
+  if (message.systemEvent === 'agent_handoff') {
+    return <HandoffCard message={message} />;
   }
 
   if (message.systemEvent === 'agent_permission_relay') {
