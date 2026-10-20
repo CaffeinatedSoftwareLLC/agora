@@ -173,26 +173,24 @@ test.describe('files: drop, paste, access, limits, encryption at rest', () => {
         expect(sha256(await dl.body())).toBe(sha256(pdf));
     });
 
-    test('[UI-03.cross-server-403] a file in another server is 403 for people who are not its members', async ({ page, seed }) => {
+    test('[UI-03.cross-server-404] a file in another server is 404 for people who are not its members', async ({ page, seed }) => {
         const { owner, member } = apis(seed);
         const bytes = Buffer.from(`Other server file ${seed.runTag}\n`);
         const f = await uploadAndPost(rs.outsider.api, rs.other.generalId, `other-${seed.runTag}.txt`, bytes, 'text/plain', `Other server ${seed.runTag}`);
         const mine = await rs.outsider.api.req('GET', `/files/${f.fileId}`);
         expect(mine.status, 'its own member can read it').toBe(200);
-        // The plan expects 403 (beta-test-plan §1.5, §2.2). Soft, so the no-bytes checks below
-        // still run and the report shows every status actually returned.
+        // 404, not 403: RLS (files_select) hides the row, so the file's existence isn't revealed
+        // (beta-test-plan §1.5, §2.2; decided 2026-10-21).
         for (const [who, api] of [['owner-e2e', owner], ['member-e2e', member]] as const) {
             const r = await api.req('GET', `/files/${f.fileId}`);
-            expect.soft(r.status, `${who} bearer GET /files/:id`).toBe(403);
-            expect(r.status, `${who} is refused`).not.toBe(200);
+            expect(r.status, `${who} bearer GET /files/:id`).toBe(404);
             expect(String(r.data).includes('Other server file'), `${who} gets no bytes`).toBe(false);
-            expect((await api.req('GET', `/files/${f.fileId}/text`)).status, `${who} /text`).not.toBe(200);
-            expect((await api.req('GET', `/files/${f.fileId}/image`)).status, `${who} /image`).not.toBe(200);
+            expect((await api.req('GET', `/files/${f.fileId}/text`)).status, `${who} /text`).toBe(404);
+            expect((await api.req('GET', `/files/${f.fileId}/image`)).status, `${who} /image`).toBe(404);
             expect((await api.req('GET', `/channels/${rs.other.generalId}/messages`)).status, `${who} messages`).toBe(403);
         }
         const viaCookie = await page.request.get(`/files/${f.fileId}`);
-        expect.soft(viaCookie.status(), 'owner cookie session GET /files/:id').toBe(403);
-        expect(viaCookie.status()).not.toBe(200);
+        expect(viaCookie.status(), 'owner cookie session GET /files/:id').toBe(404);
     });
 
     test('[UI-04.bot-file-access] bot token: its channel 200 (same bytes), another channel 403, paused 403', async ({ seed }) => {
