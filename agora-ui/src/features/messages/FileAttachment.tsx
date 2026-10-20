@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { Attachment } from '../../stores/messageStore';
 import { getAuthHeaders } from '../../lib/api';
 import { usePalette } from '../../theme';
+
+/** Keyboard focus ring shared by every interactive attachment control. */
+const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -70,6 +73,8 @@ function AttachmentBody({ attachment }: { attachment: Attachment }) {
 function ImageAttachment({ attachment }: { attachment: Attachment }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const thumbRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +94,19 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
     };
   }, [attachment.url]);
 
+  // The expanded view takes focus, closes on Escape, and hands focus back to the thumbnail.
+  useEffect(() => {
+    if (!expanded) return;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(false); };
+    document.addEventListener('keydown', onKey);
+    const thumb = thumbRef.current;
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      thumb?.focus();
+    };
+  }, [expanded]);
+
   const maxWidth = 400;
   const maxHeight = 300;
   let displayWidth = attachment.width || maxWidth;
@@ -105,10 +123,13 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
 
   return (
     <>
-      <div
-        className="mt-1 rounded-lg overflow-hidden cursor-pointer inline-block max-w-full"
+      <button
+        ref={thumbRef}
+        type="button"
+        className={`mt-1 block rounded-lg overflow-hidden cursor-pointer max-w-full p-0 ${FOCUS_RING}`}
         style={{ width: displayWidth, height: displayHeight, backgroundColor: 'rgba(0,0,0,0.1)' }}
         onClick={() => setExpanded(true)}
+        aria-label={`Open image ${attachment.name}`}
       >
         {blobUrl && (
           <img
@@ -118,14 +139,17 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
             loading="lazy"
           />
         )}
-      </div>
+      </button>
       {expanded && blobUrl && (
-        <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center cursor-pointer"
+        <button
+          ref={closeRef}
+          type="button"
+          className={`fixed inset-0 bg-black/80 z-50 flex items-center justify-center cursor-pointer ${FOCUS_RING}`}
           onClick={() => setExpanded(false)}
+          aria-label={`Close image ${attachment.name}`}
         >
           <img src={blobUrl} alt={attachment.name} className="max-w-[90vw] max-h-[90vh] object-contain" />
-        </div>
+        </button>
       )}
     </>
   );
@@ -177,7 +201,7 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
     <button
       type="button"
       onClick={() => downloadAttachment(attachment)}
-      className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 flex items-center justify-center rounded-lg hover:opacity-80 shrink-0"
+      className={`min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 flex items-center justify-center rounded-lg hover:opacity-80 shrink-0 ${FOCUS_RING}`}
       title={`Download ${attachment.name}`}
       aria-label={`Download ${attachment.name}`}
     >
@@ -210,7 +234,7 @@ function MediaAttachment({ attachment, kind }: { attachment: Attachment; kind: '
             type="button"
             onClick={load}
             disabled={loading}
-            className="flex flex-1 min-w-0 min-h-11 items-center gap-2.5 text-left hover:opacity-80 disabled:opacity-60"
+            className={`flex flex-1 min-w-0 min-h-11 items-center gap-2.5 text-left rounded-lg hover:opacity-80 disabled:opacity-60 ${FOCUS_RING}`}
           >
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: P.primary }}>
               <svg className="w-4 h-4 ml-0.5" viewBox="0 0 24 24" fill={P.onPrimary} aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
@@ -234,13 +258,16 @@ function FileCard({ attachment }: { attachment: Attachment }) {
   const handleDownload = () => downloadAttachment(attachment);
 
   return (
-    <div
-      className="mt-1 flex items-center gap-3 min-h-12 px-3 py-2 rounded-lg max-w-xs cursor-pointer hover:opacity-80"
+    <button
+      type="button"
+      className={`mt-1 flex w-full items-center gap-3 min-h-12 px-3 py-2 rounded-lg max-w-xs text-left cursor-pointer hover:opacity-80 ${FOCUS_RING}`}
       style={{ backgroundColor: P.surface, border: `1px solid ${P.border}` }}
       onClick={handleDownload}
+      aria-label={`Download ${attachment.name}`}
+      title={`Download ${attachment.name}`}
     >
       <div className="shrink-0">
-        <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke={P.muted} strokeWidth="1.5">
+        <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke={P.muted} strokeWidth="1.5" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
         </svg>
       </div>
@@ -249,6 +276,6 @@ function FileCard({ attachment }: { attachment: Attachment }) {
         <div className="text-[11px]" style={{ color: P.muted }}>{formatFileSize(attachment.size)}</div>
       </div>
       <DownloadIcon color={P.muted} />
-    </div>
+    </button>
   );
 }
