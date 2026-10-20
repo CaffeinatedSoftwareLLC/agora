@@ -12,12 +12,29 @@ import { join } from 'path';
 describe('nginx route prefix coverage', () => {
     const projectRoot = join(__dirname, '..', '..');
 
+    const nginxConf = readFileSync(join(projectRoot, 'agora-ui', 'nginx.conf'), 'utf-8');
+
+    // The API proxy regex: location ~ ^/(auth|servers|...)(/|$) {
+    // The (/|$) suffix is optional here so the anchor test below can report it missing.
+    const API_LOCATION = /location\s+~\s+\^\/\(([\w|-]+)\)(\(\/\|\$\))?\s*\{/;
+
     function getNginxPrefixes(): Set<string> {
-        const nginxConf = readFileSync(join(projectRoot, 'agora-ui', 'nginx.conf'), 'utf-8');
-        // Match the API proxy regex: location ~ ^/(auth|servers|...) {
-        const match = nginxConf.match(/location\s+~\s+\^\/\(([\w|-]+)\)\s*\{/);
+        const match = nginxConf.match(API_LOCATION);
         if (!match) throw new Error('Could not find API proxy regex in nginx.conf');
         return new Set(match[1].split('|'));
+    }
+
+    // Body of the location block whose header matches `header`.
+    function locationBody(header: RegExp): string {
+        const m = header.exec(nginxConf);
+        if (!m) throw new Error(`Could not find location ${header} in nginx.conf`);
+        let depth = 0;
+        const start = nginxConf.indexOf('{', m.index);
+        for (let i = start; i < nginxConf.length; i++) {
+            if (nginxConf[i] === '{') depth++;
+            else if (nginxConf[i] === '}' && --depth === 0) return nginxConf.slice(start + 1, i);
+        }
+        throw new Error(`Unclosed location ${header} in nginx.conf`);
     }
 
     function getBackendPrefixes(): Set<string> {
@@ -74,6 +91,21 @@ describe('nginx route prefix coverage', () => {
                 `  location ~ ^/(${[...nginxPrefixes].join('|')}|${missing.join('|')}) {`
             );
         }
+    });
+
+    it('API prefixes are anchored to whole path segments (#127)', () => {
+        // Without (/|$), /admin also matches /administrator and /files matches /files-page.
+        expect(nginxConf.match(API_LOCATION)?.[2]).toBe('(/|$)');
+    });
+
+    it('both representations of the admin URLs send Vary: Accept (#127)', () => {
+        // /admin/users and /admin/storage are an SPA page (Accept: text/html) and an API
+        // endpoint (fetch) at the same URL. The JSON comes from the admin location; the
+        // HTML comes from the /index.html location the rewrite lands on.
+        const admin = locationBody(/location\s+~\s+\^\/admin\(/);
+        expect(admin).toMatch(/rewrite\s+\^\s+\/index\.html\s+last;/);
+        expect(admin).toMatch(/add_header\s+Vary\s+Accept\s+always;/);
+        expect(locationBody(/location\s+=\s+\/index\.html\s*\{/)).toMatch(/add_header\s+Vary\s+Accept\s+always;/);
     });
 
     it('nginx regex does not contain stale prefixes with no backend routes', () => {
