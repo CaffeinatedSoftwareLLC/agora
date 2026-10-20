@@ -85,9 +85,10 @@ export function ruleForCall(call: ToolCallInfo): string | null {
 export function allowedCall(call: ToolCallInfo, rules: ReadonlySet<string>): boolean {
     const rule = ruleForCall(call);
     if (!rule) return false;
-    if (rules.has(rule)) return true;
     const bare = rule.replace(/\(.*$/, '');
     if (call.kind === 'execute') {
+        // Never `rules.has(rule)` here: ruleFor() names a command by its program's basename, so
+        // `C:/downloads/git.exe status` would pass as `Bash(git:*)`. Only the matching below decides.
         if (rules.has(bare)) return true;
         const command = commandFor(call);
         if (!command || SHELL_SYNTAX.test(command)) return false;
@@ -106,7 +107,7 @@ export function allowedCall(call: ToolCallInfo, rules: ReadonlySet<string>): boo
         }
         return false;
     }
-    if (rules.has(bare)) return true;
+    if (rules.has(rule) || rules.has(bare)) return true;
     // `mcp__agora` allows every tool of that server
     if (MCP_TOOL.test(rule) && rules.has(rule.split('__').slice(0, 2).join('__'))) return true;
     if (EDIT_TOOLS.has(bare) || ['edit', 'delete', 'move'].includes(call.kind ?? '')) return rules.has('write');
@@ -255,11 +256,17 @@ export async function executableTrust(call: ToolCallInfo, ctx: ExecContext): Pro
         if (process.platform === 'win32') {
             for (const d of dirs) for (const n of names) if (await isFile(path.join(d, n))) return false;
         }
+        // The first match in PATH order is what runs, so it alone decides: an earlier entry inside
+        // the repository is never skipped in favour of a trusted one further on (#111 recheck).
+        // adapters.ts also strips such entries from the agent's PATH (repoFreePath).
         for (const raw of (envVar(env, 'PATH') ?? '').split(path.delimiter)) {
             const entry = raw.replace(/^"(.*)"$/, '$1');
-            // `.`, an empty entry or any other relative entry means the current directory: never trusted
-            if (!entry || !path.isAbsolute(entry) || (await inRepo(entry))) continue;
             for (const n of names) {
+                if (!entry || !path.isAbsolute(entry)) {
+                    // `.`, an empty entry or any other relative entry means the current directory
+                    for (const d of dirs) if (await isFile(path.resolve(d, entry, n))) return false;
+                    continue;
+                }
                 const p = path.join(entry, n);
                 if (await isFile(p)) return !(await inRepo(p));
             }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile, unlink, rmdir } from 'node:fs/promises';
 import { join, posix, win32 } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -63,6 +63,29 @@ export function osEnv(source: NodeJS.ProcessEnv = process.env, platform = proces
             : value;
     }
     if (platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
+    return env;
+}
+/** Drop every PATH entry inside one of `roots` (links resolved), in place. */
+export async function repoFreePath(env: NodeJS.ProcessEnv, roots: string[], platform = process.platform): Promise<NodeJS.ProcessEnv> {
+    const key = Object.keys(env).find(k => k.toUpperCase() === 'PATH');
+    if (!key || !env[key]) return env;
+    const p = platform === 'win32' ? win32 : posix;
+    const norm = (s: string) => (platform === 'win32' ? p.resolve(s).toLowerCase() : p.resolve(s));
+    const real = async (s: string) => { try { return await realpath(s); } catch { return s; } };
+    const inside = (root: string, target: string) => {
+        const rel = p.relative(norm(root), norm(target));
+        return rel === '' || (!p.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${p.sep}`));
+    };
+    const all = [...roots.map(r => p.resolve(r)), ...(await Promise.all(roots.map(real)))];
+    const sep = platform === 'win32' ? ';' : ':';
+    const kept: string[] = [];
+    for (const raw of env[key]!.split(sep)) {
+        const entry = raw.replace(/^"(.*)"$/, '$1');
+        if (!entry) continue;
+        const resolved = await real(entry);
+        if (!all.some(r => inside(r, entry) || inside(r, resolved))) kept.push(raw);
+    }
+    env[key] = kept.join(sep);
     return env;
 }
 export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -133,6 +156,9 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
         const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([...active, claim.session.id])) : undefined;
         const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,
             ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}) };
+        // A PATH entry inside the worktree or repository would let a file the agent wrote win a
+        // bare-name lookup over the trusted program (acp/permissions.ts executableTrust)
+        await repoFreePath(env, [workspace.cwd, workspace.workdir, local.workdir]);
         // The plan's OAuth access token reaches app-server only through its environment
         if (plan) env.ACCESS_TOKEN = plan.accessToken;
         // Hosted runs are not bring-your-own sessions: no presence socket (agora-mcp src/socket.ts)

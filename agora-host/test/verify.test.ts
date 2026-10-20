@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Scheduler } from '../src/scheduler.js';
 import { configSchema } from '../src/config.js';
 import { projectSection, verifyPrompt, wakePrompt } from '../src/prompt.js';
-import { killVerifyTree, resolveExecutable, runVerify, verifyArgv, verifyEnv, type VerifyOutcome } from '../src/verify.js';
+import { JOB_FAILED_EXIT, JOB_FAILED_MARKER, quoteWindowsArg, resolveExecutable, runVerify, verifyArgv, verifyEnv, type VerifyOutcome } from '../src/verify.js';
 import type { Claim, HostApi, Result } from '../src/types.js';
 import { claim, config, id, successful } from './helpers.js';
 
@@ -94,41 +94,96 @@ describe('runVerify', () => {
         for (let i = 0; i < 50 && alive(); i++) await new Promise(res => setTimeout(res, 100));
         expect(alive()).toBe(false);
     }, 30000);
-    it.skipIf(process.platform !== 'win32')('on Windows, kills the descendants of a root that already exited', async () => {
-        const { spawn } = await import('node:child_process');
-        const startedAt = Date.now();
-        const parent = spawn(node, ['-e', 'const c = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: "ignore", windowsHide: true }); console.log(c.pid); setTimeout(() => process.exit(0), 100)'], { windowsHide: true });
-        let out = ''; parent.stdout.on('data', d => { out += d; });
-        await new Promise(res => parent.on('close', res));
-        const pid = Number(out.trim());
+    // A starts B, B starts C, A and B exit: C's parent is gone, so only lifetime containment finds it
+    const orphanChain = (pidFile: string, aLifetimeMs: number) => {
+        const c = `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60000)`;
+        const b = `require("child_process").spawn(process.execPath, ["-e", ${JSON.stringify(c)}], { detached: true, stdio: "ignore" }).unref(); setTimeout(() => process.exit(0), 300)`;
+        return `require("child_process").spawn(process.execPath, ["-e", ${JSON.stringify(b)}], { detached: true, stdio: "ignore" }).unref(); setTimeout(() => process.exit(0), ${aLifetimeMs})`;
+    };
+    const orphanAlive = async (pidFile: string) => {
+        const { readFile } = await import('node:fs/promises');
+        const pid = Number(await readFile(pidFile, 'utf8'));
         const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-        expect(alive()).toBe(true);
-        await killVerifyTree(parent.pid!, startedAt);
-        expect(alive()).toBe(false);
-    }, 30000);
+        for (let i = 0; i < 20 && alive(); i++) await new Promise(res => setTimeout(res, 100));
+        const was = alive();
+        if (was) process.kill(pid);
+        return was;
+    };
+    it.skipIf(process.platform !== 'win32')('on Windows, contains the whole tree in a job: an orphaned grandchild dies on timeout and on exit', async () => {
+        const { mkdtemp } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const dir = await mkdtemp(join(tmpdir(), 'verify-job-'));
+        // Timeout: A is still running, B has exited, C is an orphan
+        const timedOut = join(dir, 'timeout.pid');
+        const r = await run(orphanChain(timedOut, 60000), 2500);
+        expect(r).toMatchObject({ passed: false, timedOut: true });
+        expect(await orphanAlive(timedOut)).toBe(false);
+        // Normal exit: A and B exited, C is an orphan; closing the job takes it down
+        const exited = join(dir, 'exit.pid');
+        expect(await run(orphanChain(exited, 1500), 20000)).toMatchObject({ passed: true, exitCode: 0 });
+        expect(await orphanAlive(exited)).toBe(false);
+    }, 40000);
+    it('quotes Windows arguments the way CommandLineToArgvW reads them', () => {
+        expect(quoteWindowsArg('plain')).toBe('plain');
+        expect(quoteWindowsArg('')).toBe('""');
+        expect(quoteWindowsArg('a b')).toBe('"a b"');
+        expect(quoteWindowsArg('say "hi"')).toBe('"say \\"hi\\""');
+        expect(quoteWindowsArg('C:\\dir with space\\')).toBe('"C:\\dir with space\\\\"');
+    });
+    /** A fake command: `exit` and `close` are fired by the test. */
+    function fakeChild() {
+        return Object.assign(new EventEmitter(), { pid: 4242, exitCode: null as number | null, signalCode: null, stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
+    }
     /** A command whose first process exited (code 0) while a descendant keeps stdout/stderr open: 'close' never comes. */
     function exitedParent() {
-        const child = Object.assign(new EventEmitter(), { pid: 4242, exitCode: null as number | null, stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
+        const child = fakeChild();
         setTimeout(() => { child.stdout.write('started a watcher'); child.exitCode = 0; child.emit('exit', 0, null); }, 10);
         return child;
     }
+    const fakeRun = (child: ReturnType<typeof fakeChild>, killTree: (pid: number, exited: () => boolean) => Promise<void>, timeoutMs = 200, signal = new AbortController().signal, windowsJob = false) =>
+        runVerify([node, '-e', ''], process.cwd(), timeoutMs, signal, verifyEnv(), { killTree, spawn: (() => child) as any, windowsJob });
     it('settles on timeout after killing the tree of an exited parent whose pipes stay open', async () => {
         const child = exitedParent();
         const killTree = vi.fn(async () => {});
-        const r = await runVerify([node, '-e', ''], process.cwd(), 200, new AbortController().signal, verifyEnv(), { killTree, spawn: (() => child) as any });
+        const r = await fakeRun(child, killTree);
         // The tree is killed even though the parent had already exited
-        expect(killTree).toHaveBeenCalledWith(4242, expect.any(Number));
+        expect(killTree).toHaveBeenCalledWith(4242, expect.any(Function));
         expect(r).toMatchObject({ passed: false, timedOut: true, spawnFailed: false, exitCode: 0 });
         expect(child.stdout.destroyed && child.stderr.destroyed).toBe(true);
     });
-    it('fails closed and says so when the tree kill fails', async () => {
-        const child = exitedParent();
-        const killTree = vi.fn(async () => { throw new Error('kill failed'); });
-        const abort = new AbortController(); setTimeout(() => abort.abort(), 100);
-        const r = await runVerify([node, '-e', ''], process.cwd(), 60000, abort.signal, verifyEnv(), { killTree, spawn: (() => child) as any });
-        expect(r).toMatchObject({ passed: false, spawnFailed: false });
-        expect(r.output).toContain('could not confirm');
+    it('does not settle on close while the kill is still pending', async () => {
+        const child = fakeChild();
+        let confirm!: () => void;
+        const killTree = vi.fn(() => new Promise<void>(res => { confirm = res; }));
+        let settled = false;
+        const pending = fakeRun(child, killTree).then(r => { settled = true; return r; });
+        await new Promise(res => setTimeout(res, 300));
+        expect(killTree).toHaveBeenCalledOnce();
+        // The command closes its pipes after the timeout, but cleanup is not confirmed yet
+        child.exitCode = 1; child.emit('exit', 1, null); child.emit('close', 1);
+        await new Promise(res => setTimeout(res, 100));
+        expect(settled).toBe(false);
+        confirm();
+        expect(await pending).toMatchObject({ passed: false, timedOut: true, exitCode: 1 });
+    });
+    it('rejects with process_tree_kill_failed when the kill cannot be confirmed, even after close', async () => {
+        const child = fakeChild();
+        let fail!: (e: Error) => void;
+        const killTree = vi.fn(() => new Promise<void>((_, rej) => { fail = rej; }));
+        const abort = new AbortController(); setTimeout(() => abort.abort(), 50);
+        const pending = fakeRun(child, killTree, 60000, abort.signal);
+        await new Promise(res => setTimeout(res, 100));
+        child.emit('close', 0);
+        fail(new Error('still running'));
+        await expect(pending).rejects.toThrow('process_tree_kill_failed');
         expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    });
+    it('fails closed when the Windows job cannot be created: the command never ran', async () => {
+        const child = fakeChild();
+        setTimeout(() => { child.stderr.write(`${JOB_FAILED_MARKER}\r\n`); child.exitCode = JOB_FAILED_EXIT; child.emit('exit', JOB_FAILED_EXIT, null); child.emit('close', JOB_FAILED_EXIT); }, 10);
+        const r = await fakeRun(child, vi.fn(async () => {}), 10000, new AbortController().signal, true);
+        expect(r).toMatchObject({ passed: false, spawnFailed: true });
     });
     it('stops when the run is stopped', async () => {
         const abort = new AbortController();
@@ -156,6 +211,9 @@ describe('runVerify', () => {
         const sep = process.platform === 'win32' ? ';' : ':';
         expect(resolveExecutable('tool', work, { PATH: [work, '.', 'relative', bin].join(sep) })).toBe(join(bin, exe));
         expect(resolveExecutable('tool', work, { PATH: [work, '.'].join(sep) })).toBeNull();
+        // Any entry inside the worktree counts as the worktree (node_modules/.bin, a tools folder)
+        await mkdir(join(work, 'tools')); await writeFile(join(work, 'tools', exe), '');
+        expect(resolveExecutable('tool', work, { PATH: [join(work, 'tools'), bin].join(sep) })).toBe(join(bin, exe));
         expect(resolveExecutable('./scripts/check', work, {})).toBe(join(work, 'scripts', 'check'));
         expect(resolveExecutable(node, work, {})).toBe(node);
     });
@@ -207,6 +265,16 @@ describe('scheduler verify step', () => {
             verification: expect.objectContaining({ status: 'failed', attempts: 1, reason: 'fix_turn_failed', output: 'boom' }) }), expect.anything());
     });
 
+    it('halts the host, with no fix turn and no report, when the verify tree could not be killed', async () => {
+        const s = setup([changed(['a.ts']), changed(['b.ts'])], []);
+        s.verify.mockRejectedValueOnce(new Error('process_tree_kill_failed'));
+        await s.scheduler.submit(verifyClaim(), Date.now());
+        expect(s.runner.start).toHaveBeenCalledOnce();
+        expect(s.api.complete).not.toHaveBeenCalled(); expect(s.api.fail).not.toHaveBeenCalled();
+        // A stopped scheduler takes no more work
+        expect(await s.scheduler.submit(verifyClaim(), Date.now())).toBeUndefined();
+        expect(s.runner.start).toHaveBeenCalledOnce();
+    });
     it('skips a command this host does not allow', async () => {
         const s = setup([changed(['a.ts'])], [], verifyConfig(['npm test']));
         await s.scheduler.submit(verifyClaim(), Date.now());

@@ -274,7 +274,7 @@ for a subscription. An agent asking for sign-in fails the run with
 `acp_auth_required`. A gemini profile must be `api_key`: Agora never hosts a Google
 account login, and `allowSubscriptionAtOwnRisk` does not apply to ACP.
 
-**Permissions (#73, #93).** File calls (read, edit, delete, move) are answered only when every path they name is inside the run's worktree (links resolved); a call outside it, or without a known path, is refused with no approval card, whatever the rules say. A command rule such as `Bash(git status:*)` means the `git` found through absolute `PATH` entries outside the worktree and repository: `./git status`, `bin\git.exe status` or an absolute path inside the repository are refused (as is a bare `git` on Windows when the working directory holds a `git.exe`); an absolute path outside them matches only a rule naming that exact path. The host advertises no file system or terminal, so the
+**Permissions (#73, #93).** File calls (read, edit, delete, move) are answered only when every path they name is inside the run's worktree (links resolved); a call outside it, or without a known path, is refused with no approval card, whatever the rules say. A command rule such as `Bash(git status:*)` means the `git` found through absolute `PATH` entries outside the worktree and repository: `./git status`, `bin\git.exe status` or an absolute path inside the repository are refused (as is a bare `git` on Windows when the working directory holds a `git.exe`); an absolute path outside them matches only a rule naming that exact path. The first `PATH` match decides, and the agent's `PATH` loses every entry inside the worktree or repository. The host advertises no file system or terminal, so the
 agent uses its own tools in the worktree and asks before anything it may not run
 alone (`session/request_permission`). The host answers at once from the claim's
 rules: a match gets `allow_once`; anything else gets `reject_once`, and the rule that
@@ -350,7 +350,7 @@ Each claim carries the channel's pinned instructions and files (`project`), and 
 "verify": { "commands": ["npm run verify"], "timeoutSeconds": 600 }
 ```
 
-No shell, OS variables plus `CI=1` only, bare executables resolved from absolute `PATH` entries (never the worktree), process tree killed on timeout. The command runs code the agent just edited, as your account and outside the CLI's sandbox, so list only commands you would let that agent run itself. See [project-context.md](../docs/project-context.md).
+No shell, OS variables plus `CI=1` only, bare executables resolved from absolute `PATH` entries outside the worktree, process tree killed on timeout (on Windows, contained in a Job Object for its whole life). The command runs code the agent just edited, as your account and outside the CLI's sandbox, so list only commands you would let that agent run itself. See [project-context.md](../docs/project-context.md).
 ### Task cards and subtasks
 
 A task card's or subtask's session works in one thread (`session.threadId`), and

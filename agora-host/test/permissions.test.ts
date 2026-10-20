@@ -1,3 +1,4 @@
+import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseOutput, prepare } from '../src/adapters.js';
 import { configSchema } from '../src/config.js';
@@ -72,6 +73,19 @@ describe('tool presets', () => {
         const allowed = launch.args[launch.args.indexOf('--allowedTools') + 1].split(',');
         expect(allowed).toEqual(['mcp__agora__chat_history', 'mcp__agora__chat_send', 'mcp__agora__thread_start', 'WebSearch', 'WebFetch', 'Bash(gh:*)', 'WebFetch(domain:example.com)']);
         expect(launch.args).not.toContain('--dangerously-skip-permissions');
+    });
+    it('keeps the worktree and repository off the agent PATH', async () => {
+        const { c, delivery } = await setup();
+        const workdir = c.profiles.builder.workdir;
+        const original = process.env.PATH ?? '';
+        vi.stubEnv('PATH', [join(workdir, 'bin'), original].join(delimiter));
+        try {
+            const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+            const entries = (Object.entries(launch.env).find(([k]) => k.toUpperCase() === 'PATH')?.[1] ?? '').split(delimiter);
+            const under = (root: string) => entries.some(e => e.toLowerCase().startsWith(root.toLowerCase()));
+            expect(under(workdir)).toBe(false); expect(under(launch.cwd)).toBe(false);
+            expect(entries.length).toBeGreaterThan(0);
+        } finally { vi.unstubAllEnvs(); }
     });
     it('builds Codex sandbox, network and web search flags from presets', async () => {
         const { c, delivery } = await setup();

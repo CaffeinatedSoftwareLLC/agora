@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Launch } from '../src/adapters.js';
-import { prepare } from '../src/adapters.js';
+import { prepare, repoFreePath } from '../src/adapters.js';
 import { configSchema, loadConfig } from '../src/config.js';
 import { ProcessRunner } from '../src/process.js';
 import { probeAcp, summaryOf, type AcpPlan } from '../src/acp/session.js';
@@ -105,15 +105,24 @@ describe('ACP permission rules', () => {
         await writeFile(join(bin.dir, exe), '');
         await mkdir(join(repo.dir, 'tools'));
         await writeFile(join(repo.dir, 'tools', exe), '');
-        const env = { PATH: ['.', 'relative/bin', join(repo.dir, 'tools'), bin.dir].join(delimiter), PATHEXT: '.EXE;.CMD' };
+        const env = { PATH: ['.', 'relative/bin', bin.dir].join(delimiter), PATHEXT: '.EXE;.CMD' };
         const rules = new Set(['Bash(git status:*)']);
-        const run = async (command: string, extra: Partial<{ rules: Set<string>; roots: string[] }> = {}) => {
+        const run = async (command: string, extra: Partial<{ rules: Set<string>; roots: string[]; env: Record<string, string> }> = {}) => {
             const call = { kind: 'execute', rawInput: { command } };
             const place = await locationsInside(call, repo.dir, { rules, env, ...extra });
             return place === 'ok' && allowedCall(call, extra.rules ?? rules);
         };
-        // The PATH program: allowed; `.`, relative and in-repo PATH entries are skipped
+        // The PATH program: allowed; `.` and relative entries that hold nothing are passed over
         expect(await run('git status')).toBe(true);
+        // The first match is what runs: an in-repo entry before the trusted one refuses, never skipped
+        expect(await run('git status', { env: { ...env, PATH: [join(repo.dir, 'tools'), bin.dir].join(delimiter) } })).toBe(false);
+        expect(await run('git status', { env: { ...env, PATH: ['tools', bin.dir].join(delimiter) } })).toBe(false);
+        expect(await run('git status', { env: { ...env, PATH: [bin.dir, join(repo.dir, 'tools')].join(delimiter) } })).toBe(true);
+        // The basename-derived rule never covers an explicit path: an exact absolute grant is required
+        const generic = new Set(['Bash(git:*)']);
+        expect(await run(`${join(bin.dir, exe)} status`, { rules: generic })).toBe(false);
+        expect(await run('C:/downloads/git.exe status', { rules: generic })).toBe(false);
+        expect(await run('git status', { rules: generic })).toBe(true);
         expect(await run('git.exe status -s')).toBe(win);
         // Paths are never shortened to the granted name, POSIX or Windows form
         expect(await run('./git status')).toBe(false);
@@ -147,6 +156,14 @@ describe('ACP permission rules', () => {
         expect(await run('git status')).toBe(!win);
         // A bare Bash grant already allows any command
         expect(await run('./git status', { rules: new Set(['Bash']) })).toBe(true);
+    });
+    it('strips PATH entries inside the worktree or repository from the agent environment', async () => {
+        const repo = await tempDir(); cleanups.push(repo.cleanup);
+        const bin = await tempDir(); cleanups.push(bin.cleanup);
+        const key = process.platform === 'win32' ? 'Path' : 'PATH';
+        const env = { [key]: [join(repo.dir, 'node_modules', '.bin'), bin.dir, repo.dir, join(repo.dir, 'tools')].join(delimiter) };
+        await repoFreePath(env, [repo.dir]);
+        expect(env[key]).toBe(bin.dir);
     });
     it('turns the rules into a Gemini policy file', () => {
         const toml = geminiPolicy(['mcp__agora__chat_send', 'mcp__docs', 'Bash(git status:*)', 'Bash(npm test)', 'Edit', 'Write', 'Read', 'WebSearch']);
