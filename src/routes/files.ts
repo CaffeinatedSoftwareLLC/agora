@@ -9,6 +9,8 @@ import { INLINE_SAFE_MIMES } from '../lib/file-validation';
 import { storeFile } from '../lib/file-store';
 import { searchChannelFiles, MAX_LIMIT } from '../lib/file-search';
 import { readFileText, READ_MAX_CHARS } from '../lib/file-read';
+import { readFileImage, isBotPaused } from '../lib/file-image';
+import { canViewChannel } from '../lib/channel-access';
 import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 
@@ -95,7 +97,7 @@ export async function fileRoutes(app: FastifyInstance) {
 
     // GET /files/:fileId/text?offset=&limit= → the readable text of a text file or PDF, in pages.
     // For members who can see the file's channel, and for bots with access to it: this is how an
-    // agent reads a file it found with file search. Bots still cannot download the file itself.
+    // agent reads a file it found with file search.
     app.get('/files/:fileId/text', {
         config: {
             rateLimit: {
@@ -126,30 +128,63 @@ export async function fileRoutes(app: FastifyInstance) {
         return reply.send(result.body);
     });
 
+    // GET /files/:fileId/image → an image file as base64, scaled down to fit what a model can take
+    // (longest side 1568px, about 3.5 MB of base64). agora-mcp's file_read returns it as MCP image content.
+    // Same files and access as /text above; paused bots are refused, as for downloads.
+    app.get('/files/:fileId/image', {
+        config: {
+            rateLimit: {
+                max: 30,
+                timeWindow: '1 minute',
+                keyGenerator: (request: any) => request.userId,
+            },
+        },
+    }, async (request, reply) => {
+        const { fileId } = request.params as any;
+        const result = await readFileImage(
+            { db: app.db, store: storage, encryptionKey: config.encryptionKey },
+            { fileId, userId: request.userId, isBot: !!request.isBot },
+        );
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return reply.header('Cache-Control', 'no-store').send(result.body);
+    });
+
     // GET /files/:fileId → binary file content
+    // People: ViewChannel in the file's channel. Bots: access to the channel (bot_channel_access),
+    // only for files attached to a live message, and never while paused.
     app.get('/files/:fileId', async (request, reply) => {
         const { fileId } = request.params as any;
         const userId = request.userId;
         const db = request.dbClient!;
+        const columns = 'f.id, f.uploader_id, f.channel_id, f.filename, f.mime_type, f.size_bytes, f.storage_key, f.encryption_iv, f.encryption_tag, f.deleted_at';
+        let file: any;
 
-        // Fetch file metadata
-        const fileRes = await db.query(
-            'SELECT id, uploader_id, channel_id, filename, mime_type, size_bytes, storage_key, encryption_iv, encryption_tag, deleted_at FROM files WHERE id = $1',
-            [fileId]
-        );
-        if (fileRes.rows.length === 0) {
-            return reply.status(404).send({ error: 'File not found' });
-        }
+        if (request.isBot) {
+            // Bots are not server members, so ViewChannel cannot be computed for them. Same files as
+            // /text (attached to a live message), looked up as the server, then access is checked explicitly
+            const fileRes = await app.db.query(
+                `SELECT ${columns} FROM files f
+                 JOIN messages m ON m.id = f.message_id AND m.deleted_at IS NULL
+                 WHERE f.id = $1 AND f.deleted_at IS NULL AND (f.expires_at IS NULL OR f.expires_at > NOW())`,
+                [fileId]
+            );
+            file = fileRes.rows[0];
+            if (!file) return reply.status(404).send({ error: 'File not found' });
+            const access = await canViewChannel(app.db, file.channel_id.trim(), userId, true);
+            if (!access.allowed) return reply.status(403).send({ error: access.error });
+            if (await isBotPaused(app.db, userId)) return reply.status(403).send({ error: 'bot_paused' });
+        } else {
+            const fileRes = await db.query(`SELECT ${columns} FROM files f WHERE f.id = $1`, [fileId]);
+            file = fileRes.rows[0];
+            if (!file || file.deleted_at) {
+                return reply.status(404).send({ error: 'File not found' });
+            }
 
-        const file = fileRes.rows[0];
-        if (file.deleted_at) {
-            return reply.status(404).send({ error: 'File not found' });
-        }
-
-        // Check ViewChannel permission
-        const permCheck = await checkFilePermissions(db, file.channel_id.trim(), userId, Permissions.ViewChannel);
-        if (!permCheck.allowed) {
-            return reply.status(permCheck.status!).send({ error: permCheck.error });
+            // Check ViewChannel permission
+            const permCheck = await checkFilePermissions(db, file.channel_id.trim(), userId, Permissions.ViewChannel);
+            if (!permCheck.allowed) {
+                return reply.status(permCheck.status!).send({ error: permCheck.error });
+            }
         }
 
         const encryptedBuffer = await storage.get(file.storage_key.trim());

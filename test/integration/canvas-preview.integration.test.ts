@@ -226,13 +226,13 @@ describe('browser previews', () => {
         expect(msg.content).toContain('ERROR: Uncaught TypeError');
         expect(msg.attachments).toEqual([expect.objectContaining({ id: done.body.fileId, mime: 'image/png', width: 4, height: 3 })]);
         expect((await ctx.request.get(`/files/${done.body.fileId}`).set(member.auth)).status).toBe(200);
-        // The agent reads its own screenshot back through the preview, not the file route
+        // The agent reads its own screenshot back through the preview (or, since #117, the file route)
         const shot = await ctx.request.get(`/channels/${channel}/browser-previews/${q.id}/screenshot`).set(botAuth).buffer(true)
             .parse((res, cb) => { const parts: Buffer[] = []; res.on('data', (c: Buffer) => parts.push(c)); res.on('end', () => cb(null, Buffer.concat(parts))); });
         expect(shot.status).toBe(200);
         expect(shot.headers['content-type']).toBe('image/png');
         expect((await sharp(shot.body).metadata()).width).toBe(4);
-        expect((await ctx.request.get(`/files/${done.body.fileId}`).set(botAuth)).status).toBe(403);
+        expect((await ctx.request.get(`/files/${done.body.fileId}`).set(botAuth)).status).toBe(200);   // the bot has access to the channel
         expect((await ctx.request.get(`/channels/${channel}/browser-previews/${q.id}/screenshot`).set(outsider.auth)).status).toBe(403);
         // A repeated report changes nothing
         expect((await result(claim, { success: 'true' }, png)).body.repeated).toBe(true);

@@ -35,8 +35,11 @@ const BOT_ALLOWED_ROUTES = new Set([
     'POST /channels/:id/subtasks',
     // File search returns names, tags and scores, never file content
     'GET /channels/:id/files/search',
-    // The extracted text of a file in a channel the bot can access (not the file itself)
+    // Files in channels the bot can access: the extracted text, the image (scaled for a model),
+    // and the file itself. Paused bots get the text only (the routes refuse the rest)
     'GET /files/:fileId/text',
+    'GET /files/:fileId/image',
+    'GET /files/:fileId',
     'PATCH /channels/:id/messages/:msgId/thread',
     // Claude Code Channel: relay a permission prompt as an owner-only card, and read its answer
     'POST /channels/:id/permission-relays',

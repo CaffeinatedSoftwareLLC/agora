@@ -146,8 +146,9 @@ describe('access comes first', () => {
         expect(res.status).toBe(200);
         expect(names(res)[0]).toBe('collab-protocol.md');
         expect((await search({ q: 'protocol' }, botAuth, otherChannelId)).status).toBe(403);
-        // Bots still cannot download files: search gives them names and tags, not content
-        expect((await ctx.request.get(`/files/${files['collab-protocol.md']}`).set(botAuth)).status).toBe(403);
+        // Bots download files in channels they were given (issue #117), and only there
+        expect((await ctx.request.get(`/files/${files['collab-protocol.md']}`).set(botAuth)).status).toBe(200);
+        expect((await ctx.request.get(`/files/${files['secret.md']}`).set(botAuth)).status).toBe(403);
     });
 
     test('files of another channel never appear', async () => {
@@ -468,12 +469,11 @@ describe('reading a file\'s text', () => {
         expect((await read(files['collab-protocol.md'], owner.auth, { offset: -1 })).status).toBe(400);
     });
 
-    test('a bot reads files in channels it has access to, still cannot download them, and learns nothing about other channels', async () => {
+    test('a bot reads files in channels it has access to, and learns nothing about other channels', async () => {
         const get = vi.spyOn(storage, 'get');
         const ok = await read(files['collab-protocol.md'], botAuth);
         expect(ok.status).toBe(200);
         expect(ok.body.text).toBe(DOCS['collab-protocol.md']);
-        expect((await ctx.request.get(`/files/${files['collab-protocol.md']}`).set(botAuth)).status).toBe(403);
 
         get.mockClear();
         // Another channel's file looks exactly like a file that does not exist, and is never decrypted
