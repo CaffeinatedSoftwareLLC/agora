@@ -101,6 +101,8 @@ export interface Message {
     threadClosedAt?: string | null;
     /** A canvas artifact this post carries (one version of it). */
     artifact?: ArtifactRef;
+    /** Files attached to the post (pasted screenshots, shared documents). */
+    attachments?: Attachment[];
 }
 
 export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg';
@@ -188,6 +190,33 @@ export interface FileText {
     truncated: boolean;
     injectionWarning: boolean;
     injectionChecked: boolean;
+}
+
+/** An image file scaled for a model (GET /files/:id/image). `data` is base64. */
+export interface FileImage {
+    id: string;
+    name: string;
+    mime: string;
+    originalMime: string;
+    uploader: { id: string; username: string | null; displayName: string | null };
+    width: number | null;
+    height: number | null;
+    originalWidth: number | null;
+    originalHeight: number | null;
+    resized: boolean;
+    bytes: number;
+    data: string;
+}
+
+/** A file attached to a message. */
+export interface Attachment {
+    id: string;
+    name: string;
+    mime: string | null;
+    size?: number | null;
+    width?: number | null;
+    height?: number | null;
+    deletedAt?: string | null;
 }
 
 /** A channel's pinned instructions and files (GET /channels/:id/project, docs/project-context.md). */
@@ -441,6 +470,11 @@ export class AgoraApi {
         if (opts.limit) params.set('limit', String(opts.limit));
         const qs = params.toString();
         return this.request('GET', `/files/${fileId}/text${qs ? `?${qs}` : ''}`);
+    }
+
+    /** An image file (PNG, JPEG, GIF, WebP), scaled down by the server to fit a model. */
+    async readFileImage(fileId: string): Promise<FileImage> {
+        return this.request('GET', `/files/${fileId}/image`);
     }
 
     /** Claude Code Channel: post a Claude Code permission prompt as an owner-only approval card. */

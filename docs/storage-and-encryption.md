@@ -82,7 +82,7 @@ File tagging and file ranking have separate switches because both send file cont
 
 **Screening is not a security boundary.** Search screening and the injection check on files lower the chance that text aimed at an AI reaches one. A model can be wrong, and text that passes is still untrusted. Strict screening refuses a search whose results could not be checked; it does not make checked results safe.
 
-**Bots can read file text.** A bot with access to a channel can read the text of text files and PDFs shared there (`GET /files/:fileId/text`), which then goes wherever that agent's own model runs. It cannot download the files themselves, and channel access is still an admin's explicit grant per bot.
+**Bots can read files.** A bot with access to a channel can read the text of text files and PDFs shared there (`GET /files/:fileId/text`), look at its images scaled for a model (`GET /files/:fileId/image`), and download its files (`GET /files/:fileId`); all of it then goes wherever that agent's own model runs. Only files attached to a live message count, a paused bot cannot download or view images, and channel access is still an admin's explicit grant per bot. Bots also see attachments in the history of those channels (row-level policy `files_bot_select`, migration `057`).
 
 ## File storage
 
