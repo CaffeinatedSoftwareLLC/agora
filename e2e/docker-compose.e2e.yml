@@ -1,0 +1,107 @@
+# Disposable E2E instance. Self-contained: NOT an override of docker-compose.prod.yml.
+#
+# Always run through e2e/up.sh and e2e/down.sh, which pin the project name to
+# `agora-e2e`. Every resource here is project-scoped (agora-e2e_*), the network has
+# its own name, and the image tags end in :e2e, so nothing collides with the live
+# `agora` project on the same daemon.
+#
+# Deliberately absent: runner, socket-proxy, sandbox-image, cap-gateway, caddy,
+# tailnet. The runner force-removes every agora-run-* container on the daemon
+# (#126), so it must never start next to the live stack. Plain HTTP on the web
+# container is enough for E2E (browsers treat http://localhost as a secure context,
+# so Secure cookies and WebAuthn still work).
+name: agora-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agora
+      POSTGRES_USER: accord
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?run e2e/up.sh}
+    volumes:
+      - e2e-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accord -d agora"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [e2e]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks: [e2e]
+
+  migrate:
+    image: agora-e2e-server:e2e
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/db/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [e2e]
+    restart: "no"
+
+  api:
+    image: agora-e2e-server:e2e
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${E2E_API_PORT:-3200}:3000"
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?run e2e/up.sh}
+      HOST: 0.0.0.0
+      PORT: "3000"
+      CORS_ORIGIN: ${E2E_BASE_URL:-http://localhost:8280}
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: "true"
+      WEBAUTHN_ORIGINS: ${E2E_BASE_URL:-http://localhost:8280}
+      WEBAUTHN_RP_NAME: Agora E2E
+      LOGIN_MAX_FAILURES: "10"
+      LOGIN_LOCK_MINUTES: "15"
+      # Many logins per run; the per-account lock still applies
+      LOGIN_GLOBAL_PER_MINUTE: "600"
+      STORAGE_DIR: /data/files
+      AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?run e2e/up.sh}
+      AGORA_SETUP_TOKEN: ${AGORA_SETUP_TOKEN:?run e2e/up.sh}
+    volumes:
+      - e2e-files:/data/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [e2e]
+    restart: unless-stopped
+
+  web:
+    image: agora-e2e-web:e2e
+    build:
+      context: ../agora-ui
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${E2E_WEB_PORT:-8280}:80"
+    depends_on:
+      - api
+    networks: [e2e]
+    restart: unless-stopped
+
+networks:
+  e2e:
+    name: agora-e2e_net
+
+volumes:
+  e2e-pgdata:
+  e2e-files:

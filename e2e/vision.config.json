@@ -1,0 +1,26 @@
+{
+  "model": "claude-haiku-5-5",
+  "model_note": "Pinned snapshot (dateless IDs are pinned from the 4.6 generation on). Released 2026-10-07, retires no sooner than 2027-10-07.",
+  "rate_card_usd_per_mtok": { "input": 0.10, "output": 0.50, "cache_write_5m": 0.125, "cache_read": 0.01, "band": "prompts up to 100k tokens" },
+  "request": {
+    "max_tokens": 600,
+    "output_config": { "effort": "low", "format": "json_schema (verdict/evidence/region)" },
+    "thinking": "disabled (allowed at effort high or below)",
+    "sampling": "no temperature/top_p/top_k: Haiku 5.5 returns 400 for non-default values",
+    "sdk_max_retries": 0
+  },
+  "image_tokens": "ceil(w/28) * ceil(h/28), high-res tier: long edge <= 2576 px, <= 4784 visual tokens",
+  "fallback": { "model": "claude-haiku-4-5-20251001", "input": 1.0, "output": 5.0, "notes": "no output_config.effort; accepts temperature; legacy, may retire with 60 days notice" },
+  "verified_at": "2026-10-20",
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/models/overview",
+    "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+    "https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide",
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+    "https://platform.claude.com/docs/en/build-with-claude/effort",
+    "https://platform.claude.com/docs/en/build-with-claude/vision",
+    "https://platform.claude.com/docs/en/api/sdks/typescript",
+    "https://registry.npmjs.org/@anthropic-ai/sdk/latest"
+  ]
+}
