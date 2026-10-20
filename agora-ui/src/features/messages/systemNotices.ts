@@ -7,6 +7,7 @@ type NoticeLike = { id: string; systemEvent?: string; deletedAt?: string };
 const CARD_EVENTS = new Set([
   'agent_tool_approval',
   'agent_run_approval',
+  'agent_handoff',
   'agent_permission_relay',
   'task_card',
   'subtask',

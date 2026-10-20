@@ -10,6 +10,8 @@ import { NoticeRunToggle } from './SystemNoticeRun';
 import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 import { ProtocolBadge } from './ProtocolBadge';
 import { latestProtocol } from './latestProtocol';
+import { ThreadOwnerBadge } from '../agents/HandoffCard';
+import { useThreadOwner } from '../agents/handoffs';
 import { usePalette } from '../../theme';
 import { MicButton } from '../voice/MicButton';
 import { appendDictation } from '../voice/appendDictation';
@@ -37,6 +39,10 @@ export function ThreadPanel() {
 
   const replies = useMemo(() => openThreadId ? (repliesByThread.get(openThreadId) ?? []) : [], [openThreadId, repliesByThread]);
   const noticeRuns = useMemo(() => computeNoticeRuns(replies), [replies]);
+  // The thread's task owner (#84): refetched whenever a handoff card in it changes state
+  const handoffVersion = useMemo(() => replies.filter(r => r.systemEvent === 'agent_handoff')
+    .map(r => `${r.id}:${(r.systemData as { status?: string } | undefined)?.status ?? ''}`).join(','), [replies]);
+  const threadOwner = useThreadOwner(openThreadChannelId, openThreadId, handoffVersion);
   const { isExpanded: isRunExpanded, toggle: toggleRun } = useExpandedNoticeRuns(user?.id);
 
   useEffect(() => {
@@ -120,6 +126,7 @@ export function ThreadPanel() {
           {sessionProtocol && (
             <span className="ml-2 align-middle"><ProtocolBadge protocol={sessionProtocol} /></span>
           )}
+          {threadOwner && <ThreadOwnerBadge owner={threadOwner} />}
         </h2>
         <div className="flex items-center gap-1">
           {canClose && (

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
+import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
 import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
@@ -156,6 +157,9 @@ export interface ClaimResult {
         authorId: string | null; authorName: string | null; authorBot: boolean;
         authority: 'owner' | 'director' | null; content: string | null; createdAt: string;
     }>;
+    /** Handoff offers in this batch addressed to the session, and handoffs that made it a thread's owner (handoffs.ts). */
+    handoffs: Array<{ offerId: string; threadId: string; from: string; status: 'pending' | 'accepted';
+        branch: string | null; headSha: string | null; senderRunning: boolean }>;
 }
 
 /** Try to claim work for this host. Returns null when there is none right now. */
@@ -388,6 +392,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         // Lurk runs only read along; they never get a verify step
         verify: kept.every(k => k.entry.reason === 'lurk') ? null : channelProject.verify,
         inbox: kept.map(k => k.entry),
+        handoffs: await claimHandoffs(c, sessionId, kept.map(k => k.entry.messageId),
+            [...new Set(kept.map(k => k.entry.threadId).filter((t): t is string => !!t))]),
     };
 }
 
@@ -412,7 +418,11 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
-                u.username, u.bot AS author_bot
+                u.username, u.bot AS author_bot, m.system_event,
+                -- A handoff offer card (src/lib/handoffs.ts) wakes its recipient while the offer is open,
+                -- and still on a retry after the recipient accepted it in the failed attempt
+                EXISTS (SELECT 1 FROM agent_handoffs h WHERE h.message_id = m.id
+                        AND (h.status = 'accepted' OR (h.status = 'pending' AND h.expires_at > clock_timestamp()))) AS handoff_open
          FROM messages m LEFT JOIN users u ON u.id = m.author_id
          WHERE m.id = ANY($1)`,
         [rows.map(r => r.message_id)]
@@ -438,7 +448,9 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
         if (row.reason === 'direct' && !authority) continue;
         // A session notice from /start or /resume: no author, valid while the session is live
         if (row.reason === 'command' && m.author_id) continue;
-        if ((row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
+        const offer = row.reason === 'handoff' && m.system_event === 'agent_handoff';
+        if (offer && !m.handoff_open) continue;
+        if (!offer && (row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
         // A subtask's brief or summary: written by the server for a session it delegated, from an agent
         if (row.reason === 'delegate' && !m.author_bot) continue;
         if (terms) {

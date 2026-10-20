@@ -6,6 +6,7 @@ import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
+import { handoffNotes } from './handoff.js';
 import { CODEX_WORDS, resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
 import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
@@ -141,6 +142,8 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
     const workspace = await ensureWorkspace(local, claim);
+    // Handoff offers: is the sender's pinned commit here, and how to apply it (handoff.ts)
+    const handoffs = await handoffNotes(claim, workspace.cwd);
     const dir = await mkdtemp(join(local.stateDir, 'run-'));
     const paths = ['mcp.json', 'mcp.toml', 'schema.json', 'policy.toml'].map(p => join(dir, p));
     const cleanup = async () => {
@@ -167,7 +170,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             // The agent starts the Agora MCP server from session/new, so no MCP config is written
             const acpRules = [...new Set([...perms.claude, ...local.approvedTools.map(t => `mcp__agora__${t}`), ...rules.filter(r => CODEX_WORDS.has(r))])];
             const acpPlan: AcpPlan = {
-                prompt: prompt ?? wakePrompt(claim, ports, workspace.branch), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
+                prompt: prompt ?? wakePrompt(claim, ports, workspace.branch, handoffs), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
                 mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
                 authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
             };
@@ -197,7 +200,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                     ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
                 const profileName = claim.profile.name;
                 const appServer: AppServerPlan = {
-                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports, workspace.branch),
+                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports, workspace.branch, handoffs),
                     outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
                     refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
                 };
@@ -224,7 +227,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports, workspace.branch), cleanup, lurk: isLurkRun(claim),
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports, workspace.branch, handoffs), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }

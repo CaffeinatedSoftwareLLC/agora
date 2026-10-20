@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgoraApiError } from './api.js';
-import type { AgentSession, AgoraApi, ArtifactInfo, ArtifactVersion, Attachment, Authority, BotInfo, BrowserPreview, Director, FileImage, FileSearchResult, FileText, Message, ProjectContext, RuntimeRun, TaskCard, ThreadSummary } from './api.js';
+import type { AgentSession, AgoraApi, ArtifactInfo, ArtifactVersion, Attachment, Authority, BotInfo, BrowserPreview, Director, FileImage, FileSearchResult, FileText, HandoffOffer, Message, ProjectContext, RuntimeRun, TaskCard, ThreadSummary } from './api.js';
 import type { CursorTracker } from './cursor.js';
 import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelope.js';
 
@@ -681,6 +681,53 @@ export function registerTools(
         reservationChannel, async ({ channel }) => {
             const ch = await resolveChannel(channel);
             return reservationText(await api.fileReservations(ch.id));
+        });
+
+    // ─── Ownership handoffs (#84) ───
+    // YIELD passes the turn; a handoff passes the task. The recipient must accept.
+    const offerIdParam = z.string().length(26).describe('Offer ID (from the HANDOFF card or handoff_offer)');
+    const handoffThread = z.string().length(26).describe('Thread parent message ID');
+    const formatOffer = (o: HandoffOffer) => [
+        `Offer ${o.id} [${o.status}] ${oneLine(o.from)} → ${oneLine(o.to)} in thread ${o.threadId}`,
+        o.branch && o.headSha ? `Code: ${oneLine(o.branch)} @ ${o.headSha}${o.senderRunning ? " (last committed head; the sender's turn in progress is not in it)" : ''}` : 'Code: no committed branch yet',
+        `Reservations: ${o.paths.length ? o.paths.map(oneLine).join(', ') : 'none'}`,
+        o.status === 'pending' ? `Expires ${o.expiresAt}` : o.reason ? `Reason: ${oneLine(o.reason)}` : '',
+    ].filter(Boolean).join('\n');
+    server.tool('handoff_offer',
+        "Offer ownership of a thread's task to another live agent in this channel. Agora pins your last committed branch@sha (the commit made at the end of your last finished turn; edits from a turn in progress are not in it) and your active file reservations, posts a HANDOFF card in the thread and wakes the recipient. Nothing moves until it accepts. Offers expire (default 30 minutes).",
+        { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'), thread: handoffThread,
+            to: z.string().min(1).max(64).describe('Recipient agent name (username or profile)'),
+            summary: z.string().min(1).max(2000).describe('State of the work: what is done, what is left, how to verify'),
+            expires_in_seconds: z.number().int().min(60).max(86400).optional().describe('Seconds until the offer expires, default 1800') },
+        async ({ channel, thread, to, summary, expires_in_seconds }) => {
+            const ch = await resolveChannel(channel);
+            const { offer } = await api.handoffOffer(ch.id, { threadId: thread, to, summary, ttlSeconds: expires_in_seconds });
+            return { content: [{ type: 'text' as const, text: `${formatOffer(offer)}\nWaiting for ${oneLine(offer.to)} to accept; you still own the work until then.` }] };
+        });
+    server.tool('handoff_accept',
+        "Accept a handoff offer addressed to you: you become the thread's task owner and the sender's reservations move to your session (fresh 15-minute TTL). Safe to repeat. Then bring the code into your own worktree: inspect with git diff HEAD...<sha>, apply with git diff $(git merge-base HEAD <sha>) <sha> | git apply. Never write to the sender's worktree, reset, or switch branches.",
+        { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'), offer_id: offerIdParam },
+        async ({ channel, offer_id }) => {
+            const ch = await resolveChannel(channel);
+            const r = await api.handoffAnswer(ch.id, offer_id, { action: 'accept' });
+            const moved = r.transferred?.length ? `Moved ${r.transferred.length} reservation(s) to you.` : 'No reservations moved.';
+            const skipped = r.skipped?.length ? ` ${r.skipped.length} had lapsed or changed holder and stayed put.` : '';
+            return { content: [{ type: 'text' as const, text: `${formatOffer(r.offer)}\n${r.alreadyAccepted ? 'Already accepted; you own this.' : `You now own this. ${moved}${skipped}`}` }] };
+        });
+    server.tool('handoff_decline', 'Decline a handoff offer addressed to you. The sender keeps the work and is told why.',
+        { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'), offer_id: offerIdParam,
+            reason: z.string().max(500).optional().describe('Why, in a sentence') },
+        async ({ channel, offer_id, reason }) => {
+            const ch = await resolveChannel(channel);
+            const r = await api.handoffAnswer(ch.id, offer_id, { action: 'decline', reason });
+            return { content: [{ type: 'text' as const, text: formatOffer(r.offer) }] };
+        });
+    server.tool('handoff_cancel', 'Withdraw a pending handoff offer you made (the owner and directors can cancel any).',
+        { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'), offer_id: offerIdParam },
+        async ({ channel, offer_id }) => {
+            const ch = await resolveChannel(channel);
+            const r = await api.handoffAnswer(ch.id, offer_id, { action: 'cancel' });
+            return { content: [{ type: 'text' as const, text: formatOffer(r.offer) }] };
         });
 
     // ─── Agent sessions ───

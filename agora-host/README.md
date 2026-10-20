@@ -141,6 +141,14 @@ profiles use workspace `primary` within their server. Give unrelated repositorie
 different workspace IDs in Agents settings; end existing sessions before changing
 an ID. The server snapshots this identity when each session starts.
 
+For ownership handoffs (#84), add `handoff_offer`, `handoff_accept`,
+`handoff_decline` and `handoff_cancel`. When a wake carries a handoff offer, the
+host checks that the sender's pinned commit is in this repository (the session
+worktrees share it) and tells the agent how to inspect it (`git diff HEAD...<sha>`)
+and apply it to its own worktree (`git diff <merge-base> <sha> | git apply`). The
+host never writes to the sender's worktree and grants no extra sandbox roots;
+the applied files are committed on the recipient's branch at the end of its turn.
+
 Reserve repository-relative exact filenames or explicit directory prefixes ending
 in `/`, e.g. `src/app.ts` or `src/routes/`. Separators, Unicode and case are
 normalized (case folding is conservative on Linux). Absolute paths, `..`, globs,

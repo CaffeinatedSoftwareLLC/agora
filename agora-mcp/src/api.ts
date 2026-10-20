@@ -73,6 +73,14 @@ export interface AgentCommandResult {
     sessions?: AgentSession[];
 }
 
+/** An ownership handoff offer (#84, server src/lib/handoffs.ts). */
+export interface HandoffOffer {
+    id: string; channelId: string; threadId: string; messageId: string | null;
+    fromSessionId: string; toSessionId: string; from: string; to: string; summary: string;
+    branch: string | null; headSha: string | null; senderRunning: boolean;
+    reservationIds: string[]; transferredIds: string[]; paths: string[];
+    status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled'; reason: string | null; expiresAt: string;
+}
 export interface FileReservation {
     id: string; serverId: string; workspaceId: string; sessionId: string; channelId: string;
     holder: string; threadId: string | null; paths: string[]; reason: string | null; expiresAt: string;
@@ -366,6 +374,14 @@ export class AgoraApi {
     }
     async fileReservations(channelId: string): Promise<{ reservations: FileReservation[] }> {
         return this.request('GET', `/channels/${channelId}/file-reservations`);
+    }
+
+    async handoffOffer(channelId: string, body: { threadId: string; to: string; summary: string; ttlSeconds?: number }): Promise<{ offer: HandoffOffer }> {
+        return this.request('POST', `/channels/${channelId}/handoffs`, body);
+    }
+    async handoffAnswer(channelId: string, offerId: string, body: { action: 'accept' | 'decline' | 'cancel'; reason?: string }):
+        Promise<{ offer: HandoffOffer; alreadyAccepted?: boolean; transferred?: string[]; skipped?: string[] }> {
+        return this.request('POST', `/channels/${channelId}/handoffs/${offerId}`, body);
     }
 
     async getCursors(): Promise<Cursor[]> {

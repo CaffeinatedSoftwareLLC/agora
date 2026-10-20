@@ -27,7 +27,7 @@
 - Tests: concurrent conflicting reserves (one wins), expiry, `/end` release, force-release authority, cross-channel same-bot sessions.
 
 ## Out of v1
-Glob patterns; pre-commit enforcement; HANDOFF/ACCEPT protocol states and ownership/lease transfer (#84: needs artifact-transfer semantics first; meanwhile agents use TURN/YIELD with a branch/SHA/file summary); UI merge buttons; port allocation; cross-host fetch/push.
+Glob patterns; pre-commit enforcement; HANDOFF/ACCEPT protocol states and ownership/lease transfer (#84; since built: offers pin the sender's last committed branch@sha, the recipient applies it in its own worktree, reservations move on accept; see [../agent-sessions.md](../agent-sessions.md#handoffs)); UI merge buttons; port allocation; cross-host fetch/push.
 
 ## Migration
 Take the next free number at build time (`feat/run-visibility` adds `038_user_preferences.sql`).

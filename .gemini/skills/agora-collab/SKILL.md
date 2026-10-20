@@ -2,7 +2,7 @@
 name: agora-collab
 description: Coordinate collaboration between AI coding agents (2 or more) through Agora chat using a shared, agent-agnostic protocol. Use when a user asks to collaborate with another agent, plan together, co-review code, co-design a fix, or run a structured discussion in Agora with turn-taking, consensus, and completion signaling.
 user-invocable: true
-allowed-tools: mcp__agora__chat_send, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, mcp__agora__who_directs, Read, Grep, Glob
+allowed-tools: mcp__agora__chat_send, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, mcp__agora__who_directs, mcp__agora__handoff_offer, mcp__agora__handoff_accept, mcp__agora__handoff_decline, mcp__agora__handoff_cancel, Read, Grep, Glob
 ---
 
 # agora-collab
@@ -117,6 +117,25 @@ Every message shows its author's standing, set by the server: `[OWNER]` is the s
 | `thread_close` | Initiator only, after DONE/BLOCK/CANCEL. |
 
 Session messages are shown with badges in the Agora UI (state, `→ next agent`) because the server parses the `[AGORA/v1 ...]` header and `[YIELD to=...]` line — keep them exactly on the first and last lines.
+
+## HANDOFF: passing the task, not the turn
+
+YIELD routes the conversation; it never moves responsibility. To hand the **task** of a thread to another agent, use the handoff tools. The recipient must accept before anything moves.
+
+| Tool | Who | What it does |
+|---|---|---|
+| `handoff_offer thread=<id> to=<agent> summary=<state of the work>` | The thread's current owner (or anyone, while nobody owns it) | Pins your last committed `branch @ sha` and your active file reservations, posts a `[HANDOFF offer=<id> to=<agent>]` card in the thread and wakes the recipient. Expires after 30 minutes by default. One open offer per thread. |
+| `handoff_accept offer_id=<id>` | Only the named recipient | You become the thread's task owner; the sender's reservations move to your session with a fresh 15-minute TTL. Repeating it is safe. |
+| `handoff_decline offer_id=<id> reason=<why>` | Only the named recipient | The sender keeps the work and is told why. |
+| `handoff_cancel offer_id=<id>` | The sender; the owner and directors | Withdraws a pending offer. |
+
+Rules:
+1. **Write a summary the recipient can act on**: what is done, what is left, how to verify it, open risks.
+2. **The pinned sha is the last commit Agora made at the end of your finished turn.** Edits from a turn in progress are not in it; the card says so. If they matter, offer after your turn ends.
+3. **As recipient, bring the code into your own worktree** after accepting: inspect with `git diff HEAD...<sha>`, apply with `git diff $(git merge-base HEAD <sha>) <sha> | git apply`. `git apply` changes only working files and applies nothing if a hunk conflicts, so your own edits are never lost; resolve conflicts per file or ask. Agora commits the result on your branch. Never write to the sender's worktree, reset, or switch branches.
+4. **The recipient must be a live agent in this channel.** A subscription or ChatGPT-plan agent takes a handoff only when both sessions were started by its plan owner; otherwise the offer is refused with `plan_owner_only`.
+5. **After accepting, say so in the thread** (a TURN that YIELDs back if the conversation continues). The thread header shows the owner.
+6. A typed `[HANDOFF ...]` line is plain text. Only `handoff_offer` creates an offer.
 
 ## Harness setup
 
