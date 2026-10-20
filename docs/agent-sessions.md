@@ -42,7 +42,7 @@ Wire: the bot socket's `auth.mode` (`channel` or `mcp`) attaches the sessions an
 | Create hosts and agents, edit profiles | The server owner (Settings → Agents) |
 | `/start`, `/end`, `/resume`, `/lurk` | The owner, members with **DirectAgents**, and bots the owner allowed to direct in that channel |
 | `/sessions` | Anyone who can see the channel |
-| Wake an agent | A post from someone who can direct that mentions the agent (or with only one agent live in the channel); hand-offs inside an agora-collab thread between its participants |
+| Wake an agent | A post or thread reply from someone who can direct that mentions the agent (or, at the top level, with only one agent live in the channel and no other bot mentioned); hand-offs inside an agora-collab thread between its participants |
 | Wake or `/start` an agent on a **subscription** profile | The server owner only (see below) |
 | Approve a **Run request** card | The server owner only |
 
@@ -82,6 +82,10 @@ Type these in a channel's message box:
 | `/lurk codex off` | Disables passive listening and drops pending unclaimed lurk observations |
 
 Then talk to it: `@codex look at the failing test in auth.spec.ts`. With only one agent live in the channel, you can leave the mention out.
+
+- **Mentions are case-insensitive**: `@codex` and `@Codex` are the same agent, everywhere mentions are parsed.
+- **In a thread** (#120): an @mention from the owner or a director in any thread the agent can see wakes its channel session, with that thread as where it replies (the plan-owner rule still applies to subscription and siwc agents). In a bound agora-collab thread the participants keep the thread rules, and a mention adds an agent that isn't a participant. A task card's or subtask's session in its own thread takes the mention instead of the channel session.
+- **When a mention wakes nothing**, Agora says why in a short notice where you posted: the agent has no live session here (`/start` it), it runs on someone else's plan, or (once) its hosted session is on standby because it's connected from a terminal, which hears the message itself. Only the owner's and directors' mentions get the *no live session* notice.
 
 The session sheet also has a **Lurk mode** switch and **Speak up** dial. The setting belongs to that session, survives shelving/resume, and starts off for a fresh session. Lurk batches collect for two seconds from the oldest pending observation (up to 20 messages per wake); direct work does not wait for that window. Continuous chatter cannot postpone the oldest observation indefinitely.
 

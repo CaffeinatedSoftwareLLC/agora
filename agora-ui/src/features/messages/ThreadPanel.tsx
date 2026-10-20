@@ -5,6 +5,9 @@ import { useThreadStore } from '../../stores/threadStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { MessageItem } from './MessageItem';
+import { computeNoticeRuns } from './systemNotices';
+import { NoticeRunToggle } from './SystemNoticeRun';
+import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 import { ProtocolBadge } from './ProtocolBadge';
 import { latestProtocol } from './latestProtocol';
 import { usePalette } from '../../theme';
@@ -33,6 +36,8 @@ export function ThreadPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const replies = useMemo(() => openThreadId ? (repliesByThread.get(openThreadId) ?? []) : [], [openThreadId, repliesByThread]);
+  const noticeRuns = useMemo(() => computeNoticeRuns(replies), [replies]);
+  const { isExpanded: isRunExpanded, toggle: toggleRun } = useExpandedNoticeRuns(user?.id);
 
   useEffect(() => {
     nearBottom.current = true;
@@ -179,7 +184,9 @@ export function ThreadPanel() {
             && !prev.deletedAt
             && !reply.deletedAt
             && (new Date(reply.createdAt).getTime() - new Date(prev.createdAt).getTime()) < 300000;
-          return (
+          const run = noticeRuns[i];
+          const runExpanded = run ? isRunExpanded(run.key) : false;
+          const item = (
             <MessageItem
               key={reply.id}
               message={reply}
@@ -190,6 +197,16 @@ export function ThreadPanel() {
               channelId={openThreadChannelId}
             />
           );
+          if (!run) return item;
+          if (run.position === 0) {
+            return (
+              <div key={reply.id}>
+                <NoticeRunToggle count={run.size} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
+                {runExpanded && item}
+              </div>
+            );
+          }
+          return runExpanded ? item : null;
         })}
       </div>
 

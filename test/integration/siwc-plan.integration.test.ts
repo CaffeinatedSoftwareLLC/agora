@@ -154,7 +154,70 @@ describe('connecting a ChatGPT plan', () => {
     });
 });
 
+describe('connect request states (#115)', () => {
+    const plans = async () => (await ctx.request.get(`/servers/${serverId}/agent-plans`).set(owner.auth)).body;
+
+    it("refuses to ask the host for a profile it doesn't run as siwc", async () => {
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription' WHERE id = $1`, [codex.profileId]);
+        try {
+            const res = await plan(owner.auth, codex.profileId, 'connect');
+            expect(res.status).toBe(400);
+            expect(res.body).toEqual({ error: 'siwc_not_configured' });
+            expect(await plans()).toEqual([]);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'siwc' WHERE id = $1`, [codex.profileId]);
+        }
+    });
+
+    it('times out a request the host never picks up, and the host then gets nothing', async () => {
+        expect((await plan(owner.auth, codex.profileId, 'connect')).body.status).toBe('requested');
+        await ctx.db.query(`UPDATE agent_plan_connections SET requested_at = NOW() - interval '3 minutes' WHERE profile_id = $1`, [codex.profileId]);
+        expect(await plans()).toEqual([expect.objectContaining({ status: 'failed', error: 'request_timed_out', planOwnerId: null })]);
+        expect((await ctx.request.get('/agent-hosts/@me/plan-requests/next').set(hostAuth)).status).toBe(204);
+    });
+
+    it('times out a request at claim time too', async () => {
+        await plan(owner.auth, codex.profileId, 'connect');
+        await ctx.db.query(`UPDATE agent_plan_connections SET requested_at = NOW() - interval '3 minutes' WHERE profile_id = $1`, [codex.profileId]);
+        expect((await ctx.request.get('/agent-hosts/@me/plan-requests/next').set(hostAuth)).status).toBe(204);
+        expect((await plans())[0]).toMatchObject({ status: 'failed', error: 'request_timed_out' });
+    });
+
+    it('times out a sign-in left open in the browser; a late success still binds whoever asked', async () => {
+        await plan(owner.auth, codex.profileId, 'connect');
+        expect((await ctx.request.get('/agent-hosts/@me/plan-requests/next').set(hostAuth)).status).toBe(200);
+        expect((await plans())[0].status).toBe('in_progress');
+        await ctx.db.query(`UPDATE agent_plan_connections SET updated_at = NOW() - interval '11 minutes' WHERE profile_id = $1`, [codex.profileId]);
+        expect((await plans())[0]).toMatchObject({ status: 'failed', error: 'sign_in_timeout' });
+        const late = await ctx.request.post('/agent-hosts/@me/plans/planbot').set(hostAuth).send({ status: 'connected', accountLabel: 'eryk@example.com' });
+        expect(late.body).toEqual({ planOwnerId: owner.userId });
+        expect((await plans())[0]).toMatchObject({ status: 'connected', error: null });
+    });
+
+    it('leaves a fresh request alone', async () => {
+        await plan(owner.auth, codex.profileId, 'connect');
+        expect((await plans())[0].status).toBe('requested');
+    });
+});
+
 describe('the plan owner rule', () => {
+    it("applies in threads too (#120): only the plan owner's @mention in a thread wakes it", async () => {
+        await bindTo(owner.userId);
+        const session = await startSession(codex, owner.userId);
+        await startSession(helper, owner.userId);
+        const parent = await post(helper.auth, 'thread started by another agent');
+        const since = generateUlid();
+        const r1 = await ctx.request.post(`/channels/${channelId}/messages/${parent.id}/replies`).set(director.auth).send({ content: '@PlanBot check the PR' });
+        expect(r1.status).toBe(201);
+        expect(await inbox(session)).toEqual([]);
+        expect(await notices(since)).toEqual([SIWC_NOTICE('planbot')]);
+        const r2 = await ctx.request.post(`/channels/${channelId}/messages/${parent.id}/replies`).set(owner.auth).send({ content: '@planbot check the PR' });
+        expect(r2.status).toBe(201);
+        expect(await inbox(session)).toEqual(['direct']);
+        const thread = await ctx.db.query('SELECT thread_id FROM agent_inbox WHERE session_id = $1', [session]);
+        expect(thread.rows[0].thread_id.trim()).toBe(parent.id);
+    });
+
     it('wakes nobody before a plan is connected, with a notice saying so', async () => {
         const session = await startSession(codex, owner.userId);
         const since = generateUlid();

@@ -26,14 +26,17 @@ export function estimateMessageHeight(
 /**
  * Total estimated pixel height of the first `prependedCount` items in `messages`.
  * Used to shift scrollTop after older messages are prepended, keeping the
- * viewport anchored to the same visual position.
+ * viewport anchored to the same visual position.  `estimate` overrides the
+ * per-row estimate (MessageList passes the one its virtualizer uses).
  */
 export function computePrependShift(
   messages: MessageLike[],
   prependedCount: number,
+  estimate?: (index: number) => number,
 ): number {
   let shift = 0;
   for (let i = 0; i < prependedCount; i++) {
+    if (estimate) { shift += estimate(i); continue; }
     const prev = i > 0 ? messages[i - 1] : undefined;
     shift += estimateMessageHeight(prev, messages[i]);
   }

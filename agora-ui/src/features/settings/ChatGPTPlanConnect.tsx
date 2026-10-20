@@ -18,11 +18,13 @@ export interface PlanConnection {
 }
 
 export const USAGE_URL = 'https://chatgpt.com/settings/usage';
+export const SIWC_DOCS_URL = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/codex-chatgpt-plan.md';
 export const PENDING = new Set(['requested', 'in_progress', 'disconnect_requested']);
 
 const ERROR_TEXT: Record<string, string> = {
   consent_declined: 'Sign-in was declined in the browser.',
-  sign_in_timeout: 'Sign-in timed out before it finished in the browser.',
+  sign_in_timeout: "Timed out: sign-in didn't finish in the browser in time. Try again.",
+  request_timed_out: 'Timed out: the host never picked up the request. Check that agora-host is running and this profile is set to "auth": "siwc", then try again.',
   browser_unavailable: 'The host could not open a browser. Run `agora-host siwc login` on that machine instead.',
   callback_port_unavailable: 'The host\'s sign-in port is in use.',
   account_mismatch: 'A different ChatGPT account signed in than the one saved for this agent.',
@@ -35,12 +37,12 @@ const ERROR_TEXT: Record<string, string> = {
 
 function statusText(plan: PlanConnection | undefined, hostName: string): string {
   switch (plan?.status) {
-    case 'requested': return `Waiting for ${hostName} to open the browser…`;
-    case 'in_progress': return `Finish signing in in the browser on ${hostName}.`;
+    case 'requested': return `Request sent. Waiting for ${hostName} to pick it up…`;
+    case 'in_progress': return `Browser opened on ${hostName}. Finish signing in there.`;
     case 'disconnect_requested': return `Waiting for ${hostName} to sign out…`;
     case 'connected': return `Using ChatGPT plan${plan.accountLabel ? ` (${plan.accountLabel})` : ''}. Only its plan owner can wake this agent.`;
     case 'scope_missing': return 'Signed in, but using your ChatGPT plan wasn\'t allowed. Continue with ChatGPT again and allow it, or use an API key profile.';
-    case 'failed': return ERROR_TEXT[plan.error ?? ''] ?? `Sign-in failed${plan.error ? ` (${plan.error})` : ''}.`;
+    case 'failed': return ERROR_TEXT[plan.error ?? ''] ?? `Failed${plan.error ? ` (${plan.error})` : ''}.`;
     case 'disconnected': return plan.error ? ERROR_TEXT[plan.error] ?? 'Disconnected.' : 'Disconnected.';
     default: return 'Not connected. Run this agent on your own ChatGPT Plus or Pro plan.';
   }
@@ -67,7 +69,9 @@ export function ChatGPTPlanConnect({ serverId, profileId, hostName, plan, siwcMo
       await api.post(`/servers/${serverId}/agent-profiles/${profileId}/plan`, { action });
       onChange();
     } catch (err) {
-      setError(err instanceof ApiError ? (err.status === 403 ? 'Only the server owner or the person who registered this host can do this.' : err.code) : 'Request failed');
+      setError(err instanceof ApiError
+        ? (err.status === 403 ? 'Only the server owner or the person who registered this host can do this.' : ERROR_TEXT[err.code] ?? err.code)
+        : 'Request failed');
     }
   };
   const connected = plan?.status === 'connected';
@@ -78,9 +82,17 @@ export function ChatGPTPlanConnect({ serverId, profileId, hostName, plan, siwcMo
         <span className="font-semibold text-text">ChatGPT plan</span>
         <span className="text-text-muted" role="status">{statusText(plan, hostName)}</span>
       </div>
-      {!siwcMode && <p className="mt-1 text-text-muted">Set this profile to <code>"auth": "siwc"</code> in the host's config and restart the host first.</p>}
+      {!siwcMode && (
+        <p className="mt-1 text-text-muted">
+          {hostName} doesn't run this profile with Sign in with ChatGPT. Set <code>"auth": "siwc"</code> for it in the host's config and restart the host first.{' '}
+          <a className="text-primary hover:underline" href={SIWC_DOCS_URL} target="_blank" rel="noreferrer">How to set it up</a>
+        </p>
+      )}
+      {siwcMode && !connected && (
+        <p className="mt-1 text-text-muted">The browser opens on {hostName}, not on this device: sign in at that computer. Approving from a phone isn't possible.</p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        {!connected && (
+        {siwcMode && !connected && (
           <Button variant="secondary" disabled={pending} onClick={() => void send('connect')}>Continue with ChatGPT</Button>
         )}
         {connected && (
