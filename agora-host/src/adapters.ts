@@ -6,12 +6,8 @@ import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
-<<<<<<< HEAD
-import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
-=======
 import { handoffNotes } from './handoff.js';
-import { CODEX_WORDS, resolvePermissions } from './presets.js';
->>>>>>> origin/main
+import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
 import { detectSignals } from './signals.js';
 import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
 import { accessToken, type AccessToken } from './siwc/session.js';
