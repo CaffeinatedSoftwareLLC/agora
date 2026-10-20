@@ -6,8 +6,8 @@ import { generateBotToken } from '../auth/bot-tokens';
 import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { noticePathList } from '../lib/file-reservations';
-import { claimNext, complete, fail, heartbeat, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
-import { allowedToolsSchema, deniedToolsSchema, toolPresetsSchema } from '../lib/agent-permissions';
+import { claimNext, complete, fail, heartbeat, liveToolRequest, openToolRequest, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
+import { allowedToolsSchema, deniedToolsSchema, LIVE_WAIT_MAX_SECONDS, LIVE_WAIT_MIN_SECONDS, MAX_DETAIL, TOOL_RULE, toolPresetsSchema } from '../lib/agent-permissions';
 import { agentImageRoutes } from './agent-images';
 import { agentPlanRoutes } from './agent-plans';
 import { checkpointSchema } from '../lib/agent-checkpoints';
@@ -491,6 +491,46 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const { runId } = request.params as any;
         const body = request.body as any;
         const r = await heartbeat(app.db, request.agentHost!, runId, body.claimToken, notices, body.tokensUsed, body.progress);
+        queueNotices(request, notices);
+        return reply.status(r.status).send(r.body);
+    });
+
+    // POST /agent-hosts/@me/runs/:runId/tool-requests → 200 { id, status }
+    // A running Codex turn holds one approval request until its card is decided (#93)
+    app.post('/agent-hosts/@me/runs/:runId/tool-requests', {
+        schema: { body: { type: 'object', required: ['claimToken', 'tool', 'requestKey', 'waitSeconds'], additionalProperties: false, properties: {
+            ...claimBody,
+            tool: { type: 'string', maxLength: 310, pattern: TOOL_RULE },
+            // The host's hash of thread, turn, item and request id: binds the card to one request
+            requestKey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+            waitSeconds: { type: 'integer', minimum: LIVE_WAIT_MIN_SECONDS, maximum: LIVE_WAIT_MAX_SECONDS },
+            // The whole command the card shows (the host declines a longer one rather than truncate it)
+            detail: { type: ['string', 'null'], maxLength: MAX_DETAIL },
+            cwd: { type: ['string', 'null'], maxLength: 4096 },
+        } } },
+    }, async (request, reply) => {
+        await releaseRequestClient(request);
+        const notices: Notice[] = [];
+        const { runId } = request.params as any;
+        const r = await openToolRequest(app.db, request.agentHost!, runId, request.body as any, notices);
+        queueNotices(request, notices);
+        return reply.status(r.status).send(r.body);
+    });
+
+    // POST /agent-hosts/@me/runs/:runId/tool-requests/:requestId → 200 { status }
+    // Poll a live request's decision; `close` ends the wait (timeout, request resolved, run stopping)
+    app.post('/agent-hosts/@me/runs/:runId/tool-requests/:requestId', {
+        schema: {
+            params: { type: 'object', properties: { runId: { type: 'string' }, requestId: { type: 'string', minLength: 26, maxLength: 26 } } },
+            body: { type: 'object', required: ['claimToken'], additionalProperties: false, properties: {
+                ...claimBody, close: { type: 'string', enum: ['timeout', 'resolved', 'stopped'] },
+            } },
+        },
+    }, async (request, reply) => {
+        await releaseRequestClient(request);
+        const notices: Notice[] = [];
+        const { runId, requestId } = request.params as any;
+        const r = await liveToolRequest(app.db, request.agentHost!, runId, requestId, request.body as any, notices);
         queueNotices(request, notices);
         return reply.status(r.status).send(r.body);
     });

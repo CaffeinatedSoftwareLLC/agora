@@ -75,6 +75,8 @@ export const configSchema = z.object({
     maxConcurrent: z.number().int().min(1).max(16).default(2),
     // Redefine a built-in tool preset (readonly, dev, research) or add one (#73)
     presets: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), presetSchema).default({}),
+    // How long a Codex app-server approval waits for its tool-request card before it is denied (#93)
+    approvalWaitSeconds: z.number().int().min(10).max(3600).default(300),
     // Sign in with ChatGPT (auth "siwc"): where this host keeps its host id and credentials
     // (default ~/.agora-host/siwc) and the loopback callback port (0: any free port)
     siwc: z.object({ dir: absolute.optional(), callbackPort: z.number().int().min(0).max(65535).default(1455) }).strict().default({}),

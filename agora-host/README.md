@@ -172,7 +172,9 @@ still apply. Only locally listed `approvedTools` are preapproved, using the
 CLIs' normal tool approval controls; `chat_wait` is deliberately unavailable in
 this list. Add orchestrator tools only after the owner grants the bot authority.
 
-Codex uses `approval_policy=never` with `read-only` or `workspace-write`; Claude
+Codex `exec` uses `approval_policy=never` with `read-only` or `workspace-write`
+(`siwc` profiles run `codex app-server` with `on-request` instead, see
+[Codex app-server approvals](#codex-app-server-approvals-93)); Claude
 uses `manual` permissions with `--permission-prompts none`. Neither adapter uses
 sandbox or permission bypass flags. Any other action that needs approval fails
 normally, and is reported back to Agora as an approval request (below).
@@ -213,11 +215,48 @@ restarting the host. The host translates them to each CLI's own mechanism:
 shell command, `WebFetch(domain:host)` for a fetch, else the tool name) and sends
 it with the run's report. Agora posts an approval card: the owner or a director
 can approve it once (granted to the session's next run, and the agent is woken to
-retry) and the owner can always allow it (added to the profile). Codex gives no
-denial signal: the host guesses `write` (read-only sandbox, "access denied"
+retry) and the owner can always allow it (added to the profile). Codex `exec`
+gives no denial signal: the host guesses `write` (read-only sandbox, "access denied"
 output) and `network` (DNS/connect errors) from failed commands' output, and
-misses denials that fail silently. Codex's Windows sandbox may block network even
-with `network_access=true` (seen with `unelevated` on 0.163).
+misses denials that fail silently. That fallback is best effort; `codex app-server`
+(`siwc`) and codex-acp report each denial reliably. Codex's Windows sandbox may block
+network even with `network_access=true` (seen with `unelevated` on 0.163).
+
+### Codex app-server approvals (#93)
+
+A `siwc` profile runs `codex app-server` with `approval_policy="on-request"`: Codex
+works inside its sandbox and asks the host before anything the sandbox doesn't allow.
+Each request is answered once, and only if it belongs to the thread and turn the host
+started (verified against codex 0.163's `app-server generate-json-schema` and live runs):
+
+| Request | Judged as | Allowed when | Answer |
+| --- | --- | --- | --- |
+| `item/commandExecution/requestApproval` | the command (`powershell.exe -Command '…'`, `cmd.exe /c '…'` and `bash -lc '…'` are unwrapped) | its cwd is in the worktree, the program is a trusted executable (as for ACP, #111) and a rule matches (`Bash(git:*)`) | `{"decision":"accept"}` or `"decline"` |
+| … with `networkApprovalContext` (managed network) | a fetch of that host | `network`, `WebFetch` or `WebFetch(domain:host)` | same |
+| `item/fileChange/requestApproval` | `write`, for the paths on its `fileChange` item | every path (and any `grantRoot`) is in the worktree, and `write` (or `Edit`) is allowed | same |
+| `item/permissions/requestApproval` | `network`; plain worktree paths for `write` | as listed | the allowed subset, `"scope":"turn"` |
+| `mcpServer/elicitation/request`, legacy `execCommandApproval`/`applyPatchApproval`, anything else | — | never | `decline` / `denied` / JSON-RPC error |
+
+The rules are the profile's "always" rules, this run's one-time grants, `approvedTools`
+and the capability words its presets turn on (`write`, `network`, `web_search`). A
+preset's Claude rules don't count: an approved request runs outside the sandbox, so
+`dev`'s `Bash(node:*)` doesn't approve an escalated `node` command by itself.
+
+Anything else in the worktree becomes a tool-request card while the request is held:
+the card names the rule and shows the whole command and its cwd (a command over 8 KB
+is declined rather than truncated), and is bound to that one request
+(its key hashes the thread, turn, item and JSON-RPC id). **Approve once** and
+**Always** answer the request `accept` (Always also adds the rule to the profile;
+the host never sends `acceptForSession` or execpolicy amendments, so Codex remembers
+nothing), **Deny** answers `decline`. A program that isn't a trusted executable, such
+as a PowerShell cmdlet, is asked for as the whole shell (`Bash`). A path outside the
+worktree is declined without a card. The card denies itself after
+`approvalWaitSeconds` (top-level config, default 300) and expires when Codex resolves
+the request itself, the turn ends, the run stops, or the session is stopped, shelved,
+paused or loses channel access; an expired card approves nothing, and a decision
+made before a stop is never relayed after it.
+On a server without live tool requests, the request is declined and reported as an
+after-run card, as before.
 
 **Rate limits (#87).** A Claude `rate_limit_event` with status `rejected` (its
 `resetsAt` gives the reset time), a 429, or a Codex `turn.failed`/`error` about a
@@ -312,8 +351,9 @@ cap, so `caps.maxBudgetUsd` is refused on ACP profiles.
 
 **Not covered.** ACP agents may load MCP servers and settings from their own config
 in `stateDir` (there is no `--strict-mcp-config`); keep that directory to Agora's use.
-Live approval mid-turn (holding the turn until the owner taps) isn't implemented: a
-denied call is retried on the next run after approval.
+Live approval mid-turn (holding the turn until the owner taps) is implemented for
+Codex app-server only (above); an ACP call is denied at once and retried on the next
+run after approval.
 
 ## Execution and recovery
 

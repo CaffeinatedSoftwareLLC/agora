@@ -1,6 +1,7 @@
 import { generateUlid } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
 import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
+import { expireLiveRequests } from './agent-permissions';
 import { planNotice, PLAN_OWNER_SQL } from './provider-terms';
 import { noticeStandby } from './terminal-sessions';
 
@@ -197,6 +198,7 @@ async function closeThread(db: any, threadId: string, sessionIds: string[], canc
              WHERE session_id = ANY($1) AND status = 'claimed'`,
             [sessionIds]
         );
+        await expireLiveRequests(db, { sessionIds }, 'stopped', []);
     }
 }
 

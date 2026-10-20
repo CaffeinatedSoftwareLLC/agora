@@ -4,6 +4,7 @@ import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE } from '../lib/provider-terms';
 
@@ -115,7 +116,7 @@ async function terminalFor(db: any, channelId: string, botId: string) {
 }
 
 /** Shelve or end a session: queued work is dropped and a run in progress is asked to stop. */
-async function stopSession(db: any, sessionId: string, to: 'shelved' | 'ended', reason: string) {
+async function stopSession(db: any, sessionId: string, to: 'shelved' | 'ended', reason: string, notices: Notice[] = []) {
     if (to === 'shelved') {
         await db.query(`UPDATE agent_sessions SET state = 'shelved', end_reason = $2, shelved_at = NOW() WHERE id = $1`, [sessionId, reason]);
     } else {
@@ -130,6 +131,8 @@ async function stopSession(db: any, sessionId: string, to: 'shelved' | 'ended', 
         `UPDATE agent_runs SET cancel_requested = true, cancel_reason = $2 WHERE session_id = $1 AND status = 'claimed'`,
         [sessionId, to === 'shelved' ? 'shelved' : 'ended']
     );
+    // A step the run was holding for a tool card must not run after the stop (#93)
+    await expireLiveRequests(db, { sessionIds: [sessionId] }, 'stopped', notices);
 }
 
 /**
@@ -279,7 +282,7 @@ async function startSession(db: any, channelId: string, profileName: string, onL
     if (live) {
         if (onLive === 'keep') return { status: 200, body: { action: 'kept', session: sessionJson(live) } };
         if (onLive !== 'shelve') throw new CommandError(409, { error: 'session_live', session: sessionJson(live) });
-        await stopSession(db, live.id.trim(), 'shelved', 'replaced');
+        await stopSession(db, live.id.trim(), 'shelved', 'replaced', notices);
         shelvedNow = true;
     }
 
@@ -330,7 +333,7 @@ async function endSessionById(db: any, channelId: string, sessionId: string, who
     await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE`, [profileOf.rows[0].profile_id]);
     const live = (await db.query(`${SESSION_SELECT} WHERE s.id = $1 AND s.channel_id = $2 FOR UPDATE OF s`, [sessionId, channelId])).rows[0];
     if (!live || live.state === 'ended') throw new CommandError(404, { error: 'no_live_session' });
-    await stopSession(db, sessionId, 'ended', 'user');
+    await stopSession(db, sessionId, 'ended', 'user', notices);
     notices.push(await sessionUpdate(db, sessionId, false));
     notices.push(...await postSessionNotice(db, channelId, live.thread_id?.trim() ?? null, `${who} ended ${live.profile_name}'s session (${sessionId}).`));
     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [sessionId]);
@@ -341,7 +344,7 @@ async function endSession(db: any, channelId: string, profileName: string, who: 
     const profile = await profileByName(db, channelId, profileName);
     const live = await liveFor(db, channelId, profile.bot_id.trim());
     if (!live) throw new CommandError(404, { error: 'no_live_session' });
-    await stopSession(db, live.id.trim(), 'ended', 'user');
+    await stopSession(db, live.id.trim(), 'ended', 'user', notices);
     notices.push(await postNotice(db, channelId, `${who} ended ${profile.name}'s session (${live.id.trim()}).`));
     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [live.id]);
     return { status: 200, body: { action: 'ended', session: sessionJson(row.rows[0]) } };
@@ -374,7 +377,7 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
     if (live) {
         if (onLive === 'keep') return { status: 200, body: { action: 'kept', session: sessionJson(live) } };
         if (onLive !== 'shelve') throw new CommandError(409, { error: 'session_live', session: sessionJson(live) });
-        await stopSession(db, live.id.trim(), 'shelved', 'replaced');
+        await stopSession(db, live.id.trim(), 'shelved', 'replaced', notices);
     }
     await db.query(
         `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,

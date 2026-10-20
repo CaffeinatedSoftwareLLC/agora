@@ -1,10 +1,12 @@
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Launch } from '../adapters.js';
 import type { RunningChild } from '../process.js';
 import type { RateLimit, Result } from '../types.js';
 import { AGENT_NAME } from './oauth.js';
+import { answerServerRequest, type ApprovalContext, type Ask } from './approvals.js';
 
 /**
  * Codex app-server on a ChatGPT plan (docs/codex-chatgpt-plan.md), as OpenAI documents it:
@@ -17,6 +19,9 @@ import { AGENT_NAME } from './oauth.js';
  * - JSON-RPC over stdio: `initialize` (clientInfo name matching the agent_name_hint) →
  *   `initialized` → `thread/start` or `thread/resume` → `turn/start`, then read notifications
  *   until `turn/completed`; only status `completed` is success.
+ * - Approvals (#93, approvals.ts): the thread runs with `approvalPolicy: "on-request"`, so
+ *   Codex asks before anything its sandbox doesn't allow. The host answers each request from
+ *   the claim's rules or holds it for a tool-request card.
  * - Codex doesn't refresh the token. On a 401 the host refreshes it, restarts app-server with
  *   the new ACCESS_TOKEN, sends `initialize` again and `thread/resume`s the saved thread, once.
  */
@@ -45,6 +50,12 @@ export interface AppServerPlan {
     refresh(): Promise<string>;
     /** Abort a stuck RPC (ms); a turn itself is bounded by the run timeout. */
     rpcTimeoutMs?: number;
+    /** Rules for approval requests: the profile's "always" rules, one-time grants and preset capabilities. */
+    rules: string[];
+    /** The repository's own directories (executableTrust): the profile's workdir. */
+    roots: string[];
+    /** The tool-request card flow (scheduler.ts); without it a request outside the rules is denied. */
+    ask?: Ask;
 }
 
 const numeric = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
@@ -71,6 +82,9 @@ export function classifyTurnError(error: any): { kind: 'unauthorized' | 'not_eli
     return { kind: 'other' };
 }
 
+/** A server request's answer: what to write back, or null to stay silent (Codex cleared it). */
+type RequestHandler = (id: unknown, method: string, params: any) => Promise<object | null>;
+
 interface Rpc {
     child: ChildProcessWithoutNullStreams;
     request(method: string, params: unknown): Promise<any>;
@@ -79,7 +93,7 @@ interface Rpc {
     closed: Promise<number | null>;
 }
 
-function startRpc(launch: Launch, env: NodeJS.ProcessEnv, timeoutMs: number): Rpc {
+function startRpc(launch: Launch, env: NodeJS.ProcessEnv, timeoutMs: number, onRequest: RequestHandler): Rpc {
     const child = spawn(launch.executable, launch.args, {
         cwd: launch.cwd, env, shell: false, windowsHide: true,
         detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
@@ -114,10 +128,11 @@ function startRpc(launch: Launch, env: NodeJS.ProcessEnv, timeoutMs: number): Rp
                 pending.delete(msg.id); clearTimeout(p.timer);
                 if (msg.error) p.reject(Object.assign(new Error('rpc_error'), { rpc: msg.error })); else p.resolve(msg.result);
             } else if (msg.id !== undefined && typeof msg.method === 'string') {
-                // A server request (approval, user input): the host has no one to ask, so it declines
-                const decline = /requestApproval$/.test(msg.method) ? { result: { decision: 'decline' } }
-                    : { error: { code: -32601, message: 'Not supported by agora-host' } };
-                write({ id: msg.id, ...decline });
+                // A server request (approval, user input): answered at most once, by approvals.ts
+                const id = msg.id;
+                void onRequest(id, msg.method, msg.params)
+                    .catch(() => null)
+                    .then(answer => { if (answer) write({ id, ...answer }); });
             } else if (typeof msg.method === 'string') {
                 for (const fn of listeners) fn(msg.method, msg.params);
             }
@@ -161,19 +176,54 @@ export function startAppServer(launch: Launch & { appServer: AppServerPlan }): R
     const plan = launch.appServer;
     let current: Rpc | undefined;
     let stopped = false;
+    let stopHeld = () => {};
+    const denied: string[] = [];
+    const rules = new Set(plan.rules);
     let tokens = 0;
     const changed = new Set<string>();
     let threadId = plan.threadId;
     let final: string | null = null;
 
     const runTurn = async (env: NodeJS.ProcessEnv, prompt: string, resume: boolean): Promise<{ status: string; error: any }> => {
-        const rpc = startRpc(launch, env, plan.rpcTimeoutMs ?? 120000);
+        // Approval requests of this app-server process; held ones by JSON-RPC id
+        const items = new Map<string, any>();
+        const ctx: ApprovalContext = { cwd: launch.cwd, roots: plan.roots, env, rules, ask: plan.ask, threadId: null, turnId: null,
+            items, nonce: randomBytes(16).toString('hex') };
+        const held = new Map<string, AbortController>();
+        const keyOf = (id: unknown) => JSON.stringify(id) ?? '';
+        const onRequest: RequestHandler = async (id, method, params) => {
+            const key = keyOf(id);
+            // A repeated id while one is held: only the first is ever answered
+            if (held.has(key)) return null;
+            const abort = new AbortController();
+            held.set(key, abort);
+            try {
+                const answer = await answerServerRequest(id, method, params, ctx, abort.signal);
+                if (answer.denied && !denied.includes(answer.denied) && denied.length < 10) denied.push(answer.denied);
+                // Resolved by Codex, or the turn ended, while held: no stale answer
+                return abort.signal.aborted ? null : answer.response;
+            } finally { held.delete(key); }
+        };
+        const rpc = startRpc(launch, env, plan.rpcTimeoutMs ?? 120000, onRequest);
         current = rpc;
+        stopHeld = () => { for (const a of held.values()) a.abort('stopped'); };
         let turnId: string | null = null;
         let done!: (v: { status: string; error: any }) => void;
         const completed = new Promise<{ status: string; error: any }>(r => { done = r; });
         const early: Array<{ status: string; error: any; id: string }> = [];
         rpc.onNotification((method, params) => {
+            if (method === 'item/started') {
+                // A fileChange's paths come with its item, before the approval request
+                const item = params?.item;
+                if (typeof item?.id === 'string' && items.size < 5000) items.set(item.id, item);
+            } else if (method === 'turn/started') {
+                // Sent before turn/start returns: approval requests may come in between
+                const id = params?.turn?.id;
+                if (ctx.threadId !== null && params?.threadId === ctx.threadId && typeof id === 'string' && ctx.turnId === null) ctx.turnId = id;
+            } else if (method === 'serverRequest/resolved') {
+                // Codex answered or cleared it itself (e.g. the turn was interrupted): stop waiting
+                held.get(keyOf(params?.requestId))?.abort('resolved');
+            }
             if (method === 'item/completed') {
                 const item = params?.item;
                 if (item?.type === 'fileChange' && item.status !== 'failed' && item.status !== 'declined') {
@@ -195,24 +245,30 @@ export function startAppServer(launch: Launch & { appServer: AppServerPlan }): R
         try {
             await rpc.request('initialize', { clientInfo: { name: AGENT_NAME, title: AGENT_NAME, version: HOST_VERSION }, capabilities: null });
             rpc.notify('initialized', {});
-            const common = { cwd: launch.cwd, approvalPolicy: 'never', sandbox: plan.sandbox, ...(plan.model ? { model: plan.model } : {}) };
+            const common = { cwd: launch.cwd, approvalPolicy: 'on-request', sandbox: plan.sandbox, ...(plan.model ? { model: plan.model } : {}) };
             const thread = resume && threadId
                 ? await rpc.request('thread/resume', { threadId, excludeTurns: true, ...common })
                 : await rpc.request('thread/start', { ...common, serviceName: 'agora' });
             const id = thread?.thread?.id;
             if (typeof id !== 'string' || !id) throw new Error('app_server_bad_thread');
             threadId = id;
+            ctx.threadId = id;
             const turn = await rpc.request('turn/start', {
                 threadId, input: [{ type: 'text', text: prompt }],
                 ...(plan.effort ? { effort: plan.effort } : {}), ...(plan.outputSchema ? { outputSchema: plan.outputSchema } : {}),
             });
             turnId = String(turn?.turn?.id ?? '');
+            // The turn this request started is the only one approvals may belong to
+            ctx.turnId = turnId || null;
             const already = early.find(e => e.id === turnId);
             if (already) done(already);
             return await Promise.race([completed, exited]);
         } catch (err: any) {
             // A failed request (e.g. thread/resume) or an exit: treat as a failed turn
             return { status: 'failed', error: err?.rpc ?? null };
+        } finally {
+            // Nothing held outlives its turn: open cards are closed and no answer is sent
+            stopHeld();
         }
     };
 
@@ -251,13 +307,13 @@ export function startAppServer(launch: Launch & { appServer: AppServerPlan }): R
         }
         return {
             success, nativeSessionId: threadId, tokensUsed: tokens, summary: parsed === '[pass]' ? null : parsed, changedPaths: [...changed],
-            ...(error ? { error } : {}), ...(rateLimit ? { rateLimit } : {}),
+            ...(error ? { error } : {}), ...(rateLimit ? { rateLimit } : {}), ...(denied.length ? { deniedTools: [...denied] } : {}),
         };
     })();
 
     return {
         result,
-        async kill() { stopped = true; if (current) await killTree(current.child, current.closed); },
+        async kill() { stopped = true; stopHeld(); if (current) await killTree(current.child, current.closed); },
         tokensUsed: () => tokens,
     };
 }

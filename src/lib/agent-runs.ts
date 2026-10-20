@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
-import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
+import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
 import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
@@ -526,6 +526,7 @@ async function shelveForBudget(c: PoolClient, sessionId: string, channelId: stri
         [sessionId]
     );
     await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
+    await expireLiveRequests(c, { sessionIds: [sessionId] }, 'stopped', notices);
     notices.push(await sessionUpdate(c, sessionId, false));
     notices.push(await postNotice(c, channelId, exhausted === sessionId
         ? `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`
@@ -608,6 +609,47 @@ export async function heartbeat(pool: Pool, host: Host, runId: string, claimToke
     });
 }
 
+/**
+ * A running turn's approval request (#93): post its card, or report the one already posted
+ * for this key. The host waits for the decision with liveToolRequest().
+ */
+export async function openToolRequest(pool: Pool, host: Host, runId: string, body: { claimToken: string; tool: string; requestKey: string; waitSeconds: number; detail?: string | null; cwd?: string | null },
+                                      notices: Notice[]) {
+    return inTx(pool, async c => {
+        const check = await checkRun(c, host, runId, body.claimToken, null, notices);
+        if (!check.ok) return { status: check.status, body: check.body };
+        // A stopped, shelved, ended, paused or locked-out session waits on nothing
+        if (await cancelReason(c, check.run)) {
+            await expireLiveRequests(c, { runId }, 'stopped', notices);
+            return { status: 200, body: { id: null, status: 'cancelled' } };
+        }
+        return { status: 200, body: await openLiveRequest(c, check.run, body, notices) };
+    });
+}
+
+/** The decision on a live request; `close` ends the wait, expiring it if still undecided. */
+export async function liveToolRequest(pool: Pool, host: Host, runId: string, requestId: string, body: { claimToken: string; close?: 'timeout' | 'resolved' | 'stopped' },
+                                      notices: Notice[]) {
+    return inTx(pool, async c => {
+        const check = await checkRun(c, host, runId, body.claimToken, null, notices);
+        if (!check.ok) return { status: check.status, body: check.body };
+        // Session is locked by checkRun, so a decision can't interleave (lock order: session → request)
+        const r = await c.query(`SELECT status FROM agent_tool_requests WHERE id = $1 AND run_id = $2 AND request_key IS NOT NULL FOR UPDATE`, [requestId, runId]);
+        if (!r.rows[0]) return { status: 404, body: { error: 'not_found' } };
+        // Once the run must stop, nothing it waited on may run, even a decision made before the
+        // stop that the host hasn't read yet
+        if (await cancelReason(c, check.run)) {
+            await expireLiveRequests(c, { runId }, 'stopped', notices);
+            return { status: 200, body: { status: 'cancelled' } };
+        }
+        if (body.close && r.rows[0].status === 'waiting') {
+            await expireLiveRequests(c, { runId, requestId }, body.close, notices);
+            return { status: 200, body: { status: 'expired' } };
+        }
+        return { status: 200, body: { status: hostStatus(r.rows[0].status) } };
+    });
+}
+
 /** The step is agent-controlled text: drop control, format and line-separator characters before broadcast. */
 export function cleanStep(step: string | null | undefined): string | null {
     if (typeof step !== 'string') return null;
@@ -615,7 +657,7 @@ export function cleanStep(step: string | null | undefined): string | null {
 }
 
 /** Why the host must stop this run, or null. */
-async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
+export async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     if (run.cancel_requested) return run.cancel_reason ?? 'ended';
     const s = await c.query(
         `SELECT s.state, s.channel_id, s.bot_id FROM agent_sessions s WHERE s.id = $1`,
@@ -652,6 +694,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
              WHERE id = $1`,
             [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])], body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
         );
+        await expireLiveRequests(c, { runId }, 'stopped', notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
         await recordVerification(c, run, body.verification, notices);
         // A subtask's summary is posted back to its parent for it, so it needn't post anything itself
@@ -712,6 +755,7 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
             [runId, tokens, body.error.slice(0, 64), body.message?.slice(0, 2000) ?? null, [...new Set(body.changedPaths ?? [])]]
         );
         await enforceTokenBudget(c, run.session_id.trim(), notices);
+        await expireLiveRequests(c, { runId }, 'stopped', notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
         await recordVerification(c, run, body.verification, notices);
         if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {
@@ -801,6 +845,7 @@ async function expireRun(c: PoolClient, run: any, notices: Notice[]) {
         `UPDATE agent_runs SET status = 'expired', finished_at = NOW() WHERE id = $1 AND status = 'claimed'`,
         [run.id]
     );
+    await expireLiveRequests(c, { runId: run.id }, 'stopped', notices);
     notices.push(await sessionUpdate(c, run.session_id, false));
     await settleBatch(c, run, true, 'lease_expired', notices);
 }

@@ -14,7 +14,8 @@ import { decisionError } from './agentSessions';
 
 type Decision = 'once' | 'always' | 'deny';
 
-interface ToolApprovalData { kind?: string; requestId?: string; profile?: string; tool?: string; status?: string }
+// live: a running Codex turn waits on this card (#93); detail is the whole command it asked to run
+interface ToolApprovalData { kind?: string; requestId?: string; profile?: string; tool?: string; status?: string; live?: boolean; detail?: string | null; cwd?: string | null }
 interface RunApprovalData { kind?: string; approvalId?: string; profile?: string; status?: string }
 
 const STATUS: Record<string, { label: string; tone: string }> = {
@@ -59,6 +60,14 @@ export function ToolApprovalCard({ message }: { message: Message }) {
         {status && <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${status.tone}`}>{status.label}</span>}
       </div>
       <div className="text-sm text-text-muted"><MessageContent content={message.content ?? ''} /></div>
+      {typeof data.detail === 'string' && data.detail && (
+        // The whole command, as plain text: read every character before approving it
+        <details className="mt-2 text-sm">
+          <summary className="cursor-pointer select-none text-text-muted">Full command</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface px-2 py-1 font-mono text-xs text-text">{data.detail}</pre>
+          {typeof data.cwd === 'string' && data.cwd && <p className="mt-1 break-all text-xs text-text-muted">in <code>{data.cwd}</code></p>}
+        </details>
+      )}
       {data.status === 'pending' && data.requestId && (
         <div className="mt-2 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
           <Button onClick={() => void decide('once')} loading={busy === 'once'} disabled={busy !== null} className={TOUCH}>Approve once</Button>
