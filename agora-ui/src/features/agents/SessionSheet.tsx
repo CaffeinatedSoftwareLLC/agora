@@ -5,8 +5,8 @@ import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import {
-  ERRORS, STATE_LABEL, actionText, classifyCommandError, compactTokens, deriveChips, runAgentCommand, sessionState,
-  type AgentProfile, type AgentSession, type ChipState, type CommandBody,
+  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, runAgentCommand, sessionState,
+  terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
 
 /**
@@ -16,7 +16,8 @@ import {
  * opened it. Registered with the shell overlay manager as kind 'session-sheet'.
  */
 
-export type SheetMode = { kind: 'profile'; profile: string } | { kind: 'start' };
+/** 'terminal': an agent's terminal session (#112), the user's own CLI connected through agora-mcp. */
+export type SheetMode = { kind: 'profile'; profile: string } | { kind: 'start' } | { kind: 'terminal'; botId: string };
 
 interface SessionSheetProps {
   open: boolean;
@@ -35,6 +36,7 @@ const DOT_CLASS: Record<ChipState | 'none', string> = {
   working: 'bg-online motion-safe:animate-pulse',
   idle: 'bg-online',
   sleeping: 'bg-accent',
+  standby: 'bg-text-muted',
   shelved: 'bg-warn',
   ended: 'bg-text-dim',
   none: 'bg-text-dim',
@@ -64,6 +66,8 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [conflict, setConflict] = useState<CommandBody | null>(null);
+  // /start for an agent connected from a terminal (409 terminal_connected)
+  const [terminalConflict, setTerminalConflict] = useState<CommandBody | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // One overlay at a time (Phase 1 overlay manager): registering closes any other sheet, makes
@@ -89,8 +93,8 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
   }, [open, overlayId]);
   // When the live-session choice appears, put focus on its first button.
   useEffect(() => {
-    if (conflict) panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
-  }, [conflict]);
+    if (conflict || terminalConflict) panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+  }, [conflict, terminalConflict]);
 
   if (!open) return null;
 
@@ -101,6 +105,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     setBusy(true);
     setNotice(null);
     setConflict(null);
+    setTerminalConflict(null);
     try {
       const res = await runAgentCommand(channelId, body);
       setNotice({ text: actionText(res.action) });
@@ -108,6 +113,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     } catch (err) {
       const outcome = classifyCommandError(err, body.command);
       if (outcome.kind === 'live') setConflict(body);
+      else if (outcome.kind === 'terminal') setTerminalConflict(body);
       else setNotice({ text: outcome.text, error: true });
     } finally {
       setBusy(false);
@@ -123,10 +129,46 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     void navigator.clipboard?.writeText(id).then(() => setCopiedId(id), () => {});
   };
 
+  const retryTerminal = (onLive: 'keep' | 'standby') => {
+    if (terminalConflict?.command === 'start') void run({ ...terminalConflict, onLive });
+  };
+
   let title: string;
   let body: ReactNode;
+  const terminal = mode.kind === 'terminal'
+    ? sessions.find(s => s.kind === 'terminal' && s.state === 'live' && s.botId?.trim() === mode.botId.trim())
+    : undefined;
 
-  if (!selected) {
+  if (mode.kind === 'terminal') {
+    title = `Terminal: ${terminal?.botUsername ?? 'agent'}`;
+    const standby = terminal ? sessions.find(s => s.kind !== 'terminal' && s.state === 'live' && !s.threadId && s.botId?.trim() === mode.botId.trim()) : undefined;
+    body = terminal ? (
+      <div className="space-y-4 text-sm">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text">
+          <StateDot state={terminal.running ? 'working' : 'idle'} />
+          <span className="font-medium">{terminal.running ? 'Terminal, working' : 'Terminal, idle'}</span>
+          <span className="font-mono text-xs text-text-muted">{terminalUsage(terminal)}</span>
+        </p>
+        <p className="text-text-muted">
+          The user's own CLI, connected through agora-mcp{terminal.terminalMode === 'channel' ? ' as a Claude Code Channel' : terminal.terminalMode === 'mcp' ? ' (chat_wait)' : ''}.
+          It answers here while it is connected and ends when agora-mcp disconnects. Only owner and director messages are instructions to it.
+        </p>
+        <p data-testid="terminal-budget" className="rounded-lg border border-border bg-bg/60 p-3 text-text-muted">{TERMINAL_BUDGET}</p>
+        {standby && <p className="text-text-muted">Its hosted session ({shortId(standby.id)}) is on standby: messages don't wake it while the terminal is connected.</p>}
+        <div className="flex flex-col gap-2 md:flex-row md:flex-wrap" role="group" aria-label="Hosted-only actions">
+          {['Review changes', 'Checkpoints', 'Verify', 'Subtasks', 'End session'].map(label => (
+            <span key={label} title={HOSTED_ONLY} className="md:flex-1">
+              <button type="button" className={BTN_SECONDARY} disabled aria-disabled="true" aria-describedby={`${titleId}-hosted-only`}>{label}</button>
+            </span>
+          ))}
+        </div>
+        <p id={`${titleId}-hosted-only`} className="text-xs text-text-muted">{HOSTED_ONLY}</p>
+        <button type="button" className={BTN_SMALL} onClick={() => copy(terminal.id)} aria-label={`Copy session ID ${terminal.id}`}>
+          {copiedId === terminal.id ? 'Copied' : 'Copy ID'}
+        </button>
+      </div>
+    ) : <p className="text-sm text-text-muted">This agent has no terminal session here right now.</p>;
+  } else if (!selected) {
     title = 'Start an agent';
     body = (
       <div className="space-y-2">
@@ -161,7 +203,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     title = `Agent: ${selected}`;
     const state = chip?.state;
     const current = chip?.session;
-    const live = state === 'working' || state === 'idle' || state === 'sleeping';
+    const live = state === 'working' || state === 'idle' || state === 'sleeping' || state === 'standby';
     const history = (chip?.sessions ?? []).filter(s => !(live && s.id === current?.id)).slice(0, 5);
     const latestShelved = chip?.sessions.find(s => s.state === 'shelved');
 
@@ -211,6 +253,11 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
             </button>
           </div>
         )}
+        {state === 'standby' && (
+          <p className="rounded-lg border border-border bg-bg/60 p-3 text-sm text-text-muted">
+            This agent is connected from a terminal, which answers here. This hosted session waits and is not woken until the terminal disconnects.
+          </p>
+        )}
         {current && <SessionBudget key={current.id} session={current} channelId={channelId} onChanged={onChanged} />}
         {current && <SessionWorkspace key={`workspace-${current.id}`} sessionId={current.id} channelId={channelId} running={current.running} onChanged={onChanged} />}
         {current?.recentRuns && current.recentRuns.length > 0 && <details className="text-sm">
@@ -224,7 +271,14 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
             </li>)}
           </ul>
         </details>}
-        {conflict ? (
+        {terminalConflict ? (
+          <div className="space-y-2" role="group" aria-label="Agent connected from a terminal">
+            <p className="text-sm text-text">{ERRORS.terminal_connected}</p>
+            <button type="button" data-autofocus className={BTN_PRIMARY} disabled={busy} onClick={() => retryTerminal('keep')}>Keep the terminal</button>
+            <button type="button" className={BTN_SECONDARY} disabled={busy} onClick={() => retryTerminal('standby')}>Start hosted on standby</button>
+            <button type="button" className={BTN_SECONDARY} disabled={busy} onClick={() => setTerminalConflict(null)}>Cancel</button>
+          </div>
+        ) : conflict ? (
           <div className="space-y-2" role="group" aria-label="Agent already live">
             <p className="text-sm text-text">{ERRORS.session_live}</p>
             <button type="button" data-autofocus className={BTN_PRIMARY} disabled={busy} onClick={() => retry('shelve')}>Shelve it and start new</button>

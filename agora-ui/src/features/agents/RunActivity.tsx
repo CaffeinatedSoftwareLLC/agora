@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentRunProgressPayload, AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
-import { elapsedTime, listSessions, type AgentSession } from './agentSessions';
+import { elapsedTime, listSessions, terminalUsage, type AgentSession } from './agentSessions';
 
 /** Mounted with a channel key so requests and timers cannot leak into another channel. */
 export function RunActivity({ channelId }: { channelId: string }) {
@@ -38,6 +38,14 @@ export function RunActivity({ channelId }: { channelId: string }) {
   }, [running]);
   return <div className="shrink-0 px-4 text-sm text-text-muted" aria-label="Agent run activity">
     {sessions.map(s => {
+      // A terminal session (#112) has no runs: agora-mcp reports working while the agent calls tools
+      if (s.kind === 'terminal') {
+        if (s.state !== 'live' || !s.running) return null;
+        return <div key={s.id} className="py-1">
+          <p role="status">{s.botUsername} is working in its terminal…</p>
+          <p className="truncate text-xs" aria-label={`${s.botUsername} terminal usage`}>{terminalUsage(s)} · no budget (own CLI)</p>
+        </div>;
+      }
       const run = s.run;
       const paused = s.state === 'shelved' && s.endReason === 'budget';
       if (!run && !paused) return null;

@@ -52,17 +52,19 @@ type Panel =
   | { kind: 'busy' }
   | { kind: 'message'; text: string; error?: boolean }
   | { kind: 'sessions'; sessions: AgentSession[] }
-  | { kind: 'live'; retry: (onLive: 'shelve' | 'keep') => void };
+  | { kind: 'live'; retry: (onLive: 'shelve' | 'keep') => void }
+  /** /start for an agent connected from a terminal (#112): keep it, or start hosted on standby. */
+  | { kind: 'terminal'; retry: (onLive: 'keep' | 'standby') => void };
 
 export function useAgentCommands(channelId: string, onAccepted?: () => void): { tryHandle: (text: string) => boolean; panel: ReactNode } {
   const [state, setState] = useState<Panel>({ kind: 'none' });
 
-  const run = async (cmd: Command, onLive?: 'shelve' | 'keep') => {
+  const run = async (cmd: Command, onLive?: 'shelve' | 'keep' | 'standby') => {
     setState({ kind: 'busy' });
     const body: CommandBody = cmd.command === 'start'
       ? { command: 'start', profile: cmd.profile, fresh: cmd.fresh, ...(onLive ? { onLive } : {}) }
       : cmd.command === 'resume'
-        ? { command: 'resume', sessionId: cmd.sessionId, ...(onLive ? { onLive } : {}) }
+        ? { command: 'resume', sessionId: cmd.sessionId, ...(onLive && onLive !== 'standby' ? { onLive } : {}) }
         : cmd;
     try {
       const res = await runAgentCommand(channelId, body);
@@ -76,6 +78,8 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
       const outcome = classifyCommandError(err, cmd.command);
       if (outcome.kind === 'live') {
         setState({ kind: 'live', retry: (choice) => { void run(cmd, choice); } });
+      } else if (outcome.kind === 'terminal') {
+        setState({ kind: 'terminal', retry: (choice) => { void run(cmd, choice); } });
       } else {
         setState({ kind: 'message', text: outcome.text, error: true });
       }
@@ -123,8 +127,20 @@ export function useAgentCommands(channelId: string, onAccepted?: () => void): { 
               <button className="min-h-11 md:min-h-8 rounded-lg px-3 py-1 text-[13px] text-text-muted" onClick={close}>Cancel</button>
             </div>
           )}
+          {state.kind === 'terminal' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{ERRORS.terminal_connected}</span>
+              <button className="min-h-11 md:min-h-8 rounded-lg bg-primary px-3 py-1 text-[13px] font-semibold text-on-primary" onClick={() => state.retry('keep')}>
+                Keep the terminal
+              </button>
+              <button className="min-h-11 md:min-h-8 rounded-lg border border-border px-3 py-1 text-[13px]" onClick={() => state.retry('standby')}>
+                Start hosted on standby
+              </button>
+              <button className="min-h-11 md:min-h-8 rounded-lg px-3 py-1 text-[13px] text-text-muted" onClick={close}>Cancel</button>
+            </div>
+          )}
         </div>
-        {state.kind !== 'busy' && state.kind !== 'live' && (
+        {state.kind !== 'busy' && state.kind !== 'live' && state.kind !== 'terminal' && (
           <button className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:h-8 md:w-8 flex items-center justify-center rounded-lg text-text-muted hover:text-text" onClick={close} aria-label="Close">×</button>
         )}
       </div>

@@ -9,6 +9,7 @@ For Claude Code there is a better way to listen than polling: the **Agora Channe
 | How it hears new messages | Agora Channel (pushed) | `chat_wait` (long poll) |
 | Setup | `agora-mcp ... --channel-mode`, then start `claude` with the development-channels flag | The normal `agora-mcp` registration ([getting-started step 5](getting-started.md#5-create-a-bot-and-connect-an-agent)) |
 | Shows in the agent strip as | **listening** while connected | **listening** during `chat_wait`, **connected** otherwise |
+| Session | A **terminal** session in each of the bot's channels ([agent-sessions.md](agent-sessions.md#terminal-sessions)); **working** while it calls tools | The same |
 
 ## Status: research preview
 
@@ -56,7 +57,7 @@ Flags (all optional):
 | `--channel-mode` (or `AGORA_CHANNEL_MODE=1`) | off | Run as a Claude Code Channel |
 | `--auth subscription\|api_key` (or `AGORA_AUTH`) | `subscription` | Who may push instructions: `subscription` = the server owner only; `api_key` = the owner and the channel's directors |
 | `--no-permission-relay` | relay on | Don't forward Claude Code's permission prompts to Agora |
-| `--no-presence` (or `AGORA_PRESENCE=off`) | presence on | Plain MCP mode only: don't open the socket that shows "connected / listening" |
+| `--no-presence` (or `AGORA_PRESENCE=off`) | presence on | Plain MCP mode only: don't open the socket that shows "connected / listening"; no terminal session either |
 
 ## Who can instruct the session (sender gating)
 
@@ -84,6 +85,7 @@ When Claude wants to use a tool that needs approval (Bash, Write, Edit, an MCP t
 - agora-mcp uses MCP SDK 1.x. Claude Code's v2 MCP runtime won't register a channel that negotiates protocol revision 2026-07-28; SDK 1.x can't negotiate it, so the channel registers on the earlier handshake.
 - In channel mode agora-mcp opens a bot socket to Agora's gateway (`auth: { type: 'bot', token, mode: 'channel' }`), receives each `Message` event in the bot's channels, gates it, and pushes it. After a reconnect it catches up on top-level messages it missed (thread replies are not caught up) and asks Agora about permission cards that may have been answered meanwhile. Each message is pushed once.
 - Permission cards: `POST /channels/:id/permission-relays` (bots), answered with `POST /channels/:id/permission-relays/:requestId { decision: "allow" | "deny" }` (server owner). The decision reaches the bot's sockets as `PermissionRelayDecision`. Table `permission_relays` (migration 049).
+- Terminal session (#112): the presence socket also makes the bot a live **terminal** session in each of its channels, ended a grace period after the socket goes. While it is live, the bot's hosted `/start` session in that channel takes no wakes (one responder), file reservations work without a hosted session, and agora-mcp reports working/idle (`Activity { working, toolCalls }`). Token use shows as n/a and no budget applies. Sender gating above is unchanged. Details: [agent-sessions.md](agent-sessions.md#terminal-sessions).
 - Presence: agora-mcp tells the gateway its mode (`channel` or `mcp`); plain MCP mode sends `Listening { listening }` around each `chat_wait`. People get `AgentPresence { userId, username, channelId, status, mode }` events and an `agentPresence` list in `Ready`. Hosted runs start agora-mcp with `--no-presence`, so they don't show up as a user's own session. Presence is in memory per API process, like human presence.
 
 ## Provider terms, and why this is the headline path

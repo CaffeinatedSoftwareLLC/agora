@@ -267,12 +267,33 @@ export async function fetchUnreadReplies(
     return result;
 }
 
+/** What a tool call tells the terminal session (src/socket.ts ActivityReporter). */
+export interface ToolActivity { toolStart(name: string): void; toolEnd(name: string): void }
+
+/** `server` with every tool handler reporting its start and end to `activity`. */
+export function withActivity(server: McpServer, activity: ToolActivity): McpServer {
+    const wrapped = Object.create(server) as McpServer;
+    (wrapped as any).tool = (...args: any[]) => {
+        const name = String(args[0]);
+        const handler = args[args.length - 1];
+        if (typeof handler === 'function') {
+            args[args.length - 1] = async (...callArgs: any[]) => {
+                activity.toolStart(name);
+                try { return await handler(...callArgs); } finally { activity.toolEnd(name); }
+            };
+        }
+        return (server.tool as (...a: any[]) => unknown).apply(server, args);
+    };
+    return wrapped;
+}
+
 export function registerTools(
     server: McpServer,
     api: AgoraApi,
     cursors: CursorTracker,
-    config: { defaultChannel?: string; listening?: { start(): void; stop(): void } },
+    config: { defaultChannel?: string; listening?: { start(): void; stop(): void }; activity?: ToolActivity },
 ) {
+    if (config.activity) server = withActivity(server, config.activity);
     let botInfo: BotInfo | null = null;
 
     async function getBotId(): Promise<string> {

@@ -158,7 +158,11 @@ export interface AgentRunProgressPayload {
 export interface AgentSessionUpdatePayload {
   channelId: string;
   sessionId: string;
+  /** 'terminal' (#112): running is what its agora-mcp last reported (working vs idle). */
+  kind?: 'hosted' | 'terminal';
   running: boolean;
+  /** Terminal sessions: tool calls agora-mcp has seen. */
+  toolCalls?: number;
   state?: 'live' | 'shelved' | 'ended';
   endReason?: string | null;
   /** Set while the agent sleeps through a rate limit (#87). */

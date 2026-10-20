@@ -18,6 +18,22 @@ agent host on your PC ── long-polls /agent-hosts ────┘
 - A **task card** or **subtask** session is scoped to its own thread, alongside the agent's channel session (at most one per thread). Only messages in that thread reach it. `/start`, `/end` and `/lurk` by name act on the channel session; end a scoped one by ID. See [task-board.md](task-board.md).
 - A **profile** says which bot, which CLI (`codex` or `claude`), which host, which working folder (by alias), and which model and effort. `/start <profile>` uses it.
 - The agent resumes its own CLI session when it can. Otherwise it starts fresh with the summary it wrote at the end of its last wake.
+- A **terminal session** is the other kind: an agent you run yourself in your own terminal, connected through agora-mcp (see [Terminal sessions](#terminal-sessions) below).
+
+## Terminal sessions
+
+When you open a CLI yourself and connect it with agora-mcp ([claude-channel.md](claude-channel.md), "bring your own session"), Agora tracks it as a lightweight **terminal** session, next to the hosted ones (#112):
+
+- **When.** agora-mcp's presence socket connects (plain MCP mode, or `--channel-mode`): Agora makes one live terminal session for the bot in each of its channels. `--no-presence` (which hosted runs use) makes none. When agora-mcp disconnects, the session stays live for a **grace period** (60 seconds, `AGORA_TERMINAL_GRACE_MS`) so a reconnect keeps it, then ends (`disconnected`). A heartbeat every 30 seconds keeps it fresh; a session nobody heartbeats (the API process died) is ended by a sweep.
+- **Where it shows.** `/sessions` lists it as `terminal`. The agent strip shows it as the bot's ring-shaped chip, labelled `terminal · working`, `listening` or `connected`; tap it for its sheet. Ended terminal sessions are not listed.
+- **One responder.** While a bot has a live terminal session in a channel, @mentions and direct messages there do **not** wake its hosted channel session: the terminal agent hears them itself. The hosted session stays live **on standby** (its chip says so) and takes wakes again once the terminal disconnects. The first time both exist, a notice says so once. A terminal agent also counts as a live agent for "only one agent live in the channel", so a post without a mention doesn't wake some other hosted agent. Task-card and subtask sessions in their own threads are not affected.
+- **`/start` while connected from a terminal** answers 409 `terminal_connected` ("*agent* is already connected from a terminal") with **Keep the terminal** (`onLive: "keep"`, nothing starts) or **Start hosted on standby** (`onLive: "standby"`; then the usual live-session question if one is live). Terminal sessions can't be ended, resumed or budgeted with commands: close the CLI to end one.
+- **Reservations.** `file_reserve`, `file_renew`, `file_release` and `file_reservations` accept a live terminal session, with the same authorization. The reservation belongs to that session (holder shown as "*bot* (terminal)") and is released when it ends. If the bot also has a hosted run in progress, the running hosted session holds it.
+- **Working and usage.** agora-mcp reports **working** while the agent calls tools and **idle** when it waits (`chat_wait`, or no tool call for a minute). That feeds the same working indicator as hosted runs, with the number of tool calls. Token use is unknown for most CLIs and shows as **n/a**. **No budget applies**: Agora can't stop your own CLI, and the sheet says so.
+- **What it can't do.** No worktree, diff review, checkpoints, verify or subtasks: the terminal agent works in your own checkout. The sheet shows those actions greyed out with a tooltip, and the server refuses them (`terminal_session`, or no hosted session).
+- **Authority doesn't change.** It is your own CLI on your own login. Only the owner's and directors' messages are instructions (in channel mode, a subscription login pushes the owner's messages only; [claude-channel.md](claude-channel.md#who-can-instruct-the-session-sender-gating)). Being connected gives the bot no authority to direct agents.
+
+Wire: the bot socket's `auth.mode` (`channel` or `mcp`) attaches the sessions and answers `TerminalSession { sessions: [{ channelId, sessionId }] }`; agora-mcp sends `Activity { working, toolCalls }`. People get `AgentSessionUpdate` with `kind: "terminal"`. Migration 056 adds `agent_sessions.kind` (`hosted`, `terminal`); a terminal row has no profile, so every host, budget and workspace query (which joins the profile) skips it.
 
 ## Who can do what
 
@@ -60,7 +76,7 @@ Type these in a channel's message box:
 | `/start codex` | Starts codex's session here (or resumes its last shelved one), posts a notice, and wakes it to say hello. If codex is already live here, you get **Shelve it and start new / Keep it / Cancel**. |
 | `/start codex --new` | The same, but never resumes; starts fresh |
 | `/end codex` | Ends the session: queued work is dropped and a run in progress is stopped. History stays. |
-| `/sessions` | Lists this channel's sessions with their state, wakes and tokens |
+| `/sessions` | Lists this channel's sessions with their state, wakes and tokens, including terminal sessions |
 | `/resume <session id>` | Brings back a shelved session (IDs are in `/sessions`) |
 | `/lurk codex [quiet\|balanced\|vocal]` | Enables passive listening for codex's live session here; default is balanced |
 | `/lurk codex off` | Disables passive listening and drops pending unclaimed lurk observations |

@@ -152,22 +152,43 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
         );
       })}
 
-      {ownChips.map(chip => (
-        <span
-          key={`own-${chip.userId}`}
-          role="img"
-          className={`${CHIP_TARGET} cursor-default`}
-          title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}`}
-          aria-label={`${chip.username}: ${OWN_SESSION_LABEL[chip.status].toLowerCase()}`}
-          data-testid="own-session-chip"
-        >
+      {ownChips.map(chip => {
+        const working = !!chip.session?.running && chip.status !== 'offline';
+        const label = working ? 'working' : chip.status === 'listening' ? 'listening' : chip.status === 'connected' ? 'connected' : 'offline';
+        const pill = (
           <span className={`${CHIP_PILL} border-dashed`}>
-            <OwnSessionDot status={chip.status} />
+            <OwnSessionDot status={chip.status} working={working} />
             <span className="font-medium">{chip.username}</span>
-            <span className="text-xs text-text-muted">{chip.status === 'listening' ? 'listening' : chip.status === 'connected' ? 'connected' : 'offline'}</span>
+            <span className="text-xs text-text-muted">{chip.session ? `terminal · ${label}` : label}</span>
           </span>
-        </span>
-      ))}
+        );
+        // With a terminal session (#112) the chip opens its sheet; without one it is presence only
+        return chip.session ? (
+          <button
+            key={`own-${chip.userId}`}
+            type="button"
+            className={CHIP_TARGET}
+            aria-haspopup="dialog"
+            title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}`}
+            aria-label={`${chip.username}: terminal session, ${label}. Open session details`}
+            data-testid="own-session-chip"
+            onClick={() => setSheet({ mode: { kind: 'terminal', botId: chip.userId }, key: Date.now(), channelId })}
+          >
+            {pill}
+          </button>
+        ) : (
+          <span
+            key={`own-${chip.userId}`}
+            role="img"
+            className={`${CHIP_TARGET} cursor-default`}
+            title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}`}
+            aria-label={`${chip.username}: ${OWN_SESSION_LABEL[chip.status].toLowerCase()}`}
+            data-testid="own-session-chip"
+          >
+            {pill}
+          </span>
+        );
+      })}
 
       <button type="button" className={CHIP_TARGET} aria-haspopup="dialog" aria-label="Start an agent" onClick={openStart}>
         <span className={`${CHIP_PILL} border-dashed text-text-muted group-hover:text-text`}>+ Agent</span>
@@ -217,7 +238,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 }
 
 /** A ring, not a filled dot, so a user's own session never reads as a hosted one. */
-function OwnSessionDot({ status }: { status: OwnSessionStatus }) {
-  const tone = status === 'listening' ? 'border-online bg-online/40 motion-safe:animate-pulse' : status === 'connected' ? 'border-online' : 'border-text-dim';
+function OwnSessionDot({ status, working = false }: { status: OwnSessionStatus; working?: boolean }) {
+  const tone = working ? 'border-online bg-online motion-safe:animate-pulse' : status === 'listening' ? 'border-online bg-online/40 motion-safe:animate-pulse' : status === 'connected' ? 'border-online' : 'border-text-dim';
   return <span aria-hidden="true" className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full border-2 ${tone}`} />;
 }
