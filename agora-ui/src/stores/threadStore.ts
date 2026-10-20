@@ -54,6 +54,18 @@ interface ThreadState {
 
 const REPLY_PAGE_SIZE = 50;
 
+// Active-thread list requests, one per channel at a time. A load or a metadata event
+// that arrives while one is in flight marks the channel dirty, and the request loop
+// fetches once more after it resolves, so nothing that happened meanwhile is lost.
+const listLoads = new Map<string, Promise<void>>();
+const listDirty = new Set<string>();
+// Metadata events seen while a list request was in flight, by `${channelId}:${threadId}`.
+// A snapshot requested before such an event keeps the event's counts and closure.
+let eventSeq = 0;
+const eventSeqByThread = new Map<string, number>();
+// Bumped by clear(); a list request from before it is dropped when it resolves.
+let listGeneration = 0;
+
 export const useThreadStore = create<ThreadState>((set, get) => ({
   openThreadId: null,
   openThreadChannelId: null,
@@ -288,15 +300,48 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     });
   },
 
-  loadActiveThreads: async (channelId) => {
-    const data = await api.get<ThreadSummary[]>(`/channels/${channelId}/threads?limit=5`);
-    set((state) => {
-      const next = new Map(state.activeThreads);
-      const nextHasMore = new Map(state.hasMoreThreads);
-      next.set(channelId, data);
-      nextHasMore.set(channelId, data.length === 5);
-      return { activeThreads: next, hasMoreThreads: nextHasMore };
-    });
+  loadActiveThreads: (channelId) => {
+    const inFlight = listLoads.get(channelId);
+    if (inFlight) {
+      listDirty.add(channelId);
+      return inFlight;
+    }
+    const generation = listGeneration;
+    // Assigned before the body's first await, which is the only way to reach finally
+    let run: Promise<void> | undefined = undefined;
+    run = (async () => {
+      try {
+        do {
+          listDirty.delete(channelId);
+          const requestedAt = eventSeq;
+          const data = await api.get<ThreadSummary[]>(`/channels/${channelId}/threads?limit=5`);
+          if (generation !== listGeneration) return;
+          set((state) => {
+            const held = new Map((state.activeThreads.get(channelId) ?? []).map((t) => [t.id, t]));
+            const merged = data.map((t) => {
+              const newer = held.get(t.id);
+              if (!newer || (eventSeqByThread.get(`${channelId}:${t.id}`) ?? 0) <= requestedAt) return t;
+              return { ...t, replyCount: newer.replyCount, lastReplyAt: newer.lastReplyAt, threadClosedAt: newer.threadClosedAt };
+            });
+            const next = new Map(state.activeThreads);
+            const nextHasMore = new Map(state.hasMoreThreads);
+            next.set(channelId, merged);
+            nextHasMore.set(channelId, data.length === 5);
+            return { activeThreads: next, hasMoreThreads: nextHasMore };
+          });
+        } while (listDirty.has(channelId));
+      } finally {
+        if (listLoads.get(channelId) === run) {
+          listLoads.delete(channelId);
+          listDirty.delete(channelId);
+          for (const key of eventSeqByThread.keys()) {
+            if (key.startsWith(`${channelId}:`)) eventSeqByThread.delete(key);
+          }
+        }
+      }
+    })();
+    listLoads.set(channelId, run);
+    return run;
   },
 
   loadMoreThreads: async (channelId) => {
@@ -328,6 +373,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   updateParentMetadata: (data) => {
+    if (listLoads.has(data.channelId)) {
+      // The in-flight request may have been answered before this event: fetch again after it
+      listDirty.add(data.channelId);
+      eventSeqByThread.set(`${data.channelId}:${data.messageId}`, ++eventSeq);
+    }
+    const loaded = get().activeThreads.get(data.channelId);
+    // A first reply starts a thread the bar has never seen; the event carries only counts,
+    // so fetch the list again to get the new thread's summary.
+    if (loaded && data.replyCount > 0 && !data.threadClosedAt && !loaded.some((t) => t.id === data.messageId)) {
+      void get().loadActiveThreads(data.channelId).catch(() => {});
+      return;
+    }
     set((state) => {
       const next = new Map(state.activeThreads);
       const threads = next.get(data.channelId);
@@ -347,12 +404,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     });
   },
 
-  clear: () => set({
-    openThreadId: null,
-    openThreadChannelId: null,
-    repliesByThread: new Map(),
-    hasMore: new Map(),
-    activeThreads: new Map(),
-    hasMoreThreads: new Map(),
-  }),
+  clear: () => {
+    listGeneration++;
+    listLoads.clear();
+    listDirty.clear();
+    eventSeqByThread.clear();
+    set({
+      openThreadId: null,
+      openThreadChannelId: null,
+      repliesByThread: new Map(),
+      hasMore: new Map(),
+      activeThreads: new Map(),
+      hasMoreThreads: new Map(),
+    });
+  },
 }));
