@@ -17,7 +17,29 @@ import { asService } from '../lib/agent-sessions';
  * - The host picks the request up, runs the sign-in, and reports the result. A sign-in started
  *   on the host itself (`agora-host siwc login`) reports the same way; with no request open,
  *   the profile keeps its plan owner, or gets the host's registrant.
+ * - Only a profile the host reports as "auth": "siwc" can be asked to connect (#115); the host
+ *   ignores requests for any other profile.
+ * - Stale requests time out (#115): one the host never picks up after REQUEST_TIMEOUT_SECONDS
+ *   fails with 'request_timed_out', a sign-in still open after SIGN_IN_TIMEOUT_SECONDS with
+ *   'sign_in_timeout'. Checked whenever the state is read or a host asks for work.
  */
+
+/** The host polls every few seconds: a request it hasn't picked up after this, it isn't running or can't. */
+export const REQUEST_TIMEOUT_SECONDS = 120;
+/** The host's own sign-in times out after 5 minutes; this is the server's backstop. */
+export const SIGN_IN_TIMEOUT_SECONDS = 600;
+
+/** Fail this server's stale plan requests (#115). */
+export async function expireStalePlanRequests(db: any, serverId: string): Promise<void> {
+    await db.query(
+        `UPDATE agent_plan_connections SET status = 'failed', updated_at = NOW(),
+             error = CASE WHEN status = 'in_progress' THEN 'sign_in_timeout' ELSE 'request_timed_out' END
+         WHERE server_id = $1 AND (
+             (status IN ('requested', 'disconnect_requested') AND requested_at < NOW() - make_interval(secs => $2))
+             OR (status = 'in_progress' AND updated_at < NOW() - make_interval(secs => $3)))`,
+        [serverId, REQUEST_TIMEOUT_SECONDS, SIGN_IN_TIMEOUT_SECONDS]
+    );
+}
 
 const ID = { type: 'string', minLength: 26, maxLength: 26 } as const;
 const NAME = { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 } as const;
@@ -46,7 +68,10 @@ export async function agentPlanRoutes(app: FastifyInstance) {
         const serverId = await requireOwner(request, reply);
         if (!serverId) return reply;
         const db = request.dbClient!;
-        const rows = await asService(db, () => db.query(`${PLAN_SELECT} WHERE c.server_id = $1 ORDER BY c.profile_id`, [serverId]));
+        const rows = await asService(db, async () => {
+            await expireStalePlanRequests(db, serverId);
+            return db.query(`${PLAN_SELECT} WHERE c.server_id = $1 ORDER BY c.profile_id`, [serverId]);
+        });
         return reply.send(rows.rows.map(planJson));
     });
 
@@ -66,7 +91,7 @@ export async function agentPlanRoutes(app: FastifyInstance) {
         const action = (request.body as any).action as 'connect' | 'disconnect';
         const result = await asService(db, async () => {
             const profile = await db.query(
-                `SELECT p.id, p.adapter, h.created_by AS host_creator, srv.owner_id
+                `SELECT p.id, p.adapter, p.auth_mode, h.created_by AS host_creator, srv.owner_id
                  FROM agent_profiles p JOIN agent_hosts h ON h.id = p.host_id JOIN servers srv ON srv.id = p.server_id
                  WHERE p.id = $1 AND p.server_id = $2 AND h.revoked_at IS NULL FOR UPDATE OF p`,
                 [profileId, serverId]
@@ -77,6 +102,8 @@ export async function agentPlanRoutes(app: FastifyInstance) {
             const allowed = member.rows.length > 0 && (p.owner_id?.trim() === userId || p.host_creator?.trim() === userId);
             if (!allowed) return { status: 403, body: { error: 'Only the server owner or the person who registered this host can connect a ChatGPT plan on it' } };
             if (p.adapter !== 'codex') return { status: 400, body: { error: 'siwc_codex_only' } };
+            // The host only signs in profiles it runs as siwc; anything else would wait forever (#115)
+            if (action === 'connect' && p.auth_mode !== 'siwc') return { status: 400, body: { error: 'siwc_not_configured' } };
             const status = action === 'connect' ? 'requested' : 'disconnect_requested';
             await db.query(
                 `INSERT INTO agent_plan_connections (profile_id, server_id, status, requested_by, requested_at, error, updated_at)
@@ -95,6 +122,7 @@ export async function agentPlanRoutes(app: FastifyInstance) {
     // GET /agent-hosts/@me/plan-requests/next → 200 { profile, action, requestedBy } | 204
     app.get('/agent-hosts/@me/plan-requests/next', async (request, reply) => {
         const host = request.agentHost!, db = request.dbClient!;
+        await expireStalePlanRequests(db, host.serverId);
         const row = await db.query(
             `SELECT c.profile_id, c.status, c.requested_by, p.name FROM agent_plan_connections c
              JOIN agent_profiles p ON p.id = c.profile_id
@@ -130,7 +158,7 @@ export async function agentPlanRoutes(app: FastifyInstance) {
         );
         const p = profile.rows[0];
         if (!p) return reply.status(404).send({ error: 'unknown_profile' });
-        const current = (await db.query(`SELECT status, requested_by FROM agent_plan_connections WHERE profile_id = $1 FOR UPDATE`, [p.id])).rows[0];
+        const current = (await db.query(`SELECT status, requested_by, error FROM agent_plan_connections WHERE profile_id = $1 FOR UPDATE`, [p.id])).rows[0];
         // A request the host hasn't picked up yet wins over a report from the host's start or CLI
         if (current && (current.status === 'requested' || current.status === 'disconnect_requested') && body.status !== 'in_progress') {
             return reply.send({ planOwnerId: p.plan_owner_id?.trim() ?? null });
@@ -139,7 +167,9 @@ export async function agentPlanRoutes(app: FastifyInstance) {
         let planOwnerId: string | null = p.plan_owner_id?.trim() ?? null;
         if (body.status === 'connected' || body.status === 'scope_missing') {
             // Whoever asked from Settings; otherwise keep the binding, or the host's registrant
-            const requester = current?.status === 'in_progress' ? current.requested_by?.trim() ?? null : null;
+            // (a sign-in the server timed out but that finished after all still binds its requester)
+            const open = current?.status === 'in_progress' || (current?.status === 'failed' && current.error === 'sign_in_timeout');
+            const requester = open ? current.requested_by?.trim() ?? null : null;
             planOwnerId = requester ?? planOwnerId ?? p.host_creator?.trim() ?? null;
         } else if (body.status === 'disconnected') {
             planOwnerId = null;

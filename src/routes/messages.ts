@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { generateUlid } from '../utils/ulid';
-import { resolveMentions } from './shared';
+import { resolveMentions, mentionsEveryoneIn } from './shared';
 import { canViewChannel } from '../lib/channel-access';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
@@ -159,10 +159,7 @@ export async function messageRoutes(app: FastifyInstance) {
         const messageId = generateUlid();
 
         // Parse and resolve @mentions (shared helper)
-        const mentionContent = content || '';
-        const mentionMatches: string[] = mentionContent.match(/@(\w+)/g) || [];
-        const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
-        const mentionsEveryone = mentionedUsernames.includes('everyone');
+        const mentionsEveryone = mentionsEveryoneIn(content);
         const protocol = parseProtocol(content);
 
         const couldDirect = await stampAuthority(db, channelId, userId, !!request.isBot);

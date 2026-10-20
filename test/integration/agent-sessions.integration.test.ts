@@ -301,6 +301,127 @@ describe('wake routing (S1)', () => {
     });
 });
 
+describe('thread and case-insensitive mentions (#120)', () => {
+    async function noticesSince(since: string): Promise<Array<{ content: string; thread: string | null }>> {
+        const rows = await ctx.db.query(
+            `SELECT content, thread_id FROM messages WHERE channel_id = $1 AND author_id IS NULL AND system_event = 'agent_session' AND id > $2 ORDER BY id`,
+            [channelId, since]);
+        return rows.rows.map((r: any) => ({ content: r.content, thread: r.thread_id?.trim() ?? null }));
+    }
+    async function threadRows(sessionId: string) {
+        const rows = await ctx.db.query(`SELECT message_id, thread_id, reason FROM agent_inbox WHERE session_id = $1 ORDER BY id`, [sessionId]);
+        return rows.rows.map((r: any) => ({ message_id: r.message_id.trim(), thread_id: r.thread_id?.trim() ?? null, reason: r.reason }));
+    }
+
+    it('the original repro: the owner\'s @codex reply in a thread another bot\'s session started wakes codex there', async () => {
+        const sx = await startSession(codex);
+        await startSession(claude);
+        const parent = await post(claude.auth, 'Opened the PR, details in this thread');
+        const r = await reply(owner.auth, parent.id, '@codex check the PR');
+        expect(await threadRows(sx)).toEqual([{ message_id: r.id, thread_id: parent.id, reason: 'direct' }]);
+
+        // The host gets the thread as the destination for the reply
+        const c = await claim();
+        expect(c.status).toBe(200);
+        expect(c.body.session.id).toBe(sx);
+        expect(c.body.inbox).toEqual([expect.objectContaining({ messageId: r.id, threadId: parent.id, reason: 'direct', authority: 'owner' })]);
+    });
+
+    it('wakes only the mentioned agent, and nobody on a member\'s mention', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(member.auth, 'a question');
+        await reply(member.auth, parent.id, '@codex can you look?');
+        expect(await inbox(sx)).toEqual([]);
+        const r = await reply(owner.auth, parent.id, '@claude can you look?');
+        expect(await inbox(sx)).toEqual([]);
+        expect((await inbox(sc)).map(x => x.message_id)).toEqual([r.id]);
+    });
+
+    it('a thread reply without a mention still wakes nobody outside a bound thread', async () => {
+        const sx = await startSession(codex);
+        const parent = await post(owner.auth, 'top');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        await reply(owner.auth, parent.id, 'no mention here');
+        expect(await inbox(sx)).toEqual([]);
+    });
+
+    it('resolves mentions case-insensitively, top level and in threads', async () => {
+        const mixed = await makeBot('MixCase');
+        const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
+            .send({ name: 'mixcase', botId: mixed.botId, hostId, adapter: 'codex', workdirAlias: 'agora' });
+        expect(profile.status, JSON.stringify(profile.body)).toBe(201);
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'CODEX_API_KEY' WHERE id = $1`, [profile.body.id]);
+        const sm = await startSession({ ...mixed, profileId: profile.body.id, name: 'mixcase' });
+        const sx = await startSession(codex);
+
+        const top = await post(owner.auth, '@mixcase describe this image');
+        expect(top.mentions).toEqual([mixed.botId]);
+        const loud = await reply(owner.auth, top.id, '@CODEX and you too');
+        expect(loud.mentions).toEqual([codex.botId]);
+        expect((await inbox(sm)).map(x => x.message_id)).toEqual([top.id]);
+        expect((await inbox(sx)).map(x => x.message_id)).toEqual([loud.id]);
+
+        const everyone = await post(member.auth, 'hello @Everyone');
+        expect(everyone.mentionsEveryone).toBe(true);
+    });
+
+    it('a mention of a non-participant in a bound thread wakes it; participants keep the bound rules', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const third = await makeAgent('third', 'claude');
+        const st = await startSession(third);
+        const start = await post(claude.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [claude, codex]\ntask: x');
+        const r = await reply(owner.auth, start.id, '@third please review this plan');
+        expect((await threadRows(st))).toEqual([{ message_id: r.id, thread_id: start.id, reason: 'direct' }]);
+        // Participants hear a director in the thread, mentioned or not (unchanged)
+        expect((await inbox(sx)).map(x => x.message_id)).toContain(r.id);
+        expect((await inbox(sc)).map(x => x.message_id)).toContain(r.id);
+    });
+
+    it('a task card session in its thread takes the mention, not the agent\'s channel session too', async () => {
+        const channelSession = await startSession(codex);
+        const parent = await post(owner.auth, 'card thread');
+        const scopedId = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, thread_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [scopedId, serverId, channelId, codex.botId, codex.profileId, owner.userId, parent.id]);
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const r = await reply(owner.auth, parent.id, '@codex go');
+        expect((await inbox(scopedId)).map(x => x.message_id)).toEqual([r.id]);
+        expect(await inbox(channelSession)).toEqual([]);
+    });
+
+    it('says why when an authorised mention of a known agent wakes nothing: no live session', async () => {
+        await startSession(claude);
+        const parent = await post(claude.auth, 'thread by another agent');
+        const since = generateUlid();
+        const r = await reply(owner.auth, parent.id, '@codex check the PR');
+        expect(r.id).toBeTruthy();
+        expect(await noticesSince(since)).toEqual([
+            { content: 'codex has no live session here, so nothing woke it. Start one with /start codex.', thread: parent.id },
+        ]);
+        // Top level too, and the parent's reply count includes the notice
+        const since2 = generateUlid();
+        await post(owner.auth, '@Codex are you there?');
+        expect(await noticesSince(since2)).toEqual([
+            { content: 'codex has no live session here, so nothing woke it. Start one with /start codex.', thread: null },
+        ]);
+        const count = await ctx.db.query('SELECT reply_count FROM messages WHERE id = $1', [parent.id]);
+        expect(count.rows[0].reply_count).toBe(2);
+    });
+
+    it('no notice for a member\'s mention, a plain bot mention, or a woken agent', async () => {
+        await startSession(codex);
+        const since = generateUlid();
+        await post(member.auth, '@claude hello?');
+        await post(owner.auth, '@outsider hello?');
+        await post(owner.auth, '@codex hello?');
+        expect(await noticesSince(since)).toEqual([]);
+    });
+});
+
 describe('commands (S4)', () => {
     const cmd = (auth: object, body: object) => ctx.request.post(`/channels/${channelId}/agent-commands`).set(auth).send(body);
 

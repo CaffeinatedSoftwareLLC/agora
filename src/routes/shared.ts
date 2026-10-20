@@ -2,6 +2,17 @@
  * Shared route utilities used across multiple route modules.
  */
 
+/** The usernames a message @mentions, lowercased (mentions are case-insensitive). */
+export function mentionTokens(content: string | null): string[] {
+    const matches: string[] = (content || '').match(/@([\w-]+)/g) || [];
+    return [...new Set(matches.map(m => m.slice(1).toLowerCase()))];
+}
+
+/** Does the message mention @everyone (any case)? */
+export function mentionsEveryoneIn(content: string | null): boolean {
+    return mentionTokens(content).includes('everyone');
+}
+
 /**
  * Parse @mentions from message content, resolve to user IDs, insert into
  * message_mentions, increment channel_unreads for human mentions, and
@@ -15,9 +26,8 @@ export async function resolveMentions(
     userId: string,
     content: string | null,
 ): Promise<{ mentionedUsers: { id: string; bot: boolean }[]; mentionsEveryone: boolean }> {
-    const mentionContent = content || '';
-    const mentionMatches: string[] = mentionContent.match(/@([\w-]+)/g) || [];
-    const mentionedUsernames = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
+    // Usernames are case-insensitive here, as at login: `@codex` mentions Codex
+    const mentionedUsernames = mentionTokens(content);
     const mentionsEveryone = mentionedUsernames.includes('everyone');
 
     const nonEveryoneUsernames = mentionedUsernames.filter((u: string) => u !== 'everyone');
@@ -29,18 +39,18 @@ export async function resolveMentions(
             validMentions = await db.query(
                 `SELECT u.id, u.bot FROM users u
                  INNER JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2
-                 WHERE u.username = ANY($1)
+                 WHERE lower(u.username) = ANY($1)
                  UNION
                  SELECT u.id, u.bot FROM users u
                  INNER JOIN bot_channel_access bca ON bca.bot_id = u.id
-                 WHERE bca.channel_id = $3 AND u.username = ANY($1)`,
+                 WHERE bca.channel_id = $3 AND lower(u.username) = ANY($1)`,
                 [nonEveryoneUsernames, serverId, channelId]
             );
         } else {
             validMentions = await db.query(
                 `SELECT u.id, u.bot FROM users u
                  INNER JOIN channel_members cm ON cm.user_id = u.id AND cm.channel_id = $2
-                 WHERE u.username = ANY($1)`,
+                 WHERE lower(u.username) = ANY($1)`,
                 [nonEveryoneUsernames, channelId]
             );
         }

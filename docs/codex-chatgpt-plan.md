@@ -40,7 +40,7 @@ You need a running Agora instance, an agent host on **your** machine (the one wi
    Optional, at the top level: `"siwc": { "dir": "C:/private/agora/siwc", "callbackPort": 1455 }`. `dir` is where the host keeps its host id and your credentials (default `~/.agora-host/siwc`); `callbackPort` is the loopback port for the sign-in (another free port is used if it's taken; `0` always picks a free one).
 
 2. **Connect your plan.** Either:
-   - In Agora, open **Settings → Agents**, find the Codex agent and press **Continue with ChatGPT**. The host opens a browser tab **on the host's machine**. Or:
+   - In Agora, open **Settings → Agents**, find the Codex agent and press **Continue with ChatGPT**. The host opens a browser tab **on the host's machine**, so do this at that computer: the sign-in's callback goes to `127.0.0.1` on the host, and approving from a phone isn't possible. The button only appears once the host reports the profile as `"auth": "siwc"` (step 1, then restart the host); until then the agent explains that and links here. The row shows the request's state: *Request sent, waiting for* the host → *Browser opened on* the host → connected or failed. A request the host doesn't pick up within 2 minutes (host not running, or the profile isn't siwc) fails as *Timed out*, and so does a sign-in still open after 10 minutes. Or:
    - On the host's machine: `agora-host siwc login --profile codex --config C:/private/agora/host.json`.
 
 3. **In the browser**, sign in to ChatGPT, choose the account and workspace, keep the agent name *Agora* (or rename it), and **allow Agora to use your ChatGPT plan**. The tab then says to return to Agora.
@@ -113,6 +113,8 @@ with `ACCESS_TOKEN` in the child's environment only and `CODEX_HOME` set to the 
 | Sign-in expired, revoked or disconnected in ChatGPT settings | *lost its ChatGPT sign-in* | Continue with ChatGPT again |
 | Token endpoint unreachable | The run is retried; credentials are kept | Nothing |
 | Consent declined in the browser | *Sign-in was declined* | Try again when ready |
+| The host never picked up the request (2 minutes) | *Timed out: the host never picked up the request* | Start agora-host, check the profile has `"auth": "siwc"`, try again |
+| Sign-in left open in the browser (host: 5 minutes; server backstop: 10) | *Timed out: sign-in didn't finish* | Try again at the host's computer |
 
 ## Limits
 

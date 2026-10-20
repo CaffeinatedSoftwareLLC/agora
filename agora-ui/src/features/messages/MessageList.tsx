@@ -1,6 +1,6 @@
 import { useUIStore } from '../../stores/uiStore';
 import { useShellViewport } from '../shell/viewport';
-import { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
+import { useEffect, useRef, useCallback, useState, useLayoutEffect, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -10,6 +10,9 @@ import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
 import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
+import { computeNoticeRuns, isHiddenInRun, resizeRunRows } from './systemNotices';
+import { NoticeRunToggle } from './SystemNoticeRun';
+import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 
 interface MessageListProps {
   channelId: string;
@@ -42,17 +45,40 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   const count = messages?.length ?? 0;
   const hasMessages = count > 0;
 
+  // Consecutive plain system notices fold into one "N system notices" row (#118).
+  // Every message keeps its own virtual row; hidden members of a collapsed run render empty (0px).
+  const noticeRuns = useMemo(() => computeNoticeRuns(messages ?? []), [messages]);
+  const { isExpanded: isRunExpanded, toggle: toggleRun, keys: expandedKeys } = useExpandedNoticeRuns(userId);
+  const estimateAt = (index: number): number => {
+    if (!messages?.[index]) return 48;
+    const run = noticeRuns[index];
+    if (run) {
+      const expanded = isRunExpanded(run.key);
+      if (isHiddenInRun(run, expanded)) return 0;
+      if (run.position === 0) return expanded ? 76 : 36;
+    }
+    const prev = index > 0 ? messages[index - 1] : undefined;
+    return estimateMessageHeight(prev, messages[index]);
+  };
+
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => {
-      if (!messages?.[index]) return 48;
-      const prev = index > 0 ? messages[index - 1] : undefined;
-      return estimateMessageHeight(prev, messages[index]);
-    },
+    estimateSize: estimateAt,
     overscan: 15,
     getItemKey: (index) => messages?.[index]?.id ?? String(index),
   });
+
+  // A run opened or closed: drop the cached heights of its rows, offscreen ones included
+  const prevExpandedRef = useRef(expandedKeys);
+  useLayoutEffect(() => {
+    const prev = prevExpandedRef.current;
+    prevExpandedRef.current = expandedKeys;
+    if (prev === expandedKeys) return;
+    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)));
+    if (changed.size > 0) resizeRunRows(virtualizer, noticeRuns, changed, estimateAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedKeys]);
 
   // Load messages on channel change
   useEffect(() => {
@@ -106,7 +132,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
         const prependedCount = currentCount - prevCount;
         const el = parentRef.current;
         if (el) {
-          const shift = computePrependShift(messages, prependedCount);
+          const shift = computePrependShift(messages, prependedCount, estimateAt);
           el.scrollTop += shift;
           pendingCorrectionRef.current = {
             anchorIndex: prependedCount,
@@ -253,10 +279,13 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
           {virtualItems.map((virtualRow) => {
             const msg = messages[virtualRow.index];
             const prevMsg = virtualRow.index > 0 ? messages[virtualRow.index - 1] : undefined;
+            const run = noticeRuns[virtualRow.index];
+            const runExpanded = run ? isRunExpanded(run.key) : false;
             return (
               <div
                 key={msg.id}
                 data-index={virtualRow.index}
+                data-notice-hidden={isHiddenInRun(run, runExpanded) || undefined}
                 ref={virtualizer.measureElement}
                 style={{
                   position: 'absolute',
@@ -266,14 +295,19 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                <MessageItem
-                  message={msg}
-                  isGrouped={shouldGroup(prevMsg, msg)}
-                  isOwn={msg.authorId === userId}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  channelId={channelId}
-                />
+                {run?.position === 0 && (
+                  <NoticeRunToggle count={run.size} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
+                )}
+                {(!run || runExpanded) && (
+                  <MessageItem
+                    message={msg}
+                    isGrouped={shouldGroup(prevMsg, msg)}
+                    isOwn={msg.authorId === userId}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    channelId={channelId}
+                  />
+                )}
               </div>
             );
           })}

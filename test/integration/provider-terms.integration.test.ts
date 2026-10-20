@@ -219,6 +219,24 @@ describe('subscription profiles: direct messages', () => {
     });
 });
 
+describe('subscription profiles: thread mentions (#120)', () => {
+    it("a director's @mention in an unbound thread is refused with a notice in that thread; the owner's wakes it", async () => {
+        const s = await startSession(alpha);
+        await setMode(beta, 'api_key');
+        await startSession(beta);
+        const parent = await post(beta.auth, 'a thread by another agent');
+        const since = mark();
+        await reply(director.auth, parent.id, '@alpha check the PR');
+        await reply(member.auth, parent.id, '@ALPHA please?');
+        expect(await inbox(s)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha'), NOTICE('alpha')]);
+        const inThread = await ctx.db.query(`SELECT count(*)::int AS n FROM messages WHERE thread_id = $1 AND system_event = 'agent_session'`, [parent.id]);
+        expect(inThread.rows[0].n).toBe(2);
+        const mine = await reply(owner.auth, parent.id, '@Alpha check the PR');
+        expect(await inbox(s)).toEqual([{ message_id: mine.id, reason: 'direct' }]);
+    });
+});
+
 describe('subscription profiles: commands', () => {
     it('only the owner can /start or /resume it; a director gets subscription_owner_only', async () => {
         const refused = await cmd(director.auth, { command: 'start', profile: 'alpha' });

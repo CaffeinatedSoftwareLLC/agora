@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
-import { ChatGPTPlanConnect, USAGE_URL, type PlanConnection } from './ChatGPTPlanConnect';
+import { ChatGPTPlanConnect, SIWC_DOCS_URL, USAGE_URL, type PlanConnection } from './ChatGPTPlanConnect';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() }); });
 const post = vi.hoisted(() => vi.fn());
@@ -29,7 +29,7 @@ describe('Continue with ChatGPT', () => {
     vi.useFakeTimers();
     const onChange = vi.fn();
     render(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="desktop" plan={plan('in_progress')} siwcMode onChange={onChange} />);
-    expect(screen.getByRole('status').textContent).toBe('Finish signing in in the browser on desktop.');
+    expect(screen.getByRole('status').textContent).toBe('Browser opened on desktop. Finish signing in there.');
     expect((screen.getByText('Continue with ChatGPT') as HTMLButtonElement).disabled).toBe(true);
     act(() => { vi.advanceTimersByTime(3100); });
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -53,9 +53,34 @@ describe('Continue with ChatGPT', () => {
     expect(screen.getByRole('status').textContent).toBe('Sign-in was declined in the browser.');
   });
 
-  it('says what to change in the host config when the profile is not siwc', () => {
+  it('offers no Connect when the host does not run the profile as siwc, and links the setup docs (#115)', () => {
     render(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="desktop" plan={undefined} siwcMode={false} onChange={vi.fn()} />);
     expect(screen.getByText(/in the host's config and restart the host first/)).toBeTruthy();
+    expect(screen.queryByText('Continue with ChatGPT')).toBeNull();
+    expect(screen.getByText('How to set it up').getAttribute('href')).toBe(SIWC_DOCS_URL);
+  });
+
+  it('shows each request state and says the browser opens on the host (#115)', () => {
+    const { rerender } = render(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="tim" plan={plan('requested')} siwcMode onChange={vi.fn()} />);
+    expect(screen.getByRole('status').textContent).toBe('Request sent. Waiting for tim to pick it up…');
+    expect(screen.getByText(/The browser opens on tim, not on this device/)).toBeTruthy();
+    expect(screen.getByText(/Approving from a phone isn't possible/)).toBeTruthy();
+    rerender(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="tim" plan={plan('in_progress')} siwcMode onChange={vi.fn()} />);
+    expect(screen.getByRole('status').textContent).toBe('Browser opened on tim. Finish signing in there.');
+    rerender(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="tim" plan={plan('failed', { error: 'request_timed_out' })} siwcMode onChange={vi.fn()} />);
+    expect(screen.getByRole('status').textContent).toMatch(/^Timed out: the host never picked up the request/);
+    expect((screen.getByText('Continue with ChatGPT') as HTMLButtonElement).disabled).toBe(false);
+    rerender(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="tim" plan={plan('failed', { error: 'sign_in_timeout' })} siwcMode onChange={vi.fn()} />);
+    expect(screen.getByRole('status').textContent).toMatch(/^Timed out: sign-in didn't finish/);
+    rerender(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="tim" plan={plan('connected')} siwcMode onChange={vi.fn()} />);
+    expect(screen.queryByText(/The browser opens on tim/)).toBeNull();
+  });
+
+  it('explains the server refusing a profile that is not siwc', async () => {
+    post.mockRejectedValue(new ApiError(400, 'siwc_not_configured'));
+    render(<ChatGPTPlanConnect serverId={S} profileId={P} hostName="desktop" plan={undefined} siwcMode onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText('Continue with ChatGPT'));
+    expect((await screen.findByRole('alert')).textContent).toContain('"auth": "siwc"');
   });
 
   it('shows who may connect when the server refuses', async () => {

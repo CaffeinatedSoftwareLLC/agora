@@ -1,6 +1,6 @@
 import { generateUlid } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
-import { postNotice, type Notice } from './agent-runs';
+import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { planNotice, PLAN_OWNER_SQL } from './provider-terms';
 import { noticeStandby } from './terminal-sessions';
 
@@ -16,6 +16,11 @@ import { noticeStandby } from './terminal-sessions';
  *   wakes the other participants → 'protocol';
  * - in a bound thread, protocol messages from participants hand off (YIELD, ACK, DECIDE),
  *   and messages from someone who can direct reach every participant.
+ * - in any other thread (#120), a reply from someone who can direct that @mentions an agent
+ *   wakes that agent's channel session with the thread as its destination ('direct'); in a
+ *   bound thread this adds only agents that aren't participants.
+ * - an @mention of a known agent by a person who can direct that wakes nothing (no live
+ *   session here) gets a short notice saying why, where the mention was posted.
  * - opt-in lurkers hear otherwise unrouted channel posts and thread replies, except
  *   their own posts and posts by other lurkers. System notices never route here.
  * - a session scoped to a thread (a task card's or a subtask's, docs/task-board.md) takes no
@@ -200,12 +205,16 @@ async function closeThread(db: any, threadId: string, sessionIds: string[], canc
  * subscription rule refused, to emit after the transaction commits.
  */
 export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[]> {
-    // Cheap check first: most channels have no agent sessions
-    const any: { rows: unknown[] } = await asService(db, () => db.query(
-        `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND state = 'live' LIMIT 1`,
-        [msg.channelId]
-    ));
-    if (any.rows.length === 0) return [];
+    // Cheap check first: most channels have no agent sessions. A mention still needs a look:
+    // it may address an agent that has no session here, which gets a notice.
+    const mentionsSomeone = msg.couldDirect && msg.mentionedUserIds.length > 0;
+    if (!mentionsSomeone) {
+        const any: { rows: unknown[] } = await asService(db, () => db.query(
+            `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND state = 'live' LIMIT 1`,
+            [msg.channelId]
+        ));
+        if (any.rows.length === 0) return [];
+    }
 
     return asService(db, async () => {
         const authorId = msg.authorId.trim();
@@ -241,9 +250,47 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
                 if (s.botId !== authorId && msg.mentionedUserIds.some(id => id.trim() === s.botId)) await noticeStandby(db, msg.channelId, s.botId, notices);
             }
         }
-        for (const s of ctx.refused.values()) notices.push(await postNotice(db, msg.channelId, planNotice(s.profileName, s.authMode, !!s.planOwnerId)));
+        // A notice answers where the message was posted: in its thread for a reply
+        const say = async (content: string) => {
+            notices.push(await postNotice(db, msg.channelId, content, msg.threadId));
+            if (msg.threadId) notices.push(await threadReplyCounted(db, msg.channelId, msg.threadId));
+        };
+        for (const s of ctx.refused.values()) await say(planNotice(s.profileName, s.authMode, !!s.planOwnerId));
+        if (msg.couldDirect && authorHuman) {
+            const refusedBots = new Set([...ctx.refused.values()].map(s => s.botId));
+            for (const name of await unreachable(db, msg, authorId, terminalBots, refusedBots)) {
+                await say(`${name.username} has no live session here, so nothing woke it. Start one with /start ${name.profile}.`);
+            }
+        }
         return notices;
     });
+}
+
+/**
+ * Known agents (a profile on this server) the message @mentions that it woke nothing for and
+ * that no other notice covers: no live session in the channel, nor one scoped to this thread.
+ * An agent on standby (its live terminal session hears the message itself) or refused by the
+ * plan-owner rule isn't listed; those have their own notices.
+ */
+async function unreachable(db: any, msg: RoutedMessage, authorId: string, terminalBots: Set<string>, refusedBots: Set<string>): Promise<Array<{ username: string; profile: string }>> {
+    const ids = [...new Set(msg.mentionedUserIds.map(id => id.trim()))]
+        .filter(id => id !== authorId && !terminalBots.has(id) && !refusedBots.has(id));
+    if (ids.length === 0) return [];
+    const rows = await db.query(
+        `SELECT DISTINCT ON (p.bot_id) p.bot_id, u.username, p.name
+         FROM agent_profiles p
+         JOIN users u ON u.id = p.bot_id
+         JOIN channels c ON c.id = $2 AND c.server_id = p.server_id
+         WHERE p.bot_id = ANY($1)
+           AND NOT EXISTS (SELECT 1 FROM agent_inbox i JOIN agent_sessions s ON s.id = i.session_id
+                           WHERE i.message_id = $3 AND s.bot_id = p.bot_id)
+           AND NOT EXISTS (SELECT 1 FROM agent_sessions s
+                           WHERE s.bot_id = p.bot_id AND s.channel_id = $2 AND s.state = 'live'
+                             AND (s.thread_id IS NULL OR s.thread_id = $4))
+         ORDER BY p.bot_id, p.name`,
+        [ids, msg.channelId, msg.messageId, msg.threadId]
+    );
+    return rows.rows.map((r: any) => ({ username: r.username, profile: r.name }));
 }
 
 async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], authorSession: LiveSession | undefined, ctx: RouteContext, agents: number): Promise<void> {
@@ -274,15 +321,21 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
         return;
     }
     let targets = others.filter(s => mentioned.has(s.botId));
-    if (targets.length === 0 && others.length === 1 && sessions.length === 1 && agents === 1) targets = others;
+    if (targets.length === 0 && others.length === 1 && sessions.length === 1 && agents === 1) {
+        // The only agent here, unless the post is addressed to some other bot (#120)
+        const otherBot = mentioned.size > 0 && (await db.query(
+            `SELECT 1 FROM users WHERE id = ANY($1) AND bot = true LIMIT 1`, [[...mentioned]]
+        )).rows.length > 0;
+        if (!otherBot) targets = others;
+    }
     await addInbox(db, permitted(targets, 'direct', ctx), msg.messageId, null, 'direct');
 }
 
 async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string, ctx: RouteContext): Promise<void> {
     const threadId = msg.threadId!;
     // A task card's or subtask's own thread: someone who can direct speaks to its agent
+    const scoped = (await liveSessions(db, msg.channelId, threadId)).filter(s => s.botId !== authorId);
     if (msg.couldDirect) {
-        const scoped = (await liveSessions(db, msg.channelId, threadId)).filter(s => s.botId !== authorId);
         await addInbox(db, permitted(scoped, 'direct', ctx), msg.messageId, threadId, 'direct');
     }
     const binding = await db.query(
@@ -290,9 +343,22 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
         [threadId]
     );
     const bound = binding.rows[0];
+    const boundIds = new Set<string>(bound ? (bound.session_ids as string[]).map(id => id.trim()) : []);
+
+    // An @mention in any thread (#120): the agent's channel session answers in this thread.
+    // Participants of a bound thread keep the rules below; an agent with its own session
+    // scoped to this thread already heard it there.
+    const mentioned = new Set(msg.mentionedUserIds.map(id => id.trim()));
+    const scopedBots = new Set(scoped.map(s => s.botId));
+    const addressed = sessions.filter(s => mentioned.has(s.botId) && s.botId !== authorId && !boundIds.has(s.id) && !scopedBots.has(s.botId));
+    if (msg.couldDirect) {
+        await addInbox(db, permitted(addressed, 'direct', ctx), msg.messageId, threadId, 'direct');
+    } else if (ctx.authorHuman) {
+        // As at the top level: a person without DirectAgents @mentions a plan-owned agent; say why nothing happens
+        for (const s of addressed) if (s.subscription) ctx.refused.set(s.id, s);
+    }
     if (!bound) return;
 
-    const boundIds = new Set<string>((bound.session_ids as string[]).map(id => id.trim()));
     const participants = sessions.filter(s => boundIds.has(s.id));
     const author = participants.find(s => s.botId === authorId);
     const others = participants.filter(s => s.botId !== authorId);

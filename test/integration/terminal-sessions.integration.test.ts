@@ -168,6 +168,17 @@ describe('terminal session lifecycle', () => {
 });
 
 describe('single responder', () => {
+    test('a thread @mention while the terminal is live wakes no hosted run (#120); the terminal hears it', async () => {
+        const hostedId = await startHosted();
+        await connectTerminal(claude);
+        const parent = await post(member.auth, 'a question in a thread');
+        const res = await ctx.request.post(`/channels/${channelId}/messages/${parent.id}/replies`).set(owner.auth).send({ content: `@${claude.name.toUpperCase()} take a look` });
+        expect(res.status).toBe(201);
+        expect(res.body.mentions).toEqual([claude.id]);
+        expect(await inbox(hostedId)).not.toContain(res.body.id);
+        expect(await notices('has no live session')).toBe(0);
+    });
+
     test('a live terminal session keeps @mentions out of the hosted inbox; after presence drops, hosted works again', async () => {
         const hostedId = await startHosted();
         const { socket } = await connectTerminal(claude);
