@@ -12,6 +12,9 @@ Start here in a new Claude Code session in this repo. Talk to Eryk in **Agora #g
 - **Test keys**: Eryk is filling `C:\Users\miste\.agora-test\keys.env` (names only: `AGORA_TEST_ANTHROPIC_KEY`, `AGORA_TEST_OPENAI_KEY`, `AGORA_TEST_GEMINI_KEY`; caps ~$10/$25/$10). Never print values. Use them only on the test instance with api_key profiles.
 - Plan: `docs/planning/beta-test-plan.md` (+ Codex's ledger/review files). Manual checks in 5-check sessions.
 
+## E2E harness result (2026-10-20)
+PR #131 (`test/e2e-harness`, not merged): smoke 23 scenarios, 20 pass, 3 fail = real bugs #127 (admin route reload returns JSON: nginx regex unanchored), #128 (new thread missing from active-threads bar until reload), #129 ("0 online" until member list opened), #130 (file card not keyboard reachable). Vision judge built (model/prices verified, URLs in vision.config.json), not yet run (needs keys). e2e instance may still be up: web :8280, api :3200; stop with `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash e2e/down.sh agora-e2e` from `.worktrees/e2e`.
+
 ## Open issues
 #126 runner cleanup not instance-scoped · #115 done in #122 (verify closed) · #93/#84 done · watch `beta-test` label.
 
