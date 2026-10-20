@@ -6,7 +6,7 @@ import { cardAsker, splitCommand, type Ask, type Decision } from '../src/siwc/ap
 import { appServerRules, type Launch } from '../src/adapters.js';
 import { resolvePermissions } from '../src/presets.js';
 import type { HostApi } from '../src/types.js';
-import { claim, tempDir } from './helpers.js';
+import { claim, stubCommands, tempDir } from './helpers.js';
 
 /**
  * Codex app-server approvals become tool-request cards (#93), against a fake app-server that
@@ -188,7 +188,9 @@ describe('app-server approval requests', () => {
     });
 
     it('without a card flow (older server) declines and reports the rule for the after-run card', async () => {
-        const { answers, result } = await run([command(23, 'gh pr list', { cwd: tmp.dir })]);
+        // Bash(gh:*) is only offered for a gh found on PATH (otherwise the card asks for Bash)
+        const gh = await stubCommands(['gh']);
+        const { answers, result } = await run([command(23, 'gh pr list', { cwd: tmp.dir })], {}, { env: { PATH: gh.path } }).finally(gh.cleanup);
         expect(answers(23)[0].result).toEqual({ decision: 'decline' });
         expect(result.deniedTools).toEqual(['Bash(gh:*)']);
     });

@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { join, resolve, relative } from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { delimiter, join, resolve, relative } from 'node:path';
 import { configSchema, type Config } from '../src/config.js';
 import type { Claim, Result } from '../src/types.js';
 
@@ -38,4 +38,16 @@ export function deferred<T>() {
     let resolve!: (value: T) => void; let reject!: (error: unknown) => void;
     const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
     return { promise, resolve, reject };
+}
+/**
+ * Stand-ins for CLIs a test names in a tool call but never runs (`gh`), so the host's
+ * executable check finds them on PATH whether or not the machine has them installed.
+ * `path` is PATH with the stub directory first.
+ */
+export async function stubCommands(names: string[]): Promise<{ path: string; cleanup(): Promise<void> }> {
+    const t = await tempDir();
+    for (const name of names) {
+        await writeFile(join(t.dir, process.platform === 'win32' ? `${name}.exe` : name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    return { path: [t.dir, process.env.PATH ?? ''].join(delimiter), cleanup: t.cleanup };
 }

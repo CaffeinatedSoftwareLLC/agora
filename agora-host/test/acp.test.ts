@@ -11,7 +11,7 @@ import { ProcessRunner } from '../src/process.js';
 import { probeAcp, summaryOf, type AcpPlan } from '../src/acp/session.js';
 import { allowedCall, commandOf, locationsInside, geminiPolicy, outcome, ruleForCall } from '../src/acp/permissions.js';
 import { HostConfigError } from '../src/terms.js';
-import { claim, config, tempDir } from './helpers.js';
+import { claim, config, stubCommands, tempDir } from './helpers.js';
 
 /** The ACP adapter path (src/acp/), driven against test/fixtures/fake-acp-agent.mjs. */
 
@@ -151,9 +151,12 @@ describe('ACP permission rules', () => {
         expect(await argv([join(repo.dir, 'tools', 'bash'), '-lc', 'git status'])).toBe(false);
         // A command missing from PATH is refused
         expect(await run('gitx status', { rules: new Set(['Bash(gitx status:*)']) })).toBe(false);
-        // Windows looks in the current directory before PATH: a repo git.exe there refuses `git`
+        // A repo-root git refuses `git`: Windows looks in the current directory before PATH, and
+        // on POSIX this PATH starts with `.`, which is the current directory too
         await writeFile(join(repo.dir, exe), '');
-        expect(await run('git status')).toBe(!win);
+        expect(await run('git status')).toBe(false);
+        // Without `.` in PATH, POSIX never looks in the current directory
+        expect(await run('git status', { env: { ...env, PATH: bin.dir } })).toBe(!win);
         // A bare Bash grant already allows any command
         expect(await run('./git status', { rules: new Set(['Bash']) })).toBe(true);
     });
@@ -197,7 +200,10 @@ describe('ACP permission rules', () => {
 describe('ACP session turn (fake agent)', () => {
     it('runs one turn: answers permissions from the rules, reports denials, diffs, plan, usage', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);
+        // The fake agent asks for `gh`; a narrow Bash(gh:*) rule needs it on PATH
+        const gh = await stubCommands(['gh']); cleanups.push(gh.cleanup);
         const { result, messages, sent, child } = await run({
+            PATH: gh.path,
             ACP_TOOLS: tools(t.dir), ACP_USAGE: JSON.stringify({ totalTokens: 42, inputTokens: 30, outputTokens: 12 }),
             ACP_CONFIG: JSON.stringify([{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'flash',
                 options: [{ value: 'flash', name: 'Flash' }, { group: 'pro', name: 'Pro', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }]),
