@@ -1,0 +1,22 @@
+{
+  "name": "agora-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Playwright UI E2E harness for Agora (disposable agora-e2e instance only)",
+  "type": "module",
+  "scripts": {
+    "up": "wsl.exe -d Ubuntu -- bash up.sh",
+    "down": "wsl.exe -d Ubuntu -- bash down.sh agora-e2e",
+    "test": "playwright test",
+    "smoke": "playwright test --grep @smoke",
+    "judge": "tsx vision-judge.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "0.136.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^22.10.0",
+    "tsx": "4.23.15",
+    "typescript": "^5.7.0"
+  }
+}

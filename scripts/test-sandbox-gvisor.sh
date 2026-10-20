@@ -11,9 +11,10 @@
 # It starts its own Postgres, Redis, socket proxy and internal network (all named
 # agora-sbxtest-* / agora_sandbox_test) and removes them when it finishes.
 #
-# CAUTION: the suite removes every container named agora-run-* on this engine. If an
-# Agora stack shares the engine, a code run in progress there is killed. The script
-# stops if it sees one; set FORCE=1 to run anyway.
+# CAUTION: the suite force-removes every agora-run-* container on this engine
+# (SandboxDocker.removeOrphans), and a live runner restart can remove the suite's. So it
+# refuses to run on an engine that hosts any Agora stack or runtime container, running or
+# stopped. There is no override: run it on a dedicated engine (until #126 lands).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,15 +28,8 @@ PG_PORT=15432
 REDIS_PORT=16379
 PROXY_PORT=12375
 
-if ! docker info --format '{{range $name, $_ := .Runtimes}}{{$name}} {{end}}' | grep -qw runsc; then
-    echo "gVisor (runsc) is not registered with this Docker engine. See docs/getting-started.md." >&2
-    exit 1
-fi
-if [ -n "$(docker ps -q --filter name=agora-run-)" ] && [ "${FORCE:-}" != "1" ]; then
-    echo "A sandbox run (agora-run-*) is in progress on this engine and the suite would kill it." >&2
-    echo "Wait for it to finish, or set FORCE=1." >&2
-    exit 1
-fi
+# Refuses unless this engine has gVisor and no Agora containers (no override).
+source scripts/lib/engine-guard.sh
 
 cleanup() {
     docker rm -f "$RUNNER" "$PG" "$REDIS" "$PROXY" agora-test-cap-forwarder agora-neg-target >/dev/null 2>&1 || true
