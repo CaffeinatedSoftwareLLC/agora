@@ -15,6 +15,8 @@ Start here in a new Claude Code session in this repo. Talk to Eryk in **Agora #g
 ## E2E harness result (2026-10-20)
 PR #131 (`test/e2e-harness`, not merged): smoke 23 scenarios, 20 pass, 3 fail = real bugs #127 (admin route reload returns JSON: nginx regex unanchored), #128 (new thread missing from active-threads bar until reload), #129 ("0 online" until member list opened), #130 (file card not keyboard reachable). Vision judge built (model/prices verified, URLs in vision.config.json), not yet run (needs keys). e2e instance may still be up: web :8280, api :3200; stop with `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash e2e/down.sh agora-e2e` from `.worktrees/e2e`.
 
+**Before merging #131:** Codex hasn't reviewed it. Codex's #125 re-review (applied to the plan in c2aa095) means #131's vision judge must not upload screenshots automatically (DOM-text leak scan doesn't cover pixels — keep `--judge` disabled/gated until a pixel-aware review exists) and nothing may run `scripts/test-sandbox-gvisor.sh` on the live daemon. Fix those in #131, then have Codex review, then merge.
+
 ## Open issues
 #126 runner cleanup not instance-scoped · #115 done in #122 (verify closed) · #93/#84 done · watch `beta-test` label.
 
