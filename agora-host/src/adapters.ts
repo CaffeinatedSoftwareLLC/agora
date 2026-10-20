@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
-import { ensureWorkspace, workspaceWritableRoots, type Workspace } from './workspaces.js';
+import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { CODEX_WORDS, resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
 import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
@@ -178,9 +178,6 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
         }
         if (local.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
-        // Commits in the session worktree write to the main repo's .git, outside workspace-write (#113)
-        const gitRoots = local.adapter === 'codex' && perms.codex.sandbox === 'workspace-write'
-            ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(await workspaceWritableRoots(workspace))}`] : [];
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];
@@ -195,7 +192,6 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 // output schema go over JSON-RPC (siwc/appserver.ts)
                 args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS,
                     '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
-                    ...gitRoots,
                     ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                     ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
                     ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
@@ -210,7 +206,6 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             }
             args = ['exec', '--ignore-user-config', '-s', perms.codex.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
-                ...gitRoots,
                 ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                 ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
                 ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : []),

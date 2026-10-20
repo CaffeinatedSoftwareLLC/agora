@@ -210,3 +210,22 @@ async function executeOperation(local: LocalProfile, cmd: ReviewCommand, runGh: 
         return { headSha: sha, message: `Squash-merged into ${base}` };
     } finally { await withGitSignal(AbortSignal.timeout(15000),()=>git(w.cwd, ['worktree', 'remove', '--force', temp])).catch(() => {}); }
 }
+
+/**
+ * Commit what a finished run changed in its session worktree, on the session branch (#113).
+ * Codex's sandbox can't write the shared .git, and granting it refs would let it move other
+ * branches, so the host commits for the agent. Hooks off; nothing is committed if nothing changed.
+ * Returns the new head sha, or undefined when the tree was clean.
+ */
+export async function commitRun(w: Workspace, bot: { name: string; botId: string }, summary: string | null): Promise<string | undefined> {
+    await validateWorkspace(w);
+    await git(w.cwd, ['add', '-A', '--', '.']);
+    try { await git(w.cwd, ['diff', '--cached', '--quiet']); return; } catch (e: any) { if (e.code !== 1) throw e; }
+    const subject = oneLine(summary ?? '') || 'Agent changes';
+    const name = oneLine(bot.name).replace(/[<>]/g, '') || 'agent';
+    await git(w.cwd, ['-c', `user.name=${name}`, '-c', `user.email=${bot.botId}@agora.invalid`, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+        'commit', '--no-verify', '-m', `${subject}
+
+Agent: ${name}`]);
+    return (await git(w.cwd, ['rev-parse', 'HEAD'])).trim();
+}

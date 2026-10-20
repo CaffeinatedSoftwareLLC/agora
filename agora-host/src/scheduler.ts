@@ -9,7 +9,7 @@ import { attachRunImages } from './images.js';
 import { NON_RETRYABLE, TermsRefusal } from './terms.js';
 import { planLoop } from './siwc/requests.js';
 import { ACP_FATAL } from './acp/session.js';
-import { snapshotTree, checkpoint, executeReview, type Checkpoint } from './review.js';
+import { snapshotTree, checkpoint, commitRun, executeReview, type Checkpoint } from './review.js';
 import { verifyPrompt } from './prompt.js';
 import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
 import { runPreview } from './preview.js';
@@ -134,6 +134,11 @@ export class Scheduler {
             if (finished && launch?.workspace && beforeTree) {
                 try { savedCheckpoint = await checkpoint(launch.workspace, claim.run.id, beforeTree); }
                 catch { this.log('checkpoint_failed'); }
+                // The host commits for the agent; its sandbox can't write the shared .git (#113)
+                if (result?.success && !launch.lurk) {
+                    try { await commitRun(launch.workspace, { name: claim.profile.name, botId: claim.profile.botId }, result.summary); }
+                    catch { this.log('auto_commit_failed'); }
+                }
             }
             if (interval) clearInterval(interval);
             // Finish any heartbeat before reporting; no post-completion heartbeat race.
