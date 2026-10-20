@@ -233,7 +233,8 @@ preset's Claude rules don't count: an approved request runs outside the sandbox,
 `dev`'s `Bash(node:*)` doesn't approve an escalated `node` command by itself.
 
 Anything else in the worktree becomes a tool-request card while the request is held:
-the card names the rule and shows the command, and is bound to that one request
+the card names the rule and shows the whole command and its cwd (a command over 8 KB
+is declined rather than truncated), and is bound to that one request
 (its key hashes the thread, turn, item and JSON-RPC id). **Approve once** and
 **Always** answer the request `accept` (Always also adds the rule to the profile;
 the host never sends `acceptForSession` or execpolicy amendments, so Codex remembers
@@ -241,7 +242,9 @@ nothing), **Deny** answers `decline`. A program that isn't a trusted executable,
 as a PowerShell cmdlet, is asked for as the whole shell (`Bash`). A path outside the
 worktree is declined without a card. The card denies itself after
 `approvalWaitSeconds` (top-level config, default 300) and expires when Codex resolves
-the request itself, the turn ends or the run stops; an expired card approves nothing.
+the request itself, the turn ends, the run stops, or the session is stopped, shelved,
+paused or loses channel access; an expired card approves nothing, and a decision
+made before a stop is never relayed after it.
 On a server without live tool requests, the request is declined and reported as an
 after-run card, as before.
 

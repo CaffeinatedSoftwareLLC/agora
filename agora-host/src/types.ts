@@ -115,7 +115,7 @@ export interface HostApi {
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;
     reportProfiles?(profiles: ProfileReport[]): Promise<void>;
     /** Post a card for one approval request a running turn holds (#93); status 'pending' until decided. */
-    openToolRequest?(claim: Claim, body: { tool: string; requestKey: string; waitSeconds: number; detail: string | null }, signal?: AbortSignal): Promise<{ id: string | null; status: string }>;
+    openToolRequest?(claim: Claim, body: { tool: string; requestKey: string; waitSeconds: number; detail: string | null; cwd: string | null }, signal?: AbortSignal): Promise<{ id: string | null; status: string }>;
     /** A live request's decision; `close` ends the wait (expired if still undecided). */
     toolRequest?(claim: Claim, requestId: string, close?: 'timeout' | 'resolved' | 'stopped', signal?: AbortSignal): Promise<{ status: string }>;
     claimPlanRequest?(signal?: AbortSignal): Promise<PlanRequest | null>;

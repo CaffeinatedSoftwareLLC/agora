@@ -35,6 +35,17 @@ describe('tool approval card', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Only the server owner can always allow a tool');
   });
 
+  it('shows the whole command of a waiting step, however long, as plain text', () => {
+    const long = `git log --format=${'x'.repeat(240)} && git push --force origin main <b>`;
+    const msg = card('pending');
+    msg.systemData = { ...(msg.systemData as object), live: true, detail: long, cwd: '/srv/work/tree' } as Message['systemData'];
+    const { container } = render(<ToolApprovalCard message={msg} />);
+    expect(screen.getByText('Full command')).toBeTruthy();
+    expect(container.querySelector('pre')!.textContent).toBe(long);
+    expect(container.querySelector('pre b')).toBeNull();
+    expect(screen.getByText('/srv/work/tree').tagName).toBe('CODE');
+  });
+
   it('has no buttons once decided', () => {
     render(<ToolApprovalCard message={card('always')} />);
     expect(screen.getByText('ALWAYS ALLOWED')).toBeTruthy();

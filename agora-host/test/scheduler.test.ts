@@ -126,7 +126,7 @@ describe('Codex app-server approvals (#93)', () => {
         await vi.advanceTimersByTimeAsync(2500);
         await expect(decision).resolves.toBe('once');
         expect(api.openToolRequest).toHaveBeenCalledWith(expect.objectContaining({ run: expect.objectContaining({ id: id(1) }) }),
-            { tool: 'Bash(gh:*)', requestKey: 'b'.repeat(64), waitSeconds: 120, detail: 'gh pr list' });
+            { tool: 'Bash(gh:*)', requestKey: 'b'.repeat(64), waitSeconds: 120, detail: 'gh pr list', cwd: null });
         children[0].finish.resolve(successful); await work;
     });
 });

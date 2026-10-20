@@ -514,6 +514,7 @@ async function shelveForBudget(c: PoolClient, sessionId: string, channelId: stri
         [sessionId]
     );
     await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
+    await expireLiveRequests(c, { sessionIds: [sessionId] }, 'stopped', notices);
     notices.push(await sessionUpdate(c, sessionId, false));
     notices.push(await postNotice(c, channelId, exhausted === sessionId
         ? `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`
@@ -600,11 +601,16 @@ export async function heartbeat(pool: Pool, host: Host, runId: string, claimToke
  * A running turn's approval request (#93): post its card, or report the one already posted
  * for this key. The host waits for the decision with liveToolRequest().
  */
-export async function openToolRequest(pool: Pool, host: Host, runId: string, body: { claimToken: string; tool: string; requestKey: string; waitSeconds: number; detail?: string | null },
+export async function openToolRequest(pool: Pool, host: Host, runId: string, body: { claimToken: string; tool: string; requestKey: string; waitSeconds: number; detail?: string | null; cwd?: string | null },
                                       notices: Notice[]) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, body.claimToken, null, notices);
         if (!check.ok) return { status: check.status, body: check.body };
+        // A stopped, shelved, ended, paused or locked-out session waits on nothing
+        if (await cancelReason(c, check.run)) {
+            await expireLiveRequests(c, { runId }, 'stopped', notices);
+            return { status: 200, body: { id: null, status: 'cancelled' } };
+        }
         return { status: 200, body: await openLiveRequest(c, check.run, body, notices) };
     });
 }
@@ -618,6 +624,12 @@ export async function liveToolRequest(pool: Pool, host: Host, runId: string, req
         // Session is locked by checkRun, so a decision can't interleave (lock order: session → request)
         const r = await c.query(`SELECT status FROM agent_tool_requests WHERE id = $1 AND run_id = $2 AND request_key IS NOT NULL FOR UPDATE`, [requestId, runId]);
         if (!r.rows[0]) return { status: 404, body: { error: 'not_found' } };
+        // Once the run must stop, nothing it waited on may run, even a decision made before the
+        // stop that the host hasn't read yet
+        if (await cancelReason(c, check.run)) {
+            await expireLiveRequests(c, { runId }, 'stopped', notices);
+            return { status: 200, body: { status: 'cancelled' } };
+        }
         if (body.close && r.rows[0].status === 'waiting') {
             await expireLiveRequests(c, { runId, requestId }, body.close, notices);
             return { status: 200, body: { status: 'expired' } };
@@ -633,7 +645,7 @@ export function cleanStep(step: string | null | undefined): string | null {
 }
 
 /** Why the host must stop this run, or null. */
-async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
+export async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     if (run.cancel_requested) return run.cancel_reason ?? 'ended';
     const s = await c.query(
         `SELECT s.state, s.channel_id, s.bot_id FROM agent_sessions s WHERE s.id = $1`,

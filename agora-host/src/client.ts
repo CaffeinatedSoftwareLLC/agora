@@ -140,7 +140,7 @@ export class Client implements HostApi {
         }
     }
     /** A card for one approval request a running Codex turn holds (siwc/approvals.ts). */
-    async openToolRequest(claim: Claim, body: { tool: string; requestKey: string; waitSeconds: number; detail: string | null }, signal?: AbortSignal) {
+    async openToolRequest(claim: Claim, body: { tool: string; requestKey: string; waitSeconds: number; detail: string | null; cwd: string | null }, signal?: AbortSignal) {
         return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).nullable(), status: z.string().max(20) })
             .parse(await this.request('POST', `runs/${claim.run.id}/tool-requests`, { claimToken: claim.run.claimToken, ...body }, signal));
     }

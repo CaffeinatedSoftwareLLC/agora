@@ -106,15 +106,30 @@ export const LIVE_WAIT_MAX_SECONDS = 3600;
 /** What the host is told: 'pending' while undecided, else the decision (or 'expired'). */
 export const hostStatus = (status: string) => (status === 'waiting' ? 'pending' : status);
 
-/** What the agent asked to do, as one line of inline code: agent text, so no markup survives. */
-export function cleanDetail(detail: string | null | undefined): string | null {
+/** The longest command a card shows in full; the host declines a longer one rather than truncate it. */
+export const MAX_DETAIL = 8192;
+
+/**
+ * What the agent asked to do, kept whole so the owner can read every character before approving
+ * (it is agent text: shown as plain text, never markup). Control and format characters other than
+ * newlines and tabs are dropped; nothing is shortened.
+ */
+export function fullDetail(detail: string | null | undefined): string | null {
     if (typeof detail !== 'string') return null;
-    const one = detail.replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ').replace(/`/g, "'").replace(/\s+/g, ' ').trim();
-    return one ? (one.length > 200 ? `${one.slice(0, 199)}…` : one) : null;
+    const kept = detail.replace(/[\p{Cf}\u2028\u2029]|[^\P{Cc}\n\t]/gu, '').trim();
+    return kept ? kept.slice(0, MAX_DETAIL) : null;
+}
+
+/** A one-line preview for the message text; the card shows the full command. */
+export function detailPreview(detail: string | null | undefined): string | null {
+    if (!detail) return null;
+    const one = detail.replace(/`/g, "'").replace(/\s+/g, ' ').trim();
+    return one.length > 120 ? `${one.slice(0, 119)}…` : one;
 }
 
 export function liveCardText(profile: string, tool: string, status: string, detail: string | null, opts: { who?: string; minutes?: number; reason?: string } = {}): string {
-    const what = detail ? ` to run \`${detail}\`` : '';
+    const preview = detailPreview(detail);
+    const what = preview ? ` to run \`${preview}\`${preview.endsWith('…') ? ' (full command on the card)' : ''}` : '';
     if (status === 'pending') {
         return `${profile} is waiting for \`${tool}\`${what}. Approve once to let this step run, or always allow \`${tool}\` for this agent (owner only).`
             + ` Denied automatically after ${opts.minutes ?? 1} min.`;
@@ -128,7 +143,7 @@ export function liveCardText(profile: string, tool: string, status: string, deta
 }
 
 /** File one live request and its card, or return the one already filed for this key. */
-export async function openLiveRequest(c: PoolClient, run: any, body: { tool: string; requestKey: string; waitSeconds: number; detail?: string | null },
+export async function openLiveRequest(c: PoolClient, run: any, body: { tool: string; requestKey: string; waitSeconds: number; detail?: string | null; cwd?: string | null },
                                       notices: Notice[]): Promise<{ id: string | null; status: string }> {
     const s = await c.query(
         `SELECT s.server_id, s.channel_id, s.profile_id, p.name, p.allowed_tools FROM agent_sessions s
@@ -142,7 +157,8 @@ export async function openLiveRequest(c: PoolClient, run: any, body: { tool: str
     if (existing.rows[0]) return { id: existing.rows[0].id.trim(), status: hostStatus(existing.rows[0].status) };
     const wait = Math.min(LIVE_WAIT_MAX_SECONDS, Math.max(LIVE_WAIT_MIN_SECONDS, Math.round(body.waitSeconds)));
     const id = generateUlid();
-    const detail = cleanDetail(body.detail);
+    const detail = fullDetail(body.detail);
+    const cwd = fullDetail(body.cwd);
     await c.query(
         `INSERT INTO agent_tool_requests (id, server_id, session_id, profile_id, run_id, tool, request_key, waiting_until, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8), 'waiting')`,
@@ -150,7 +166,7 @@ export async function openLiveRequest(c: PoolClient, run: any, body: { tool: str
     );
     const channelId = session.channel_id.trim();
     const messageId = generateUlid();
-    const data = { kind: 'agent_tool_approval', requestId: id, sessionId: run.session_id.trim(), profile: session.name, tool: body.tool, status: 'pending', live: true, detail };
+    const data = { kind: 'agent_tool_approval', requestId: id, sessionId: run.session_id.trim(), profile: session.name, tool: body.tool, status: 'pending', live: true, detail, cwd };
     const content = liveCardText(session.name, body.tool, 'pending', detail, { minutes: Math.max(1, Math.round(wait / 60)) });
     await c.query(
         `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data)
@@ -162,13 +178,18 @@ export async function openLiveRequest(c: PoolClient, run: any, body: { tool: str
     return { id, status: 'pending' };
 }
 
-/** Expire live requests nobody decided: the host stopped waiting, or the run ended. */
-export async function expireLiveRequests(c: PoolClient, where: { runId: string; requestId?: string }, reason: string, notices: Notice[]): Promise<void> {
+/**
+ * Expire live requests nobody decided: the host stopped waiting, the run ended, or its session
+ * was stopped, shelved or ended (then nothing it was waiting on may run).
+ */
+export async function expireLiveRequests(c: PoolClient, where: { runId?: string; sessionIds?: string[]; requestId?: string }, reason: string, notices: Notice[]): Promise<void> {
+    if (!where.runId && !where.sessionIds?.length) return;
     const rows = await c.query(
         `UPDATE agent_tool_requests SET status = 'expired', decided_at = NOW()
-         WHERE run_id = $1 AND request_key IS NOT NULL AND status = 'waiting' AND ($2::text IS NULL OR id = $2)
+         WHERE request_key IS NOT NULL AND status = 'waiting'
+           AND ($1::text IS NULL OR run_id = $1) AND ($3::text[] IS NULL OR session_id = ANY($3::text[])) AND ($2::text IS NULL OR id = $2)
          RETURNING id, tool, message_id, profile_id`,
-        [where.runId, where.requestId ?? null]
+        [where.runId ?? null, where.requestId ?? null, where.sessionIds ?? null]
     );
     for (const r of rows.rows) {
         if (!r.message_id) continue;
@@ -187,6 +208,7 @@ export async function expireLiveRequests(c: PoolClient, where: { runId: string; 
             event: { id: r.message_id.trim(), channelId, content, editedAt: updated.rows[0].edited_at, systemData: updated.rows[0].system_data } });
     }
 }
+
 
 /** When a rate-limited session wakes: the CLI's reset time, kept within sane bounds. */
 export function sleepUntil(resetAt: string | null | undefined, now = Date.now()): Date {

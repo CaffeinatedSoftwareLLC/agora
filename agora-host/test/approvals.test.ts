@@ -91,6 +91,17 @@ describe('app-server approval requests', () => {
         expect(new Set(keys).size).toBe(2);
     });
 
+    it('shows the owner the whole command and its cwd, however long, and declines one too long to show', async () => {
+        const long = `git log --format=${'x'.repeat(240)} && git push --force origin main`;
+        const ask = asker('deny');
+        await run([command(30, long, { cwd: tmp.dir })], { ask });
+        expect(ask.mock.calls[0][0].detail).toBe(long);
+        expect(ask.mock.calls[0][0].detail!.endsWith('git push --force origin main')).toBe(true);
+        expect(ask.mock.calls[0][0].cwd).toBe(tmp.dir);
+        const huge = await run([command(31, `git log ${'y'.repeat(9000)}`, { cwd: tmp.dir })], { ask: asker('once') });
+        expect(huge.answers(31)[0].result).toEqual({ decision: 'decline' });
+    });
+
     it('declines a request from another turn without a card', async () => {
         const ask = asker('once');
         const { answers } = await run([{ ...command(5, 'git push', { cwd: tmp.dir }), otherTurn: true }], { rules: ['Bash(git:*)'], ask });
@@ -202,7 +213,7 @@ describe('app-server approval requests', () => {
         let seen: AbortSignal | undefined;
         const ask = vi.fn<Ask>((_req, signal) => { seen = signal; return new Promise(resolve => signal.addEventListener('abort', () => resolve('deny'))); });
         const { answers, result } = await run([command(26, 'git push', { cwd: tmp.dir })], { ask }, {
-            kill: running => { const t = setInterval(() => { if (ask.mock.calls.length) { clearInterval(t); void running.kill(); } }, 10); },
+            kill: running => { const t = setInterval(() => { if (ask.mock.calls.length) { clearInterval(t); running.kill().catch(() => {}); /* taskkill may be refused in a restricted environment: the abort is what is tested */ } }, 10); },
         });
         expect(result.success).toBe(false);
         expect(seen?.reason).toBe('stopped');
@@ -222,7 +233,7 @@ describe('card flow over the host API', () => {
         const a = api(['pending', 'once']);
         const ask = cardAsker(a, claim(), { waitMs: 5000, pollMs: 5 })!;
         await expect(ask(req, new AbortController().signal)).resolves.toBe('once');
-        expect(a.openToolRequest).toHaveBeenCalledWith(expect.anything(), { tool: 'Bash(gh:*)', requestKey: 'a'.repeat(64), waitSeconds: 10, detail: 'gh pr list' });
+        expect(a.openToolRequest).toHaveBeenCalledWith(expect.anything(), { tool: 'Bash(gh:*)', requestKey: 'a'.repeat(64), waitSeconds: 10, detail: 'gh pr list', cwd: null });
     });
     it('denies after the wait, closing the card as timed out', async () => {
         const a = api(['pending']);

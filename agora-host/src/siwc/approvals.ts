@@ -35,7 +35,10 @@ import { allowedCall, executableTrust, reportable, ruleForCall, type ToolCallInf
  */
 
 export type Decision = 'once' | 'always' | 'deny';
-export interface CardRequest { tool: string; key: string; detail: string | null }
+/** `detail`: the whole command (or what else is asked), shown in full on the card; `cwd`: where it runs. */
+export interface CardRequest { tool: string; key: string; detail: string | null; cwd?: string | null }
+/** The longest command a card shows in full (the server's limit): a longer one is declined, never truncated. */
+export const MAX_DETAIL = 8192;
 /** Post a card for one request and wait for its decision. Rejects when no card could be posted. */
 export type Ask = (req: CardRequest, signal: AbortSignal) => Promise<Decision>;
 
@@ -151,13 +154,13 @@ export function requestKey(nonce: string, method: string, rpcId: unknown, p: { t
 }
 
 /** One request's decision: allowed by the rules, else the card's. Unknown or failed → deny. */
-async function decide(rule: string, allowed: boolean, key: string, detail: string | null, ctx: ApprovalContext, signal: AbortSignal): Promise<{ allow: boolean; denied?: string }> {
+async function decide(rule: string, allowed: boolean, key: string, detail: string | null, ctx: ApprovalContext, signal: AbortSignal, cwd?: string): Promise<{ allow: boolean; denied?: string }> {
     if (allowed) return { allow: true };
     if (!reportable(rule)) return { allow: false };
     // Older server or no card flow: deny now, report the rule for the usual after-run card
     if (!ctx.ask || signal.aborted) return { allow: false, denied: rule };
     try {
-        const d = await ctx.ask({ tool: rule, key, detail }, signal);
+        const d = await ctx.ask({ tool: rule, key, detail, ...(cwd ? { cwd } : {}) }, signal);
         return { allow: d === 'once' || d === 'always' };
     } catch {
         return { allow: false, denied: rule };
@@ -165,7 +168,6 @@ async function decide(rule: string, allowed: boolean, key: string, detail: strin
 }
 
 const bound = (p: { threadId: string; turnId: string }, ctx: ApprovalContext) => !!ctx.threadId && !!ctx.turnId && p.threadId === ctx.threadId && p.turnId === ctx.turnId;
-const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 300);
 
 async function commandApproval(rpcId: unknown, params: unknown, ctx: ApprovalContext, signal: AbortSignal): Promise<Answer> {
     const parsed = commandSchema.safeParse(params);
@@ -191,12 +193,14 @@ async function commandApproval(rpcId: unknown, params: unknown, ctx: ApprovalCon
     if (!await insideWorktree(ctx.cwd, [cwd])) return { response: DECLINE };
     const call: ToolCallInfo = { kind: 'execute', rawInput: { command: argv, cwd } };
     const trust = await executableTrust(call, { cwd: ctx.cwd, roots: ctx.roots, rules: ctx.rules, env: ctx.env });
-    const detail = oneLine(p.command!);
+    // The owner sees every character of what would run; too long to show means no approval
+    const detail = p.command!.trim();
+    if (detail.length > MAX_DETAIL || cwd.length > 4096) return { response: DECLINE };
     // A program that isn't a trusted executable (a PowerShell cmdlet, a file in the repository)
     // can't be allowed by a narrow rule; only the whole shell, and the owner sees the command
     const rule = trust === 'ok' ? ruleForCall(call) : 'Bash';
     if (!rule) return { response: DECLINE };
-    const d = await decide(rule, trust === 'ok' && allowedCall(call, ctx.rules), key, detail, ctx, signal);
+    const d = await decide(rule, trust === 'ok' && allowedCall(call, ctx.rules), key, detail, ctx, signal, cwd);
     return { response: d.allow ? ACCEPT : DECLINE, denied: d.denied };
 }
 
@@ -290,7 +294,7 @@ export function cardAsker(api: HostApi, claim: Claim, o: { waitMs: number; pollM
         const waitSeconds = Math.min(3600, Math.max(10, Math.ceil(o.waitMs / 1000)));
         const deadline = now() + o.waitMs;
         // Not aborted mid-request: a card posted without the host knowing its id couldn't be closed
-        const opened = await open(claim, { tool: req.tool, requestKey: req.key, waitSeconds, detail: req.detail });
+        const opened = await open(claim, { tool: req.tool, requestKey: req.key, waitSeconds, detail: req.detail, cwd: req.cwd ?? null });
         const first = decided(opened.status);
         if (first || !opened.id) return first ?? 'deny';
         const id = opened.id;

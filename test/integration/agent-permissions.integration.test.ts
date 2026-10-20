@@ -298,7 +298,9 @@ describe('live tool requests: a running Codex turn waits on its card (#93)', () 
         expect(second.body.id).not.toBe(first.body.id);
         const posted = await cards();
         expect(posted).toHaveLength(2);
-        expect(posted[0].system_data).toMatchObject({ kind: 'agent_tool_approval', live: true, status: 'pending', tool: 'Bash(gh:*)', detail: "gh pr create --title 'x' rm -rf /" });
+        expect(posted[0].system_data).toMatchObject({ kind: 'agent_tool_approval', live: true, status: 'pending', tool: 'Bash(gh:*)', detail: 'gh pr create --title `x`\nrm -rf /' });
+        // The message text is a one-line preview: no markup from the command survives
+        expect(posted[0].content).toContain("`gh pr create --title 'x' rm -rf /`");
         expect(posted[0].content).toContain('is waiting for `Bash(gh:*)`');
         expect((await poll(c, first.body.id)).body.status).toBe('pending');
 
@@ -357,6 +359,48 @@ describe('live tool requests: a running Codex turn waits on its card (#93)', () 
         expect(done.status, JSON.stringify(done.body)).toBe(200);
         const statuses = (await cards()).map(card => [card.system_data.live === true, card.system_data.status]);
         expect(statuses).toEqual([[true, 'expired'], [false, 'pending']]);
+    });
+
+    const endSession = () => ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'codex' });
+
+    it('stop before approval: the card expires and cannot release the step', async () => {
+        const { c } = await running();
+        const r = await open(c, { tool: 'Bash(gh:*)', requestKey: key('4'), detail: 'gh pr merge 1' });
+        expect((await endSession()).status).toBe(200);
+        const [card] = await cards();
+        expect(card.system_data.status).toBe('expired');
+        expect((await decide(r.body.id, 'once')).status).toBe(409);
+        expect((await poll(c, r.body.id)).body.status).toBe('cancelled');
+        // No new card for a stopped run
+        expect((await open(c, { tool: 'Bash(gh:*)', requestKey: key('5') })).body).toEqual({ id: null, status: 'cancelled' });
+    });
+
+    it('a cancelled run that is still claimed refuses approvals on its cards', async () => {
+        const { c } = await running();
+        const r = await open(c, { tool: 'Bash(gh:*)', requestKey: key('6') });
+        await ctx.db.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'ended' WHERE id = $1`, [c.body.run.id]);
+        expect((await decide(r.body.id, 'once')).status).toBe(410);
+        expect((await decide(r.body.id, 'always')).status).toBe(410);
+    });
+
+    it('stop between approval and poll: the host is never told to allow', async () => {
+        const { c } = await running();
+        const r = await open(c, { tool: 'Bash(gh:*)', requestKey: key('7') });
+        expect((await decide(r.body.id, 'once')).status).toBe(200);
+        expect((await endSession()).status).toBe(200);
+        expect((await poll(c, r.body.id)).body.status).toBe('cancelled');
+    });
+
+    it('stores and shows the whole command and its cwd, however long', async () => {
+        const { c } = await running();
+        const long = `git log --format=${'x'.repeat(240)} && git push --force origin main`;
+        const r = await open(c, { tool: 'Bash', requestKey: key('8'), detail: long, cwd: '/srv/work/tree' });
+        expect(r.status).toBe(200);
+        const [card] = await cards();
+        expect(card.system_data.detail).toBe(long);
+        expect(card.system_data.cwd).toBe('/srv/work/tree');
+        expect(card.content).toContain('full command on the card');
+        expect((await open(c, { tool: 'Bash', requestKey: key('9'), detail: 'y'.repeat(9000) })).status).toBe(400);
     });
 
     it('rejects a stale claim, a malformed key and an unknown request', async () => {

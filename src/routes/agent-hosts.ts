@@ -7,7 +7,7 @@ import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { noticePathList } from '../lib/file-reservations';
 import { claimNext, complete, fail, heartbeat, liveToolRequest, openToolRequest, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
-import { allowedToolsSchema, deniedToolsSchema, LIVE_WAIT_MAX_SECONDS, LIVE_WAIT_MIN_SECONDS, TOOL_RULE, toolPresetsSchema } from '../lib/agent-permissions';
+import { allowedToolsSchema, deniedToolsSchema, LIVE_WAIT_MAX_SECONDS, LIVE_WAIT_MIN_SECONDS, MAX_DETAIL, TOOL_RULE, toolPresetsSchema } from '../lib/agent-permissions';
 import { agentImageRoutes } from './agent-images';
 import { agentPlanRoutes } from './agent-plans';
 import { checkpointSchema } from '../lib/agent-checkpoints';
@@ -504,7 +504,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
             // The host's hash of thread, turn, item and request id: binds the card to one request
             requestKey: { type: 'string', pattern: '^[0-9a-f]{64}$' },
             waitSeconds: { type: 'integer', minimum: LIVE_WAIT_MIN_SECONDS, maximum: LIVE_WAIT_MAX_SECONDS },
-            detail: { type: ['string', 'null'], maxLength: 1000 },
+            // The whole command the card shows (the host declines a longer one rather than truncate it)
+            detail: { type: ['string', 'null'], maxLength: MAX_DETAIL },
+            cwd: { type: ['string', 'null'], maxLength: 4096 },
         } } },
     }, async (request, reply) => {
         await releaseRequestClient(request);

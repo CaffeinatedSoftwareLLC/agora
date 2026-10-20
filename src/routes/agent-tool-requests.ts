@@ -3,7 +3,7 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { cancelReason, postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { cardText, liveCardText, REQUEST_TTL_HOURS } from '../lib/agent-permissions';
 import { runCardText, RUN_APPROVAL_TTL_HOURS } from '../lib/provider-terms';
 
@@ -84,6 +84,13 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                 const req = r.rows[0];
                 if (req.status !== 'pending' && req.status !== 'waiting') throw new Refusal(409, { error: 'already_decided', status: req.status });
                 if ((req.expired || req.live_over) && decision !== 'deny') throw new Refusal(410, { error: 'expired' });
+                // A waiting step is released only while its run may go on: not after /stop, /end,
+                // a shelve, a paused bot or lost channel access (the run is still claimed until
+                // the host notices; the host's poll applies the same check)
+                if (req.live && decision !== 'deny') {
+                    const run = (await db.query('SELECT * FROM agent_runs WHERE id = $1', [req.run_id])).rows[0];
+                    if (s.rows[0].state !== 'live' || !run || await cancelReason(db, run)) throw new Refusal(410, { error: 'expired' });
+                }
 
                 // An approval wakes a live agent to retry, or lets a waiting step run. A subscription
                 // agent runs only when the owner triggers it (a siwc agent: its plan owner), so
