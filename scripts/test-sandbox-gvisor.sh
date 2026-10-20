@@ -28,17 +28,8 @@ PG_PORT=15432
 REDIS_PORT=16379
 PROXY_PORT=12375
 
-if ! docker info --format '{{range $name, $_ := .Runtimes}}{{$name}} {{end}}' | grep -qw runsc; then
-    echo "gVisor (runsc) is not registered with this Docker engine. See docs/getting-started.md." >&2
-    exit 1
-fi
-others="$(docker ps -a --format '{{.Names}}' --filter label=agora.managed=runtime;     docker ps -a --format '{{.Names}}' --filter name=agora-run-;     docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^agora/ {print $1}')"
-if [ -n "$others" ]; then
-    echo "This engine hosts Agora containers; the suite could delete their code runs (and they ours):" >&2
-    echo "$others" | sort -u | sed 's/^/  /' >&2
-    echo "Run it on a dedicated Docker engine. Never start a second dockerd in another WSL distro." >&2
-    exit 1
-fi
+# Refuses unless this engine has gVisor and no Agora containers (no override).
+source scripts/lib/engine-guard.sh
 
 cleanup() {
     docker rm -f "$RUNNER" "$PG" "$REDIS" "$PROXY" agora-test-cap-forwarder agora-neg-target >/dev/null 2>&1 || true
