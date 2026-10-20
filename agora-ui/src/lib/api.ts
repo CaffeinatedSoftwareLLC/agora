@@ -240,7 +240,7 @@ export interface AIUsageStats {
   error_count: number;
 }
 
-export type AICapability = 'chat' | 'search' | 'image' | 'tts' | 'video' | 'decide';
+export type AICapability = 'chat' | 'search' | 'image' | 'tts' | 'video' | 'decide' | 'stt';
 
 export interface AIAdapter {
   id: string;
@@ -299,7 +299,7 @@ export type AIConnectionResult = { ok: boolean; error?: string };
 /** One audited change to the server's AI settings (providers, routes, assistant). */
 export interface AIChange {
   id: string;
-  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update'
+  action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update' | 'ai_voice_update'
     | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag';
   targetType: string;
   targetId: string | null;
@@ -307,6 +307,82 @@ export interface AIChange {
   createdAt: string;
   actor: { id: string; username: string; bot: boolean } | null;
 }
+
+// ─── Voice in and out (docs/voice.md) ───
+
+/** Where speech is turned into text (input) or text into speech (output) for a member. */
+export type VoiceEngine = 'server' | 'browser' | 'off';
+
+export interface AIVoiceSettings {
+  voiceInputEnabled: boolean;
+  /** Without a Transcription route: let browsers recognise speech themselves (Chrome/Safari send audio to Google/Apple). */
+  browserSttFallback: boolean;
+  maxRecordingSeconds: number;
+  sttLanguage: string | null;
+  readAloudEnabled: boolean;
+  /** Read replies with the server's Speech route (also used by audio overviews). */
+  readAloudServer: boolean;
+  browserTtsFallback: boolean;
+  readAloudVoice: string | null;
+  readAloudMaxChars: number;
+}
+
+export type AIVoiceRouteState =
+  | { configured: true; enabled: boolean; provider: string; adapter: string; model: string }
+  | { configured: false; enabled: false; provider: null; adapter: null; model: null };
+
+export interface AIVoiceView extends AIVoiceSettings {
+  routes: { stt: AIVoiceRouteState; tts: AIVoiceRouteState };
+  engines: { input: VoiceEngine; output: VoiceEngine };
+  warnings: string[];
+}
+
+/** What a member's client uses in a channel. */
+export interface ChannelVoice {
+  input: VoiceEngine;
+  output: VoiceEngine;
+  maxRecordingSeconds: number;
+  language: string | null;
+  maxChars: number;
+}
+
+export const voiceApi = {
+  getSettings: (serverId: string) =>
+    api.get<AIVoiceView>(`/servers/${serverId}/ai/voice`),
+
+  patchSettings: (serverId: string, data: Partial<AIVoiceSettings>) =>
+    api.patch<AIVoiceView>(`/servers/${serverId}/ai/voice`, data),
+
+  forChannel: (channelId: string) =>
+    api.get<ChannelVoice>(`/channels/${channelId}/voice`),
+
+  /** Send a recorded clip; the server passes it to its Transcription route. */
+  transcribe: async (channelId: string, clip: Blob): Promise<string> => {
+    const res = await fetch(`/channels/${channelId}/voice/transcribe`, {
+      method: 'POST',
+      headers: { ...sessionHeaders('POST'), 'Content-Type': clip.type || 'audio/webm' },
+      credentials: 'same-origin',
+      body: clip,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, data.error || 'transcription_failed');
+    return data.text ?? '';
+  },
+
+  /** A message voiced by the server's Speech route (MP3). */
+  speech: async (channelId: string, messageId: string): Promise<Blob> => {
+    const res = await fetch(`/channels/${channelId}/messages/${messageId}/speech`, {
+      method: 'POST',
+      headers: sessionHeaders('POST'),
+      credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data.error || 'speech_failed');
+    }
+    return res.blob();
+  },
+};
 
 /** What a decision model can be used for. Each is switched on separately. */
 export type AIDecisionUse = 'routing' | 'search_screening' | 'file_tagging' | 'file_ranking';
@@ -399,6 +475,51 @@ export const fileSearchApi = {
   /** The tag names members can filter by. */
   tagNames: (serverId: string) =>
     api.get<{ id: string; name: string }[]>(`/servers/${serverId}/file-tags`),
+};
+
+/** A channel's project context and verify command (docs/project-context.md). */
+export interface ChannelProject {
+  channelId: string;
+  instructions: string;
+  version: number;
+  files: { id: string; name: string; mime: string; size: number }[];
+  verify: { command: string; maxRetries: number } | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  /** The viewer may change instructions and files (the owner and directors). */
+  canEdit: boolean;
+  /** The viewer may set the verify command (the server owner). */
+  canEditVerify: boolean;
+}
+
+export const projectApi = {
+  get: (channelId: string) => api.get<ChannelProject>(`/channels/${channelId}/project`),
+  /** Either field may be left out; fileIds replaces the pinned list, in order. */
+  update: (channelId: string, change: { instructions?: string; fileIds?: string[] }) =>
+    api.put<ChannelProject>(`/channels/${channelId}/project`, change),
+  /** command null turns verify off. */
+  setVerify: (channelId: string, command: string | null, maxRetries?: number) =>
+    api.put<ChannelProject>(`/channels/${channelId}/project/verify`, { command, ...(maxRetries === undefined ? {} : { maxRetries }) }),
+};
+
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg';
+export interface ArtifactSummary {
+  id: string; title: string; kind: ArtifactKind; latestVersion: number | null;
+  updatedAt: string; createdByUsername: string | null;
+}
+export interface ArtifactVersionInfo {
+  version: number; messageId: string; threadId: string | null; authorUsername: string | null; authorBot: boolean;
+  title: string; kind: ArtifactKind; size: number; createdAt: string;
+}
+export interface ArtifactDetail { id: string; title: string; kind: ArtifactKind; latestVersion: number | null; versions: ArtifactVersionInfo[] }
+export interface ArtifactVersion { artifactId: string; version: number; title: string; kind: ArtifactKind; content: string; authorUsername: string | null; createdAt: string }
+
+/** Canvas artifacts (docs/canvas-and-preview.md). Posting one goes through the message routes. */
+export const canvasApi = {
+  list: (channelId: string) => api.get<{ artifacts: ArtifactSummary[] }>(`/channels/${channelId}/artifacts?limit=50`),
+  get: (channelId: string, artifactId: string) => api.get<ArtifactDetail>(`/channels/${channelId}/artifacts/${artifactId}`),
+  version: (channelId: string, artifactId: string, version: number) =>
+    api.get<ArtifactVersion>(`/channels/${channelId}/artifacts/${artifactId}/versions/${version}`),
 };
 
 export const aiApi = {

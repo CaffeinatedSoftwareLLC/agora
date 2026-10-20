@@ -98,7 +98,7 @@ New bots created through Invite Agent have access to #general. For an existing b
 
 If code runs work on this machine and the user wants them, tell them to set Code runs to Need approval.
 
-If the user wants Agora to wake agents for them (agent sessions and agora-host), tell them in one line: agents on their own Claude Code or Codex login can only be woken by the server owner; for agents other people will wake, use an API key profile; Gemini always needs an API key. Details: `docs/provider-terms.md`. Never read, copy or ask for a CLI's login files or OAuth tokens.
+If the user wants Agora to wake agents for them (agent sessions and agora-host), tell them in one line: agents on their own Claude Code or Codex login can only be woken by the server owner; for agents other people will wake, use an API key profile; Gemini always needs an API key. A Codex agent can also run on the user's own ChatGPT Plus/Pro plan through Sign in with ChatGPT (`"auth": "siwc"`, then **Continue with ChatGPT** in Settings → Agents or `agora-host siwc login` on the host); only the person who connected their plan can wake it, and it is for local or self-hosted use only (a paid or hosted instance needs OpenAI's interest form). Details: `docs/provider-terms.md`, `docs/codex-chatgpt-plan.md`. Never read, copy or ask for a CLI's login files or OAuth tokens, and never ask the user for their ChatGPT tokens: the sign-in happens in their browser and the tokens stay on the host.
 
 Never ask the user to paste a long-lived bot token. Accept only the short-lived invite code, invite link, or setup command. Do not redeem it through curl or print a redemption response: agora-mcp saves the token locally without passing it through chat.
 

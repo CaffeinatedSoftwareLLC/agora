@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
-import { aiApi, botApi, serverApi, ApiError } from '../../lib/api';
-import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue } from '../../lib/api';
+import { aiApi, botApi, serverApi, voiceApi, ApiError } from '../../lib/api';
+import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue, AIVoiceView } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
 import { AssistantSection } from './ai/AssistantSection';
 import { DecisionsSection } from './ai/DecisionsSection';
 import { TagsSection } from './ai/TagsSection';
+import { VoiceSection } from './ai/VoiceSection';
 import { UsageSection } from './ai/UsageSection';
 import { ChangesSection } from './ai/ChangesSection';
 
@@ -24,6 +25,7 @@ interface AIState {
   usage: AICapabilityUsage[];
   decisions: AIDecisionSettings;
   tags: { tags: AIFileTag[]; max: number; queue: AITaggingQueue };
+  voice: AIVoiceView;
 }
 
 export function AISettings() {
@@ -41,7 +43,7 @@ export function AISettings() {
     let cancelled = false;
     (async () => {
       try {
-        const [adapters, providers, routes, config, channels, usage, decisions, tags] = await Promise.all([
+        const [adapters, providers, routes, config, channels, usage, decisions, tags, voice] = await Promise.all([
           aiApi.listAdapters(instanceServerId),
           aiApi.listProviders(instanceServerId),
           aiApi.listRoutes(instanceServerId),
@@ -50,6 +52,7 @@ export function AISettings() {
           aiApi.getCapabilityUsage(instanceServerId, USAGE_DAYS),
           aiApi.getDecisions(instanceServerId),
           aiApi.listTags(instanceServerId),
+          voiceApi.getSettings(instanceServerId),
         ]);
         let botChannelIds = new Set<string>();
         if (config.configured && config.botId) {
@@ -69,6 +72,7 @@ export function AISettings() {
           usage: usage.capabilities,
           decisions,
           tags,
+          voice,
         });
         setError('');
       } catch (err) {
@@ -138,6 +142,13 @@ export function AISettings() {
             hasChatRoute={state.routes.some(r => r.capability === 'chat' && r.enabled)}
             channels={state.channels}
             botChannelIds={state.botChannelIds}
+            onChanged={reload}
+          />
+          <VoiceSection
+            // Re-seed the form whenever the saved settings or the stt/tts routes change
+            key={JSON.stringify(state.voice)}
+            serverId={instanceServerId}
+            settings={state.voice}
             onChanged={reload}
           />
           <DecisionsSection

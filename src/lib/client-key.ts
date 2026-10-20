@@ -1,3 +1,5 @@
+import { artifactsForMessages } from './artifacts';
+
 /**
  * Durable duplicate protection for posts (docs/planning/agent-sessions-wbs.md, "Duplicate
  * posts after a retry"). An author may send `client_key` with a message; a repeat with the
@@ -38,6 +40,7 @@ export async function findClientKey(db: any, authorId: string, key: string, targ
     const sameParent = (existing.thread_id?.trim() ?? null) === (target.threadId?.trim() ?? null);
     const sameContent = (existing.content ?? null) === (target.content ?? null);
     if (!sameChannel || !sameParent || !sameContent) return { kind: 'conflict' };
+    const artifact = (await artifactsForMessages(db, [existing.id])).get(existing.id.trim());
 
     return {
         kind: 'replay',
@@ -53,6 +56,7 @@ export async function findClientKey(db: any, authorId: string, key: string, targ
             ...(existing.thread_id ? { threadId: existing.thread_id.trim() } : {}),
             mentionsEveryone: existing.mentions_everyone,
             ...(existing.protocol ? { protocol: existing.protocol } : {}),
+            ...(artifact ? { artifact } : {}),
             replayed: true,
         },
     };

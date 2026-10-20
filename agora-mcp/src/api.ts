@@ -44,6 +44,27 @@ export interface AgentSession {
     lastActiveAt: string;
     /** Sleeping through a rate limit until then; messages for it are held. */
     sleepingUntil?: string | null;
+    /** A task card's or subtask's session works in this thread. */
+    threadId?: string | null;
+    /** A subtask's parent session. */
+    parentSessionId?: string | null;
+    title?: string | null;
+    tokenBudget?: number;
+}
+
+/** A card on a channel's task board (docs/task-board.md). */
+export interface TaskCard {
+    id: string; channelId: string; title: string; description: string;
+    status: 'todo' | 'in_progress' | 'review' | 'done';
+    profile: { id: string; name: string } | null;
+    threadId: string | null;
+    session: { id: string; state: 'live' | 'shelved' | 'ended'; running: boolean; branch: string | null; headSha: string | null; tokensUsed: number; tokenBudget: number } | null;
+    prUrl: string | null; prState: 'open' | 'draft' | 'merged' | 'closed' | null;
+}
+
+export interface SubtaskRequest {
+    parentSessionId: string; title: string; brief: string;
+    profile?: string; reportThreadId?: string; tokenBudget?: number; client_key?: string;
 }
 
 export interface AgentCommandResult {
@@ -78,6 +99,23 @@ export interface Message {
     replyCount?: number;
     lastReplyAt?: string | null;
     threadClosedAt?: string | null;
+    /** A canvas artifact this post carries (one version of it). */
+    artifact?: ArtifactRef;
+}
+
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg';
+export interface ArtifactRef { id: string; version: number; title: string; kind: ArtifactKind; latestVersion: number }
+export interface ArtifactInfo {
+    id: string; title: string; kind: ArtifactKind; latestVersion: number | null;
+    versions: { version: number; messageId: string; threadId: string | null; authorUsername: string | null; title: string; kind: ArtifactKind; size: number; createdAt: string }[];
+}
+export interface ArtifactVersion { artifactId: string; version: number; title: string; kind: ArtifactKind; content: string; authorUsername: string | null; createdAt: string }
+
+export interface BrowserPreview {
+    id: string; sessionId: string; url: string;
+    status: 'queued' | 'claimed' | 'succeeded' | 'failed';
+    result: { error?: string; title?: string; console?: { level: string; text: string }[] } | null;
+    messageId: string | null; fileId: string | null;
 }
 
 export interface ThreadSummary {
@@ -150,6 +188,17 @@ export interface FileText {
     truncated: boolean;
     injectionWarning: boolean;
     injectionChecked: boolean;
+}
+
+/** A channel's pinned instructions and files (GET /channels/:id/project, docs/project-context.md). */
+export interface ProjectContext {
+    channelId: string;
+    instructions: string;
+    version: number;
+    files: Array<{ id: string; name: string; mime: string; size: number }>;
+    verify: { command: string; maxRetries: number } | null;
+    updatedAt: string | null;
+    updatedBy: string | null;
 }
 
 export interface ThreadCursor {
@@ -226,6 +275,11 @@ export class AgoraApi {
         return res.directors;
     }
 
+    /** The channel's project context: instructions and pinned files. */
+    async getProject(channelId: string): Promise<ProjectContext> {
+        return this.request('GET', `/channels/${channelId}/project`);
+    }
+
     async getMessages(
         channelId: string,
         opts?: { limit?: number; before?: string },
@@ -259,6 +313,21 @@ export class AgoraApi {
     /** Session commands: start, end, resume (need can_direct) and sessions (listing). */
     async agentCommand(channelId: string, body: AgentCommand): Promise<AgentCommandResult> {
         return this.request('POST', `/channels/${channelId}/agent-commands`, body);
+    }
+    async tasks(channelId: string): Promise<{ cards: TaskCard[]; canManage: boolean }> {
+        return this.request('GET', `/channels/${channelId}/tasks`);
+    }
+    async createTask(channelId: string, body: { title: string; description?: string; profile?: string; start?: boolean }): Promise<{ action: string; card: TaskCard }> {
+        return this.request('POST', `/channels/${channelId}/tasks`, body);
+    }
+    async updateTask(channelId: string, taskId: string, body: { title?: string; description?: string; status?: TaskCard['status']; profile?: string | null }): Promise<{ card: TaskCard }> {
+        return this.request('PATCH', `/channels/${channelId}/tasks/${encodeURIComponent(taskId)}`, body);
+    }
+    async startTask(channelId: string, taskId: string): Promise<{ action: string; card: TaskCard }> {
+        return this.request('POST', `/channels/${channelId}/tasks/${encodeURIComponent(taskId)}/start`);
+    }
+    async startSubtask(channelId: string, body: SubtaskRequest): Promise<{ action: string; session: AgentSession }> {
+        return this.request('POST', `/channels/${channelId}/subtasks`, body);
     }
     async fileReservation(channelId: string, body: {
         action: 'reserve' | 'renew' | 'release'; paths?: string[]; reservationId?: string;
@@ -381,6 +450,32 @@ export class AgoraApi {
 
     async getPermissionRelay(channelId: string, requestId: string): Promise<{ id: string; relayId: string; status: string }> {
         return this.request('GET', `/channels/${channelId}/permission-relays/${requestId}`);
+    }
+
+    /** Post a canvas artifact (or its next version), with optional text, to a channel or thread. */
+    async postArtifact(channelId: string, body: { content?: string; artifact: { id?: string; title?: string; kind?: ArtifactKind; content: string } },
+        opts: { threadId?: string; clientKey?: string; idempotencyKey?: string } = {}): Promise<Message> {
+        const headers: Record<string, string> = opts.idempotencyKey ? { 'idempotency-key': opts.idempotencyKey } : {};
+        const path = opts.threadId ? `/channels/${channelId}/messages/${opts.threadId}/replies` : `/channels/${channelId}/messages`;
+        return this.request('POST', path, { ...body, ...(opts.clientKey ? { client_key: opts.clientKey } : {}) }, headers);
+    }
+    async getArtifact(channelId: string, artifactId: string): Promise<ArtifactInfo> {
+        return this.request('GET', `/channels/${channelId}/artifacts/${encodeURIComponent(artifactId)}`);
+    }
+    async getArtifactVersion(channelId: string, artifactId: string, version: number): Promise<ArtifactVersion> {
+        return this.request('GET', `/channels/${channelId}/artifacts/${encodeURIComponent(artifactId)}/versions/${version}`);
+    }
+    async requestPreview(channelId: string, body: { url: string; threadId?: string; width?: number; height?: number; fullPage?: boolean }): Promise<{ id: string; status: string }> {
+        return this.request('POST', `/channels/${channelId}/browser-previews`, body);
+    }
+    async getPreview(channelId: string, previewId: string): Promise<BrowserPreview> {
+        return this.request('GET', `/channels/${channelId}/browser-previews/${previewId}`);
+    }
+    /** The PNG a finished preview posted. */
+    async getPreviewScreenshot(channelId: string, previewId: string): Promise<Buffer> {
+        const res = await fetch(`${this.baseUrl}/channels/${channelId}/browser-previews/${previewId}/screenshot`, { headers: { Authorization: `Bot ${this.token}` } });
+        if (!res.ok) throw new AgoraApiError(`Agora API ${res.status} GET screenshot`, res.status, null, null);
+        return Buffer.from(await res.arrayBuffer());
     }
 
     async getRun(runId: string): Promise<RuntimeRun> {

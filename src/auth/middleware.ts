@@ -22,8 +22,17 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/threads',
     // Who may give agents instructions in the channel
     'GET /channels/:id/directors',
+    // The channel's project context (agora-mcp's project_context); changing it is for people only
+    'GET /channels/:id/project',
     // Agent sessions: the route itself requires can_direct for anything but listing
     'POST /channels/:id/agent-commands',
+    // Task board (docs/task-board.md): reading is open to the channel, changes need can_direct
+    'GET /channels/:id/tasks',
+    'POST /channels/:id/tasks',
+    'PATCH /channels/:id/tasks/:taskId',
+    'POST /channels/:id/tasks/:taskId/start',
+    // Subtask delegation: only during the bot's own hosted run in the channel
+    'POST /channels/:id/subtasks',
     // File search returns names, tags and scores, never file content
     'GET /channels/:id/files/search',
     // The extracted text of a file in a channel the bot can access (not the file itself)
@@ -32,6 +41,14 @@ const BOT_ALLOWED_ROUTES = new Set([
     // Claude Code Channel: relay a permission prompt as an owner-only card, and read its answer
     'POST /channels/:id/permission-relays',
     'GET /channels/:id/permission-relays/:requestId',
+    // Canvas artifacts: read what agents and people posted (docs/canvas-and-preview.md)
+    'GET /channels/:id/artifacts',
+    'GET /channels/:id/artifacts/:artifactId',
+    'GET /channels/:id/artifacts/:artifactId/versions/:version',
+    // Browser preview of the bot's own hosted session, and the screenshot it posted
+    'POST /channels/:id/browser-previews',
+    'GET /channels/:id/browser-previews/:previewId',
+    'GET /channels/:id/browser-previews/:previewId/screenshot',
     'GET /bots/@me/cursors',
     'PUT /bots/@me/cursors/:channelId',
     'GET /bots/@me/thread-cursors',

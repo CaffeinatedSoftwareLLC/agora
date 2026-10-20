@@ -1,31 +1,98 @@
-import { mkdir, mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, realpath, writeFile, unlink, rmdir } from 'node:fs/promises';
+import { join, posix, win32 } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
 import { ensureWorkspace, type Workspace } from './workspaces.js';
-import { resolvePermissions } from './presets.js';
+import { CODEX_WORDS, resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { checkTerms, GEMINI_NOT_HOSTED, HostConfigError } from './terms.js';
+import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
+import { accessToken, type AccessToken } from './siwc/session.js';
+import { SiwcError } from './siwc/oauth.js';
+import { DEFAULT_DIR } from './siwc/store.js';
+import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
+import { sessionPorts } from './preview.js';
+import { probeAcp, SESSION_ID, type AcpPlan } from './acp/session.js';
+import { geminiPolicy } from './acp/permissions.js';
 
 export interface Launch {
     lurk?: boolean;
     workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
-    adapter: 'codex' | 'claude'; cleanup(): Promise<void>;
+    adapter: 'codex' | 'claude' | 'gemini'; cleanup(): Promise<void>;
     /** Codex's sandbox for this run, so denials can be read from its output. */
     sandbox?: 'read-only' | 'workspace-write';
     /** Preset names the claim used that this host doesn't define. */
     unknownPresets?: string[];
+    /** auth "siwc": drive `codex app-server` on a ChatGPT plan instead of `codex exec`. */
+    appServer?: AppServerPlan;
+    /** protocol "acp": one ACP session turn instead of the CLI's headless mode. */
+    acp?: AcpPlan;
+}
+
+/** Where this host keeps Sign in with ChatGPT state (config `siwc.dir`). */
+export const siwcDir = (config: Config) => config.siwc?.dir ?? DEFAULT_DIR;
+
+/** A fresh access token for a siwc profile; sign-in problems become terms refusals with their code. */
+async function siwcToken(config: Config, profile: string, force = false): Promise<AccessToken> {
+    try { return await accessToken({ dir: siwcDir(config), profile, force }); }
+    catch (err) {
+        if (err instanceof SiwcError && /^siwc_[a-z_]+$/.test(err.code)) throw new TermsRefusal(err.code as SiwcRunError, err.message);
+        throw err;
+    }
 }
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
+const STATE_DIR_ENV = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' } as const;
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
-export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+/**
+ * Only the variables the OS needs to find programs and home/temp directories, made so a bare
+ * program name never resolves to a file in the working directory (a worktree the agent writes):
+ * - PATH keeps absolute entries only; `.`, an empty entry or any relative one means "here".
+ * - Windows: NoDefaultCurrentDirectoryInExePath=1 stops cmd.exe, SearchPath and libuv (Node's
+ *   child_process) from trying the current directory before PATH. PowerShell never does.
+ */
+export function osEnv(source: NodeJS.ProcessEnv = process.env, platform = process.platform): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(source)) if (osKeys.has(key.toUpperCase()) && value !== undefined) env[key] = value;
-    if (profile.adapter !== 'gemini') env[profile.adapter === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = profile.stateDir;
+    const absolute = platform === 'win32' ? win32.isAbsolute : posix.isAbsolute;
+    for (const [key, value] of Object.entries(source)) {
+        if (!osKeys.has(key.toUpperCase()) || value === undefined) continue;
+        env[key] = key.toUpperCase() === 'PATH'
+            ? value.split(platform === 'win32' ? ';' : ':').filter(e => !!e && absolute(e.replace(/^"(.*)"$/, '$1'))).join(platform === 'win32' ? ';' : ':')
+            : value;
+    }
+    if (platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
+    return env;
+}
+/** Drop every PATH entry inside one of `roots` (links resolved), in place. */
+export async function repoFreePath(env: NodeJS.ProcessEnv, roots: string[], platform = process.platform): Promise<NodeJS.ProcessEnv> {
+    const key = Object.keys(env).find(k => k.toUpperCase() === 'PATH');
+    if (!key || !env[key]) return env;
+    const p = platform === 'win32' ? win32 : posix;
+    const norm = (s: string) => (platform === 'win32' ? p.resolve(s).toLowerCase() : p.resolve(s));
+    const real = async (s: string) => { try { return await realpath(s); } catch { return s; } };
+    const inside = (root: string, target: string) => {
+        const rel = p.relative(norm(root), norm(target));
+        return rel === '' || (!p.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${p.sep}`));
+    };
+    const all = [...roots.map(r => p.resolve(r)), ...(await Promise.all(roots.map(real)))];
+    const sep = platform === 'win32' ? ';' : ':';
+    const kept: string[] = [];
+    for (const raw of env[key]!.split(sep)) {
+        const entry = raw.replace(/^"(.*)"$/, '$1');
+        if (!entry) continue;
+        const resolved = await real(entry);
+        if (!all.some(r => inside(r, entry) || inside(r, resolved))) kept.push(raw);
+    }
+    env[key] = kept.join(sep);
+    return env;
+}
+export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    const env = osEnv(source);
+    // Each CLI keeps its settings and login in the profile's stateDir. For Gemini that also keeps
+    // the user's own ~/.gemini (and any Google login cached there) out of hosted runs.
+    env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
     // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md)
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
         const key = source[profile.apiKeyEnv];
@@ -34,6 +101,8 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     return env;
 }
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
+    // ACP: the protocol version is the gate, not the CLI's version string
+    if (profile.protocol === 'acp') return probeAcp({ executable: profile.executable, args: profile.acpArgs, cwd: profile.workdir, env: childEnv(profile) });
     if (profile.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
     const { stdout } = await promisify(execFile)(profile.executable, ['--version'], {
         env: childEnv(profile), cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096,
@@ -44,32 +113,71 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
     return version[0];
 }
 
-export async function prepare(config: Config, claim: Claim): Promise<Launch> {
+/** `prompt` replaces the wake prompt: a verify fix turn resuming the same conversation (verify.ts). */
+/**
+ * `active` is every session this host is running (the scheduler's set), so a preview port range
+ * held by a running session is never handed to this one; when none is free, preparing fails.
+ */
+export async function prepare(config: Config, claim: Claim, prompt?: string, active: ReadonlySet<string> = new Set()): Promise<Launch> {
     const local = config.profiles[claim.profile.name];
     if (!local || local.adapter !== claim.profile.adapter || local.workdirAlias !== claim.profile.workdirAlias) throw new Error('unmapped_profile');
-    // Subscription profiles run only for the owner; run approval when required (terms.ts)
+    // Subscription profiles run only for the owner, siwc ones for their plan owner; run approval when required (terms.ts)
     checkTerms(local, claim);
+    let plan: AccessToken | undefined;
+    if (local.auth === 'siwc') {
+        plan = await siwcToken(config, claim.profile.name);
+        // The Agora user this host saved at sign-in must be the one the server says owns the plan
+        checkTerms(local, claim, plan.agoraUserId);
+    }
     const token = config.botTokens[claim.profile.botId];
     if (!token) throw new Error('missing_bot_token');
-    const efforts = local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
+    const acp = local.protocol === 'acp';
+    // An ACP agent lists its own reasoning levels; acp/session.ts matches the effort against them
+    const efforts = acp ? null : local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
     const { model, effort } = claim.profile;
-    if (effort !== null && !efforts.includes(effort)) throw new Error('unsupported_effort');
-    if (claim.session.nativeSessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
+    if (effort !== null && efforts && !efforts.includes(effort)) throw new Error('unsupported_effort');
+    // ACP session IDs are the agent's own; the CLIs use UUIDs
+    const nativeId = acp ? SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
     const workspace = await ensureWorkspace(local, claim);
     const dir = await mkdtemp(join(local.stateDir, 'run-'));
-    const paths = ['mcp.json', 'mcp.toml', 'schema.json'].map(p => join(dir, p));
+    const paths = ['mcp.json', 'mcp.toml', 'schema.json', 'policy.toml'].map(p => join(dir, p));
     const cleanup = async () => {
         // Only remove these known files and the empty directory we created; no recursive deletion.
         await Promise.all(paths.map(p => unlink(p).catch(() => {})));
         await rmdir(dir).catch(() => {});
     };
     // Presets and allowed tools come with every claim (#73): no restart after an edit
-    const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, [...claim.profile.allowedTools, ...claim.run.grantedTools], config.presets);
+    const rules = [...claim.profile.allowedTools, ...claim.run.grantedTools];
+    const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, rules, config.presets);
     try {
-        const env = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId };
+        // This session's own preview ports: the only ones browser_preview will load
+        const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([...active, claim.session.id])) : undefined;
+        const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,
+            ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}) };
+        // A PATH entry inside the worktree or repository would let a file the agent wrote win a
+        // bare-name lookup over the trusted program (acp/permissions.ts executableTrust)
+        await repoFreePath(env, [workspace.cwd, workspace.workdir, local.workdir]);
+        // The plan's OAuth access token reaches app-server only through its environment
+        if (plan) env.ACCESS_TOKEN = plan.accessToken;
         // Hosted runs are not bring-your-own sessions: no presence socket (agora-mcp src/socket.ts)
         const server = { command: config.mcp.executable, args: [config.mcp.entrypoint, '--no-presence'] };
+        if (acp) {
+            // The agent starts the Agora MCP server from session/new, so no MCP config is written
+            const acpRules = [...new Set([...perms.claude, ...local.approvedTools.map(t => `mcp__agora__${t}`), ...rules.filter(r => CODEX_WORDS.has(r))])];
+            const acpPlan: AcpPlan = {
+                prompt: prompt ?? wakePrompt(claim, ports), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
+                mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
+                authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
+            };
+            let args = local.acpArgs;
+            const policy = local.adapter === 'gemini' ? geminiPolicy(acpRules) : '';
+            if (policy) { await writeFile(paths[3], policy, { mode: 0o600 }); args = [...args, '--policy', paths[3]]; }
+            return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: '', cleanup,
+                lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
+        }
+        if (local.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];
@@ -79,6 +187,23 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
             const tools = [...new Set([...local.approvedTools, ...perms.codex.mcpTools])].map(t => `${t}={approval_mode="approve"}`).join(',');
             const mcp = `{agora={command=${JSON.stringify(server.command)},args=${JSON.stringify(server.args)},env_vars=["AGORA_INSTANCE","AGORA_BOT_TOKEN","AGORA_DEFAULT_CHANNEL"],required=true,tools={${tools}}}}`;
             await writeFile(paths[1], `mcp_servers=${mcp}\n`, { mode: 0o600 });
+            if (plan) {
+                // codex app-server with OpenAI's ChatGPT-plan provider; model, effort, sandbox and
+                // output schema go over JSON-RPC (siwc/appserver.ts)
+                args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS,
+                    '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                    ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
+                    ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
+                    ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
+                const profileName = claim.profile.name;
+                const appServer: AppServerPlan = {
+                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports),
+                    outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
+                    refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
+                };
+                return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: 'codex', stdin: '', cleanup, lurk: isLurkRun(claim),
+                    sandbox: perms.codex.sandbox, unknownPresets: perms.unknownPresets, appServer };
+            }
             args = ['exec', '--ignore-user-config', '-s', perms.codex.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
                 ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
@@ -99,7 +224,7 @@ export async function prepare(config: Config, claim: Claim): Promise<Launch> {
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: wakePrompt(claim), cleanup, lurk: isLurkRun(claim),
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }

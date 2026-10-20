@@ -5,10 +5,14 @@ import { canViewChannel } from '../lib/channel-access';
 import { isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { hashClaimToken, postNotice } from '../lib/agent-runs';
 import { generateUlid } from '../utils/ulid';
+import { trackWorkspaceResult } from '../lib/task-cards';
 
 const ID = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' } as const;
 const SHA = { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' } as const;
-/** Actions only the server owner may queue: rewinding history, forking, and opening a PR with the owner's `gh` login. */
+/**
+ * Actions only the server owner may queue: rewinding history, forking, and opening a PR with the owner's `gh` login.
+ * 'pr_status' only reads the session branch's PR (for its task card), so directors may refresh it.
+ */
 const OWNER_ONLY = ['restore','fork','pr'];
 const response = (httpStatus: number, body?: object) => ({ httpStatus, body });
 async function respondService(request: FastifyRequest, reply: FastifyReply, fn: () => Promise<any>) {
@@ -33,7 +37,7 @@ export async function workspaceReviewRoutes(app: FastifyInstance) {
     const root = '/channels/:id/sessions/:sessionId';
     app.post(`${root}/workspace-commands`, { schema: { body: {
         type: 'object', additionalProperties: false, required: ['action'], properties: {
-            action: { type: 'string', enum: ['diff','discard','commit','merge','pr','restore','fork'] },
+            action: { type: 'string', enum: ['diff','discard','commit','merge','pr','restore','fork','pr_status'] },
             path: { type: 'string', minLength: 1, maxLength: 4096 }, offset: { type: 'integer', minimum: 0, maximum: 131072 },
             revision: {type:'string',pattern:'^[0-9a-f]{64}$'},
             message: { type: 'string', minLength: 1, maxLength: 2000 }, checkpointId: ID,
@@ -132,7 +136,7 @@ export async function workspaceReviewRoutes(app: FastifyInstance) {
                 error:{type:'string',maxLength:120},message:{type:'string',maxLength:4096},url:{type:'string',maxLength:2048},
                 diff:{type:'string',maxLength:20000},path:{type:'string',maxLength:4096},files:{type:'array',maxItems:30,items:{type:'string',maxLength:4096}},
                 next:{type:['integer','null'],minimum:0,maximum:131072},truncated:{type:'boolean'},branch:{type:'string',maxLength:128},baseSha:SHA,headSha:SHA,sessionId:ID,
-                revision:{type:'string',pattern:'^[0-9a-f]{64}$'},
+                revision:{type:'string',pattern:'^[0-9a-f]{64}$'},prState:{type:'string',enum:['open','draft','merged','closed']},
             }},
         },
     } } }, async (request,reply) => {
@@ -162,6 +166,8 @@ export async function workspaceReviewRoutes(app: FastifyInstance) {
                 await db.query(`UPDATE agent_batches SET status='dropped',finished_at=NOW() WHERE session_id=$1 AND status='retry'`,[s.id]);
             }
             await db.query('UPDATE agent_workspace_commands SET status=$2,result=$3,finished_at=NOW() WHERE id=$1',[c.id,b.success?'succeeded':'failed',b.result]);
+            // A task card follows its session's pull request (docs/task-board.md)
+            if (b.success) for (const n of await trackWorkspaceResult(db,s.id.trim(),c.action,b.result)) (request.pendingEvents ??= []).push({ room:`channel:${n.channelId}`,event:n.eventName!,data:n.event });
             // Every action's result is a system notice; previews keep patch text out of chat.
             emit(request,await postNotice(db,s.channel_id.trim(),`Workspace ${c.action} ${b.success?'completed':'failed'} for session ${s.id.trim()}: ${b.result.error??b.result.message??'Review ready in the session sheet.'}${b.result.url?' '+b.result.url:''}`));
             return {ok:true};

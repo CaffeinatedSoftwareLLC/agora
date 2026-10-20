@@ -23,7 +23,10 @@ export function ArcContentArea() {
   const membersOpen = useUIStore(s => s.aux === 'members');
   const toggleMembers = useUIStore(s => s.toggleAux);
   const filesOpen = useUIStore(s => s.aux === 'files');
+  const canvasOpen = useUIStore(s => s.aux === 'canvas');
   const toggleFiles = useUIStore(s => s.toggleAux);
+  const projectOpen = useUIStore(s => s.aux === 'project');
+  const tasksOpen = useUIStore(s => s.aux === 'tasks');
   const openThreadView = useUIStore(s => s.openThreadView);
 
   const accentColor = P.accent;
@@ -103,6 +106,73 @@ export function ArcContentArea() {
           >
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: P.primary }} />
             <span className="sr-only">{paletteName}</span>
+          </button>
+
+          {/* Project context panel toggle (docs/project-context.md) */}
+          <button
+            onClick={() => toggleFiles('project')}
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            style={{
+              color: projectOpen ? accentColor : P.muted,
+              background: projectOpen ? `${accentColor}1f` : 'transparent',
+            }}
+            title="Project context for agents"
+            aria-label="Project context for agents"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z" />
+            </svg>
+          </button>
+
+          {/* Task board toggle */}
+          <button
+            onClick={() => toggleFiles('tasks')}
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            style={{
+              color: tasksOpen ? accentColor : P.muted,
+              background: tasksOpen ? `${accentColor}1f` : 'transparent',
+            }}
+            title="Task board"
+            aria-label="Task board"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M9 3v18M15 3v18M5 8h2M11 8h2M11 12h2M17 8h2" />
+            </svg>
+          </button>
+
+          {/* Canvas: the artifacts agents and people published here */}
+          <button
+            onClick={() => canvasOpen ? useUIStore.getState().closeAux() : useUIStore.getState().openCanvas({ channelId: activeChannelId, artifactId: null, version: null })}
+            className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+            style={{
+              color: canvasOpen ? accentColor : P.muted,
+              background: canvasOpen ? `${accentColor}1f` : 'transparent',
+            }}
+            title="Canvas: artifacts in this channel"
+            aria-label="Canvas: artifacts in this channel"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
           </button>
 
           {/* Files panel toggle */}

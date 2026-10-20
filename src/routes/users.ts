@@ -37,7 +37,7 @@ export async function userRoutes(app: FastifyInstance) {
     // ─── UI preferences of the signed-in person (not bots) ───
     // Known keys only, so the column can't become a dumping ground for client data.
 
-    // GET /users/@me/preferences → 200 { palette? }
+    // GET /users/@me/preferences → 200 { palette?, readAloud? }
     app.get('/users/@me/preferences', async (request, reply) => {
         if (request.isBot) return reply.status(403).send({ error: 'forbidden' });
         const db = request.dbClient!;
@@ -45,7 +45,7 @@ export async function userRoutes(app: FastifyInstance) {
         return reply.send(row.rows[0]?.preferences ?? {});
     });
 
-    // PATCH /users/@me/preferences { palette } → 200 merged preferences
+    // PATCH /users/@me/preferences { palette?, readAloud? } → 200 merged preferences
     app.patch('/users/@me/preferences', {
         schema: {
             body: {
@@ -54,6 +54,8 @@ export async function userRoutes(app: FastifyInstance) {
                 minProperties: 1,
                 properties: {
                     palette: { type: 'string', enum: ['aegean', 'terracotta'] },
+                    // Read agents' new replies aloud: never, on phones (touch screens), or on every device
+                    readAloud: { type: 'string', enum: ['off', 'phone', 'all'] },
                 },
             },
         },

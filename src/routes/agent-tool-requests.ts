@@ -66,7 +66,7 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                 // Lock order, as everywhere: profile → session → request
                 await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 ${decision === 'always' ? 'FOR UPDATE' : 'FOR SHARE'}`, [ref.profile_id]);
                 const s = await db.query(
-                    `SELECT s.state, p.name, p.auth_mode FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
+                    `SELECT s.state, p.name, p.auth_mode, p.plan_owner_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
                     [ref.session_id]
                 );
                 const r = await db.query(
@@ -107,8 +107,11 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                     }
                 }
                 // An approval wakes a live agent to retry; the notice is its batch. A subscription
-                // agent runs only when the owner triggers it, so a director's approval waits.
-                const mayWake = s.rows[0].auth_mode === 'api_key' || await isServerOwner(db, ref.server_id.trim(), userId);
+                // agent runs only when the owner triggers it (a siwc agent: its plan owner), so
+                // anyone else's approval waits.
+                const mode = s.rows[0].auth_mode;
+                const mayWake = mode === 'api_key'
+                    || (mode === 'siwc' ? s.rows[0].plan_owner_id?.trim() === userId : await isServerOwner(db, ref.server_id.trim(), userId));
                 if (decision !== 'deny' && s.rows[0].state === 'live' && mayWake) {
                     const notice = await postNotice(db, channelId,
                         `${who} ${decision === 'always' ? 'always allowed' : 'approved once'} \`${req.tool}\` for ${profile}. Retry the step that needed it.`);

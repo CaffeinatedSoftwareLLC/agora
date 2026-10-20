@@ -50,7 +50,8 @@ export function wavToPcm(wav: Buffer): Pcm {
         } else if (id === 'data') {
             if (!format) throw new Error('WAV data chunk before fmt chunk');
             if (format.audioFormat !== 1 || format.bits !== 16) throw new Error('Only 16-bit PCM WAV is supported');
-            const end = Math.min(body + size, wav.length);
+            // Streamed WAVs are written before their length is known: 0 or 0xFFFFFFFF means "to the end"
+            const end = size === 0 || size === 0xFFFFFFFF ? wav.length : Math.min(body + size, wav.length);
             const bytes = wav.subarray(body, end - ((end - body) % 2));
             // Copy into an aligned buffer; Buffer slices may start at odd offsets
             const samples = new Int16Array(bytes.length / 2);

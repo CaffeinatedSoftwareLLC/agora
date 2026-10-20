@@ -12,8 +12,7 @@ import type { Claim } from './types.js';
  * - A profile on `api_key` gets its key from this host's environment (`apiKeyEnv`), passed
  *   to the child only. The key is never logged, stored or sent to Agora.
  * - Gemini (CLI or Antigravity) must use an API key: Google's terms call third-party access
- *   through its account login a breach. `allowSubscriptionAtOwnRisk` overrides that and
- *   forces owner approval of every run.
+ *   through its account login a breach. Gemini is hosted only over ACP with an API key.
  * - The host never reads, copies or relays a CLI's own login files or OAuth tokens.
  */
 
@@ -29,19 +28,38 @@ export const API_KEY_ENVS: Record<'codex' | 'claude' | 'gemini', string[]> = {
 export const GEMINI_SUBSCRIPTION_REFUSAL =
     'a gemini profile must use auth "api_key" (GEMINI_API_KEY). Google\'s Antigravity terms, section 6: '
     + '"Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach", '
-    + 'and accounts have been suspended for it. To run on your Google login anyway, set "allowSubscriptionAtOwnRisk": true; '
-    + `every run then waits for your approval in Agora. That reduces the risk but does not remove it. See ${TERMS_DOC}`;
+    + 'and accounts have been suspended for it. Agora never hosts a Google account login: run Gemini over ACP with an API key '
+    + `("protocol": "acp", "acpArgs": ["--acp"], "auth": "api_key", "apiKeyEnv": "GEMINI_API_KEY"). See ${TERMS_DOC}`;
 
 export const GEMINI_NOT_HOSTED =
-    'Gemini is not a hosted adapter yet. Its profile passed the provider-terms check, but the host can only run codex and claude profiles.';
+    'Gemini is hosted only over ACP with an API key: set "protocol": "acp" and "acpArgs": ["--acp"] on the gemini profile (agora-host README, "ACP agents").';
+
+/**
+ * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An
+ * api_key profile on ACP must use it, so the agent can't fall back to an account login.
+ * Claude Code reads ANTHROPIC_API_KEY itself, so claude needs none.
+ */
+export const ACP_API_KEY_METHODS: Record<string, string> = {
+    GEMINI_API_KEY: 'gemini-api-key',
+    GOOGLE_API_KEY: 'vertex-ai',
+    CODEX_API_KEY: 'codex-api-key',
+    OPENAI_API_KEY: 'openai-api-key',
+};
 
 /** A configuration problem whose message is fixed text, safe to print. */
 export class HostConfigError extends Error {}
 
 /** The host refused a claim because of the provider-terms rules. Never retried. */
 export class TermsRefusal extends Error {
-    constructor(public readonly code: 'subscription_owner_only' | 'run_not_approved', message: string) { super(message); }
+    constructor(public readonly code: 'subscription_owner_only' | 'run_not_approved' | 'plan_owner_only' | SiwcRunError, message: string) { super(message); }
 }
+
+/** Why a run on a ChatGPT plan (auth "siwc") can't start or didn't finish. */
+export type SiwcRunError = 'siwc_not_connected' | 'siwc_scope_missing' | 'siwc_reauth_required' | 'siwc_not_eligible'
+    | 'siwc_usage_limit' | 'siwc_plan_owner_mismatch' | 'siwc_refresh_unavailable';
+/** Result errors a retry can't fix. siwc_refresh_unavailable stays retryable (network). */
+export const NON_RETRYABLE = new Set(['host_launch_failed', 'subscription_owner_only', 'run_not_approved', 'plan_owner_only',
+    'siwc_not_connected', 'siwc_scope_missing', 'siwc_reauth_required', 'siwc_not_eligible', 'siwc_plan_owner_mismatch']);
 
 /** Every wake needs the owner's approval: asked for, or forced for Gemini on account login. */
 export function needsRunApproval(profile: LocalProfile): boolean {
@@ -52,7 +70,23 @@ export function needsRunApproval(profile: LocalProfile): boolean {
  * Check a claim against the local profile's auth mode before anything starts. The server
  * applies the same rules; this catches a stale server-side mode or a server bug.
  */
-export function checkTerms(profile: LocalProfile, claim: Claim): void {
+export function checkTerms(profile: LocalProfile, claim: Claim, boundUser: string | null = null): void {
+    if (profile.auth === 'siwc') {
+        // A ChatGPT plan is its owner's: only their own messages and commands, and hand-offs
+        // inside sessions they started (docs/codex-chatgpt-plan.md)
+        const owner = claim.profile.planOwnerId;
+        const refuse = () => new TermsRefusal('plan_owner_only', `${claim.profile.name} runs on its plan owner's ChatGPT plan; only they can wake it.`);
+        if (!owner) throw new TermsRefusal('siwc_not_connected', `${claim.profile.name} is not connected to a ChatGPT plan.`);
+        // The server's binding must match the one this host saved at sign-in
+        if (boundUser && boundUser !== owner) throw new TermsRefusal('siwc_plan_owner_mismatch', `${claim.profile.name} is connected for another Agora user on this host.`);
+        if (!claim.session.startedByOwner) throw refuse();
+        for (const item of claim.inbox) {
+            if (item.reason === 'command') continue;
+            // delegate: a subtask's brief or summary, posted by the server for a session it delegated
+            if (item.reason === 'handoff' || item.reason === 'protocol' || item.reason === 'delegate') { if (!item.authorBot) throw refuse(); continue; }
+            if (item.authorBot || item.authority === null || item.authorId !== owner) throw refuse();
+        }
+    }
     if (profile.auth === 'subscription') {
         const refuse = () => new TermsRefusal('subscription_owner_only',
             `${claim.profile.name} runs on the owner's personal subscription; only the owner can wake it.`);
@@ -60,7 +94,8 @@ export function checkTerms(profile: LocalProfile, claim: Claim): void {
         for (const item of claim.inbox) {
             // The session notice of the owner's /start or /resume; the server gates who sends it
             if (item.reason === 'command') continue;
-            if (item.reason === 'handoff' || item.reason === 'protocol') {
+            // delegate: a subtask's brief or summary, posted by the server for a session it delegated
+            if (item.reason === 'handoff' || item.reason === 'protocol' || item.reason === 'delegate') {
                 if (!item.authorBot) throw refuse();
                 continue;
             }
@@ -82,6 +117,7 @@ export function profileReport(profiles: Record<string, LocalProfile>) {
 /** One line for the start-up log. */
 export function describeAuth(name: string, profile: LocalProfile): string {
     const approval = needsRunApproval(profile) ? '; every run needs the owner\'s approval' : '';
+    if (profile.auth === 'siwc') return `Profile ${name}: ChatGPT plan via Sign in with ChatGPT (codex app-server); only its plan owner can wake it${approval}.`;
     return profile.auth === 'api_key'
         ? `Profile ${name}: API key from ${profile.apiKeyEnv}${approval}.`
         : `Profile ${name}: account login (subscription); only the server owner can wake it${approval}.`;

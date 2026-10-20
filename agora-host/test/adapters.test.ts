@@ -77,9 +77,10 @@ describe('argv/config isolation', () => {
         expect(launch.env.CLAUDE_CONFIG_DIR).toBe(c.profiles.builder.stateDir);
     });
     it('excludes every inherited credential and automation configuration', () => {
-        const env = childEnv(config().profiles.builder, { Path: 'trusted-path', SystemRoot: 'os', AGORA_HOST_TOKEN: 'host',
+        const env = childEnv(config().profiles.builder, { Path: '/trusted/path', SystemRoot: 'os', AGORA_HOST_TOKEN: 'host',
             AGORA_BOT_TOKEN: 'other', OPENAI_API_KEY: 'secret', NODE_OPTIONS: '--require malicious.js', CLAUDECODE: 'parent' });
-        expect(env).toEqual({ Path: 'trusted-path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir });
+        expect(env).toEqual({ Path: '/trusted/path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir,
+            ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) });
     });
     it('rejects missing/mismatched local mappings, unsupported effort, and ambiguous resume', async () => {
         const { c, delivery } = await setup(); delivery.profile.workdirAlias = 'untrusted';
@@ -155,5 +156,24 @@ describe('changed files and streaming usage', () => {
         expect(parseOutput('claude', assistant + '\n{', 1)).toMatchObject({ success: false, tokensUsed: 13 });
         const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { summary: 'done' }, usage: { input_tokens: 10, output_tokens: 5 } });
         expect(parseOutput('claude', assistant + '\n' + result, 0)).toMatchObject({ success: true, tokensUsed: 15 });
+    });
+});
+
+describe('browser preview ports', () => {
+    it('gives the run its session port range in the environment and the wake prompt', async () => {
+        const { c, delivery } = await setup();
+        const plain = await prepare(c, delivery); cleanups.push(plain.cleanup);
+        expect(plain.env.AGORA_PREVIEW_PORTS).toBeUndefined();
+        expect(plain.stdin).not.toContain('browser_preview');
+        c.preview = { browser: process.execPath, stateDir: join(c.profiles.builder.stateDir, 'preview'), portBase: 43000, portsPerSession: 5, slots: 10 };
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(launch.env.AGORA_PREVIEW_PORTS).toBe('43000-43004');
+        expect(launch.stdin).toContain('ports 43000-43004 only (also in AGORA_PREVIEW_PORTS)');
+        expect(JSON.parse(await readFile(join(c.preview.stateDir, 'preview-ports.json'), 'utf8')).sessions[delivery.session.id].slot).toBe(0);
+    });
+    it('rejects a port range past 65535', () => {
+        const base = { instance: 'http://127.0.0.1:3000', hostToken: 'ah_x.y', mcp: { executable: process.execPath, entrypoint: process.execPath }, profiles: {}, botTokens: {} };
+        expect(configSchema.safeParse({ ...base, preview: { browser: process.execPath, stateDir: process.cwd(), portBase: 65000, portsPerSession: 10, slots: 100 } }).success).toBe(false);
+        expect(configSchema.safeParse({ ...base, preview: { browser: process.execPath, stateDir: process.cwd() } }).success).toBe(true);
     });
 });

@@ -11,9 +11,12 @@ import { ProtocolBadge } from './ProtocolBadge';
 import { RuntimeCard } from './RuntimeCard';
 import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
 import { PermissionRelayCard } from '../agents/PermissionRelayCard';
+import { TaskThreadNotice } from '../tasks/TaskThreadNotice';
 import { SearchCard } from './SearchCard';
 import { ReportCard } from './ReportCard';
+import { ArtifactCard } from '../canvas/ArtifactCard';
 import { usePalette } from '../../theme';
+import { browserSpeechSupported, primeAudio, useVoiceStore } from '../voice/voiceStore';
 
 interface MessageItemProps {
   message: Message;
@@ -52,6 +55,18 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   const openThread = useUIStore(s => s.openThreadView);
   const canReply = !!(channelId && !message.deletedAt && !message.systemEvent);
   const handleReply = canReply ? () => openThread(channelId!, message.id) : undefined;
+  const voiceOutput = useVoiceStore(s => (channelId ? s.channels[channelId]?.output : undefined));
+  const readingAloud = useVoiceStore(s => s.speaking === message.id);
+  const canReadAloud = !!(channelId && message.content?.trim() && !message.pending && !message.failed && !message.streaming
+    && (voiceOutput === 'server' || (voiceOutput === 'browser' && browserSpeechSupported())));
+  const handleReadAloud = canReadAloud
+    ? () => {
+        primeAudio();
+        const voice = useVoiceStore.getState();
+        if (readingAloud) voice.stop();
+        else voice.speak({ id: message.id, channelId: channelId!, content: message.content });
+      }
+    : undefined;
 
   const clearLongPress = () => {
     if (longPressTimerRef.current !== null) {
@@ -91,6 +106,11 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
 
   if (message.systemEvent === 'agent_permission_relay') {
     return <PermissionRelayCard message={message} />;
+  }
+
+  // A task card's or subtask's thread (docs/task-board.md)
+  if ((message.systemEvent === 'task_card' || message.systemEvent === 'subtask') && channelId) {
+    return <TaskThreadNotice message={message} channelId={channelId} />;
   }
 
   // Agent session notice (started / shelved / ended): left-aligned with the message column, console icon
@@ -154,6 +174,8 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             onDelete={() => onDelete(message.id)}
             onReply={handleReply}
             messageContent={message.content ?? ''}
+            onReadAloud={handleReadAloud}
+            readingAloud={readingAloud}
             sheetOpen={sheetOpen}
             onSheetOpenChange={setSheetOpen}
           />
@@ -176,6 +198,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
               <FileAttachment key={att.id} attachment={att} />
             ))}
           </div>
+        )}
+        {message.artifact && (channelId ?? message.channelId) && (
+          <ArtifactCard artifact={message.artifact} channelId={channelId ?? message.channelId} />
         )}
         {!!(message.replyCount && message.replyCount > 0 && channelId) && (
           <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} threadClosedAt={message.threadClosedAt} />
@@ -202,6 +227,8 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
           onDelete={() => onDelete(message.id)}
           onReply={handleReply}
           messageContent={message.content ?? ''}
+          onReadAloud={handleReadAloud}
+          readingAloud={readingAloud}
           sheetOpen={sheetOpen}
           onSheetOpenChange={setSheetOpen}
         />
@@ -244,6 +271,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
               <FileAttachment key={att.id} attachment={att} />
             ))}
           </div>
+        )}
+        {message.artifact && (channelId ?? message.channelId) && (
+          <ArtifactCard artifact={message.artifact} channelId={channelId ?? message.channelId} />
         )}
         {!!(message.replyCount && message.replyCount > 0 && channelId) && (
           <ThreadIndicator replyCount={message.replyCount} lastReplyAt={message.lastReplyAt} channelId={channelId} messageId={message.id} threadClosedAt={message.threadClosedAt} />

@@ -4,8 +4,10 @@ import { generateUlid } from '../utils/ulid';
 import { readAuthorities } from './direct-agents';
 import { duration, fileDeniedTools, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, subscriptionNotice } from './provider-terms';
+import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
+import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
+import { reportSubtask } from './agent-subtasks';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -22,7 +24,9 @@ export const MAX_ATTEMPTS = 3;
 export const MAX_BATCH = 20;
 
 /** A channel event to emit after the transaction that produced it commits. */
-export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' }
+export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' | 'ThreadMetadataUpdate' | 'TaskCardUpdate' | 'AgentRunProgress' }
+/** What an ACP run reports with its heartbeats; the step is the agent's own text. */
+export interface RunProgress { step: string | null; toolCalls: number; planDone?: number | null; planTotal?: number | null }
 
 export interface Host { id: string; serverId: string }
 
@@ -54,21 +58,45 @@ async function inTx<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T
     }
 }
 
-/** Insert a system notice in a channel; returns the socket event to emit after commit. */
-export async function postNotice(c: PoolClient | any, channelId: string, content: string): Promise<Notice> {
+/**
+ * Insert a system notice in a channel, or as a reply in `threadId`; returns the socket event
+ * to emit after commit. A thread reply also needs threadReplyCounted.
+ */
+export async function postNotice(c: PoolClient | any, channelId: string, content: string, threadId: string | null = null): Promise<Notice> {
     const id = generateUlid();
     await c.query(
-        `INSERT INTO messages (id, channel_id, author_id, content, system_event)
-         VALUES ($1, $2, NULL, $3, 'agent_session')`,
-        [id, channelId, content]
+        `INSERT INTO messages (id, channel_id, author_id, content, system_event, thread_id)
+         VALUES ($1, $2, NULL, $3, 'agent_session', $4)`,
+        [id, channelId, content, threadId]
     );
     return {
         channelId: channelId.trim(),
         event: {
             id, content, authorId: null, authorUsername: null,
             channelId: channelId.trim(), createdAt: new Date().toISOString(), systemEvent: 'agent_session',
+            ...(threadId ? { threadId: threadId.trim() } : {}),
         },
     };
+}
+
+/** A reply was added to a thread: count it on the parent; returns the thread's update event. */
+export async function threadReplyCounted(c: PoolClient | any, channelId: string, threadId: string): Promise<Notice> {
+    const parent = await c.query(
+        `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW() WHERE id = $1
+         RETURNING reply_count, last_reply_at, thread_closed_at`,
+        [threadId]
+    );
+    return {
+        channelId: channelId.trim(), eventName: 'ThreadMetadataUpdate',
+        event: { channelId: channelId.trim(), messageId: threadId.trim(), replyCount: parent.rows[0].reply_count,
+            lastReplyAt: parent.rows[0].last_reply_at, threadClosedAt: parent.rows[0].thread_closed_at ?? null },
+    };
+}
+
+/** A session notice: in the session's own thread for a task card or subtask session, else in the channel. */
+export async function postSessionNotice(c: PoolClient | any, channelId: string, threadId: string | null, content: string): Promise<Notice[]> {
+    const notice = await postNotice(c, channelId, content, threadId);
+    return threadId ? [notice, await threadReplyCounted(c, channelId, threadId)] : [notice];
 }
 
 // ─── Claim ───
@@ -97,15 +125,26 @@ export interface ClaimResult {
         wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
         wokeFromSleep: boolean;
         lurkMode: 'quiet' | 'balanced' | 'vocal' | null;
-        /** The server owner started or last resumed this session (provider-terms.ts). */
+        /** The profile's plan owner started or last resumed this session (provider-terms.ts). */
         startedByOwner: boolean;
+        /** A task card or subtask session works only in this thread (docs/task-board.md). */
+        threadId: string | null;
+        /** A subtask's parent session: the child's summary is posted back to it. */
+        parentSessionId: string | null;
+        scope: { kind: 'task' | 'subtask'; title: string } | null;
     };
     profile: {
         id: string; name: string; botId: string; adapter: string;
-        authMode: 'subscription' | 'api_key'; runApproval: boolean;
+        authMode: 'subscription' | 'api_key' | 'siwc'; runApproval: boolean;
+        /** Whose plan a 'subscription' or 'siwc' profile runs on; null for api_key or not yet connected. */
+        planOwnerId: string | null;
         model: string | null; effort: string | null; workdirAlias: string;
         toolPresets: string[]; allowedTools: string[];
     };
+    /** The channel's pinned instructions and files (channel-projects.ts); null when there are none. */
+    project: ClaimProject | null;
+    /** The owner's verify command for this channel; the host runs it only if its config allows it. */
+    verify: { command: string; maxRetries: number } | null;
     inbox: Array<{
         messageId: string; threadId: string | null; reason: string;
         authorId: string | null; authorName: string | null; authorBot: boolean;
@@ -143,7 +182,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
                 COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
                 p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep,
-                p.auth_mode, p.run_approval, (s.started_by IS NOT NULL AND s.started_by = srv.owner_id) AS started_by_owner
+                p.auth_mode, p.run_approval, ${PLAN_OWNER_SQL} AS plan_owner_id,
+                (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner,
+                (SELECT t.title FROM task_cards t WHERE t.session_id = s.id) AS task_title
          FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN channels ch ON ch.id = s.channel_id
@@ -164,9 +205,10 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const channelId = session.channel_id.trim();
     const botId = session.bot_id.trim();
 
-    // 2. Budgets
-    if (session.wakes_used >= session.wake_budget || Number(session.tokens_used) >= Number(session.token_budget)) {
-        await shelveForBudget(c, sessionId, channelId, session.profile_name, notices);
+    // 2. Budgets; a subtask also stops when a parent's budget is used up
+    const exhausted = session.wakes_used >= session.wake_budget ? sessionId : await budgetExhausted(c, sessionId);
+    if (exhausted) {
+        await shelveForBudget(c, sessionId, channelId, session.profile_name, notices, exhausted);
         return null;
     }
 
@@ -248,7 +290,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
 
     // 4. Recheck each row; rows that fail are acknowledged without work
     const subscription = session.auth_mode !== 'api_key';
-    const kept = await recheckRows(c, channelId, rows, subscription ? { startedByOwner: !!session.started_by_owner } : null);
+    const planOwnerId: string | null = session.plan_owner_id?.trim() ?? null;
+    const kept = await recheckRows(c, channelId, rows, subscription ? { startedByOwner: !!session.started_by_owner, planOwnerId } : null);
     // Turning lurk off invalidates pending passive work, including retry batches.
     for (let i = kept.length - 1; i >= 0; i--) {
         if (kept[i].row.reason === 'lurk' && !session.lurk_mode) kept.splice(i, 1);
@@ -261,9 +304,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         if (isRetry) {
             await c.query(`UPDATE agent_batches SET status = 'dropped', finished_at = NOW() WHERE id = $1`, [batchId]);
         }
-        // Work dropped only because someone other than the owner started this subscription session
+        // Work dropped only because someone other than the plan owner started this session
         if (subscription && !session.started_by_owner && rows.some((r: any) => r.reason !== 'lurk')) {
-            notices.push(await postNotice(c, channelId, subscriptionNotice(session.profile_name)));
+            notices.push(await postNotice(c, channelId, planNotice(session.profile_name, session.auth_mode, !!planOwnerId)));
         }
         return null;
     }
@@ -305,6 +348,11 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     );
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
+    const channelProject = await readProject(c, channelId);
+    // Plan-owned profiles take project context from their plan owner only (provider-terms.ts)
+    const wakeProject = subscription ? await ownerAuthoredProject(c, channelId, channelProject, planOwnerId) : channelProject;
+    const project = claimProject(wakeProject, session.project_version_seen ?? null, !session.native_session_id);
+    if (project) await c.query(`UPDATE agent_runs SET project_version = $2 WHERE id = $1`, [runId, project.version]);
 
     notices.push(await sessionUpdate(c, sessionId, true));
     return {
@@ -319,13 +367,20 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
             wakesUsed: session.wakes_used + 1, wakeBudget: session.wake_budget,
             tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget), wokeFromSleep,
             lurkMode: session.lurk_mode ?? null, startedByOwner: !!session.started_by_owner,
+            threadId: session.thread_id?.trim() ?? null, parentSessionId: session.parent_session_id?.trim() ?? null,
+            scope: session.task_title != null ? { kind: 'task', title: session.task_title }
+                : session.parent_session_id ? { kind: 'subtask', title: session.title ?? 'Subtask' } : null,
         },
         profile: {
             id: session.profile_id.trim(), name: session.profile_name, botId, adapter: session.adapter,
-            authMode: subscription ? 'subscription' : 'api_key', runApproval: !!session.run_approval,
+            authMode: session.auth_mode === 'siwc' ? 'siwc' : subscription ? 'subscription' : 'api_key', runApproval: !!session.run_approval,
+            planOwnerId: subscription ? planOwnerId : null,
             model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
             toolPresets: session.tool_presets ?? [], allowedTools: session.allowed_tools ?? [],
         },
+        project,
+        // Lurk runs only read along; they never get a verify step
+        verify: kept.every(k => k.entry.reason === 'lurk') ? null : channelProject.verify,
         inbox: kept.map(k => k.entry),
     };
 }
@@ -344,10 +399,10 @@ async function botCanAct(c: PoolClient, botId: string, channelId: string): Promi
 }
 
 /**
- * `terms` is set for a subscription profile (provider-terms.ts): only the owner's own
- * messages, the owner's commands, and hand-offs inside a session the owner started count.
+ * `terms` is set for a plan-owned profile (provider-terms.ts): only the plan owner's own
+ * messages, the plan owner's commands, and hand-offs inside a session they started count.
  */
-async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms: { startedByOwner: boolean } | null = null) {
+async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms: { startedByOwner: boolean; planOwnerId: string | null } | null = null) {
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
@@ -378,9 +433,11 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
         // A session notice from /start or /resume: no author, valid while the session is live
         if (row.reason === 'command' && m.author_id) continue;
         if ((row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
+        // A subtask's brief or summary: written by the server for a session it delegated, from an agent
+        if (row.reason === 'delegate' && !m.author_bot) continue;
         if (terms) {
-            if (!terms.startedByOwner) continue;
-            if ((row.reason === 'direct' || row.reason === 'lurk') && (authority !== 'owner' || m.author_bot)) continue;
+            if (!terms.startedByOwner || !terms.planOwnerId) continue;
+            if ((row.reason === 'direct' || row.reason === 'lurk') && (!authority || m.author_bot || m.author_id?.trim() !== terms.planOwnerId)) continue;
             if ((row.reason === 'handoff' || row.reason === 'protocol') && !m.author_bot) continue;
         }
         kept.push({
@@ -401,14 +458,60 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
     return kept;
 }
 
-async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[]) {
+interface Spend { id: string; depth: number; budget: number; spent: number }
+
+/**
+ * This session and each parent above it (depth 0 is the session), with its token budget and
+ * what it and all its subtasks have spent: a subtask's tokens count against every parent
+ * above it (docs/task-board.md). Reads only: never locks a parent, so a child's run can't
+ * deadlock with its parent's.
+ */
+async function familySpend(c: PoolClient | any, sessionId: string): Promise<Spend[]> {
+    const r = await c.query(
+        `WITH RECURSIVE up AS (
+             SELECT id, parent_session_id, 0 AS depth FROM agent_sessions WHERE id = $1
+             UNION ALL
+             SELECT p.id, p.parent_session_id, up.depth + 1 FROM agent_sessions p JOIN up ON p.id = up.parent_session_id WHERE up.depth < ${MAX_SUBTASK_DEPTH}
+         ), down AS (
+             SELECT id AS root, id, 0 AS depth FROM up
+             UNION ALL
+             SELECT down.root, s.id, down.depth + 1 FROM agent_sessions s JOIN down ON s.parent_session_id = down.id WHERE down.depth < ${MAX_SUBTASK_DEPTH}
+         )
+         SELECT btrim(r.id) AS id, up.depth, COALESCE(r.token_budget, p.token_budget) AS budget, SUM(s.tokens_used) AS spent
+         FROM down
+         JOIN agent_sessions s ON s.id = down.id
+         JOIN agent_sessions r ON r.id = down.root JOIN agent_profiles p ON p.id = r.profile_id
+         JOIN up ON up.id = down.root
+         GROUP BY r.id, up.depth, r.token_budget, p.token_budget
+         ORDER BY up.depth`,
+        [sessionId]
+    );
+    return r.rows.map((row: any) => ({ id: row.id, depth: row.depth, budget: Number(row.budget), spent: Number(row.spent) }));
+}
+
+/** The ID of the session whose budget is used up (this one, or a parent it spends from), or null. */
+export async function budgetExhausted(c: PoolClient | any, sessionId: string): Promise<string | null> {
+    return (await familySpend(c, sessionId)).find(s => s.spent >= s.budget)?.id ?? null;
+}
+
+/** Tokens this session may still spend: the least any budget in its family has left. */
+export async function budgetRemaining(c: PoolClient | any, sessionId: string): Promise<number> {
+    return Math.min(...(await familySpend(c, sessionId)).map(s => s.budget - s.spent));
+}
+
+/** How deep subtasks may nest: a parent, its child and a grandchild. */
+export const MAX_SUBTASK_DEPTH = 2;
+
+async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[], exhausted = sessionId) {
     await c.query(
         `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW() WHERE id = $1 AND state = 'live'`,
         [sessionId]
     );
     await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     notices.push(await sessionUpdate(c, sessionId, false));
-    notices.push(await postNotice(c, channelId, `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`));
+    notices.push(await postNotice(c, channelId, exhausted === sessionId
+        ? `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`
+        : `Subtask session for ${profileName} (${sessionId}) shelved: the budget of its parent session ${exhausted} is used up.`));
 }
 
 // ─── Heartbeat, complete, fail ───
@@ -459,7 +562,7 @@ export async function checkRun(c: PoolClient, host: Host, runId: string, claimTo
     return { ok: true, run };
 }
 
-export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null) {
+export async function heartbeat(pool: Pool, host: Host, runId: string, claimToken: string, notices: Notice[], tokensUsed?: number | null, progress?: RunProgress) {
     return inTx(pool, async c => {
         const check = await checkRun(c, host, runId, claimToken, null, notices);
         if (!check.ok) return { status: check.status, body: check.body };
@@ -474,8 +577,23 @@ export async function heartbeat(pool: Pool, host: Host, runId: string, claimToke
             `UPDATE agent_runs SET lease_until = NOW() + make_interval(secs => $2) WHERE id = $1 RETURNING lease_until`,
             [runId, LEASE_SECONDS]
         );
+        if (progress) {
+            // Live only: the channel shows it next to "is working…"; nothing is stored
+            const s = await c.query(`SELECT channel_id FROM agent_sessions WHERE id = $1`, [run.session_id]);
+            const channelId = s.rows[0]?.channel_id?.trim();
+            if (channelId) notices.push({ channelId, eventName: 'AgentRunProgress', event: {
+                channelId, sessionId: run.session_id.trim(), runId: run.id.trim(), step: cleanStep(progress.step),
+                toolCalls: progress.toolCalls, planDone: progress.planDone ?? null, planTotal: progress.planTotal ?? null,
+            } });
+        }
         return { status: 200, body: { cancel: false, leaseUntil: new Date(lease.rows[0].lease_until).toISOString() } };
     });
+}
+
+/** The step is agent-controlled text: drop control, format and line-separator characters before broadcast. */
+export function cleanStep(step: string | null | undefined): string | null {
+    if (typeof step !== 'string') return null;
+    return step.replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
 }
 
 /** Why the host must stop this run, or null. */
@@ -495,7 +613,7 @@ async function cancelReason(c: PoolClient, run: any): Promise<string | null> {
     return null;
 }
 
-export interface CompleteBody { checkpoint?: CheckpointReport; claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[] }
+export interface CompleteBody { checkpoint?: CheckpointReport; claimToken: string; nativeSessionId?: string | null; tokensUsed?: number | null; summary?: string | null; changedPaths?: string[]; branch?: string; baseSha?: string; headSha?: string; deniedTools?: string[]; verification?: VerificationReport }
 
 export async function complete(pool: Pool, host: Host, runId: string, body: CompleteBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -517,10 +635,13 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
             [runId, tokens, body.nativeSessionId ?? null, body.summary ?? null, [...new Set(body.changedPaths ?? [])], body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
         );
         await fileDeniedTools(c, run, body.deniedTools, notices);
+        await recordVerification(c, run, body.verification, notices);
+        // A subtask's summary is posted back to its parent for it, so it needn't post anything itself
+        const subtask = (await c.query(`SELECT parent_session_id FROM agent_sessions WHERE id = $1`, [run.session_id])).rows[0]?.parent_session_id;
         const posted = await c.query(`SELECT 1 FROM messages m JOIN agent_sessions s ON s.bot_id = m.author_id
             WHERE s.id = $1 AND m.channel_id = s.channel_id AND m.created_at >= $2 LIMIT 1`, [run.session_id, run.created_at]);
         const addressed = await c.query(`SELECT 1 FROM agent_inbox WHERE batch_id = $1 AND reason <> 'lurk' AND acked_at IS NULL LIMIT 1`, [run.batch_id]);
-        if (!posted.rows.length && addressed.rows.length > 0) {
+        if (!subtask && !posted.rows.length && addressed.rows.length > 0) {
             await c.query(`UPDATE agent_runs SET error = 'nothing_posted' WHERE id = $1`, [runId]);
             const name = await c.query(`SELECT p.name, s.channel_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
             notices.push(await postNotice(c, name.rows[0].channel_id.trim(), `${name.rows[0].name} finished without posting a reply. The run may be blocked; check its permissions or wake it again.`));
@@ -536,22 +657,28 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
                 branch = CASE WHEN p.generation = $4 THEN COALESCE($5, s.branch) ELSE s.branch END,
                 base_sha = CASE WHEN p.generation = $4 THEN COALESCE($6, s.base_sha) ELSE s.base_sha END,
                 head_sha = CASE WHEN p.generation = $4 THEN COALESCE($7, s.head_sha) ELSE s.head_sha END,
+                project_version_seen = COALESCE($8, s.project_version_seen),
                 last_active_at = NOW()
              FROM agent_profiles p
              WHERE s.id = $1 AND p.id = s.profile_id
              RETURNING s.state, s.tokens_used, s.channel_id, COALESCE(s.token_budget, p.token_budget) AS token_budget, p.name AS profile_name`,
-            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation, body.branch ?? null, body.baseSha ?? null, body.headSha ?? null]
+            [run.session_id, body.nativeSessionId ?? null, body.summary ?? null, run.profile_generation, body.branch ?? null, body.baseSha ?? null, body.headSha ?? null,
+             run.project_version ?? null]
         );
-        notices.push(await sessionUpdate(c, run.session_id, false));
         const session = s.rows[0];
-        if (session && session.state === 'live' && Number(session.tokens_used) >= Number(session.token_budget)) {
-            await shelveForBudget(c, run.session_id.trim(), session.channel_id.trim(), session.profile_name, notices);
+        // A finished subtask: its summary goes back to the parent and the child is shelved as done
+        const reported = !!subtask && !run.cancel_requested && session?.state === 'live'
+            && await reportSubtask(c, run.session_id.trim(), body.summary ?? null, notices);
+        notices.push(await sessionUpdate(c, run.session_id, false));
+        const exhausted = session && session.state === 'live' && !reported ? await budgetExhausted(c, run.session_id.trim()) : null;
+        if (exhausted) {
+            await shelveForBudget(c, run.session_id.trim(), session.channel_id.trim(), session.profile_name, notices, exhausted);
         }
         return { status: 200, body: run.cancel_requested ? { ok: true, cancelled: true } : { ok: true } };
     });
 }
 
-export interface FailBody { checkpoint?: CheckpointReport; claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null } }
+export interface FailBody { checkpoint?: CheckpointReport; claimToken: string; error: string; message?: string; tokensUsed?: number | null; retryable?: boolean; changedPaths?: string[]; deniedTools?: string[]; rateLimit?: { resetAt?: string | null }; verification?: VerificationReport }
 
 export async function fail(pool: Pool, host: Host, runId: string, body: FailBody, notices: Notice[]) {
     return inTx(pool, async c => {
@@ -568,6 +695,7 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         );
         await enforceTokenBudget(c, run.session_id.trim(), notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
+        await recordVerification(c, run, body.verification, notices);
         if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {
             notices.push(await sessionUpdate(c, run.session_id, false));
             return { status: 200, body: { ok: true, sleeping: true } };
@@ -578,13 +706,21 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
     });
 }
 
+/** Keep the host's verify result on the run and post it in the channel (docs/project-context.md). */
+async function recordVerification(c: PoolClient, run: any, v: VerificationReport | undefined, notices: Notice[]) {
+    if (!v) return;
+    await c.query(`UPDATE agent_runs SET verification = $2 WHERE id = $1`, [run.id, JSON.stringify(v)]);
+    const s = await c.query(`SELECT s.channel_id, p.name FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
+    notices.push(await postNotice(c, s.rows[0].channel_id.trim(), verificationNotice(s.rows[0].name, v)));
+}
+
 /**
  * After a failed or expired attempt: retry the batch unchanged, or give it up. Cancelled
  * work and work for sessions that are no longer live is dropped, never retried.
  */
 async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: string, notices: Notice[]) {
     const s = await c.query(
-        `SELECT s.state, s.channel_id, p.name AS profile_name FROM agent_sessions s
+        `SELECT s.state, s.channel_id, p.name AS profile_name, p.auth_mode FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
         [run.session_id]
     );
@@ -604,7 +740,8 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     await c.query(`UPDATE agent_batches SET status = 'failed', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
     await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
     // The host refused the run under the provider-terms rules (agora-host/src/terms.ts)
-    const text = error === 'subscription_owner_only' ? subscriptionNotice(session.profile_name)
+    const text = error === 'subscription_owner_only' ? planNotice(session.profile_name, 'subscription')
+        : Object.hasOwn(SIWC_ERRORS, error) ? `${session.profile_name} ${SIWC_ERRORS[error]}`
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));
@@ -680,10 +817,10 @@ async function chargeUsage(c: PoolClient, run: any, reported?: number | null): P
 }
 
 async function enforceTokenBudget(c: PoolClient, sessionId: string, notices: Notice[]) {
-    const r = await c.query(`SELECT s.state, s.channel_id, s.tokens_used,
-        COALESCE(s.token_budget, p.token_budget) AS token_budget, p.name
+    const r = await c.query(`SELECT s.state, s.channel_id, p.name
         FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [sessionId]);
     const s = r.rows[0];
-    if (s?.state === 'live' && Number(s.tokens_used) >= Number(s.token_budget))
-        await shelveForBudget(c, sessionId, s.channel_id.trim(), s.name, notices);
+    if (s?.state !== 'live') return;
+    const exhausted = await budgetExhausted(c, sessionId);
+    if (exhausted) await shelveForBudget(c, sessionId, s.channel_id.trim(), s.name, notices, exhausted);
 }

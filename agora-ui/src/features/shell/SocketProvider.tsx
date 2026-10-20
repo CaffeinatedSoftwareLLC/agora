@@ -24,6 +24,13 @@ import type {
   BotMessageStreamPayload,
 } from '../../lib/contracts/ws-events';
 import { SocketContext } from './SocketContext';
+import { useVoiceStore } from '../voice/voiceStore';
+
+/** A new message is on screen: in the open channel, or (a thread reply) in the open thread. */
+function isOnScreen(channelId: string, threadId?: string): boolean {
+  if (threadId) return useThreadStore.getState().openThreadId === threadId;
+  return useChannelStore.getState().activeChannelId === channelId;
+}
 
 export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -84,6 +91,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       } else {
         useMessageStore.getState().addMessage(data);
       }
+      if (data.authorBot && !data.systemEvent && isOnScreen(data.channelId, data.threadId)) {
+        useVoiceStore.getState().autoRead({ id: data.id, channelId: data.channelId, content: data.content });
+      }
       const activeChannelId = useChannelStore.getState().activeChannelId;
       if (data.channelId !== activeChannelId || isFeedObscured()) {
         useUnreadStore.getState().incrementUnread(data.channelId);
@@ -124,6 +134,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         useThreadStore.getState().streamUpdate(data.threadId, data.messageId, data.content, data.streaming, data.attachments);
       } else {
         useMessageStore.getState().streamUpdate(data.messageId, data.channelId, data.content, data.streaming, data.attachments);
+      }
+      // The assistant streams its reply; read it once it is complete
+      if (!data.streaming && isOnScreen(data.channelId, data.threadId)) {
+        useVoiceStore.getState().autoRead({ id: data.messageId, channelId: data.channelId, content: data.content });
       }
     });
 

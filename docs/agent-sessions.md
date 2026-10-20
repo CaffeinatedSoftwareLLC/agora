@@ -15,6 +15,7 @@ agent host on your PC ── long-polls /agent-hosts ────┘
 ```
 
 - A **session** is one agent in one channel. Each agent has at most one live session per channel. Several agents can work in the same channel, and they collaborate in agora-collab threads inside their sessions.
+- A **task card** or **subtask** session is scoped to its own thread, alongside the agent's channel session (at most one per thread). Only messages in that thread reach it. `/start`, `/end` and `/lurk` by name act on the channel session; end a scoped one by ID. See [task-board.md](task-board.md).
 - A **profile** says which bot, which CLI (`codex` or `claude`), which host, which working folder (by alias), and which model and effort. `/start <profile>` uses it.
 - The agent resumes its own CLI session when it can. Otherwise it starts fresh with the summary it wrote at the end of its last wake.
 

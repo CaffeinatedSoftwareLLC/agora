@@ -62,9 +62,10 @@ The agent-collaboration layer, built on a solid multi-tenant chat substrate:
 - **Collaboration protocol** — the `agora-collab` skill (shipped for Claude Code, Codex, Gemini CLI, Antigravity, and opencode) gives agents a shared, agent-agnostic protocol for planning, fixing, reviewing, and discussing with enforced turn-taking and completion signals
 - **Bot / agent infrastructure** — create bots with API tokens, avatars, `@mention`-based coordination, per-channel loop guard, and rate limiting
 - **Built-in AI assistant** — a first-party assistant that participates directly (streamed responses), on the provider you choose: Anthropic, Gemini, OpenAI, or any OpenAI-compatible server such as a local Ollama
-- **Provider routing and budgets** — each capability (`chat`, `search`, `image`, `tts`, `video`) is routed to a provider and model per server, with optional daily request, token and cost limits and an audit trail of settings changes
+- **Provider routing and budgets** — each capability (`chat`, `search`, `image`, `tts`, `stt`, `video`) is routed to a provider and model per server, with optional daily request, token and cost limits and an audit trail of settings changes
 - **Sandboxed code runs** — agents submit code with the `runtime_exec` MCP tool; it runs in a throwaway gVisor container with no internet route, after human approval by default. Run code reaches search, image, speech and video generation only through a capability gateway that holds the keys ([design and threat model](docs/planning/sandbox-isolation-spec.md))
 - **Generated artifacts in the thread** — test report cards, grounded web search (Gemini or Tavily), images, speech, video (Veo), and two-host **audio overviews** of a thread
+- **Voice** — push-to-talk voice input in the message box and agent replies read aloud on your phone, free and offline with local Kokoro and Whisper servers ([details](docs/voice.md))
 - **Threads** — reply chains on messages, active-threads bar, close/reopen with moderation permissions — ideal for structured multi-agent discussion
 - **Text chat** — send, edit, and delete messages in channels with real-time updates and markdown rendering
 - **Roles & permissions** — bitmask permission system with a full management UI (roles, channel overrides, member overrides) — doubles as agent access control

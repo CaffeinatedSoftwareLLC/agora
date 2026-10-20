@@ -14,12 +14,14 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Invites](#invites)
 - [Channels](#channels)
 - [Messages](#messages)
+- [Project context](#project-context)
 - [Threads](#threads)
 - [Files](#files)
 - [Unreads](#unreads)
 - [Users](#users)
 - [Bots](#bots)
 - [AI Providers](#ai-providers)
+- [Voice](#voice)
 - [Admin](#admin)
 - [WebSocket Gateway](#websocket-gateway)
 
@@ -502,7 +504,8 @@ Send a message to a channel. Parses `@username` mentions from content and tracks
 
 | Field     | Type   | Required | Constraints      |
 |-----------|--------|----------|------------------|
-| `content` | string | yes      | 1-4000 characters |
+| `content` | string | yes, unless `attachments` (posts only) or `artifact` is given | 1-4000 characters |
+| `artifact` | object | no | A canvas artifact: `title`, `kind`, `content`, or `id` to add a version. See [canvas-and-preview.md](canvas-and-preview.md). |
 
 **Response** `201`
 ```json
@@ -687,6 +690,52 @@ Let a bot direct agents in this channel, or stop it.
 
 ---
 
+## Project context
+
+Instructions and up to 10 pinned files every agent in the channel gets, and the owner's verify command. Details: [project-context.md](project-context.md).
+
+### GET /channels/:id/project
+
+**Auth:** Required (must be able to see the channel). Bots can call it.
+
+**Response** `200`
+```json
+{
+  "channelId": "01HYX...", "instructions": "Use npm.", "version": 3,
+  "files": [{ "id": "01HZ...", "name": "spec.md", "mime": "text/markdown", "size": 1204 }],
+  "verify": { "command": "npm run verify", "maxRetries": 2 },
+  "updatedAt": "2026-10-19T10:00:00.000Z", "updatedBy": "espresso",
+  "canEdit": true, "canEditVerify": true
+}
+```
+
+A channel with nothing set returns `version: 0`, empty instructions and files, and `verify: null`.
+
+### PUT /channels/:id/project
+
+Change the instructions (at most 8,000 characters) and/or replace the pinned files, in order. Bumps `version`.
+
+**Auth:** Required. The server owner and directors in the channel; not bots.
+
+**Request Body** `{ "instructions": "Use npm.", "fileIds": ["01HZ..."] }` (either may be left out)
+
+**Errors**
+
+| Status | Error | Cause |
+|---|---|---|
+| 400 | `Not a file shared in this channel: ...` | A file ID from another channel, or deleted |
+| 403 | `cannot_direct` | Caller doesn't direct agents here |
+
+### PUT /channels/:id/project/verify
+
+Set the command agora-host runs in the session worktree after a run that changed files, or turn it off with `null`. The host runs it only if its profile's `verify.commands` lists it.
+
+**Auth:** Required. **Server owner only.**
+
+**Request Body** `{ "command": "npm run verify", "maxRetries": 2 }`. `command`: plain words separated by single spaces, at most 300 characters; `maxRetries` 0-5.
+
+---
+
 ## Threads
 
 ### POST /channels/:id/messages/:msgId/replies
@@ -704,7 +753,8 @@ Create a reply to a message, starting or continuing a thread.
 
 | Field     | Type   | Required | Constraints      |
 |-----------|--------|----------|------------------|
-| `content` | string | yes      | 1-4000 characters |
+| `content` | string | yes, unless `attachments` (posts only) or `artifact` is given | 1-4000 characters |
+| `artifact` | object | no | A canvas artifact: `title`, `kind`, `content`, or `id` to add a version. See [canvas-and-preview.md](canvas-and-preview.md). |
 
 **Response** `201`
 ```json
@@ -1282,7 +1332,7 @@ Update per-channel bot configuration (loop guard limit).
 
 ## AI Providers
 
-Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`) to a provider and model. The built-in assistant uses the `chat` route.
+Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`, `stt`) to a provider and model. The built-in assistant uses the `chat` route.
 
 All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key.
 
@@ -1304,6 +1354,74 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 **Base URLs** (the `openai` adapter: Ollama, OpenRouter, Groq, vLLM, …) must be http(s). Hosts that resolve to private, loopback or link-local addresses are rejected unless an instance admin enables `PATCH /admin/settings/ai { "allowPrivateBaseUrls": true }`, e.g. for a local Ollama server.
 
 The older `/servers/:serverId/ai-config` endpoints still work. `PUT` upserts a provider plus the `chat` route plus the assistant bot in one call, and accepts `provider` values `claude` (legacy), `anthropic`, `openai` or `gemini`.
+
+**Speech routes** on the `openai` adapter use the Audio API shape, which local servers implement too: `tts` posts to `{baseUrl}/audio/speech` (Kokoro-FastAPI, OpenAI) and asks for WAV; `stt` posts the clip to `{baseUrl}/audio/transcriptions` (speaches/faster-whisper, OpenAI, Groq). See [voice.md](voice.md).
+
+---
+
+## Voice
+
+Push-to-talk transcription and messages read aloud ([voice.md](voice.md)). The engines are the `stt` (Transcription) and `tts` (Speech) capability routes; the settings below switch voice on and off and allow browser fallbacks.
+
+### GET /servers/:serverId/ai/voice
+
+**Administrator.** Settings, the two routes' state, and the engine members get in each direction.
+
+**Response** `200`
+```json
+{
+  "voiceInputEnabled": true,
+  "browserSttFallback": false,
+  "maxRecordingSeconds": 120,
+  "sttLanguage": null,
+  "readAloudEnabled": true,
+  "readAloudServer": false,
+  "browserTtsFallback": true,
+  "readAloudVoice": null,
+  "readAloudMaxChars": 1500,
+  "routes": {
+    "stt": { "configured": true, "enabled": true, "provider": "Whisper (local)", "adapter": "openai", "model": "Systran/faster-whisper-small" },
+    "tts": { "configured": false, "enabled": false, "provider": null, "adapter": null, "model": null }
+  },
+  "engines": { "input": "server", "output": "browser" },
+  "warnings": []
+}
+```
+
+### PATCH /servers/:serverId/ai/voice
+
+**Administrator.** Any subset of the settings above. `sttLanguage` is an ISO 639-1 code (optionally with a region, `pt-BR`) or `null`; `readAloudVoice` a voice name (`[A-Za-z0-9_.:+-]`, up to 64) or `null`; `maxRecordingSeconds` 5–600; `readAloudMaxChars` 100–4000. Recorded in `GET /servers/:serverId/ai/changes` as `ai_voice_update`. **Errors:** `400` invalid values or nothing recognised to change.
+
+### GET /channels/:id/voice
+
+Any member who can see the channel (not bots). Which engine the client uses.
+
+**Response** `200`
+```json
+{ "input": "server", "output": "browser", "maxRecordingSeconds": 120, "language": "en", "maxChars": 1500 }
+```
+
+`input` / `output`: `server` (the routes above), `browser` (the Web Speech API: `SpeechRecognition` / `speechSynthesis`) or `off`.
+
+### POST /channels/:id/voice/transcribe
+
+Needs View Channel and Send Messages (not bots). The body is the recorded clip itself, with its type as `Content-Type`: `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/x-m4a`, `audio/aac`, `audio/mpeg`, `audio/wav`, `audio/x-wav` or `audio/flac` (parameters such as `;codecs=opus` are ignored); up to 25 MB. Rate limited to 30 a minute per person.
+
+**Response** `200` `{ "text": "please rerun the failing test" }`. The text is for the person to check; nothing is posted.
+
+**Errors:** `415` other content types; `400` an empty clip; `403` voice input is off (`voice_off`); `503` no usable Transcription route (`voice_unavailable`); `429` the route's daily limit (`budget_exceeded`); `502` the engine failed (`provider_error`). Every call to the engine is recorded in usage as `stt`.
+
+### POST /channels/:id/messages/:msgId/speech
+
+Any member who can see the channel (not bots), when an admin has turned on read-aloud with the server's Speech route. Voices the stored message (a channel message or a thread reply): Markdown is turned into speakable text, cut at `readAloudMaxChars`, and spoken with `readAloudVoice`. Rate limited to 60 a minute per person.
+
+**Response** `200` audio: `audio/mpeg` when the engine returns WAV (Kokoro, OpenAI), otherwise the engine's own type. A message voiced recently is served from memory without another engine call.
+
+**Errors:** `403` read-aloud with the server's voice is off (`voice_off`); `404` no such message in this channel, or deleted; `422` a system message or nothing to read (`nothing_to_read`); `503` / `429` / `502` as above. Engine calls are recorded in usage as `tts`, with the message ID.
+
+### Read-aloud preference
+
+`PATCH /users/@me/preferences { "readAloud": "off" | "phone" | "all" }` saves whether new agent replies are read aloud automatically: never, on touch-screen devices, or everywhere. `GET /users/@me/preferences` returns it with the other preferences.
 
 ---
 

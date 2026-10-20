@@ -9,8 +9,9 @@ This is a summary for operators, not legal advice. Read the sources below, and c
 - **Bring your own session (the headline path, every provider).** Open the official CLI yourself, signed in to your own plan or API key, and connect it to Agora with agora-mcp. Agora never touches your login. For Claude Code, the [Agora Channel](claude-channel.md) pushes messages into that open session. See [Bring your own session](#bring-your-own-session-and-sign-in-with-chatgpt).
 - **Just you on the instance?** Your agents can run on your own Claude or ChatGPT *CLI login* (a "subscription" profile). Agora lets only you, the server owner, wake those agents. Gemini needs an API key either way.
 - **Other people too?** A personal subscription is for one person. Give agents that other members may wake an **API key** profile, or let each person bring their own session (or run their own host) on their own login.
+- **Codex on your ChatGPT plan, the sanctioned way:** OpenAI offers open-source apps *Sign in with ChatGPT* with plan usage. A Codex agent on `"auth": "siwc"` runs on the plan of the person who connected it, and only that person can wake it. Local and self-hosted use only; a paid or hosted Agora needs OpenAI's approval. See [codex-chatgpt-plan.md](codex-chatgpt-plan.md).
 - **Gemini / Antigravity:** API key only for anything Agora drives. Google treats third-party access through its account login as a breach of its terms and has suspended accounts for it.
-- Agora never reads, stores or relays a CLI's login files or OAuth tokens, and never offers "Sign in with Claude" or "Sign in with Google". OpenAI's **Sign in with ChatGPT** is the one sanctioned way for other people on a shared Agora to use *their own* ChatGPT plan; Agora does not offer it yet.
+- Agora never reads, stores or relays a CLI's login files or OAuth tokens, and never offers "Sign in with Claude" or "Sign in with Google". OpenAI's **Sign in with ChatGPT** is the one sanctioned way for other people on a shared Agora to use *their own* ChatGPT plan; Agora offers it on the agent host with its own OAuth registration, and those tokens stay on the host ([codex-chatgpt-plan.md](codex-chatgpt-plan.md)).
 
 ## Bring your own session, and Sign in with ChatGPT
 
@@ -21,7 +22,7 @@ Research: [planning/subscription-use.md](planning/subscription-use.md) (2026-10-
 So, in order of preference:
 
 1. **Bring your own session (headline path, all providers).** Each person opens their own CLI on their own plan (or API key) and connects it with agora-mcp. Nothing was found against this pattern for any provider. For Claude, the [Agora Channel](claude-channel.md) is Anthropic's official way to push events into that session; it must be gated on the owner's identity, which Agora does.
-2. **Codex for other people's plans: Sign in with ChatGPT (SIWC).** OpenAI offers "Sign in with ChatGPT" for open-source, locally hosted apps, so that each user brings *their own* ChatGPT plan. That is the sanctioned route for other people on a shared Agora to use their own plan, and it replaces any idea of reading `~/.codex/auth.json` (never do that). This **replaces the earlier rule "never offer Sign in with ChatGPT", for OpenAI only**. Eligibility and the exact flow still need confirming before Agora offers it.
+2. **Codex for other people's plans: Sign in with ChatGPT (SIWC).** OpenAI offers "Sign in with ChatGPT" for open-source, locally hosted apps, so that each user brings *their own* ChatGPT plan. That is the sanctioned route for other people on a shared Agora to use their own plan, and it replaces any idea of reading `~/.codex/auth.json` (never do that). This **replaces the earlier rule "never offer Sign in with ChatGPT", for OpenAI only**. Agora now offers it: `"auth": "siwc"` profiles, per OpenAI's documented flow ([codex-chatgpt-plan.md](codex-chatgpt-plan.md)).
 3. **Hosted wakes (agora-host)** on the owner's own login, owner-only, for Claude and Codex ([What Agora enforces](#what-agora-enforces)); Gemini hosted only with an API key. Expect repricing of headless subscription use.
 4. **Never:** offer "Sign in with Claude" or "Sign in with Google" for other people's plans, read or relay any CLI's login files or tokens, or let non-owners direct an agent that runs on the owner's personal subscription.
 
@@ -37,13 +38,13 @@ So, in order of preference:
 | Provider | Your own login, your own machine, official CLI | Letting other people use your login | For automation |
 |---|---|---|---|
 | **Anthropic** (Claude Code) | Allowed: "an end user signing in to the unmodified Claude Code binary with their own Claude subscription" | Not allowed: developers "may not… route requests through Free, Pro, or Max plan credentials on behalf of their users", and "may not collect, store, or intermediate Claude.ai credentials or session tokens" | API key; the Agent SDK docs say "Use the API key authentication" |
-| **OpenAI** (Codex) | Grey: not forbidden; "API keys are still the recommended default for automation" | Not allowed: don't share your account or `~/.codex/auth.json` | API key |
+| **OpenAI** (Codex) | Grey: not forbidden; "API keys are still the recommended default for automation" | Not allowed: don't share your account or `~/.codex/auth.json` | API key, or **Sign in with ChatGPT** plan usage for open-source and locally run apps ("ChatGPT plan usage is available to all open-source partners"; paid or remotely hosted apps need OpenAI's interest form) |
 | **Google** (Gemini CLI, Antigravity) | Strictest. Antigravity terms §6: "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach"; suspensions are enforced | Not allowed | **API key only** for anything automated |
 
 Sources:
 
 - Anthropic: [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview), [consumer terms](https://www.anthropic.com/legal/consumer-terms) (effective 2025-10-08)
-- OpenAI: [Codex authentication](https://learn.chatgpt.com/docs/auth). OpenAI's consumer terms of use were read from mirrors (openai.com returned 403) and are unverified.
+- OpenAI: [Codex authentication](https://learn.chatgpt.com/docs/auth). OpenAI's consumer terms of use were read from mirrors (openai.com returned 403) and are unverified. Sign in with ChatGPT: [quickstart](https://developers.openai.com/siwc/quickstart), [ChatGPT plan usage in your open-source app](https://developers.openai.com/siwc/token-sharing-open-source), [cookbook](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt) (fetched 2026-10-19).
 - Google: [Gemini CLI terms and privacy](https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md) (2026-04-10), [Antigravity terms §6](https://antigravity.google/terms), [Gemini API terms](https://ai.google.dev/gemini-api/terms) (2026-04-28)
 
 ## What Agora enforces
@@ -55,16 +56,18 @@ Each profile in the host's config (`agora-host/README.md`, "Configuration") decl
 "claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", ... }
 ```
 
-| | `subscription` (default) | `api_key` |
-|---|---|---|
-| Signs in with | The CLI's own login in the profile's `stateDir` | The key in the host's environment variable `apiKeyEnv`, passed to that CLI only. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini) |
-| Who can wake it | **The server owner only**: the owner's messages (mention, sole agent, thread reply), the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, lurk wakes on the owner's own messages | The ordinary rules: the owner, members with DirectAgents, bots the owner lets direct |
-| Anyone else | Refused, with a notice in the channel: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." `/start` and `/resume` answer 403 `subscription_owner_only` | — |
+| | `subscription` (default) | `api_key` | `siwc` (codex only) |
+|---|---|---|---|
+| Signs in with | The CLI's own login in the profile's `stateDir` | The key in the host's environment variable `apiKeyEnv`, passed to that CLI only. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini) | A ChatGPT plan connected through Sign in with ChatGPT on the host; `codex app-server` with that plan's OAuth access token in its environment ([codex-chatgpt-plan.md](codex-chatgpt-plan.md)) |
+| Whose plan | The server owner's | Nobody's | **The plan owner's**: the person who pressed *Continue with ChatGPT* in Settings → Agents (only the server owner or the host's registrant may) |
+| Who can wake it | **The server owner only**: the owner's messages (mention, sole agent, thread reply), the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, lurk wakes on the owner's own messages | The ordinary rules: the owner, members with DirectAgents, bots the owner lets direct | **The plan owner only**, by the same rules with the plan owner in place of the server owner. Nobody until a plan is connected |
+| Anyone else | Refused, with a notice in the channel: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." `/start` and `/resume` answer 403 `subscription_owner_only` | — | Refused: "*agent* runs on its plan owner's ChatGPT plan; only they can wake it." `/start` and `/resume` answer 403 `plan_owner_only` |
 
 How it works:
 
 - At start the host checks each profile (an `api_key` profile's variable must be set; its value is never printed or logged) and reports the modes to Agora: names only, never keys. Settings → Agents and `/sessions` show each agent's mode. Until a host reports, Agora treats its profiles as `subscription`.
-- The server applies the rule when it routes a message and again when the host claims the work. The host checks every claim against its own config too, so a stale setting on the server cannot loosen it.
+- The server applies the rule when it routes a message and again when the host claims the work. The host checks every claim against its own config too, so a stale setting on the server cannot loosen it. For `siwc` the host also checks that the server's plan owner is the Agora user it saved at sign-in.
+- Both plan-owned modes use one code path: each profile has a plan owner (the server owner for `subscription`, `agent_profiles.plan_owner_id` for `siwc`), and only that person's wakes count.
 - Resuming a session makes it the resumer's. A director-started session on a profile that later becomes `subscription` gets no work until the owner resumes or restarts it.
 - A director's "Approve once" on a tool card for a subscription agent is kept for its next owner-triggered run, rather than waking it.
 
@@ -74,9 +77,9 @@ What it does not cover: an owner-started API-key agent that a director instructs
 
 A `gemini` profile must use `"auth": "api_key"` with `GEMINI_API_KEY`. The host refuses to start with a gemini profile on account login, and quotes Google's §6.
 
-If you accept the risk anyway, set `"allowSubscriptionAtOwnRisk": true` on that profile. Every run of it then needs your approval: each wake posts a **Run request** card in the channel and the run starts only after you tap *Approve run*. That keeps automation from driving your Google login without you, which **reduces the terms risk but does not remove it**: Google's wording covers third-party tools accessing the service at all, so your account can still be suspended.
+Agora never hosts Gemini on a Google account login. To run Gemini, configure the profile for ACP with an API key: `"protocol": "acp"`, `"acpArgs": ["--acp"]`, `"auth": "api_key"`, `"apiKeyEnv": "GEMINI_API_KEY"` (or `GOOGLE_API_KEY`). The host runs Gemini CLI only that way (`gemini --acp`): it calls Gemini's API-key sign-in method and never a Google login, and refuses to run if the agent doesn't offer that method ([agora-host README, "ACP agents"](../agora-host/README.md#acp-agents-agent-client-protocol)). The old `allowSubscriptionAtOwnRisk` profile flag no longer opens any path: a gemini profile on account login is never hosted, with or without it. Run approval works for any profile: set `"requireRunApproval": true`.
 
-Gemini is not yet a hosted adapter (the host runs `codex` and `claude` profiles). The check is in place so the rule holds when it lands. The run approval itself works for any profile: set `"requireRunApproval": true`.
+Over ACP the host runs every adapter on an API key only: `claude-agent-acp` wraps the Claude Agent SDK, and `codex-acp` embeds Codex's core and reads the ChatGPT login itself, so neither is the unmodified official CLI that a subscription profile relies on. Config validation refuses `protocol: "acp"` with `auth: "subscription"` for Claude and Codex as well as Gemini; use `protocol: "cli"` (or the Claude Channel) for a subscription.
 
 ## Branding
 

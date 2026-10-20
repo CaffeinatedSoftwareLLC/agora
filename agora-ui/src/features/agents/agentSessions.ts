@@ -17,8 +17,8 @@ export interface AgentRun {
 
 export interface AgentSession {
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
-  /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only. */
-  authMode?: 'subscription' | 'api_key';
+  /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only, siwc = plan-owner-triggered only. */
+  authMode?: 'subscription' | 'api_key' | 'siwc';
   /** Every run waits for the owner's approval on a card. */
   runApproval?: boolean;
   branch?: string | null;
@@ -41,6 +41,11 @@ export interface AgentSession {
   tokenBudget?: number;
   run?: AgentRun | null;
   recentRuns?: AgentRun[];
+  /** A task card's or subtask's session works only in this thread (docs/task-board.md). */
+  threadId?: string | null;
+  /** A subtask's parent session. */
+  parentSessionId?: string | null;
+  title?: string | null;
 }
 
 export interface AgentProfile {
@@ -53,6 +58,7 @@ export interface AgentProfile {
 export type CommandBody =
   | { command: 'start'; profile: string; fresh?: boolean; onLive?: 'shelve' | 'keep' }
   | { command: 'end'; profile: string }
+  | { command: 'end'; sessionId: string }
   | { command: 'lurk'; profile: string; lurkMode: 'quiet' | 'balanced' | 'vocal' | null }
   | { command: 'sessions' }
   | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number }
@@ -74,6 +80,12 @@ export const ERRORS: Record<string, string> = {
   session_live: 'That agent already has a live session here.',
   not_sleeping: 'That session is not sleeping.',
   subscription_owner_only: "This agent runs on the owner's personal subscription, so only the owner can start or resume it. Ask the owner, or configure an API key profile.",
+  plan_owner_only: "This agent runs on its plan owner's ChatGPT plan, so only they can start or resume it. Ask them, or configure an API key profile.",
+  card_session_live: "This card's agent is working. End its session before reassigning the card.",
+  card_changed: 'The card changed meanwhile. Try again.',
+  card_not_found: 'That card no longer exists.',
+  no_assignee: 'Assign an agent to the card first.',
+  empty_title: 'Give the card a title.',
 };
 
 export const NO_AUTHORITY = 'Only the owner and directors can start, end, resume or change lurk mode for agent sessions.';
@@ -98,7 +110,7 @@ export function listProfiles(serverId: string): Promise<AgentProfile[]> {
 export function classifyCommandError(err: unknown, command: CommandBody['command']): { kind: 'live' } | { kind: 'error'; text: string } {
   const code = err instanceof ApiError ? err.code : 'unknown_error';
   if (code === 'session_live' && (command === 'start' || command === 'resume')) return { kind: 'live' };
-  if (code === 'subscription_owner_only') return { kind: 'error', text: ERRORS[code] };
+  if (code === 'subscription_owner_only' || code === 'plan_owner_only') return { kind: 'error', text: ERRORS[code] };
   if (err instanceof ApiError && err.status === 403) return { kind: 'error', text: NO_AUTHORITY };
   return { kind: 'error', text: ERRORS[code] ?? `Command failed (${code}).` };
 }
@@ -151,10 +163,14 @@ function byRecent(a: AgentSession, b: AgentSession): number {
   return (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
 }
 
-/** One chip per profile with sessions in the channel: live first, then shelved, then ended. */
+/**
+ * One chip per profile with sessions in the channel: live first, then shelved, then ended.
+ * Task card and subtask sessions work in their own threads and show on the task board.
+ */
 export function deriveChips(sessions: AgentSession[]): AgentChip[] {
   const groups = new Map<string, AgentSession[]>();
   for (const s of sessions) {
+    if (s.threadId) continue;
     const list = groups.get(s.profile);
     if (list) list.push(s); else groups.set(s.profile, [s]);
   }
@@ -169,7 +185,7 @@ export function deriveChips(sessions: AgentSession[]): AgentChip[] {
 
 /** "subscription (owner only)" or "API key", plus "approval per run". */
 export function authLabel(mode: AgentSession['authMode'], runApproval?: boolean): string {
-  const base = mode === 'api_key' ? 'API key' : 'subscription (owner only)';
+  const base = mode === 'api_key' ? 'API key' : mode === 'siwc' ? 'ChatGPT plan (plan owner only)' : 'subscription (owner only)';
   return runApproval ? `${base}, approval per run` : base;
 }
 
@@ -241,7 +257,7 @@ export function ownSessionChips(
   present: Iterable<{ userId: string; username: string; status: OwnSessionStatus; mode: 'channel' | 'mcp' | null }>,
   sessions: AgentSession[],
 ): OwnSessionChip[] {
-  const hosted = new Set(sessions.filter(s => s.state === 'live' && s.botId).map(s => s.botId!.trim()));
+  const hosted = new Set(sessions.filter(s => s.state === 'live' && s.botId && !s.threadId).map(s => s.botId!.trim()));
   return [...present]
     .filter(p => !hosted.has(p.userId.trim()))
     .map(p => ({ userId: p.userId, username: p.username, status: p.status, mode: p.mode }))

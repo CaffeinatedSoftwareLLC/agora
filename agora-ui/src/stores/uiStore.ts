@@ -2,10 +2,13 @@ import { create } from 'zustand';
 import { useThreadStore } from './threadStore';
 import type { PaletteKey } from '../theme/palettes';
 import { api } from '../lib/api';
+import { useVoiceStore } from '../features/voice/voiceStore';
 
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
 
-export type AuxView = 'thread' | 'files' | 'members';
+export type AuxView = 'thread' | 'files' | 'members' | 'project' | 'tasks' | 'canvas';
+/** What the canvas pane shows: an artifact (a version, or the latest when null), or the channel's list. */
+export interface CanvasTarget { channelId: string; artifactId: string | null; version: number | null }
 export interface Overlay {
   kind: 'session-sheet' | 'message-actions' | 'modal';
   id: string;
@@ -17,7 +20,7 @@ interface UIState {
   paletteKey: PaletteKey;
   setPalette: (key: PaletteKey) => void;
   togglePalette: () => void;
-  /** Load the account's saved preferences (theme) after sign-in. */
+  /** Load the account's saved preferences (theme, read-aloud) after sign-in. */
   loadPreferences: () => Promise<void>;
 
   navOpen: boolean;
@@ -29,6 +32,10 @@ interface UIState {
   toggleAux: (kind: AuxView) => void;
   closeAux: () => void;
   openThreadView: (channelId: string, threadId: string) => void;
+  canvas: CanvasTarget | null;
+  /** The pane the canvas replaced, so closing it goes back (e.g. to the thread it was opened from). */
+  canvasReturn: AuxView | null;
+  openCanvas: (target: CanvasTarget) => void;
   onChannelSelect: (channelId: string | null) => void;
   openOverlay: (overlay: Overlay) => void;
   closeOverlay: () => void;
@@ -45,9 +52,14 @@ interface UIState {
 }
 
 // Persist palette to localStorage
-const storedPalette = (typeof window !== 'undefined'
-  ? localStorage.getItem('agora:palette') as PaletteKey | null
-  : null) || 'aegean';
+function readStoredPalette(): PaletteKey | null {
+  try {
+    if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return null;
+    const v = localStorage.getItem('agora:palette');
+    return v === 'aegean' || v === 'terracotta' ? v : null;
+  } catch { return null; } // blocked or missing storage
+}
+const storedPalette: PaletteKey = readStoredPalette() || 'aegean';
 
 const isPalette = (v: unknown): v is PaletteKey => v === 'aegean' || v === 'terracotta';
 
@@ -70,7 +82,8 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
   loadPreferences: async () => {
     try {
-      const prefs = await api.get<{ palette?: unknown }>('/users/@me/preferences');
+      const prefs = await api.get<{ palette?: unknown; readAloud?: unknown }>('/users/@me/preferences');
+      useVoiceStore.getState().applyPreference(prefs.readAloud);
       if (isPalette(prefs.palette) && prefs.palette !== get().paletteKey) {
         try { localStorage.setItem('agora:palette', prefs.palette); } catch { /* private mode */ }
         set({ paletteKey: prefs.palette });
@@ -85,17 +98,22 @@ export const useUIStore = create<UIState>((set, get) => ({
   closeNav: () => set({ navOpen: false }),
   openAux: (kind) => set({ aux: kind, navOpen: false }),
   toggleAux: (kind) => set(s => ({ aux: s.aux === kind ? null : kind, navOpen: false })),
-  closeAux: () => set({ aux: null }),
+  // Closing a canvas opened from a thread goes back to the thread
+  closeAux: () => set(s => ({ aux: s.aux === 'canvas' ? s.canvasReturn : null, canvasReturn: null })),
   openThreadView: (channelId, threadId) => {
     useThreadStore.getState().openThread(channelId, threadId);
     set({ aux: 'thread', navOpen: false });
   },
+  canvas: null,
+  canvasReturn: null,
+  openCanvas: (target) => set(s => ({ canvas: target, aux: 'canvas', navOpen: false,
+    canvasReturn: s.aux === 'canvas' ? s.canvasReturn : s.aux === 'thread' ? 'thread' : null })),
   onChannelSelect: (channelId) => {
     if (useThreadStore.getState().openThreadChannelId !== channelId) {
       useThreadStore.getState().closeThread();
     }
     const overlay = get().activeOverlay;
-    set({ navOpen: false, aux: null, activeOverlay: null, activeModal: null });
+    set({ navOpen: false, aux: null, activeOverlay: null, activeModal: null, canvas: null, canvasReturn: null });
     overlay?.onClose();
   },
   openOverlay: (overlay) => {

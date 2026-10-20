@@ -180,6 +180,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Voice (docs/voice.md), opt-in with --profile voice: free, offline speech on this
+  # machine's CPU. No published ports; the api reaches them on the compose network. Add
+  # them in Settings → AI as OpenAI-compatible providers (http://kokoro:8880/v1 and
+  # http://whisper:8000/v1), which needs "Allow private network base URLs".
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0
+    profiles: ["voice"]
+    restart: unless-stopped
+
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    profiles: ["voice"]
+    volumes:
+      - whisper-models:/home/ubuntu/.cache/huggingface/hub
+    restart: unless-stopped
+
   web:
     build:
       context: ./agora-ui
@@ -217,3 +233,5 @@ volumes:
   files-data:
   pgdata:
   redisdata:
+  # Speech-to-text models downloaded by the whisper service (voice profile)
+  whisper-models:

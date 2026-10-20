@@ -14,6 +14,20 @@ export const OVERVIEW_SPEAKERS: SpeechSpeaker[] = [
     { speaker: 'Alex', voice: 'Kore' },
     { speaker: 'Sam', voice: 'Puck' },
 ];
+
+/**
+ * The hosts' voices on the Speech route's engine: Gemini's prebuilt voices, or the
+ * Audio API's names on an OpenAI-compatible server (OpenAI; Kokoro-FastAPI maps them
+ * to its own voices).
+ */
+const OVERVIEW_VOICES: Record<string, [string, string]> = {
+    openai: ['nova', 'onyx'],
+};
+
+export function overviewSpeakers(adapterId: string): SpeechSpeaker[] {
+    const voices = OVERVIEW_VOICES[adapterId];
+    return voices ? OVERVIEW_SPEAKERS.map((s, i) => ({ ...s, voice: voices[i] })) : OVERVIEW_SPEAKERS;
+}
 /** Script cap: the gateway's tts input limit is 8000 chars; this is ~4 minutes of speech. */
 export const MAX_SCRIPT_CHARS = 6000;
 const MAX_TRANSCRIPT_CHARS = 60_000;
@@ -165,7 +179,7 @@ export async function createAudioOverview(db: Queryable, input: OverviewInput): 
     const ttsStarted = Date.now();
     let audio: { data: Buffer; mime: string };
     try {
-        const result = await synthesizeDialogue(tts.value.adapter, tts.value.credentials, { model: tts.value.model, lines: script, speakers: OVERVIEW_SPEAKERS });
+        const result = await synthesizeDialogue(tts.value.adapter, tts.value.credentials, { model: tts.value.model, lines: script, speakers: overviewSpeakers(tts.value.adapter.id) });
         await recordUsage(db, { ...usageBase, capability: 'tts', providerId: tts.value.providerId, adapter: tts.value.adapter.id, model: tts.value.model, route: tts.value.route, usage: result.usage, latencyMs: Date.now() - ttsStarted });
         audio = result;
     } catch (err) {

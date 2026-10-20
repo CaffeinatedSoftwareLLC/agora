@@ -31,6 +31,15 @@ export interface ProtocolInfo {
   participants?: string[];
 }
 
+/** A canvas artifact a message carries: one version of it (server: src/lib/artifacts.ts). */
+export interface ArtifactRef {
+  id: string;
+  version: number;
+  title: string;
+  kind: 'html' | 'markdown' | 'mermaid' | 'svg';
+  latestVersion: number;
+}
+
 export interface MessagePayload {
   id: string;
   content: string;
@@ -46,6 +55,7 @@ export interface MessagePayload {
   mentionsEveryone?: boolean;
   systemEvent?: string;
   attachments?: MessageAttachmentPayload[];
+  artifact?: ArtifactRef;
   threadId?: string;
   replyCount?: number;
   lastReplyAt?: string;
@@ -121,6 +131,28 @@ export interface BotMessageStreamPayload {
     threadId?: string;
     /** Files attached when the stream finishes (e.g. an audio overview). */
     attachments?: MessagePayload['attachments'];
+}
+
+/** A task card changed (docs/task-board.md); `card` is the board's full view of it. */
+export interface TaskCardUpdatePayload {
+  channelId: string;
+  card: import('../../features/tasks/taskBoard').TaskCard;
+}
+
+export interface TaskCardDeletePayload {
+  channelId: string;
+  id: string;
+}
+
+/** What an ACP agent's run is doing now, from host heartbeats. Not stored; `step` is agent text. */
+export interface AgentRunProgressPayload {
+  channelId: string;
+  sessionId: string;
+  runId: string;
+  step: string | null;
+  toolCalls: number;
+  planDone: number | null;
+  planTotal: number | null;
 }
 
 export interface AgentSessionUpdatePayload {

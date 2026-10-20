@@ -10,6 +10,9 @@ import { ArcContentArea } from './ArcContentArea';
 import { MembersSidebar } from '../servers/MembersSidebar';
 import { ThreadPanel } from '../messages/ThreadPanel';
 import { FilesPanel } from '../messages/FilesPanel';
+import { ProjectPanel } from '../messages/ProjectPanel';
+import { TasksPanel } from '../tasks/TasksPanel';
+import { CanvasPanel } from '../canvas/CanvasPanel';
 import { OverlayManager } from './OverlayManager';
 import { useShellViewport } from './viewport';
 import './shell.css';
@@ -107,11 +110,14 @@ export function AppShell() {
         </div>
         {aux && <>
           {compact && !phone && <button className="shell-backdrop" aria-label="Close inspector" onClick={() => useUIStore.getState().closeAux()} />}
-          <aside ref={auxRef} tabIndex={-1} className="shell-aux" role={compact ? 'dialog' : 'complementary'}
+          <aside ref={auxRef} tabIndex={-1} className={`shell-aux${aux === 'canvas' ? ' is-canvas' : ''}`} role={compact ? 'dialog' : 'complementary'}
             aria-label={aux} aria-modal={compact ? true : undefined} inert={!!overlay}>
             {aux === 'thread' && <ThreadPanel />}
             {aux === 'files' && <FilesPanel />}
+            {aux === 'project' && <ProjectPanel />}
+            {aux === 'tasks' && <TasksPanel />}
             {aux === 'members' && <MembersSidebar />}
+            {aux === 'canvas' && <CanvasPanel />}
           </aside>
         </>}
       </div>

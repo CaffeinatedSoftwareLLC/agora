@@ -1,7 +1,8 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
-import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type ProfileReport } from './types.js';
+import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type Progress, type ProfileReport } from './types.js';
 import type { ReviewCommand } from './review.js';
+import type { PreviewCommand, PreviewOutcome } from './preview.js';
 
 export class HttpError extends Error {
     constructor(public readonly status: number) { super(`host_http_${status}`); }
@@ -68,6 +69,40 @@ export class Client implements HostApi {
             catch (e) { if (attempt>=2 || signal?.aborted || e instanceof HttpError && e.status<500) throw e; await sleep(this.retryDelayMs,signal); }
         }
     }
+    async claimPreview(signal?: AbortSignal): Promise<PreviewCommand | null> {
+        const data = await this.request('GET', 'browser-previews/next', undefined, signal);
+        if (data === null) return null;
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), claimToken: z.string().min(10),
+            sessionId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
+            workdirAlias: z.string(), url: z.string().url().max(2048),
+            options: z.object({ width: z.number().int().min(320).max(1920), height: z.number().int().min(240).max(1600), fullPage: z.boolean() }),
+        }).parse(data);
+    }
+    /** Fields first, then the PNG: the server reads the multipart body in order. */
+    async previewResult(cmd: PreviewCommand, outcome: PreviewOutcome, signal?: AbortSignal): Promise<void> {
+        for (let attempt = 0; ; attempt++) {
+            const form = new FormData();
+            form.append('claimToken', cmd.claimToken);
+            form.append('success', String(outcome.success));
+            if (outcome.success) {
+                form.append('title', outcome.capture.title);
+                form.append('console', JSON.stringify(outcome.capture.console));
+                form.append('screenshot', new Blob([new Uint8Array(outcome.capture.png)], { type: 'image/png' }), 'preview.png');
+            } else {
+                form.append('error', outcome.error);
+                form.append('console', JSON.stringify(outcome.console ?? []));
+            }
+            try {
+                const response = await this.fetcher(new URL(`/agent-hosts/@me/browser-previews/${cmd.id}/result`, this.origin), {
+                    method: 'POST', headers: { Authorization: `AgentHost ${this.token}` }, body: form, redirect: 'error',
+                    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+                });
+                await response.body?.cancel();
+                if (!response.ok) throw new HttpError(response.status);
+                return;
+            } catch (e) { if (attempt >= 2 || signal?.aborted || e instanceof HttpError && e.status < 500) throw e; await sleep(this.retryDelayMs, signal); }
+        }
+    }
     async workspaceWarning(sessionId: string, paths: string[]): Promise<void> {
         await this.request('POST', 'workspaces/warning', { sessionId, paths });
     }
@@ -88,8 +123,10 @@ export class Client implements HostApi {
         await response.body?.cancel();
         if (!response.ok) throw new HttpError(response.status);
     }
-    async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null): Promise<Heartbeat> {
-        return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`, { claimToken: claim.run.claimToken, tokensUsed }, signal));
+    async heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null, progress?: Progress | null): Promise<Heartbeat> {
+        // progress: what an ACP run is doing; older servers ignore it
+        return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`,
+            { claimToken: claim.run.claimToken, tokensUsed, ...(progress ? { progress } : {}) }, signal));
     }
     private async report(claim: Claim, action: 'complete' | 'fail', body: Completion | Failure, signal?: AbortSignal) {
         for (let attempt = 0; ; attempt++) {
@@ -105,6 +142,17 @@ export class Client implements HostApi {
     /** How each profile's CLI signs in (terms.ts); only variable names, never keys. */
     async reportProfiles(profiles: ProfileReport[]): Promise<void> {
         await this.request('POST', 'profiles', { profiles });
+    }
+    /** A Settings → Agents request to connect or disconnect a ChatGPT plan on this host. */
+    async claimPlanRequest(signal?: AbortSignal): Promise<PlanRequest | null> {
+        const data = await this.request('GET', 'plan-requests/next', undefined, signal);
+        if (data === null) return null;
+        return z.object({ profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/), action: z.enum(['connect', 'disconnect']),
+            requestedBy: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).nullable() }).parse(data);
+    }
+    /** The sign-in state of one profile. Never a token: a status, a fixed error code, the account's email. */
+    async reportPlan(profile: string, body: { status: PlanStatus; error?: string | null; accountLabel?: string | null }, signal?: AbortSignal) {
+        return z.object({ planOwnerId: z.string().nullable() }).parse(await this.request('POST', `plans/${encodeURIComponent(profile)}`, body, signal));
     }
     complete(claim: Claim, body: Completion, signal?: AbortSignal) { return this.report(claim, 'complete', body, signal); }
     fail(claim: Claim, body: Failure, signal?: AbortSignal) { return this.report(claim, 'fail', body, signal); }

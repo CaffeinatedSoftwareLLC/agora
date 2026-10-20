@@ -10,10 +10,12 @@ export function claim(): Claim {
         run: { id: id(1), claimToken: 'rt_test', attempt: 1, deliveryKey: 'dk_batch', leaseSeconds: 120,
             leaseUntil: '2026-10-17T21:02:00.000Z', heartbeatSeconds: 30, timeoutSeconds: 900, grantedTools: [], ownerApproved: false },
         session: { id: id(2), channelId: id(3), channelName: 'general', nativeSessionId: null, summary: 'Previous decision',
-            wakesUsed: 1, wakeBudget: 50, tokensUsed: 0, tokenBudget: 2000000, wokeFromSleep: false, lurkMode: null, startedByOwner: true },
+            wakesUsed: 1, wakeBudget: 50, tokensUsed: 0, tokenBudget: 2000000, wokeFromSleep: false, lurkMode: null, startedByOwner: true,
+            threadId: null, parentSessionId: null, scope: null },
         profile: { id: id(4), name: 'builder', botId: id(5), adapter: 'codex', model: 'gpt-6.1-sol', effort: 'high', workdirAlias: 'agora', toolPresets: [], allowedTools: [], authMode: 'subscription', runApproval: false },
         inbox: [{ messageId: id(6), threadId: id(7), reason: 'handoff', authorId: id(8), authorName: 'Claude',
             authorBot: true, authority: null, content: 'Review the changes.', createdAt: '2026-10-17T21:00:00.000Z' }],
+        project: null, verify: null,
     };
 }
 export function config(dir = process.cwd()): Config {

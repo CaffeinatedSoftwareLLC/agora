@@ -8,6 +8,8 @@ import { MessageItem } from './MessageItem';
 import { ProtocolBadge } from './ProtocolBadge';
 import { latestProtocol } from './latestProtocol';
 import { usePalette } from '../../theme';
+import { MicButton } from '../voice/MicButton';
+import { appendDictation } from '../voice/appendDictation';
 
 export function ThreadPanel() {
   const P = usePalette();
@@ -147,7 +149,8 @@ export function ThreadPanel() {
         >
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[13px] font-semibold" style={{ color: P.text }}>
-              {parentMessage.authorUsername}
+              {/* Task card and subtask threads start from a system line (docs/task-board.md) */}
+              {parentMessage.authorUsername ?? (parentMessage.systemEvent ? 'Agora' : '')}
             </span>
             <span className="text-[11px]" style={{ color: P.muted }}>
               {new Date(parentMessage.createdAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
@@ -219,6 +222,13 @@ export function ThreadPanel() {
               rows={1}
               className="flex-1 resize-none bg-transparent outline-none text-[16px] md:text-[15px] leading-[1.4] py-2 md:py-1.5 px-1 placeholder:text-text-muted/70"
               style={{ color: P.text, maxHeight: '104px' }}
+            />
+            <MicButton
+              channelId={openThreadChannelId}
+              onText={(text) => {
+                setContent(appendDictation(useDraftStore.getState().getDraft(draftKey), text));
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
             />
             <button
               type="button"

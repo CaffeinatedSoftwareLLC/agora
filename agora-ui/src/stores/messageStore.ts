@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
-import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, ProtocolInfo } from '../lib/contracts/ws-events';
+import type { ArtifactRef, MessagePayload, MessageUpdatePayload, MessageDeletePayload, ProtocolInfo } from '../lib/contracts/ws-events';
 
 export interface Attachment {
   id: string;
@@ -37,6 +37,8 @@ export interface Message {
   systemEvent?: string;
   systemData?: Record<string, unknown>;
   attachments?: Attachment[];
+  /** A canvas artifact this post carries (one version of it). */
+  artifact?: ArtifactRef;
   replyCount?: number;
   lastReplyAt?: string;
   threadClosedAt?: string;
@@ -88,6 +90,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       systemData: m.systemData,
       protocol: m.protocol,
       attachments: m.attachments,
+      artifact: m.artifact,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
     set((state) => {
@@ -125,6 +128,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       systemData: m.systemData,
       protocol: m.protocol,
       attachments: m.attachments,
+      artifact: m.artifact,
       ...(m.replyCount ? { replyCount: m.replyCount, lastReplyAt: m.lastReplyAt, ...(m.threadClosedAt ? { threadClosedAt: m.threadClosedAt } : {}) } : {}),
     }));
     set((state) => {
@@ -289,6 +293,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           systemData: msg.systemData,
           protocol: msg.protocol,
           attachments: msg.attachments,
+          artifact: msg.artifact,
         };
         nextByChannel.set(msg.channelId, updated);
       } else {
@@ -310,6 +315,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           systemData: msg.systemData,
           protocol: msg.protocol,
           attachments: msg.attachments,
+          artifact: msg.artifact,
         };
         nextByChannel.set(msg.channelId, [...current, newMsg]);
       }
