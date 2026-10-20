@@ -167,7 +167,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             // The agent starts the Agora MCP server from session/new, so no MCP config is written
             const acpRules = [...new Set([...perms.claude, ...local.approvedTools.map(t => `mcp__agora__${t}`), ...rules.filter(r => CODEX_WORDS.has(r))])];
             const acpPlan: AcpPlan = {
-                prompt: prompt ?? wakePrompt(claim, ports), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
+                prompt: prompt ?? wakePrompt(claim, ports, workspace.branch), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
                 mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
                 authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
             };
@@ -197,7 +197,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                     ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
                 const profileName = claim.profile.name;
                 const appServer: AppServerPlan = {
-                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports),
+                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports, workspace.branch),
                     outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
                     refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
                 };
@@ -224,7 +224,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports), cleanup, lurk: isLurkRun(claim),
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports, workspace.branch), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { childEnv, parseOutput, prepare } from '../src/adapters.js';
 import { configSchema } from '../src/config.js';
 import { wakePrompt } from '../src/prompt.js';
 import { claim, config, tempDir } from './helpers.js';
 import { git } from '../src/workspaces.js';
+import { commitRun } from '../src/review.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
@@ -175,5 +176,41 @@ describe('browser preview ports', () => {
         const base = { instance: 'http://127.0.0.1:3000', hostToken: 'ah_x.y', mcp: { executable: process.execPath, entrypoint: process.execPath }, profiles: {}, botTokens: {} };
         expect(configSchema.safeParse({ ...base, preview: { browser: process.execPath, stateDir: process.cwd(), portBase: 65000, portsPerSession: 10, slots: 100 } }).success).toBe(false);
         expect(configSchema.safeParse({ ...base, preview: { browser: process.execPath, stateDir: process.cwd() } }).success).toBe(true);
+    });
+});
+
+describe('session worktree commits (#113)', () => {
+    it('gives codex no extra writable roots and tells every adapter the host commits', async () => {
+        const { c, delivery } = await setup();
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(launch.args.join(' ')).not.toContain('writable_roots');
+        expect(launch.stdin).toContain(`on branch ${launch.workspace!.branch}`);
+        expect(launch.stdin).toContain('Agora commits your changes on this branch at the end of each turn; do not run git commit');
+        expect(launch.stdin).toContain('do not create another worktree, clone or nested repository');
+        expect(wakePrompt(claim())).not.toContain('nested repository');
+        c.profiles.builder.adapter = 'claude'; delivery.profile.adapter = 'claude';
+        const claude = await prepare(c, delivery); cleanups.push(claude.cleanup);
+        expect(claude.stdin).toContain('nested repository');
+    });
+    it('commits own-branch changes as the bot, leaves other branches alone, and skips a clean tree', async () => {
+        const { c, delivery } = await setup();
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        const w = launch.workspace!, main = c.profiles.builder.workdir;
+        const heads = async () => (await git(main, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'])).trim().split('\n')
+            .filter(l => !l.startsWith(`refs/heads/${w.branch} `)).join('\n');
+        const before = await heads(), mainHead = (await git(main, ['rev-parse', 'HEAD'])).trim();
+        const bot = { name: 'builder', botId: delivery.profile.botId };
+        expect(await commitRun(w, bot, 'ignored')).toBeUndefined();
+        expect((await git(w.cwd, ['rev-parse', 'HEAD'])).trim()).toBe(w.baseSha);
+        await writeFile(join(w.cwd, 'a.txt'), 'hello');
+        const sha = await commitRun(w, bot, 'Add a.txt\nsecond line');
+        expect(sha).toBeDefined();
+        expect((await git(w.cwd, ['rev-parse', w.branch])).trim()).toBe(sha);
+        const log = (await git(w.cwd, ['log', '-1', '--format=%an <%ae>%n%B'])).trim();
+        expect(log).toContain(`builder <${delivery.profile.botId}@agora.invalid>`);
+        expect(log).toContain('Add a.txt'); expect(log).not.toContain('second line'); expect(log).toContain('Agent: builder');
+        expect(await heads()).toBe(before);
+        expect((await git(main, ['rev-parse', 'HEAD'])).trim()).toBe(mainHead);
+        expect(await commitRun(w, bot, 'again')).toBeUndefined();
     });
 });
