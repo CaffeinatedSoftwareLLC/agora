@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
-import { join, resolve, win32 } from 'node:path';
+import { join, posix, resolve, win32 } from 'node:path';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, HostApi } from './types.js';
 
@@ -67,6 +67,21 @@ export async function ensureWorkspace(local: LocalProfile, claim: { session: Pic
     }
     await validateWorkspace(w);
     return w;
+}
+/**
+ * What `git commit` needs outside a session worktree (#113), as the only extra writable roots
+ * Codex's workspace-write sandbox gets. A linked worktree keeps HEAD, index and its logs in its
+ * own gitdir (`<common>/worktrees/<name>`); new objects, the branch ref (and its .lock) and the
+ * reflog go to the shared dir. Deliberately NOT granted: the main checkout's working tree, the
+ * common dir's config, hooks, packed-refs or the other worktrees' gitdirs.
+ */
+export function gitWritableRoots(gitDir: string, commonDir: string, platform = process.platform): string[] {
+    const p = platform === 'win32' ? win32 : posix;
+    return [p.resolve(gitDir), ...['objects', 'refs', 'logs'].map(d => p.join(p.resolve(commonDir), d))];
+}
+export async function workspaceWritableRoots(w: Workspace): Promise<string[]> {
+    const gitDir = await realpath((await git(w.cwd, ['rev-parse', '--path-format=absolute', '--git-dir'])).trim());
+    return gitWritableRoots(gitDir, w.commonDir);
 }
 export async function workspaceHead(w: Workspace) {
     await validateWorkspace(w);

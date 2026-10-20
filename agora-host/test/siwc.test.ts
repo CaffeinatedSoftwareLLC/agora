@@ -305,6 +305,7 @@ describe('app-server launch', () => {
             expect(launch.args).toContain('model_providers.openai_chatgpt_plan.env_key="ACCESS_TOKEN"');
             expect(launch.args).toContain('model_providers.openai_chatgpt_plan.requires_openai_auth=false');
             expect(launch.args).toContain('model_providers.openai_chatgpt_plan.supports_websockets=false');
+            expect(launch.args.some(a => a.startsWith('sandbox_workspace_write.writable_roots=') && a.includes('objects'))).toBe(true);
             expect(launch.args.join(' ')).not.toContain('at_secret_value');
             expect(launch.stdin).not.toContain('at_secret_value');
             expect(launch.env.ACCESS_TOKEN).toBe('at_secret_value');

@@ -5,7 +5,7 @@ import { childEnv, parseOutput, prepare } from '../src/adapters.js';
 import { configSchema } from '../src/config.js';
 import { wakePrompt } from '../src/prompt.js';
 import { claim, config, tempDir } from './helpers.js';
-import { git } from '../src/workspaces.js';
+import { git, gitWritableRoots, workspaceWritableRoots } from '../src/workspaces.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
@@ -175,5 +175,40 @@ describe('browser preview ports', () => {
         const base = { instance: 'http://127.0.0.1:3000', hostToken: 'ah_x.y', mcp: { executable: process.execPath, entrypoint: process.execPath }, profiles: {}, botTokens: {} };
         expect(configSchema.safeParse({ ...base, preview: { browser: process.execPath, stateDir: process.cwd(), portBase: 65000, portsPerSession: 10, slots: 100 } }).success).toBe(false);
         expect(configSchema.safeParse({ ...base, preview: { browser: process.execPath, stateDir: process.cwd() } }).success).toBe(true);
+    });
+});
+
+describe('session worktree git access (#113)', () => {
+    it('grants the worktree gitdir and the shared objects/refs/logs, never a working tree (POSIX)', () => {
+        const roots = gitWritableRoots('/repo/.git/worktrees/wt-1', '/repo/.git', 'linux');
+        expect(roots).toEqual(['/repo/.git/worktrees/wt-1', '/repo/.git/objects', '/repo/.git/refs', '/repo/.git/logs']);
+        expect(roots).not.toContain('/repo'); expect(roots).not.toContain('/repo/.git');
+    });
+    it('does the same with Windows paths', () => {
+        const roots = gitWritableRoots('C:\\repo\\.git\\worktrees\\wt-1', 'C:\\repo\\.git', 'win32');
+        expect(roots).toEqual(['C:\\repo\\.git\\worktrees\\wt-1', 'C:\\repo\\.git\\objects', 'C:\\repo\\.git\\refs', 'C:\\repo\\.git\\logs']);
+        expect(roots).not.toContain('C:\\repo'); expect(roots).not.toContain('C:\\repo\\.git');
+    });
+    it('passes them to codex exec as writable_roots, without the main working tree', async () => {
+        const { c, delivery } = await setup();
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        const arg = launch.args.find(a => a.startsWith('sandbox_workspace_write.writable_roots='))!;
+        expect(arg).toBeDefined();
+        const roots: string[] = JSON.parse(arg.split('=').slice(1).join('='));
+        expect(roots).toEqual(await workspaceWritableRoots(launch.workspace!));
+        expect(roots).toContain(join(launch.workspace!.commonDir, 'objects'));
+        expect(roots.some(r => r === launch.workspace!.workdir || r === launch.workspace!.cwd || r === launch.workspace!.commonDir)).toBe(false);
+        expect(launch.args.indexOf(arg)).toBeLessThan(launch.args.indexOf('--json'));
+    });
+    it('tells the agent it is already in its worktree, for every adapter', async () => {
+        const p = wakePrompt(claim(), undefined, 'agora/builder/X');
+        expect(p).toContain('already this session\'s git worktree, on branch agora/builder/X');
+        expect(p).toContain('Do not create another worktree, clone or nested repository');
+        expect(wakePrompt(claim())).not.toContain('nested repository');
+        const { c, delivery } = await setup();
+        c.profiles.builder.adapter = 'claude'; delivery.profile.adapter = 'claude';
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(launch.stdin).toContain(`on branch ${launch.workspace!.branch}`);
+        expect(launch.args.join(' ')).not.toContain('writable_roots');
     });
 });

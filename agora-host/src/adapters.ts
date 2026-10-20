@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, Result } from './types.js';
 import { isLurkRun, wakePrompt } from './prompt.js';
-import { ensureWorkspace, type Workspace } from './workspaces.js';
+import { ensureWorkspace, workspaceWritableRoots, type Workspace } from './workspaces.js';
 import { CODEX_WORDS, resolvePermissions } from './presets.js';
 import { detectSignals } from './signals.js';
 import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
@@ -167,7 +167,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             // The agent starts the Agora MCP server from session/new, so no MCP config is written
             const acpRules = [...new Set([...perms.claude, ...local.approvedTools.map(t => `mcp__agora__${t}`), ...rules.filter(r => CODEX_WORDS.has(r))])];
             const acpPlan: AcpPlan = {
-                prompt: prompt ?? wakePrompt(claim, ports), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
+                prompt: prompt ?? wakePrompt(claim, ports, workspace.branch), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
                 mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
                 authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
             };
@@ -178,6 +178,9 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
         }
         if (local.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
+        // Commits in the session worktree write to the main repo's .git, outside workspace-write (#113)
+        const gitRoots = local.adapter === 'codex' && perms.codex.sandbox === 'workspace-write'
+            ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(await workspaceWritableRoots(workspace))}`] : [];
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];
@@ -192,12 +195,13 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 // output schema go over JSON-RPC (siwc/appserver.ts)
                 args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS,
                     '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                    ...gitRoots,
                     ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                     ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
                     ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
                 const profileName = claim.profile.name;
                 const appServer: AppServerPlan = {
-                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports),
+                    threadId: claim.session.nativeSessionId, prompt: prompt ?? wakePrompt(claim, ports, workspace.branch),
                     outputSchema: isLurkRun(claim) ? null : resultSchema, model, effort, sandbox: perms.codex.sandbox,
                     refresh: async () => (await siwcToken(config, profileName, true)).accessToken,
                 };
@@ -206,6 +210,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             }
             args = ['exec', '--ignore-user-config', '-s', perms.codex.sandbox,
                 '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                ...gitRoots,
                 ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                 ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
                 ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : []),
@@ -224,7 +229,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
-        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports), cleanup, lurk: isLurkRun(claim),
+        return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports, workspace.branch), cleanup, lurk: isLurkRun(claim),
             ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }
