@@ -1,6 +1,6 @@
 import { shellHistorySettled } from './shellHistory';
 import { useUIStore } from '../../stores/uiStore';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUnreadStore } from '../../stores/unreadStore';
@@ -199,7 +199,12 @@ export function ArcChannelSidebar() {
 
   // Count online members for this server (reactive to presence + member changes)
   const members = useMemberStore(s => instanceServerId ? s.byServer.get(instanceServerId) : undefined);
+  const loadMembers = useMemberStore(s => s.loadMembers);
   const presenceMap = usePresenceStore(s => s.status);
+  // The count needs the member list, which otherwise loads only when the member panel opens
+  useEffect(() => {
+    if (instanceServerId && !members) void loadMembers(instanceServerId).catch(() => {});
+  }, [instanceServerId, members, loadMembers]);
   const onlineCount = useMemo(() => {
     if (!members) return 0;
     return members.filter(m => presenceMap.get(m.id) === 'online').length;

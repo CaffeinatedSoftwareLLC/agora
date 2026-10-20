@@ -78,6 +78,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const activeChannelId = useChannelStore.getState().activeChannelId;
       if (activeChannelId && data.channels.some(c => c.id === activeChannelId)) {
         void useMessageStore.getState().loadMessages(activeChannelId);
+        // The thread store was just cleared; the active-threads bar only loads on mount
+        void useThreadStore.getState().loadActiveThreads(activeChannelId).catch(() => {});
       }
       if (openThreadId && openThreadChannelId && data.channels.some(c => c.id === openThreadChannelId)) {
         useThreadStore.getState().openThread(openThreadChannelId, openThreadId);

@@ -54,6 +54,9 @@ interface ThreadState {
 
 const REPLY_PAGE_SIZE = 50;
 
+// Channels whose active-thread list is being fetched again for a thread it does not hold yet
+const refreshing = new Set<string>();
+
 export const useThreadStore = create<ThreadState>((set, get) => ({
   openThreadId: null,
   openThreadChannelId: null,
@@ -328,6 +331,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   updateParentMetadata: (data) => {
+    const loaded = get().activeThreads.get(data.channelId);
+    // A first reply starts a thread the bar has never seen; the event carries only counts,
+    // so fetch the list again to get the new thread's summary.
+    if (loaded && data.replyCount > 0 && !data.threadClosedAt && !loaded.some((t) => t.id === data.messageId)) {
+      if (!refreshing.has(data.channelId)) {
+        refreshing.add(data.channelId);
+        void get().loadActiveThreads(data.channelId)
+          .catch(() => {})
+          .finally(() => refreshing.delete(data.channelId));
+      }
+      return;
+    }
     set((state) => {
       const next = new Map(state.activeThreads);
       const threads = next.get(data.channelId);
