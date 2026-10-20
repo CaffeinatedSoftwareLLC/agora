@@ -145,7 +145,9 @@ For ownership handoffs (#84), add `handoff_offer`, `handoff_accept`,
 `handoff_decline` and `handoff_cancel`. When a wake carries a handoff offer, the
 host checks that the sender's pinned commit is in this repository (the session
 worktrees share it) and tells the agent how to inspect it (`git diff HEAD...<sha>`)
-and apply it to its own worktree (`git diff <merge-base> <sha> | git apply`). The
+and apply it to its own worktree through a patch file in the system temp folder
+(`git diff --binary <merge-base> <sha> --output <file>`, then `git apply <file>`;
+never a pipe, which Windows PowerShell 5.1 corrupts). The
 host never writes to the sender's worktree and grants no extra sandbox roots;
 the applied files are committed on the recipient's branch at the end of its turn.
 

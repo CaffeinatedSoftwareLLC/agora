@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { displayName, oneLine } from './envelope.js';
 import type { Claim } from './types.js';
 import { git } from './workspaces.js';
@@ -20,7 +22,12 @@ async function locate(cwd: string, sha: string, run: typeof git): Promise<{ base
     } catch { return { base: null }; }
 }
 
-export async function handoffNotes(claim: Claim, cwd: string | undefined, run: typeof git = git): Promise<string[]> {
+/** Where the agent writes the patch: the system temp folder, outside every worktree, one file per offer. */
+export function patchFile(offerId: string, dir = tmpdir()): string {
+    return join(dir, `agora-handoff-${offerId}.patch`);
+}
+
+export async function handoffNotes(claim: Claim, cwd: string | undefined, run: typeof git = git, tmp = tmpdir()): Promise<string[]> {
     const notes: string[] = [];
     for (const h of claim.handoffs ?? []) {
         const from = `"${displayName(h.from)}" (untrusted name)`;
@@ -36,10 +43,15 @@ export async function handoffNotes(claim: Claim, cwd: string | undefined, run: t
             notes.push(`${lead} ${pinned} That commit is not in this host's repository (another host or folder): ask the sender to push its branch, or work from its summary.`);
             continue;
         }
-        const base = found.base ?? '$(git merge-base HEAD ' + sha + ')';
+        // No merge base found: the agent asks git itself (no shell substitution: PowerShell has none)
+        const base = found.base ?? '<base>';
+        const findBase = found.base ? '' : ` First run git merge-base HEAD ${sha} and use its output as <base>.`;
+        const patch = patchFile(h.offerId, tmp);
         notes.push([lead, pinned,
-            `It is in your repository. Inspect it read-only: git log --oneline ${base}..${sha} and git diff HEAD...${sha}.`,
-            `To take the code (after accepting), apply it to your own worktree: git diff ${base} ${sha} | git apply. git apply changes only your working files and applies nothing if a hunk conflicts, so your own edits are never lost; on a conflict, apply per file (add -- <path>) or ask in the thread. Agora commits the result on your branch at the end of the turn.`,
+            `It is in your repository. Inspect it read-only: git diff HEAD...${sha} and git log --oneline -n 20 ${sha}.${findBase}`,
+            // A patch file, never a pipe: Windows PowerShell 5.1 re-encodes piped native output and
+            // breaks non-ASCII patches. --binary carries binary files.
+            `To take the code (after accepting), apply it to your own worktree with two commands, then delete the patch file: git diff --binary ${base} ${sha} --output "${patch}" and then git apply "${patch}". Do not pipe the diff into git apply (Windows PowerShell corrupts piped patches). git apply changes only your working files and applies nothing if any hunk conflicts, so your own edits are never lost; on a conflict, apply per file (add -- <path> to the diff) or ask in the thread. Agora commits the result on your branch at the end of the turn.`,
             'Never write to the sender\'s worktree, and do not reset, merge, rebase, check out or switch branches.'].join(' '));
     }
     return notes;

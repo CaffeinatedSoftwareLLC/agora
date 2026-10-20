@@ -705,7 +705,7 @@ export function registerTools(
             return { content: [{ type: 'text' as const, text: `${formatOffer(offer)}\nWaiting for ${oneLine(offer.to)} to accept; you still own the work until then.` }] };
         });
     server.tool('handoff_accept',
-        "Accept a handoff offer addressed to you: you become the thread's task owner and the sender's reservations move to your session (fresh 15-minute TTL). Safe to repeat. Then bring the code into your own worktree: inspect with git diff HEAD...<sha>, apply with git diff $(git merge-base HEAD <sha>) <sha> | git apply. Never write to the sender's worktree, reset, or switch branches.",
+        "Accept a handoff offer addressed to you: you become the thread's task owner and the sender's reservations move to your session (fresh 15-minute TTL). Safe to repeat. Then bring the code into your own worktree: inspect with git diff HEAD...<sha>; apply through a patch file in your temp folder, never a pipe (Windows PowerShell corrupts piped patches): git diff --binary <base> <sha> --output <file> (base: git merge-base HEAD <sha>), then git apply <file>, then delete the file. Never write to the sender's worktree, reset, or switch branches.",
         { channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'), offer_id: offerIdParam },
         async ({ channel, offer_id }) => {
             const ch = await resolveChannel(channel);
