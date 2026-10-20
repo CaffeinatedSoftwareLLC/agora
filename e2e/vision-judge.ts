@@ -2,8 +2,7 @@
  * Advisory vision check over a run's screenshot manifest (docs/planning/beta-test-plan.md §2.3).
  *
  *   npx tsx vision-judge.ts                 # dry run: leak scan + worst-case budget, sends nothing
- *   npx tsx vision-judge.ts --judge         # sends screenshots (off by default)
- *   npx tsx vision-judge.ts --judge --run <run-id> --budget 0.25
+ *   npx tsx vision-judge.ts --judge         # refused: uploads are disabled (see PIXEL_REVIEW below)
  *
  * Never gates anything: verdicts go to artifacts/<run-id>/judge.json for human review.
  * Key: AGORA_TEST_ANTHROPIC_KEY from %USERPROFILE%\.agora-test\keys.env (or the environment). Never printed.
@@ -23,6 +22,10 @@ const cfg = JSON.parse(fs.readFileSync(path.join(E2E_DIR, 'vision.config.json'),
 const MODEL: string = cfg.model;
 const RATE = cfg.rate_card_usd_per_mtok as { input: number; output: number; cache_write_5m: number; cache_read: number };
 const MAX_TOKENS: number = cfg.request.max_tokens;
+// The leak scan reads DOM text, which does not verify pixels (rendered input values, images and
+// canvas can show secrets absent from page text). Uploads stay off until a pixel-aware, fail-closed
+// review exists (beta-test-plan.md, "Leak scanner"). Not an env/flag override on purpose.
+const PIXEL_REVIEW = false;
 const MAX_ATTEMPTS = 2;           // dispatcher-level attempts per ask (SDK retries are off)
 const PROMPT_TOKEN_BOUND = 600;   // system prompt + expectation text, generous upper bound
 
@@ -132,7 +135,13 @@ async function main() {
     const worst = entries.reduce((s, e) => s + reserveFor(path.join(runDir, e.file)) * MAX_ATTEMPTS * 2, 0);
     console.log(`run ${run}: ${entries.length} screenshots, model ${MODEL}, budget $${budget.cap.toFixed(2)}, `
         + `worst case incl. retries and re-asks $${worst.toFixed(4)}`);
-    if (!judge) { console.log('dry run (pass --judge to send). Leak scan clean.'); return; }
+    if (!judge) { console.log('dry run. Leak scan clean.'); return; }
+    if (!PIXEL_REVIEW) {
+        const reason = 'screenshot uploads disabled until a pixel-aware leak review exists (beta-test-plan.md)';
+        fs.writeFileSync(path.join(runDir, 'judge.json'), JSON.stringify({ run, status: 'blocked', reason }, null, 2));
+        console.error(`blocked: ${reason}`);
+        process.exit(3);
+    }
     if (!key) {
         fs.writeFileSync(path.join(runDir, 'judge.json'), JSON.stringify({ run, status: 'blocked', reason: 'AGORA_TEST_ANTHROPIC_KEY not set' }, null, 2));
         console.log('blocked: AGORA_TEST_ANTHROPIC_KEY not set');

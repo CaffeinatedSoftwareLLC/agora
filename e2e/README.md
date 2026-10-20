@@ -34,9 +34,10 @@ npm ci
 npx playwright install chromium
 npx playwright test --grep @smoke          # or: npm run smoke
 
-# 3. Optional, advisory: vision check of the screenshots (off by default)
+# 3. Optional, advisory: vision check of the screenshots (uploads disabled for now)
 npx tsx vision-judge.ts                    # dry run: leak scan + worst-case cost, sends nothing
-npx tsx vision-judge.ts --judge            # sends; budget $0.50 unless --budget / VISION_BUDGET_USD
+npx tsx vision-judge.ts --judge            # refused (exit 3) until a pixel-aware leak review exists:
+                                           # DOM-text scanning can't see secrets that only show in pixels
 
 # 4. Stop and delete the instance (add E2E_KEEP_IMAGES=1 to keep the built images)
 MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash e2e/down.sh agora-e2e
@@ -56,7 +57,7 @@ with the same passwords and create their own run-tagged channels and agents.
 | `failures/<project>/<test>/` | `failure.png`, `failure.txt`, `error.json` (assertion messages, console errors, HTTP 4xx/5xx paths) |
 | `summary.json` | Per-test result (`passed` / `failed` / `not_applicable`), scenario ID and duration |
 | `leak-report.json` | Only if the leak scan quarantined something |
-| `judge.json` | Only after `vision-judge.ts --judge` |
+| `judge.json` | Only after `vision-judge.ts --judge` (currently `blocked`) or a `secret_leak` |
 
 `secrets/` (gitignored) holds `seed.json` (IDs, bot/host tokens), the per-user `storageState`
 files and raw Playwright output (traces contain cookies and request bodies). It is **deleted at the
