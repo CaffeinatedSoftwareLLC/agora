@@ -1,440 +1,560 @@
 surface_id,kind,source,line,entrypoint,scenario_ids,coverage_state,baseline_sha
-S0001,mcp_tool,agora-mcp/src/tools.ts,377,chat_send,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0002,mcp_tool,agora-mcp/src/tools.ts,408,chat_read,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0003,mcp_tool,agora-mcp/src/tools.ts,436,who_directs,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0004,mcp_tool,agora-mcp/src/tools.ts,451,project_context,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0005,mcp_tool,agora-mcp/src/tools.ts,464,channel_list,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0006,mcp_tool,agora-mcp/src/tools.ts,491,chat_wait,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0007,mcp_tool,agora-mcp/src/tools.ts,566,chat_history,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0008,mcp_tool,agora-mcp/src/tools.ts,594,thread_start,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0009,mcp_tool,agora-mcp/src/tools.ts,615,thread_list,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0010,mcp_tool,agora-mcp/src/tools.ts,635,thread_close,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0011,mcp_tool,agora-mcp/src/tools.ts,660,file_reserve,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0012,mcp_tool,agora-mcp/src/tools.ts,668,file_renew,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0013,mcp_tool,agora-mcp/src/tools.ts,674,file_release,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0014,mcp_tool,agora-mcp/src/tools.ts,680,file_reservations,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0015,mcp_tool,agora-mcp/src/tools.ts,696,handoff_offer,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0016,mcp_tool,agora-mcp/src/tools.ts,707,handoff_accept,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0017,mcp_tool,agora-mcp/src/tools.ts,717,handoff_decline,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0018,mcp_tool,agora-mcp/src/tools.ts,725,handoff_cancel,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0019,mcp_tool,agora-mcp/src/tools.ts,766,session_list,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0020,mcp_tool,agora-mcp/src/tools.ts,785,session_start,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0021,mcp_tool,agora-mcp/src/tools.ts,804,session_lurk,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0022,mcp_tool,agora-mcp/src/tools.ts,816,session_end,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0023,mcp_tool,agora-mcp/src/tools.ts,830,session_wake,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0024,mcp_tool,agora-mcp/src/tools.ts,855,task_list,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0025,mcp_tool,agora-mcp/src/tools.ts,868,task_create,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0026,mcp_tool,agora-mcp/src/tools.ts,885,task_update,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0027,mcp_tool,agora-mcp/src/tools.ts,905,task_start,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0028,mcp_tool,agora-mcp/src/tools.ts,919,subtask_start,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0029,mcp_tool,agora-mcp/src/tools.ts,948,file_search,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0030,mcp_tool,agora-mcp/src/tools.ts,964,file_read,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0031,mcp_tool,agora-mcp/src/tools.ts,980,canvas_publish,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0032,mcp_tool,agora-mcp/src/tools.ts,1007,canvas_read,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0033,mcp_tool,agora-mcp/src/tools.ts,1025,browser_preview,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0034,mcp_tool,agora-mcp/src/tools.ts,1060,runtime_exec,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0035,mcp_tool,agora-mcp/src/tools.ts,1087,runtime_status,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0036,route_module,src/routes/admin.ts,1,admin.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0037,http_endpoint,src/routes/admin.ts,25,GET /admin/stats,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0038,http_endpoint,src/routes/admin.ts,44,GET /admin/pending-users,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0039,http_endpoint,src/routes/admin.ts,81,POST /admin/approve-user/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0040,http_endpoint,src/routes/admin.ts,137,POST /admin/reject-user/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0041,http_endpoint,src/routes/admin.ts,166,GET /admin/users,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0042,http_endpoint,src/routes/admin.ts,279,POST /admin/users/:id/ban,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0043,http_endpoint,src/routes/admin.ts,284,PATCH /admin/instance,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0044,http_endpoint,src/routes/admin.ts,359,GET /admin/settings/files,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0045,http_endpoint,src/routes/admin.ts,368,PATCH /admin/settings/files,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0046,http_endpoint,src/routes/admin.ts,417,GET /admin/settings/ai,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0047,http_endpoint,src/routes/admin.ts,426,PATCH /admin/settings/ai,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0048,http_endpoint,src/routes/admin.ts,451,GET /admin/settings/runtime,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0049,http_endpoint,src/routes/admin.ts,460,PATCH /admin/settings/runtime,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0050,http_endpoint,src/routes/admin.ts,496,GET /admin/storage,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0051,route_module,src/routes/agent-commands.ts,1,agent-commands.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0052,http_endpoint,src/routes/agent-commands.ts,153,POST /channels/:id/agent-commands,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0053,route_module,src/routes/agent-hosts.ts,1,agent-hosts.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0054,http_endpoint,src/routes/agent-hosts.ts,124,POST /servers/:serverId/agent-hosts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0055,http_endpoint,src/routes/agent-hosts.ts,148,GET /servers/:serverId/agent-hosts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0056,http_endpoint,src/routes/agent-hosts.ts,159,DELETE /servers/:serverId/agent-hosts/:hostId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0057,http_endpoint,src/routes/agent-hosts.ts,175,POST /servers/:serverId/agent-profiles,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0058,http_endpoint,src/routes/agent-hosts.ts,214,GET /servers/:serverId/agent-profiles,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0059,http_endpoint,src/routes/agent-hosts.ts,226,PATCH /servers/:serverId/agent-profiles/:profileId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0060,http_endpoint,src/routes/agent-hosts.ts,296,DELETE /servers/:serverId/agent-profiles/:profileId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0061,http_endpoint,src/routes/agent-hosts.ts,316,POST /servers/:serverId/agents,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0062,http_endpoint,src/routes/agent-hosts.ts,386,POST /agent-hosts/@me/profiles,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0063,http_endpoint,src/routes/agent-hosts.ts,413,POST /agent-hosts/@me/workspaces/reconcile,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0064,http_endpoint,src/routes/agent-hosts.ts,428,POST /agent-hosts/@me/workspaces/warning,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0065,http_endpoint,src/routes/agent-hosts.ts,445,GET /agent-hosts/@me/runs/next,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0066,http_endpoint,src/routes/agent-hosts.ts,479,POST /agent-hosts/@me/runs/:runId/heartbeat,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0067,http_endpoint,src/routes/agent-hosts.ts,500,POST /agent-hosts/@me/runs/:runId/tool-requests,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0068,http_endpoint,src/routes/agent-hosts.ts,522,POST /agent-hosts/@me/runs/:runId/tool-requests/:requestId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0069,http_endpoint,src/routes/agent-hosts.ts,539,POST /agent-hosts/@me/runs/:runId/complete,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0070,http_endpoint,src/routes/agent-hosts.ts,569,POST /agent-hosts/@me/runs/:runId/fail,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0071,route_module,src/routes/agent-images.ts,1,agent-images.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0072,http_endpoint,src/routes/agent-images.ts,33,POST /agent-hosts/@me/runs/:runId/images/discover,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0073,http_endpoint,src/routes/agent-images.ts,47,POST /agent-hosts/@me/runs/:runId/images,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0074,route_module,src/routes/agent-invites.ts,1,agent-invites.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0075,http_endpoint,src/routes/agent-invites.ts,11,POST /servers/:serverId/agent-invites,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0076,http_endpoint,src/routes/agent-invites.ts,58,POST /agent-invites/redeem,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0077,route_module,src/routes/agent-plans.ts,1,agent-plans.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0078,http_endpoint,src/routes/agent-plans.ts,67,GET /servers/:serverId/agent-plans,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0079,http_endpoint,src/routes/agent-plans.ts,80,POST /servers/:serverId/agent-profiles/:profileId/plan,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0080,http_endpoint,src/routes/agent-plans.ts,123,GET /agent-hosts/@me/plan-requests/next,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0081,http_endpoint,src/routes/agent-plans.ts,141,POST /agent-hosts/@me/plans/:name,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0082,route_module,src/routes/agent-tool-requests.ts,1,agent-tool-requests.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0083,http_endpoint,src/routes/agent-tool-requests.ts,38,POST /channels/:id/agent-tool-requests/:requestId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0084,http_endpoint,src/routes/agent-tool-requests.ts,163,POST /channels/:id/agent-run-approvals/:approvalId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0085,route_module,src/routes/ai-config.ts,1,ai-config.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0086,http_endpoint,src/routes/ai-config.ts,111,GET /servers/:serverId/ai-config,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0087,http_endpoint,src/routes/ai-config.ts,148,PUT /servers/:serverId/ai-config,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0088,http_endpoint,src/routes/ai-config.ts,246,PATCH /servers/:serverId/ai-config,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0089,http_endpoint,src/routes/ai-config.ts,298,POST /servers/:serverId/ai-config/assistant,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0090,http_endpoint,src/routes/ai-config.ts,309,POST /servers/:serverId/ai-config/test,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0091,http_endpoint,src/routes/ai-config.ts,330,GET /servers/:serverId/ai-config/usage,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0092,route_module,src/routes/ai-decisions.ts,1,ai-decisions.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0093,http_endpoint,src/routes/ai-decisions.ts,85,GET /servers/:serverId/ai/decisions,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0094,http_endpoint,src/routes/ai-decisions.ts,93,PATCH /servers/:serverId/ai/decisions,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0095,route_module,src/routes/ai-providers.ts,1,ai-providers.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0096,http_endpoint,src/routes/ai-providers.ts,57,GET /servers/:serverId/ai/adapters,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0097,http_endpoint,src/routes/ai-providers.ts,63,GET /servers/:serverId/ai/providers,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0098,http_endpoint,src/routes/ai-providers.ts,78,POST /servers/:serverId/ai/providers,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0099,http_endpoint,src/routes/ai-providers.ts,129,PATCH /servers/:serverId/ai/providers/:providerId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0100,http_endpoint,src/routes/ai-providers.ts,200,DELETE /servers/:serverId/ai/providers/:providerId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0101,http_endpoint,src/routes/ai-providers.ts,215,POST /servers/:serverId/ai/providers/:providerId/test,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0102,http_endpoint,src/routes/ai-providers.ts,253,GET /servers/:serverId/ai/routes,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0103,http_endpoint,src/routes/ai-providers.ts,266,PUT /servers/:serverId/ai/routes/:capability,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0104,http_endpoint,src/routes/ai-providers.ts,351,DELETE /servers/:serverId/ai/routes/:capability,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0105,http_endpoint,src/routes/ai-providers.ts,372,GET /servers/:serverId/ai/changes,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0106,http_endpoint,src/routes/ai-providers.ts,379,GET /servers/:serverId/ai/usage,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0107,route_module,src/routes/artifacts.ts,1,artifacts.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0108,http_endpoint,src/routes/artifacts.ts,11,GET /channels/:id/artifacts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0109,http_endpoint,src/routes/artifacts.ts,25,GET /channels/:id/artifacts/:artifactId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0110,http_endpoint,src/routes/artifacts.ts,43,GET /channels/:id/artifacts/:artifactId/versions/:version,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0111,route_module,src/routes/auth.ts,1,auth.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0112,http_endpoint,src/routes/auth.ts,12,POST /auth/register,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0113,http_endpoint,src/routes/auth.ts,141,POST /auth/login,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0114,http_endpoint,src/routes/auth.ts,238,POST /auth/logout,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0115,http_endpoint,src/routes/auth.ts,267,POST /auth/logout-all,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0116,http_endpoint,src/routes/auth.ts,276,GET /auth/session,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0117,route_module,src/routes/bots.ts,1,bots.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0118,http_endpoint,src/routes/bots.ts,185,POST /servers/:serverId/bots,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0119,http_endpoint,src/routes/bots.ts,235,GET /servers/:serverId/bots,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0120,http_endpoint,src/routes/bots.ts,264,GET /servers/:serverId/bots/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0121,http_endpoint,src/routes/bots.ts,314,PATCH /servers/:serverId/bots/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0122,http_endpoint,src/routes/bots.ts,374,PATCH /servers/:serverId/bots/:id/pause,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0123,http_endpoint,src/routes/bots.ts,419,DELETE /servers/:serverId/bots/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0124,http_endpoint,src/routes/bots.ts,462,POST /servers/:serverId/bots/:id/tokens,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0125,http_endpoint,src/routes/bots.ts,496,GET /servers/:serverId/bots/:id/tokens,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0126,http_endpoint,src/routes/bots.ts,524,DELETE /servers/:serverId/bots/:id/tokens/:tokenId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0127,http_endpoint,src/routes/bots.ts,548,POST /channels/:id/bots/:botId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0128,http_endpoint,src/routes/bots.ts,577,PUT /channels/:id/bots/:botId/direct,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0129,http_endpoint,src/routes/bots.ts,609,DELETE /channels/:id/bots/:botId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0130,http_endpoint,src/routes/bots.ts,637,PATCH /channels/:id/bot-config,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0131,http_endpoint,src/routes/bots.ts,690,GET /bots/@me,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0132,http_endpoint,src/routes/bots.ts,734,GET /bots/@me/cursors,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0133,http_endpoint,src/routes/bots.ts,760,PUT /bots/@me/cursors/:channelId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0134,http_endpoint,src/routes/bots.ts,805,GET /bots/@me/thread-cursors,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0135,http_endpoint,src/routes/bots.ts,832,PUT /bots/@me/thread-cursors/:threadId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0136,route_module,src/routes/browser-previews.ts,1,browser-previews.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0137,http_endpoint,src/routes/browser-previews.ts,59,POST /channels/:id/browser-previews,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0138,http_endpoint,src/routes/browser-previews.ts,107,GET /channels/:id/browser-previews/:previewId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0139,http_endpoint,src/routes/browser-previews.ts,118,GET /channels/:id/browser-previews/:previewId/screenshot,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0140,http_endpoint,src/routes/browser-previews.ts,131,GET /agent-hosts/@me/browser-previews/next,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0141,http_endpoint,src/routes/browser-previews.ts,163,POST /agent-hosts/@me/browser-previews/:previewId/result,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0142,route_module,src/routes/channel-projects.ts,1,channel-projects.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0143,http_endpoint,src/routes/channel-projects.ts,41,GET /channels/:id/project,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0144,http_endpoint,src/routes/channel-projects.ts,53,PUT /channels/:id/project,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0145,http_endpoint,src/routes/channel-projects.ts,89,PUT /channels/:id/project/verify,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0146,route_module,src/routes/channels.ts,1,channels.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0147,http_endpoint,src/routes/channels.ts,7,POST /servers/:id/channels,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0148,route_module,src/routes/directors.ts,1,directors.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0149,http_endpoint,src/routes/directors.ts,9,GET /channels/:id/directors,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0150,route_module,src/routes/file-reservations.ts,1,file-reservations.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0151,http_endpoint,src/routes/file-reservations.ts,37,GET /channels/:id/file-reservations,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0152,http_endpoint,src/routes/file-reservations.ts,61,POST /channels/:id/file-reservations,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0153,route_module,src/routes/file-tags.ts,1,file-tags.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0154,http_endpoint,src/routes/file-tags.ts,29,GET /servers/:serverId/file-tags,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0155,http_endpoint,src/routes/file-tags.ts,39,GET /servers/:serverId/ai/tags,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0156,http_endpoint,src/routes/file-tags.ts,48,POST /servers/:serverId/ai/tags,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0157,http_endpoint,src/routes/file-tags.ts,96,PATCH /servers/:serverId/ai/tags/:tagId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0158,http_endpoint,src/routes/file-tags.ts,156,DELETE /servers/:serverId/ai/tags/:tagId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0159,http_endpoint,src/routes/file-tags.ts,169,POST /servers/:serverId/ai/tags/retag,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0160,route_module,src/routes/files.ts,1,files.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0161,http_endpoint,src/routes/files.ts,21,POST /files/upload,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0162,http_endpoint,src/routes/files.ts,66,GET /channels/:id/files/search,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0163,http_endpoint,src/routes/files.ts,101,GET /files/:fileId/text,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0164,http_endpoint,src/routes/files.ts,134,GET /files/:fileId/image,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0165,http_endpoint,src/routes/files.ts,155,GET /files/:fileId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0166,http_endpoint,src/routes/files.ts,219,DELETE /files/:fileId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0167,route_module,src/routes/handoffs.ts,1,handoffs.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0168,http_endpoint,src/routes/handoffs.ts,35,GET /channels/:id/threads/:threadId/handoffs,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0169,http_endpoint,src/routes/handoffs.ts,41,POST /channels/:id/handoffs,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0170,http_endpoint,src/routes/handoffs.ts,54,POST /channels/:id/handoffs/:offerId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0171,route_module,src/routes/instance.ts,1,instance.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0172,http_endpoint,src/routes/instance.ts,12,GET /instance/status,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0173,http_endpoint,src/routes/instance.ts,33,POST /instance/setup,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0174,route_module,src/routes/messages.ts,1,messages.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0175,http_endpoint,src/routes/messages.ts,20,POST /channels/:id/messages,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0176,http_endpoint,src/routes/messages.ts,322,GET /channels/:id/messages,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0177,http_endpoint,src/routes/messages.ts,420,PATCH /channels/:id/messages/:msgId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0178,http_endpoint,src/routes/messages.ts,492,DELETE /channels/:id/messages/:msgId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0179,route_module,src/routes/passkeys.ts,1,passkeys.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0180,http_endpoint,src/routes/passkeys.ts,76,GET /auth/passkeys,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0181,http_endpoint,src/routes/passkeys.ts,87,POST /auth/passkeys/register/options,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0182,http_endpoint,src/routes/passkeys.ts,125,POST /auth/passkeys/register/verify,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0183,http_endpoint,src/routes/passkeys.ts,187,DELETE /auth/passkeys/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0184,http_endpoint,src/routes/passkeys.ts,204,POST /auth/passkeys/login/options,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0185,http_endpoint,src/routes/passkeys.ts,246,POST /auth/passkeys/login/verify,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0186,route_module,src/routes/permission-relays.ts,1,permission-relays.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0187,http_endpoint,src/routes/permission-relays.ts,35,POST /channels/:id/permission-relays,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0188,http_endpoint,src/routes/permission-relays.ts,109,GET /channels/:id/permission-relays/:requestId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0189,http_endpoint,src/routes/permission-relays.ts,124,POST /channels/:id/permission-relays/:requestId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0190,route_module,src/routes/roles.ts,1,roles.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0191,http_endpoint,src/routes/roles.ts,120,GET /servers/:serverId/roles,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0192,http_endpoint,src/routes/roles.ts,150,POST /servers/:serverId/roles,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0193,http_endpoint,src/routes/roles.ts,217,PATCH /servers/:serverId/roles/:roleId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0194,http_endpoint,src/routes/roles.ts,315,DELETE /servers/:serverId/roles/:roleId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0195,http_endpoint,src/routes/roles.ts,346,PUT /servers/:serverId/members/:userId/roles/:roleId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0196,http_endpoint,src/routes/roles.ts,399,DELETE /servers/:serverId/members/:userId/roles/:roleId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0197,http_endpoint,src/routes/roles.ts,422,GET /channels/:channelId/overrides,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0198,http_endpoint,src/routes/roles.ts,463,PUT /channels/:channelId/overrides/roles/:roleId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0199,http_endpoint,src/routes/roles.ts,522,DELETE /channels/:channelId/overrides/roles/:roleId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0200,http_endpoint,src/routes/roles.ts,546,PUT /channels/:channelId/overrides/members/:userId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0201,http_endpoint,src/routes/roles.ts,605,DELETE /channels/:channelId/overrides/members/:userId,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0202,route_module,src/routes/runtime.ts,1,runtime.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0203,http_endpoint,src/routes/runtime.ts,68,POST /runtime/runs,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0204,http_endpoint,src/routes/runtime.ts,114,GET /runtime/runs/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0205,http_endpoint,src/routes/runtime.ts,119,GET /runtime/runs/:id/code,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0206,http_endpoint,src/routes/runtime.ts,145,PATCH /servers/:serverId/bots/:id/runtime,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0207,route_module,src/routes/servers.ts,1,servers.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0208,http_endpoint,src/routes/servers.ts,11,POST /servers,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0209,http_endpoint,src/routes/servers.ts,76,GET /servers/:id/channels,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0210,http_endpoint,src/routes/servers.ts,108,POST /servers/:id/invites,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0211,http_endpoint,src/routes/servers.ts,135,GET /servers/:id/members,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0212,http_endpoint,src/routes/servers.ts,179,GET /servers/:id/access,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0213,http_endpoint,src/routes/servers.ts,216,POST /invites/:code,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0214,route_module,src/routes/subtasks.ts,1,subtasks.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0215,http_endpoint,src/routes/subtasks.ts,32,POST /channels/:id/subtasks,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0216,route_module,src/routes/task-board.ts,1,task-board.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0217,http_endpoint,src/routes/task-board.ts,143,GET /channels/:id/tasks,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0218,http_endpoint,src/routes/task-board.ts,156,POST /channels/:id/tasks,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0219,route_module,src/routes/terms-watch.ts,1,terms-watch.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0220,http_endpoint,src/routes/terms-watch.ts,12,GET /terms-watch,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0221,http_endpoint,src/routes/terms-watch.ts,27,POST /terms-watch/documents,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0222,http_endpoint,src/routes/terms-watch.ts,44,PATCH /terms-watch/documents/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0223,http_endpoint,src/routes/terms-watch.ts,56,DELETE /terms-watch/documents/:id,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0224,http_endpoint,src/routes/terms-watch.ts,61,PATCH /terms-watch/settings,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0225,http_endpoint,src/routes/terms-watch.ts,78,POST /terms-watch/check,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0226,http_endpoint,src/routes/terms-watch.ts,83,GET /terms-watch/documents/:id/changes,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0227,http_endpoint,src/routes/terms-watch.ts,91,POST /terms-watch/changes/:id/acknowledge,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0228,route_module,src/routes/threads.ts,1,threads.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0229,http_endpoint,src/routes/threads.ts,20,POST /channels/:id/messages/:msgId/replies,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0230,http_endpoint,src/routes/threads.ts,290,GET /channels/:id/messages/:msgId/replies,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0231,http_endpoint,src/routes/threads.ts,397,GET /channels/:id/threads,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0232,http_endpoint,src/routes/threads.ts,537,PATCH /channels/:id/messages/:msgId/thread,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0233,route_module,src/routes/unreads.ts,1,unreads.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0234,http_endpoint,src/routes/unreads.ts,8,PUT /channels/:channelId/ack,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0235,http_endpoint,src/routes/unreads.ts,54,GET /channels/:channelId/unreads,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0236,http_endpoint,src/routes/unreads.ts,99,GET /unreads,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0237,route_module,src/routes/users.ts,1,users.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0238,http_endpoint,src/routes/users.ts,7,GET /users/search,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0239,http_endpoint,src/routes/users.ts,41,GET /users/@me/preferences,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0240,http_endpoint,src/routes/users.ts,49,PATCH /users/@me/preferences,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0241,route_module,src/routes/voice.ts,1,voice.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0242,http_endpoint,src/routes/voice.ts,159,GET /servers/:serverId/ai/voice,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0243,http_endpoint,src/routes/voice.ts,166,PATCH /servers/:serverId/ai/voice,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0244,http_endpoint,src/routes/voice.ts,204,GET /channels/:id/voice,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0245,http_endpoint,src/routes/voice.ts,220,POST /channels/:id/voice/transcribe,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0246,http_endpoint,src/routes/voice.ts,291,POST /channels/:id/messages/:msgId/speech,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0247,route_module,src/routes/workspace-review.ts,1,workspace-review.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0248,http_endpoint,src/routes/workspace-review.ts,103,GET /agent-hosts/@me/workspace-commands/next,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0249,http_endpoint,src/routes/workspace-review.ts,133,POST /agent-hosts/@me/workspace-commands/:commandId/result,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0250,ui_feature,agora-ui/src/features/account,1,account,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0251,ui_feature,agora-ui/src/features/admin,1,admin,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0252,ui_feature,agora-ui/src/features/agents,1,agents,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0253,ui_feature,agora-ui/src/features/auth,1,auth,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0254,ui_feature,agora-ui/src/features/canvas,1,canvas,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0255,ui_feature,agora-ui/src/features/live,1,live,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0256,ui_feature,agora-ui/src/features/messages,1,messages,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0257,ui_feature,agora-ui/src/features/moderation,1,moderation,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0258,ui_feature,agora-ui/src/features/servers,1,servers,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0259,ui_feature,agora-ui/src/features/settings,1,settings,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0260,ui_feature,agora-ui/src/features/setup,1,setup,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0261,ui_feature,agora-ui/src/features/shell,1,shell,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0262,ui_feature,agora-ui/src/features/tasks,1,tasks,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0263,ui_feature,agora-ui/src/features/voice,1,voice,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0264,test_anchor,agora-host/test/acp.test.ts,1,acp.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0265,test_anchor,agora-host/test/adapters.test.ts,1,adapters.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0266,test_anchor,agora-host/test/approvals.test.ts,1,approvals.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0267,test_anchor,agora-host/test/autostart.test.ts,1,autostart.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0268,test_anchor,agora-host/test/client.test.ts,1,client.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0269,test_anchor,agora-host/test/config.test.ts,1,config.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0270,test_anchor,agora-host/test/handoff.test.ts,1,handoff.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0271,test_anchor,agora-host/test/host.test.ts,1,host.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0272,test_anchor,agora-host/test/lurk-images.test.ts,1,lurk-images.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0273,test_anchor,agora-host/test/permissions.test.ts,1,permissions.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0274,test_anchor,agora-host/test/preview.test.ts,1,preview.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0275,test_anchor,agora-host/test/process.test.ts,1,process.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0276,test_anchor,agora-host/test/review.test.ts,1,review.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0277,test_anchor,agora-host/test/scheduler.test.ts,1,scheduler.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0278,test_anchor,agora-host/test/siwc.test.ts,1,siwc.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0279,test_anchor,agora-host/test/task-scope.test.ts,1,task-scope.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0280,test_anchor,agora-host/test/terms.test.ts,1,terms.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0281,test_anchor,agora-host/test/verify.test.ts,1,verify.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0282,test_anchor,agora-host/test/workspaces.test.ts,1,workspaces.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0283,test_anchor,agora-mcp/test/canvas-preview.test.ts,1,canvas-preview.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0284,test_anchor,agora-mcp/test/channel-list.test.ts,1,channel-list.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0285,test_anchor,agora-mcp/test/channel.test.ts,1,channel.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0286,test_anchor,agora-mcp/test/chat-wait.test.ts,1,chat-wait.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0287,test_anchor,agora-mcp/test/config.test.ts,1,config.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0288,test_anchor,agora-mcp/test/cursor.test.ts,1,cursor.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0289,test_anchor,agora-mcp/test/directors.test.ts,1,directors.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0290,test_anchor,agora-mcp/test/envelope.test.ts,1,envelope.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0291,test_anchor,agora-mcp/test/files.test.ts,1,files.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0292,test_anchor,agora-mcp/test/handoffs.test.ts,1,handoffs.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0293,test_anchor,agora-mcp/test/images.test.ts,1,images.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0294,test_anchor,agora-mcp/test/invites.test.ts,1,invites.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0295,test_anchor,agora-mcp/test/project.test.ts,1,project.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0296,test_anchor,agora-mcp/test/reservations.test.ts,1,reservations.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0297,test_anchor,agora-mcp/test/runtime.test.ts,1,runtime.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0298,test_anchor,agora-mcp/test/sessions.test.ts,1,sessions.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0299,test_anchor,agora-mcp/test/tasks.test.ts,1,tasks.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0300,test_anchor,agora-mcp/test/terminal-session.test.ts,1,terminal-session.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0301,test_anchor,agora-mcp/test/threads.test.ts,1,threads.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0302,test_anchor,agora-mcp/test/tools.test.ts,1,tools.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0303,test_anchor,agora-ui/src/features/account/PasskeySettings.test.tsx,1,PasskeySettings.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0304,test_anchor,agora-ui/src/features/admin/ProviderTerms.test.tsx,1,ProviderTerms.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0305,test_anchor,agora-ui/src/features/agents/ConsoleStrip.test.tsx,1,ConsoleStrip.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0306,test_anchor,agora-ui/src/features/agents/HandoffCard.test.tsx,1,HandoffCard.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0307,test_anchor,agora-ui/src/features/agents/LurkToggle.test.tsx,1,LurkToggle.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0308,test_anchor,agora-ui/src/features/agents/OwnSession.test.tsx,1,OwnSession.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0309,test_anchor,agora-ui/src/features/agents/RunActivity.test.tsx,1,RunActivity.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0310,test_anchor,agora-ui/src/features/agents/SessionWorkspace.test.tsx,1,SessionWorkspace.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0311,test_anchor,agora-ui/src/features/agents/TerminalSession.test.tsx,1,TerminalSession.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0312,test_anchor,agora-ui/src/features/agents/ToolApprovalCard.test.tsx,1,ToolApprovalCard.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0313,test_anchor,agora-ui/src/features/agents/agentSessions.test.ts,1,agentSessions.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0314,test_anchor,agora-ui/src/features/auth/LoginPage.test.tsx,1,LoginPage.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0315,test_anchor,agora-ui/src/features/canvas/Canvas.test.tsx,1,Canvas.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0316,test_anchor,agora-ui/src/features/messages/MentionEnter.test.tsx,1,MentionEnter.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0317,test_anchor,agora-ui/src/features/messages/MessageList.visibility.test.tsx,1,MessageList.visibility.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0318,test_anchor,agora-ui/src/features/messages/NewMessagesPill.test.tsx,1,NewMessagesPill.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0319,test_anchor,agora-ui/src/features/messages/ProjectPanel.test.tsx,1,ProjectPanel.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0320,test_anchor,agora-ui/src/features/messages/SystemNoticeRun.test.tsx,1,SystemNoticeRun.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0321,test_anchor,agora-ui/src/features/messages/noticeRunVirtualizer.test.ts,1,noticeRunVirtualizer.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0322,test_anchor,agora-ui/src/features/messages/shouldGroup.test.ts,1,shouldGroup.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0323,test_anchor,agora-ui/src/features/messages/systemNotices.test.ts,1,systemNotices.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0324,test_anchor,agora-ui/src/features/settings/ChatGPTPlanConnect.test.tsx,1,ChatGPTPlanConnect.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0325,test_anchor,agora-ui/src/features/settings/CreateAgentInviteModal.test.tsx,1,CreateAgentInviteModal.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0326,test_anchor,agora-ui/src/features/shell/AppShell.test.tsx,1,AppShell.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0327,test_anchor,agora-ui/src/features/shell/shellHistory.test.ts,1,shellHistory.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0328,test_anchor,agora-ui/src/features/tasks/TasksPanel.test.tsx,1,TasksPanel.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0329,test_anchor,agora-ui/src/features/voice/MicButton.test.tsx,1,MicButton.test.tsx,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0330,test_anchor,agora-ui/src/features/voice/speakable.test.ts,1,speakable.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0331,test_anchor,agora-ui/src/features/voice/voiceStore.test.ts,1,voiceStore.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0332,test_anchor,agora-ui/src/stores/authStore.restore.test.ts,1,authStore.restore.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0333,test_anchor,agora-ui/src/stores/authStore.test.ts,1,authStore.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0334,test_anchor,agora-ui/src/stores/draftStore.test.ts,1,draftStore.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0335,test_anchor,agora-ui/src/stores/messageStore.test.ts,1,messageStore.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0336,test_anchor,agora-ui/src/stores/uiStore.test.ts,1,uiStore.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0337,test_anchor,test/integration/acp-agents.integration.test.ts,1,acp-agents.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0338,test_anchor,test/integration/admin.integration.test.ts,1,admin.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0339,test_anchor,test/integration/agent-invites.integration.test.ts,1,agent-invites.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0340,test_anchor,test/integration/agent-permissions.integration.test.ts,1,agent-permissions.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0341,test_anchor,test/integration/agent-sessions.integration.test.ts,1,agent-sessions.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0342,test_anchor,test/integration/agora-mcp-package.integration.test.ts,1,agora-mcp-package.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0343,test_anchor,test/integration/agora-mcp.integration.test.ts,1,agora-mcp.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0344,test_anchor,test/integration/ai-assistant.integration.test.ts,1,ai-assistant.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0345,test_anchor,test/integration/ai-audit.integration.test.ts,1,ai-audit.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0346,test_anchor,test/integration/ai-decisions.integration.test.ts,1,ai-decisions.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0347,test_anchor,test/integration/ai-providers.integration.test.ts,1,ai-providers.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0348,test_anchor,test/integration/ai-streaming.integration.test.ts,1,ai-streaming.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0349,test_anchor,test/integration/assistant-routing.integration.test.ts,1,assistant-routing.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0350,test_anchor,test/integration/assistant-search.integration.test.ts,1,assistant-search.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0351,test_anchor,test/integration/audio-overview.integration.test.ts,1,audio-overview.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0352,test_anchor,test/integration/auth-phase1.integration.test.ts,1,auth-phase1.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0353,test_anchor,test/integration/auth.integration.test.ts,1,auth.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0354,test_anchor,test/integration/bot-coordination.integration.test.ts,1,bot-coordination.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0355,test_anchor,test/integration/bot-pause.integration.test.ts,1,bot-pause.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0356,test_anchor,test/integration/bots.integration.test.ts,1,bots.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0357,test_anchor,test/integration/canvas-preview.integration.test.ts,1,canvas-preview.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0358,test_anchor,test/integration/cap-gateway.integration.test.ts,1,cap-gateway.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0359,test_anchor,test/integration/channel-visibility.integration.test.ts,1,channel-visibility.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0360,test_anchor,test/integration/claude-channel.integration.test.ts,1,claude-channel.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0361,test_anchor,test/integration/cookie-session.integration.test.ts,1,cookie-session.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0362,test_anchor,test/integration/direct-agents.integration.test.ts,1,direct-agents.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0363,test_anchor,test/integration/file-image.integration.test.ts,1,file-image.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0364,test_anchor,test/integration/file-reservations.integration.test.ts,1,file-reservations.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0365,test_anchor,test/integration/file-search.integration.test.ts,1,file-search.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0366,test_anchor,test/integration/file-tagging.integration.test.ts,1,file-tagging.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0367,test_anchor,test/integration/files.integration.test.ts,1,files.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0368,test_anchor,test/integration/gateway-access.integration.test.ts,1,gateway-access.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0369,test_anchor,test/integration/handoffs.integration.test.ts,1,handoffs.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0370,test_anchor,test/integration/infra.integration.test.ts,1,infra.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0371,test_anchor,test/integration/instance.integration.test.ts,1,instance.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0372,test_anchor,test/integration/invites-cookie.integration.test.ts,1,invites-cookie.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0373,test_anchor,test/integration/key-fingerprint.integration.test.ts,1,key-fingerprint.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0374,test_anchor,test/integration/login-limit.integration.test.ts,1,login-limit.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0375,test_anchor,test/integration/lurk-images.integration.test.ts,1,lurk-images.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0376,test_anchor,test/integration/members.integration.test.ts,1,members.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0377,test_anchor,test/integration/mentions.integration.test.ts,1,mentions.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0378,test_anchor,test/integration/message-sanitize.integration.test.ts,1,message-sanitize.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0379,test_anchor,test/integration/message-ws-events.integration.test.ts,1,message-ws-events.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0380,test_anchor,test/integration/messages.integration.test.ts,1,messages.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0381,test_anchor,test/integration/passkeys.integration.test.ts,1,passkeys.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0382,test_anchor,test/integration/project-context.integration.test.ts,1,project-context.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0383,test_anchor,test/integration/protocol.integration.test.ts,1,protocol.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0384,test_anchor,test/integration/provider-terms.integration.test.ts,1,provider-terms.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0385,test_anchor,test/integration/request-lifecycle.integration.test.ts,1,request-lifecycle.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0386,test_anchor,test/integration/roles.integration.test.ts,1,roles.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0387,test_anchor,test/integration/runner-gateway.integration.test.ts,1,runner-gateway.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0388,test_anchor,test/integration/runtime-api.integration.test.ts,1,runtime-api.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0389,test_anchor,test/integration/runtime-tripwires.integration.test.ts,1,runtime-tripwires.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0390,test_anchor,test/integration/search-screening.integration.test.ts,1,search-screening.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0391,test_anchor,test/integration/servers.integration.test.ts,1,servers.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0392,test_anchor,test/integration/session-idle.integration.test.ts,1,session-idle.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0393,test_anchor,test/integration/session-revocation.integration.test.ts,1,session-revocation.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0394,test_anchor,test/integration/siwc-plan.integration.test.ts,1,siwc-plan.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0395,test_anchor,test/integration/storage-maintenance.integration.test.ts,1,storage-maintenance.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0396,test_anchor,test/integration/task-board.integration.test.ts,1,task-board.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0397,test_anchor,test/integration/terminal-sessions.integration.test.ts,1,terminal-sessions.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0398,test_anchor,test/integration/terms-watch.integration.test.ts,1,terms-watch.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0399,test_anchor,test/integration/threads.integration.test.ts,1,threads.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0400,test_anchor,test/integration/typing-presence.integration.test.ts,1,typing-presence.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0401,test_anchor,test/integration/unreads.integration.test.ts,1,unreads.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0402,test_anchor,test/integration/user-preferences.integration.test.ts,1,user-preferences.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0403,test_anchor,test/integration/users-search.integration.test.ts,1,users-search.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0404,test_anchor,test/integration/voice-hardening.integration.test.ts,1,voice-hardening.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0405,test_anchor,test/integration/voice.integration.test.ts,1,voice.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0406,test_anchor,test/integration/websocket.integration.test.ts,1,websocket.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0407,test_anchor,test/integration/workspace-review.integration.test.ts,1,workspace-review.integration.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0408,test_anchor,test/live/decisions.live.test.ts,1,decisions.live.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0409,test_anchor,test/sandbox/gateway-e2e.sandbox.test.ts,1,gateway-e2e.sandbox.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0410,test_anchor,test/sandbox/negative.sandbox.test.ts,1,negative.sandbox.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0411,test_anchor,test/sandbox/runner.sandbox.test.ts,1,runner.sandbox.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0412,test_anchor,test/sandbox/std.sandbox.test.ts,1,std.sandbox.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0413,test_anchor,test/unit/adapters.unit.test.ts,1,adapters.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0414,test_anchor,test/unit/agent-lurk.test.ts,1,agent-lurk.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0415,test_anchor,test/unit/agent-presence.test.ts,1,agent-presence.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0416,test_anchor,test/unit/audio-overview.unit.test.ts,1,audio-overview.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0417,test_anchor,test/unit/auth.unit.test.ts,1,auth.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0418,test_anchor,test/unit/channel-projects.unit.test.ts,1,channel-projects.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0419,test_anchor,test/unit/config-production.unit.test.ts,1,config-production.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0420,test_anchor,test/unit/decide.unit.test.ts,1,decide.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0421,test_anchor,test/unit/encryption.unit.test.ts,1,encryption.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0422,test_anchor,test/unit/file-image.test.ts,1,file-image.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0423,test_anchor,test/unit/file-reservations.unit.test.ts,1,file-reservations.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0424,test_anchor,test/unit/mp3.unit.test.ts,1,mp3.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0425,test_anchor,test/unit/nginx-routes.unit.test.ts,1,nginx-routes.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0426,test_anchor,test/unit/permissions.unit.test.ts,1,permissions.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0427,test_anchor,test/unit/protocol.unit.test.ts,1,protocol.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0428,test_anchor,test/unit/provider-terms.unit.test.ts,1,provider-terms.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0429,test_anchor,test/unit/providers.unit.test.ts,1,providers.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0430,test_anchor,test/unit/report.unit.test.ts,1,report.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0431,test_anchor,test/unit/runtime.unit.test.ts,1,runtime.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0432,test_anchor,test/unit/sanitize-text.unit.test.ts,1,sanitize-text.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0433,test_anchor,test/unit/speech.unit.test.ts,1,speech.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0434,test_anchor,test/unit/storage.unit.test.ts,1,storage.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0435,test_anchor,test/unit/terms-watch.unit.test.ts,1,terms-watch.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0436,test_anchor,test/unit/text-extract.unit.test.ts,1,text-extract.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0437,test_anchor,test/unit/ulid.unit.test.ts,1,ulid.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0438,test_anchor,test/unit/url-guard.unit.test.ts,1,url-guard.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0439,test_anchor,test/unit/voice.unit.test.ts,1,voice.unit.test.ts,,unmapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0001,mcp_tool,agora-mcp/src/tools.ts,377,chat_send,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0002,mcp_tool,agora-mcp/src/tools.ts,408,chat_read,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0003,mcp_tool,agora-mcp/src/tools.ts,436,who_directs,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0004,mcp_tool,agora-mcp/src/tools.ts,451,project_context,UI-06.project-pin;UI-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0005,mcp_tool,agora-mcp/src/tools.ts,464,channel_list,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0006,mcp_tool,agora-mcp/src/tools.ts,491,chat_wait,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0007,mcp_tool,agora-mcp/src/tools.ts,566,chat_history,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0008,mcp_tool,agora-mcp/src/tools.ts,594,thread_start,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0009,mcp_tool,agora-mcp/src/tools.ts,615,thread_list,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0010,mcp_tool,agora-mcp/src/tools.ts,635,thread_close,UI-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0011,mcp_tool,agora-mcp/src/tools.ts,660,file_reserve,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0012,mcp_tool,agora-mcp/src/tools.ts,668,file_renew,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0013,mcp_tool,agora-mcp/src/tools.ts,674,file_release,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0014,mcp_tool,agora-mcp/src/tools.ts,680,file_reservations,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0015,mcp_tool,agora-mcp/src/tools.ts,696,handoff_offer,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0016,mcp_tool,agora-mcp/src/tools.ts,707,handoff_accept,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0017,mcp_tool,agora-mcp/src/tools.ts,717,handoff_decline,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0018,mcp_tool,agora-mcp/src/tools.ts,725,handoff_cancel,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0019,mcp_tool,agora-mcp/src/tools.ts,766,session_list,AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0020,mcp_tool,agora-mcp/src/tools.ts,785,session_start,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0021,mcp_tool,agora-mcp/src/tools.ts,804,session_lurk,AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0022,mcp_tool,agora-mcp/src/tools.ts,816,session_end,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0023,mcp_tool,agora-mcp/src/tools.ts,830,session_wake,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0024,mcp_tool,agora-mcp/src/tools.ts,855,task_list,UI-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0025,mcp_tool,agora-mcp/src/tools.ts,868,task_create,UI-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0026,mcp_tool,agora-mcp/src/tools.ts,885,task_update,UI-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0027,mcp_tool,agora-mcp/src/tools.ts,905,task_start,UI-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0028,mcp_tool,agora-mcp/src/tools.ts,919,subtask_start,AG-08;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0029,mcp_tool,agora-mcp/src/tools.ts,948,file_search,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0030,mcp_tool,agora-mcp/src/tools.ts,964,file_read,UI-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0031,mcp_tool,agora-mcp/src/tools.ts,980,canvas_publish,UI-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0032,mcp_tool,agora-mcp/src/tools.ts,1007,canvas_read,UI-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0033,mcp_tool,agora-mcp/src/tools.ts,1025,browser_preview,AG-08,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0034,mcp_tool,agora-mcp/src/tools.ts,1060,runtime_exec,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0035,mcp_tool,agora-mcp/src/tools.ts,1087,runtime_status,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0036,route_module,src/routes/admin.ts,1,admin.ts,ID-06;ID-01;ID-02;SEC-02;UI-03;OP-06;OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0037,http_endpoint,src/routes/admin.ts,25,GET /admin/stats,ID-06.admin-reload;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0038,http_endpoint,src/routes/admin.ts,44,GET /admin/pending-users,ID-06.admin-reload;ID-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0039,http_endpoint,src/routes/admin.ts,81,POST /admin/approve-user/:id,ID-01;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0040,http_endpoint,src/routes/admin.ts,137,POST /admin/reject-user/:id,ID-01;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0041,http_endpoint,src/routes/admin.ts,166,GET /admin/users,ID-06.admin-reload;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0042,http_endpoint,src/routes/admin.ts,279,POST /admin/users/:id/ban,ID-06;ID-02;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0043,http_endpoint,src/routes/admin.ts,284,PATCH /admin/instance,ID-01;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0044,http_endpoint,src/routes/admin.ts,359,GET /admin/settings/files,UI-03;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0045,http_endpoint,src/routes/admin.ts,368,PATCH /admin/settings/files,UI-03;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0046,http_endpoint,src/routes/admin.ts,417,GET /admin/settings/ai,OP-06,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0047,http_endpoint,src/routes/admin.ts,426,PATCH /admin/settings/ai,OP-06,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0048,http_endpoint,src/routes/admin.ts,451,GET /admin/settings/runtime,OP-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0049,http_endpoint,src/routes/admin.ts,460,PATCH /admin/settings/runtime,OP-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0050,http_endpoint,src/routes/admin.ts,496,GET /admin/storage,ID-06.admin-vary,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0051,route_module,src/routes/agent-commands.ts,1,agent-commands.ts,AG-01;AG-10;SEC-01;UI-02;AG-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0052,http_endpoint,src/routes/agent-commands.ts,153,POST /channels/:id/agent-commands,AG-01;AG-10;SEC-01;UI-02.notice-drawer;AG-04.siwc-stop-before,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0053,route_module,src/routes/agent-hosts.ts,1,agent-hosts.ts,AG-01;SEC-01;AG-10;ID-05;AG-04;AG-07;OP-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0054,http_endpoint,src/routes/agent-hosts.ts,124,POST /servers/:serverId/agent-hosts,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0055,http_endpoint,src/routes/agent-hosts.ts,148,GET /servers/:serverId/agent-hosts,AG-10.agents-page;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0056,http_endpoint,src/routes/agent-hosts.ts,159,DELETE /servers/:serverId/agent-hosts/:hostId,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0057,http_endpoint,src/routes/agent-hosts.ts,175,POST /servers/:serverId/agent-profiles,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0058,http_endpoint,src/routes/agent-hosts.ts,214,GET /servers/:serverId/agent-profiles,AG-10.agents-page,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0059,http_endpoint,src/routes/agent-hosts.ts,226,PATCH /servers/:serverId/agent-profiles/:profileId,AG-04;AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0060,http_endpoint,src/routes/agent-hosts.ts,296,DELETE /servers/:serverId/agent-profiles/:profileId,AG-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0061,http_endpoint,src/routes/agent-hosts.ts,316,POST /servers/:serverId/agents,AG-10.agents-page;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0062,http_endpoint,src/routes/agent-hosts.ts,386,POST /agent-hosts/@me/profiles,AG-10.agents-page;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0063,http_endpoint,src/routes/agent-hosts.ts,413,POST /agent-hosts/@me/workspaces/reconcile,AG-07,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0064,http_endpoint,src/routes/agent-hosts.ts,428,POST /agent-hosts/@me/workspaces/warning,AG-07,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0065,http_endpoint,src/routes/agent-hosts.ts,445,GET /agent-hosts/@me/runs/next,OP-02.crash-before-claim;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0066,http_endpoint,src/routes/agent-hosts.ts,479,POST /agent-hosts/@me/runs/:runId/heartbeat,OP-02.crash-before-claim;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0067,http_endpoint,src/routes/agent-hosts.ts,500,POST /agent-hosts/@me/runs/:runId/tool-requests,AG-04.siwc-inspect;AG-04.siwc-file;AG-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0068,http_endpoint,src/routes/agent-hosts.ts,522,POST /agent-hosts/@me/runs/:runId/tool-requests/:requestId,AG-04.siwc-stop-before;AG-04.siwc-stop-between;AG-04.siwc-timeout;AG-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0069,http_endpoint,src/routes/agent-hosts.ts,539,POST /agent-hosts/@me/runs/:runId/complete,OP-02.crash-after-effect;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0070,http_endpoint,src/routes/agent-hosts.ts,569,POST /agent-hosts/@me/runs/:runId/fail,OP-02;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0071,route_module,src/routes/agent-images.ts,1,agent-images.ts,UI-04;SEC-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0072,http_endpoint,src/routes/agent-images.ts,33,POST /agent-hosts/@me/runs/:runId/images/discover,UI-04;SEC-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0073,http_endpoint,src/routes/agent-images.ts,47,POST /agent-hosts/@me/runs/:runId/images,UI-04;SEC-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0074,route_module,src/routes/agent-invites.ts,1,agent-invites.ts,ID-05;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0075,http_endpoint,src/routes/agent-invites.ts,11,POST /servers/:serverId/agent-invites,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0076,http_endpoint,src/routes/agent-invites.ts,58,POST /agent-invites/redeem,ID-05;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0077,route_module,src/routes/agent-plans.ts,1,agent-plans.ts,AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0078,http_endpoint,src/routes/agent-plans.ts,67,GET /servers/:serverId/agent-plans,AG-10.agents-page,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0079,http_endpoint,src/routes/agent-plans.ts,80,POST /servers/:serverId/agent-profiles/:profileId/plan,AG-10.agents-page;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0080,http_endpoint,src/routes/agent-plans.ts,123,GET /agent-hosts/@me/plan-requests/next,AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0081,http_endpoint,src/routes/agent-plans.ts,141,POST /agent-hosts/@me/plans/:name,AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0082,route_module,src/routes/agent-tool-requests.ts,1,agent-tool-requests.ts,AG-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0083,http_endpoint,src/routes/agent-tool-requests.ts,38,POST /channels/:id/agent-tool-requests/:requestId,AG-04.siwc-once;AG-04.siwc-always;AG-04.siwc-deny;AG-04.siwc-file;AG-04.siwc-director;AG-04.siwc-race;AG-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0084,http_endpoint,src/routes/agent-tool-requests.ts,163,POST /channels/:id/agent-run-approvals/:approvalId,AG-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0085,route_module,src/routes/ai-config.ts,1,ai-config.ts,AG-02;OP-06;SEC-04;OP-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0086,http_endpoint,src/routes/ai-config.ts,111,GET /servers/:serverId/ai-config,AG-02;OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0087,http_endpoint,src/routes/ai-config.ts,148,PUT /servers/:serverId/ai-config,AG-02;OP-06;SEC-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0088,http_endpoint,src/routes/ai-config.ts,246,PATCH /servers/:serverId/ai-config,AG-02;OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0089,http_endpoint,src/routes/ai-config.ts,298,POST /servers/:serverId/ai-config/assistant,AG-02;OP-03.provider-down,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0090,http_endpoint,src/routes/ai-config.ts,309,POST /servers/:serverId/ai-config/test,OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0091,http_endpoint,src/routes/ai-config.ts,330,GET /servers/:serverId/ai-config/usage,AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0092,route_module,src/routes/ai-decisions.ts,1,ai-decisions.ts,AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0093,http_endpoint,src/routes/ai-decisions.ts,85,GET /servers/:serverId/ai/decisions,AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0094,http_endpoint,src/routes/ai-decisions.ts,93,PATCH /servers/:serverId/ai/decisions,AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0095,route_module,src/routes/ai-providers.ts,1,ai-providers.ts,OP-06;SEC-04;OP-03;AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0096,http_endpoint,src/routes/ai-providers.ts,57,GET /servers/:serverId/ai/adapters,OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0097,http_endpoint,src/routes/ai-providers.ts,63,GET /servers/:serverId/ai/providers,OP-06;SEC-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0098,http_endpoint,src/routes/ai-providers.ts,78,POST /servers/:serverId/ai/providers,OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0099,http_endpoint,src/routes/ai-providers.ts,129,PATCH /servers/:serverId/ai/providers/:providerId,OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0100,http_endpoint,src/routes/ai-providers.ts,200,DELETE /servers/:serverId/ai/providers/:providerId,OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0101,http_endpoint,src/routes/ai-providers.ts,215,POST /servers/:serverId/ai/providers/:providerId/test,OP-06;OP-03.provider-down,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0102,http_endpoint,src/routes/ai-providers.ts,253,GET /servers/:serverId/ai/routes,OP-06;AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0103,http_endpoint,src/routes/ai-providers.ts,266,PUT /servers/:serverId/ai/routes/:capability,OP-06;AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0104,http_endpoint,src/routes/ai-providers.ts,351,DELETE /servers/:serverId/ai/routes/:capability,OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0105,http_endpoint,src/routes/ai-providers.ts,372,GET /servers/:serverId/ai/changes,AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0106,http_endpoint,src/routes/ai-providers.ts,379,GET /servers/:serverId/ai/usage,AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0107,route_module,src/routes/artifacts.ts,1,artifacts.ts,UI-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0108,http_endpoint,src/routes/artifacts.ts,11,GET /channels/:id/artifacts,UI-05.canvas-render,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0109,http_endpoint,src/routes/artifacts.ts,25,GET /channels/:id/artifacts/:artifactId,UI-05.canvas-render;UI-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0110,http_endpoint,src/routes/artifacts.ts,43,GET /channels/:id/artifacts/:artifactId/versions/:version,UI-05.canvas-render;UI-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0111,route_module,src/routes/auth.ts,1,auth.ts,ID-01;ID-02;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0112,http_endpoint,src/routes/auth.ts,12,POST /auth/register,ID-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0113,http_endpoint,src/routes/auth.ts,141,POST /auth/login,ID-01.login;ID-01.login-email;ID-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0114,http_endpoint,src/routes/auth.ts,238,POST /auth/logout,ID-02.cookie,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0115,http_endpoint,src/routes/auth.ts,267,POST /auth/logout-all,ID-02;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0116,http_endpoint,src/routes/auth.ts,276,GET /auth/session,ID-02.idle-renew;ID-02.cookie,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0117,route_module,src/routes/bots.ts,1,bots.ts,ID-05;SEC-01;SEC-02;ID-04;AG-01;AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0118,http_endpoint,src/routes/bots.ts,185,POST /servers/:serverId/bots,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0119,http_endpoint,src/routes/bots.ts,235,GET /servers/:serverId/bots,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0120,http_endpoint,src/routes/bots.ts,264,GET /servers/:serverId/bots/:id,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0121,http_endpoint,src/routes/bots.ts,314,PATCH /servers/:serverId/bots/:id,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0122,http_endpoint,src/routes/bots.ts,374,PATCH /servers/:serverId/bots/:id/pause,ID-05;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0123,http_endpoint,src/routes/bots.ts,419,DELETE /servers/:serverId/bots/:id,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0124,http_endpoint,src/routes/bots.ts,462,POST /servers/:serverId/bots/:id/tokens,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0125,http_endpoint,src/routes/bots.ts,496,GET /servers/:serverId/bots/:id/tokens,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0126,http_endpoint,src/routes/bots.ts,524,DELETE /servers/:serverId/bots/:id/tokens/:tokenId,ID-05;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0127,http_endpoint,src/routes/bots.ts,548,POST /channels/:id/bots/:botId,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0128,http_endpoint,src/routes/bots.ts,577,PUT /channels/:id/bots/:botId/direct,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0129,http_endpoint,src/routes/bots.ts,609,DELETE /channels/:id/bots/:botId,ID-05;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0130,http_endpoint,src/routes/bots.ts,637,PATCH /channels/:id/bot-config,AG-01;ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0131,http_endpoint,src/routes/bots.ts,690,GET /bots/@me,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0132,http_endpoint,src/routes/bots.ts,734,GET /bots/@me/cursors,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0133,http_endpoint,src/routes/bots.ts,760,PUT /bots/@me/cursors/:channelId,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0134,http_endpoint,src/routes/bots.ts,805,GET /bots/@me/thread-cursors,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0135,http_endpoint,src/routes/bots.ts,832,PUT /bots/@me/thread-cursors/:threadId,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0136,route_module,src/routes/browser-previews.ts,1,browser-previews.ts,AG-08;SEC-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0137,http_endpoint,src/routes/browser-previews.ts,59,POST /channels/:id/browser-previews,AG-08;SEC-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0138,http_endpoint,src/routes/browser-previews.ts,107,GET /channels/:id/browser-previews/:previewId,AG-08,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0139,http_endpoint,src/routes/browser-previews.ts,118,GET /channels/:id/browser-previews/:previewId/screenshot,AG-08,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0140,http_endpoint,src/routes/browser-previews.ts,131,GET /agent-hosts/@me/browser-previews/next,AG-08,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0141,http_endpoint,src/routes/browser-previews.ts,163,POST /agent-hosts/@me/browser-previews/:previewId/result,AG-08,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0142,route_module,src/routes/channel-projects.ts,1,channel-projects.ts,UI-06;AG-10;AG-08;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0143,http_endpoint,src/routes/channel-projects.ts,41,GET /channels/:id/project,UI-06.project-pin,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0144,http_endpoint,src/routes/channel-projects.ts,53,PUT /channels/:id/project,UI-06.project-pin;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0145,http_endpoint,src/routes/channel-projects.ts,89,PUT /channels/:id/project/verify,AG-08;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0146,route_module,src/routes/channels.ts,1,channels.ts,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0147,http_endpoint,src/routes/channels.ts,7,POST /servers/:id/channels,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0148,route_module,src/routes/directors.ts,1,directors.ts,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0149,http_endpoint,src/routes/directors.ts,9,GET /channels/:id/directors,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0150,route_module,src/routes/file-reservations.ts,1,file-reservations.ts,AG-05;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0151,http_endpoint,src/routes/file-reservations.ts,37,GET /channels/:id/file-reservations,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0152,http_endpoint,src/routes/file-reservations.ts,61,POST /channels/:id/file-reservations,AG-05;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0153,route_module,src/routes/file-tags.ts,1,file-tags.ts,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0154,http_endpoint,src/routes/file-tags.ts,29,GET /servers/:serverId/file-tags,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0155,http_endpoint,src/routes/file-tags.ts,39,GET /servers/:serverId/ai/tags,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0156,http_endpoint,src/routes/file-tags.ts,48,POST /servers/:serverId/ai/tags,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0157,http_endpoint,src/routes/file-tags.ts,96,PATCH /servers/:serverId/ai/tags/:tagId,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0158,http_endpoint,src/routes/file-tags.ts,156,DELETE /servers/:serverId/ai/tags/:tagId,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0159,http_endpoint,src/routes/file-tags.ts,169,POST /servers/:serverId/ai/tags/retag,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0160,route_module,src/routes/files.ts,1,files.ts,UI-03;OP-03;OP-08;UI-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0161,http_endpoint,src/routes/files.ts,21,POST /files/upload,UI-03.upload-image;UI-03.upload-pdf;UI-03.magic-bytes;OP-03.storage-down;OP-08.soak,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0162,http_endpoint,src/routes/files.ts,66,GET /channels/:id/files/search,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0163,http_endpoint,src/routes/files.ts,101,GET /files/:fileId/text,UI-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0164,http_endpoint,src/routes/files.ts,134,GET /files/:fileId/image,UI-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0165,http_endpoint,src/routes/files.ts,155,GET /files/:fileId,UI-03.upload-image;UI-03.upload-pdf;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0166,http_endpoint,src/routes/files.ts,219,DELETE /files/:fileId,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0167,route_module,src/routes/handoffs.ts,1,handoffs.ts,AG-05;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0168,http_endpoint,src/routes/handoffs.ts,35,GET /channels/:id/threads/:threadId/handoffs,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0169,http_endpoint,src/routes/handoffs.ts,41,POST /channels/:id/handoffs,AG-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0170,http_endpoint,src/routes/handoffs.ts,54,POST /channels/:id/handoffs/:offerId,AG-05;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0171,route_module,src/routes/instance.ts,1,instance.ts,ID-01;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0172,http_endpoint,src/routes/instance.ts,12,GET /instance/status,ID-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0173,http_endpoint,src/routes/instance.ts,33,POST /instance/setup,ID-01;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0174,route_module,src/routes/messages.ts,1,messages.ts,UI-01;UI-05;SEC-01;OP-03;OP-08;UI-02;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0175,http_endpoint,src/routes/messages.ts,20,POST /channels/:id/messages,UI-01.send-live;UI-01.mention-case;UI-05.canvas-render;SEC-01;OP-03.db-down;OP-08.soak,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0176,http_endpoint,src/routes/messages.ts,322,GET /channels/:id/messages,UI-01.send-live;UI-01.mention-case;UI-02.virtualizer,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0177,http_endpoint,src/routes/messages.ts,420,PATCH /channels/:id/messages/:msgId,UI-01;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0178,http_endpoint,src/routes/messages.ts,492,DELETE /channels/:id/messages/:msgId,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0179,route_module,src/routes/passkeys.ts,1,passkeys.ts,ID-03;OP-03;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0180,http_endpoint,src/routes/passkeys.ts,76,GET /auth/passkeys,ID-03.passkey,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0181,http_endpoint,src/routes/passkeys.ts,87,POST /auth/passkeys/register/options,ID-03.passkey;OP-03.redis-down,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0182,http_endpoint,src/routes/passkeys.ts,125,POST /auth/passkeys/register/verify,ID-03.passkey,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0183,http_endpoint,src/routes/passkeys.ts,187,DELETE /auth/passkeys/:id,ID-03.passkey,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0184,http_endpoint,src/routes/passkeys.ts,204,POST /auth/passkeys/login/options,ID-03.passkey;OP-03.redis-down,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0185,http_endpoint,src/routes/passkeys.ts,246,POST /auth/passkeys/login/verify,ID-03.passkey;SEC-03;OP-03.redis-down,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0186,route_module,src/routes/permission-relays.ts,1,permission-relays.ts,AG-09;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0187,http_endpoint,src/routes/permission-relays.ts,35,POST /channels/:id/permission-relays,AG-09;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0188,http_endpoint,src/routes/permission-relays.ts,109,GET /channels/:id/permission-relays/:requestId,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0189,http_endpoint,src/routes/permission-relays.ts,124,POST /channels/:id/permission-relays/:requestId,AG-09;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0190,route_module,src/routes/roles.ts,1,roles.ts,ID-04;SEC-01;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0191,http_endpoint,src/routes/roles.ts,120,GET /servers/:serverId/roles,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0192,http_endpoint,src/routes/roles.ts,150,POST /servers/:serverId/roles,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0193,http_endpoint,src/routes/roles.ts,217,PATCH /servers/:serverId/roles/:roleId,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0194,http_endpoint,src/routes/roles.ts,315,DELETE /servers/:serverId/roles/:roleId,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0195,http_endpoint,src/routes/roles.ts,346,PUT /servers/:serverId/members/:userId/roles/:roleId,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0196,http_endpoint,src/routes/roles.ts,399,DELETE /servers/:serverId/members/:userId/roles/:roleId,ID-04;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0197,http_endpoint,src/routes/roles.ts,422,GET /channels/:channelId/overrides,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0198,http_endpoint,src/routes/roles.ts,463,PUT /channels/:channelId/overrides/roles/:roleId,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0199,http_endpoint,src/routes/roles.ts,522,DELETE /channels/:channelId/overrides/roles/:roleId,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0200,http_endpoint,src/routes/roles.ts,546,PUT /channels/:channelId/overrides/members/:userId,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0201,http_endpoint,src/routes/roles.ts,605,DELETE /channels/:channelId/overrides/members/:userId,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0202,route_module,src/routes/runtime.ts,1,runtime.ts,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0203,http_endpoint,src/routes/runtime.ts,68,POST /runtime/runs,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0204,http_endpoint,src/routes/runtime.ts,114,GET /runtime/runs/:id,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0205,http_endpoint,src/routes/runtime.ts,119,GET /runtime/runs/:id/code,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0206,http_endpoint,src/routes/runtime.ts,145,PATCH /servers/:serverId/bots/:id/runtime,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0207,route_module,src/routes/servers.ts,1,servers.ts,ID-04;UI-01;ID-06;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0208,http_endpoint,src/routes/servers.ts,11,POST /servers,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0209,http_endpoint,src/routes/servers.ts,76,GET /servers/:id/channels,ID-04;UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0210,http_endpoint,src/routes/servers.ts,108,POST /servers/:id/invites,ID-04.invite-dialog,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0211,http_endpoint,src/routes/servers.ts,135,GET /servers/:id/members,ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0212,http_endpoint,src/routes/servers.ts,179,GET /servers/:id/access,ID-06;ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0213,http_endpoint,src/routes/servers.ts,216,POST /invites/:code,ID-04;SEC-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0214,route_module,src/routes/subtasks.ts,1,subtasks.ts,AG-08;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0215,http_endpoint,src/routes/subtasks.ts,32,POST /channels/:id/subtasks,AG-08;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0216,route_module,src/routes/task-board.ts,1,task-board.ts,UI-06;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0217,http_endpoint,src/routes/task-board.ts,143,GET /channels/:id/tasks,UI-06.task-crud,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0218,http_endpoint,src/routes/task-board.ts,156,POST /channels/:id/tasks,UI-06.task-crud,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0219,route_module,src/routes/terms-watch.ts,1,terms-watch.ts,ID-06;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0220,http_endpoint,src/routes/terms-watch.ts,12,GET /terms-watch,ID-06.provider-terms;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0221,http_endpoint,src/routes/terms-watch.ts,27,POST /terms-watch/documents,AG-10;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0222,http_endpoint,src/routes/terms-watch.ts,44,PATCH /terms-watch/documents/:id,AG-10;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0223,http_endpoint,src/routes/terms-watch.ts,56,DELETE /terms-watch/documents/:id,AG-10;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0224,http_endpoint,src/routes/terms-watch.ts,61,PATCH /terms-watch/settings,AG-10;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0225,http_endpoint,src/routes/terms-watch.ts,78,POST /terms-watch/check,ID-06.provider-terms,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0226,http_endpoint,src/routes/terms-watch.ts,83,GET /terms-watch/documents/:id/changes,AG-10;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0227,http_endpoint,src/routes/terms-watch.ts,91,POST /terms-watch/changes/:id/acknowledge,AG-10;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0228,route_module,src/routes/threads.ts,1,threads.ts,UI-01;UI-08;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0229,http_endpoint,src/routes/threads.ts,20,POST /channels/:id/messages/:msgId/replies,UI-01.thread-wake;UI-08.mobile-thread,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0230,http_endpoint,src/routes/threads.ts,290,GET /channels/:id/messages/:msgId/replies,UI-01.thread-wake,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0231,http_endpoint,src/routes/threads.ts,397,GET /channels/:id/threads,UI-01.thread-wake,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0232,http_endpoint,src/routes/threads.ts,537,PATCH /channels/:id/messages/:msgId/thread,UI-01.thread-wake;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0233,route_module,src/routes/unreads.ts,1,unreads.ts,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0234,http_endpoint,src/routes/unreads.ts,8,PUT /channels/:channelId/ack,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0235,http_endpoint,src/routes/unreads.ts,54,GET /channels/:channelId/unreads,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0236,http_endpoint,src/routes/unreads.ts,99,GET /unreads,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0237,route_module,src/routes/users.ts,1,users.ts,SEC-01;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0238,http_endpoint,src/routes/users.ts,7,GET /users/search,SEC-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0239,http_endpoint,src/routes/users.ts,41,GET /users/@me/preferences,ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0240,http_endpoint,src/routes/users.ts,49,PATCH /users/@me/preferences,ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0241,route_module,src/routes/voice.ts,1,voice.ts,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0242,http_endpoint,src/routes/voice.ts,159,GET /servers/:serverId/ai/voice,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0243,http_endpoint,src/routes/voice.ts,166,PATCH /servers/:serverId/ai/voice,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0244,http_endpoint,src/routes/voice.ts,204,GET /channels/:id/voice,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0245,http_endpoint,src/routes/voice.ts,220,POST /channels/:id/voice/transcribe,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0246,http_endpoint,src/routes/voice.ts,291,POST /channels/:id/messages/:msgId/speech,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0247,route_module,src/routes/workspace-review.ts,1,workspace-review.ts,AG-07;OP-02;SEC-05;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0248,http_endpoint,src/routes/workspace-review.ts,103,GET /agent-hosts/@me/workspace-commands/next,AG-07;OP-02.workspace-cmd-crash,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0249,http_endpoint,src/routes/workspace-review.ts,133,POST /agent-hosts/@me/workspace-commands/:commandId/result,AG-07;OP-02.workspace-cmd-crash,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0250,ui_feature,agora-ui/src/features/account,1,account,ID-03.passkey;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0251,ui_feature,agora-ui/src/features/admin,1,admin,ID-06.admin-reload;ID-06.provider-terms;ID-06.admin-vary,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0252,ui_feature,agora-ui/src/features/agents,1,agents,AG-10.agents-page;AG-01;AG-04;AG-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0253,ui_feature,agora-ui/src/features/auth,1,auth,ID-01.login;ID-01.login-email;ID-02.cookie,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0254,ui_feature,agora-ui/src/features/canvas,1,canvas,UI-05.canvas-render;UI-05.canvas-escape,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0255,ui_feature,agora-ui/src/features/live,1,live,UI-01.mention-enter;UI-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0256,ui_feature,agora-ui/src/features/messages,1,messages,UI-01.send-live;UI-02.notice-drawer;UI-02.virtualizer;UI-03.upload-image,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0257,ui_feature,agora-ui/src/features/moderation,1,moderation,ID-04;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0258,ui_feature,agora-ui/src/features/servers,1,servers,ID-04.invite-dialog;ID-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0259,ui_feature,agora-ui/src/features/settings,1,settings,AG-10.agents-page;ID-04;ID-05;AG-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0260,ui_feature,agora-ui/src/features/setup,1,setup,ID-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0261,ui_feature,agora-ui/src/features/shell,1,shell,UI-08.mobile-nav;UI-08.mobile-thread,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0262,ui_feature,agora-ui/src/features/tasks,1,tasks,UI-06.task-crud,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0263,ui_feature,agora-ui/src/features/voice,1,voice,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0264,test_anchor,agora-host/test/acp.test.ts,1,acp.test.ts,AG-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0265,test_anchor,agora-host/test/adapters.test.ts,1,adapters.test.ts,AG-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0266,test_anchor,agora-host/test/approvals.test.ts,1,approvals.test.ts,AG-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0267,test_anchor,agora-host/test/autostart.test.ts,1,autostart.test.ts,OP-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0268,test_anchor,agora-host/test/client.test.ts,1,client.test.ts,OP-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0269,test_anchor,agora-host/test/config.test.ts,1,config.test.ts,OP-04;AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0270,test_anchor,agora-host/test/handoff.test.ts,1,handoff.test.ts,AG-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0271,test_anchor,agora-host/test/host.test.ts,1,host.test.ts,OP-04.host-version;OP-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0272,test_anchor,agora-host/test/lurk-images.test.ts,1,lurk-images.test.ts,UI-04;AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0273,test_anchor,agora-host/test/permissions.test.ts,1,permissions.test.ts,AG-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0274,test_anchor,agora-host/test/preview.test.ts,1,preview.test.ts,AG-08,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0275,test_anchor,agora-host/test/process.test.ts,1,process.test.ts,OP-02;SEC-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0276,test_anchor,agora-host/test/review.test.ts,1,review.test.ts,AG-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0277,test_anchor,agora-host/test/scheduler.test.ts,1,scheduler.test.ts,OP-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0278,test_anchor,agora-host/test/siwc.test.ts,1,siwc.test.ts,AG-10;AG-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0279,test_anchor,agora-host/test/task-scope.test.ts,1,task-scope.test.ts,UI-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0280,test_anchor,agora-host/test/terms.test.ts,1,terms.test.ts,AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0281,test_anchor,agora-host/test/verify.test.ts,1,verify.test.ts,AG-08,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0282,test_anchor,agora-host/test/workspaces.test.ts,1,workspaces.test.ts,AG-06;AG-07;SEC-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0283,test_anchor,agora-mcp/test/canvas-preview.test.ts,1,canvas-preview.test.ts,UI-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0284,test_anchor,agora-mcp/test/channel-list.test.ts,1,channel-list.test.ts,ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0285,test_anchor,agora-mcp/test/channel.test.ts,1,channel.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0286,test_anchor,agora-mcp/test/chat-wait.test.ts,1,chat-wait.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0287,test_anchor,agora-mcp/test/config.test.ts,1,config.test.ts,ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0288,test_anchor,agora-mcp/test/cursor.test.ts,1,cursor.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0289,test_anchor,agora-mcp/test/directors.test.ts,1,directors.test.ts,ID-04;SEC-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0290,test_anchor,agora-mcp/test/envelope.test.ts,1,envelope.test.ts,SEC-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0291,test_anchor,agora-mcp/test/files.test.ts,1,files.test.ts,UI-03;UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0292,test_anchor,agora-mcp/test/handoffs.test.ts,1,handoffs.test.ts,AG-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0293,test_anchor,agora-mcp/test/images.test.ts,1,images.test.ts,UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0294,test_anchor,agora-mcp/test/invites.test.ts,1,invites.test.ts,ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0295,test_anchor,agora-mcp/test/project.test.ts,1,project.test.ts,UI-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0296,test_anchor,agora-mcp/test/reservations.test.ts,1,reservations.test.ts,AG-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0297,test_anchor,agora-mcp/test/runtime.test.ts,1,runtime.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0298,test_anchor,agora-mcp/test/sessions.test.ts,1,sessions.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0299,test_anchor,agora-mcp/test/tasks.test.ts,1,tasks.test.ts,UI-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0300,test_anchor,agora-mcp/test/terminal-session.test.ts,1,terminal-session.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0301,test_anchor,agora-mcp/test/threads.test.ts,1,threads.test.ts,UI-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0302,test_anchor,agora-mcp/test/tools.test.ts,1,tools.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0303,test_anchor,agora-ui/src/features/account/PasskeySettings.test.tsx,1,PasskeySettings.test.tsx,ID-03.passkey,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0304,test_anchor,agora-ui/src/features/admin/ProviderTerms.test.tsx,1,ProviderTerms.test.tsx,ID-06.provider-terms,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0305,test_anchor,agora-ui/src/features/agents/ConsoleStrip.test.tsx,1,ConsoleStrip.test.tsx,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0306,test_anchor,agora-ui/src/features/agents/HandoffCard.test.tsx,1,HandoffCard.test.tsx,AG-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0307,test_anchor,agora-ui/src/features/agents/LurkToggle.test.tsx,1,LurkToggle.test.tsx,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0308,test_anchor,agora-ui/src/features/agents/OwnSession.test.tsx,1,OwnSession.test.tsx,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0309,test_anchor,agora-ui/src/features/agents/RunActivity.test.tsx,1,RunActivity.test.tsx,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0310,test_anchor,agora-ui/src/features/agents/SessionWorkspace.test.tsx,1,SessionWorkspace.test.tsx,AG-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0311,test_anchor,agora-ui/src/features/agents/TerminalSession.test.tsx,1,TerminalSession.test.tsx,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0312,test_anchor,agora-ui/src/features/agents/ToolApprovalCard.test.tsx,1,ToolApprovalCard.test.tsx,AG-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0313,test_anchor,agora-ui/src/features/agents/agentSessions.test.ts,1,agentSessions.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0314,test_anchor,agora-ui/src/features/auth/LoginPage.test.tsx,1,LoginPage.test.tsx,ID-01.login,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0315,test_anchor,agora-ui/src/features/canvas/Canvas.test.tsx,1,Canvas.test.tsx,UI-05.canvas-render;UI-05.canvas-escape,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0316,test_anchor,agora-ui/src/features/messages/MentionEnter.test.tsx,1,MentionEnter.test.tsx,UI-01.mention-enter,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0317,test_anchor,agora-ui/src/features/messages/MessageList.visibility.test.tsx,1,MessageList.visibility.test.tsx,UI-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0318,test_anchor,agora-ui/src/features/messages/NewMessagesPill.test.tsx,1,NewMessagesPill.test.tsx,UI-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0319,test_anchor,agora-ui/src/features/messages/ProjectPanel.test.tsx,1,ProjectPanel.test.tsx,UI-06.project-pin,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0320,test_anchor,agora-ui/src/features/messages/SystemNoticeRun.test.tsx,1,SystemNoticeRun.test.tsx,UI-02.notice-drawer,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0321,test_anchor,agora-ui/src/features/messages/noticeRunVirtualizer.test.ts,1,noticeRunVirtualizer.test.ts,UI-02.virtualizer,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0322,test_anchor,agora-ui/src/features/messages/shouldGroup.test.ts,1,shouldGroup.test.ts,UI-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0323,test_anchor,agora-ui/src/features/messages/systemNotices.test.ts,1,systemNotices.test.ts,UI-02.notice-drawer,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0324,test_anchor,agora-ui/src/features/settings/ChatGPTPlanConnect.test.tsx,1,ChatGPTPlanConnect.test.tsx,AG-10.agents-page,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0325,test_anchor,agora-ui/src/features/settings/CreateAgentInviteModal.test.tsx,1,CreateAgentInviteModal.test.tsx,ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0326,test_anchor,agora-ui/src/features/shell/AppShell.test.tsx,1,AppShell.test.tsx,UI-08.mobile-nav,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0327,test_anchor,agora-ui/src/features/shell/shellHistory.test.ts,1,shellHistory.test.ts,UI-08.mobile-thread,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0328,test_anchor,agora-ui/src/features/tasks/TasksPanel.test.tsx,1,TasksPanel.test.tsx,UI-06.task-crud,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0329,test_anchor,agora-ui/src/features/voice/MicButton.test.tsx,1,MicButton.test.tsx,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0330,test_anchor,agora-ui/src/features/voice/speakable.test.ts,1,speakable.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0331,test_anchor,agora-ui/src/features/voice/voiceStore.test.ts,1,voiceStore.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0332,test_anchor,agora-ui/src/stores/authStore.restore.test.ts,1,authStore.restore.test.ts,ID-02.cookie,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0333,test_anchor,agora-ui/src/stores/authStore.test.ts,1,authStore.test.ts,ID-01;ID-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0334,test_anchor,agora-ui/src/stores/draftStore.test.ts,1,draftStore.test.ts,UI-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0335,test_anchor,agora-ui/src/stores/messageStore.test.ts,1,messageStore.test.ts,UI-01;UI-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0336,test_anchor,agora-ui/src/stores/uiStore.test.ts,1,uiStore.test.ts,UI-08,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0337,test_anchor,test/integration/acp-agents.integration.test.ts,1,acp-agents.integration.test.ts,AG-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0338,test_anchor,test/integration/admin.integration.test.ts,1,admin.integration.test.ts,ID-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0339,test_anchor,test/integration/agent-invites.integration.test.ts,1,agent-invites.integration.test.ts,ID-05;SEC-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0340,test_anchor,test/integration/agent-permissions.integration.test.ts,1,agent-permissions.integration.test.ts,AG-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0341,test_anchor,test/integration/agent-sessions.integration.test.ts,1,agent-sessions.integration.test.ts,AG-01;AG-08,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0342,test_anchor,test/integration/agora-mcp-package.integration.test.ts,1,agora-mcp-package.integration.test.ts,AG-09;ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0343,test_anchor,test/integration/agora-mcp.integration.test.ts,1,agora-mcp.integration.test.ts,UI-04;AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0344,test_anchor,test/integration/ai-assistant.integration.test.ts,1,ai-assistant.integration.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0345,test_anchor,test/integration/ai-audit.integration.test.ts,1,ai-audit.integration.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0346,test_anchor,test/integration/ai-decisions.integration.test.ts,1,ai-decisions.integration.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0347,test_anchor,test/integration/ai-providers.integration.test.ts,1,ai-providers.integration.test.ts,AG-02;OP-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0348,test_anchor,test/integration/ai-streaming.integration.test.ts,1,ai-streaming.integration.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0349,test_anchor,test/integration/assistant-routing.integration.test.ts,1,assistant-routing.integration.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0350,test_anchor,test/integration/assistant-search.integration.test.ts,1,assistant-search.integration.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0351,test_anchor,test/integration/audio-overview.integration.test.ts,1,audio-overview.integration.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0352,test_anchor,test/integration/auth-phase1.integration.test.ts,1,auth-phase1.integration.test.ts,ID-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0353,test_anchor,test/integration/auth.integration.test.ts,1,auth.integration.test.ts,ID-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0354,test_anchor,test/integration/bot-coordination.integration.test.ts,1,bot-coordination.integration.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0355,test_anchor,test/integration/bot-pause.integration.test.ts,1,bot-pause.integration.test.ts,ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0356,test_anchor,test/integration/bots.integration.test.ts,1,bots.integration.test.ts,ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0357,test_anchor,test/integration/canvas-preview.integration.test.ts,1,canvas-preview.integration.test.ts,UI-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0358,test_anchor,test/integration/cap-gateway.integration.test.ts,1,cap-gateway.integration.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0359,test_anchor,test/integration/channel-visibility.integration.test.ts,1,channel-visibility.integration.test.ts,ID-04;SEC-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0360,test_anchor,test/integration/claude-channel.integration.test.ts,1,claude-channel.integration.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0361,test_anchor,test/integration/cookie-session.integration.test.ts,1,cookie-session.integration.test.ts,ID-02.cookie;ID-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0362,test_anchor,test/integration/direct-agents.integration.test.ts,1,direct-agents.integration.test.ts,ID-04;SEC-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0363,test_anchor,test/integration/file-image.integration.test.ts,1,file-image.integration.test.ts,UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0364,test_anchor,test/integration/file-reservations.integration.test.ts,1,file-reservations.integration.test.ts,AG-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0365,test_anchor,test/integration/file-search.integration.test.ts,1,file-search.integration.test.ts,UI-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0366,test_anchor,test/integration/file-tagging.integration.test.ts,1,file-tagging.integration.test.ts,UI-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0367,test_anchor,test/integration/files.integration.test.ts,1,files.integration.test.ts,UI-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0368,test_anchor,test/integration/gateway-access.integration.test.ts,1,gateway-access.integration.test.ts,ID-05;OP-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0369,test_anchor,test/integration/handoffs.integration.test.ts,1,handoffs.integration.test.ts,AG-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0370,test_anchor,test/integration/infra.integration.test.ts,1,infra.integration.test.ts,OP-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0371,test_anchor,test/integration/instance.integration.test.ts,1,instance.integration.test.ts,ID-06;ID-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0372,test_anchor,test/integration/invites-cookie.integration.test.ts,1,invites-cookie.integration.test.ts,ID-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0373,test_anchor,test/integration/key-fingerprint.integration.test.ts,1,key-fingerprint.integration.test.ts,OP-05.wrong-key;ID-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0374,test_anchor,test/integration/login-limit.integration.test.ts,1,login-limit.integration.test.ts,ID-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0375,test_anchor,test/integration/lurk-images.integration.test.ts,1,lurk-images.integration.test.ts,UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0376,test_anchor,test/integration/members.integration.test.ts,1,members.integration.test.ts,ID-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0377,test_anchor,test/integration/mentions.integration.test.ts,1,mentions.integration.test.ts,UI-01.mention-case,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0378,test_anchor,test/integration/message-sanitize.integration.test.ts,1,message-sanitize.integration.test.ts,UI-01;SEC-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0379,test_anchor,test/integration/message-ws-events.integration.test.ts,1,message-ws-events.integration.test.ts,UI-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0380,test_anchor,test/integration/messages.integration.test.ts,1,messages.integration.test.ts,UI-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0381,test_anchor,test/integration/passkeys.integration.test.ts,1,passkeys.integration.test.ts,ID-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0382,test_anchor,test/integration/project-context.integration.test.ts,1,project-context.integration.test.ts,UI-06;AG-08,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0383,test_anchor,test/integration/protocol.integration.test.ts,1,protocol.integration.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0384,test_anchor,test/integration/provider-terms.integration.test.ts,1,provider-terms.integration.test.ts,AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0385,test_anchor,test/integration/request-lifecycle.integration.test.ts,1,request-lifecycle.integration.test.ts,OP-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0386,test_anchor,test/integration/roles.integration.test.ts,1,roles.integration.test.ts,ID-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0387,test_anchor,test/integration/runner-gateway.integration.test.ts,1,runner-gateway.integration.test.ts,OP-03;OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0388,test_anchor,test/integration/runtime-api.integration.test.ts,1,runtime-api.integration.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0389,test_anchor,test/integration/runtime-tripwires.integration.test.ts,1,runtime-tripwires.integration.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0390,test_anchor,test/integration/search-screening.integration.test.ts,1,search-screening.integration.test.ts,AG-02;UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0391,test_anchor,test/integration/servers.integration.test.ts,1,servers.integration.test.ts,ID-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0392,test_anchor,test/integration/session-idle.integration.test.ts,1,session-idle.integration.test.ts,ID-02.idle-renew;ID-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0393,test_anchor,test/integration/session-revocation.integration.test.ts,1,session-revocation.integration.test.ts,ID-02;SEC-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0394,test_anchor,test/integration/siwc-plan.integration.test.ts,1,siwc-plan.integration.test.ts,AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0395,test_anchor,test/integration/storage-maintenance.integration.test.ts,1,storage-maintenance.integration.test.ts,UI-03;OP-03;OP-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0396,test_anchor,test/integration/task-board.integration.test.ts,1,task-board.integration.test.ts,UI-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0397,test_anchor,test/integration/terminal-sessions.integration.test.ts,1,terminal-sessions.integration.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0398,test_anchor,test/integration/terms-watch.integration.test.ts,1,terms-watch.integration.test.ts,AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0399,test_anchor,test/integration/threads.integration.test.ts,1,threads.integration.test.ts,UI-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0400,test_anchor,test/integration/typing-presence.integration.test.ts,1,typing-presence.integration.test.ts,UI-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0401,test_anchor,test/integration/unreads.integration.test.ts,1,unreads.integration.test.ts,UI-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0402,test_anchor,test/integration/user-preferences.integration.test.ts,1,user-preferences.integration.test.ts,ID-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0403,test_anchor,test/integration/users-search.integration.test.ts,1,users-search.integration.test.ts,SEC-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0404,test_anchor,test/integration/voice-hardening.integration.test.ts,1,voice-hardening.integration.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0405,test_anchor,test/integration/voice.integration.test.ts,1,voice.integration.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0406,test_anchor,test/integration/websocket.integration.test.ts,1,websocket.integration.test.ts,UI-02;OP-03.ws-loss,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0407,test_anchor,test/integration/workspace-review.integration.test.ts,1,workspace-review.integration.test.ts,AG-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0408,test_anchor,test/live/decisions.live.test.ts,1,decisions.live.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0409,test_anchor,test/sandbox/gateway-e2e.sandbox.test.ts,1,gateway-e2e.sandbox.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0410,test_anchor,test/sandbox/negative.sandbox.test.ts,1,negative.sandbox.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0411,test_anchor,test/sandbox/runner.sandbox.test.ts,1,runner.sandbox.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0412,test_anchor,test/sandbox/std.sandbox.test.ts,1,std.sandbox.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0413,test_anchor,test/unit/adapters.unit.test.ts,1,adapters.unit.test.ts,OP-06;AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0414,test_anchor,test/unit/agent-lurk.test.ts,1,agent-lurk.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0415,test_anchor,test/unit/agent-presence.test.ts,1,agent-presence.test.ts,AG-09,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0416,test_anchor,test/unit/audio-overview.unit.test.ts,1,audio-overview.unit.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0417,test_anchor,test/unit/auth.unit.test.ts,1,auth.unit.test.ts,ID-01;ID-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0418,test_anchor,test/unit/channel-projects.unit.test.ts,1,channel-projects.unit.test.ts,UI-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0419,test_anchor,test/unit/config-production.unit.test.ts,1,config-production.unit.test.ts,OP-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0420,test_anchor,test/unit/decide.unit.test.ts,1,decide.unit.test.ts,AG-02,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0421,test_anchor,test/unit/encryption.unit.test.ts,1,encryption.unit.test.ts,UI-03;OP-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0422,test_anchor,test/unit/file-image.test.ts,1,file-image.test.ts,UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0423,test_anchor,test/unit/file-reservations.unit.test.ts,1,file-reservations.unit.test.ts,AG-05,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0424,test_anchor,test/unit/mp3.unit.test.ts,1,mp3.unit.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0425,test_anchor,test/unit/nginx-routes.unit.test.ts,1,nginx-routes.unit.test.ts,ID-06.admin-reload;ID-06.admin-vary;OP-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0426,test_anchor,test/unit/permissions.unit.test.ts,1,permissions.unit.test.ts,ID-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0427,test_anchor,test/unit/protocol.unit.test.ts,1,protocol.unit.test.ts,AG-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0428,test_anchor,test/unit/provider-terms.unit.test.ts,1,provider-terms.unit.test.ts,AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0429,test_anchor,test/unit/providers.unit.test.ts,1,providers.unit.test.ts,OP-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0430,test_anchor,test/unit/report.unit.test.ts,1,report.unit.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0431,test_anchor,test/unit/runtime.unit.test.ts,1,runtime.unit.test.ts,OP-01,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0432,test_anchor,test/unit/sanitize-text.unit.test.ts,1,sanitize-text.unit.test.ts,UI-01;SEC-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0433,test_anchor,test/unit/speech.unit.test.ts,1,speech.unit.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0434,test_anchor,test/unit/storage.unit.test.ts,1,storage.unit.test.ts,UI-03,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0435,test_anchor,test/unit/terms-watch.unit.test.ts,1,terms-watch.unit.test.ts,AG-10,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0436,test_anchor,test/unit/text-extract.unit.test.ts,1,text-extract.unit.test.ts,UI-04,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0437,test_anchor,test/unit/ulid.unit.test.ts,1,ulid.unit.test.ts,,excluded:ID-generator utility test; no scenario-level behaviour,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0438,test_anchor,test/unit/url-guard.unit.test.ts,1,url-guard.unit.test.ts,OP-06,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0439,test_anchor,test/unit/voice.unit.test.ts,1,voice.unit.test.ts,UI-07,anchor,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0440,http_endpoint,src/routes/task-board.ts,184,PATCH /channels/:id/tasks/:taskId,UI-06.task-crud,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0441,http_endpoint,src/routes/task-board.ts,217,DELETE /channels/:id/tasks/:taskId,UI-06.task-crud,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0442,http_endpoint,src/routes/task-board.ts,228,POST /channels/:id/tasks/:taskId/start,UI-06;AG-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0443,http_endpoint,src/routes/workspace-review.ts,38,POST /channels/:id/sessions/:sessionId/workspace-commands,AG-07;SEC-05;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0444,http_endpoint,src/routes/workspace-review.ts,75,GET /channels/:id/sessions/:sessionId/workspace-commands/:commandId,AG-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0445,http_endpoint,src/routes/workspace-review.ts,82,GET /channels/:id/sessions/:sessionId/workspace-commands/latest,AG-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0446,http_endpoint,src/routes/workspace-review.ts,90,GET /channels/:id/sessions/:sessionId/checkpoints,AG-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0447,http_endpoint,src/routes/runtime.ts,131,POST /runtime/runs/:id/approve,OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0448,http_endpoint,src/routes/runtime.ts,131,POST /runtime/runs/:id/deny,OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0449,http_endpoint,src/app.ts,74,GET /health,OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0450,http_endpoint,src/gateway/cap-gateway.ts,330,GET /health (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0451,http_endpoint,src/gateway/cap-gateway.ts,382,POST /v1/capabilities/:name (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0452,http_endpoint,src/gateway/cap-gateway.ts,409,POST /v1/messages (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0453,http_endpoint,src/gateway/cap-gateway.ts,438,POST /v1/files/search (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0454,http_endpoint,src/gateway/cap-gateway.ts,464,POST /v1/files/read (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0455,http_endpoint,src/gateway/cap-gateway.ts,499,POST /v1/reports (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0456,http_endpoint,src/gateway/cap-gateway.ts,587,POST /v1/files (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0457,test_anchor,agora-ui/src/features/messages/FileAttachment.test.tsx,1,FileAttachment.test.tsx,UI-03;UI-08,anchor,11e998c735abc77f35d69402d7d48c2722d11a85
+S0458,test_anchor,agora-ui/src/features/shell/ArcChannelSidebar.test.tsx,1,ArcChannelSidebar.test.tsx,UI-01;UI-02,anchor,11e998c735abc77f35d69402d7d48c2722d11a85
+S0459,test_anchor,agora-ui/src/stores/threadStore.test.ts,1,threadStore.test.ts,UI-01.thread-wake,anchor,11e998c735abc77f35d69402d7d48c2722d11a85
+S0460,socket_event,src/gateway.ts,74,handshake: JWT/bot token/cookie auth + Origin check,ID-02;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0461,socket_event,src/gateway.ts,364,server->client Ready (joins visible channel rooms),UI-01.send-live;ID-04;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0462,socket_event,src/gateway.ts,229,server->client BotReady,AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0463,socket_event,src/routes/messages.ts,307,server->client Message,UI-01.send-live;UI-01.thread-wake;OP-03.ws-loss;OP-08.soak,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0464,socket_event,src/routes/messages.ts,473,server->client MessageUpdate,UI-01;AG-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0465,socket_event,src/routes/messages.ts,558,server->client MessageDelete,UI-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0466,socket_event,src/routes/messages.ts,270,server->user MessageMention (+ internal assistantMention),AG-02;UI-01.mention-case,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0467,socket_event,src/routes/threads.ts,272,server->client ThreadMetadataUpdate,UI-01.thread-wake,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0468,socket_event,src/routes/messages.ts,145,server->client ChannelLoopGuard,AG-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0469,socket_event,src/routes/servers.ts,274,"server->user ServerJoin (joins rooms, filtered channels)",ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0470,socket_event,src/routes/bots.ts,626,internal _leaveRoom (bot channel access removed),ID-05;SEC-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0471,socket_event,src/runtime/tripwires.ts,63,internal _GatewayAccessChanged via Redis (tripwire pause),OP-01;SEC-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0472,socket_event,src/lib/event-bridge.ts,34,Redis agora:events bridge (allowlist Message/MessageUpdate/ThreadMetadataUpdate),SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0473,socket_event,src/routes/permission-relays.ts,181,server->bot PermissionRelayDecision,AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0474,socket_event,src/routes/channel-projects.ts,36,server->client ChannelProjectUpdate,UI-06,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0475,socket_event,src/lib/task-cards.ts,48,server->client TaskCardUpdate,UI-06.task-crud,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0476,socket_event,src/routes/task-board.ts,224,server->client TaskCardDelete,UI-06.task-crud,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0477,socket_event,src/lib/agent-runs.ts,115,server->client AgentSessionUpdate,AG-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0478,socket_event,src/lib/agent-runs.ts,603,server->client AgentRunProgress,AG-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0479,socket_event,src/gateway.ts,242,server->client AgentPresence,AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0480,socket_event,src/gateway.ts,273,server->bot TerminalSession,AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0481,socket_event,src/gateway.ts,399,server->client PresenceUpdate,UI-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0482,socket_event,src/gateway.ts,407,client->server Typing / server->client Typing,UI-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0483,socket_event,src/gateway.ts,245,client->server Listening (agora-mcp presence),AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0484,socket_event,src/gateway.ts,264,client->server Activity (terminal working/idle),AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0485,socket_event,src/ai/assistant-handler.ts,179,server->client BotMessageStream,AG-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0486,socket_event,src/app.ts,295,server->user error account_suspended + forced disconnect,ID-06;SEC-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0487,worker,src/workers/file-cleanup.ts,6,"file cleanup worker (hourly: expired, orphaned, soft-deleted files)",UI-03,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0488,worker,src/workers/file-tagging.ts,383,file tagging worker (decision-model tags),UI-03,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0489,worker,src/workers/terms-watch.ts,114,provider terms watcher (60 s tick),ID-06.provider-terms;AG-10,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0490,worker,src/index.ts,47,agent run sweeper (15 s: expired claims retried or dropped),OP-02.crash-after-effect;OP-02.crash-before-claim;OP-03.db-down,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0491,worker,src/gateway.ts,34,socket session revalidation sweep,ID-02;SEC-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0492,worker,src/gateway.ts,47,terminal session heartbeat and stale sweep,AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0493,worker,src/ai/assistant-handler.ts,36,built-in assistant mention handler (internal bus),AG-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0494,worker,src/runner-main.ts,34,sandbox runner worker (BullMQ),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0495,worker,src/runner-main.ts,27,"runner startup orphan removal (removeOrphans, #126)",OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0496,worker,src/runner-main.ts,79,"runner maintenance sweep (code retention prune, approval expiry)",OP-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0497,worker,src/gateway-main.ts,13,capability gateway service (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0498,cli_command,agora-host/src/index.ts,16,agora-host --config <file>,AG-01;AG-03;AG-10;AG-04.siwc-outside,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0499,cli_command,agora-host/src/index.ts,14,agora-host autostart <enable|disable|status> --config <file>,OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0500,cli_command,agora-host/src/index.ts,12,agora-host siwc <login|status|logout> --profile <name> --config <file>,AG-10,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0501,cli_command,agora-mcp/src/invites.ts,26,agora-mcp --instance <url> --invite <code>,ID-05;SEC-03,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0502,cli_command,agora-mcp/src/config.ts,29,agora-mcp --instance <url> --token <token> | --config <file>,AG-01;AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0503,cli_command,agora-mcp/src/channel-server.ts,27,agora-mcp --channel-mode (Claude Channel),AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0504,cli_command,agora-mcp/src/channel-server.ts,21,agora-mcp --auth <subscription|api_key>,AG-09;AG-10,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0505,cli_command,agora-mcp/src/channel-server.ts,30,agora-mcp --no-presence (hosted runs),AG-01;AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0506,cli_command,agora-mcp/src/channel-server.ts,29,agora-mcp --no-permission-relay,AG-09,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0507,cli_command,agora-mcp/src/index.ts,16,agora-mcp --version,,excluded:prints the package version and exits; no state or authority,11e998c735abc77f35d69402d7d48c2722d11a85
+S0508,cli_command,src/db/migrate.ts,1,npm run migrate,OP-04.upgrade,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0509,cli_command,src/tools/rotate-encryption-key.ts,21,npm run key:rotate,OP-05,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0510,cli_command,src/tools/unlock-login.ts,14,npm run login:unlock -- <username|email>,ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0511,cli_command,src/tools/migrate-storage-from-s3.ts,16,npm run storage:migrate-from-s3,OP-04,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0512,cli_command,src/tools/strip-storage-filenames.ts,14,npm run storage:strip-filenames,OP-04,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0513,migration_set,src/db/migrations,1,src/db/migrations/*.sql (59 files) via src/db/migrate.ts,OP-04.upgrade;OP-05.restore,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0514,migration_set,src/db/migrations/001_core_tables.sql,1,001_core_tables.sql,OP-04.upgrade;ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0515,migration_set,src/db/migrations/002_channels_and_members.sql,1,002_channels_and_members.sql,OP-04.upgrade;ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0516,migration_set,src/db/migrations/003_permissions.sql,1,003_permissions.sql,OP-04.upgrade;ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0517,migration_set,src/db/migrations/006_row_level_security.sql,1,006_row_level_security.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0518,migration_set,src/db/migrations/007_instance_config.sql,1,007_instance_config.sql,OP-04.upgrade;ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0519,migration_set,src/db/migrations/008_instance_admin.sql,1,008_instance_admin.sql,OP-04.upgrade;ID-06,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0520,migration_set,src/db/migrations/009_user_account_status.sql,1,009_user_account_status.sql,OP-04.upgrade;ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0521,migration_set,src/db/migrations/013_ip_tracking_and_bans.sql,1,013_ip_tracking_and_bans.sql,OP-04.upgrade;ID-06,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0522,migration_set,src/db/migrations/015_file_sharing.sql,1,015_file_sharing.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0523,migration_set,src/db/migrations/016_bot_infrastructure.sql,1,016_bot_infrastructure.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0524,migration_set,src/db/migrations/018_channels_update_policy.sql,1,018_channels_update_policy.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0525,migration_set,src/db/migrations/025_bot_pause.sql,1,025_bot_pause.sql,OP-04.upgrade;ID-05,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0526,migration_set,src/db/migrations/029_runtime_access.sql,1,029_runtime_access.sql,OP-04.upgrade;OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0527,migration_set,src/db/migrations/034_file_tags.sql,1,034_file_tags.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0528,migration_set,src/db/migrations/035_session_version.sql,1,035_session_version.sql,OP-04.upgrade;ID-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0529,migration_set,src/db/migrations/036_direct_agents.sql,1,036_direct_agents.sql,OP-04.upgrade;ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0530,migration_set,src/db/migrations/037_agent_sessions.sql,1,037_agent_sessions.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0531,migration_set,src/db/migrations/041_file_reservations.sql,1,041_file_reservations.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0532,migration_set,src/db/migrations/042_agent_permissions.sql,1,042_agent_permissions.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0533,migration_set,src/db/migrations/043_agent_invites.sql,1,043_agent_invites.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0534,migration_set,src/db/migrations/044_passkeys.sql,1,044_passkeys.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0535,migration_set,src/db/migrations/045_lurk_images.sql,1,045_lurk_images.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0536,migration_set,src/db/migrations/046_provider_terms.sql,1,046_provider_terms.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0537,migration_set,src/db/migrations/047_diff_review.sql,1,047_diff_review.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0538,migration_set,src/db/migrations/048_terms_watch.sql,1,048_terms_watch.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0539,migration_set,src/db/migrations/049_permission_relays.sql,1,049_permission_relays.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0540,migration_set,src/db/migrations/050_siwc_plan.sql,1,050_siwc_plan.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0541,migration_set,src/db/migrations/051_project_context.sql,1,051_project_context.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0542,migration_set,src/db/migrations/052_task_board.sql,1,052_task_board.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0543,migration_set,src/db/migrations/053_canvas_preview.sql,1,053_canvas_preview.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0544,migration_set,src/db/migrations/057_bot_file_visibility.sql,1,057_bot_file_visibility.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0545,migration_set,src/db/migrations/058_agent_handoffs.sql,1,058_agent_handoffs.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0546,deploy_entrypoint,docker-compose.prod.yml,1,docker compose -f docker-compose.prod.yml (prod stack),OP-04.upgrade;OP-05.restore;OP-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0547,deploy_entrypoint,docker-compose.tailnet.yml,1,docker-compose.tailnet.yml override (Tailscale),OP-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0548,deploy_entrypoint,docker-compose.yml,1,"docker-compose.yml (dev postgres/redis, voice profile)",,excluded:dev and vitest infrastructure (127.0.0.1 postgres/redis); not a deployment,11e998c735abc77f35d69402d7d48c2722d11a85
+S0549,deploy_entrypoint,docker-compose.minio-migrate.yml,1,docker-compose.minio-migrate.yml (one-time MinIO -> disk move),OP-04,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0550,deploy_entrypoint,Dockerfile,1,"Dockerfile (api, migrate, runner, cap-gateway image)",OP-04.upgrade,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0551,deploy_entrypoint,agora-ui/Dockerfile,1,agora-ui/Dockerfile (web image),OP-04.upgrade;ID-06.admin-reload,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0552,deploy_entrypoint,sandbox/Dockerfile,1,sandbox/Dockerfile (code-run image),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0553,deploy_entrypoint,agora-ui/nginx.conf,1,agora-ui/nginx.conf (SPA + API prefix proxy),ID-06.admin-reload;ID-06.admin-vary;OP-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0554,deploy_entrypoint,Caddyfile,1,Caddyfile (TLS reverse proxy),OP-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0555,deploy_entrypoint,scripts/setup-env.js,1,node scripts/setup-env.js [--prod] [--force],OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0556,deploy_entrypoint,.github/workflows/agora-mcp-release.yml,1,agora-mcp release workflow (agora-mcp.tgz on GitHub Releases),ID-05,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0557,deploy_entrypoint,e2e/docker-compose.e2e.yml,1,e2e/docker-compose.e2e.yml (disposable agora-e2e project),,excluded:test harness for the disposable instance; not shipped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0558,deploy_entrypoint,e2e/up.sh,1,e2e/up.sh,,excluded:test harness for the disposable instance; not shipped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0559,deploy_entrypoint,e2e/down.sh,1,e2e/down.sh agora-e2e,,excluded:test harness for the disposable instance; not shipped,11e998c735abc77f35d69402d7d48c2722d11a85
