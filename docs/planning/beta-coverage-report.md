@@ -30,6 +30,8 @@ A route module counts as `mapped` when at least one of its endpoints is mapped. 
 
 ## Gaps
 
+> **Closed 2026-10-21 on `test/coverage-gaps`:** all 41 rows are now `mapped` to the IDs below, which are in the plan (§2.2 "Coverage gaps closed below the UI", §3.5, §6.5) with their test files. Eleven assertions fail on the candidate and are kept as `it.fails` findings: `SEC-01.user-search` (3), `SEC-01.rls-probe` (7, across 6 policies: `server_invites` SELECT and UPDATE, `server_members` self-INSERT, `files` INSERT, `files` UPDATE without WITH CHECK (2), `agent_invites` INSERT) and `ID-05.bot-edit` (case-variant rename). The counts table above is the state before that.
+
 41 rows that no plan scenario covers. The proposed IDs are **not** in the plan yet. Add them to §2–§6 before using them in the ledger: the checker rejects suffixed IDs the plan doesn't contain. Each "must assert" line follows §0: what the UI shows, what is persisted, and how many side effects happen.
 
 | surface_id | entrypoint | family | proposed ID | must assert |

@@ -344,6 +344,19 @@ Each bullet is one test. `📸` marks a screenshot that goes to the vision check
 - Touch targets: a script asserts every `button` in cards is at least 44×44 CSS px (32 px for the notice drawer).
 - No horizontal scroll at 360 px width.
 
+**Coverage gaps closed below the UI** (vitest against a real test app and Postgres; the gaps in [beta-coverage-report.md](beta-coverage-report.md))
+
+| ID | Test | Expected |
+|---|---|---|
+| ID-05.channel-list-revoke | `test/integration/mcp-channel-canvas.integration.test.ts` | MCP `channel_list` lists exactly the bot's `bot_channel_access` channels. After `DELETE /channels/:id/bots/:botId` the channel is gone from the list, `chat_read` on it gives 403, and 0 events reach the bot afterwards |
+| UI-05.canvas-read | `test/integration/mcp-channel-canvas.integration.test.ts` | MCP `canvas_read` of version N is byte-identical to what was published. In a channel the bot can't see: 403 and no content |
+| ID-05.host-revoke | `test/integration/agent-host-lifecycle.integration.test.ts` | Owner `DELETE /servers/:serverId/agent-hosts/:hostId` gives 204 and sets `revoked_at`; the host token's next `runs/next` gives 401; the host's claimed run is redelivered once after the lease expires. A non-owner gets 403 and the row is unchanged |
+| AG-01.profile-delete | `test/integration/agent-host-lifecycle.integration.test.ts` | `DELETE /servers/:serverId/agent-profiles/:profileId` with a non-ended session: 409 and the profile is kept. After `/end`: 204, the profile row is gone, the bot and its messages remain. A director gets 403 |
+| AG-07.ended-worktree | `test/integration/agent-host-lifecycle.integration.test.ts` | `/end` with uncommitted edits: the worktree is kept and exactly 1 notice (`workspaces/warning`) lists the paths. A clean ended worktree is removed. A session with a claimed run or a queued workspace command is not returned by `workspaces/reconcile` |
+| ID-05.bot-edit | `test/integration/bot-lifecycle.integration.test.ts` | `PATCH /servers/:serverId/bots/:id` rename shows in the bot list, messages and mentions. A duplicate name gives 409. A caller without ManageBots gets 403 and the row is unchanged. A rename can't produce an `[OWNER]`-looking author in agora-mcp output (SEC-01) |
+| ID-05.bot-delete | `test/integration/bot-lifecycle.integration.test.ts` | After `DELETE /servers/:serverId/bots/:id` every token gives 401 and an already-open bot socket receives 0 channel events. Agent profiles that reference the bot are not left orphaned |
+| AG-09.no-permission-relay | `test/integration/mcp-channel-canvas.integration.test.ts`, `agora-mcp/test/channel.test.ts` | `agora-mcp --channel-mode --no-permission-relay`: no permission capability is declared, so the prompt stays in the terminal; 0 `permission_relays` rows are created |
+
 ### 2.3 Vision check
 
 Purpose: catch what DOM assertions miss (overlapping layouts, unreadable text, blank panes, broken dark mode), cheaply. **It stays advisory**: a vision pass never overrides a failed assertion, and a vision `fail` or `uncertain` goes to human review. It becomes a gate only after calibration (below), never because two runs agreed: two answers from the same grader are not independent evidence.
@@ -492,6 +505,11 @@ These run on the **disposable instance** (non-runtime services only, §2.1). `OP
 | OP-03.ws-loss | Drop the socket repeatedly during streaming | No duplicate or lost messages after reconnect |
 | OP-06.\<provider\>.* | For **each** enabled provider and capability (Anthropic, OpenAI, Gemini, OpenAI-compatible/Ollama, Tavily, Kokoro, Whisper, TypeSafe Jev if keyed): save, Test, invoke, invalid key, revoked key, 429, timeout, wrong endpoint, fix and reconnect | Each step shows the right state in Settings → AI; failures are visible and recover after the fix; keys never returned by the config API |
 | OP-08.soak | 5 browser clients + 3 fake agents for 30 minutes: long threads, uploads, cards | No lost or duplicated events, no cross-tenant data, queue depth and API RSS stay bounded (record throughput, p95 latency, peak RSS) |
+| OP-06.private-base-url | `GET`/`PATCH /admin/settings/ai` (`allowPrivateBaseUrls`), then create providers. Test: `test/integration/admin-ai-private-urls.integration.test.ts` | With the flag off, a provider with a `127.0.0.1` or `10.x` base URL gives 400 and no provider row. An admin turns it on: 1 audit row, then the same request gives 201. A non-admin `PATCH` gives 403 and the setting is unchanged |
+| OP-01.code-retention | `PATCH /admin/settings/runtime`, then the runner maintenance sweep driven directly (no runner needed). Test: `test/integration/runtime-retention.integration.test.ts` | Shortening retention without `confirm` gives 409 `confirmation_required` and nothing changes. With `confirm`, the next sweep prunes code only on runs past the limit: `GET /runtime/runs/:id/code` gives 410 with `prunedAt`, newer runs keep their code, and stale approvals expire |
+| OP-05.key-rotate | `npm run key:rotate` on a disposable DB and storage dir. Test: `test/integration/key-rotate.integration.test.ts` | Every file and provider key decrypts under the new key and none still needs the old one. Killed part-way and re-run: the run completes and no file is double-encrypted. Starting the API with the old key gives the fingerprint refusal |
+| OP-04.minio-migrate | `npm run storage:migrate-from-s3` (what `docker-compose.minio-migrate.yml` runs) against an in-process S3 stub. Test: `test/integration/storage-migrate-s3.integration.test.ts` | N blobs are copied and a re-run copies 0; files then download and match byte for byte |
+| OP-04.strip-filenames | `npm run storage:strip-filenames` on pre-0.2.0 keys. Test: `test/integration/storage-strip-filenames.integration.test.ts` | Pre-0.2.0 keys are renamed to `<channel>/<file>/blob`. A re-run renames 0, downloads are unchanged, and no file name is left in a storage path |
 
 ---
 
@@ -717,6 +735,14 @@ Each item: how to check, and what passes. Automated ones point to where they liv
 | Speech route opt-in | Speech route on, "Use this server's Speech route" off | Read-aloud uses browser voices |
 | Bots can't use voice | Bot token on `/channels/:id/voice/transcribe` and `/speech` | Refused |
 | Daily request limit | Limit of 2 on `tts`; read aloud 3 times (different messages) | Third refused; cache serves repeats without counting |
+
+### 6.5 Database and event-bus authority
+
+| ID | How | Pass |
+|---|---|---|
+| SEC-01.user-search | `GET /users/search` as a user who shares no server, with `q=%` and `q=_`. Test: `test/integration/user-search-scope.integration.test.ts` | An outsider gets no results for other users' names; `%` and `_` match only themselves (escaped in `ILIKE`). Today the search is instance-wide and unescaped: `q=%` lists up to 20 users |
+| SEC-01.bridge-allowlist | Publish to Redis `agora:events` with a real Socket.IO server and client. Test: `test/integration/event-bridge.integration.test.ts` | A non-allowlisted event or room gives 0 client deliveries and 1 warning. An allowlisted `Message` to `channel:<id>` gives exactly 1 delivery. `_GatewayAccessChanged` triggers a DB re-read and is never forwarded |
+| SEC-01.rls-probe | For each RLS policy table (migrations 006 to 058), connect as `app_user` with an outsider's `app.current_user_id`. Test: `test/integration/rls-probe.integration.test.ts` | SELECT returns 0 rows, INSERT/UPDATE/DELETE affect 0 rows or raise, and a member sees exactly their rows. Service-only tables (no `app_user` grant) refuse both outsider and member. A route 403 alone no longer counts as proof of the policy |
 
 ---
 
