@@ -4,7 +4,8 @@ import { prepare, type Launch } from './adapters.js';
 import { fatalAuth, fenced, HttpError } from './client.js';
 import type { Claim, HostApi, Result, Verification } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
-import { reconcileWorkspaces, workspaceHead } from './workspaces.js';
+import { reconcileWorkspaces, recoverWorkspaceGitLocks, workspaceHead } from './workspaces.js';
+import { GitLockError } from './git-owner.js';
 import { attachRunImages } from './images.js';
 import { NON_RETRYABLE, TermsRefusal } from './terms.js';
 import { planLoop } from './siwc/requests.js';
@@ -252,7 +253,9 @@ export class Scheduler {
                 } catch (err) {
                     // Git/gh errors contain local paths and command output. Send only known codes.
                     const code = err instanceof Error ? err.message : '';
-                    result = { error: /^[a-z][a-z_]{0,100}$/.test(code) ? code : 'workspace_command_failed' };
+                    result = { error: /^[a-z][a-z_]{0,100}$/.test(code) ? code : 'workspace_command_failed',
+                        ...(err instanceof GitLockError ? { message: err.detail } : {}) };
+                    if (code === 'process_tree_kill_failed') await this.stop();
                 }
                 await api.workspaceCommandResult(cmd, success, result, this.abort.signal);
             } catch (err) {
@@ -288,6 +291,7 @@ export class Scheduler {
     }
     async run(): Promise<void> {
         let nextReconcile = 0;
+        await recoverWorkspaceGitLocks(this.config, this.log);
         const commands = this.commandLoop(), previews = this.previewLoop();
         // Settings → Agents "Continue with ChatGPT": sign-ins run on this machine (siwc/requests.ts)
         const plans = planLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });

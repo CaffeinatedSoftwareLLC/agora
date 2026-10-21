@@ -18,7 +18,7 @@ const CAP = 128 * 1024, PAGE = 16000;
 /** execFile bounds output before allocation can grow with a huge patch. No shell or diff drivers. */
 async function boundedGit(cwd: string, args: string[]) {
     return new Promise<{ text: string; truncated: boolean }>((resolve, reject) => {
-        execFile('git', ['-c', 'core.longpaths=true', '--literal-pathspecs', ...args], {
+        execFile('git', ['--no-optional-locks', '-c', 'core.longpaths=true', '--literal-pathspecs', ...args], {
             cwd, windowsHide: true, signal: gitSignal(), timeout: 30000, maxBuffer: CAP, encoding: 'buffer',
             env: {...process.env,GIT_TERMINAL_PROMPT:'0'},
         }, (err,stdout) => {
@@ -82,7 +82,9 @@ export async function reviewDiff(w: Workspace, path?: string, offset = 0, expect
 export async function snapshotTree(w: Workspace): Promise<string> {
     await validateWorkspace(w);
     const index = join(dirname(w.cwd), `snapshot-${randomUUID()}.index`);
-    const run = async (args: string[]) => (await exec('git', ['-c', 'core.longpaths=true', ...args], {
+    // A private temporary index cannot take the worktree's index.lock; don't replace
+    // its normal-index ownership record or pay for an owner process for these commands.
+    const run = async (args: string[]) => (await exec('git', ['--no-optional-locks', '-c', 'core.longpaths=true', ...args], {
         cwd: w.cwd, env: { ...process.env, GIT_INDEX_FILE: index }, windowsHide: true, timeout: 30000, signal: gitSignal(), maxBuffer: 1024 * 1024,
     })).stdout.trim();
     try { await run(['read-tree', 'HEAD']); await run(['add', '-A', '--', '.']); return await run(['write-tree']); }
