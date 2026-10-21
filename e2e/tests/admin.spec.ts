@@ -72,47 +72,55 @@ test.describe('instance admin', () => {
         const statsBefore = (await owner.ok('GET', '/admin/stats')) as any;
         let keep!: Throwaway;
         let drop!: Throwaway;
-        await withPolicy(owner, 'approval', async () => {
-            keep = await registerThrowaway(seed, 'q-appr');
-            drop = await registerThrowaway(seed, 'q-rej');
-        });
-        expect([keep.status, drop.status]).toEqual(['pending', 'pending']);
+        try {
+            await withPolicy(owner, 'approval', async () => {
+                keep = await registerThrowaway(seed, 'q-appr');
+                drop = await registerThrowaway(seed, 'q-rej');
+            });
+            expect([keep.status, drop.status]).toEqual(['pending', 'pending']);
 
-        // Dashboard: both counts went up by two
-        await page.goto('/admin');
-        await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 15_000 });
-        expect(await statValue(page, 'Total Users')).toBe(statsBefore.totalUsers + 2);
-        expect(await statValue(page, 'Pending Approvals')).toBe(statsBefore.pendingCount + 2);
-        await page.getByRole('link', { name: 'Review pending users' }).click();
-        await page.waitForURL(/\/admin\/pending/);
-        await expect(page.getByRole('heading', { name: 'Pending Users' })).toBeVisible();
-        const card = (u: Throwaway) => page.locator('div.bg-surface').filter({ hasText: u.username });
-        await expect(card(keep)).toBeVisible();
-        await expect(card(drop)).toBeVisible();
+            // Dashboard: both counts went up by two
+            await page.goto('/admin');
+            await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 15_000 });
+            expect(await statValue(page, 'Total Users')).toBe(statsBefore.totalUsers + 2);
+            expect(await statValue(page, 'Pending Approvals')).toBe(statsBefore.pendingCount + 2);
+            await page.getByRole('link', { name: 'Review pending users' }).click();
+            await page.waitForURL(/\/admin\/pending/);
+            await expect(page.getByRole('heading', { name: 'Pending Users' })).toBeVisible();
+            const card = (u: Throwaway) => page.locator('div.bg-surface').filter({ hasText: u.username });
+            await expect(card(keep)).toBeVisible();
+            await expect(card(drop)).toBeVisible();
 
-        // Reject: a confirmation, then the account is gone
-        await card(drop).getByRole('button', { name: 'Reject' }).click();
-        await expect(page.getByText(`Are you sure you want to reject ${drop.username}? This will delete their account.`)).toBeVisible();
-        const rejected = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/reject-user/${drop.id}`);
-        await page.getByRole('button', { name: 'Reject', exact: true }).last().click();
-        expect((await rejected).status()).toBe(200);
-        await expect(card(drop)).toHaveCount(0);
-        expect(await adminUser(owner, drop.username), 'rejected account deleted').toBeNull();
-        expect((await loginStatus(drop.username, drop.password)).status).toBe(401);
+            // Reject: a confirmation, then the account is gone
+            await card(drop).getByRole('button', { name: 'Reject' }).click();
+            await expect(page.getByText(`Are you sure you want to reject ${drop.username}? This will delete their account.`)).toBeVisible();
+            const rejected = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/reject-user/${drop.id}`);
+            await page.getByRole('button', { name: 'Reject', exact: true }).last().click();
+            expect((await rejected).status()).toBe(200);
+            await expect(card(drop)).toHaveCount(0);
+            expect(await adminUser(owner, drop.username), 'rejected account deleted').toBeNull();
+            expect((await loginStatus(drop.username, drop.password)).status).toBe(401);
 
-        // Approve: active, a member of the instance server, can log in
-        const approved = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/approve-user/${keep.id}`);
-        await card(keep).getByRole('button', { name: 'Approve' }).click();
-        expect((await approved).status()).toBe(200);
-        await expect(card(keep)).toHaveCount(0);
-        await expect(page.locator('p.text-danger')).toHaveCount(0);
-        expect((await adminUser(owner, keep.username))?.accountStatus).toBe('active');
-        expect(await isMember(owner, seed.serverId, keep.id)).toBe(true);
-        expect((await loginStatus(keep.username, keep.password)).status).toBe(200);
+            // Approve: active, a member of the instance server, can log in (fails until #158)
+            const approved = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/approve-user/${keep.id}`);
+            await card(keep).getByRole('button', { name: 'Approve' }).click();
+            expect((await approved).status()).toBe(200);
+            await expect(card(keep)).toHaveCount(0);
+            await expect(page.locator('p.text-danger')).toHaveCount(0);
+            expect((await adminUser(owner, keep.username))?.accountStatus).toBe('active');
+            expect(await isMember(owner, seed.serverId, keep.id)).toBe(true);
+            expect((await loginStatus(keep.username, keep.password)).status).toBe(200);
 
-        const statsAfter = (await owner.ok('GET', '/admin/stats')) as any;
-        expect(statsAfter.totalUsers).toBe(statsBefore.totalUsers + 1);
-        expect(statsAfter.pendingCount).toBe(statsBefore.pendingCount);
+            const statsAfter = (await owner.ok('GET', '/admin/stats')) as any;
+            expect(statsAfter.totalUsers).toBe(statsBefore.totalUsers + 1);
+            expect(statsAfter.pendingCount).toBe(statsBefore.pendingCount);
+        } finally {
+            // Throwaways left pending (an approve or reject that failed) are rejected, so the queue holds nothing of ours
+            for (const u of [keep, drop]) {
+                const left = u ? await adminUser(owner, u.username) : null;
+                if (left?.accountStatus === 'pending') await owner.req('POST', `/admin/reject-user/${left.id}`);
+            }
+        }
     });
 
     test('[ID-06.ban-disconnects] banning a user closes their open page\'s socket and signs them out; they cannot log in', async ({ page, browser, seed }, ti) => {
@@ -226,7 +234,8 @@ test.describe('instance admin', () => {
 
     test('[ID-06.storage-authority] the admin max size is the only cap: under a 3 MB limit a 2 MB file is accepted', async ({ seed }) => {
         // CLAUDE.md: "All file limits ... are admin-configurable via instance_settings, no hardcoded
-        // caps anywhere else." A 2 MB file under a 3 MB setting must be stored.
+        // caps anywhere else." A 2 MB file under a 3 MB setting must be stored. Fails until #157
+        // (@fastify/multipart's 1 MiB default fileSize refuses it first).
         const { owner } = apis(seed);
         const original = await fileSettings(owner);
         test.info().annotations.push({ type: 'setting', description: `files.max_size_bytes ${original['files.max_size_bytes']} -> ${3 * MB} (restored after)` });

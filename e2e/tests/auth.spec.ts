@@ -188,6 +188,7 @@ test.describe('auth: policies, lockout and sessions', () => {
         test.info().annotations.push({ type: 'setting', description: `registration_policy ${original} -> approval (restored after)` });
         const ownerCtx = await browser.newContext({ baseURL: e2eEnv().baseURL, storageState: storageStateFor('owner') });
         const admin = await ownerCtx.newPage();
+        let username = '';
         try {
             // The owner switches the policy in Instance Settings
             await admin.goto('/settings/instance');
@@ -200,7 +201,7 @@ test.describe('auth: policies, lockout and sessions', () => {
             expect(await currentPolicy()).toBe('approval');
 
             // A visitor registers: the form says approval is needed; the result is /pending
-            const username = throwawayName(seed, 'reg-appr');
+            username = throwawayName(seed, 'reg-appr');
             const password = throwawayPassword(username);
             await page.goto('/register');
             await expect(page.getByRole('button', { name: 'Request Access' })).toBeVisible({ timeout: 15_000 });
@@ -234,7 +235,7 @@ test.describe('auth: policies, lockout and sessions', () => {
             await submitLogin(page, username, password);
             await page.waitForURL(/\/pending/);
 
-            // The admin approves in the pending queue
+            // The admin approves in the pending queue (fails until #158: the approve hits RLS on server_members)
             await admin.goto('/admin/pending');
             await expect(admin.getByRole('heading', { name: 'Pending Users' })).toBeVisible({ timeout: 15_000 });
             const card = admin.locator('div.bg-surface').filter({ hasText: username });
@@ -255,6 +256,9 @@ test.describe('auth: policies, lockout and sessions', () => {
         } finally {
             await ownerCtx.close();
             await setPolicy(owner, original);
+            // A throwaway left pending (approval failed) is rejected, so the queue holds nothing of ours
+            const left = username ? await adminUser(owner, username) : null;
+            if (left?.accountStatus === 'pending') await owner.ok('POST', `/admin/reject-user/${left.id}`);
         }
         expect(await currentPolicy()).toBe(original);
     });
@@ -293,7 +297,7 @@ test.describe('auth: policies, lockout and sessions', () => {
         const msg = page.locator('p.text-danger');
         await expect(msg).not.toHaveText(GENERIC);
         await snap(page, ti, 'ID-01.lockout', '01-locked', 'A login page showing a message that there were too many attempts', { ready: msg });
-        // The lock message should be words, as the passkey button words it (lib/passkeys.ts), not the raw code
+        // The lock message should be words, as the passkey button words it (lib/passkeys.ts), not the raw code (#159)
         await expect.soft(msg, 'lock message is human-readable').toHaveText(/too many attempts/i);
 
         // The right password is refused while locked, from the page and from the API; no session
