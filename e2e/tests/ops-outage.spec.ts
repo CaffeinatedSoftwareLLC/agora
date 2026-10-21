@@ -107,13 +107,17 @@ test.describe('outages (OP-03)', () => {
             const post = await apiPost;
             ti.annotations.push({ type: 'api-write', description: `${post.status ?? 'no answer'} after ${post.ms} ms` });
             await expectAtomic(owner, ch.id, apiText, post, 'API post');
-            const uiCopies = await waitFor('the UI send to settle', async () => {
+            // The send must settle one way or the other: one stored copy, or a visible refusal.
+            // A send still pending after recovery (or a polling error) fails here.
+            const ui = await waitFor('the UI send to settle', async () => {
                 const n = (await messages(owner, ch.id, 100)).filter(m => m.content === uiText).length;
                 const failed = await page.getByText('Failed to send').count();
-                return n > 0 || failed > 0 ? { n } : null;
-            }, 60_000, 1000).then(r => r.n).catch(() => 0);
-            expect(uiCopies, 'the UI message is stored at most once').toBeLessThanOrEqual(1);
-            if (uiCopies === 1) await expect(rowWith(page, uiText), 'shown once').toHaveCount(1, { timeout: 15_000 });
+                return n > 0 || failed > 0 ? { n, failed } : null;
+            }, 60_000, 1000);
+            ti.annotations.push({ type: 'ui-write', description: `stored ${ui.n}, refusal shown ${ui.failed > 0}` });
+            expect(ui.n, 'the UI message is stored at most once').toBeLessThanOrEqual(1);
+            if (ui.n === 1) await expect(rowWith(page, uiText), 'shown once').toHaveCount(1, { timeout: 15_000 });
+            else expect(ui.failed, 'not stored, so the UI shows the send failed').toBeGreaterThan(0);
 
             // The agent run finishes (on a redelivery if its report was lost) with exactly one reply
             const s = await waitFor('agent run to succeed', async () => {
