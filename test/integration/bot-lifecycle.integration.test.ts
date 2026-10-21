@@ -107,19 +107,19 @@ describe('S0121 PATCH /servers/:serverId/bots/:id', () => {
         for (const taken of ['dupb', 'blmember', 'blowner']) {
             const res = await ctx.request.patch(`/servers/${serverId}/bots/${a.id}`).set(owner.auth).send({ username: taken });
             expect(res.status).toBe(409);
-            expect(res.body).toEqual({ error: 'Username already taken' });
+            expect(res.body).toEqual({ error: 'username_taken' });
         }
         expect((await botRow(a.id)).username).toBe('dupa');
         expect((await ctx.db.query(`SELECT count(*)::int AS n FROM users WHERE username = 'dupb'`)).rows[0].n).toBe(1);
     });
 
-    // FINDING: usernames are unique case-sensitively (uq_users_username) but mentions resolve case-insensitively (shared.ts resolveMentions), so a bot renamed to a case variant of another bot's name is accepted and an @mention of either reaches both.
-    it.fails('[ID-05.bot-edit] a rename to a case variant of a taken name gives 409', async () => {
+    // Regression fixed by #190 (issue #189): case twins cannot share mention delivery.
+    it('[ID-05.bot-edit] a rename to a case variant of a taken name gives 409', async () => {
         await makeBot('casecodex');
         const twin = await makeBot('casetwin');
         const res = await ctx.request.patch(`/servers/${serverId}/bots/${twin.id}`).set(owner.auth).send({ username: 'CaseCodex' });
-        // Today: 200, and a following "@casecodex" post lists both bots in its mentions
         expect(res.status).toBe(409);
+        expect(res.body).toEqual({ error: 'username_taken' });
         expect((await botRow(twin.id)).username).toBe('casetwin');
     });
 

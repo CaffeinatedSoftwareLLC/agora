@@ -7,9 +7,8 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
  * SEC-01.user-search (S0238): GET /users/search (src/routes/users.ts:7).
  *
  * The wanted behaviour: a caller only finds people they share a server with, and `q` is a
- * literal prefix (`%` and `_` match themselves). On this candidate the query is instance-wide
- * and `q` goes into ILIKE unescaped, so the wanted-behaviour tests are `it.fails` findings.
- * The fix is on branch fix/141-scope-user-search (not merged here).
+ * literal prefix (`%` and `_` match themselves). Fixed by #173 (issue #141):
+ * the original three findings are required passing regressions on merged main.
  */
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
@@ -47,16 +46,16 @@ describe('GET /users/search: scope', () => {
         expect(await search(bob.auth, 'teama')).toEqual(['teamalice']);
     });
 
-    // FINDING: /users/search is instance-wide: a user sharing no server finds every username (src/routes/users.ts:22-26)
-    it.fails('[SEC-01.user-search] an outsider sharing no server gets no results for other users\' names', async () => {
+    // Regression fixed by #173: search is restricted to shared servers.
+    it('[SEC-01.user-search] an outsider sharing no server gets no results for other users\' names', async () => {
         const { outsider } = await outsiderSetup();
         expect(await search(outsider.auth, 'team')).toEqual([]);
         expect(await search(outsider.auth, 'teamalice')).toEqual([]);
     });
 
-    it('[SEC-01.user-search] current behaviour: the outsider finds both team members by prefix', async () => {
+    it('[SEC-01.user-search] an outsider cannot enumerate people with empty or wildcard queries', async () => {
         const { outsider } = await outsiderSetup();
-        expect(await search(outsider.auth, 'team')).toEqual(['teamalice', 'teambob']);
+        for (const q of ['', '%', '_']) expect(await search(outsider.auth, q)).toEqual([]);
     });
 });
 
@@ -73,33 +72,32 @@ describe('GET /users/search: q is a literal prefix', () => {
         return searcher;
     }
 
-    // FINDING: q goes into ILIKE unescaped, so `%` matches any run of characters (src/routes/users.ts:26 `q + '%'`)
-    it.fails('[SEC-01.user-search] `%` matches only a literal percent sign', async () => {
+    // Regression fixed by #173: percent signs are literal prefix characters.
+    it('[SEC-01.user-search] `%` matches only a literal percent sign', async () => {
         const searcher = await wildcardSetup();
         expect(await search(searcher.auth, 'pct%')).toEqual(['pct%name']);
         expect(await search(searcher.auth, '%')).toEqual([]);
     });
 
-    // FINDING: q goes into ILIKE unescaped, so `_` matches any single character (src/routes/users.ts:26)
-    it.fails('[SEC-01.user-search] `_` matches only a literal underscore', async () => {
+    // Regression fixed by #173: underscores are literal prefix characters.
+    it('[SEC-01.user-search] `_` matches only a literal underscore', async () => {
         const searcher = await wildcardSetup();
         expect(await search(searcher.auth, 'und_')).toEqual(['und_name']);
         expect(await search(searcher.auth, '_')).toEqual([]);
     });
 
-    it('[SEC-01.user-search] current behaviour: q=% lists exactly 20 of 25 users, none of them shares a server', async () => {
+    it('[SEC-01.user-search] q=% never lists unshared users and matching remains literal within a shared server', async () => {
         const searcher = await authedUser(ctx.request, 'pctlister');
         for (let i = 0; i < 25; i++) await authedUser(ctx.request, `lone${String(i).padStart(2, '0')}`);
         const memberships = await ctx.db.query('SELECT count(*)::int AS n FROM server_members');
         expect(memberships.rows[0].n).toBe(0);
 
         const all = await search(searcher.auth, '%');
-        expect(all).toHaveLength(20);
-        expect(all.every(n => /^lone\d\d$/.test(n))).toBe(true);
+        expect(all).toEqual([]);
         expect(await search(searcher.auth, 'pct%')).toEqual([]); // 'pctlister' is the caller, excluded
         const wildcards = await wildcardSetup();
-        expect(await search(wildcards.auth, 'pct%')).toEqual(['pct%name', 'pctlister', 'pctxname']);
-        expect(await search(wildcards.auth, 'und_')).toEqual(['und_name', 'undxname']);
+        expect(await search(wildcards.auth, 'pct%')).toEqual(['pct%name']);
+        expect(await search(wildcards.auth, 'und_')).toEqual(['und_name']);
     });
 });
 
