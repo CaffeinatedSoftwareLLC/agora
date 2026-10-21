@@ -22,6 +22,15 @@ export class Sensitive {
         this.values.push(value);
         recordRuntimeSecret(value);
     }
+    /**
+     * Like add(), but the value is only kept in this test's memory, never written to
+     * runtime-secrets.json: for the real provider test keys, which the end-of-run leak scan
+     * already gets in memory from lib/agent-keys.ts (agentKeysForScan).
+     */
+    addInMemory(value: string) {
+        this.active = true;
+        if (value && value.length >= 8 && !this.values.includes(value)) this.values.push(value);
+    }
     /** Replace every known value, and while active every token/invite-shaped string. */
     scrub(text: string): string {
         let out = text;

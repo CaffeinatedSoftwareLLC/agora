@@ -14,6 +14,16 @@ import path from 'node:path';
 import { artifactsDir, readEnvFile, SECRETS_DIR, SEED_FILE } from './env';
 import { knownSecrets, scanDir } from './leak-scan';
 import { runtimeSecrets } from './sensitive';
+import { agentKeysForScan } from './agent-keys';
+
+/**
+ * Every value the leak scan looks for: the seed's secrets, the instance's, values tests
+ * registered while running (minted tokens, invite codes, dummy agent keys: lib/sensitive.ts) and
+ * the agent E2E's real test keys, read in memory only when E2E_AGENT_LIVE=1 (lib/agent-keys.ts).
+ */
+export function scanSecrets(seedSecrets?: Record<string, unknown>, envSecrets: Record<string, string> = {}): string[] {
+    return knownSecrets([seedSecrets, envSecrets, { ...runtimeSecrets() }, agentKeysForScan()]);
+}
 
 export async function finalize(summary?: unknown) {
     const dir = artifactsDir();
@@ -24,8 +34,7 @@ export async function finalize(summary?: unknown) {
         const e = readEnvFile();
         envSecrets = { a: e.DB_PASSWORD, b: e.JWT_SECRET, c: e.AGORA_ENCRYPTION_KEY, d: e.AGORA_SETUP_TOKEN, e: e.E2E_OWNER_PASSWORD, f: e.E2E_MEMBER_PASSWORD };
     } catch { /* gone */ }
-    // Plus values tests registered while running (minted tokens, invite codes): lib/sensitive.ts
-    const secrets = knownSecrets([seedSecrets, envSecrets, { ...runtimeSecrets() }]);
+    const secrets = scanSecrets(seedSecrets, envSecrets);
 
     if (summary && fs.existsSync(dir)) fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(summary, null, 2));
 

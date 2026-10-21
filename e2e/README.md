@@ -148,6 +148,28 @@ cd e2e
 E2E_OPS=1 npx playwright test tests/ops-crash.spec.ts tests/ops-outage.spec.ts   # about 25-30 minutes
 ```
 
+## Providers and soak (not in the smoke set)
+
+Plan §3.5 OP-06 and OP-08.
+
+| Spec | Scenarios |
+|---|---|
+| `ops-providers.spec.ts` (`E2E_OPS=1`) | `OP-06.<provider>.<step>` for anthropic, openai, gemini (real test keys, only with `E2E_AGENT_LIVE=1`), compat (OpenAI-compatible/Ollama), kokoro, whisper, tavily, jev: save through Settings → AI, Test, one tiny invoke, a wrong key, 429, timeout and wrong endpoint (the provider stub), the fix. Every JSON response and socket frame the page gets, and a sweep of the AI settings reads, is checked for the key values; the key columns are checked to hold ciphertext. Providers that take no base URL get `not_applicable` for the stub cases. `E2E_ANTHROPIC_MODEL`, `E2E_OPENAI_MODEL`, `E2E_GEMINI_MODEL` (comma lists, tried in order while the model is a 404) pick the models. Writes `op06-evidence.jsonl` and `op06-cleanup.jsonl`. |
+| `ops-soak.spec.ts` (`E2E_SOAK=1`) | `OP-08.soak`: five browsers on two servers and three fake agents for `E2E_SOAK_MINUTES` (default 30): exactly-once storage and live delivery, cross-tenant and private-channel isolation of every socket frame, agent inbox drain, API memory bounds. Writes `soak-metrics.json`. |
+
+- Real keys stay in memory (lib/agent-keys.ts): tests register them with `sensitive.addInMemory()`,
+  the end-of-run leak scan gets them from `agentKeysForScan()`, tracing is off in that file and a
+  screenshot is taken only after checking the page shows no key. The bad-key, 429, timeout and
+  wrong-endpoint states use fake keys, so a real key never reaches the stub.
+- Everything OP-06 creates is deleted afterwards and the settings it touches (allow private base
+  URLs, the assistant's enabled flag, voice switches, routes) are put back and read back.
+
+```bash
+cd e2e
+E2E_OPS=1 E2E_AGENT_LIVE=1 npx playwright test tests/ops-providers.spec.ts   # about 8 minutes (one 300 s timeout case)
+E2E_SOAK=1 E2E_SOAK_MINUTES=30 npx playwright test tests/ops-soak.spec.ts      # the minutes plus about 5
+```
+
 Not covered yet (plan §2.2): code runs (blocked on the shared daemon until #126 is fixed), voice
 (needs a Whisper stub), admin approval/ban flows, WebKit.
 
