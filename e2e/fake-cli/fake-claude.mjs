@@ -27,10 +27,12 @@
  * A verify fix turn (no batch) changes nothing and succeeds without posting.
  *
  * Never prints the prompt, tokens or environment. Writes a one-line JSON trace per run to
- * <CLAUDE_CONFIG_DIR>/fake-runs.jsonl (directives, args summary) for the tests to read.
+ * <CLAUDE_CONFIG_DIR>/fake-runs.jsonl (directives, args summary) for the tests to read. The
+ * trace names the provider key variables present in this process's environment with a short
+ * SHA-256 prefix of each value (never the value), so a test can prove which key reached it.
  */
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -70,6 +72,10 @@ function parsePrompt(prompt) {
         hasInstructions: prompt.includes('Project instructions (authorized') };
 }
 
+const PROVIDER_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY'];
+const keyHashes = () => Object.fromEntries(PROVIDER_KEYS.filter(k => process.env[k])
+    .map(k => [k, createHash('sha256').update(process.env[k]).digest('hex').slice(0, 16)]));
+
 /** One MCP tools/call against the configured agora-mcp server (stdio, newline-delimited JSON-RPC). */
 async function mcpCall(tool, args) {
     const cfg = JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.agora;
@@ -107,7 +113,7 @@ async function main() {
     const { meta, hasBatch, thread, d, batchCount, wokeFromSleep, hasPinned, hasInstructions } = parsePrompt(prompt);
     const stateDir = process.env.CLAUDE_CONFIG_DIR;
     const trace = { at: new Date().toISOString(), runId: meta.runId ?? null, sessionId: meta.sessionId ?? null, resume: resume ?? null,
-        lurk, verifyTurn: !hasBatch, previewPorts: process.env.AGORA_PREVIEW_PORTS ?? null, directives: d, batchCount, wokeFromSleep, hasPinned, hasInstructions, allowed: allowed.filter(r => !r.startsWith('mcp__')), cwd: process.cwd() };
+        lurk, verifyTurn: !hasBatch, previewPorts: process.env.AGORA_PREVIEW_PORTS ?? null, directives: d, batchCount, wokeFromSleep, hasPinned, hasInstructions, allowed: allowed.filter(r => !r.startsWith('mcp__')), cwd: process.cwd(), providerKeys: keyHashes() };
     const tokens = Number(d.tokens) > 0 ? Number(d.tokens) : 120;
     emit({ type: 'system', subtype: 'init', session_id: sessionId, cwd: process.cwd(), tools: [], mcp_servers: [{ name: 'agora', status: 'connected' }] });
 

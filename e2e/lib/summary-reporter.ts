@@ -6,6 +6,11 @@ import { runId } from './env';
  * Collects per-test outcomes into artifacts/<run-id>/summary.json, then runs finalize()
  * (leak scan + delete secrets/). Runs in onExit so it is the very last step of a run.
  */
+function skipState(test: TestCase): string {
+    const reason = test.annotations.find(a => a.type === 'skip')?.description ?? '';
+    return /^blocked:/.test(reason) ? 'blocked' : /^skipped_budget:/.test(reason) ? 'skipped_budget' : 'not_applicable';
+}
+
 export default class SummaryReporter implements Reporter {
     private rows: any[] = [];
     private status = 'unknown';
@@ -20,7 +25,8 @@ export default class SummaryReporter implements Reporter {
             // starts passing, Playwright reports it failed, and so does this.
             result: test.expectedStatus === 'failed' && result.status === 'failed' ? 'expected_failure'
                 : result.status === 'passed' && test.expectedStatus !== 'failed' ? 'passed'
-                : result.status === 'skipped' ? 'not_applicable' : 'failed',
+                // §0 result states: a skip whose reason starts with blocked: / skipped_budget: keeps that state
+                : result.status === 'skipped' ? skipState(test) : 'failed',
             raw_status: result.status,
             skip_reason: test.annotations.find(a => a.type === 'skip' || a.type === 'blocked')?.description,
             elapsed_seconds: +(result.duration / 1000).toFixed(1),

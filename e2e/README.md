@@ -121,6 +121,79 @@ its own host; `fkdirector-e2e` (a run-tagged role with DirectAgents) plays the d
 Not covered yet (plan §2.2): code runs (blocked on the shared daemon until #126 is fixed), voice
 (needs a Whisper stub), admin approval/ban flows, WebKit.
 
+## Agent E2E with real CLIs (`@agent`, plan §3)
+
+`lib/agent-host.ts` starts a real `agora-host` from this checkout whose profiles run the real
+**Claude Code** (`claude.exe -p`), **Codex** (the native `codex.exe`, `codex exec`) and **Gemini CLI**
+over ACP (`node.exe` + `@google/gemini-cli/bundle/gemini.js --acp`). `tests/agents-live.spec.ts`
+holds scenarios A1–A22; `tests/agents-harness.spec.ts` checks the harness itself with the fake CLI.
+
+Isolation, enforced in code (plan §3.1):
+
+- **api_key only.** A `subscription` or `siwc` profile is refused before anything is registered,
+  and the generated host config is checked again before it is written.
+- **Keys only in the host child.** `AGORA_TEST_ANTHROPIC_KEY`, `AGORA_TEST_OPENAI_KEY` and
+  `AGORA_TEST_GEMINI_KEY` (environment, else `%USERPROFILE%\.agora-test\keys.env`, read only when
+  `E2E_AGENT_LIVE=1`) stay in memory (`lib/agent-keys.ts`) and are set as `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY` (or `CODEX_API_KEY` with `E2E_CODEX_KEY_ENV=CODEX_API_KEY`) and `GEMINI_API_KEY`
+  in the agora-host child's environment only. Every provider variable is stripped from what the
+  child inherits; the runner's own `process.env` never gets them. `finalize.ts` adds the key values
+  to the leak scan in memory; they are never written to disk.
+- **Fresh state dirs.** Each profile gets an empty temp `stateDir` (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+  `GEMINI_CLI_HOME`), asserted empty right before the host starts and deleted by `stop()`.
+- **Throwaway repo.** `<tmp>/repo`: `src/sum.js` (subtracts), `test/sum.test.js` (expects 5, fails),
+  `package.json` (`npm test` = `node --test`), `index.html`, with a local bare `origin`.
+- **Caps.** Every server profile: wake budget 10, token budget 200,000, run timeout 300 s. Claude CLI
+  profiles: `caps.maxBudgetUsd: 0.50` (the host refuses a USD cap on Codex and ACP).
+- **Models.** `E2E_MODEL_CLAUDE`, `E2E_MODEL_CODEX`, `E2E_MODEL_GEMINI` are required for a live run;
+  there are no defaults. The coordinator verifies the model IDs and their prices first.
+- **Token ledger.** `artifacts/<run>/agent-usage.json`: tokens, wakes and sessions per scenario (from
+  `/sessions`). When the total reaches `E2E_AGENT_TOKEN_CAP` (default 1,500,000) the remaining
+  scenarios are skipped as `skipped_budget`. The provider-side cap on each key stays the hard stop.
+
+Without `E2E_AGENT_LIVE=1`, all three keys and the three model variables, every live scenario is
+`blocked` (`summary.json`). `E2E_AGENT_FAKE=1` runs the live spec against the fake CLI instead (no
+provider, no spend); scenarios the fake can't perform are `not_applicable` there.
+
+```bash
+# Harness self-test (fake CLI, no spend)
+npx playwright test tests/agents-harness.spec.ts
+E2E_AGENT_FAKE=1 npx playwright test tests/agents-live.spec.ts
+
+# Live run (owner-approved spend; keys from the environment or ~/.agora-test/keys.env)
+E2E_AGENT_LIVE=1 E2E_MODEL_CLAUDE=<id> E2E_MODEL_CODEX=<id> E2E_MODEL_GEMINI=<id> npx playwright test tests/agents-harness.spec.ts tests/agents-live.spec.ts
+```
+
+Optional: `E2E_AGENT_TOKEN_CAP`, `E2E_CODEX_KEY_ENV`, `E2E_CODEX_WINDOWS_SANDBOX`
+(`elevated`/`unelevated`), and CLI paths `E2E_CLAUDE_EXE` (default `~/.local/bin/claude.exe`),
+`E2E_CODEX_EXE` (default the npm package's native `codex.exe`), `E2E_GEMINI_JS` (default
+`<npm root -g>/@google/gemini-cli/bundle/gemini.js`).
+
+| Scenario | Asserted (API / git) | Fake mode |
+|---|---|---|
+| `AG-02.A1-hello` | claude posts; session live; tokens > 0; auth api_key | yes |
+| `AG-03.A2-codex-gemini` | codex and gemini post; host log "Verified gemini over ACP"; gemini recorded `gemini-api-key` (soft) | posts only |
+| `AG-07.A3-fix-test` | `changedPaths` has `src/sum.js`; bot commit on `agora/<profile>/<session>`; `node --test` passes in the worktree; test file and main untouched | no `node --test` |
+| `AG-02.A4-native-resume` | no new Claude conversation file in its state dir; reply mentions the code word (soft) | `--resume` id |
+| `AG-01.A5-thread-mention` | reply from claude inside a thread started by the codex bot (`@Claude-E2E-…`) | yes |
+| `SEC-01.A6-member-refused` | member mention: no run, no reply | yes |
+| `SEC-01.A7-director-allowed` | director mention: run and reply | yes |
+| `AG-04.A8-preset-denial` | read-only: card for Edit/Write → Approve once → retry run changes `src/sum.js` | `Bash(node:*)` |
+| `AG-03.A9-codex-readonly` | NOTES.md not written; card or failed run recorded in the ledger note | no |
+| `AG-01.A10-budget-stop` | budget used+5,000 → shelved `budget` with the notice | yes |
+| `AG-01.A11-project-context` | last reply ends with BANANA | instructions in the wake |
+| `AG-08.A12-verify` | verify notice for `node --test` says passed | failed notice |
+| `UI-05.A13-canvas` | mermaid artifact by the bot; version 1 has content | no |
+| `AG-08.A14-browser-preview` | the test serves index.html on the session's preview port; bot post "Browser preview of …" with a PNG | no |
+| `UI-03.A15-image-reading` | runtime PNG "E2E-42" attached; reply contains 42 | no |
+| `AG-08.A16-subtask` | child session (parentSessionId) in its own thread, shelved `done`; parent woken again | no |
+| `AG-05.A17-handoff` | thread owner becomes codex; offer accepted | no |
+| `AG-05.A18-reservations` | one holder (claude); codex run did not change `src/sum.js` | no |
+| `UI-06.A19-task-board` | card started for codex: thread, scoped session, branch, codex reply in the thread | yes |
+| `AG-01.A20-lurk` | quiet lurk: ≤ 1 post after a wrong claim, none after a harmless post | yes |
+| `OP-03.A21-rate-limit` | only if a session slept for a rate limit, else `not_applicable` | — |
+| `AG-09.A22-terminal` | manual, `not_applicable` | — |
+
 ## Vision check costs
 
 `vision-judge.ts` is advisory only: it never fails a run. Model and request settings are in

@@ -9,6 +9,8 @@
     "down": "wsl.exe -d Ubuntu -- bash down.sh agora-e2e",
     "test": "playwright test",
     "smoke": "playwright test --grep @smoke",
+    "agent:harness": "playwright test tests/agents-harness.spec.ts",
+    "agent:live": "playwright test tests/agents-harness.spec.ts tests/agents-live.spec.ts",
     "judge": "tsx vision-judge.ts",
     "typecheck": "tsc --noEmit"
   },

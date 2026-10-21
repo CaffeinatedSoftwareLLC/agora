@@ -21,9 +21,9 @@ import { Api } from './api';
 import { artifactsDir, E2E_DIR, e2eEnv, runId, SECRETS_DIR, SEED_FILE } from './env';
 import type { Seed } from './seed-types';
 
-const REPO = path.resolve(E2E_DIR, '..');
-const HOST_DIR = path.join(REPO, 'agora-host');
-const MCP_DIR = path.join(REPO, 'agora-mcp');
+export const REPO = path.resolve(E2E_DIR, '..');
+export const HOST_DIR = path.join(REPO, 'agora-host');
+export const MCP_DIR = path.join(REPO, 'agora-mcp');
 const FAKE_SCRIPT = path.join(E2E_DIR, 'fake-cli', 'fake-claude.mjs');
 const LAUNCHER_SRC = path.join(E2E_DIR, 'fake-cli', 'launcher.cs');
 /** Passed to api_key profiles; the fake CLI never uses it and it is not a real key. */
@@ -61,7 +61,7 @@ export interface FakeHost {
 }
 export interface FakePreview { browser: string; portBase: number; portsPerSession?: number }
 
-function git(cwd: string, args: string[]) {
+export function git(cwd: string, args: string[]) {
     return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trim();
 }
 
@@ -81,7 +81,7 @@ export async function waitFor<T>(what: string, fn: () => Promise<T | null | unde
  * goes to artifacts/<run-id>/build-provenance.json (commit, a hash of uncommitted changes in
  * both packages, node version).
  */
-function ensureBuilt() {
+export function ensureBuilt() {
     const marker = path.join(SECRETS_DIR, `built-${runId()}`);
     if (fs.existsSync(marker)) return;
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -106,7 +106,7 @@ function ensureBuilt() {
 }
 
 /** The fake CLI as a native executable the host accepts (no .cmd/.js shims on Windows). */
-function buildLauncher(dir: string): string {
+export function buildLauncher(dir: string): string {
     if (process.platform !== 'win32') {
         const exe = path.join(dir, 'claude');
         fs.writeFileSync(exe, `#!/bin/sh\nexec "${process.execPath}" "${FAKE_SCRIPT}" "$@"\n`, { mode: 0o755 });
@@ -122,14 +122,14 @@ function buildLauncher(dir: string): string {
     return exe;
 }
 
-function killTree(pid: number) {
+export function killTree(pid: number) {
     try {
         if (process.platform === 'win32') execFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
         else process.kill(-pid, 'SIGKILL');
     } catch { /* already gone */ }
 }
 
-function addSecretsToSeed(values: Record<string, string>) {
+export function addSecretsToSeed(values: Record<string, string>) {
     try {
         const seed = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8'));
         seed.secrets.extra = { ...(seed.secrets.extra ?? {}), ...values };
@@ -137,7 +137,7 @@ function addSecretsToSeed(values: Record<string, string>) {
     } catch { /* seed gone: nothing to scan against */ }
 }
 
-function rmrf(p: string) {
+export function rmrf(p: string) {
     for (let i = 0; i < 5; i++) {
         try { fs.rmSync(p, { recursive: true, force: true }); return; } catch { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},400)']); }
     }
