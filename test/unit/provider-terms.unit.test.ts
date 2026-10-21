@@ -42,6 +42,23 @@ describe('provider terms', () => {
         expect(hits).toEqual([]);
     });
 
+    // beta-test-plan §6.1 "No Sign in with Claude/Google" and "No CLI auth-file reads": the wider
+    // phrasings and endpoints, scripts/ included, and the CLIs' own home folders by path
+    it('offers no Claude or Google login in any wording, and no source reaches a CLI home folder', () => {
+        const LOGIN = /(sign in|sign-in|log in|log-in|login|continue) with (claude|google|anthropic|gemini)/i;
+        const ENDPOINTS = /accounts\.google\.com|oauth2\.googleapis\.com|claude\.ai\/oauth|console\.anthropic\.com\/oauth/i;
+        const CLI_HOME = /~[\\/]\.(claude|codex|gemini)\b|['"`]\.(claude|codex|gemini)['"`]/;
+        const all = [...DIRS, 'scripts'].flatMap(d => files(join(ROOT, d)));
+        const rel = (f: string) => f.slice(ROOT.length + 1).replace(/\\/g, '/');
+        expect(all.filter(f => LOGIN.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+        expect(all.filter(f => ENDPOINTS.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+        // Code only: a comment may say what is kept out (adapters.ts explains why ~/.gemini is)
+        const code = (f: string) => readFileSync(f, 'utf8').split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        expect(all.filter(f => CLI_HOME.test(code(f))).map(rel)).toEqual([]);
+        // The scan saw the whole tree, not an empty folder
+        expect(all.length).toBeGreaterThan(200);
+    });
+
     it('explains a refusal and a run card in plain words', () => {
         expect(subscriptionNotice('claude')).toBe("claude runs on the owner's personal subscription; ask the owner, or configure an API key profile.");
         expect(runCardText('gem', 'pending', undefined, 'eryk: hi')).toBe('gem wants to run for: "eryk: hi". It needs the owner\'s approval for every run. Approve to start it.');

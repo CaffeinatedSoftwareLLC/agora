@@ -3,6 +3,7 @@ import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } 
 import { generateUlid } from '../../src/utils/ulid';
 import { hashPassword } from '../../src/auth/passwords';
 import { generateToken } from '../../src/auth/tokens';
+import { invalidateSettingsCache } from '../../src/lib/settings';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: any, member: any, serverId: string, channelId: string, everyoneRoleId: string;
@@ -143,6 +144,118 @@ describe('Admin file settings', () => {
             .set(member.auth);
 
         expect(res.status).toBe(403);
+    });
+
+    // #155: Ajv coercion inside oneOf turned null into 0, and /admin/storage then divided by zero
+    test('PATCH null retention and quota round-trips as null, and /admin/storage still loads', async () => {
+        const set = await ctx.request.patch('/admin/settings/files').set(admin.auth)
+            .send({ 'files.retention_days': 30, 'files.storage_quota_bytes': 1073741824 });
+        expect(set.status).toBe(200);
+
+        const clear = await ctx.request.patch('/admin/settings/files').set(admin.auth)
+            .send({ 'files.retention_days': null, 'files.storage_quota_bytes': null });
+        expect(clear.status).toBe(200);
+
+        const stored = await ctx.db.query(
+            "SELECT key, value FROM instance_settings WHERE key IN ('files.retention_days', 'files.storage_quota_bytes') ORDER BY key");
+        expect(stored.rows).toEqual([
+            { key: 'files.retention_days', value: null },
+            { key: 'files.storage_quota_bytes', value: null },
+        ]);
+        const got = await ctx.request.get('/admin/settings/files').set(admin.auth);
+        expect(got.body['files.retention_days']).toBeNull();
+        expect(got.body['files.storage_quota_bytes']).toBeNull();
+
+        const storage = await ctx.request.get('/admin/storage').set(admin.auth);
+        expect(storage.status).toBe(200);
+        expect(storage.body.quotaBytes).toBeNull();
+        expect(storage.body.quotaUsedPercent).toBeNull();
+    });
+
+    test('PATCH rejects 0 for retention and quota', async () => {
+        expect((await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.retention_days': 0 })).status).toBe(400);
+        expect((await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.storage_quota_bytes': 0 })).status).toBe(400);
+    });
+
+    test('a stored quota of 0 counts as no quota instead of a 500', async () => {
+        // Rows the coercion bug already wrote on existing instances
+        await ctx.db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ('files.storage_quota_bytes', '0'::jsonb)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+        invalidateSettingsCache();
+        try {
+            const storage = await ctx.request.get('/admin/storage').set(admin.auth);
+            expect(storage.status).toBe(200);
+            expect(storage.body.quotaBytes).toBeNull();
+            expect(storage.body.quotaUsedPercent).toBeNull();
+        } finally {
+            await ctx.db.query(
+                `UPDATE instance_settings SET value = 'null'::jsonb WHERE key = 'files.storage_quota_bytes'`);
+            invalidateSettingsCache();
+        }
+    });
+
+    test('PATCH /admin/settings/runtime keeps a null code retention as null', async () => {
+        const res = await ctx.request.patch('/admin/settings/runtime').set(admin.auth).send({ codeRetentionDays: null });
+        expect(res.status).toBe(200);
+        expect(res.body.codeRetentionDays).toBeNull();
+        const stored = await ctx.db.query("SELECT value FROM instance_settings WHERE key = 'runtime.code_retention_days'");
+        expect(stored.rows[0].value).toBeNull();
+        expect((await ctx.request.get('/admin/settings/runtime').set(admin.auth)).body.codeRetentionDays).toBeNull();
+        // Back to the default retention for the rest of the file
+        await ctx.request.patch('/admin/settings/runtime').set(admin.auth).send({ codeRetentionDays: 30, confirm: true });
+    });
+});
+
+// #157: @fastify/multipart's default fileSize (Fastify's 1 MiB bodyLimit) refused files before
+// storeFile() saw them. The admin setting is the only cap.
+describe('Upload size follows the admin setting', () => {
+    let admin: any;
+    const MB = 1000 * 1000;
+
+    beforeAll(async () => { admin = await insertAdminUser('sizeadmin'); });
+
+    async function setMaxSize(bytes: number) {
+        const res = await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.max_size_bytes': bytes });
+        expect(res.status).toBe(200);
+    }
+    const fileCount = async () => (await ctx.db.query('SELECT COUNT(*)::int AS n FROM files')).rows[0].n as number;
+
+    test('a 1.5 MB file under a 25 MB setting is stored', async () => {
+        await setMaxSize(25 * 1024 * 1024);
+        const res = await ctx.request.post('/files/upload').set(owner.auth)
+            .field('channel_id', channelId)
+            .attach('file', Buffer.alloc(1.5 * MB, 'a'), 'one-and-a-half.txt');
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        expect(res.body.size).toBe(1.5 * MB);
+    });
+
+    test('a 2 MB file over a 1 MB setting gets the setting refusal and stores nothing', async () => {
+        await setMaxSize(1 * MB);
+        try {
+            const before = await fileCount();
+            const res = await ctx.request.post('/files/upload').set(owner.auth)
+                .field('channel_id', channelId)
+                .attach('file', Buffer.alloc(2 * MB, 'b'), 'two.txt');
+            expect(res.status).toBe(413);
+            expect(res.body.error).toBe('File exceeds maximum allowed size');
+            expect(res.body.code).toBeUndefined();
+            expect(await fileCount()).toBe(before);
+        } finally {
+            await setMaxSize(26214400);
+        }
+    });
+
+    test('a file exactly at the setting is stored', async () => {
+        await setMaxSize(1 * MB);
+        try {
+            const res = await ctx.request.post('/files/upload').set(owner.auth)
+                .field('channel_id', channelId)
+                .attach('file', Buffer.alloc(1 * MB, 'c'), 'exact.txt');
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+        } finally {
+            await setMaxSize(26214400);
+        }
     });
 });
 

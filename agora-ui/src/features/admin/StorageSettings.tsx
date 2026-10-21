@@ -43,7 +43,8 @@ export function StorageSettings() {
         setStats(storageStats);
         setMaxSizeMB(Math.round((fileSettings['files.max_size_bytes'] ?? 26214400) / 1048576));
         setAllowedExtensions(fileSettings['files.allowed_extensions'] ?? []);
-        setRetentionDays(fileSettings['files.retention_days'] ?? null);
+        // A stored 0 (old #155 bug) means no limit; saving it back would fail validation
+        setRetentionDays(fileSettings['files.retention_days'] || null);
         setExifStrip(fileSettings['files.exif_strip'] ?? true);
       })
       .catch((err) => {

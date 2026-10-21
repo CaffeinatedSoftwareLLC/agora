@@ -168,6 +168,25 @@ describe('playback', () => {
     expect(useVoiceStore.getState().speaking).toBeNull();
   });
 
+  // beta-test-plan §6.4 "Text length": a 5,000-character message read with a 1,500 limit
+  it('reads a 5,000-character message cut at a sentence within the limit, saying the rest is in the message', async () => {
+    const sentences = Array.from({ length: 200 }, (_, i) => `Step ${String(i).padStart(3, '0')} of the plan is done.`);
+    const content = sentences.join(' ').slice(0, 5000);
+    expect(content.length).toBe(5000);
+    useVoiceStore.setState({ channels: { C1: SERVER, C2: { ...BROWSER, maxChars: 1500 } } });
+    useVoiceStore.getState().speak({ id: 'L1', channelId: 'C2', content });
+    await flush();
+    expect(speech).not.toHaveBeenCalled();
+    expect(spoken).toHaveLength(1);
+    const text = spoken[0].text;
+    const SUFFIX = ' The rest is in the message.';
+    expect(text.endsWith(`is done.${SUFFIX}`)).toBe(true);
+    const body = text.slice(0, -SUFFIX.length);
+    expect(body.length).toBeLessThanOrEqual(1500);
+    expect(body.length).toBeGreaterThan(1000);
+    expect(content.startsWith(body)).toBe(true);
+  });
+
   it('loads the channel’s engines when it does not know them yet, and stays quiet where voice is off', async () => {
     forChannel.mockResolvedValue({ ...SERVER, output: 'off' });
     useVoiceStore.getState().speak({ id: 'M4', channelId: 'C9', content: 'hi' });

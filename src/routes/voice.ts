@@ -91,12 +91,18 @@ async function channelForVoice(request: FastifyRequest, reply: FastifyReply, per
 }
 
 /** Resolve a voice route and its budget; replies with the refusal when it can't be used. */
-async function voiceRoute(db: any, reply: FastifyReply, serverId: string, capability: 'stt' | 'tts'): Promise<ResolvedRoute | null> {
+async function voiceRoute(db: any, reply: FastifyReply, serverId: string, capability: 'stt' | 'tts', opts: { budget?: boolean } = {}): Promise<ResolvedRoute | null> {
     const resolved = await resolveRoute(db, serverId, capability);
     if (!resolved.ok) { reply.status(503).send({ error: resolved.error, code: 'voice_unavailable' }); return null; }
-    const budget = await checkBudget(db, resolved.value.route);
-    if (!budget.ok) { reply.status(429).send({ error: budget.error, code: 'budget_exceeded' }); return null; }
+    if (opts.budget !== false && !(await withinBudget(db, reply, resolved.value))) return null;
     return resolved.value;
+}
+
+/** The route's daily limits; replies 429 when one is spent. */
+async function withinBudget(db: any, reply: FastifyReply, resolved: ResolvedRoute): Promise<boolean> {
+    const budget = await checkBudget(db, resolved.route);
+    if (!budget.ok) { reply.status(429).send({ error: budget.error, code: 'budget_exceeded' }); return false; }
+    return true;
 }
 
 /**
@@ -309,7 +315,8 @@ export async function voiceRoutes(app: FastifyInstance) {
         if (!row || row.deleted_at) return reply.status(404).send({ error: 'Message not found' });
         if (row.system_event || !row.content?.trim()) return reply.status(422).send({ error: 'This message has nothing to read aloud', code: 'nothing_to_read' });
 
-        const route = await voiceRoute(db, reply, serverId, 'tts');
+        // The budget is checked after the cache: replaying audio already made costs no provider call (#143)
+        const route = await voiceRoute(db, reply, serverId, 'tts', { budget: false });
         if (!route) return reply;
 
         const voice = settings.readAloudVoice ?? undefined;
@@ -318,6 +325,7 @@ export async function voiceRoutes(app: FastifyInstance) {
         const key = [msgId, contentHash, route.providerId, route.model, voice ?? '', settings.readAloudMaxChars].join('|');
         const hit = cachedSpeech(key);
         if (hit) return reply.header('Cache-Control', 'private, max-age=3600').type(hit.mime).send(hit.data);
+        if (!(await withinBudget(db, reply, route))) return reply;
 
         const ids = mentionedIds(row.content);
         const names = new Map<string, string>();

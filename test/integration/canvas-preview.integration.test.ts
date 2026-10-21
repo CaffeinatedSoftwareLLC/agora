@@ -152,6 +152,21 @@ describe('browser previews', () => {
             'http://localhost.evil.com:80/', 'http://0.0.0.0:3000/', 'javascript:alert(1)', 'not a url']) expect(previewUrl(bad), bad).toBeNull();
     });
 
+    // beta-test-plan §6.2 "Preview port isolation", server side: fixed code, nothing queued
+    it('refuses a URL off loopback, with credentials or without a port: 400 url_not_allowed, nothing queued', async () => {
+        for (const url of ['https://example.com:443/', 'http://192.168.1.10:8080/', 'http://10.0.0.5:3000/', 'http://user:pw@localhost:3000/',
+            'http://:pw@127.0.0.1:3000/', 'http://localhost/', 'https://127.0.0.1/', 'http://localhost.evil.com:80/', 'http://0.0.0.0:3000/',
+            'file:///etc/passwd', 'javascript:alert(1)']) {
+            for (const auth of [botAuth, owner.auth]) {
+                const res = await queue(auth === owner.auth ? { url, sessionId } : { url }, auth);
+                expect(res.status, url).toBe(400);
+                expect(res.body.error, url).toBe('url_not_allowed');
+            }
+        }
+        expect((await ctx.db.query('SELECT count(*)::int AS n FROM browser_previews WHERE session_id = $1', [sessionId])).rows[0].n).toBe(0);
+        expect((await next()).status).toBe(204);
+    });
+
     it('lets an agent preview its own session, and a director any session; one at a time', async () => {
         expect((await queue({ url: 'https://example.com:443/' })).status).toBe(400);
         expect((await queue({ url: 'http://localhost:5173/' }, outsider.auth)).status).toBe(403);

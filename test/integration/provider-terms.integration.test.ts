@@ -420,3 +420,59 @@ describe('run approval', () => {
         expect((await decide(posted[0].system_data.approvalId, 'approve')).status).toBe(409);
     });
 });
+
+/**
+ * beta-test-plan §6.1 "Subscription profiles are owner-only": a refusal changes nothing (no
+ * session row, no wake, nothing to claim), and a director's approve-once on a subscription
+ * agent is kept for the owner's next run.
+ */
+describe('beta §6.1: subscription refusals leave nothing behind', () => {
+    const sessionsOf = async (agent: Agent) =>
+        (await ctx.db.query(`SELECT count(*)::int AS n FROM agent_sessions WHERE profile_id = $1`, [agent.profileId])).rows[0].n;
+
+    it('a refused /start creates no session, no wake and no run', async () => {
+        const byDirector = await cmd(director.auth, { command: 'start', profile: 'alpha' });
+        expect(byDirector.status).toBe(403);
+        expect(byDirector.body.error).toBe('subscription_owner_only');
+        const byMember = await cmd(member.auth, { command: 'start', profile: 'alpha' });
+        expect(byMember.status).toBe(403);
+        expect(byMember.body.error).toBe('cannot_direct');
+        expect(await sessionsOf(alpha)).toBe(0);
+        expect((await ctx.db.query(`SELECT count(*)::int AS n FROM agent_inbox`)).rows[0].n).toBe(0);
+        expect((await ctx.db.query(`SELECT count(*)::int AS n FROM agent_runs`)).rows[0].n).toBe(0);
+        expect((await claim()).status).toBe(204);
+    });
+
+    it('a refused /resume leaves the session shelved and the owner\'s, with no wake', async () => {
+        const s = await startSession(alpha);
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'shelved', end_reason = 'user' WHERE id = $1`, [s]);
+        const byDirector = await cmd(director.auth, { command: 'resume', sessionId: s });
+        expect(byDirector.status).toBe(403);
+        expect(byDirector.body.error).toBe('subscription_owner_only');
+        const byMember = await cmd(member.auth, { command: 'resume', sessionId: s });
+        expect(byMember.status).toBe(403);
+        expect(byMember.body.error).toBe('cannot_direct');
+        const row = (await ctx.db.query(`SELECT state, started_by FROM agent_sessions WHERE id = $1`, [s])).rows[0];
+        expect(row.state).toBe('shelved');
+        expect(row.started_by.trim()).toBe(owner.userId);
+        expect(await inbox(s)).toEqual([]);
+        expect((await claim()).status).toBe(204);
+    });
+
+    it('a director\'s approve-once wakes nothing and is granted to the owner\'s next run', async () => {
+        const s = await startSession(alpha);
+        const id = generateUlid();
+        await ctx.db.query(`INSERT INTO agent_tool_requests (id, server_id, session_id, profile_id, tool) VALUES ($1, $2, $3, $4, 'Bash(gh:*)')`,
+            [id, serverId, s, alpha.profileId]);
+        const res = await ctx.request.post(`/channels/${channelId}/agent-tool-requests/${id}`).set(director.auth).send({ decision: 'once' });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(res.body.status).toBe('once');
+        expect(await inbox(s)).toEqual([]);
+        expect((await claim()).status).toBe(204);
+
+        await post(owner.auth, '@alpha retry the release step');
+        const c = await claim();
+        expect(c.status).toBe(200);
+        expect(c.body.run.grantedTools).toEqual(['Bash(gh:*)']);
+    });
+});

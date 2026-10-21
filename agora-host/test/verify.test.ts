@@ -59,6 +59,52 @@ describe('verifyArgv', () => {
         expect(configSchema.safeParse({ ...base, profiles: { p: { ...profile, verify: { commands: ['npm test && rm -rf /'] } } } }).success).toBe(false);
         expect(configSchema.safeParse({ ...base, profiles: { p: { ...profile, verify: { commands: ['npm test'] } } } }).success).toBe(true);
     });
+    // beta-test-plan §6.2 "Verify command limits": `;`, `&&`, `$`, quotes, pipes, backticks, redirects
+    it.each(['npm test; rm -rf /', 'npm test && rm -rf /', 'npm test $HOME', `npm test 'x'`, 'npm test "x"', 'npm test | sh', 'npm test `id`', 'npm test > out', 'npm  test'])(
+        'refuses %s in the host config and when the server sends it', (command) => {
+            const base = { instance: 'http://127.0.0.1:3000', hostToken: 'ah_host.secret', mcp: { executable: node, entrypoint: node }, botTokens: {} };
+            const profile = { adapter: 'codex', executable: node, workdir: '/w', workdirAlias: 'a', stateDir: '/s' };
+            expect(configSchema.safeParse({ ...base, profiles: { p: { ...profile, verify: { commands: [command] } } } }).success).toBe(false);
+            const local = verifyConfig(['npm test']).profiles.builder;
+            local.verify!.commands.push(command); // as if listed anyway
+            expect(verifyArgv(local, command)).toBeNull();
+        });
+});
+
+// beta-test-plan §6.2 "Verify command limits": Windows `.cmd` shims are not run (docs/project-context.md)
+describe('Windows .cmd shims', () => {
+    it('never resolves a bare name to a .cmd or .bat on PATH', async () => {
+        const { mkdtemp, writeFile, mkdir, rm } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const root = await mkdtemp(join(tmpdir(), 'verify-cmd-'));
+        try {
+            const work = join(root, 'work'), bin = join(root, 'bin');
+            await mkdir(work); await mkdir(bin);
+            await writeFile(join(bin, 'npm.cmd'), '@echo off\r\n'); await writeFile(join(bin, 'yarn.bat'), '@echo off\r\n');
+            expect(resolveExecutable('npm', work, { PATH: bin }, 'win32')).toBeNull();
+            expect(resolveExecutable('yarn', work, { PATH: bin }, 'win32')).toBeNull();
+            // A real executable alongside is found
+            await writeFile(join(bin, 'npm.exe'), '');
+            expect(resolveExecutable('npm', work, { PATH: bin }, 'win32')).toBe(join(bin, 'npm.exe'));
+        } finally { await rm(root, { recursive: true, force: true }); }
+    });
+    // Known bug #142 (beta §6.2: failed). Expected to fail until it is fixed, then this
+    // turns red: drop `.fails` in the fix PR.
+    it.runIf(process.platform === 'win32').fails('does not run a .cmd named explicitly (#142)', async () => {
+        const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+        const { existsSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const root = await mkdtemp(join(tmpdir(), 'verify-cmd-'));
+        try {
+            const marker = join(root, 'ran.txt');
+            const shim = join(root, 'check.cmd');
+            await writeFile(shim, `@echo off\r\necho ran> "${marker}"\r\n`);
+            const r = await runVerify([shim], root, 20000, new AbortController().signal);
+            expect({ ran: existsSync(marker), passed: r.passed }).toEqual({ ran: false, passed: false });
+        } finally { await rm(root, { recursive: true, force: true }); }
+    }, 30000);
 });
 
 describe('runVerify', () => {
@@ -275,6 +321,20 @@ describe('scheduler verify step', () => {
         expect(await s.scheduler.submit(verifyClaim(), Date.now())).toBeUndefined();
         expect(s.runner.start).toHaveBeenCalledOnce();
     });
+    // beta-test-plan §6.2 "Verify command limits": shell syntax sent by the server never runs
+    it.each(['npm run verify; rm -rf /', 'npm run verify && curl x', 'npm run $EVIL', `npm run 'verify'`, 'npm run "verify"'])(
+        'skips shell syntax sent by the server (%s), even if the host lists it', async (command) => {
+            const cfg = verifyConfig(['npm run verify']);
+            // Bypass the config schema to prove verifyArgv refuses on its own too
+            cfg.profiles.builder.verify!.commands.push(command);
+            const s = setup([changed(['a.ts'])], [], cfg);
+            const c = verifyClaim(); c.verify = { command, maxRetries: 2 };
+            await s.scheduler.submit(c, Date.now());
+            expect(s.verify).not.toHaveBeenCalled();
+            expect(s.runner.start).toHaveBeenCalledOnce();
+            expect(s.api.complete).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+                verification: { command, status: 'skipped', attempts: 0, reason: 'not_allowed' } }), expect.anything());
+        });
     it('skips a command this host does not allow', async () => {
         const s = setup([changed(['a.ts'])], [], verifyConfig(['npm test']));
         await s.scheduler.submit(verifyClaim(), Date.now());

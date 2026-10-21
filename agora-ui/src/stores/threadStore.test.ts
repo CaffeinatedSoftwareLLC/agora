@@ -148,3 +148,45 @@ describe('threadStore active-thread list races (#128)', () => {
     expect(useThreadStore.getState().activeThreads.get('ch-1')!.map((t) => t.id)).toEqual(['thread-new']);
   });
 });
+
+describe('threadStore.sendReply vs its socket echo (#149)', () => {
+  const echo = (id: string, content: string) => ({
+    id, content, authorId: 'u1', authorUsername: 'alice', channelId: 'ch-1',
+    createdAt: '2026-10-20T12:05:00.000Z', threadId: 'parent-1',
+  });
+  const copies = (text: string) =>
+    useThreadStore.getState().repliesByThread.get('parent-1')!.filter((m) => m.content === text);
+
+  it('keeps one copy when the echo arrives before the POST response', async () => {
+    const post = deferred<{ id: string }>();
+    mockApi.post.mockReturnValueOnce(post.promise);
+    const sending = useThreadStore.getState().sendReply('ch-1', 'parent-1', 'Reply check', 'u1', 'alice');
+    expect(copies('Reply check')).toHaveLength(1);
+
+    useThreadStore.getState().addReply(echo('reply-1', 'Reply check'));
+    // The echo replaces the optimistic row at once: no moment with two copies
+    expect(copies('Reply check')).toHaveLength(1);
+    expect(copies('Reply check')[0].id).toBe('reply-1');
+    expect(copies('Reply check')[0].pending).toBeUndefined();
+
+    post.resolve({ id: 'reply-1' });
+    await sending;
+    expect(copies('Reply check')).toHaveLength(1);
+    expect(copies('Reply check')[0].id).toBe('reply-1');
+  });
+
+  it('keeps one copy when the POST response arrives before the echo', async () => {
+    const post = deferred<{ id: string }>();
+    mockApi.post.mockReturnValueOnce(post.promise);
+    const sending = useThreadStore.getState().sendReply('ch-1', 'parent-1', 'Reply check', 'u1', 'alice');
+
+    post.resolve({ id: 'reply-1' });
+    await sending;
+    expect(copies('Reply check')).toHaveLength(1);
+    expect(copies('Reply check')[0]).toMatchObject({ id: 'reply-1', pending: true });
+
+    useThreadStore.getState().addReply(echo('reply-1', 'Reply check'));
+    expect(copies('Reply check')).toHaveLength(1);
+    expect(copies('Reply check')[0].pending).toBeUndefined();
+  });
+});

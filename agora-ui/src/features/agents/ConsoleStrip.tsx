@@ -8,7 +8,7 @@ import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { ProtocolBadge } from '../messages/ProtocolBadge';
 import { latestProtocol } from '../messages/latestProtocol';
 import {
-  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownSessionChips, ownSessionDetail,
+  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownSessionChips, ownSessionDetail, resetTime,
   type AgentProfile, type AgentSession, type OwnSessionStatus,
 } from './agentSessions';
 import { SessionSheet, StateDot, type SheetMode } from './SessionSheet';
@@ -134,18 +134,21 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
     >
       {chips.map(chip => {
         const tokens = chip.session.state !== 'ended' && chip.session.tokensUsed > 0 ? compactTokens(chip.session.tokensUsed) : null;
+        // A rate-limited agent says so on the chip, with the reset time (#147)
+        const resets = chip.state === 'sleeping' && chip.session.sleepingUntil ? resetTime(chip.session.sleepingUntil) : null;
         return (
           <button
             key={chip.profile}
             type="button"
             className={CHIP_TARGET}
             aria-haspopup="dialog"
-            aria-label={`${chip.profile}: ${STATE_LABEL[chip.state].toLowerCase()}${tokens ? `, ${tokens} tokens` : ''}. Open session controls`}
+            aria-label={`${chip.profile}: ${STATE_LABEL[chip.state].toLowerCase()}${resets ? `, resets ${resets}` : ''}${tokens ? `, ${tokens} tokens` : ''}. Open session controls`}
             onClick={() => setSheet({ mode: { kind: 'profile', profile: chip.profile }, key: Date.now(), channelId })}
           >
             <span className={CHIP_PILL}>
               <StateDot state={chip.state} />
               <span className="font-medium">{chip.profile}</span>
+              {resets && <span className="text-xs text-text-muted">Sleeping · <span className="hidden sm:inline">resets </span>{resets}</span>}
               {tokens && <span className="font-mono text-xs text-text-muted">{tokens}</span>}
             </span>
           </button>

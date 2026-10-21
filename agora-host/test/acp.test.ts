@@ -11,7 +11,7 @@ import { ProcessRunner } from '../src/process.js';
 import { probeAcp, summaryOf, type AcpPlan } from '../src/acp/session.js';
 import { allowedCall, commandOf, locationsInside, geminiPolicy, outcome, ruleForCall } from '../src/acp/permissions.js';
 import { HostConfigError } from '../src/terms.js';
-import { claim, config, tempDir } from './helpers.js';
+import { claim, config, stubCommands, tempDir } from './helpers.js';
 
 /** The ACP adapter path (src/acp/), driven against test/fixtures/fake-acp-agent.mjs. */
 
@@ -151,9 +151,12 @@ describe('ACP permission rules', () => {
         expect(await argv([join(repo.dir, 'tools', 'bash'), '-lc', 'git status'])).toBe(false);
         // A command missing from PATH is refused
         expect(await run('gitx status', { rules: new Set(['Bash(gitx status:*)']) })).toBe(false);
-        // Windows looks in the current directory before PATH: a repo git.exe there refuses `git`
+        // A repo-root git refuses `git`: Windows looks in the current directory before PATH, and
+        // on POSIX this PATH starts with `.`, which is the current directory too
         await writeFile(join(repo.dir, exe), '');
-        expect(await run('git status')).toBe(!win);
+        expect(await run('git status')).toBe(false);
+        // Without `.` in PATH, POSIX never looks in the current directory
+        expect(await run('git status', { env: { ...env, PATH: bin.dir } })).toBe(!win);
         // A bare Bash grant already allows any command
         expect(await run('./git status', { rules: new Set(['Bash']) })).toBe(true);
     });
@@ -197,7 +200,10 @@ describe('ACP permission rules', () => {
 describe('ACP session turn (fake agent)', () => {
     it('runs one turn: answers permissions from the rules, reports denials, diffs, plan, usage', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);
+        // The fake agent asks for `gh`; a narrow Bash(gh:*) rule needs it on PATH
+        const gh = await stubCommands(['gh']); cleanups.push(gh.cleanup);
         const { result, messages, sent, child } = await run({
+            PATH: gh.path,
             ACP_TOOLS: tools(t.dir), ACP_USAGE: JSON.stringify({ totalTokens: 42, inputTokens: 30, outputTokens: 12 }),
             ACP_CONFIG: JSON.stringify([{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'flash',
                 options: [{ value: 'flash', name: 'Flash' }, { group: 'pro', name: 'Pro', options: [{ value: 'gemini-pro', name: 'Gemini Pro' }] }] }]),
@@ -229,6 +235,36 @@ describe('ACP session turn (fake agent)', () => {
         const step = child.progress?.()?.step ?? '';
         expect(step).toBe('Denied Bash');
         expect(step).not.toMatch(/[\u0000-\u001f]|curl/);
+    });
+    // beta-test-plan §6.2 "ACP path rules": each refused in a real turn, and none becomes a card
+    it('refuses a relative ../ edit, a link out of the worktree and ./git in a turn, with no card', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const link = join(t.dir, 'link');
+        // A junction on Windows needs no privilege; elsewhere a directory symlink. No silent skip.
+        await symlink(join(t.dir, '..'), link, process.platform === 'win32' ? 'junction' : 'dir');
+        const { result, messages } = await run({ ACP_TOOLS: JSON.stringify([
+            { kind: 'edit', name: 'Write', title: 'Write', rawInput: { file_path: '../outside.txt' } },
+            { kind: 'edit', name: 'Edit', title: 'Edit', rawInput: {}, locations: [{ path: '../outside.txt' }] },
+            { kind: 'edit', name: 'Write', title: 'Write', rawInput: {}, locations: [{ path: join(link, 'outside.txt') }] },
+            { kind: 'execute', title: './git status', rawInput: { command: './git status' } },
+            { kind: 'execute', title: 'git status', rawInput: { command: 'git status -s' } },
+        ]) }, { rules: ['Edit', 'Write', 'Bash(git status:*)'] }, { cwd: t.dir });
+        // The last call is the control: the trusted PATH git with a matching rule is allowed
+        expect(messages.filter(m => m.permission).map(m => m.answer.outcome.optionId ?? m.answer.outcome.outcome)).toEqual(['no', 'no', 'no', 'no', 'yes']);
+        expect(result.deniedTools ?? []).toEqual([]);
+        expect(result.success).toBe(true);
+    });
+    it.runIf(process.platform === 'win32')('refuses a bare git while a git.exe sits in the worktree, with no card', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const call = JSON.stringify([{ kind: 'execute', title: 'git status', rawInput: { command: 'git status -s' } }]);
+        const answers = (messages: any[]) => messages.filter(m => m.permission).map(m => m.answer.outcome.optionId ?? m.answer.outcome.outcome);
+        const before = await run({ ACP_TOOLS: call }, { rules: ['Bash(git status:*)'] }, { cwd: t.dir });
+        expect(answers(before.messages)).toEqual(['yes']);
+        await writeFile(join(t.dir, 'git.exe'), '');
+        const after = await run({ ACP_TOOLS: call }, { rules: ['Bash(git status:*)'] }, { cwd: t.dir });
+        expect(answers(after.messages)).toEqual(['no']);
+        expect(after.result.deniedTools ?? []).toEqual([]);
+        expect(after.child.progress?.()?.step).toBe('Denied a command that is not a trusted executable on PATH');
     });
     it('authenticates an API-key profile with its key method only, and never a login', async () => {
         const methods = JSON.stringify([{ id: 'oauth-personal', name: 'Log in with Google' }, { id: 'gemini-api-key', name: 'Use Gemini API key' }]);

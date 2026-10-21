@@ -157,6 +157,34 @@ describe('canvas pane', () => {
     expect(view.container.querySelector('iframe')!.getAttribute('srcdoc')).toContain('<svg id="d">');
   });
 
+  // beta-test-plan §6.2 "Canvas sandbox": no form submit, no popups or top navigation, SVG can't script
+  it('blocks form submits and base changes, and gives the HTML frame no popup, form, top-navigation or same-origin rights', async () => {
+    for (const network of [false, true]) {
+      expect(artifactCsp(network)).toContain("form-action 'none'");
+      expect(artifactCsp(network)).toContain("base-uri 'none'");
+    }
+    useUIStore.getState().openCanvas({ channelId: 'c1', artifactId: A, version: null });
+    const { container } = render(<CanvasPanel />);
+    await waitFor(() => expect(container.querySelector('iframe')).toBeTruthy());
+    const tokens = container.querySelector('iframe')!.getAttribute('sandbox')!.split(/\s+/).filter(Boolean);
+    expect(tokens).toEqual(['allow-scripts']);
+    for (const right of ['allow-popups', 'allow-forms', 'allow-top-navigation', 'allow-same-origin', 'allow-modals', 'allow-popups-to-escape-sandbox'])
+      expect(tokens).not.toContain(right);
+    expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain("form-action 'none'");
+  });
+
+  it('renders an SVG artifact in a frame that cannot run scripts', async () => {
+    content[1] = { kind: 'svg', content: '<svg onload="parent.document.title=1"><script>document.cookie="x=1"</script></svg>' };
+    latest = 1;
+    useUIStore.getState().openCanvas({ channelId: 'c1', artifactId: A, version: null });
+    const { container } = render(<CanvasPanel />);
+    await waitFor(() => expect(container.querySelector('iframe')).toBeTruthy());
+    const frame = container.querySelector('iframe')!;
+    expect(frame.hasAttribute('sandbox')).toBe(true);
+    expect(frame.getAttribute('sandbox')).toBe('');
+    expect(frame.getAttribute('srcdoc')).toContain("default-src 'none'");
+  });
+
   it('goes back to the thread it was opened from', () => {
     useUIStore.setState({ aux: 'thread' });
     useUIStore.getState().openCanvas({ channelId: 'c1', artifactId: A, version: null });

@@ -375,3 +375,39 @@ describe('subtasks', () => {
         expect((await subtask({ parentSessionId: grandchild.body.session.id, title: 'Too deep', brief: 'No' })).body.error).toBe('subtask_depth');
     });
 });
+
+/**
+ * beta-test-plan §6.1 "Subtasks respect plan owners": a director-started parent can't spawn a
+ * child on a subscription (or someone's ChatGPT plan) profile, and the refusal creates nothing.
+ */
+describe('beta §6.1: subtask plan-owner refusals leave nothing behind', () => {
+    afterEach(async () => {
+        await ctx.db.query(`UPDATE agent_profiles SET plan_owner_id = NULL WHERE server_id = $1`, [serverId]);
+    });
+    const counts = async () => (await ctx.db.query(`SELECT
+            (SELECT count(*)::int FROM agent_sessions WHERE profile_id = $1) AS sessions,
+            (SELECT count(*)::int FROM messages WHERE channel_id = $2 AND system_event = 'subtask') AS threads,
+            (SELECT count(*)::int FROM agent_inbox WHERE reason = 'delegate') AS wakes`, [helper.profileId, channelId])).rows[0];
+
+    it.each([
+        ['subscription', 'subscription_owner_only'],
+        ['siwc', 'plan_owner_only'],
+    ])('a director-started parent gets 403 %s → %s and no child, thread or wake', async (mode, code) => {
+        const started = await command({ command: 'start', profile: 'builder' });
+        expect(started.status, JSON.stringify(started.body)).toBe(201);
+        const parentId = started.body.session.id;
+        await claim();
+        await ctx.db.query('UPDATE bot_channel_access SET can_direct = true WHERE bot_id = $1 AND channel_id = $2', [builder.botId, channelId]);
+        await ctx.db.query(`UPDATE agent_sessions SET started_by = $2 WHERE id = $1`, [parentId, director.userId]);
+        // A siwc child bound to the server owner's plan: the director didn't start the parent's work on it
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = $2, api_key_env = NULL, plan_owner_id = $3 WHERE id = $1`,
+            [helper.profileId, mode, mode === 'siwc' ? owner.userId : null]);
+        const before = await counts();
+        const res = await subtask({ parentSessionId: parentId, title: 'Sub', brief: 'Help', profile: 'helper' });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe(code);
+        expect(await counts()).toEqual(before);
+        expect(before).toMatchObject({ sessions: 0, wakes: 0 });
+        await noClaim();
+    });
+});

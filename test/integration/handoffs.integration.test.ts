@@ -297,3 +297,38 @@ describe('decline and cancel', () => {
         expect((await state(t, member.auth)).body.offers.map((x: any) => x.status)).toEqual(['cancelled', 'cancelled']);
     });
 });
+
+/** beta-test-plan §6.1 "Handoffs respect plan owners": a plan_owner_only refusal changes nothing. */
+describe('beta §6.1: plan-owner handoff refusals leave nothing behind', () => {
+    it('a refused offer creates no offer row, no card and no wake for the recipient', async () => {
+        const sa = await start(a); const sb = await start(b); await drain();
+        const t = await thread();
+        await ctx.db.query('UPDATE agent_sessions SET started_by = $2 WHERE id = $1', [sa, member.userId]);
+        const refused = await offer(a, { threadId: t, to: 'hob', summary: 'x' });
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('plan_owner_only');
+        expect((await ctx.db.query('SELECT count(*)::int AS n FROM agent_handoffs WHERE thread_id = $1', [t])).rows[0].n).toBe(0);
+        expect((await ctx.db.query(`SELECT count(*)::int AS n FROM messages WHERE system_event = 'agent_handoff' AND (thread_id = $1 OR id = $1)`, [t])).rows[0].n).toBe(0);
+        // Only the drained /start wake, nothing new
+        expect((await inbox(sb)).filter((r: any) => !r.acked || r.reason === 'handoff' || r.system_event === 'agent_handoff')).toEqual([]);
+        expect((await claim()).status).toBe(204);
+        expect((await state(t)).body).toMatchObject({ owner: null, offers: [] });
+    });
+
+    it('a refused accept leaves the offer pending, reservations with the sender and no owner', async () => {
+        const sa = await start(a); const sb = await start(b); await drain();
+        const t = await thread();
+        const r = await reserve(a, ['src/plan/']);
+        const o = await offerOk(a, { threadId: t, to: 'hob', summary: 'x' });
+        await drain();
+        await ctx.db.query('UPDATE agent_sessions SET started_by = $2 WHERE id = $1', [sb, member.userId]);
+        const refused = await answer(b.auth, o.id, 'accept');
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('plan_owner_only');
+        expect((await ctx.db.query('SELECT status FROM agent_handoffs WHERE id = $1', [o.id])).rows[0].status).toBe('pending');
+        expect((await ctx.db.query('SELECT session_id FROM agent_file_reservations WHERE id = $1', [r.id])).rows[0].session_id.trim()).toBe(sa);
+        expect(await notices(t)).toEqual([]);
+        expect((await state(t)).body.owner).toBeNull();
+        expect((await ctx.db.query('SELECT system_data FROM messages WHERE id = $1', [o.messageId])).rows[0].system_data.status).toBe('pending');
+    });
+});
