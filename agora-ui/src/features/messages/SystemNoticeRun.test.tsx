@@ -97,6 +97,12 @@ describe('system notice runs in MessageList', () => {
 });
 
 describe('NoticeText', () => {
+  it('links to the wake-budget settings while keeping other markup as text', () => {
+    render(<NoticeText text="Raise the wake budget in [Agent settings](/settings/agents). [other](https://example.com)" />);
+    expect(screen.getByRole('link', { name: 'Agent settings' })).toHaveProperty('pathname', '/settings/agents');
+    expect(screen.queryByRole('link', { name: 'other' })).toBeNull();
+    expect(screen.getByText(/\[other\]\(https:\/\/example.com\)/)).toBeTruthy();
+  });
   it('truncates long notices behind show more / show less', () => {
     const text = ['Kept worktree with changes:', ...Array.from({ length: 30 }, (_, i) => `src/file${i}.ts`)].join('\n');
     const { container } = render(<NoticeText text={text} />);

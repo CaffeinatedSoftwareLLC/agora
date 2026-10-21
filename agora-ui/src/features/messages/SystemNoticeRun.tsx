@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { truncateNotice } from './systemNotices';
 
 interface NoticeRunToggleProps {
@@ -30,7 +30,12 @@ export function NoticeText({ text, className = '' }: { text: string | null | und
   const short = truncateNotice(text);
   return (
     <span className={`min-w-0 whitespace-pre-line [overflow-wrap:anywhere] ${className}`}>
-      {short && !open ? short : text}
+      {(short && !open ? short : text)?.split('[Agent settings](/settings/agents)').map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && <a href="/settings/agents" className="text-primary-text underline">Agent settings</a>}
+          {part}
+        </Fragment>
+      ))}
       {short && (
         <>
           {' '}
