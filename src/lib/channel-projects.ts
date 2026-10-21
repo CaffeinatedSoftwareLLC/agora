@@ -15,8 +15,9 @@ import { readFileText, type FileReadDeps } from './file-read';
 export const MAX_PROJECT_FILES = 10;
 export const MAX_INSTRUCTIONS = 8000;
 export const MAX_VERIFY_RETRIES = 5;
-/** Plain words only: agora-host splits on single spaces and runs it without a shell. */
-export const VERIFY_COMMAND_PATTERN = '^[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$';
+const VERIFY_COMMAND_SYNTAX = '^[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$';
+/** Plain words, no batch executable: agora-host splits on spaces and runs without a shell. */
+export const VERIFY_COMMAND_PATTERN = '^(?![^ ]*\\.(?:[cC][mM][dD]|[bB][aA][tT])\\.*(?: |$))' + VERIFY_COMMAND_SYNTAX.slice(1);
 /** Pinned file text carried in a claim: per file, and for all of them together. */
 export const DOC_CHARS = 12_000;
 export const TOTAL_DOC_CHARS = 30_000;
@@ -186,7 +187,9 @@ export interface VerificationReport {
 export const verificationSchema = {
     type: 'object', additionalProperties: false, required: ['command', 'status', 'attempts'],
     properties: {
-        command: { type: 'string', minLength: 1, maxLength: 300, pattern: VERIFY_COMMAND_PATTERN },
+        // Old saved commands may now be refused by the host. Accept their skipped reports
+        // so a run can finish without retrying the same disallowed command (#142).
+        command: { type: 'string', minLength: 1, maxLength: 300, pattern: VERIFY_COMMAND_SYNTAX },
         status: { type: 'string', enum: ['passed', 'failed', 'skipped'] },
         attempts: { type: 'integer', minimum: 0, maximum: MAX_VERIFY_RETRIES },
         exitCode: { type: ['integer', 'null'] },

@@ -18,8 +18,8 @@ import { osEnv } from './adapters.js';
  * login directory, no API key) plus CI=1, so test runners don't wait for input.
  */
 
-/** Same rule as the server's (src/lib/channel-projects.ts): plain words, single spaces. */
-export const VERIFY_COMMAND = /^[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$/;
+/** Same rule as the server's: plain words, single spaces, no batch executable (#142). */
+export const VERIFY_COMMAND = /^(?![^ ]*\.(?:[cC][mM][dD]|[bB][aA][tT])\.*(?: |$))[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$/;
 /** Output kept while the command runs, and how much of its end goes to the agent and the channel. */
 const KEEP = 64 * 1024;
 export const AGENT_TAIL = 12_000;
@@ -44,8 +44,14 @@ export function verifyEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proce
  */
 export function resolveExecutable(name: string, cwd: string, env: NodeJS.ProcessEnv, platform = process.platform): string | null {
     const isFile = (p: string) => { try { return statSync(p).isFile(); } catch { return false; } };
-    if (isAbsolute(name)) return name;
-    if (/[\\/]/.test(name)) return resolvePath(cwd, name);
+    // Process.Start can run an explicit batch file through cmd.exe even with shell=false.
+    // Check normalized paths too (check.cmd/.), and Windows' ignored trailing dots.
+    const batch = (p: string) => /\.(cmd|bat)\.*$/i.test(p);
+    if (batch(name)) return null;
+    if (isAbsolute(name) || /[\\/]/.test(name)) {
+        const path = resolvePath(cwd, name);
+        return batch(path) ? null : path;
+    }
     const pathVar = Object.entries(env).find(([k]) => k.toUpperCase() === 'PATH')?.[1] ?? '';
     const exts = platform === 'win32' && !extname(name) ? ['.exe', '.com'] : [''];
     const fold = (s: string) => (platform === 'win32' ? resolvePath(s).toLowerCase() : resolvePath(s));

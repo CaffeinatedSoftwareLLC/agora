@@ -8,8 +8,8 @@ import { usePalette } from '../../theme';
 
 const MAX_FILES = 10;
 const MAX_INSTRUCTIONS = 8000;
-/** Plain words separated by single spaces: the host runs it without a shell. */
-const VERIFY_PATTERN = /^[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$/;
+/** Same rule as the server: plain words, single spaces, no batch executable (#142). */
+const VERIFY_PATTERN = /^(?![^ ]*\.(?:[cC][mM][dD]|[bB][aA][tT])\.*(?: |$))[A-Za-z0-9_./:@=+,-]+( [A-Za-z0-9_./:@=+,-]+)*$/;
 
 function errorText(err: unknown): string {
   return err instanceof ApiError ? (err.status === 403 ? 'You can\'t change this.' : err.message || err.code) : 'Could not save';
@@ -185,7 +185,7 @@ export function ProjectPanel() {
               <input className={input} style={{ background: P.surface, border: `1px solid ${commandValid ? P.border : P.danger}`, color: P.text }}
                 value={command} onChange={e => setCommand(e.target.value)} placeholder="Off (e.g. npm run verify)"
                 maxLength={300} aria-label="Verify command" aria-invalid={!commandValid} />
-              {!commandValid && <p className="text-[12px]" style={{ color: P.danger }}>Plain words separated by single spaces; no quotes, pipes or ;.</p>}
+              {!commandValid && <p className="text-[12px]" style={{ color: P.danger }}>Plain words separated by single spaces; no quotes, pipes or ;. The executable cannot be a .cmd or .bat file.</p>}
               <label className="flex items-center gap-2 text-[13px]" style={{ color: P.text }}>
                 Fix turns after a failure
                 <select className={input} style={{ background: P.surface, border: `1px solid ${P.border}`, color: P.text }}

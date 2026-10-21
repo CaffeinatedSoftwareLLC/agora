@@ -89,9 +89,23 @@ describe('Windows .cmd shims', () => {
             expect(resolveExecutable('npm', work, { PATH: bin }, 'win32')).toBe(join(bin, 'npm.exe'));
         } finally { await rm(root, { recursive: true, force: true }); }
     });
-    // Known bug #142 (beta §6.2: failed). Expected to fail until it is fixed, then this
-    // turns red: drop `.fails` in the fix PR.
-    it.runIf(process.platform === 'win32').fails('does not run a .cmd named explicitly (#142)', async () => {
+    it.each(['check.cmd', 'check.BaT', './scripts/check.CMD', 'C:/tools/check.bat', 'check.cmd.'])(
+        'refuses explicitly named batch command %s in config, argv and executable resolution (#142)', command => {
+            const c = verifyConfig([`${command} test`]);
+            expect(configSchema.safeParse(c).success).toBe(false);
+            expect(verifyArgv(c.profiles.builder, `${command} test`)).toBeNull();
+            expect(resolveExecutable(command, process.cwd(), {}, 'win32')).toBeNull();
+        });
+    it('allows batch filenames as arguments to a native executable', () => {
+        const command = 'node scripts/check.cmd';
+        const c = verifyConfig([command]);
+        expect(configSchema.safeParse(c).success).toBe(true);
+        expect(verifyArgv(c.profiles.builder, command)).toEqual(['node', 'scripts/check.cmd']);
+    });
+    it('refuses batch files after resolving a relative path', () => {
+        expect(resolveExecutable('./check.cmd/.', process.cwd(), {}, 'win32')).toBeNull();
+    });
+    it.runIf(process.platform === 'win32')('does not run a .cmd named explicitly (#142)', async () => {
         const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
         const { existsSync } = await import('node:fs');
         const { tmpdir } = await import('node:os');

@@ -109,6 +109,19 @@ it('is read-only for members who cannot direct, as plain text', async () => {
   expect(mocks.search).not.toHaveBeenCalled();
 });
 
+it.each(['npm.cmd test', 'check.BaT', './scripts/check.CMD', 'C:/tools/check.bat test', 'check.cmd.'])(
+  'refuses a batch executable in the verify command: %s (#142)', async command => {
+    render(<ProjectPanel />);
+    const input = await screen.findByLabelText('Verify command');
+    fireEvent.change(input, { target: { value: command } });
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect((screen.getByRole('button', { name: 'Save verify' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save verify' }));
+    expect(mocks.setVerify).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: 'node scripts/check.cmd' } });
+    expect((screen.getByRole('button', { name: 'Save verify' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
 it('follows updates from others without overwriting an unsaved edit', async () => {
   render(<ProjectPanel />);
   const box = await screen.findByLabelText('Project instructions') as HTMLTextAreaElement;
