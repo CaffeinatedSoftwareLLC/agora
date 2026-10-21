@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { PageSpinner } from '../../components/ui/PageSpinner';
 import { passkeyErrorMessage, passkeysSupported } from '../../lib/passkeys';
+import { signInErrorMessage } from '../../lib/auth-errors';
 import { NotAffiliated } from '../../components/ui/NotAffiliated';
 
 export function LoginPage() {
@@ -34,13 +35,8 @@ export function LoginPage() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.code === 'account_suspended') {
-          setError('Your account has been suspended. Contact an administrator.');
-        } else if (err.code === 'invalid_credentials') {
-          setError('Wrong username, email or password.');
-        } else {
-          setError(err.code);
-        }
+        // Every code POST /auth/login sends is worded; anything else is shown as sent
+        setError(signInErrorMessage(err.code) ?? err.code);
       } else {
         setError('An unexpected error occurred.');
       }

@@ -89,3 +89,28 @@ test('no passkey button when the browser has no WebAuthn', () => {
   expect(screen.queryByRole('button', { name: 'Sign in with a passkey' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
 });
+
+// #159: the lockout showed the raw code "too_many_attempts"
+test.each([
+  [429, 'too_many_attempts', 'Too many attempts. Wait a few minutes and try again.'],
+  [503, 'login_unavailable', 'Sign-in is unavailable right now. Try again shortly.'],
+  [401, 'invalid_credentials', 'Wrong username, email or password.'],
+  [403, 'account_suspended', 'Your account has been suspended. Contact an administrator.'],
+])('a %i %s from the password form is shown in words', async (status, code, message) => {
+  useAuthStore.setState({ user: null, status: 'idle' });
+  vi.spyOn(api, 'post').mockRejectedValue(new ApiError(status, code));
+  renderLogin();
+  fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: 'alice' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  expect(screen.queryByText(code)).toBeNull();
+});
+
+test('a locked-out passkey sign-in gets the same words as the password form', async () => {
+  useAuthStore.setState({ user: null, status: 'idle' });
+  vi.spyOn(api, 'post').mockRejectedValue(new ApiError(429, 'too_many_attempts'));
+  renderLogin();
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in with a passkey' }));
+  expect(await screen.findByText('Too many attempts. Wait a few minutes and try again.')).toBeInTheDocument();
+});
