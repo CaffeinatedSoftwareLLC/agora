@@ -238,7 +238,9 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod down -v
 
 ### Backups
 
-Back up three things together: the `pgdata` volume (or a `pg_dump`), the `files-data` volume, and `.env.prod`. The database holds the per-file decryption parameters, the volume holds the encrypted files, and `.env.prod` holds the key; any two without the third cannot restore files. See [Storage and Encryption](docs/storage-and-encryption.md#backups).
+Back up three things together: Postgres (`pgdata`, or `pg_dumpall --roles-only` plus `pg_dump -Fc`), the `files-data` volume, and `.env.prod`. The database holds the per-file decryption parameters, the volume holds the encrypted files, and `.env.prod` holds the key; any two without the third cannot restore files.
+
+For a logical restore into an empty cluster, apply `roles.sql` before `pg_restore`: `pg_dump` excludes roles, and Agora's row-level security policies are `TO app_user`. Without a roles backup, create the default role first with `CREATE ROLE app_user NOLOGIN; GRANT app_user TO accord;`. See [Storage and Encryption](docs/storage-and-encryption.md#backups) for the backup and restore commands.
 
 ## Local Development Setup
 

@@ -205,11 +205,44 @@ Outside Docker: `AGORA_NEW_ENCRYPTION_KEY=<new key> npm run key:rotate`.
 
 A restorable backup is three things taken together:
 
-1. **Postgres** (`pgdata`): all data, plus the IV and auth tag for every file.
+1. **Postgres** (`pgdata`): all data, plus the IV and auth tag for every file. A logical backup needs both the cluster roles (`roles.sql`) and the database dump (`agora.dump`).
 2. **The file store** (`files-data`, or your bucket): the ciphertext.
 3. **`.env.prod`**: the keys.
 
-Any two without the third cannot restore files. Agora ships no backup tool; use `pg_dump` and a copy of the volume, taken close together.
+Any two without the third cannot restore files. Agora ships no backup tool; take the database backup and a copy of the file store close together.
+
+For a logical database backup, save the roles alongside a custom-format dump:
+
+```bash
+umask 077
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres \
+  pg_dumpall -U accord --roles-only > roles.sql
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres \
+  pg_dump -U accord -d agora -Fc > agora.dump
+```
+
+To restore into an empty cluster, first restore `.env.prod` and start only Postgres. Apply the roles **before** restoring the database:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d postgres
+# Wait until Postgres is ready, then restore roles before policies and data.
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres \
+  psql -U accord -d postgres < roles.sql
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres \
+  pg_restore -U accord -d agora < agora.dump
+```
+
+`pg_dump` excludes cluster roles, and Agora's row-level security policies are `TO app_user`, so that role must exist before `pg_restore`. On a cluster initialized with `accord`, the roles import can report that `accord` already exists; the `app_user` role must still be restored.
+
+If the roles backup is unavailable, create Agora's required role and grant before `pg_restore`:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres \
+  psql -U accord -d postgres -v ON_ERROR_STOP=1 \
+  -c 'CREATE ROLE app_user NOLOGIN; GRANT app_user TO accord;'
+```
+
+This fallback supplies Agora's default application role only; restore any additional custom roles separately. Restore the matching file store before starting the rest of the stack.
 
 ## Encryption in transit
 
