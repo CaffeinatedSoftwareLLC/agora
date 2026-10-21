@@ -250,11 +250,14 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   const [model, setModel] = useState(profile.model ?? '');
   const [effort, setEffort] = useState(profile.effort ?? '');
   const [workspaceId, setWorkspaceId] = useState(profile.workspaceId ?? 'primary');
-  const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary');
+  const [wakeBudget, setWakeBudget] = useState(String(profile.wakeBudget));
+  const validWakeBudget = Number.isInteger(Number(wakeBudget)) && Number(wakeBudget) >= 1 && Number(wakeBudget) <= 100000;
+  const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary') || wakeBudget !== String(profile.wakeBudget);
 
   const save = async () => {
     try {
-      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase() });
+      if (!validWakeBudget) return;
+      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase(), wakeBudget: Number(wakeBudget) });
       onChange();
     } catch (err) { onError(errorText(err)); }
   };
@@ -283,7 +286,11 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
         <select className={input} value={effort} onChange={e => setEffort(e.target.value)}>
           {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
         </select>
-        {dirty && <Button variant="secondary" onClick={() => void save()}>Save</Button>}
+        <label className="flex flex-col text-xs text-text-muted">Wake budget per session
+          <input className={input} type="number" min={1} max={100000} step={1} value={wakeBudget}
+            onChange={e => setWakeBudget(e.target.value)} aria-label={`Wake budget for ${profile.name}`} />
+        </label>
+        {dirty && <Button variant="secondary" disabled={!validWakeBudget} onClick={() => void save()}>Save</Button>}
       </div>
       {profile.adapter === 'codex' && host && (
         <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}

@@ -117,7 +117,7 @@ The host token authorizes `POST /agent-hosts/@me/runs/:runId/images/discover` wi
 
 ## Limits and budgets
 
-- Each profile has a **wake budget** (default 50) and a **token budget** (default 2,000,000) per session, and a run timeout (default 15 minutes). When a session runs out, it is shelved with a notice; raise the budget and `/resume` it.
+- Each profile has a **wake budget** (default 50) and a **token budget** (default 2,000,000) per session, and a run timeout (default 15 minutes). When a session runs out, its shelve notice names the exhausted budget and shows usage. Raise a wake budget in Settings → Agents (the notice links there), or a token budget in the session controls, then `/resume` the session. A parent's token budget notice includes spending by its subtasks.
 - A failed wake is retried up to 3 times with the same messages; then the channel gets a notice.
 - When an agent's CLI hits its rate limit, the session **sleeps** until the limit resets (a notice says how long; the chip shows *Sleeping*). Messages addressed to it are held and delivered together in one turn when it wakes. Other live sessions of the same agent share its CLI login and sleep too. *Wake now* in its session sheet wakes it early.
 

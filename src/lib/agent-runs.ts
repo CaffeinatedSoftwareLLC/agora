@@ -9,6 +9,7 @@ import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
+import { budgetShelveNotice, type ExhaustedBudget } from './agent-budget-notice';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -216,7 +217,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const botId = session.bot_id.trim();
 
     // 2. Budgets; a subtask also stops when a parent's budget is used up
-    const exhausted = session.wakes_used >= session.wake_budget ? sessionId : await budgetExhausted(c, sessionId);
+    const exhausted: ExhaustedBudget | null = session.wakes_used >= session.wake_budget
+        ? { sessionId, kind: 'wake', used: session.wakes_used, limit: session.wake_budget }
+        : await exhaustedTokenBudget(c, sessionId);
     if (exhausted) {
         await shelveForBudget(c, sessionId, channelId, session.profile_name, notices, exhausted);
         return null;
@@ -509,7 +512,12 @@ async function familySpend(c: PoolClient | any, sessionId: string): Promise<Spen
 
 /** The ID of the session whose budget is used up (this one, or a parent it spends from), or null. */
 export async function budgetExhausted(c: PoolClient | any, sessionId: string): Promise<string | null> {
-    return (await familySpend(c, sessionId)).find(s => s.spent >= s.budget)?.id ?? null;
+    return (await exhaustedTokenBudget(c, sessionId))?.sessionId ?? null;
+}
+
+async function exhaustedTokenBudget(c: PoolClient | any, sessionId: string): Promise<ExhaustedBudget | null> {
+    const spent = (await familySpend(c, sessionId)).find(s => s.spent >= s.budget);
+    return spent ? { sessionId: spent.id, kind: 'token', used: spent.spent, limit: spent.budget } : null;
 }
 
 /** Tokens this session may still spend: the least any budget in its family has left. */
@@ -520,7 +528,7 @@ export async function budgetRemaining(c: PoolClient | any, sessionId: string): P
 /** How deep subtasks may nest: a parent, its child and a grandchild. */
 export const MAX_SUBTASK_DEPTH = 2;
 
-async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[], exhausted = sessionId) {
+async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[], exhausted: ExhaustedBudget) {
     await c.query(
         `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW() WHERE id = $1 AND state = 'live'`,
         [sessionId]
@@ -528,9 +536,7 @@ async function shelveForBudget(c: PoolClient, sessionId: string, channelId: stri
     await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     await expireLiveRequests(c, { sessionIds: [sessionId] }, 'stopped', notices);
     notices.push(await sessionUpdate(c, sessionId, false));
-    notices.push(await postNotice(c, channelId, exhausted === sessionId
-        ? `Session for ${profileName} shelved: its budget is used up. /resume ${sessionId} after raising the budget.`
-        : `Subtask session for ${profileName} (${sessionId}) shelved: the budget of its parent session ${exhausted} is used up.`));
+    notices.push(await postNotice(c, channelId, budgetShelveNotice(profileName, sessionId, exhausted)));
 }
 
 // ─── Heartbeat, complete, fail ───
@@ -731,7 +737,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
         const reported = !!subtask && !run.cancel_requested && session?.state === 'live'
             && await reportSubtask(c, run.session_id.trim(), body.summary ?? null, notices);
         notices.push(await sessionUpdate(c, run.session_id, false));
-        const exhausted = session && session.state === 'live' && !reported ? await budgetExhausted(c, run.session_id.trim()) : null;
+        const exhausted = session && session.state === 'live' && !reported ? await exhaustedTokenBudget(c, run.session_id.trim()) : null;
         if (exhausted) {
             await shelveForBudget(c, run.session_id.trim(), session.channel_id.trim(), session.profile_name, notices, exhausted);
         }
@@ -884,6 +890,6 @@ async function enforceTokenBudget(c: PoolClient, sessionId: string, notices: Not
         FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [sessionId]);
     const s = r.rows[0];
     if (s?.state !== 'live') return;
-    const exhausted = await budgetExhausted(c, sessionId);
+    const exhausted = await exhaustedTokenBudget(c, sessionId);
     if (exhausted) await shelveForBudget(c, sessionId, s.channel_id.trim(), s.name, notices, exhausted);
 }
