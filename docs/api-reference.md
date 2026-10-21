@@ -1152,7 +1152,7 @@ Get unread state for all channels the user is a member of (server channels + DM 
 
 ### GET /users/search
 
-Search for users by username prefix. Excludes the authenticated user from results.
+Search for people who share at least one server with the authenticated user, by case-insensitive literal username prefix. `%`, `_` and `\` are matched literally. Excludes the authenticated user and bots; returns at most 20 people. Instance admins use the same shared-server scope.
 
 **Auth:** Required
 
