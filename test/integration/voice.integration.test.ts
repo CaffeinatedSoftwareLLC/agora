@@ -410,9 +410,8 @@ describe('beta §6.4: voice limits', () => {
         } finally { await putRoute('tts'); }
     });
 
-    // #143 (beta §6.4: pending). The intended behaviour is Eryk's decision; until then this is an
-    // expected failure. Fix the route → drop `.fails`; decision "keep as is" → delete this test.
-    it.fails('once the daily limit is spent, a message already voiced is still served from the cache (#143)', async () => {
+    // #143: decided 2026-10-21 (Eryk, option A): cached audio plays after the limit; only new audio counts
+    it('once the daily limit is spent, a message already voiced is still served from the cache (#143)', async () => {
         const used = await ttsUsage();
         await putRoute('tts', { dailyRequestLimit: used + 1 });
         try {
