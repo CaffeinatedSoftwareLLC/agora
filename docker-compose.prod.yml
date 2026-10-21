@@ -205,7 +205,8 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:latest
+    # Pinned by digest; bump deliberately (docker buildx imagetools inspect caddy:<ver>)
+    image: caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
     restart: unless-stopped
     ports:
       - "80:80"
