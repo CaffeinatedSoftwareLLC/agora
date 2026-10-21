@@ -21,6 +21,10 @@
  *   #fake-silent             finish successfully without posting anything
  *   #fake-interject          on a lurk run, post instead of [pass]
  *   #fake-say=<word>         include <word> in the posted reply (to find it later)
+ *   #fake-mark               also write a trace line when the run starts and once it has posted
+ *                            ("phase": "started" / "posted"), so a test can crash the host between
+ *                            steps (OP-02); these lines have no "outcome"
+ *   #fake-hold=<s>           after posting, stay "working" s more seconds before finishing
  *
  * With no directive a normal run posts one reply through agora-mcp's chat_send (the "hello"
  * after /start) and a lurk run (no --json-schema) prints exactly [pass] and posts nothing.
@@ -106,10 +110,12 @@ async function main() {
     const prompt = await readStdin();
     const { meta, hasBatch, thread, d, batchCount, wokeFromSleep, hasPinned, hasInstructions } = parsePrompt(prompt);
     const stateDir = process.env.CLAUDE_CONFIG_DIR;
-    const trace = { at: new Date().toISOString(), runId: meta.runId ?? null, sessionId: meta.sessionId ?? null, resume: resume ?? null,
+    const trace = { at: new Date().toISOString(), runId: meta.runId ?? null, deliveryKey: meta.deliveryKey ?? null, pid: process.pid, sessionId: meta.sessionId ?? null, resume: resume ?? null,
         lurk, verifyTurn: !hasBatch, previewPorts: process.env.AGORA_PREVIEW_PORTS ?? null, directives: d, batchCount, wokeFromSleep, hasPinned, hasInstructions, allowed: allowed.filter(r => !r.startsWith('mcp__')), cwd: process.cwd() };
     const tokens = Number(d.tokens) > 0 ? Number(d.tokens) : 120;
     emit({ type: 'system', subtype: 'init', session_id: sessionId, cwd: process.cwd(), tools: [], mcp_servers: [{ name: 'agora', status: 'connected' }] });
+    const mark = phase => { if (d.mark) writeTrace(stateDir, { at: new Date().toISOString(), runId: trace.runId, deliveryKey: trace.deliveryKey, pid: process.pid, phase, directives: d }); };
+    mark('started');
 
     const seconds = Math.min(Number(d.sleep) || 0, 300);
     for (let s = 0; s < seconds; s += 2) {
@@ -159,6 +165,12 @@ async function main() {
         posted = r.isError ? 'error' : 'ok';
     }
     trace.posted = posted;
+    if (posted === 'ok') mark('posted');
+    const hold = Math.min(Number(d.hold) || 0, 300);
+    for (let s = 0; s < hold; s += 2) {
+        await sleep(Math.min(2000, (hold - s) * 1000));
+        emit({ type: 'assistant', message: { id: `msg_hold_${s}`, role: 'assistant', content: [{ type: 'text', text: 'working' }], usage: usage(tokens) }, session_id: sessionId });
+    }
 
     if (lurk && !d.interject) {
         emit({ type: 'result', subtype: 'success', is_error: false, session_id: sessionId, result: '[pass]', usage: usage(tokens), permission_denials: denials });

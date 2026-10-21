@@ -8,7 +8,8 @@
  *   teardown and by finalize); the workdir is a throwaway git repo in a temp folder.
  * - agora-host and agora-mcp come from this checkout (built here if dist/ is missing).
  * - stop() kills the host's whole process tree (taskkill /T /F on Windows) and removes the temp
- *   folder and config. An exit hook does the same if the worker dies first.
+ *   folder and config. An exit hook does the same if the worker dies first. kill() and
+ *   restart() crash and restart it in place (OP-02, ops-crash.spec.ts).
  *
  * The host token and bot tokens are added to secrets/seed.json so the leak scan looks for them.
  */
@@ -57,6 +58,13 @@ export interface FakeHost {
      * on (the bring-your-own-CLI path, #112). stop() closes its stdin, so it exits.
      */
     terminal(key: string): Promise<{ stop(): Promise<void> }>;
+    /**
+     * Crash the host: kill its whole process tree (the CLI and agora-mcp with it), so it reports
+     * nothing. Config, worktrees and log stay, for restart() (OP-02).
+     */
+    kill(): Promise<void>;
+    /** Start the host again with the same config after kill(); resolves once the server has seen it. */
+    restart(): Promise<void>;
     stop(): Promise<void>;
 }
 export interface FakePreview { browser: string; portBase: number; portsPerSession?: number }
@@ -219,11 +227,23 @@ async function launch(seed: Seed, opts: { label: string; profiles: FakeProfileSp
     const logFd = fs.openSync(logFile, 'a');
     const env: NodeJS.ProcessEnv = { ...process.env, ANTHROPIC_API_KEY: FAKE_KEY, GH_CONFIG_DIR: ghDir, GIT_TERMINAL_PROMPT: '0' };
     for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'NODE_OPTIONS']) delete env[k];
-    const child: ChildProcess = spawn(process.execPath, [path.join(HOST_DIR, 'dist', 'index.js'), '--config', configFile], {
-        cwd: HOST_DIR, env, stdio: ['ignore', logFd, logFd], windowsHide: true, detached: process.platform !== 'win32',
-    });
-    let exited = false;
-    child.on('exit', () => { exited = true; });
+    let child!: ChildProcess;
+    let exited = true;
+    // restart() spawns again with the same config; only the current child's exit counts
+    const spawnHost = () => {
+        const c = spawn(process.execPath, [path.join(HOST_DIR, 'dist', 'index.js'), '--config', configFile], {
+            cwd: HOST_DIR, env, stdio: ['ignore', logFd, logFd], windowsHide: true, detached: process.platform !== 'win32',
+        });
+        child = c; exited = false;
+        c.on('exit', () => { if (child === c) exited = true; });
+    };
+    spawnHost();
+    const lastSeen = async (): Promise<string | null> => {
+        const hosts = (await owner.ok('GET', `/servers/${sid}/agent-hosts`)) as any;
+        const list: any[] = Array.isArray(hosts) ? hosts : (hosts.hosts ?? []);
+        const h = list.find(x => String(x.id).trim() === hostId);
+        return h?.lastSeenAt ?? h?.last_seen_at ?? null;
+    };
     const terminals = new Set<ChildProcess>();
     const onExit = () => {
         if (!exited && child.pid) killTree(child.pid);
@@ -255,6 +275,20 @@ async function launch(seed: Seed, opts: { label: string; profiles: FakeProfileSp
                 },
             };
         },
+        async kill() {
+            if (!exited && child.pid) killTree(child.pid);
+            await waitFor('host exit after kill', async () => exited, 10_000, 100);
+        },
+        async restart() {
+            if (!exited) throw new Error('restart() needs a stopped host: call kill() first');
+            const before = await lastSeen();
+            spawnHost();
+            await waitFor('restarted host to report in', async () => {
+                if (exited) throw new Error(`agora-host exited: ${host.log().slice(-600)}`);
+                const seen = await lastSeen();
+                return seen && seen !== before ? seen : null;
+            }, 45_000);
+        },
         async stop() {
             for (const t of terminals) if (t.pid && t.exitCode === null) killTree(t.pid);
             terminals.clear();
@@ -271,10 +305,7 @@ async function launch(seed: Seed, opts: { label: string; profiles: FakeProfileSp
         // Ready when the server has seen the host (it reports profiles, then long-polls for runs)
         await waitFor('fake host to report in', async () => {
             if (exited) throw new Error(`agora-host exited: ${host.log().slice(-600)}`);
-            const hosts = (await owner.ok('GET', `/servers/${sid}/agent-hosts`)) as any;
-            const list: any[] = Array.isArray(hosts) ? hosts : (hosts.hosts ?? []);
-            const h = list.find(x => String(x.id).trim() === hostId);
-            return h && (h.lastSeenAt ?? h.last_seen_at) ? h : null;
+            return lastSeen();
         }, 30_000);
     } catch (e) { await host.stop(); throw e; }
     return host;

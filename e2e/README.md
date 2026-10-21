@@ -106,7 +106,7 @@ local bare `origin`; `GH_CONFIG_DIR` points at an empty folder, so `gh` has no l
 config (host and bot tokens) and log live in `secrets/`; `stop()` kills the host's process tree
 (`taskkill /T /F`) and deletes the temp folder. Tests drive the fake by what they post:
 `#fake-sleep=20`, `#fake-edit=a,b`, `#fake-edits=35`, `#fake-tokens=2000`, `#fake-deny=gh`,
-`#fake-ratelimit`, `#fake-fail`, `#fake-silent` (see the script's header). Each spec file starts
+`#fake-ratelimit`, `#fake-fail`, `#fake-silent`, `#fake-mark`, `#fake-hold=40` (see the script's header). Each spec file starts
 its own host; `fkdirector-e2e` (a run-tagged role with DirectAgents) plays the director.
 
 | Spec | Scenarios |
@@ -117,6 +117,36 @@ its own host; `fkdirector-e2e` (a run-tagged role with DirectAgents) plays the d
 | `diff-review.mobile.spec.ts` (Pixel 7) | `AG-07.diff-review` |
 | `preview.spec.ts` | `AG-08.browser-preview` (Playwright's Chromium as the host's preview browser) |
 | `canvas-extra.spec.ts` | `UI-05.canvas-versions`, `UI-05.canvas-escape-nav` (no host needed) |
+
+## Crash and outage scenarios (not in the smoke set)
+
+Plan §3.5 OP-02 and OP-03, skipped (`not_applicable`) unless `E2E_OPS=1` is set. They take minutes: the server's leases are fixed (runs 120 s after the
+last heartbeat, swept every 15 s; workspace commands 180 s) and have no test-only override, so
+each crash test waits one out, and the provider timeout case waits out Node's 300 s fetch timeout.
+
+| Spec | Scenarios |
+|---|---|
+| `ops-crash.spec.ts` | `OP-02.crash-after-effect`, `OP-02.crash-before-claim`, `OP-02.crash-after-claim`, `OP-02.workspace-cmd-crash`: `FakeHost.kill()` kills the host's process tree mid-run (or mid-commit, held open by a slow git clean filter in the fake repo), `restart()` starts it again with the same config |
+| `ops-outage.spec.ts` | `OP-03.db-down`, `OP-03.redis-down` (`docker pause`), `OP-03.storage-down` (the API user loses write access to `/data/files` through `docker exec -u 0 chmod`; restored after), `OP-03.provider-down` (dead port, 429 and never-answering stub), `OP-03.ws-loss` (Playwright `routeWebSocket` drops the page's socket three times while a stub reply streams) |
+
+- `lib/containers.ts` is the only way the specs touch Docker. It refuses any container whose name
+  does not start with `agora-e2e-` and, on every call, any container that is not labelled as part
+  of the `agora-e2e` compose project (or as its own stub). It pauses, unpauses and execs; it never
+  starts, stops, recreates or prunes compose containers. On Windows it calls the WSL `Ubuntu`
+  daemon with `wsl.exe --exec docker`.
+- The provider stub (`fake-provider/provider-stub.mjs`) runs as a throwaway `agora-e2e-provstub-*`
+  container from the `agora-e2e-server:e2e` image on `agora-e2e_net`. The seeded server's chat route
+  points at it for the test; the previous route, the assistant's enabled flag and the instance's
+  "allow private base URLs" setting are put back afterwards.
+- Every test ends with `expectHealthy()` (all containers running, `/health` on API and web, an
+  authenticated read); afterEach unpauses anything still paused.
+- Observations of how an outage looks from outside (an error instead of a hang, the connection dot)
+  are soft assertions, so the integrity and recovery checks after them still run.
+
+```bash
+cd e2e
+E2E_OPS=1 npx playwright test tests/ops-crash.spec.ts tests/ops-outage.spec.ts   # about 25-30 minutes
+```
 
 Not covered yet (plan §2.2): code runs (blocked on the shared daemon until #126 is fixed), voice
 (needs a Whisper stub), admin approval/ban flows, WebKit.
