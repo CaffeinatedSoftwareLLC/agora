@@ -31,6 +31,21 @@ export interface StoredFile {
 
 export type StoreResult = { ok: true; file: StoredFile } | { ok: false; status: number; error: string; details?: unknown };
 
+/** The refusal for a file over files.max_size_bytes. Upload routes that stop reading early give the same one. */
+export const FILE_TOO_LARGE = { status: 413, error: 'File exceeds maximum allowed size' } as const;
+
+/**
+ * The most an upload route reads when files.max_size_bytes has no usable value: the largest
+ * value PATCH /admin/settings/files accepts for it. Not a cap of its own; storeFile decides.
+ */
+export const MAX_FILE_SIZE_SETTING = 104857600;
+
+/** How many bytes an upload route should let multipart read: the admin setting (#157). */
+export async function uploadByteLimit(db: Queryable): Promise<number> {
+    const setting = Number(await getFileSetting(db, 'files.max_size_bytes'));
+    return Number.isSafeInteger(setting) && setting > 0 ? setting : MAX_FILE_SIZE_SETTING;
+}
+
 const DEFAULT_ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'txt', 'md', 'csv', 'json', 'zip', 'mp3', 'mp4', 'mov'];
 
 export async function getFileSetting(db: Queryable, key: string): Promise<any> {
@@ -51,7 +66,7 @@ export async function storeFile(
 
     const maxSizeBytes = await getFileSetting(db, 'files.max_size_bytes');
     if (maxSizeBytes && buffer.length > maxSizeBytes) {
-        return { ok: false, status: 413, error: 'File exceeds maximum allowed size' };
+        return { ok: false, ...FILE_TOO_LARGE };
     }
 
     const allowedExtensions: string[] = (await getFileSetting(db, 'files.allowed_extensions')) ?? DEFAULT_ALLOWED_EXTENSIONS;

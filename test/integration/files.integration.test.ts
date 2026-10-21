@@ -146,6 +146,58 @@ describe('Admin file settings', () => {
     });
 });
 
+// #157: @fastify/multipart's default fileSize (Fastify's 1 MiB bodyLimit) refused files before
+// storeFile() saw them. The admin setting is the only cap.
+describe('Upload size follows the admin setting', () => {
+    let admin: any;
+    const MB = 1000 * 1000;
+
+    beforeAll(async () => { admin = await insertAdminUser('sizeadmin'); });
+
+    async function setMaxSize(bytes: number) {
+        const res = await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.max_size_bytes': bytes });
+        expect(res.status).toBe(200);
+    }
+    const fileCount = async () => (await ctx.db.query('SELECT COUNT(*)::int AS n FROM files')).rows[0].n as number;
+
+    test('a 1.5 MB file under a 25 MB setting is stored', async () => {
+        await setMaxSize(25 * 1024 * 1024);
+        const res = await ctx.request.post('/files/upload').set(owner.auth)
+            .field('channel_id', channelId)
+            .attach('file', Buffer.alloc(1.5 * MB, 'a'), 'one-and-a-half.txt');
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        expect(res.body.size).toBe(1.5 * MB);
+    });
+
+    test('a 2 MB file over a 1 MB setting gets the setting refusal and stores nothing', async () => {
+        await setMaxSize(1 * MB);
+        try {
+            const before = await fileCount();
+            const res = await ctx.request.post('/files/upload').set(owner.auth)
+                .field('channel_id', channelId)
+                .attach('file', Buffer.alloc(2 * MB, 'b'), 'two.txt');
+            expect(res.status).toBe(413);
+            expect(res.body.error).toBe('File exceeds maximum allowed size');
+            expect(res.body.code).toBeUndefined();
+            expect(await fileCount()).toBe(before);
+        } finally {
+            await setMaxSize(26214400);
+        }
+    });
+
+    test('a file exactly at the setting is stored', async () => {
+        await setMaxSize(1 * MB);
+        try {
+            const res = await ctx.request.post('/files/upload').set(owner.auth)
+                .field('channel_id', channelId)
+                .attach('file', Buffer.alloc(1 * MB, 'c'), 'exact.txt');
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+        } finally {
+            await setMaxSize(26214400);
+        }
+    });
+});
+
 describe('Message attachments', () => {
     test('message with valid attachment succeeds', async () => {
         const fileId = await insertTestFile({ uploaderId: owner.userId, channelId });
