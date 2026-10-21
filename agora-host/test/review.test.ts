@@ -7,9 +7,6 @@ import { claim, config, tempDir, id } from './helpers.js';
 import { Scheduler } from '../src/scheduler.js';
 import { performance } from 'node:perf_hooks';
 import { vi } from 'vitest';
-// These cases perform many Git operations, each with a durable owner and an OS birth-time
-// probe on Windows. Keep the test deadline above the expected multi-operation runtime.
-vi.setConfig({ testTimeout: 15000 });
 const cleanups: Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const c of cleanups.splice(0).reverse()) await c();});
 async function setup() {

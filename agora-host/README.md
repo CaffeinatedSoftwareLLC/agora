@@ -135,13 +135,15 @@ repository mappings or branch identities fail safely without force-removal.
 
 Before workspace commands and at startup, the host checks the linked worktree's own
 `index.lock` and `HEAD.lock`. Each host Git operation has a gated owner process whose
-PID and OS creation time are written atomically beside the session record before Git
-can start. A recorded dead process (including a reused PID) lets the host clear its
+PID and a random nonce are written atomically beside the session record before Git
+can start. Only recovery queries the OS command line for that nonce, so a reused PID
+cannot be mistaken for the owner. A recorded dead process lets the host clear its
 regular, unchanged locks and log `workspace_git_lock_cleared`. If Git is still running,
 the process identity cannot be checked, or a lock has no host ownership record, the
 host keeps it and reports `stale_git_lock` with the path for the owner to inspect.
 Symlink and hard-linked locks are refused; shared repository refs are never cleared.
-Identity probes and diff previews are read-only and cannot replace a writer's record.
+Identity probes, diff previews and private temporary-index commands cannot replace a
+writer's record. Overlapping host Git commands queue per worktree within their timeout.
 
 For advisory file reservations, add `file_reserve`, `file_renew`, `file_release`
 and `file_reservations` to a profile's `approvedTools` as needed. The server's

@@ -5,43 +5,45 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const exec = promisify(execFile);
-export interface GitOwner { pid: number; processStartTime: string; argv0: string; at: string }
+export interface GitOwner { pid: number; nonce: string; argv0: string; at: string }
 interface GitWorkspace { cwd: string; gitDir: string; record: string; log: (code: string) => void }
 const workspaces = new Map<string, GitWorkspace>();
-const busy = new Set<string>();
+const queues = new Map<string, Promise<void>>();
 const key = (cwd: string) => process.platform === 'win32' ? resolve(cwd).toLowerCase() : resolve(cwd);
 
 export class GitLockError extends Error {
     constructor(public readonly detail: string) { super('stale_git_lock'); }
 }
 
-/** A PID alone is unsafe after a restart: operating systems reuse it. */
-export async function processStartTime(pid: number): Promise<string | null> {
+/** Only recovery needs an OS probe. A reused PID cannot accidentally have this random nonce. */
+export async function gitOwnerAlive(owner: GitOwner): Promise<boolean> {
+    const { pid, nonce } = owner;
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('invalid_git_owner_pid');
+    if (!/^[0-9a-f]{32}$/.test(nonce)) throw new Error('invalid_git_owner_nonce');
     try { process.kill(pid, 0); } catch (e: any) {
-        if (e.code === 'ESRCH') return null;
+        if (e.code === 'ESRCH') return false;
         throw e;
     }
     if (process.platform === 'win32') {
         const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-        const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -ne $p) { $p.StartTime.ToUniversalTime().Ticks.ToString() }`;
+        const script = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($null -eq $p) { 'null' } else { @{ commandLine = $p.CommandLine } | ConvertTo-Json -Compress }`;
         const r = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 10000, maxBuffer: 4096 });
-        const value = r.stdout.trim();
-        if (!value) return null;
-        if (!/^\d+$/.test(value)) throw new Error('git_owner_identity_unavailable');
-        return value;
+        const value = JSON.parse(r.stdout.trim());
+        if (value === null) return false;
+        if (typeof value?.commandLine !== 'string' || !value.commandLine) throw new Error('git_owner_identity_unavailable');
+        return new RegExp(`(?:^|[\\s"'])${nonce}(?:$|[\\s"'])`).test(value.commandLine);
     }
     if (process.platform === 'linux') {
         try {
-            const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
-            const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-            if (!/^\d+$/.test(fields[19] ?? '')) throw new Error('git_owner_identity_unavailable');
-            return fields[19]; // field 22; command names may contain spaces and parentheses
-        } catch (e: any) { if (e.code === 'ENOENT') return null; throw e; }
+            const command = await readFile(`/proc/${pid}/cmdline`, 'utf8');
+            if (!command) throw new Error('git_owner_identity_unavailable');
+            return command.split('\0').includes(nonce);
+        } catch (e: any) { if (e.code === 'ENOENT') return false; throw e; }
     }
-    const r = await exec('ps', ['-p', String(pid), '-o', 'lstart='], { timeout: 10000, maxBuffer: 4096,
+    const r = await exec('ps', ['-ww', '-p', String(pid), '-o', 'command='], { timeout: 10000, maxBuffer: 16384,
         env: { ...process.env, LC_ALL: 'C' } }).catch((e: any) => { if (e.code === 1) return { stdout: '' }; throw e; });
-    return r.stdout.trim() || null;
+    if (!r.stdout.trim()) return false;
+    return new RegExp(`(?:^|[\\s"'])${nonce}(?:$|[\\s"'])`).test(r.stdout);
 }
 
 export function registerGitWorkspace(cwd: string, gitDir: string, record: string, log?: (code: string) => void) {
@@ -58,14 +60,14 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
     let o: GitOwner;
     try { o = JSON.parse(await readFile(w.record, 'utf8')); }
     catch { throw new GitLockError('Git ownership record is invalid; locks retained.'); }
-    if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.pid) || o.pid <= 0 || typeof o.processStartTime !== 'string' || !o.processStartTime
+    if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.pid) || o.pid <= 0 || typeof o.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(o.nonce)
         || o.argv0 !== process.execPath || typeof o.at !== 'string' || !Number.isFinite(Date.parse(o.at)))
         throw new GitLockError('Git ownership record is invalid; locks retained.');
     return o;
 }
 
 /** Only the linked worktree's private index/HEAD locks, never common refs or a human's lock. */
-export async function recoverGitLocks(cwd: string, startTime = processStartTime): Promise<void> {
+export async function recoverGitLocks(cwd: string, ownerAlive = gitOwnerAlive): Promise<void> {
     const w = workspaces.get(key(cwd));
     if (!w) return;
     const locks = [];
@@ -79,10 +81,10 @@ export async function recoverGitLocks(cwd: string, startTime = processStartTime)
     if (!locks.length) return;
     const owner = await ownerOf(w);
     if (!owner) throw new GitLockError(`${locks[0].path}: no host ownership record; retained for the owner to check.`);
-    let current: string | null;
-    try { current = await startTime(owner.pid); }
+    let alive: boolean;
+    try { alive = await ownerAlive(owner); }
     catch { throw new GitLockError(`${locks[0].path}: cannot confirm the recorded Git process exited; retained.`); }
-    if (current === owner.processStartTime) throw new GitLockError(`${locks[0].path}: git still running; retained.`);
+    if (alive) throw new GitLockError(`${locks[0].path}: git still running; retained.`);
     for (const lock of locks) {
         const now = await statOrNull(lock.path);
         if (!now) continue;
@@ -94,7 +96,7 @@ export async function recoverGitLocks(cwd: string, startTime = processStartTime)
     }
 }
 
-// The owner process waits for the durable PID/birth-time record BEFORE it starts Git.
+// The owner process waits for the durable PID/nonce record BEFORE it starts Git.
 // If the host dies alone, this process remains alive until Git and its pipes have closed;
 // a restarted host therefore cannot mistake a surviving writer for a stale lock.
 const GATE = `
@@ -120,14 +122,43 @@ process.on('SIGTERM', () => { if (git) git.kill('SIGTERM'); else process.exit(1)
 `;
 
 export interface GitExecOptions { signal?: AbortSignal; timeout?: number; maxBuffer?: number; env?: NodeJS.ProcessEnv }
+async function waitForSlot(previous: Promise<void>, signal: AbortSignal | undefined, timeout: number) {
+    if (signal?.aborted) throw new Error('Git operation aborted');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort = () => {};
+    try {
+        await new Promise<void>((resolve, reject) => {
+            abort = () => reject(new Error('Git operation aborted while queued'));
+            signal?.addEventListener('abort', abort, { once: true });
+            timer = setTimeout(() => reject(new Error('Git operation timed out while queued')), timeout);
+            previous.then(resolve, reject);
+        });
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+}
+
 /** Same string output/exit-code contract as execFile, with durable ownership for session Git. */
 export async function executeGit(cwd: string, args: string[], options: GitExecOptions = {}): Promise<{ stdout: string; stderr: string }> {
     const w = workspaces.get(key(cwd));
     const env = options.env ?? { ...process.env, GIT_TERMINAL_PROMPT: '0' };
     if (!w) return exec('git', args, { cwd, env, windowsHide: true, timeout: options.timeout ?? 60000,
         maxBuffer: options.maxBuffer ?? 4 * 1024 * 1024, signal: options.signal });
-    if (busy.has(key(cwd))) throw new GitLockError('Another host Git operation is still running in this worktree.');
-    busy.add(key(cwd));
+    const k = key(cwd), previous = queues.get(k) ?? Promise.resolve(), began = Date.now();
+    let release!: () => void;
+    const slot = new Promise<void>(resolve => { release = resolve; });
+    const tail = previous.then(() => slot);
+    queues.set(k, tail);
+    void tail.then(() => { if (queues.get(k) === tail) queues.delete(k); });
+    try {
+        const budget = options.timeout ?? 60000;
+        await waitForSlot(previous, options.signal, budget);
+        const left = budget - (Date.now() - began);
+        if (left <= 0) throw new Error('Git operation timed out while queued');
+        return await executeOwnedGit(w, args, { ...options, timeout: left }, env);
+    } finally { release(); }
+}
+
+async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExecOptions, env: NodeJS.ProcessEnv) {
+    const cwd = w.cwd;
     let child: ReturnType<typeof spawn> | undefined;
     let owner: GitOwner | undefined, closed = false, started = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -137,10 +168,11 @@ export async function executeGit(cwd: string, args: string[], options: GitExecOp
     try {
         await recoverGitLocks(cwd);
         const previous = await ownerOf(w);
-        if (previous && await processStartTime(previous.pid) === previous.processStartTime)
+        if (previous && await gitOwnerAlive(previous))
             throw new GitLockError('Recorded Git process is still running in this worktree.');
         if (options.signal?.aborted) throw new Error('Git operation aborted');
-        child = spawn(process.execPath, ['-e', GATE], { cwd, env, windowsHide: true,
+        const nonce = randomUUID().replace(/-/g, '');
+        child = spawn(process.execPath, ['-e', GATE, nonce], { cwd, env, windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
         let stdout = '', stderr = '', bytes = 0;
         let failure: Error | undefined;
@@ -179,9 +211,8 @@ export async function executeGit(cwd: string, args: string[], options: GitExecOp
         };
         child.stdout!.on('data', chunk => collect('stdout', chunk)); child.stderr!.on('data', chunk => collect('stderr', chunk));
         if (!child.pid) throw new Error('git_owner_process_failed');
-        const birth = await processStartTime(child.pid);
-        if (!birth || closed || options.signal?.aborted) throw new Error('git_owner_identity_unavailable');
-        owner = { pid: child.pid, processStartTime: birth, argv0: process.execPath, at: new Date().toISOString() };
+        if (closed || options.signal?.aborted) throw new Error('Git operation aborted');
+        owner = { pid: child.pid, nonce, argv0: process.execPath, at: new Date().toISOString() };
         const temp = `${w.record}.${randomUUID()}.tmp`;
         await writeFile(temp, JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
         await rename(temp, w.record);
@@ -195,12 +226,10 @@ export async function executeGit(cwd: string, args: string[], options: GitExecOp
             child.kill(); // gate never received permission to launch Git
             await result?.catch(() => {});
         }
-        try {
-            // Keep ownership evidence if a lock survived, or if the owner is still alive.
-            if (owner && closed && !await statOrNull(join(w.gitDir, 'index.lock')) && !await statOrNull(join(w.gitDir, 'HEAD.lock'))) {
-                const current = await ownerOf(w);
-                if (current?.pid === owner.pid && current.processStartTime === owner.processStartTime) await unlink(w.record);
-            }
-        } finally { busy.delete(key(cwd)); }
+        // Keep ownership evidence if a lock survived, or if the owner is still alive.
+        if (owner && closed && !await statOrNull(join(w.gitDir, 'index.lock')) && !await statOrNull(join(w.gitDir, 'HEAD.lock'))) {
+            const current = await ownerOf(w);
+            if (current?.pid === owner.pid && current.nonce === owner.nonce) await unlink(w.record);
+        }
     }
 }

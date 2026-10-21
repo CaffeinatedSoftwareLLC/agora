@@ -5,7 +5,6 @@ import { join, dirname, relative, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LocalProfile } from './config.js';
 import { ensureWorkspace, git, gitSignal, withGitSignal, validateWorkspace, type Workspace } from './workspaces.js';
-import { executeGit } from './git-owner.js';
 
 const exec = promisify(execFile);
 const identity = ['-c', 'user.name=Agora', '-c', 'user.email=agora@localhost'];
@@ -83,8 +82,10 @@ export async function reviewDiff(w: Workspace, path?: string, offset = 0, expect
 export async function snapshotTree(w: Workspace): Promise<string> {
     await validateWorkspace(w);
     const index = join(dirname(w.cwd), `snapshot-${randomUUID()}.index`);
-    const run = async (args: string[]) => (await executeGit(w.cwd, ['-c', 'core.longpaths=true', ...args], {
-        env: { ...process.env, GIT_INDEX_FILE: index }, timeout: 30000, signal: gitSignal(), maxBuffer: 1024 * 1024,
+    // A private temporary index cannot take the worktree's index.lock; don't replace
+    // its normal-index ownership record or pay for an owner process for these commands.
+    const run = async (args: string[]) => (await exec('git', ['--no-optional-locks', '-c', 'core.longpaths=true', ...args], {
+        cwd: w.cwd, env: { ...process.env, GIT_INDEX_FILE: index }, windowsHide: true, timeout: 30000, signal: gitSignal(), maxBuffer: 1024 * 1024,
     })).stdout.trim();
     try { await run(['read-tree', 'HEAD']); await run(['add', '-A', '--', '.']); return await run(['write-tree']); }
     finally { await rm(index, { force: true }); await rm(index + '.lock', { force: true }); }
