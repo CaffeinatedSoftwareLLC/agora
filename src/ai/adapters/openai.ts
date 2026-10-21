@@ -3,10 +3,13 @@ import { apiError, joinUrl, networkError, sseJson, testConnectionWithTimeout } f
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
+function officialOpenAI(base: string): boolean {
+    return new URL(base).hostname.toLowerCase().replace(/\.$/, '') === 'api.openai.com';
+}
+
 /** OpenAI's current field; compatible endpoints retain the widely supported legacy field. */
 function tokenLimit(base: string, limit: number): Record<string, number> {
-    const official = new URL(base).hostname.toLowerCase().replace(/\.$/, '') === 'api.openai.com';
-    return { [official ? 'max_completion_tokens' : 'max_tokens']: limit };
+    return { [officialOpenAI(base) ? 'max_completion_tokens' : 'max_tokens']: limit };
 }
 
 /** OpenAI's voices; Kokoro-FastAPI maps these names to its own voices too. */
@@ -170,11 +173,14 @@ export const openaiAdapter: Adapter = {
 
     async testConnection(creds: ProviderCredentials, model: string) {
         return testConnectionWithTimeout(async signal => {
-            const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/chat/completions'), {
+            const base = creds.baseUrl || DEFAULT_BASE;
+            const official = officialOpenAI(base);
+            // Model metadata checks the key/model without spending reasoning tokens on a ping.
+            const res = await fetch(joinUrl(base, official ? `/models/${encodeURIComponent(model)}` : '/chat/completions'), {
                 signal,
-                method: 'POST',
+                method: official ? 'GET' : 'POST',
                 headers: headers(creds),
-                body: JSON.stringify({ model, ...tokenLimit(creds.baseUrl || DEFAULT_BASE, 1), messages: [{ role: 'user', content: 'ping' }] }),
+                ...(official ? {} : { body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }) }),
             });
             if (!res.ok) {
                 return { ok: false, error: await apiError('OpenAI', res) };

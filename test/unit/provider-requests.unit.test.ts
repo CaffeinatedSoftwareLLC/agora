@@ -19,7 +19,7 @@ describe('OpenAI token-limit compatibility', () => {
         ['https://api.openai.com@proxy.example/v1', 'max_tokens'],
     ] as const;
     for (const [baseUrl, field] of endpoints) {
-        it.each(['chat', 'test'])(`uses only ${field} at ${baseUrl ?? 'default OpenAI'} for %s`, async action => {
+        it.each(['chat', 'test'])(`uses the appropriate endpoint/payload at ${baseUrl ?? 'default OpenAI'} for %s`, async action => {
             const fetchMock = vi.fn(async () => new Response('', { status: 200 }));
             vi.stubGlobal('fetch', fetchMock);
             if (action === 'chat') {
@@ -31,12 +31,35 @@ describe('OpenAI token-limit compatibility', () => {
                 expect(await openaiAdapter.testConnection({ baseUrl }, 'gpt-6-luna')).toEqual({ ok: true });
             }
             expect(fetchMock).toHaveBeenCalledOnce();
-            const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            if (action === 'test' && field === 'max_completion_tokens') {
+                expect(url).toMatch(/\/models\/gpt-6-luna$/);
+                expect(init.method).toBe('GET');
+                expect(init.body).toBeUndefined();
+                return;
+            }
+            expect(url).toMatch(/\/chat\/completions$/);
+            expect(init.method).toBe('POST');
             const body = JSON.parse(init.body as string);
             expect(body[field]).toBe(action === 'chat' ? 123 : 1);
             expect(body).not.toHaveProperty(field === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens');
         });
     }
+
+    it.each([401, 404])('official model metadata errors (%s) remain readable', async status => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'key or model unavailable' } }), { status }));
+        vi.stubGlobal('fetch', fetchMock);
+        expect(await openaiAdapter.testConnection({ apiKey: 'fixture' }, 'gpt-6-luna'))
+            .toEqual({ ok: false, error: `OpenAI API ${status}: key or model unavailable` });
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('encodes the model as a single metadata path segment', async () => {
+        const fetchMock = vi.fn(async () => new Response('{}'));
+        vi.stubGlobal('fetch', fetchMock);
+        expect(await openaiAdapter.testConnection({ apiKey: 'fixture' }, 'model/name?x=1')).toEqual({ ok: true });
+        expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('https://api.openai.com/v1/models/model%2Fname%3Fx%3D1');
+    });
 });
 
 describe.each(adapters)('$id connection-test deadline', adapter => {
