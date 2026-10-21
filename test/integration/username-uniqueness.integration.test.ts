@@ -73,7 +73,7 @@ it('the index arbitrates simultaneous registrations without a 500', async () => 
     expect(results.find(r => r.status === 409)!.body).toEqual({ error: 'username_taken' });
 });
 
-const migration = readFileSync(resolve(__dirname, '../../src/db/migrations/060_case_insensitive_usernames.sql'), 'utf8');
+const migration = readFileSync(resolve(__dirname, '../../src/db/migrations/061_case_insensitive_usernames.sql'), 'utf8');
 
 it('migration reports every legacy collision with names and IDs, changing no accounts', async () => {
     const client = await ctx.db.connect();
