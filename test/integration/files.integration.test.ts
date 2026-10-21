@@ -3,6 +3,7 @@ import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } 
 import { generateUlid } from '../../src/utils/ulid';
 import { hashPassword } from '../../src/auth/passwords';
 import { generateToken } from '../../src/auth/tokens';
+import { invalidateSettingsCache } from '../../src/lib/settings';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: any, member: any, serverId: string, channelId: string, everyoneRoleId: string;
@@ -143,6 +144,66 @@ describe('Admin file settings', () => {
             .set(member.auth);
 
         expect(res.status).toBe(403);
+    });
+
+    // #155: Ajv coercion inside oneOf turned null into 0, and /admin/storage then divided by zero
+    test('PATCH null retention and quota round-trips as null, and /admin/storage still loads', async () => {
+        const set = await ctx.request.patch('/admin/settings/files').set(admin.auth)
+            .send({ 'files.retention_days': 30, 'files.storage_quota_bytes': 1073741824 });
+        expect(set.status).toBe(200);
+
+        const clear = await ctx.request.patch('/admin/settings/files').set(admin.auth)
+            .send({ 'files.retention_days': null, 'files.storage_quota_bytes': null });
+        expect(clear.status).toBe(200);
+
+        const stored = await ctx.db.query(
+            "SELECT key, value FROM instance_settings WHERE key IN ('files.retention_days', 'files.storage_quota_bytes') ORDER BY key");
+        expect(stored.rows).toEqual([
+            { key: 'files.retention_days', value: null },
+            { key: 'files.storage_quota_bytes', value: null },
+        ]);
+        const got = await ctx.request.get('/admin/settings/files').set(admin.auth);
+        expect(got.body['files.retention_days']).toBeNull();
+        expect(got.body['files.storage_quota_bytes']).toBeNull();
+
+        const storage = await ctx.request.get('/admin/storage').set(admin.auth);
+        expect(storage.status).toBe(200);
+        expect(storage.body.quotaBytes).toBeNull();
+        expect(storage.body.quotaUsedPercent).toBeNull();
+    });
+
+    test('PATCH rejects 0 for retention and quota', async () => {
+        expect((await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.retention_days': 0 })).status).toBe(400);
+        expect((await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.storage_quota_bytes': 0 })).status).toBe(400);
+    });
+
+    test('a stored quota of 0 counts as no quota instead of a 500', async () => {
+        // Rows the coercion bug already wrote on existing instances
+        await ctx.db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ('files.storage_quota_bytes', '0'::jsonb)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+        invalidateSettingsCache();
+        try {
+            const storage = await ctx.request.get('/admin/storage').set(admin.auth);
+            expect(storage.status).toBe(200);
+            expect(storage.body.quotaBytes).toBeNull();
+            expect(storage.body.quotaUsedPercent).toBeNull();
+        } finally {
+            await ctx.db.query(
+                `UPDATE instance_settings SET value = 'null'::jsonb WHERE key = 'files.storage_quota_bytes'`);
+            invalidateSettingsCache();
+        }
+    });
+
+    test('PATCH /admin/settings/runtime keeps a null code retention as null', async () => {
+        const res = await ctx.request.patch('/admin/settings/runtime').set(admin.auth).send({ codeRetentionDays: null });
+        expect(res.status).toBe(200);
+        expect(res.body.codeRetentionDays).toBeNull();
+        const stored = await ctx.db.query("SELECT value FROM instance_settings WHERE key = 'runtime.code_retention_days'");
+        expect(stored.rows[0].value).toBeNull();
+        expect((await ctx.request.get('/admin/settings/runtime').set(admin.auth)).body.codeRetentionDays).toBeNull();
+        // Back to the default retention for the rest of the file
+        await ctx.request.patch('/admin/settings/runtime').set(admin.auth).send({ codeRetentionDays: 30, confirm: true });
     });
 });
 
