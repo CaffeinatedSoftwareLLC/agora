@@ -15,6 +15,8 @@ import { useThreadOwner } from '../agents/handoffs';
 import { usePalette } from '../../theme';
 import { MicButton } from '../voice/MicButton';
 import { appendDictation } from '../voice/appendDictation';
+import { useUploadStore } from '../../stores/uploadStore';
+import { UploadPreview } from './UploadPreview';
 
 export function ThreadPanel() {
   const P = usePalette();
@@ -36,6 +38,19 @@ export function ThreadPanel() {
   const nearBottom = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounter = useRef(0);
+  const [dragging, setDragging] = useState(false);
+  const allUploads = useUploadStore(s => s.uploads);
+  const addUpload = useUploadStore(s => s.addUpload);
+  const removeUpload = useUploadStore(s => s.removeUpload);
+  const uploads = useMemo(() => Array.from(allUploads.values()).filter(u =>
+    u.channelId === openThreadChannelId && u.threadId === openThreadId), [allUploads, openThreadChannelId, openThreadId]);
+  const completed = uploads.filter(u => u.status === 'done' && u.result);
+  const uploadsBlocked = uploads.some(u => u.status !== 'done');
+  const canSend = !sending && !uploadsBlocked && (!!content.trim() || completed.length > 0);
+
+  useEffect(() => { dragCounter.current = 0; setDragging(false); }, [openThreadId]);
 
   const replies = useMemo(() => openThreadId ? (repliesByThread.get(openThreadId) ?? []) : [], [openThreadId, repliesByThread]);
   const noticeRuns = useMemo(() => computeNoticeRuns(replies), [replies]);
@@ -91,10 +106,13 @@ export function ThreadPanel() {
   const handleSend = async () => {
     if (sending) return;
     const trimmed = content.trim();
-    if (!trimmed || !user) return;
+    if (!canSend || !user) return;
     nearBottom.current = true;
     setSending(true);
-    await sendDraft(draftKey, () => sendReply(openThreadChannelId, openThreadId, trimmed, user.id, user.username));
+    const sentUploads = completed;
+    const sent = await sendDraft(draftKey, () => sendReply(openThreadChannelId, openThreadId, trimmed, user.id, user.username,
+      sentUploads.length ? sentUploads.map(u => u.result!.id) : undefined));
+    if (sent) for (const upload of sentUploads) removeUpload(upload.id);
     setSending(false);
     inputRef.current?.focus();
   };
@@ -108,6 +126,13 @@ export function ThreadPanel() {
 
   const noopEdit = () => {};
   const noopDelete = () => {};
+
+  const handleFiles = (files: FileList | File[]) => {
+    if (sending) return;
+    for (const file of Array.from(files).slice(0, Math.max(0, 10 - uploads.length))) {
+      addUpload(openThreadChannelId, file, openThreadId);
+    }
+  };
 
   return (
     <div
@@ -232,16 +257,27 @@ export function ThreadPanel() {
           </div>
         </div>
       ) : (
-        <div className="shrink-0 px-2.5 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-3 md:pb-3 md:pt-1">
+        <div className="relative shrink-0 px-2.5 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-3 md:pb-3 md:pt-1"
+          onDragEnter={e => { e.preventDefault(); dragCounter.current++; setDragging(true); }}
+          onDragOver={e => e.preventDefault()}
+          onDragLeave={e => { e.preventDefault(); if (--dragCounter.current <= 0) { dragCounter.current = 0; setDragging(false); } }}
+          onDrop={e => { e.preventDefault(); dragCounter.current = 0; setDragging(false); handleFiles(e.dataTransfer.files); }}>
+          <input ref={fileInputRef} type="file" multiple className="hidden" aria-label="Thread attachments" disabled={sending}
+            onChange={e => { if (e.target.files) handleFiles(e.target.files); e.target.value = ''; }} />
+          {dragging && <div className="pointer-events-none absolute inset-0 rounded-xl border-2 border-dashed border-primary bg-surface/90 flex items-center justify-center z-10">Drop files to upload</div>}
+          {uploads.length > 0 && <div className="flex flex-wrap gap-2 py-2">{uploads.map(upload => <UploadPreview key={upload.id} upload={upload} onRemove={removeUpload} />)}</div>}
           <div
             className="flex items-end gap-1.5 rounded-2xl px-2.5 py-1.5"
             style={{ background: P.surface, border: `1px solid ${P.border}` }}
           >
+            <button type="button" className="shrink-0 min-h-11 min-w-11 md:min-h-9 md:min-w-9 rounded-xl text-text-muted hover:bg-surface-hover"
+              aria-label="Attach file to reply" title="Attach file to reply" disabled={sending} onClick={() => fileInputRef.current?.click()}>+</button>
             <textarea
               ref={inputRef}
               value={content}
               onChange={(e) => setContent(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); handleFiles(e.clipboardData.files); } }}
               placeholder="Reply..."
               rows={1}
               className="flex-1 resize-none bg-transparent outline-none text-[16px] md:text-[15px] leading-[1.4] py-2 md:py-1.5 px-1 placeholder:text-text-muted/70"
@@ -257,12 +293,12 @@ export function ThreadPanel() {
             <button
               type="button"
               onClick={handleSend}
-              disabled={!content.trim()}
+              disabled={!canSend}
               className="shrink-0 min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
               style={{
-                background: content.trim() ? P.primary : P.bg,
-                color: content.trim() ? P.onPrimary : P.muted,
-                opacity: content.trim() ? 1 : 0.5,
+                background: canSend ? P.primary : P.bg,
+                color: canSend ? P.onPrimary : P.muted,
+                opacity: canSend ? 1 : 0.5,
               }}
               title="Send reply"
               aria-label="Send reply"
