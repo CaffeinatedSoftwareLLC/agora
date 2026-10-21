@@ -85,8 +85,9 @@ test.describe('agent cards with the fake host', () => {
         await waitIdle(owner, ch.id, a.name, sid);
         const runsBeforeAlways = fh.traces('tool').length;
         const dc2 = dp.locator('[data-index]').filter({ hasText: 'was denied Bash(npm:*)' }).last();
-        await dc2.getByRole('button', { name: 'Always allow' }).click();
-        await expect(dc2.getByRole('alert')).toHaveText('Only the server owner can always allow a tool');
+        // A director gets Approve once and Deny, never Always allow (#146), and the API refuses it too
+        await expect(dc2.getByRole('button', { name: 'Approve once' })).toBeVisible();
+        await expect(dc2.getByRole('button', { name: 'Always allow' })).toHaveCount(0);
         const dr = await dir.api.req('POST', `/channels/${ch.id}/agent-tool-requests/${req2}`, { decision: 'always' });
         expect(dr.status).toBe(403);
         const profiles = async () => ((await owner.ok('GET', `/servers/${seed.serverId}/agent-profiles`)) as any[]).find(p => trimId(p.id) === a.profileId);
