@@ -16,7 +16,11 @@ export default class SummaryReporter implements Reporter {
             scenario_id: id,
             title: test.titlePath().slice(2).join(' > '),
             project: test.parent.project()?.name,
-            result: result.status === 'passed' ? 'passed' : result.status === 'skipped' ? 'not_applicable' : 'failed',
+            // test.fail() for a known, filed bug: kept visible, never counted as a pass. If it
+            // starts passing, Playwright reports it failed, and so does this.
+            result: test.expectedStatus === 'failed' && result.status === 'failed' ? 'expected_failure'
+                : result.status === 'passed' && test.expectedStatus !== 'failed' ? 'passed'
+                : result.status === 'skipped' ? 'not_applicable' : 'failed',
             raw_status: result.status,
             skip_reason: test.annotations.find(a => a.type === 'skip' || a.type === 'blocked')?.description,
             elapsed_seconds: +(result.duration / 1000).toFixed(1),
