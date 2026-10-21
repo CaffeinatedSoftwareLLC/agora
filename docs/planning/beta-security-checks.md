@@ -14,17 +14,17 @@ Result states follow §0: `passed`, `failed`, `blocked`, `manual`, `not_applicab
 | 6.4 Voice limits (6) | 5 | 1 | 0 | 0 | 0 |
 | **Total (42)** | **34** | **2** | **2** | **4** | **0** |
 
-Suites after this pass:
+Suites at head `4afa793`, re-run 2026-10-21, with the two known bugs marked as linked expected failures (`it.fails`, see "Product bugs found"):
 
 | Suite | Result |
 |---|---|
-| `npx vitest run test/integration` | 1064 passed, 1 failed (1065) in 71 files. Baseline: 1033, so 32 new. |
+| `npx vitest run test/integration` | 1065 passed (1065) in 71 files, including the #143 expected failure. Baseline: 1033, so 32 new. |
 | `npx vitest run test/unit` | 341 passed (341) in 27 files. Baseline: 340, so 1 new. |
-| `agora-host` `npm test` | 288 passed, 1 failed, 4 skipped (293) in 19 files. Baseline: 266 passed, 4 skipped (270). |
+| `agora-host` `npm test` | 289 passed, 4 skipped (293) in 19 files, including the #142 expected failure. Baseline: 266 passed, 4 skipped (270). |
 | `agora-mcp` `npm test` | 161 passed (161) in 20 files. Unchanged. |
 | `agora-ui` `npx vitest run` | 275 passed (275) in 38 files. Baseline: 259 passed in 37 files. |
 
-The two failing tests are the product bugs listed at the end. Each one asserts the correct behaviour and is left failing on purpose: none of them uses `it.fails` or a skip.
+History: the first run of this pass (head `81dbb1f`) left both tests as plain failures, which gave integration 1064 passed / 1 failed and agora-host 288 passed / 1 failed. Codex's review asked for linked expected failures so the default suites stay green. The beta results are unchanged: #142 `failed`, #143 `pending decision`.
 
 ---
 
