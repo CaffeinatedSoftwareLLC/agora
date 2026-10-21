@@ -545,6 +545,15 @@ All API endpoints (except `/health` and `/instance/*`) return 503 until instance
 
 ### Database connection errors
 
+API dependency outages return `503 {"error":"service_unavailable"}` with `Retry-After: 5`.
+Database acquisition and transaction-control queries have a 5-second deadline. API
+transactions use a 15-second local statement timeout, with a 17-second client deadline
+for queries if the database cannot respond. A client that times out is closed rather
+than returned to the pool. Workers, migrations and scripts keep their existing query
+limits. Redis authentication and passkey commands time out after 2 seconds; an
+unavailable token blacklist blocks authentication. `/health` checks PostgreSQL and
+returns 503 when it is unavailable.
+
 Make sure PostgreSQL is running and healthy:
 
 ```bash

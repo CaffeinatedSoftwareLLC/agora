@@ -110,9 +110,12 @@ async function releaseRequestClient(request: FastifyRequest) {
     try {
         await client.query('COMMIT');
         request.txCommitted = true;
-    } catch {
+    } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         request.txCommitted = false;
+        request.txFailure = err;
+        client.release(err instanceof Error ? err : true);
+        throw err;
     }
     client.release();
 }

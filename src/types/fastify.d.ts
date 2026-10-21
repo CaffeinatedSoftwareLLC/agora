@@ -16,6 +16,8 @@ declare module 'fastify' {
         isInstanceAdmin: boolean;
         /** Set when the request's transaction ends: true after COMMIT, false if the COMMIT failed. */
         txCommitted?: boolean;
+        /** Original COMMIT failure, used to distinguish a dependency outage from a constraint failure. */
+        txFailure?: unknown;
         /** Socket.IO events queued during the request, flushed after COMMIT. */
         pendingEvents: Array<{ event: string; room: string; data: any }>;
         /** User IDs to force-disconnect after COMMIT (e.g. suspended users). */
