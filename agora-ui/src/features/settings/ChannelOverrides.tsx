@@ -37,7 +37,9 @@ export function ChannelOverrides() {
 
   async function loadOverrides(channelId: string) {
     setSelectedChannel(channelId);
+    setOverrides(null);
     setError('');
+    if (!channelId) return;
     try {
       const data = await roleApi.getOverrides(channelId);
       setOverrides(data);
