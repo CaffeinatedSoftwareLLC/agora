@@ -334,7 +334,7 @@ describe('subtasks', () => {
         expect(beat.body).toMatchObject({ cancel: true });
         expect(await session(childId)).toMatchObject({ state: 'shelved', end_reason: 'budget' });
         const notice = (await ctx.db.query(`SELECT content FROM messages WHERE content LIKE 'Subtask session for builder%' ORDER BY id DESC LIMIT 1`)).rows[0];
-        expect(notice.content).toContain(`the budget of its parent session ${parentId} is used up`);
+        expect(notice.content).toContain(`the budget of its parent session ${parentId} (token budget) is used up (11,000 of 10,000 tokens)`);
 
         // The parent's own next wake finds its family budget gone
         await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@builder next' });

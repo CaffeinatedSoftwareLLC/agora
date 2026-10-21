@@ -166,6 +166,9 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
   const [result, setResult] = useState<AIConnectionResult | null>(null);
   const [newKey, setNewKey] = useState('');
   const [editingKey, setEditingKey] = useState(false);
+  const [editingUrl, setEditingUrl] = useState(false);
+  const [newBaseUrl, setNewBaseUrl] = useState(provider.baseUrl ?? '');
+  const [savingUrl, setSavingUrl] = useState(false);
   const [error, setError] = useState('');
 
   async function run(action: () => Promise<unknown>, fallback: string) {
@@ -188,6 +191,16 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
     } finally {
       setTesting(false);
     }
+  }
+
+  async function saveBaseUrl() {
+    setSavingUrl(true);
+    await run(async () => {
+      await aiApi.updateProvider(serverId, provider.id, { baseUrl: newBaseUrl.trim() || null });
+      setEditingUrl(false);
+      setResult(null);
+    }, 'Failed to save base URL');
+    setSavingUrl(false);
   }
 
   return (
@@ -231,7 +244,10 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
           placeholder="model to test"
           aria-label={`Test model for ${provider.label}`}
         />
-        <Button variant="secondary" onClick={test} loading={testing} disabled={!speech && !model.trim()}>Test</Button>
+        <Button variant="secondary" onClick={test} loading={testing} disabled={editingUrl || (!speech && !model.trim())}>Test</Button>
+        {adapter?.supportsBaseUrl && <Button variant="secondary" disabled={testing || savingUrl} onClick={() => {
+          setNewBaseUrl(provider.baseUrl ?? ''); setEditingUrl(v => !v); setError('');
+        }}>Edit base URL</Button>}
         <Button variant="secondary" onClick={() => setEditingKey(v => !v)}>
           {provider.hasApiKey ? 'Replace key' : 'Add key'}
         </Button>
@@ -256,6 +272,19 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
       </div>
 
       {speech && <p className="text-xs text-text-muted mt-1">Checks the speech server connection without generating audio. Use read-aloud or transcription to check the output.</p>}
+
+      {editingUrl && (
+        <div className="mt-3 space-y-2">
+          <Input label="Base URL" id={`base-url-${provider.id}`} value={newBaseUrl}
+            disabled={savingUrl} placeholder={adapter?.defaultBaseUrl}
+            onChange={e => setNewBaseUrl(e.target.value)} />
+          <p className="text-xs text-text-muted">Leave empty to use {adapter?.defaultBaseUrl || 'the provider default'}.</p>
+          <div className="flex gap-2">
+            <Button onClick={saveBaseUrl} loading={savingUrl}>Save base URL</Button>
+            <Button variant="secondary" disabled={savingUrl} onClick={() => setEditingUrl(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
 
       {editingKey && (
         <div className="flex items-center gap-2 mt-2">
