@@ -253,6 +253,25 @@ export class AgoraApiError extends Error {
     }
 }
 
+const RETRY_BUDGET_MS = 45_000;
+const MAX_RETRY_DELAY_MS = 10_000;
+
+function connectionUnavailable(error: unknown): boolean {
+    const e = error as { code?: string; cause?: { code?: string; errors?: Array<{ code?: string }> } } | null;
+    const retryable = (code?: string) => code === 'ECONNREFUSED' || code === 'ECONNRESET';
+    return retryable(e?.code) || retryable(e?.cause?.code) || !!e?.cause?.errors?.some(item => retryable(item.code));
+}
+
+function retryDelay(header: string | null, attempt: number): number {
+    let delay = Math.min(1000 * 2 ** Math.min(attempt, 4), MAX_RETRY_DELAY_MS);
+    if (header?.trim()) {
+        const seconds = Number(header);
+        const parsed = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(header) - Date.now();
+        if (Number.isFinite(parsed) && parsed >= 0) delay = parsed;
+    }
+    return Math.max(250, Math.min(delay, MAX_RETRY_DELAY_MS));
+}
+
 export class AgoraApi {
     private baseUrl: string;
     private token: string;
@@ -269,7 +288,8 @@ export class AgoraApi {
         headers?: Record<string, string>,
     ): Promise<T> {
         const url = `${this.baseUrl}${path}`;
-        const res = await fetch(url, {
+        // Serialize once: a retry must carry exactly the original idempotency identity/content.
+        const init: RequestInit = {
             method,
             headers: {
                 'Authorization': `Bot ${this.token}`,
@@ -277,29 +297,47 @@ export class AgoraApi {
                 ...headers,
             },
             body: body !== undefined ? JSON.stringify(body) : undefined,
-        });
-
-        if (!res.ok) {
-            const text = await res.text();
-            if (res.status === 423) {
-                let reason: string | null = null;
-                try { reason = JSON.parse(text).reason ?? null; } catch { /* non-JSON body */ }
-                throw new Error(
-                    `This bot is paused by an Agora admin${reason ? ` (reason: ${reason})` : ''}. `
-                    + 'It can still read messages but cannot post until resumed. Stop and tell the user.',
-                );
+        };
+        const clientKey = (body as { client_key?: unknown } | undefined)?.client_key;
+        const safe = method === 'GET' || (typeof clientKey === 'string' && clientKey.trim().length > 0)
+            || Object.entries(headers ?? {}).some(([name, value]) => name.toLowerCase() === 'idempotency-key' && value.trim().length > 0);
+        const deadline = Date.now() + RETRY_BUDGET_MS;
+        if (safe) init.signal = AbortSignal.timeout(RETRY_BUDGET_MS);
+        let lastError: unknown;
+        for (let attempt = 0; ; attempt++) {
+            if (safe && Date.now() >= deadline) throw lastError ?? new Error('Agora request retry budget expired');
+            let retryAfter: string | null = null;
+            try {
+                const res = await fetch(url, init);
+                if (!res.ok) {
+                    const text = await res.text();
+                    if (res.status === 423) {
+                        let reason: string | null = null;
+                        try { reason = JSON.parse(text).reason ?? null; } catch { /* non-JSON body */ }
+                        throw new Error(
+                            `This bot is paused by an Agora admin${reason ? ` (reason: ${reason})` : ''}. `
+                            + 'It can still read messages but cannot post until resumed. Stop and tell the user.',
+                        );
+                    }
+                    let json: any = null;
+                    try { json = JSON.parse(text); } catch { /* non-JSON body */ }
+                    retryAfter = res.headers.get('retry-after');
+                    throw new AgoraApiError(`Agora API ${res.status} ${method} ${path}: ${text}`, res.status,
+                        typeof json?.error === 'string' ? json.error : null, json);
+                }
+                const contentType = res.headers.get('content-type');
+                if (contentType?.includes('application/json')) return await res.json() as T;
+                return undefined as T;
+            } catch (error) {
+                if (init.signal?.aborted) throw lastError ?? error;
+                const unavailable = error instanceof AgoraApiError && error.status === 503 && error.code === 'service_unavailable';
+                if (!safe || (!unavailable && !connectionUnavailable(error))) throw error;
+                lastError = error;
             }
-            let json: any = null;
-            try { json = JSON.parse(text); } catch { /* non-JSON body */ }
-            throw new AgoraApiError(`Agora API ${res.status} ${method} ${path}: ${text}`, res.status,
-                typeof json?.error === 'string' ? json.error : null, json);
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) throw lastError;
+            await new Promise(resolve => setTimeout(resolve, Math.min(retryDelay(retryAfter, attempt), remaining)));
         }
-
-        const contentType = res.headers.get('content-type');
-        if (contentType?.includes('application/json')) {
-            return res.json() as Promise<T>;
-        }
-        return undefined as T;
     }
 
     async getMe(): Promise<BotInfo> {
