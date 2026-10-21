@@ -22,6 +22,8 @@ export function ThreadPanel() {
   const openThreadChannelId = useThreadStore(s => s.openThreadChannelId);
   const repliesByThread = useThreadStore(s => s.repliesByThread);
   const sendReply = useThreadStore(s => s.sendReply);
+  const editReply = useThreadStore(s => s.editReply);
+  const deleteReply = useThreadStore(s => s.deleteReply);
   const closeThreadRemote = useThreadStore(s => s.closeThreadRemote);
   const reopenThread = useThreadStore(s => s.reopenThread);
   const activeThreads = useThreadStore(s => s.activeThreads);
@@ -106,8 +108,12 @@ export function ThreadPanel() {
     }
   };
 
-  const noopEdit = () => {};
-  const noopDelete = () => {};
+  const handleEdit = (replyId: string, content: string) => {
+    void editReply(openThreadChannelId, openThreadId, replyId, content);
+  };
+  const handleDelete = (replyId: string) => {
+    void deleteReply(openThreadChannelId, openThreadId, replyId);
+  };
 
   return (
     <div
@@ -199,8 +205,8 @@ export function ThreadPanel() {
               message={reply}
               isGrouped={isGrouped}
               isOwn={reply.authorId === user?.id}
-              onEdit={noopEdit}
-              onDelete={noopDelete}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
               channelId={openThreadChannelId}
             />
           );

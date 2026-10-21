@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { test, expect, openChannel, apis } from '../lib/fixtures';
 import { snap } from '../lib/snap';
 import { freshChannel, makeBot, uniq } from '../lib/helpers';
@@ -146,4 +147,7 @@ test.describe('mobile touch targets and width', () => {
         test.info().annotations.push({ type: 'note', description: `overflow at 360px: ${JSON.stringify(results)}` });
         expect(results.filter(r => r.overflow > 0), 'pages wider than the 360 px viewport').toEqual([]);
     });
+});
+test('[UI-01.thread-reply-actions] phone sheet edits and deletes an own reply, including another client', async ({ page, seed }) => {
+    await checkThreadReplyActions(page, seed, true);
 });
