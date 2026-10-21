@@ -20,6 +20,8 @@ const capabilities = {
     sessionCapabilities: env.ACP_RESUME === 'resume' ? { resume: {} } : {},
 };
 const configOptions = json('ACP_CONFIG', []);
+const sessionConfig = () => ({ ...(env.ACP_OMIT_CONFIG ? {} : { configOptions }),
+    ...(env.ACP_MODELS ? { models: json('ACP_MODELS', {}) } : {}) });
 
 async function prompt(id, { sessionId }) {
     if (env.ACP_HANG) return;
@@ -54,9 +56,11 @@ createInterface({ input: process.stdin }).on('line', line => {
         case 'authenticate': return reply(id, {});
         case 'session/new':
             if (env.ACP_NEW_ERROR) return fail(id, JSON.parse(env.ACP_NEW_ERROR));
-            return reply(id, { sessionId: 'sess-1', configOptions });
-        case 'session/resume': case 'session/load': return reply(id, { configOptions });
+            return reply(id, { sessionId: 'sess-1', ...sessionConfig() });
+        case 'session/resume': case 'session/load': return reply(id, sessionConfig());
         case 'session/set_config_option': return reply(id, { configOptions });
+        case 'session/set_model':
+            return env.ACP_SET_MODEL_ERROR ? fail(id, json('ACP_SET_MODEL_ERROR', {})) : reply(id, {});
         case 'session/prompt': return void prompt(id, params);
         case 'session/cancel': return;
         default: if (id !== undefined) fail(id, { code: -32601, message: 'Method not found' });

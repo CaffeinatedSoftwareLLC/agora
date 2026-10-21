@@ -303,11 +303,13 @@ own `~/.gemini` (and any Google login cached there) out of hosted runs.
 **One turn.** `initialize` (protocol version 1, else the run fails with
 `acp_protocol_unsupported`) → `authenticate` (API-key profiles only, below) →
 `session/new` in the session worktree, with the Agora MCP server (bot token in its
-`env`) → `session/set_config_option` for the profile's model and effort → one
+`env`) → `session/set_config_option` for the profile's model and effort (or
+`session/set_model` when the agent advertises `models` without a model config option) → one
 `session/prompt` with the wake prompt → stdin closed, then the process tree stopped.
 The session ID is stored like a CLI's native ID; the next wake uses `session/resume`,
 else `session/load`, and fails with `native_resume_unsupported` rather than start a
 new conversation. A model the agent doesn't list fails with `acp_model_unavailable`;
+the run's error message lists the available model IDs (up to eight, with a count of any others).
 an effort it doesn't list is ignored. The summary is the JSON `summary` of the
 agent's final message, else its text; `[pass]` works for lurk runs.
 
