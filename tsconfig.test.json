@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.d.ts", "test/**/*"],
+  // #180 tracks the MCP SDK overload blow-up and the remaining test fixture errors.
+  // Keep this diagnostic check finite; it is not a passing gate yet.
+  "exclude": ["node_modules", "dist", "test/integration/agora-mcp-package.integration.test.ts"]
+}
