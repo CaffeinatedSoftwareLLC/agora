@@ -3,7 +3,7 @@ S0001,mcp_tool,agora-mcp/src/tools.ts,377,chat_send,UI-01;AG-01,mapped,ae0c0f342
 S0002,mcp_tool,agora-mcp/src/tools.ts,408,chat_read,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0003,mcp_tool,agora-mcp/src/tools.ts,436,who_directs,ID-04;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0004,mcp_tool,agora-mcp/src/tools.ts,451,project_context,UI-06.project-pin;UI-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0005,mcp_tool,agora-mcp/src/tools.ts,464,channel_list,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0005,mcp_tool,agora-mcp/src/tools.ts,464,channel_list,ID-05.channel-list-revoke;ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0006,mcp_tool,agora-mcp/src/tools.ts,491,chat_wait,AG-09,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0007,mcp_tool,agora-mcp/src/tools.ts,566,chat_history,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0008,mcp_tool,agora-mcp/src/tools.ts,594,thread_start,UI-01;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
@@ -30,7 +30,7 @@ S0028,mcp_tool,agora-mcp/src/tools.ts,919,subtask_start,AG-08;AG-10,mapped,ae0c0
 S0029,mcp_tool,agora-mcp/src/tools.ts,948,file_search,UI-03,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0030,mcp_tool,agora-mcp/src/tools.ts,964,file_read,UI-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0031,mcp_tool,agora-mcp/src/tools.ts,980,canvas_publish,UI-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0032,mcp_tool,agora-mcp/src/tools.ts,1007,canvas_read,UI-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0032,mcp_tool,agora-mcp/src/tools.ts,1007,canvas_read,UI-05.canvas-read;UI-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0033,mcp_tool,agora-mcp/src/tools.ts,1025,browser_preview,AG-08,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0034,mcp_tool,agora-mcp/src/tools.ts,1060,runtime_exec,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0035,mcp_tool,agora-mcp/src/tools.ts,1087,runtime_status,OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
@@ -44,25 +44,25 @@ S0042,http_endpoint,src/routes/admin.ts,279,POST /admin/users/:id/ban,ID-06;ID-0
 S0043,http_endpoint,src/routes/admin.ts,284,PATCH /admin/instance,ID-01;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0044,http_endpoint,src/routes/admin.ts,359,GET /admin/settings/files,UI-03;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0045,http_endpoint,src/routes/admin.ts,368,PATCH /admin/settings/files,UI-03;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0046,http_endpoint,src/routes/admin.ts,417,GET /admin/settings/ai,OP-06,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0047,http_endpoint,src/routes/admin.ts,426,PATCH /admin/settings/ai,OP-06,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0048,http_endpoint,src/routes/admin.ts,451,GET /admin/settings/runtime,OP-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0049,http_endpoint,src/routes/admin.ts,460,PATCH /admin/settings/runtime,OP-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0046,http_endpoint,src/routes/admin.ts,417,GET /admin/settings/ai,OP-06.private-base-url;OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0047,http_endpoint,src/routes/admin.ts,426,PATCH /admin/settings/ai,OP-06.private-base-url;OP-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0048,http_endpoint,src/routes/admin.ts,451,GET /admin/settings/runtime,OP-01.code-retention;OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0049,http_endpoint,src/routes/admin.ts,460,PATCH /admin/settings/runtime,OP-01.code-retention;OP-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0050,http_endpoint,src/routes/admin.ts,496,GET /admin/storage,ID-06.admin-vary,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0051,route_module,src/routes/agent-commands.ts,1,agent-commands.ts,AG-01;AG-10;SEC-01;UI-02;AG-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0052,http_endpoint,src/routes/agent-commands.ts,153,POST /channels/:id/agent-commands,AG-01;AG-10;SEC-01;UI-02.notice-drawer;AG-04.siwc-stop-before,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0053,route_module,src/routes/agent-hosts.ts,1,agent-hosts.ts,AG-01;SEC-01;AG-10;ID-05;AG-04;AG-07;OP-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0054,http_endpoint,src/routes/agent-hosts.ts,124,POST /servers/:serverId/agent-hosts,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0055,http_endpoint,src/routes/agent-hosts.ts,148,GET /servers/:serverId/agent-hosts,AG-10.agents-page;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0056,http_endpoint,src/routes/agent-hosts.ts,159,DELETE /servers/:serverId/agent-hosts/:hostId,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0056,http_endpoint,src/routes/agent-hosts.ts,159,DELETE /servers/:serverId/agent-hosts/:hostId,ID-05.host-revoke;ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0057,http_endpoint,src/routes/agent-hosts.ts,175,POST /servers/:serverId/agent-profiles,AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0058,http_endpoint,src/routes/agent-hosts.ts,214,GET /servers/:serverId/agent-profiles,AG-10.agents-page,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0059,http_endpoint,src/routes/agent-hosts.ts,226,PATCH /servers/:serverId/agent-profiles/:profileId,AG-04;AG-01;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0060,http_endpoint,src/routes/agent-hosts.ts,296,DELETE /servers/:serverId/agent-profiles/:profileId,AG-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0060,http_endpoint,src/routes/agent-hosts.ts,296,DELETE /servers/:serverId/agent-profiles/:profileId,AG-01.profile-delete;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0061,http_endpoint,src/routes/agent-hosts.ts,316,POST /servers/:serverId/agents,AG-10.agents-page;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0062,http_endpoint,src/routes/agent-hosts.ts,386,POST /agent-hosts/@me/profiles,AG-10.agents-page;AG-10,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0063,http_endpoint,src/routes/agent-hosts.ts,413,POST /agent-hosts/@me/workspaces/reconcile,AG-07,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0064,http_endpoint,src/routes/agent-hosts.ts,428,POST /agent-hosts/@me/workspaces/warning,AG-07,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0063,http_endpoint,src/routes/agent-hosts.ts,413,POST /agent-hosts/@me/workspaces/reconcile,AG-07.ended-worktree;AG-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0064,http_endpoint,src/routes/agent-hosts.ts,428,POST /agent-hosts/@me/workspaces/warning,AG-07.ended-worktree;AG-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0065,http_endpoint,src/routes/agent-hosts.ts,445,GET /agent-hosts/@me/runs/next,OP-02.crash-before-claim;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0066,http_endpoint,src/routes/agent-hosts.ts,479,POST /agent-hosts/@me/runs/:runId/heartbeat,OP-02.crash-before-claim;AG-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0067,http_endpoint,src/routes/agent-hosts.ts,500,POST /agent-hosts/@me/runs/:runId/tool-requests,AG-04.siwc-inspect;AG-04.siwc-file;AG-04,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
@@ -119,9 +119,9 @@ S0117,route_module,src/routes/bots.ts,1,bots.ts,ID-05;SEC-01;SEC-02;ID-04;AG-01;
 S0118,http_endpoint,src/routes/bots.ts,185,POST /servers/:serverId/bots,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0119,http_endpoint,src/routes/bots.ts,235,GET /servers/:serverId/bots,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0120,http_endpoint,src/routes/bots.ts,264,GET /servers/:serverId/bots/:id,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0121,http_endpoint,src/routes/bots.ts,314,PATCH /servers/:serverId/bots/:id,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0121,http_endpoint,src/routes/bots.ts,314,PATCH /servers/:serverId/bots/:id,ID-05.bot-edit;SEC-01;ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0122,http_endpoint,src/routes/bots.ts,374,PATCH /servers/:serverId/bots/:id/pause,ID-05;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0123,http_endpoint,src/routes/bots.ts,419,DELETE /servers/:serverId/bots/:id,ID-05,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0123,http_endpoint,src/routes/bots.ts,419,DELETE /servers/:serverId/bots/:id,ID-05.bot-delete;ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0124,http_endpoint,src/routes/bots.ts,462,POST /servers/:serverId/bots/:id/tokens,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0125,http_endpoint,src/routes/bots.ts,496,GET /servers/:serverId/bots/:id/tokens,ID-05,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0126,http_endpoint,src/routes/bots.ts,524,DELETE /servers/:serverId/bots/:id/tokens/:tokenId,ID-05;SEC-02,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
@@ -236,7 +236,7 @@ S0234,http_endpoint,src/routes/unreads.ts,8,PUT /channels/:channelId/ack,UI-01,m
 S0235,http_endpoint,src/routes/unreads.ts,54,GET /channels/:channelId/unreads,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0236,http_endpoint,src/routes/unreads.ts,99,GET /unreads,UI-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0237,route_module,src/routes/users.ts,1,users.ts,SEC-01;ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
-S0238,http_endpoint,src/routes/users.ts,7,GET /users/search,SEC-01,gap,ae0c0f34288ba7af93a5761b58cf6220f58b801d
+S0238,http_endpoint,src/routes/users.ts,7,GET /users/search,SEC-01.user-search;SEC-01,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0239,http_endpoint,src/routes/users.ts,41,GET /users/@me/preferences,ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0240,http_endpoint,src/routes/users.ts,49,PATCH /users/@me/preferences,ID-06,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
 S0241,route_module,src/routes/voice.ts,1,voice.ts,UI-07,mapped,ae0c0f34288ba7af93a5761b58cf6220f58b801d
@@ -470,7 +470,7 @@ S0468,socket_event,src/routes/messages.ts,145,server->client ChannelLoopGuard,AG
 S0469,socket_event,src/routes/servers.ts,274,"server->user ServerJoin (joins rooms, filtered channels)",ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0470,socket_event,src/routes/bots.ts,626,internal _leaveRoom (bot channel access removed),ID-05;SEC-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0471,socket_event,src/runtime/tripwires.ts,63,internal _GatewayAccessChanged via Redis (tripwire pause),OP-01;SEC-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0472,socket_event,src/lib/event-bridge.ts,34,Redis agora:events bridge (allowlist Message/MessageUpdate/ThreadMetadataUpdate),SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0472,socket_event,src/lib/event-bridge.ts,34,Redis agora:events bridge (allowlist Message/MessageUpdate/ThreadMetadataUpdate),SEC-01.bridge-allowlist;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0473,socket_event,src/routes/permission-relays.ts,181,server->bot PermissionRelayDecision,AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0474,socket_event,src/routes/channel-projects.ts,36,server->client ChannelProjectUpdate,UI-06,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0475,socket_event,src/lib/task-cards.ts,48,server->client TaskCardUpdate,UI-06.task-crud,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
@@ -494,7 +494,7 @@ S0492,worker,src/gateway.ts,47,terminal session heartbeat and stale sweep,AG-09,
 S0493,worker,src/ai/assistant-handler.ts,36,built-in assistant mention handler (internal bus),AG-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0494,worker,src/runner-main.ts,34,sandbox runner worker (BullMQ),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0495,worker,src/runner-main.ts,27,"runner startup orphan removal (removeOrphans, #126)",OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0496,worker,src/runner-main.ts,79,"runner maintenance sweep (code retention prune, approval expiry)",OP-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0496,worker,src/runner-main.ts,79,"runner maintenance sweep (code retention prune, approval expiry)",OP-01.code-retention;OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0497,worker,src/gateway-main.ts,13,capability gateway service (cap-gateway),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0498,cli_command,agora-host/src/index.ts,16,agora-host --config <file>,AG-01;AG-03;AG-10;AG-04.siwc-outside,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0499,cli_command,agora-host/src/index.ts,14,agora-host autostart <enable|disable|status> --config <file>,OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
@@ -504,50 +504,50 @@ S0502,cli_command,agora-mcp/src/config.ts,29,agora-mcp --instance <url> --token 
 S0503,cli_command,agora-mcp/src/channel-server.ts,27,agora-mcp --channel-mode (Claude Channel),AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0504,cli_command,agora-mcp/src/channel-server.ts,21,agora-mcp --auth <subscription|api_key>,AG-09;AG-10,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0505,cli_command,agora-mcp/src/channel-server.ts,30,agora-mcp --no-presence (hosted runs),AG-01;AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0506,cli_command,agora-mcp/src/channel-server.ts,29,agora-mcp --no-permission-relay,AG-09,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0506,cli_command,agora-mcp/src/channel-server.ts,29,agora-mcp --no-permission-relay,AG-09.no-permission-relay;AG-09,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0507,cli_command,agora-mcp/src/index.ts,16,agora-mcp --version,,excluded:prints the package version and exits; no state or authority,11e998c735abc77f35d69402d7d48c2722d11a85
 S0508,cli_command,src/db/migrate.ts,1,npm run migrate,OP-04.upgrade,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0509,cli_command,src/tools/rotate-encryption-key.ts,21,npm run key:rotate,OP-05,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0509,cli_command,src/tools/rotate-encryption-key.ts,21,npm run key:rotate,OP-05.key-rotate;OP-05,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0510,cli_command,src/tools/unlock-login.ts,14,npm run login:unlock -- <username|email>,ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0511,cli_command,src/tools/migrate-storage-from-s3.ts,16,npm run storage:migrate-from-s3,OP-04,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0512,cli_command,src/tools/strip-storage-filenames.ts,14,npm run storage:strip-filenames,OP-04,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0511,cli_command,src/tools/migrate-storage-from-s3.ts,16,npm run storage:migrate-from-s3,OP-04.minio-migrate;OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0512,cli_command,src/tools/strip-storage-filenames.ts,14,npm run storage:strip-filenames,OP-04.strip-filenames;OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0513,migration_set,src/db/migrations,1,src/db/migrations/*.sql (59 files) via src/db/migrate.ts,OP-04.upgrade;OP-05.restore,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0514,migration_set,src/db/migrations/001_core_tables.sql,1,001_core_tables.sql,OP-04.upgrade;ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0515,migration_set,src/db/migrations/002_channels_and_members.sql,1,002_channels_and_members.sql,OP-04.upgrade;ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0516,migration_set,src/db/migrations/003_permissions.sql,1,003_permissions.sql,OP-04.upgrade;ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0517,migration_set,src/db/migrations/006_row_level_security.sql,1,006_row_level_security.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0517,migration_set,src/db/migrations/006_row_level_security.sql,1,006_row_level_security.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0518,migration_set,src/db/migrations/007_instance_config.sql,1,007_instance_config.sql,OP-04.upgrade;ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0519,migration_set,src/db/migrations/008_instance_admin.sql,1,008_instance_admin.sql,OP-04.upgrade;ID-06,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0520,migration_set,src/db/migrations/009_user_account_status.sql,1,009_user_account_status.sql,OP-04.upgrade;ID-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0521,migration_set,src/db/migrations/013_ip_tracking_and_bans.sql,1,013_ip_tracking_and_bans.sql,OP-04.upgrade;ID-06,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0522,migration_set,src/db/migrations/015_file_sharing.sql,1,015_file_sharing.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0523,migration_set,src/db/migrations/016_bot_infrastructure.sql,1,016_bot_infrastructure.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0524,migration_set,src/db/migrations/018_channels_update_policy.sql,1,018_channels_update_policy.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0522,migration_set,src/db/migrations/015_file_sharing.sql,1,015_file_sharing.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0523,migration_set,src/db/migrations/016_bot_infrastructure.sql,1,016_bot_infrastructure.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0524,migration_set,src/db/migrations/018_channels_update_policy.sql,1,018_channels_update_policy.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0525,migration_set,src/db/migrations/025_bot_pause.sql,1,025_bot_pause.sql,OP-04.upgrade;ID-05,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0526,migration_set,src/db/migrations/029_runtime_access.sql,1,029_runtime_access.sql,OP-04.upgrade;OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0527,migration_set,src/db/migrations/034_file_tags.sql,1,034_file_tags.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0527,migration_set,src/db/migrations/034_file_tags.sql,1,034_file_tags.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0528,migration_set,src/db/migrations/035_session_version.sql,1,035_session_version.sql,OP-04.upgrade;ID-02,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0529,migration_set,src/db/migrations/036_direct_agents.sql,1,036_direct_agents.sql,OP-04.upgrade;ID-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
-S0530,migration_set,src/db/migrations/037_agent_sessions.sql,1,037_agent_sessions.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0531,migration_set,src/db/migrations/041_file_reservations.sql,1,041_file_reservations.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0532,migration_set,src/db/migrations/042_agent_permissions.sql,1,042_agent_permissions.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0533,migration_set,src/db/migrations/043_agent_invites.sql,1,043_agent_invites.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0534,migration_set,src/db/migrations/044_passkeys.sql,1,044_passkeys.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0535,migration_set,src/db/migrations/045_lurk_images.sql,1,045_lurk_images.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0536,migration_set,src/db/migrations/046_provider_terms.sql,1,046_provider_terms.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0537,migration_set,src/db/migrations/047_diff_review.sql,1,047_diff_review.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0538,migration_set,src/db/migrations/048_terms_watch.sql,1,048_terms_watch.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0539,migration_set,src/db/migrations/049_permission_relays.sql,1,049_permission_relays.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0540,migration_set,src/db/migrations/050_siwc_plan.sql,1,050_siwc_plan.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0541,migration_set,src/db/migrations/051_project_context.sql,1,051_project_context.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0542,migration_set,src/db/migrations/052_task_board.sql,1,052_task_board.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0543,migration_set,src/db/migrations/053_canvas_preview.sql,1,053_canvas_preview.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0544,migration_set,src/db/migrations/057_bot_file_visibility.sql,1,057_bot_file_visibility.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
-S0545,migration_set,src/db/migrations/058_agent_handoffs.sql,1,058_agent_handoffs.sql,SEC-01,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0530,migration_set,src/db/migrations/037_agent_sessions.sql,1,037_agent_sessions.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0531,migration_set,src/db/migrations/041_file_reservations.sql,1,041_file_reservations.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0532,migration_set,src/db/migrations/042_agent_permissions.sql,1,042_agent_permissions.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0533,migration_set,src/db/migrations/043_agent_invites.sql,1,043_agent_invites.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0534,migration_set,src/db/migrations/044_passkeys.sql,1,044_passkeys.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0535,migration_set,src/db/migrations/045_lurk_images.sql,1,045_lurk_images.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0536,migration_set,src/db/migrations/046_provider_terms.sql,1,046_provider_terms.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0537,migration_set,src/db/migrations/047_diff_review.sql,1,047_diff_review.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0538,migration_set,src/db/migrations/048_terms_watch.sql,1,048_terms_watch.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0539,migration_set,src/db/migrations/049_permission_relays.sql,1,049_permission_relays.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0540,migration_set,src/db/migrations/050_siwc_plan.sql,1,050_siwc_plan.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0541,migration_set,src/db/migrations/051_project_context.sql,1,051_project_context.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0542,migration_set,src/db/migrations/052_task_board.sql,1,052_task_board.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0543,migration_set,src/db/migrations/053_canvas_preview.sql,1,053_canvas_preview.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0544,migration_set,src/db/migrations/057_bot_file_visibility.sql,1,057_bot_file_visibility.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
+S0545,migration_set,src/db/migrations/058_agent_handoffs.sql,1,058_agent_handoffs.sql,SEC-01.rls-probe;SEC-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0546,deploy_entrypoint,docker-compose.prod.yml,1,docker compose -f docker-compose.prod.yml (prod stack),OP-04.upgrade;OP-05.restore;OP-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0547,deploy_entrypoint,docker-compose.tailnet.yml,1,docker-compose.tailnet.yml override (Tailscale),OP-07,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0548,deploy_entrypoint,docker-compose.yml,1,"docker-compose.yml (dev postgres/redis, voice profile)",,excluded:dev and vitest infrastructure (127.0.0.1 postgres/redis); not a deployment,11e998c735abc77f35d69402d7d48c2722d11a85
-S0549,deploy_entrypoint,docker-compose.minio-migrate.yml,1,docker-compose.minio-migrate.yml (one-time MinIO -> disk move),OP-04,gap,11e998c735abc77f35d69402d7d48c2722d11a85
+S0549,deploy_entrypoint,docker-compose.minio-migrate.yml,1,docker-compose.minio-migrate.yml (one-time MinIO -> disk move),OP-04.minio-migrate;OP-04,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0550,deploy_entrypoint,Dockerfile,1,"Dockerfile (api, migrate, runner, cap-gateway image)",OP-04.upgrade,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0551,deploy_entrypoint,agora-ui/Dockerfile,1,agora-ui/Dockerfile (web image),OP-04.upgrade;ID-06.admin-reload,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
 S0552,deploy_entrypoint,sandbox/Dockerfile,1,sandbox/Dockerfile (code-run image),OP-01,mapped,11e998c735abc77f35d69402d7d48c2722d11a85
