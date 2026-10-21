@@ -11,6 +11,15 @@ const CANARY = 'https://egress-canary.agora-e2e.test';
 const page1 = (h: string) => `<!doctype html><html><body style="font-family:sans-serif;background:#f4f1ea;color:#222"><h1 id="h">${h}</h1><p>Canvas version test.</p></body></html>`;
 
 test.describe('canvas versions, source, download and navigation escapes', () => {
+    // These tests post as the seeded bot in the shared agents channel. The loop guard allows 4
+    // consecutive bot messages per channel (max_bot_hops), so a human message before and after
+    // each test keeps this spec and later bot-posting specs (canvas.spec.ts) under it.
+    const humanBreak = async (seed: Parameters<typeof apis>[0]) => {
+        await apis(seed).owner.ok('POST', `/channels/${seed.channels.agents}/messages`, { content: 'e2e: human break for the loop guard' }, [201]);
+    };
+    test.beforeEach(async ({ seed }) => { await humanBreak(seed); });
+    test.afterEach(async ({ seed }) => { await humanBreak(seed); });
+
     test('[UI-05.canvas-versions] v2 renders; v1 is selectable with Go to latest; Source and Download match the version', async ({ page, seed }, ti) => {
         const { bot } = apis(seed);
         const ch = seed.channels.agents, name = `agents-${seed.runTag}`;
