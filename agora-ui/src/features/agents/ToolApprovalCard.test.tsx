@@ -3,11 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
 import type { Message } from '../../stores/messageStore';
 import { RunApprovalCard, ToolApprovalCard } from './ToolApprovalCard';
+import { useAuthStore } from '../../stores/authStore';
+import { clearViewerAuthority } from './viewerAuthority';
 import { authLabel, classifyCommandError, decisionError, describeSession, ERRORS, isSleeping, sessionState, deriveChips, type AgentSession } from './agentSessions';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() }); });
 const post = vi.hoisted(() => vi.fn());
-vi.mock('../../lib/api', async orig => ({ ...await orig<typeof import('../../lib/api')>(), api: { post: (...args: unknown[]) => post(...args) } }));
+const get = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/api', async orig => ({ ...await orig<typeof import('../../lib/api')>(), api: { post: (...args: unknown[]) => post(...args), get: (...args: unknown[]) => get(...args) } }));
 
 const card = (status: string): Message => ({
   id: 'M'.repeat(26), channelId: 'C'.repeat(26), content: 'codex was denied `Bash(gh:*)`.', authorId: null, authorUsername: null,
@@ -15,14 +18,27 @@ const card = (status: string): Message => ({
   systemData: { kind: 'agent_tool_approval', requestId: 'R'.repeat(26), profile: 'codex', tool: 'Bash(gh:*)', status },
 } as unknown as Message);
 
-beforeEach(() => { post.mockReset(); });
+// GET /channels/:id/directors: the owner and one director
+const DIRECTORS = { directors: [
+  { userId: 'owner', username: 'owner', bot: false, authority: 'owner' },
+  { userId: 'dir', username: 'dir', bot: false, authority: 'director' },
+] };
+const viewAs = (id: string) => useAuthStore.setState({ user: { id } as never });
+
+beforeEach(() => {
+  post.mockReset();
+  get.mockReset();
+  get.mockResolvedValue(DIRECTORS);
+  clearViewerAuthority();
+  viewAs('owner');
+});
 
 describe('tool approval card', () => {
   it('sends the decision for a pending request', async () => {
     post.mockResolvedValue({ id: 'R'.repeat(26), status: 'once' });
     render(<ToolApprovalCard message={card('pending')} />);
     expect(screen.getByText('Bash(gh:*)').tagName).toBe('CODE');
-    fireEvent.click(screen.getByText('Approve once'));
+    fireEvent.click(await screen.findByText('Approve once'));
     await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${'C'.repeat(26)}/agent-tool-requests/${'R'.repeat(26)}`, { decision: 'once' }));
     fireEvent.click(screen.getByText('Always allow'));
     await waitFor(() => expect(post).toHaveBeenLastCalledWith(expect.any(String), { decision: 'always' }));
@@ -31,11 +47,11 @@ describe('tool approval card', () => {
   it('shows why a decision failed', async () => {
     post.mockRejectedValue(new ApiError(403, 'Only the server owner can always allow a tool'));
     render(<ToolApprovalCard message={card('pending')} />);
-    fireEvent.click(screen.getByText('Always allow'));
+    fireEvent.click(await screen.findByText('Always allow'));
     expect((await screen.findByRole('alert')).textContent).toBe('Only the server owner can always allow a tool');
   });
 
-  it('shows the whole command of a waiting step, however long, as plain text', () => {
+  it('shows the whole command of a waiting step, however long, as plain text', async () => {
     const long = `git log --format=${'x'.repeat(240)} && git push --force origin main <b>`;
     const msg = card('pending');
     msg.systemData = { ...(msg.systemData as object), live: true, detail: long, cwd: '/srv/work/tree' } as Message['systemData'];
@@ -44,12 +60,54 @@ describe('tool approval card', () => {
     expect(container.querySelector('pre')!.textContent).toBe(long);
     expect(container.querySelector('pre b')).toBeNull();
     expect(screen.getByText('/srv/work/tree').tagName).toBe('CODE');
+    await screen.findByText('Approve once');
   });
 
   it('has no buttons once decided', () => {
     render(<ToolApprovalCard message={card('always')} />);
     expect(screen.getByText('ALWAYS ALLOWED')).toBeTruthy();
     expect(screen.queryByText('Approve once')).toBeNull();
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  describe('who sees the decision buttons (#146)', () => {
+    const buttons = () => screen.queryAllByRole('button').map(b => b.textContent);
+
+    it('the owner gets Approve once, Always allow and Deny', async () => {
+      render(<ToolApprovalCard message={card('pending')} />);
+      await waitFor(() => expect(buttons()).toEqual(['Approve once', 'Always allow', 'Deny']));
+      expect(get).toHaveBeenCalledWith(`/channels/${'C'.repeat(26)}/directors`);
+    });
+
+    it('a director gets Approve once and Deny, not Always allow', async () => {
+      viewAs('dir');
+      render(<ToolApprovalCard message={card('pending')} />);
+      await waitFor(() => expect(buttons()).toEqual(['Approve once', 'Deny']));
+    });
+
+    it('a member sees the status and no buttons', async () => {
+      viewAs('member');
+      render(<ToolApprovalCard message={card('pending')} />);
+      expect(await screen.findByText('The owner or a director decides.')).toBeTruthy();
+      expect(screen.getByText('PENDING')).toBeTruthy();
+      expect(buttons()).toEqual([]);
+    });
+
+    it('shows no buttons while the lookup runs, and all of them if it fails', async () => {
+      let fail!: (e: Error) => void;
+      get.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+      viewAs('member');
+      render(<ToolApprovalCard message={card('pending')} />);
+      expect(buttons()).toEqual([]);
+      fail(new Error('offline'));
+      await waitFor(() => expect(buttons()).toEqual(['Approve once', 'Always allow', 'Deny']));
+    });
+
+    it('looks up the directors once for several cards in a channel', async () => {
+      render(<><ToolApprovalCard message={card('pending')} /><ToolApprovalCard message={card('pending')} /></>);
+      await waitFor(() => expect(buttons()).toHaveLength(6));
+      expect(get).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('maps server errors to sentences', () => {
