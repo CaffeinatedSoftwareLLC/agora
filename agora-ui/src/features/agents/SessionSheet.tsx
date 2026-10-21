@@ -5,7 +5,7 @@ import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import {
-  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, runAgentCommand, sessionState,
+  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState,
   terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
 
@@ -245,7 +245,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
         {state === 'sleeping' && current?.sleepingUntil && (
           <div className="space-y-2 rounded-lg border border-border bg-bg/60 p-3 text-sm text-text-muted">
             <p>
-              Hit its rate limit. Sleeping until {new Date(current.sleepingUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })};
+              Hit its rate limit. Sleeping until {resetTime(current.sleepingUntil)};
               messages for it are held and delivered together when it wakes.
             </p>
             <button type="button" className={BTN_SECONDARY} disabled={busy} onClick={() => void run({ command: 'wake', sessionId: current.id })}>
