@@ -1,6 +1,6 @@
 /**
- * Docker control for the outage scenarios (beta-test-plan §3.5 OP-03): pause/unpause, exec
- * and a throwaway stub container, only ever on containers named `agora-e2e-*`.
+ * Docker control for the outage scenarios (beta-test-plan §3.5 OP-03): pause/unpause, exec,
+ * stats (OP-08 soak) and a throwaway stub container, only ever on containers named `agora-e2e-*`.
  *
  * - Every call that names a container goes through `target()`, which refuses any name without
  *   the `agora-e2e-` prefix and then reads the container's labels: it must belong to the
@@ -20,7 +20,7 @@ export const PROJECT = 'agora-e2e';
 export const NETWORK = 'agora-e2e_net';
 const NAME_RE = /^agora-e2e-[a-z0-9][a-z0-9_.-]{0,100}$/;
 const STUB_LABEL = 'agora-e2e.ops-stub';
-const SUBCOMMANDS = new Set(['ps', 'inspect', 'pause', 'unpause', 'exec', 'logs', 'run', 'rm']);
+const SUBCOMMANDS = new Set(['ps', 'inspect', 'pause', 'unpause', 'exec', 'logs', 'run', 'rm', 'stats']);
 
 export type Service = 'postgres' | 'redis' | 'api' | 'web';
 
@@ -147,6 +147,24 @@ export async function removeStub(name: string) {
     const labels = (JSON.parse(r.stdout)[0]?.Config?.Labels ?? {}) as Record<string, string>;
     if (labels[STUB_LABEL] !== '1') throw new Error(`refusing to remove ${name}: not an ops stub`);
     await docker(['rm', '-f', name]);
+}
+
+export interface ContainerStats { memBytes: number; memLimitBytes: number; cpuPercent: number; raw: string }
+
+const UNITS: Record<string, number> = { b: 1, kb: 1e3, kib: 1024, mb: 1e6, mib: 1024 ** 2, gb: 1e9, gib: 1024 ** 3 };
+const bytes = (s: string) => {
+    const m = /^([\d.]+)\s*([a-z]+)$/i.exec(s.trim());
+    return m ? Number(m[1]) * (UNITS[m[2].toLowerCase()] ?? NaN) : NaN;
+};
+
+/** One `docker stats --no-stream` sample of an agora-e2e container (OP-08 soak: API memory). */
+export async function stats(name: string): Promise<ContainerStats> {
+    await target(name);
+    const r = await docker(['stats', '--no-stream', '--format', '{{json .}}', name], { timeoutMs: 30_000 });
+    const s = JSON.parse(r.stdout.trim().split(/\r?\n/)[0]) as { MemUsage: string; CPUPerc: string; Name: string };
+    if (s.Name !== name) throw new Error(`stats ${name}: unexpected result`);
+    const [used, limit] = s.MemUsage.split('/');
+    return { memBytes: bytes(used), memLimitBytes: bytes(limit), cpuPercent: parseFloat(s.CPUPerc), raw: s.MemUsage.trim() };
 }
 
 export async function logs(name: string): Promise<string> {
