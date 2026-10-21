@@ -78,7 +78,7 @@ it('normalizes Windows drive, case, separators and UNC roots without equating a 
     expect(samePath('\\\\server\\share\\Repo', '//SERVER/share/repo', 'win32')).toBe(true);
     expect(samePath('C:\\Repo', 'C:\\Repo\\child', 'win32')).toBe(false);
 });
-it('checks out tracked files beyond Windows MAX_PATH using execFile and longpaths', async () => {
+it.skipIf(process.platform !== 'win32')('checks out tracked files beyond Windows MAX_PATH using execFile and longpaths', async () => {
     const s = await setup();
     const folder = 'long-path-'.repeat(16);
     await mkdir(join(s.local.workdir, folder));
