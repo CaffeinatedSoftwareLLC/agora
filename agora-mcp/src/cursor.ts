@@ -5,6 +5,8 @@ export class CursorTracker {
     private loaded = false;
     private threadCursors = new Map<string, string>();
     private threadsLoaded = false;
+    private attentionCursors = new Map<string, string>();
+    private attentionLoaded = false;
 
     constructor(private api: AgoraApi) {}
 
@@ -48,5 +50,25 @@ export class CursorTracker {
 
         await this.api.updateThreadCursor(threadId, messageId);
         this.threadCursors.set(threadId, messageId);
+    }
+
+    async loadAttention(): Promise<void> {
+        if (this.attentionLoaded) return;
+        for (const c of await this.api.getAttentionCursors()) {
+            if (c.lastReadId > (this.attentionCursors.get(c.channelId) ?? '')) this.attentionCursors.set(c.channelId, c.lastReadId);
+        }
+        this.attentionLoaded = true;
+    }
+
+    getAttentionCursor(channelId: string): string | undefined {
+        return this.attentionCursors.get(channelId);
+    }
+
+    async ackAttention(channelId: string, messageId: string): Promise<void> {
+        const current = this.attentionCursors.get(channelId);
+        if (current && current >= messageId) return;
+        const saved = await this.api.updateAttentionCursor(channelId, messageId);
+        // Another instance may already have acknowledged a newer page.
+        if (saved.lastReadId > (this.attentionCursors.get(channelId) ?? '')) this.attentionCursors.set(channelId, saved.lastReadId);
     }
 }

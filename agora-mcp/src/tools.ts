@@ -490,17 +490,17 @@ export function registerTools(
 
     server.tool(
         'chat_wait',
-        'Wait for new messages in an Agora channel, or in a thread when `thread` is set. Blocks until a new message arrives or the timeout expires. '
+        'Wait for new messages in a channel or the selected thread, plus direct @mentions and valid protocol YIELDs to you anywhere in that same channel. Cross-thread notifications identify their source and do not advance that thread\'s read cursor. Blocks until a message needs you or the timeout expires. '
         + 'Use this to "listen" for incoming messages: one long wait keeps the agent idle without spending tokens. '
         + `Timeouts up to ${MAX_WAIT_SECONDS}s are allowed, but your MCP client must allow a tool call that long (see the agora-collab skill's setup notes). ` + FORMAT_NOTE,
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             timeout: z.number().optional().describe(`Max seconds to wait (default: 30, max: ${MAX_WAIT_SECONDS})`),
-            thread: threadParam,
+            thread: threadParam.describe('Thread whose replies to read in full. Direct attention anywhere in the same channel is still watched.'),
             until: z.enum(['any', 'turn']).optional().describe(
                 '"any" (default): return on any new message. "turn": keep waiting through bot messages that '
                 + '[YIELD to=] a different agent; return on a YIELD to you, a human or system message, or any other '
-                + 'protocol message. Everything read while waiting is returned together.',
+                + 'protocol message. Direct attention anywhere in the channel returns in either mode, even if that post YIELDs to someone else. A mention is notification, not permission to take their turn. Everything read while waiting is returned together.',
             ),
         },
         async ({ channel, timeout, thread, until }, extra) => {
@@ -524,22 +524,56 @@ export function registerTools(
                 }).catch(() => {});
             };
 
-            const collected: Message[] = [];
-            const done = () => until === 'turn'
-                ? collected.some(m => wakesAgent(m, self))
-                : collected.length > 0;
+            const collected = new Map<string, Message>();
+            let attentionId: string | undefined;
+            function attentionFailure(err: unknown): never {
+                if (err instanceof AgoraApiError && err.status === 404) {
+                    throw new Error('Server does not support channel attention. Upgrade the Agora server before using chat_wait.');
+                }
+                throw err;
+            }
+            try { await cursors.loadAttention(); } catch (err) { attentionFailure(err); }
+            const done = () => !!attentionId || (until === 'turn'
+                ? [...collected.values()].some(m => wakesAgent(m, self))
+                : collected.size > 0);
+            const formatted = () => {
+                const messages = [...collected.values()].sort((a, b) => a.id.localeCompare(b.id));
+                if (!messages.some(m => (m.threadId ?? null) !== (thread ?? null))) return formatMessages(messages);
+                const scopes = new Map<string, Message[]>();
+                for (const m of messages) {
+                    const scope = m.threadId ?? '';
+                    const group = scopes.get(scope) ?? [];
+                    group.push(m); scopes.set(scope, group);
+                }
+                return [...scopes].map(([source, posts]) =>
+                    `${source ? label(ch.name, source) : `#${oneLine(ch.name)} (top-level)`}:\n${formatMessages(posts)}`,
+                ).join('\n\n');
+            };
+            const saveAttention = async () => {
+                if (!attentionId || extra.signal.aborted) return '';
+                try { await cursors.ackAttention(ch.id, attentionId); return ''; }
+                catch { return '\n\nAttention cursor could not be saved; these notifications may repeat.'; }
+            };
 
             // Shown in Agora as "listening" while the wait is open (src/socket.ts)
             config.listening?.start();
             try {
                 while (Date.now() < deadline && !extra.signal.aborted) {
+                    // Read attention before native cursors advance, so matching native
+                    // posts remain eligible. A separate cursor never skips thread context.
+                    const attention = await api.getAttention(ch.id, { after: cursors.getAttentionCursor(ch.id), limit: 100 }).catch(attentionFailure);
+                    for (const m of attention) {
+                        if (m.authorId === botInfo!.id || m.deletedAt) continue;
+                        collected.set(m.id, m);
+                        attentionId = m.id;
+                    }
                     const { messages } = await readUnread(ch.id, thread, 200);
-                    collected.push(...messages);
+                    for (const m of messages) collected.set(m.id, { ...m, threadId: m.threadId ?? thread ?? null });
                     if (done()) {
                         return {
                             content: [{
                                 type: 'text' as const,
-                                text: `${label(ch.name, thread)} — ${collected.length} new message(s):\n\n${formatMessages(collected)}`,
+                                text: `${label(ch.name, thread)} — ${collected.size} new message(s):\n\n${formatted()}${await saveAttention()}`,
                             }],
                         };
                     }
@@ -556,8 +590,8 @@ export function registerTools(
 
             const waited = Math.round((Date.now() - start) / 1000);
             // Messages consumed while waiting for a turn are still returned, or they'd be lost.
-            const text = collected.length > 0
-                ? `${label(ch.name, thread)} — not your turn yet after ${waited}s; ${collected.length} message(s) for other agents:\n\n${formatMessages(collected)}`
+            const text = collected.size > 0
+                ? `${label(ch.name, thread)} — not your turn yet after ${waited}s; ${collected.size} message(s) for other agents:\n\n${formatted()}${await saveAttention()}`
                 : `${label(ch.name, thread)} — no new messages after ${waited}s`;
             return { content: [{ type: 'text' as const, text }] };
         },

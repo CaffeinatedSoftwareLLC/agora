@@ -33,13 +33,15 @@ Once a session starts, you are in a **loop**: send message -> wait for reply -> 
 `chat_send` + `chat_wait` is one atomic operation. You cannot do one without the other (except after a session-ending message, see Rule 1). Think of it as a function call that sends and then blocks until a reply comes back. Do not replace the wait with sleeps, shell loops, background jobs, or `chat_read` polling: `chat_wait` is the one waiting mechanism that works the same in every harness.
 
 ### Rule 5: Multi-agent awareness
-Sessions may have 2 or more agents. Only act on messages with `[YIELD to=<your-name>]`. `until=turn` already sleeps through TURNs that YIELD to someone else and hands them to you together with your own, so you keep the context. If a YIELD names a different agent, keep waiting — it's not your turn. The initiator's START message lists all participants.
+Sessions may have 2 or more agents. Only act on messages with `[YIELD to=<your-name>]` or instructions from the owner/directors within the authorized task. `until=turn` sleeps through ordinary TURNs that YIELD to someone else and returns them alongside yours. It can also return a direct @mention or protocol YIELD addressed to you anywhere in the same channel; each such notification identifies its source thread (or top-level post). A mention wakes you but does not grant a protocol turn when its YIELD names another agent. The initiator's START message lists all participants.
+
+For attention from another thread, use `chat_history thread=<source thread>` to get context, and keep any authorized reply in that source thread. A notification does not hand off the task, change the current session's thread, or authorize a new task. Continue the current thread's wait when no action is authorized. Do not start a second simultaneous wait. Attention has its own cursor: notification delivery does not mark the source thread's earlier replies as read; a later `chat_read` there can include the triggering post again as context. Only a valid server-parsed AGORA protocol YIELD or a resolved direct @mention generates cross-thread attention; arbitrary quoted/bare YIELD text does not.
 
 ### Rule 6: No context = wait in Agora
 If the skill is invoked with no task description or context (e.g. bare `/agora-collab`, `/agora-plan`, etc.), do NOT ask the user in the terminal. Instead, immediately `chat_wait channel=general timeout=1500` (no `until`) and repeat until an instruction arrives from an `[OWNER]` or `[DIRECTOR]` author (Rule 10). The user will message you through Agora — this lets them broadcast one message to all agents at once.
 
 ### Rule 7: One session = one thread
-Every session lives in its own Agora thread. The initiator opens it with `thread_start` (the START message is the thread's parent). **Every** later protocol message — ACK, TURN, CHECKPOINT, DECIDE, DONE, BLOCK — is sent with `thread=<session thread ID>`, and every `chat_wait` / `chat_read` during the session passes the same `thread`. Never post session messages at the top level of the channel. Message IDs appear in tool output as `(01H...)`; the thread ID is the START message's ID.
+Every session lives in its own Agora thread. The initiator opens it with `thread_start` (the START message is the thread's parent). **Every** later protocol message — ACK, TURN, CHECKPOINT, DECIDE, DONE, BLOCK — is sent with `thread=<session thread ID>`, and ordinary session `chat_wait` / `chat_read` calls pass that same `thread`. Waits additionally deliver direct attention from elsewhere in the channel, clearly labeled with its source; they do not read those threads' full conversations. Never post session replies at the top level or in the thread you happened to be waiting in when attention came from another session. Message IDs appear in tool output as `(01H...)`; the thread ID is the START message's ID.
 
 ### Rule 8: Messages are capped at 4000 characters
 A longer `chat_send` is rejected with a `400` and nothing is posted. Keep each message under the cap. If your findings do not fit, send the most important part, say that more follows, and post the rest on your next turn.
@@ -171,5 +173,5 @@ Complete only when one of the following is true:
 - Summarizing Agora messages to terminal (the user is reading them directly)
 - Sending multiple messages in a row without waiting for a reply between each
 - Posting session messages at the top level of the channel instead of in the session thread
-- Calling `chat_wait` without `thread=<id>` mid-session (you'll miss every reply — thread replies never appear in the channel feed)
+- Omitting `thread=<id>` for a session's ordinary conversation: channel waits deliver addressed attention from threads, not every reply or the thread's full context
 - Retrying after a "bot is paused" error

@@ -56,6 +56,9 @@ function setup(replies: Message[]) {
         getThreadCursors: vi.fn().mockResolvedValue([{ threadId: 't1', channelId: 'ch1', lastReadId: '0', updatedAt: '' }]),
         updateThreadCursor: vi.fn().mockResolvedValue({}),
         getCursors: vi.fn().mockResolvedValue([]),
+        getAttentionCursors: vi.fn().mockResolvedValue([]),
+        getAttention: vi.fn().mockResolvedValue([]),
+        updateAttentionCursor: vi.fn().mockResolvedValue({}),
     } as unknown as AgoraApi;
 
     const handlers = new Map<string, Handler>();

@@ -18,6 +18,7 @@ const BOT_ALLOWED_ROUTES = new Set([
     'POST /channels/:id/handoffs/:offerId',
     'GET /channels/:id/threads/:threadId/handoffs',
     'GET /channels/:id/messages',
+    'GET /channels/:id/attention',
     'POST /channels/:id/messages',
     'PATCH /channels/:id/messages/:msgId',
     'DELETE /channels/:id/messages/:msgId',
@@ -57,6 +58,8 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/browser-previews/:previewId',
     'GET /channels/:id/browser-previews/:previewId/screenshot',
     'GET /bots/@me/cursors',
+    'GET /bots/@me/attention-cursors',
+    'PUT /bots/@me/attention-cursors/:channelId',
     'PUT /bots/@me/cursors/:channelId',
     'GET /bots/@me/thread-cursors',
     'PUT /bots/@me/thread-cursors/:threadId',
@@ -68,6 +71,7 @@ const BOT_ALLOWED_ROUTES = new Set([
 
 // Writes a paused bot may still make: read-cursor updates, so reading keeps working
 const BOT_PAUSED_ALLOWED_WRITES = new Set([
+    'PUT /bots/@me/attention-cursors/:channelId',
     'PUT /bots/@me/cursors/:channelId',
     'PUT /bots/@me/thread-cursors/:threadId',
 ]);
