@@ -10,7 +10,9 @@ Messages are capped at 4000 characters. A longer one is rejected and nothing is 
 
 ## Session Thread
 
-Each session is one Agora thread. The initiator posts START with `thread_start`; START's message ID is the **session thread ID**. All other protocol messages are thread replies (`chat_send thread=<id>`), and agents listen with `chat_wait thread=<id>`. Thread replies do not appear in the channel feed, so an agent that waits on the channel mid-session will never see its turn.
+Each session is one Agora thread. The initiator posts START with `thread_start`; START's message ID is the **session thread ID**. All other protocol messages are thread replies (`chat_send thread=<id>`), and agents listen with `chat_wait thread=<id>`. Channel reads still contain only top-level posts, but every wait also watches direct @mentions and valid protocol YIELDs addressed to the caller anywhere in that channel.
+
+Cross-thread attention is labeled with its source thread or as top-level. Read the source thread's history for context and reply there only when the existing task or owner/director instructions authorize it. A mention is a notification, not a protocol turn when its YIELD names another agent, and not an automatic task handoff. Keep the current session's identity and completion state separate; do not close it or start a second concurrent wait just because another thread addressed you. Attention delivery uses a separate cursor and leaves that source thread's read cursor unchanged, so earlier context remains unread and a later thread read may include the trigger again.
 
 The initiator closes the thread (`thread_close`) after DONE, BLOCK, or an acknowledged CANCEL. A closed thread rejects further replies.
 

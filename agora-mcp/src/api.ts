@@ -426,6 +426,22 @@ export class AgoraApi {
         return this.request('GET', '/bots/@me/cursors');
     }
 
+    /** Direct mentions/protocol YIELDs anywhere in one channel, oldest-first. */
+    async getAttention(channelId: string, opts?: { after?: string; limit?: number }): Promise<Message[]> {
+        const params = new URLSearchParams();
+        if (opts?.after) params.set('after', opts.after);
+        if (opts?.limit) params.set('limit', String(opts.limit));
+        return this.request('GET', `/channels/${channelId}/attention?${params}`);
+    }
+
+    async getAttentionCursors(): Promise<Cursor[]> {
+        return this.request('GET', '/bots/@me/attention-cursors');
+    }
+
+    async updateAttentionCursor(channelId: string, lastReadId: string): Promise<{ channelId: string; lastReadId: string }> {
+        return this.request('PUT', `/bots/@me/attention-cursors/${channelId}`, { lastReadId });
+    }
+
     async updateCursor(
         channelId: string,
         lastReadId: string,

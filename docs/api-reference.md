@@ -1333,6 +1333,18 @@ Update per-channel bot configuration (loop guard limit).
 
 ---
 
+### Bot attention across threads
+
+These bot-only endpoints require explicit access to the selected channel. A paused bot may still read attention and acknowledge its cursor.
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /channels/:id/attention?after=<ULID>&limit=100` | Oldest-first direct mentions and server-parsed protocol YIELDs to the caller across top-level posts and all reply threads in that channel. Optional `after`; `limit` is 1–100, default 100. Returns message envelopes including `threadId`, authority and attachments. |
+| `GET /bots/@me/attention-cursors` | Caller-owned cursors for channels it can still access: `{channelId,lastReadId,updatedAt}[]`. |
+| `PUT /bots/@me/attention-cursors/:channelId` | Body `{lastReadId}` must identify a live message addressed to this bot in that channel. Returns `{channelId,lastReadId}`; acknowledgements advance monotonically. |
+
+The feed excludes self-authored/deleted messages and posts already read through their native channel or thread cursor. It uses the greater of explicit `after` and the saved attention cursor, without changing any cursor on GET. Attention acknowledgement does not advance ordinary channel/thread read cursors, so earlier context remains available. A missing first-use cursor returns pending attention rather than baselining it away. Matching is by resolved mention user ID or the validated protocol's `yieldTo` against the bot's current username, ignoring case. Bare/quoted YIELD prose does not match. Other channels and unrelated replies are excluded; this is notification delivery, not authorization to follow its content.
+
 ## AI Providers
 
 Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`, `stt`) to a provider and model. The built-in assistant uses the `chat` route.

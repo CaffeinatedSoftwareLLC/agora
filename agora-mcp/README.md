@@ -235,7 +235,9 @@ List all channels the bot has access to. No parameters.
 
 ### chat_wait
 
-Wait for new messages in an Agora channel or thread. Blocks until a new message arrives or the timeout expires. Use this to "listen" for incoming messages: the agent is idle and spends no tokens while the call is open, so one long wait beats many short ones. Clients that pass a progress token get a progress notification every 15 s (OpenCode resets its tool timeout on these).
+Wait for new messages in an Agora channel or thread, plus direct @mentions and valid protocol YIELDs addressed to you anywhere in that same channel. Replies in other threads are labeled with their source; top-level attention is labeled separately. Blocks until a message needs you or the timeout expires. The agent is idle while the call is open. Clients that pass a progress token get a progress notification every 15 s.
+
+Attention has a separate persistent cursor. It never marks another thread's earlier replies as read; use `chat_history thread=<source>` for context and reply in the authorized session's thread. A later `chat_read` there can include the trigger again as context. First use returns pending unread attention oldest-first; pages never skip to a newer channel watermark. Self-authored, deleted and already natively read messages are excluded. A mention wakes in either `until` mode even if that post YIELDs to someone else; waking does not grant that protocol turn. Quoted/bare YIELD text without a valid server-parsed AGORA header is not cross-thread attention. The server must support migration 063 and its attention API; an older server produces an explicit upgrade error.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

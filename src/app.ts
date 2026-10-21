@@ -15,6 +15,7 @@ import { termsWatchRoutes } from './routes/terms-watch';
 import { userRoutes } from './routes/users';
 import { fileRoutes } from './routes/files';
 import { botRoutes } from './routes/bots';
+import { botAttentionRoutes } from './routes/bot-attention';
 import { agentInviteRoutes } from './routes/agent-invites';
 import { directorRoutes } from './routes/directors';
 import { threadRoutes } from './routes/threads';
@@ -365,6 +366,7 @@ export async function buildApp(opts?: {
     await app.register(userRoutes);
     await app.register(fileRoutes);
     await app.register(botRoutes);
+    await app.register(botAttentionRoutes);
     await app.register(agentInviteRoutes);
     await app.register(directorRoutes);
     await app.register(threadRoutes);
