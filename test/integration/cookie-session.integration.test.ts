@@ -101,6 +101,51 @@ test('reads work with the cookie alone; writes need the matching CSRF token', as
     expect(ok.status).toBe(201);
 });
 
+// beta-test-plan §6.3 CSRF: every unsafe method, every bad token, and nothing changes
+test('POST, PUT, PATCH and DELETE with a cookie need this session\'s CSRF token: 403 csrf_failed and nothing changes', async () => {
+    const s = await cookieLogin();
+    const other = await cookieLogin();
+    const ok = (req: any) => req.set('Cookie', s.cookie).set('X-CSRF-Token', s.csrf);
+    const server = await ok(ctx.request.post('/servers')).send({ name: 'csrf' });
+    expect(server.status).toBe(201);
+    const channels = await ctx.request.get(`/servers/${server.body.id}/channels`).set('Cookie', s.cookie);
+    const channelId = channels.body[0].id;
+    const msg = await ok(ctx.request.post(`/channels/${channelId}/messages`)).send({ content: 'original' });
+    expect(msg.status).toBe(201);
+    const counts = async () => (await ctx.db.query(`SELECT
+        (SELECT count(*)::int FROM servers) AS servers,
+        (SELECT count(*)::int FROM messages WHERE channel_id = $1 AND deleted_at IS NULL) AS messages`, [channelId])).rows[0];
+    const before = await counts();
+
+    const attempts: Array<[string, () => any]> = [
+        ['POST', () => ctx.request.post('/servers').send({ name: 'forged' })],
+        ['POST', () => ctx.request.post(`/channels/${channelId}/messages`).send({ content: 'forged' })],
+        ['PUT', () => ctx.request.put(`/channels/${channelId}/project`).send({ instructions: 'forged' })],
+        ['PATCH', () => ctx.request.patch(`/channels/${channelId}/messages/${msg.body.id}`).send({ content: 'forged' })],
+        ['DELETE', () => ctx.request.delete(`/channels/${channelId}/messages/${msg.body.id}`)],
+    ];
+    const tokens: Array<[string, string | null]> = [['none', null], ['wrong', 'nope'], ['other session', other.csrf], ['empty', '']];
+    for (const [method, make] of attempts) {
+        for (const [label, token] of tokens) {
+            let req = make().set('Cookie', s.cookie);
+            if (token !== null) req = req.set('X-CSRF-Token', token);
+            const res = await req;
+            expect(res.status, `${method} with ${label} token`).toBe(403);
+            expect(res.body.error, `${method} with ${label} token`).toBe('csrf_failed');
+        }
+    }
+    expect(await counts()).toEqual(before);
+    const kept = await ctx.db.query('SELECT content, edited_at FROM messages WHERE id = $1', [msg.body.id]);
+    expect(kept.rows[0]).toMatchObject({ content: 'original', edited_at: null });
+    const project = await ctx.request.get(`/channels/${channelId}/project`).set('Cookie', s.cookie);
+    expect(JSON.stringify(project.body)).not.toContain('forged');
+
+    // The same calls with this session's token go through
+    expect((await ok(ctx.request.patch(`/channels/${channelId}/messages/${msg.body.id}`)).send({ content: 'edited' })).status).toBe(200);
+    expect((await ok(ctx.request.put(`/channels/${channelId}/project`)).send({ instructions: 'real' })).status).toBe(200);
+    expect([200, 204]).toContain((await ok(ctx.request.delete(`/channels/${channelId}/messages/${msg.body.id}`))).status);
+});
+
 test('a planted CSRF cookie with a matching header does not pass (the token is bound to the session)', async () => {
     const s = await cookieLogin();
     const session = s.cookie.split(';')[0];

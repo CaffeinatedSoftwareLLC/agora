@@ -534,6 +534,16 @@ describe('commands (S4)', () => {
         expect(res.body.error).toBe('cannot_direct');
         expect(res.body.message).toMatch(/^claude can't direct agents in #general; ask the server owner to grant DirectAgents/);
     });
+    // beta-test-plan §6.2 Orchestration: the refusal starts nothing
+    it('a refused /start creates no session for the target agent and leaves the host nothing to claim', async () => {
+        const count = async () => (await ctx.db.query(`SELECT count(*)::int AS n FROM agent_sessions WHERE bot_id = $1 AND state = 'live'`, [codex.botId])).rows[0].n;
+        const before = await count();
+        const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe('cannot_direct');
+        expect(await count()).toBe(before);
+        expect((await ctx.db.query(`SELECT count(*)::int AS n FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id WHERE s.bot_id = $1 AND r.status = 'queued'`, [codex.botId])).rows[0].n).toBe(0);
+    });
 });
 
 describe('session_wake: require_direct (#75)', () => {

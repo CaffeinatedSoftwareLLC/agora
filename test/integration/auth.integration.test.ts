@@ -141,3 +141,16 @@ describe('POST /auth/login', () => {
         expect((await ctx.request.post('/auth/login').send({})).status).toBe(400);
     });
 });
+
+// beta-test-plan §6.1 "No Sign in with Claude/Google": the server has no provider login route
+describe('provider sign-in routes', () => {
+    test('the route table has no OAuth or provider login, only Agora\'s own sign-in', async () => {
+        const table = ctx.app.printRoutes({ commonPrefix: false });
+        expect(table).not.toMatch(/oauth|google|anthropic|claude|gemini|openai|chatgpt|siwc/i);
+        expect(table).toMatch(/\/auth\/login/);
+        expect(table).toMatch(/\/auth\/passkeys/);
+        for (const path of ['/auth/google', '/auth/claude', '/auth/oauth/callback', '/auth/openai']) {
+            expect((await ctx.request.get(path)).status, path).toBe(404);
+        }
+    });
+});
