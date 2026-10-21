@@ -3,7 +3,7 @@ import { asService } from '../lib/agent-sessions';
 
 export async function userRoutes(app: FastifyInstance) {
 
-    // GET /users/search?q=<prefix> → 200 [{ id, username }]
+    // GET /users/search?q=<literal prefix> → users who share a server with the caller.
     app.get('/users/search', {
         schema: {
             querystring: {
@@ -19,11 +19,17 @@ export async function userRoutes(app: FastifyInstance) {
         const userId = request.userId;
         const db = request.dbClient!;
 
+        const prefix = q.replace(/[\\%_]/g, '\\$&') + '%';
         const result = await db.query(
-            `SELECT id, username FROM users
-             WHERE username ILIKE $1 AND id != $2 AND bot = false
+            `SELECT u.id, u.username FROM users u
+             WHERE u.username ILIKE $1 ESCAPE '\\' AND u.id != $2 AND u.bot = false
+               AND EXISTS (
+                   SELECT 1 FROM server_members caller
+                   JOIN server_members peer ON peer.server_id = caller.server_id
+                   WHERE caller.user_id = $2 AND peer.user_id = u.id
+               )
              LIMIT 20`,
-            [q + '%', userId]
+            [prefix, userId]
         );
 
         const users = result.rows.map((row: any) => ({
