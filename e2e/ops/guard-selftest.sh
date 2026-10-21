@@ -122,6 +122,25 @@ override runner $'services:\n  runner:\n    image: agora-ops-server:new'
 refused "ops_validate: forbidden service runner" "service 'runner' is not allowed" ops_validate
 override image $'services:\n  api:\n    image: agora-e2e-server:e2e'
 refused "ops_validate: api image retagged to agora-e2e" "image 'agora-e2e-server:e2e' is not allowed" ops_validate
+# Service keys are an allowlist (render only; agora-api-1 is only named, never touched)
+override vf-container $'services:\n  api:\n    volumes_from:\n      - container:agora-api-1:rw'
+refused "ops_validate: volumes_from container:agora-api-1" "service api: key 'volumes_from' is not allowed" ops_validate
+override vf-service $'services:\n  redis:\n    volumes_from:\n      - postgres'
+refused "ops_validate: volumes_from a service" "service redis: key 'volumes_from' is not allowed" ops_validate
+override devices $'services:\n  api:\n    devices:\n      - /dev/fuse:/dev/fuse'
+refused "ops_validate: devices" "service api: key 'devices' is not allowed" ops_validate
+override cap-add $'services:\n  postgres:\n    cap_add: [SYS_ADMIN]'
+refused "ops_validate: cap_add" "service postgres: key 'cap_add' is not allowed" ops_validate
+override unknown-key $'services:\n  redis:\n    stop_grace_period: 5s'
+refused "ops_validate: a key the harness does not use (stop_grace_period)" "service redis: key 'stop_grace_period' is not allowed" ops_validate
+override secrets $'services:\n  api:\n    secrets: [s]\nsecrets:\n  s:\n    file: /etc/hostname'
+refused "ops_validate: secrets (top-level and service)" "top-level key 'secrets'" ops_validate
+override vol-nocopy $'services:\n  api:\n    volumes:\n      - type: volume\n        source: ops-files\n        target: /x\n        volume:\n          subpath: y'
+refused "ops_validate: mount volume options" "volume options are not allowed" ops_validate
+override net-alias $'services:\n  api:\n    networks:\n      ops:\n        aliases: [postgres]'
+refused "ops_validate: network aliases on a service" "options \\(aliases, addresses, ...\\) are not allowed" ops_validate
+override build-ctx $'services:\n  api:\n    build:\n      context: https://example.invalid/repo.git'
+refused "ops_validate: remote build context" "build context .* is not a local checkout path" ops_validate
 
 # up/down refusals: names that do not exist on the daemon
 NX_VOL=agora_pgdata_selftest_nx

@@ -13,9 +13,14 @@ Docker daemon, next to the live `agora` stack and the `agora-e2e` project, witho
   behind the `web` profile, unused by the checks). No runner, socket-proxy, cap-gateway or caddy.
   Volumes are `<project>_ops-*`, the network is `<project>_net`.
 - Before every `up` **and every `down -v`**, `ops_validate` renders the config (all profiles)
-  and `validate_compose.py` parses it: the project name; every service is one of postgres, redis,
-  migrate, api, web with an allowed image (`agora-ops-server:old|new`, ...), no container_name,
-  privileged or host network; every volume resolves to `<project>_…` and is a plain local volume
+  and `validate_compose.py` parses it, with allowlists throughout: the project name; only the
+  top-level keys name/services/volumes/networks (no configs, secrets, ...); every service is one of
+  postgres, redis, migrate, api, web with an allowed image (`agora-ops-server:old|new`, ...) and
+  only the keys the ops compose file renders to (build, command, depends_on, entrypoint,
+  environment, healthcheck, image, networks, ports, profiles, restart, volumes), each value
+  checked (local build context, no entrypoint, project-only depends_on and networks without
+  aliases, plain project-volume mounts), so `volumes_from`, `devices`, `cap_add`, `privileged`,
+  `security_opt`, `network_mode`, `container_name` and any unknown key are refused; every volume resolves to `<project>_…` and is a plain local volume
   (no external, no other driver, no `driver_opts`, which could bind any host directory under a
   safe name); every network resolves to exactly `<project>_net` and is a plain bridge (no
   external, no other driver, no `driver_opts` or ipam settings); every mount is a project volume
@@ -34,7 +39,9 @@ Docker daemon, next to the live `agora` stack and the `agora-e2e` project, witho
   overrides in `.state/selftest/` that name `agora_pgdata`, `agora_pgdata_v2`, `agora_data2`,
   `agora_default`, `agora-e2e_net`, or add an external volume or network, a bind mount, a volume
   with `driver_opts` binding a live volume's directory, another volume or network driver, network
-  `driver_opts`, port 3000, a port on all interfaces, a `runner` service or an `agora-e2e` image.
+  `driver_opts`, port 3000, a port on all interfaces, a `runner` service, an `agora-e2e` image,
+  `volumes_from` (`container:agora-api-1:rw` and a service), `devices`, `cap_add`, an unused key,
+  `secrets`, mount volume options, network aliases or a remote build context.
   The compose cases only render config. The `up`/`down` cases use volume and network names that do
   not exist on the daemon, so even a guard that failed open could not reach a real resource.
 - Fake data only (`ops-owner`, `ops-member`). The provider key is a `sk-test-CANARY-…` string and
