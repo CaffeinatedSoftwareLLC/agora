@@ -1,0 +1,105 @@
+# Disposable instances for the upgrade and backup/restore checks (OP-04, OP-05).
+#
+# Always run through e2e/ops/*.sh, which pass `-p <project>` (agora-ops or
+# agora-ops-restore) and refuse anything else. Every resource here is scoped to that
+# project: volumes are `<project>_ops-*`, the network is `<project>_net`, and the
+# server image tag is chosen by the script (agora-ops-server:old / :new).
+#
+# Same exclusions as e2e/docker-compose.e2e.yml: no runner, socket-proxy,
+# sandbox-image, cap-gateway, caddy or tailnet. The web container is optional
+# (profile `web`): every check here talks to the API only.
+name: agora-ops
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agora
+      POSTGRES_USER: accord
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?run e2e/ops scripts}
+    volumes:
+      - ops-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accord -d agora"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [ops]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks: [ops]
+
+  migrate:
+    image: ${OPS_SERVER_IMAGE:?run e2e/ops scripts}
+    build:
+      context: ${OPS_BUILD_CONTEXT:-../..}
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/db/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [ops]
+    restart: "no"
+
+  api:
+    image: ${OPS_SERVER_IMAGE:?run e2e/ops scripts}
+    build:
+      context: ${OPS_BUILD_CONTEXT:-../..}
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${OPS_API_PORT:?run e2e/ops scripts}:3000"
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?run e2e/ops scripts}
+      HOST: 0.0.0.0
+      PORT: "3000"
+      CORS_ORIGIN: http://localhost:${OPS_WEB_PORT:-8380}
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: "true"
+      WEBAUTHN_ORIGINS: http://localhost:${OPS_WEB_PORT:-8380}
+      WEBAUTHN_RP_NAME: Agora Ops
+      LOGIN_MAX_FAILURES: "10"
+      LOGIN_LOCK_MINUTES: "15"
+      LOGIN_GLOBAL_PER_MINUTE: "600"
+      STORAGE_DIR: /data/files
+      AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?run e2e/ops scripts}
+      AGORA_SETUP_TOKEN: ${AGORA_SETUP_TOKEN:?run e2e/ops scripts}
+    volumes:
+      - ops-files:/data/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [ops]
+    restart: unless-stopped
+
+  web:
+    profiles: [web]
+    image: ${OPS_WEB_IMAGE:-agora-ops-web:new}
+    build:
+      context: ${OPS_BUILD_CONTEXT:-../..}/agora-ui
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${OPS_WEB_PORT:-8380}:80"
+    depends_on:
+      - api
+    networks: [ops]
+    restart: unless-stopped
+
+networks:
+  ops:
+    name: ${OPS_PROJECT:?run e2e/ops scripts}_net
+
+volumes:
+  ops-pgdata:
+  ops-files:
