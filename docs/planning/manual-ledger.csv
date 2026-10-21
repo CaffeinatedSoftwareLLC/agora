@@ -9,3 +9,8 @@ M02.4,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Log ou
 M02.6,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Reload the page,Still logged in,,,passed,Agora job 9 thread 2026-10-21 22:47,,,
 M02.7,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Account & security > add a passkey (fingerprint),Listed with today's date,1 user_passkeys row,1,passed,user_passkeys row created 2026-10-21 22:46:53 UTC,,,
 M02.8,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Log out; sign in with the passkey,Works without a password,session created,,passed,Agora job 9 thread 2026-10-21 22:47,,,
+M03.13,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome + desktop browser,Edit an own message,Edited on both,message content updated,1,failed,"thread replies: no PATCH sent (live nginx+API logs); channel messages pass (agora-e2e repro, pixel-7 + desktop)",#204,,
+M03.14,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome + desktop browser,Delete an own message,Gone on both,message deleted,1,failed,"thread replies: no DELETE sent; channel messages pass (agora-e2e repro)",#204,,
+M03.15,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Send Markdown,Rendered; link opens new tab,,,passed,Agora job 9 thread 2026-10-21 23:10,,,
+M03.16,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Type @cla then Enter,Autocomplete; Enter selects,,,passed,Agora job 9 thread 2026-10-21 23:08,,,
+M03.17,,f1d8c58,live-tailnet,,owner,,,Windows 11 (WSL host),Android Chrome,Mention @Codex with a capital,Resolves to the codex bot,mention row for codex,,passed,Agora job 9 thread 2026-10-21 23:08,,,
