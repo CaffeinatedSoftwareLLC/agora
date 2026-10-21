@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { aiApi, ApiError } from '../../../lib/api';
-import type { AIAdapter, AIProvider, AIConnectionResult } from '../../../lib/api';
+import type { AICapability, AIAdapter, AIProvider, AIConnectionResult } from '../../../lib/api';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { CAPABILITY_INFO, inputClass } from './format';
@@ -158,6 +158,10 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
   onChanged: () => void;
 }) {
   const [model, setModel] = useState(testModel ?? adapter?.defaultModels.chat ?? Object.values(adapter?.defaultModels ?? {})[0] ?? '');
+  const [chosenCapability, setChosenCapability] = useState<AICapability | null>(null);
+  const capability = chosenCapability ?? (provider.capabilities.includes('chat') ? 'chat'
+    : provider.capabilities.find(c => c === 'tts' || c === 'stt') ?? 'chat');
+  const speech = provider.adapter === 'openai' && (capability === 'tts' || capability === 'stt');
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<AIConnectionResult | null>(null);
   const [newKey, setNewKey] = useState('');
@@ -178,7 +182,7 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
     setTesting(true);
     setResult(null);
     try {
-      setResult(await aiApi.testProvider(serverId, provider.id, model.trim() || undefined));
+      setResult(await aiApi.testProvider(serverId, provider.id, model.trim() || undefined, provider.adapter === 'openai' ? capability : undefined));
     } catch (err) {
       setResult({ ok: false, error: errorText(err, 'Test failed') });
     } finally {
@@ -214,6 +218,12 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
       {provider.baseUrl && <p className="text-xs text-text-muted mt-1 break-all">{provider.baseUrl}</p>}
 
       <div className="flex items-center gap-2 mt-3 flex-wrap">
+        {provider.adapter === 'openai' && (
+          <select aria-label={`Test capability for ${provider.label}`} value={capability}
+            className={`${inputClass} py-1 text-sm`} onChange={e => { setChosenCapability(e.target.value as AICapability); setResult(null); }}>
+            {(['chat', 'tts', 'stt'] as const).map(c => <option key={c} value={c}>{CAPABILITY_INFO[c].label}</option>)}
+          </select>
+        )}
         <input
           className={`${inputClass} py-1 text-sm w-56`}
           value={model}
@@ -221,7 +231,7 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
           placeholder="model to test"
           aria-label={`Test model for ${provider.label}`}
         />
-        <Button variant="secondary" onClick={test} loading={testing} disabled={!model.trim()}>Test</Button>
+        <Button variant="secondary" onClick={test} loading={testing} disabled={!speech && !model.trim()}>Test</Button>
         <Button variant="secondary" onClick={() => setEditingKey(v => !v)}>
           {provider.hasApiKey ? 'Replace key' : 'Add key'}
         </Button>
@@ -244,6 +254,8 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
           </span>
         )}
       </div>
+
+      {speech && <p className="text-xs text-text-muted mt-1">Checks the speech server connection without generating audio. Use read-aloud or transcription to check the output.</p>}
 
       {editingKey && (
         <div className="flex items-center gap-2 mt-2">

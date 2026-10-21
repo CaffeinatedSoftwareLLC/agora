@@ -218,12 +218,15 @@ export async function aiProviderRoutes(app: FastifyInstance) {
             body: {
                 type: 'object',
                 additionalProperties: false,
-                properties: { model: { type: 'string', minLength: 1, maxLength: 100 } },
+                properties: {
+                    model: { type: 'string', minLength: 1, maxLength: 100 },
+                    capability: { type: 'string', enum: CAPABILITIES },
+                },
             },
         },
     }, async (request, reply) => {
         const { serverId, providerId } = request.params as any;
-        const { model } = (request.body as any) ?? {};
+        const { model, capability } = (request.body as { model?: string; capability?: Capability }) ?? {};
         const db = request.dbClient!;
 
         const existing = await db.query('SELECT * FROM ai_providers WHERE id = $1 AND server_id = $2', [providerId, serverId]);
@@ -232,8 +235,17 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         const adapter = getAdapter(row.adapter);
         if (!adapter) return reply.send({ ok: false, error: `Unknown adapter "${row.adapter}"` });
 
-        const testModel = model ?? adapter.defaultModels.chat ?? Object.values(adapter.defaultModels)[0];
-        if (!testModel) return reply.status(400).send({ error: 'model is required for this provider' });
+        const routes = adapter.id === 'openai' ? (await db.query(
+            `SELECT capability, model FROM ai_capability_routes WHERE provider_id = $1 AND server_id = $2
+             ORDER BY (capability = 'chat') DESC, capability`, [providerId, serverId],
+        )).rows : [];
+        const testCapability = capability ?? routes[0]?.capability
+            ?? (adapter.capabilities.includes('chat') ? 'chat' : adapter.capabilities[0]);
+        if (!adapter.capabilities.includes(testCapability)) return reply.status(400).send({ error: 'Capability not supported by this provider' });
+        const testModel = model ?? routes.find(r => r.capability === testCapability)?.model
+            ?? adapter.defaultModels[testCapability as Capability] ?? Object.values(adapter.defaultModels)[0];
+        const speech = adapter.id === 'openai' && (testCapability === 'tts' || testCapability === 'stt');
+        if (!testModel && !speech) return reply.status(400).send({ error: 'model is required for this provider' });
         if (row.base_url) {
             const urlError = await validateBaseUrl(db, row.adapter, row.base_url);
             if (urlError) return reply.send({ ok: false, error: urlError });
@@ -245,7 +257,7 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         } catch {
             return reply.send({ ok: false, error: 'Stored API key could not be decrypted' });
         }
-        return reply.send(await adapter.testConnection({ apiKey, baseUrl: row.base_url || undefined }, testModel));
+        return reply.send(await adapter.testConnection({ apiKey, baseUrl: row.base_url || undefined }, testModel ?? '', testCapability));
     });
 
     // ─── Capability routes ───

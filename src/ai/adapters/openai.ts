@@ -1,5 +1,6 @@
-import type { Adapter, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
+import type { Adapter, Capability, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
 import { apiError, joinUrl, networkError, sseJson, testConnectionWithTimeout } from './sse';
+import { testOpenAISpeechConnection } from './openai-speech-test';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
@@ -171,7 +172,8 @@ export const openaiAdapter: Adapter = {
         return { text: json.text.trim(), usage };
     },
 
-    async testConnection(creds: ProviderCredentials, model: string) {
+    async testConnection(creds: ProviderCredentials, model: string, capability: Capability = 'chat') {
+        if (capability === 'tts' || capability === 'stt') return testOpenAISpeechConnection(creds, model);
         return testConnectionWithTimeout(async signal => {
             const base = creds.baseUrl || DEFAULT_BASE;
             const official = officialOpenAI(base);

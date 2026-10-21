@@ -231,5 +231,5 @@ export interface Adapter extends AdapterInfo {
     decide?(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult>;
     /** Present exactly when the adapter lists `decide`. */
     decideLimits?: DecideLimits;
-    testConnection(creds: ProviderCredentials, model: string): Promise<ConnectionResult>;
+    testConnection(creds: ProviderCredentials, model: string, capability?: Capability): Promise<ConnectionResult>;
 }
