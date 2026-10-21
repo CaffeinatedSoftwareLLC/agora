@@ -291,6 +291,15 @@ cd agora-ui && npm run dev     # Frontend on http://localhost:5173
 
 Open **http://localhost:5173** — the setup wizard appears on first run.
 
+`npm run build` compiles backend source into `dist/src/`; it does not compile tests.
+Docker uses the same build configuration, preserving the API, migration, runner and
+gateway entry points. `npm run typecheck:test` checks test types without emitting files.
+That command is currently diagnostic: it reports existing fixture type errors and
+excludes the MCP package integration test that triggers excessive SDK type inference.
+[Issue #180](https://github.com/CaffeinatedSoftwareLLC/agora/issues/180) tracks both
+blockers; do not use the test type-check as a passing gate yet. Vitest commands are
+unchanged.
+
 ## First-Time Instance Setup
 
 Agora requires a one-time setup to create the first admin account. This is secured by a **setup token**.
