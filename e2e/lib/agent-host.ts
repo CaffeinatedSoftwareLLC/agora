@@ -30,7 +30,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Api } from './api';
-import { e2eEnv, SECRETS_DIR } from './env';
+import { artifactsDir, e2eEnv, SECRETS_DIR } from './env';
 import { addSecretsToSeed, buildLauncher, ensureBuilt, git, HOST_DIR, killTree, MCP_DIR, rmrf, waitFor } from './fake-host';
 import { liveGate, PROVIDER_ENVS, providerKeyEnv, testKey, type AgentAdapter } from './agent-keys';
 import { Sensitive } from './sensitive';
@@ -308,6 +308,22 @@ export async function startAgentHost(seed: Seed, opts: AgentHostOptions): Promis
                 await waitFor('host exit', async () => exited, 10_000, 100).catch(() => undefined);
                 process.off('exit', onExit);
                 try { fs.closeSync(logFd); } catch { /* closed */ }
+                // E2E_AGENT_KEEP_LOGS=1: keep the host log and each CLI's own transcripts for
+                // debugging. They land in artifacts/, so the end-of-run leak scan quarantines any
+                // file that holds a key or another known secret.
+                if (process.env.E2E_AGENT_KEEP_LOGS === '1') {
+                    const out = path.join(artifactsDir(), 'host');
+                    try {
+                        fs.mkdirSync(out, { recursive: true });
+                        fs.copyFileSync(logFile, path.join(out, 'agora-host.log'));
+                        for (const [key, a] of Object.entries(agents)) {
+                            for (const sub of ['sessions', 'projects', 'tmp']) {
+                                const src = path.join(a.stateDir, sub);
+                                if (fs.existsSync(src)) fs.cpSync(src, path.join(out, key, sub), { recursive: true, filter: f => !/[\/]wt-/.test(f) });
+                            }
+                        }
+                    } catch (e) { console.warn(`keep logs: ${(e as Error).message}`); }
+                }
                 for (const f of [configFile, logFile]) { try { fs.rmSync(f, { force: true }); } catch { /* gone */ } }
                 rmrf(root);
             },
