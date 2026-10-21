@@ -55,7 +55,7 @@ export class Client implements HostApi {
         if (data === null) return null;
         return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), claimToken: z.string().min(10),
             sessionId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
-            workdirAlias: z.string(), action: z.enum(['diff','discard','commit','merge','pr','restore','fork']),
+            workdirAlias: z.string(), action: z.enum(['diff','discard','commit','merge','pr','restore','fork','pr_status']),
             payload: z.object({ path: z.string().max(4096).optional(), offset: z.number().int().min(0).max(131072).optional(),
                 revision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
                 message: z.string().max(2000).optional(), forkSessionId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).optional(),

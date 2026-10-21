@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client, HttpError } from '../src/client.js';
@@ -29,6 +30,18 @@ describe('HTTP contract against a fake local server', () => {
         const client=new Client(url,'ah_test',fetch,undefined,1);const c=await client.claimWorkspaceCommand();
         expect(claims).toBe(1);await client.workspaceCommandResult(c!,true,{diff:'+hello'});
         expect(reports).toBe(2);expect(bodies[0]).toBe(bodies[1]);expect(JSON.parse(bodies[0]).claimToken).toBe(cmd.claimToken);
+    });
+    it('accepts every workspace action the server can queue (#145: pr_status was missing)', async () => {
+        // The server's own list, so a new action there fails here until the host parses it
+        const route = readFileSync(new URL('../../src/routes/workspace-review.ts', import.meta.url), 'utf8');
+        const actions = JSON.parse(route.match(/action: \{ type: 'string', enum: (\[[^\]]+\])/)![1].replace(/'/g, '"')) as string[];
+        expect(actions).toContain('pr_status');
+        for (const action of actions) {
+            const cmd = { id: id(21), claimToken: 'claim-token', sessionId: id(2), profile: 'builder', workdirAlias: 'agora', action, payload: {} };
+            const url = await fake(() => ({ status: 200, body: cmd }));
+            await expect(new Client(url, 'ah_test', fetch, undefined, 1).claimWorkspaceCommand(), action).resolves.toMatchObject({ action });
+            server!.closeAllConnections(); await new Promise<void>(r => server!.close(() => r())); server = undefined;
+        }
     });
     it('discovers eligible posts and uploads multipart bytes with host and claim credentials', async () => {
         const c = claim(); let uploads = 0;
