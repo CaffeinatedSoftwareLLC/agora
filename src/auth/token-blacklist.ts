@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { config } from '../config';
+import { REDIS_COMMAND_TIMEOUT_MS } from '../db/request-timeouts';
 
 const BLACKLIST_PREFIX = 'token:blacklist:';
 
@@ -7,7 +8,13 @@ let redis: Redis | null = null;
 
 export function getRedis(): Redis {
     if (!redis) {
-        redis = new Redis(config.redisUrl);
+        redis = new Redis(config.redisUrl, {
+            commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+            connectTimeout: REDIS_COMMAND_TIMEOUT_MS,
+            maxRetriesPerRequest: 1,
+        });
+        // ioredis reconnects itself; errors must not become an unhandled event.
+        redis.on('error', () => {});
     }
     return redis;
 }
