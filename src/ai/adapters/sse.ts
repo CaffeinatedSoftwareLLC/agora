@@ -56,3 +56,17 @@ export function networkError(err: unknown): string {
     const detail = cause?.code ?? cause?.message;
     return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message;
 }
+
+export const PROVIDER_TEST_TIMEOUT_MS = 15_000;
+
+/** A connection test has its own deadline, including reading an error response body. */
+export async function testConnectionWithTimeout(run: (signal: AbortSignal) => Promise<{ ok: boolean; error?: string }>) {
+    const signal = AbortSignal.timeout(PROVIDER_TEST_TIMEOUT_MS);
+    const timedOut = () => ({ ok: false, error: 'timed out after 15 s' });
+    try {
+        const result = await run(signal);
+        return signal.aborted ? timedOut() : result;
+    } catch (err) {
+        return signal.aborted ? timedOut() : { ok: false, error: networkError(err) };
+    }
+}
