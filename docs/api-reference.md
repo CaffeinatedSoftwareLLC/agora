@@ -428,6 +428,8 @@ The code is 8 hex characters.
 
 Use an invite code to join a server. Idempotent if the user is already a member.
 
+New joins validate the code's expiry and remaining uses atomically. Repeating a successful join does not consume another use, including when that join used the last one.
+
 **Auth:** Required
 
 **Response** `200`
@@ -442,7 +444,7 @@ Use an invite code to join a server. Idempotent if the user is already a member.
 
 | Status | Error             | Cause                |
 |--------|-------------------|----------------------|
-| 404    | `Invite not found` | Invalid invite code  |
+| 404    | `Invite not found` | Invalid, expired or exhausted invite code |
 
 **Side effects:** If the user was not already a member, a `ServerJoin` WebSocket event is emitted to the user's socket room containing the server and its channels.
 

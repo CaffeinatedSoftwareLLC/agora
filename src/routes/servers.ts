@@ -219,7 +219,7 @@ export async function serverRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
 
         const invite = await db.query(
-            'SELECT server_id FROM server_invites WHERE code = $1',
+            'SELECT server_id, joined FROM public.join_server_by_invite($1)',
             [code]
         );
 
@@ -229,23 +229,8 @@ export async function serverRoutes(app: FastifyInstance) {
 
         const serverId = invite.rows[0].server_id;
 
-        // Add as member (ignore if already member)
-        const insertResult = await db.query(
-            `INSERT INTO server_members (server_id, user_id)
-             VALUES ($1, $2)
-             ON CONFLICT DO NOTHING
-             RETURNING server_id`,
-            [serverId, userId]
-        );
-
-        // Increment use count
-        await db.query(
-            'UPDATE server_invites SET use_count = use_count + 1 WHERE code = $1',
-            [code]
-        );
-
         // If user was actually inserted (not already a member), emit ServerJoin
-        if (insertResult.rows.length > 0) {
+        if (invite.rows[0].joined) {
             const serverRow = await db.query(
                 'SELECT id, name, owner_id FROM servers WHERE id = $1',
                 [serverId]
