@@ -108,7 +108,7 @@ export async function workspaceReviewRoutes(app: FastifyInstance) {
             const expired = (await db.query(`UPDATE agent_workspace_commands SET status='failed', result='{"error":"host_timeout_check_repository_before_retry"}',finished_at=NOW()
                 WHERE host_id=$1 AND status='claimed' AND lease_until<NOW() RETURNING session_id`,[host.id])).rows;
             for (const row of expired) { const s = (await db.query('SELECT channel_id FROM agent_sessions WHERE id=$1',[row.session_id])).rows[0];
-                emit(request,await postNotice(db,s.channel_id.trim(),'Workspace command timed out. Check repository state before retrying.')); }
+                emit(request,await postNotice(db,s.channel_id.trim(),'Workspace command timed out. Check repository state and possible Git lock files before retrying.')); }
             const candidates = (await db.query(`SELECT c.id,c.session_id,s.channel_id FROM agent_workspace_commands c JOIN agent_sessions s ON s.id=c.session_id
                 WHERE c.host_id=$1 AND s.server_id=$2 AND c.status='queued' ORDER BY c.id LIMIT 20`,[host.id,host.serverId])).rows;
             for (const candidate of candidates) {
