@@ -55,7 +55,9 @@ describe('GET /users/search: scope', () => {
 
     it('[SEC-01.user-search] an outsider cannot enumerate people with empty or wildcard queries', async () => {
         const { outsider } = await outsiderSetup();
-        for (const q of ['', '%', '_']) expect(await search(outsider.auth, q)).toEqual([]);
+        const empty = await ctx.request.get('/users/search?q=').set(outsider.auth);
+        expect(empty.status).toBe(400); // The query schema requires a non-empty prefix.
+        for (const q of ['%', '_']) expect(await search(outsider.auth, q)).toEqual([]);
     });
 });
 
