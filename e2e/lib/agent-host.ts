@@ -317,7 +317,7 @@ export async function startAgentHost(seed: Seed, opts: AgentHostOptions): Promis
                         fs.mkdirSync(out, { recursive: true });
                         fs.copyFileSync(logFile, path.join(out, 'agora-host.log'));
                         for (const [key, a] of Object.entries(agents)) {
-                            for (const sub of ['sessions', 'projects', 'tmp']) {
+                            for (const sub of ['sessions', 'projects', 'tmp', '.gemini']) {
                                 const src = path.join(a.stateDir, sub);
                                 if (fs.existsSync(src)) fs.cpSync(src, path.join(out, key, sub), { recursive: true, filter: f => !/[\/]wt-/.test(f) });
                             }

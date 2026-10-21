@@ -104,7 +104,8 @@ test.describe('agent E2E with real CLIs @agent', () => {
     });
 
     test('[AG-03.A2-codex-gemini] /start codex and gemini: each posts; gemini runs over ACP with the API-key method', async ({}, ti) => {
-        for (const k of ['codex', 'gemini']) {
+        // E2E_A2_AGENTS=gemini runs one half (e.g. without a Codex Windows sandbox dialog)
+        for (const k of (process.env.E2E_A2_AGENTS ?? 'codex,gemini').split(',') as Array<'codex' | 'gemini'>) {
             const ch = await liveChannel(f, `a2-${k}`, [k]);
             const { sid, hello } = await startAgent(f, ch.id, k);
             expect(trimId(hello.authorId)).toBe(bot(k));
