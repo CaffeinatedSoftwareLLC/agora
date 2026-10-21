@@ -118,7 +118,7 @@ Risk: **H** = a bug can leak data, break the provider terms, run code it shouldn
 | Feature | Where | How to trigger | Expected | Risk |
 |---|---|---|---|---|
 | Upload | composer: button, drag-drop, paste | Upload an image, a PDF, a zip, a renamed .exe | Allowed types upload; magic-byte mismatch is refused; size/quota limits enforced | H |
-| Download and preview | FileAttachment, FilesPanel | Open, download | Inline image preview; download works; another server's member gets 403 | H |
+| Download and preview | FileAttachment, FilesPanel | Open, download | Inline image preview; download works; someone outside the file's server gets 404 (RLS hides the row, so its existence isn't revealed) | H |
 | Encryption at rest | `files-data` volume | `docker exec` into the volume and inspect a blob | Ciphertext only; no file name in the path | H |
 | Delete and cleanup | message actions; worker | Delete a file; wait for retention expiry | Removed by the hourly worker | M |
 | Agents read images | agora-mcp `file_read`; `GET /files/:id/image` | Paste a screenshot, ask the agent what it shows | The bot sees attachments in its channels; 403 elsewhere; paused bot → 403; images over 25 MB or 40 MP → 413 (#119) | H |
@@ -299,7 +299,7 @@ Each bullet is one test. `📸` marks a screenshot that goes to the vision check
 - Upload by button, drag-drop (`dispatchEvent('drop')` with a DataTransfer), paste. 📸 "A message with an inline image preview"
 - Renamed `.exe` as `.png` → refused (magic bytes).
 - Download returns identical bytes.
-- Other server's member → 403 on `GET /files/:id`.
+- Someone outside the file's server → 404 on `GET /files/:id`, `/text` and `/image`, with no bytes (RLS hides the row; decided 2026-10-21, a 403 would reveal that the file exists).
 - Bot token: `GET /files/:id` in its channel → 200, other channel → 403, paused → 403; `GET /files/:id/image` on the 41 MP fixture → 413.
 - Volume check (shell step): `docker run --rm -v agora-e2e_files-data:/d alpine sh -c 'grep -rl "E2E-PLAINTEXT-MARKER" /d'` finds nothing after uploading a text file containing that marker.
 
