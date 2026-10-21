@@ -54,7 +54,7 @@ with the same passwords and create their own run-tagged channels and agents.
 |---|---|
 | `manifest.jsonl` | One line per screenshot: `scenario_id`, `step`, `expectation`, `file`, `text_file`, project, viewport |
 | `screens/<project>/<scenario>/<step>.png` + `.txt` | Viewport screenshot and the page's DOM text at capture time (the text is what the leak scan reads) |
-| `failures/<project>/<test>/` | `failure.png`, `failure.txt`, `error.json` (assertion messages, console errors, HTTP 4xx/5xx paths) |
+| `failures/<project>/<test>/` | `failure.png`, `failure.txt`, `error.json` (assertion messages, console errors, HTTP 4xx/5xx paths) A test that puts a secret on screen calls `sensitive.begin()` before the reveal and `sensitive.add(value)` once it knows the value (`lib/sensitive.ts`). Its failure keeps no PNG (`failure-png-withheld.txt` instead), its text is scrubbed of those values and of token and invite-code shapes, and the values join the end-of-run leak scan. |
 | `summary.json` | Per-test result (`passed` / `failed` / `not_applicable`), scenario ID and duration |
 | `leak-report.json` | Only if the leak scan quarantined something |
 | `judge.json` | Only after `vision-judge.ts --judge` (currently `blocked`) or a `secret_leak` |

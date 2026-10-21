@@ -4,6 +4,7 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { Api } from './api';
 import { artifactsDir, e2eEnv, SEED_FILE, storageStatePath } from './env';
 import type { Seed } from './seed-types';
+import { Sensitive, writeFailureEvidence } from './sensitive';
 
 export function loadSeed(): Seed {
     return JSON.parse(fs.readFileSync(SEED_FILE, 'utf8'));
@@ -12,13 +13,16 @@ export function loadSeed(): Seed {
 type Fixtures = {
     seed: Seed;
     consoleErrors: string[];
+    /** Secrets this test shows on screen; see lib/sensitive.ts. */
+    sensitive: Sensitive;
     _failureEvidence: void;
 };
 
 /**
  * Base test. Default storageState = owner. On failure, writes a viewport screenshot, the
  * DOM text, the error and console errors to artifacts/<run-id>/failures/<test>/ (all
- * text, so the leak scan can read it). Raw traces stay under secrets/ and are deleted.
+ * text, so the leak scan can read it). A test that showed a secret (`sensitive`) keeps no
+ * screenshot and its text is scrubbed. Raw traces stay under secrets/ and are deleted.
  */
 export const test = base.extend<Fixtures>({
     storageState: async ({}, use) => { await use(storageStatePath('owner')); },
@@ -30,21 +34,17 @@ export const test = base.extend<Fixtures>({
         page.on('response', r => { if (r.status() >= 400) errs.push(`http ${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`); });
         await use(errs);
     },
-    _failureEvidence: [async ({ page, consoleErrors }, use, testInfo) => {
+    sensitive: async ({}, use) => { await use(new Sensitive()); },
+    _failureEvidence: [async ({ page, consoleErrors, sensitive }, use, testInfo) => {
         await use();
         if (testInfo.status === testInfo.expectedStatus) return;
         const dir = path.join(artifactsDir(), 'failures', testInfo.project.name,
             testInfo.titlePath.slice(1).join('__').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120));
-        fs.mkdirSync(dir, { recursive: true });
-        try { await page.screenshot({ path: path.join(dir, 'failure.png'), animations: 'disabled', timeout: 5000 }); } catch { /* page gone */ }
-        try { fs.writeFileSync(path.join(dir, 'failure.txt'), await page.evaluate(() => document.body?.innerText ?? '')); } catch { /* page gone */ }
-        fs.writeFileSync(path.join(dir, 'error.json'), JSON.stringify({
+        await writeFailureEvidence(page, dir, {
             test: testInfo.titlePath.join(' > '),
-            url: (() => { try { return page.url(); } catch { return null; } })(),
-            status: testInfo.status,
-            errors: testInfo.errors.map(e => (e.message ?? '').replace(/\u001b\[[0-9;]*m/g, '').slice(0, 4000)),
-            console_errors: consoleErrors,
-        }, null, 2));
+            status: testInfo.status ?? 'unknown',
+            errors: testInfo.errors.map(e => e.message ?? ''),
+        }, consoleErrors, sensitive);
     }, { auto: true }],
 });
 

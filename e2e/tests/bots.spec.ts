@@ -21,7 +21,7 @@ function expectedCommand(client: 'claude' | 'codex' | 'gemini', instance: string
 }
 
 test.describe('bots, tokens and agent invites', () => {
-    test('[ID-05.bot-token-once] create a bot and mint a token: shown once, then only metadata', async ({ page, seed }, ti) => {
+    test('[ID-05.bot-token-once] create a bot and mint a token: shown once, then only metadata', async ({ page, seed, sensitive }, ti) => {
         const { owner, anon } = apis(seed);
         const name = uniq(seed, 'tokenbot');
         await openBots(page);
@@ -38,11 +38,17 @@ test.describe('bots, tokens and agent invites', () => {
 
         const row = botRow(page, name);
         await row.getByRole('button').filter({ has: page.getByText(name, { exact: true }) }).click();
+        // The token is on screen from this click on: failure evidence keeps no PNG and is scrubbed
+        sensitive.begin();
+        const minted = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/servers/${seed.serverId}/bots/${botId}/tokens`);
         await row.getByRole('button', { name: 'New Token' }).click();
+        const mintedToken = (await (await minted).json().catch(() => ({}))).token;
+        if (typeof mintedToken === 'string') sensitive.add(mintedToken);
         const dlg = page.getByRole('dialog', { name: 'Token Created' });
         const tokenEl = dlg.locator('.font-mono');
         await expect(tokenEl).toBeVisible();
         const token = (await tokenEl.innerText()).trim();   // kept in memory only
+        sensitive.add(token);
         expect(/^bot_[0-9A-HJKMNP-TV-Z]{26}\.[0-9a-f]{64}$/.test(token), 'token has the bot_<id>.<secret> shape').toBe(true);
         await expect(dlg.getByText('Copy this token now. It will not be shown again.')).toBeVisible();
         // The screenshot never carries the token: masked in pixels and replaced in the DOM text
@@ -72,7 +78,7 @@ test.describe('bots, tokens and agent invites', () => {
             { ready: tokenRow });
     });
 
-    test('[ID-05.invite-dialog] Invite Agent shows the setup command for Claude Code, Codex and Gemini with an expiry', async ({ page, seed }, ti) => {
+    test('[ID-05.invite-dialog] Invite Agent shows the setup command for Claude Code, Codex and Gemini with an expiry', async ({ page, seed, sensitive }, ti) => {
         const instance = e2eEnv().baseURL;
         const name = uniq(seed, 'invbot');
         await openBots(page);
@@ -81,11 +87,14 @@ test.describe('bots, tokens and agent invites', () => {
         await dlg.getByLabel('New bot username').fill(name);
         await dlg.getByLabel('Instance URL reachable by the agent').fill(instance);
         const resP = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/servers/${seed.serverId}/agent-invites`);
+        // The invite code is on screen from this click on
+        sensitive.begin();
         await dlg.getByRole('button', { name: 'Create Invite' }).click();
         const res = await resP;
-        expect(res.status()).toBe(201);
-        const inv = await res.json();
+        const inv = await res.json().catch(() => ({}));
         const code: string = inv.code;
+        if (typeof code === 'string') sensitive.add(code);
+        expect(res.status()).toBe(201);
         expect(/^[0-9a-f]{64}$/.test(code)).toBe(true);
         const minutes = (Date.parse(inv.expiresAt) - Date.now()) / 60_000;
         expect(minutes, 'expires in about 10 minutes').toBeGreaterThan(8);
@@ -114,15 +123,18 @@ test.describe('bots, tokens and agent invites', () => {
         expect((await owner.ok('GET', `/servers/${seed.serverId}/bots/${inv.botId}/tokens`)) as any[]).toHaveLength(0);
     });
 
-    test('[ID-05.invite-redeem] redeeming an agent invite returns a working token once; the second redeem is 410', async ({ seed }) => {
+    test('[ID-05.invite-redeem] redeeming an agent invite returns a working token once; the second redeem is 410', async ({ seed, sensitive }) => {
         const { owner, anon } = apis(seed);
         const inv = (await owner.ok('POST', `/servers/${seed.serverId}/agent-invites`, { username: uniq(seed, 'redeembot') }, [201])) as any;
+        sensitive.add(inv.code);
         const first = await anon.req('POST', '/agent-invites/redeem', { code: inv.code });
+        if (typeof first.data?.token === 'string') sensitive.add(first.data.token);
         expect(first.status).toBe(200);
         expect(first.data.botId).toBe(inv.botId);
         const me = await anon.with(`Bot ${first.data.token}`).req('GET', '/bots/@me');
         expect([me.status, me.data?.id?.trim()]).toEqual([200, inv.botId]);
         const second = await anon.req('POST', '/agent-invites/redeem', { code: inv.code });
+        if (typeof second.data?.token === 'string') sensitive.add(second.data.token);
         expect([second.status, second.data?.error]).toEqual([410, 'invite_invalid_or_expired']);
         expect(second.data?.token, 'no token on replay').toBeUndefined();
         const tokens = (await owner.ok('GET', `/servers/${seed.serverId}/bots/${inv.botId}/tokens`)) as any[];
