@@ -47,6 +47,8 @@ import { getRedis } from './auth/token-blacklist';
 import { readGatewayAccess, writeGatewayAccess } from './lib/gateway-gate';
 import { changesGatewayAccess, refreshGatewayAccess, invalidateGatewayAccess, visibleChannels } from './lib/gateway-access';
 import { LoginLimiter, type LoginLimits } from './auth/login-limit';
+import { DB_CONNECT_TIMEOUT_MS, RequestClient, enterRequestDbScope, leaveRequestDbScope } from './db/request-timeouts';
+import { installDependencyErrorHandler, isServiceUnavailable } from './lib/service-unavailable';
 
 export async function buildApp(opts?: {
     logger?: boolean;
@@ -59,7 +61,12 @@ export async function buildApp(opts?: {
 
     const db = new Pool({
         connectionString: opts?.dbUrl ?? process.env.DATABASE_URL,
+        connectionTimeoutMillis: DB_CONNECT_TIMEOUT_MS,
+        Client: RequestClient,
     });
+    db.on('error', err => app.log.warn({ err }, 'Idle database connection failed'));
+    installDependencyErrorHandler(app);
+    app.addHook('onRequest', (_request, _reply, done) => enterRequestDbScope(done));
 
     const jwtSecret = opts?.jwtSecret ?? process.env.JWT_SECRET ?? 'dev-secret-do-not-use-in-prod';
 
@@ -72,6 +79,7 @@ export async function buildApp(opts?: {
 
     // Health endpoint (no auth required)
     app.get('/health', async () => {
+        await db.query('SELECT 1');
         return { status: 'ok' };
     });
 
@@ -88,8 +96,13 @@ export async function buildApp(opts?: {
     // ─── Per-request DB client lifecycle (RLS enforcement) ───
     app.addHook('onRequest', async (request) => {
         const client = await db.connect();
-        await client.query('BEGIN');
-        request.dbClient = client;
+        try {
+            await client.query('BEGIN'); // RequestClient also sets the transaction-local statement timeout.
+            request.dbClient = client;
+        } catch (err) {
+            client.release(err instanceof Error ? err : true);
+            throw err;
+        }
     });
 
     // Initialization gate — block everything except bootstrap routes when not initialized
@@ -182,10 +195,11 @@ export async function buildApp(opts?: {
             request.txCommitted = true;
         } catch (err) {
             request.txCommitted = false;
+            request.txFailure = err;
             request.log.error({ err }, 'COMMIT failed; request rolled back');
             await client.query('ROLLBACK').catch(() => {});
         }
-        client.release();
+        client.release(request.txCommitted ? undefined : true);
         return request.txCommitted;
     }
 
@@ -211,10 +225,12 @@ export async function buildApp(opts?: {
         request.pendingEvents = [];
         request.pendingDisconnects = [];
         request.idempotencyResponseBody = undefined;
-        reply.code(500);
+        const unavailable = isServiceUnavailable(request.txFailure);
+        reply.code(unavailable ? 503 : 500);
+        if (unavailable) reply.header('Retry-After', '5');
         reply.removeHeader('content-length');
         reply.header('content-type', 'application/json; charset=utf-8');
-        return JSON.stringify({ error: 'commit_failed' });
+        return JSON.stringify({ error: unavailable ? 'service_unavailable' : 'commit_failed' });
     });
 
     // After the reply: flush pending socket events and finish idempotency bookkeeping.
@@ -222,6 +238,7 @@ export async function buildApp(opts?: {
     app.addHook('onResponse', async (request) => {
         // A reply that bypassed onSend still has its client: commit it here
         const committed = await commitRequest(request);
+        leaveRequestDbScope();
         const idempotencyKey = request.idempotencyKey;
         if (!committed) {
             if (idempotencyKey && request.txCommitted === false) {

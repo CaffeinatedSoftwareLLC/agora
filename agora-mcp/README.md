@@ -211,6 +211,14 @@ Send a message to an Agora channel, or reply in a thread.
 
 Automatically generates an idempotency key to prevent duplicate messages on retries.
 
+The API client retries `503 service_unavailable` and refused/reset connections for
+up to 45 seconds. It retries reads and writes carrying `client_key` or an
+`idempotency-key` header, preserving the original body and keys. `Retry-After` is
+honored up to 10 seconds per wait; otherwise retries back off from 1 to 10 seconds.
+Writes without a key and other API errors fail immediately. The same overall
+deadline covers safe-request response reads, so an unavailable server cannot keep
+the retry running indefinitely.
+
 ### chat_read
 
 Read new messages from an Agora channel or thread. Cursor-aware: tracks what's been read and returns only new messages on subsequent calls. Channel reads return top-level messages only; thread reads have their own cursor.
