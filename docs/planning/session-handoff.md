@@ -1,4 +1,4 @@
-# Session handoff (Claude coordinator), 2026-10-21 early morning
+# Session handoff (Claude coordinator), 2026-10-21 ~03:20 UTC (paused for the night by Eryk)
 
 Start a new Claude Code session in this repo and say: "read docs/planning/session-handoff.md and continue in Agora".
 
@@ -23,12 +23,19 @@ Codex **AGREE**d the combined candidate `80192a5` (local `.worktrees/combined`, 
 Results on `80192a5`: Playwright 84 passed / 0 failed / 2 n/a; integration 1075; unit 341; UI 292; host 290 + 4 skipped; mcp 161.
 **Eryk: "we wait for tests"**. Don't merge or deploy until he says so. When he does: merge in the order above with `gh pr merge --merge --match-head-commit <sha>`, retarget #156 and #160 to `main` once their parents have merged, then check that main's tree equals `80192a5`. Any head change needs a Codex re-review. Deploying needs its own go: run `agora-deploy.sh`, then rebuild and restart AgoraHost (#148 changes host code).
 
-## Running jobs (threads in #general)
-- **Job 3, Playwright E2E** (`01M5DSJW5KC3MHWVPEQ94SN6TH`): wave B (setup/auth/admin/storage/mobile, which changes instance-wide settings) runs as a subagent on local branch `test/e2e-wave-b`, built on wave A1.
-- Jobs 1, 2 and 4 and the batch review thread are closed. Job 3 E2E thread `01M5DSJW5KC3MHWVPEQ94SN6TH` is done pending the merge. **Job 5, agent E2E** (`01M5E4JXRH9ZHFF57S7SM355S4`) is approved by Eryk (keys in, provider caps set). Models: `claude-haiku-5-5`, `gpt-6-luna` (fallback `gpt-5.6-luna`), `gemini-3.1-flash-lite` (fallback `gemini-2.5-flash-lite`). The runner is on local branch `test/e2e-agent` (subagent). Merge `80192a5` into it before any live run.
+## Where to resume (Eryk: "resume tests tomorrow")
+- **Batch on hold:** the 15-PR candidate `80192a5` was approved by Codex (see above). Don't merge or deploy until Eryk says.
+- **Job 5, agent E2E** (thread `01M5E4JXRH9ZHFF57S7SM355S4`, still open). Runner branch `test/e2e-agent` (pushed, head `b2b3b5f`, already includes `80192a5`); its worktree is `.claude/worktrees/agent-a073e7290a7077859`.
+  - Live command (in `e2e/`): `E2E_AGENT_LIVE=1 E2E_CODEX_KEY_ENV=CODEX_API_KEY E2E_MODEL_CLAUDE=claude-haiku-5-5 E2E_MODEL_CODEX=gpt-6-luna E2E_MODEL_GEMINI=gemini-3.1-flash-lite E2E_AGENT_TOKEN_CAP=1500000 npx playwright test tests/agents-live.spec.ts`. Keys come from `~/.agora-test/keys.env`; never print them.
+  - Last run: 3 passed (A9, A15, A19). The 15 failures all came from **#166**: each setup waits for the /start hello. Spend so far is about 1.57M tokens, roughly under $1.
+  - **Next:** merge `fix/166-start-hello` (PR #168) and `fix/165-codex-api-key-env` (PR #167) into `test/e2e-agent` locally, then re-run A1 to A20. Once #167 is in, drop `E2E_CODEX_KEY_ENV` (the host passes `CODEX_API_KEY` itself). Then send #167 and #168 to Codex for review.
+  - Each /start wake costs about 50k tokens (Claude Code's own prompt), so budget for that.
+- **Job 3 E2E thread** `01M5DSJW5KC3MHWVPEQ94SN6TH`: done (84/84 on the candidate). Close it after the merge.
+- After job 5: operations and recovery (§3.5, destructive, disposable instance only), manual sessions M01 and on with Eryk (live is still `11e998c`, so deploy first), platform passes.
+- Listener subagents time out after an hour; re-arm on the open threads when resuming.
 
 ## Open beta-test issues
-#136 (tsc OOM), #137 (fixed in #138), #141 (M: /users/search instance-wide, wildcards), #142 (L: `.cmd` verify), #143 (L: tts cache, decision pending), #145 (fixed in #148), #146 (fixed in #153), #147 (fixed in #154), #149 (fixed in #152), #150 (L: e2e not repeatable with `--repeat-each`). Plan wording questions: there's no kick endpoint, and channel rename/delete and leave-server don't exist (PR #139 report).
+#136 (tsc OOM), #137 (fixed in #138), #141 (M: /users/search instance-wide, wildcards), #142 (L: `.cmd` verify), #143 (L: tts cache, decision pending), #145 (fixed in #148), #146 (fixed in #153), #147 (fixed in #154), #149 (fixed in #152), #150 (L: e2e not repeatable with `--repeat-each`), #155/#157/#158/#159 (fixed in the batch: #161-#164), #165 (codex OPENAI_API_KEY, fix PR #167), #166 (no hello after /start, fix PR #168). Plan wording questions: there's no kick endpoint, and channel rename/delete and leave-server don't exist (PR #139 report).
 
 ## Next in beta-test-plan §7.1
 After the merges: manual 5-check sessions with Eryk (one thread each; live is on `11e998c`), agent E2E with test keys (ask Eryk "keys in?" first; keys at `C:\Users\miste\.agora-test\keys.env`, never print them), operations and recovery (§3.5), platform passes (agora-host on Linux passes after #138, run in a `node:22` container), fix wave (#141, #142, #143, #150, plus the 41 coverage gaps such as `SEC-01.rls-probe`). Runtime/code-run tests stay blocked until #126.
