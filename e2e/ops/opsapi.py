@@ -5,8 +5,8 @@
   opsapi.py verify --base URL --env ENVFILE --manifest IN.json [--no-write] [--report OUT.json]
   opsapi.py provider-test --base URL --env ENVFILE --manifest IN.json [--expect decrypts|decrypt-error]
 
-Every call also takes --state DIR (lib.sh passes e2e/ops/.state); env, manifest and report
-paths must resolve inside it.
+The env, manifest and report paths must resolve inside the `.state` directory next to this
+script (e2e/ops/.state); the root is not configurable and a symlinked .state is refused.
 
 Fake data only: users ops-owner / ops-member, a provider whose key is a CANARY string and
 whose base URL is a dead loopback port inside the API container (so a provider test proves
@@ -33,6 +33,15 @@ DEAD_BASE_URL = 'http://127.0.0.1:9/v1'
 DEAD_PORT_BODY = {'ok': False, 'error': 'fetch failed (bad port)'}
 DECRYPT_ERROR_BODY = {'ok': False, 'error': DECRYPT_ERROR}
 ALLOWED_BASES = ('http://127.0.0.1:3300', 'http://127.0.0.1:3400')
+
+
+def state_root():
+    """<directory of this script>/.state, canonical. A symlinked .state is refused."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    state = os.path.join(here, '.state')
+    if os.path.islink(state) or not os.path.isdir(state):
+        sys.exit(f'refusing state directory {state}: missing or a symlink')
+    return os.path.realpath(state)
 
 
 class Api:
@@ -382,12 +391,12 @@ def main():
     ap.add_argument('--report')
     ap.add_argument('--no-write', action='store_true')
     ap.add_argument('--expect', choices=['decrypts', 'decrypt-error'], default='decrypts')
-    ap.add_argument('--state', required=True)
     args = ap.parse_args()
     if args.base.rstrip('/') not in ALLOWED_BASES:
         sys.exit(f'refusing base URL {args.base} (only the ops projects: {", ".join(ALLOWED_BASES)})')
-    # Every file read or written must resolve inside e2e/ops/.state (symlinks resolved)
-    state = os.path.realpath(args.state)
+    # Every file read or written must resolve inside the .state directory next to this
+    # script (symlinks resolved). The root is fixed here, never taken from the caller.
+    state = state_root()
     for name in ('env', 'manifest', 'report'):
         value = getattr(args, name)
         if value is not None:

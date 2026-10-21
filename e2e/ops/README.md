@@ -15,19 +15,28 @@ Docker daemon, next to the live `agora` stack and the `agora-e2e` project, witho
 - Before every `up` **and every `down -v`**, `ops_validate` renders the config (all profiles)
   and `validate_compose.py` parses it: the project name; every service is one of postgres, redis,
   migrate, api, web with an allowed image (`agora-ops-server:old|new`, ...), no container_name,
-  privileged or host network; every volume resolves to `<project>_…` and is not external; every
-  network resolves to exactly `<project>_net`; every mount is a project volume (no bind mounts);
-  every published port is the project's own api/web port, bound to 127.0.0.1, never 80, 443,
-  3000, 8080, 3200 or 8280. Then no container outside the project may publish those ports.
+  privileged or host network; every volume resolves to `<project>_…` and is a plain local volume
+  (no external, no other driver, no `driver_opts`, which could bind any host directory under a
+  safe name); every network resolves to exactly `<project>_net` and is a plain bridge (no
+  external, no other driver, no `driver_opts` or ipam settings); every mount is a project volume
+  (no bind mounts); every published port is the project's own api/web port, bound to 127.0.0.1,
+  never 80, 443, 3000, 8080, 3200 or 8280. Then no container outside the project may publish
+  those ports.
 - Every file the scripts write (env files, manifests, reports, backups, temp copies) must
-  resolve inside `e2e/ops/.state/` after symlinks are resolved (`state_path` in `lib.sh`,
-  re-checked in `opsapi.py`). There are no path or state-dir override variables.
+  resolve inside `e2e/ops/.state/` after symlinks are resolved (`state_path` in `lib.sh`).
+  `opsapi.py` checks its `--env`, `--manifest` and `--report` against `<its own directory>/.state`,
+  refuses a symlinked `.state`, and takes no root from the caller. `verify.sh` accepts only
+  `--no-write` after its two arguments and forwards nothing else. There are no path or state-dir
+  override variables.
 - `guard-selftest.sh` proves the refusals: paths outside `.state` (including `..` and a symlink
-  out), the live API port, and throwaway compose overrides in `.state/selftest/` that name
-  `agora_pgdata`, `agora_pgdata_v2`, `agora_data2`, `agora_default`, `agora-e2e_net`, an
-  external volume, a bind mount, port 3000, a port on all interfaces, a `runner` service and an
-  `agora-e2e` image. The `up`/`down` cases use volume and network names that do not exist on the
-  daemon, so even a guard that failed open could not reach a real resource.
+  out), `opsapi.py` with a manifest in the repo, with `--state`, from a copy next to a symlinked
+  `.state`, or against the live API port; `verify.sh` with extra arguments; and throwaway compose
+  overrides in `.state/selftest/` that name `agora_pgdata`, `agora_pgdata_v2`, `agora_data2`,
+  `agora_default`, `agora-e2e_net`, or add an external volume or network, a bind mount, a volume
+  with `driver_opts` binding a live volume's directory, another volume or network driver, network
+  `driver_opts`, port 3000, a port on all interfaces, a `runner` service or an `agora-e2e` image.
+  The compose cases only render config. The `up`/`down` cases use volume and network names that do
+  not exist on the daemon, so even a guard that failed open could not reach a real resource.
 - Fake data only (`ops-owner`, `ops-member`). The provider key is a `sk-test-CANARY-…` string and
   its base URL is `http://127.0.0.1:9/v1` inside the API container. The decryption proof requires
   the provider to still be that `openai` one on that URL and its test to answer exactly

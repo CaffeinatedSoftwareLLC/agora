@@ -39,12 +39,39 @@ refused "ops_gen_env through a symlink" "refusing path outside" ops_gen_env "$ST
 refused "env_set outside .state" "refusing path outside" env_set "$OUTSIDE/x.env" K V
 [ -z "$(ls -A "$OUTSIDE")" ] && { echo "PASS nothing was written outside .state"; pass=$((pass + 1)); } \
   || { echo "FAIL files written to $OUTSIDE"; fail=$((fail + 1)); }
+# opsapi.py: the root is <its own dir>/.state, never the caller's. Nothing below reaches
+# the network: every case is refused while the arguments are checked.
+OPSAPI=(python3 -I "$OPS_DIR/opsapi.py")
+TRACKED="$OPS_REPO/ops-selftest-tracked.json"   # would be a tracked path in the repo
 refused "opsapi --manifest outside .state" "refusing --manifest" \
-  python3 -I "$OPS_DIR/opsapi.py" verify --state "$OPS_STATE_REAL" --base http://127.0.0.1:3300 --env "$ST/x.env" --manifest "$OUTSIDE/m.json"
+  "${OPSAPI[@]}" verify --base http://127.0.0.1:3300 --env "$ST/x.env" --manifest "$OUTSIDE/m.json"
 refused "opsapi --report through a symlink" "refusing --report" \
-  python3 -I "$OPS_DIR/opsapi.py" verify --state "$OPS_STATE_REAL" --base http://127.0.0.1:3300 --env "$ST/x.env" --manifest "$ST/m.json" --report "$ST/escape/r.json"
+  "${OPSAPI[@]}" verify --base http://127.0.0.1:3300 --env "$ST/x.env" --manifest "$ST/m.json" --report "$ST/escape/r.json"
 refused "opsapi against the live API" "refusing base URL" \
-  python3 -I "$OPS_DIR/opsapi.py" verify --state "$OPS_STATE_REAL" --base http://127.0.0.1:3000 --env "$ST/x.env" --manifest "$ST/m.json"
+  "${OPSAPI[@]}" verify --base http://127.0.0.1:3000 --env "$ST/x.env" --manifest "$ST/m.json"
+refused "opsapi seed --state <repo> --manifest <repo>/tracked.json" "unrecognized arguments: --state" \
+  "${OPSAPI[@]}" seed --state "$OPS_REPO" --base http://127.0.0.1:3300 --env "$ST/x.env" --manifest "$TRACKED"
+refused "opsapi seed --manifest <repo>/tracked.json" "refusing --manifest" \
+  "${OPSAPI[@]}" seed --base http://127.0.0.1:3300 --env "$ST/x.env" --manifest "$TRACKED"
+[ ! -e "$TRACKED" ] && { echo "PASS nothing was written to the repo"; pass=$((pass + 1)); } \
+  || { echo "FAIL $TRACKED was written"; fail=$((fail + 1)); }
+# A copy of opsapi.py next to a .state symlink (pointing at the real .state) is refused
+cp "$OPS_DIR/opsapi.py" "$OUTSIDE/opsapi.py"
+ln -s "$OPS_STATE_REAL" "$OUTSIDE/.state"
+refused "opsapi with a symlinked .state" "refusing state directory .*: missing or a symlink" \
+  python3 -I "$OUTSIDE/opsapi.py" verify --base http://127.0.0.1:3300 --env "$OUTSIDE/.state/x.env" --manifest "$OUTSIDE/.state/m.json"
+rm -f "$OUTSIDE/opsapi.py" "$OUTSIDE/.state"
+# verify.sh forwards nothing but --no-write (refused before it contacts any API)
+refused "verify.sh with a trailing --report=" "unknown argument '--report=" \
+  bash "$OPS_DIR/verify.sh" agora-ops "$ST/m.json" --report="$OUTSIDE/r.json"
+refused "verify.sh with a trailing --state=" "unknown argument '--state=" \
+  bash "$OPS_DIR/verify.sh" agora-ops "$ST/m.json" --state="$OPS_REPO"
+refused "verify.sh with a trailing --report <path>" "usage: verify.sh" \
+  bash "$OPS_DIR/verify.sh" agora-ops "$ST/m.json" --report "$OUTSIDE/r.json"
+refused "verify.sh with --no-write plus more" "usage: verify.sh" \
+  bash "$OPS_DIR/verify.sh" agora-ops "$ST/m.json" --no-write --report "$OUTSIDE/r.json"
+[ -z "$(ls -A "$OUTSIDE")" ] && { echo "PASS nothing was written outside .state (opsapi/verify cases)"; pass=$((pass + 1)); } \
+  || { echo "FAIL files written to $OUTSIDE"; fail=$((fail + 1)); }
 rm -f "$ST/escape"; rmdir "$OUTSIDE"
 refused "a project that is not ops" "refusing project" ops_use agora-e2e
 
@@ -72,6 +99,17 @@ override external $'volumes:\n  ops-files:\n    external: true\n    name: agora-
 refused "ops_validate: external volume" "external volumes are not allowed" ops_validate
 override bind $'services:\n  api:\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock'
 refused "ops_validate: bind mount" "is not a project volume" ops_validate
+# A safely named volume that binds a host directory through driver_opts (render only)
+override indirect-bind $'volumes:\n  ops-files:\n    driver: local\n    driver_opts:\n      type: none\n      o: bind\n      device: /var/lib/docker/volumes/agora_files-data/_data'
+refused "ops_validate: volume with driver_opts bind to a live volume's directory" "volume ops-files: driver_opts are not allowed" ops_validate
+override vol-driver $'volumes:\n  ops-pgdata:\n    driver: rexray/ebs'
+refused "ops_validate: non-default volume driver" "volume ops-pgdata: driver 'rexray/ebs' is not allowed" ops_validate
+override net-opts $'networks:\n  ops:\n    driver_opts:\n      com.docker.network.bridge.name: docker0'
+refused "ops_validate: network with driver_opts" "network ops: driver_opts are not allowed" ops_validate
+override net-driver $'networks:\n  ops:\n    driver: macvlan'
+refused "ops_validate: non-bridge network driver" "network ops: driver 'macvlan' is not allowed" ops_validate
+override net-external $'networks:\n  ops:\n    external: true\n    name: agora-ops_net'
+refused "ops_validate: external network" "network ops: external networks are not allowed" ops_validate
 override live-net $'networks:\n  ops:\n    name: agora_default'
 refused "ops_validate: network renamed to agora_default" "network ops: resolved name 'agora_default'" ops_validate
 override second-net $'services:\n  api:\n    networks: [ops, other]\nnetworks:\n  other:\n    name: agora-e2e_net'

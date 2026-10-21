@@ -134,4 +134,4 @@ ops_down() {
 
 ops_psql() { ocompose exec -T postgres psql -U accord -d agora -v ON_ERROR_STOP=1 -At "$@"; }
 
-ops_api() { python3 -I "$OPS_DIR/opsapi.py" --state "$OPS_STATE_REAL" "$@"; }
+ops_api() { python3 -I "$OPS_DIR/opsapi.py" "$@"; }

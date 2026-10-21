@@ -39,20 +39,40 @@ def main():
     if cfg.get('name') != project:
         errors.append(f'rendered project name {cfg.get("name")!r} is not {project!r}')
 
+    # Allowlists, not denylists: a safely named volume can still bind any host directory
+    # through driver/driver_opts (type=none, o=bind, device=...), and a network can join
+    # another one through its driver or options. Only a plain local volume and a plain
+    # bridge network pass.
     volumes = cfg.get('volumes') or {}
     for key, v in volumes.items():
-        name = (v or {}).get('name', '')
-        if (v or {}).get('external'):
+        v = v or {}
+        name = v.get('name', '')
+        if v.get('external'):
             errors.append(f'volume {key}: external volumes are not allowed')
+        if v.get('driver', 'local') != 'local':
+            errors.append(f'volume {key}: driver {v.get("driver")!r} is not allowed')
+        if 'driver_opts' in v:
+            errors.append(f'volume {key}: driver_opts are not allowed ({json.dumps(v["driver_opts"])})')
+        for extra in sorted(set(v) - {'name', 'external', 'driver', 'driver_opts'}):
+            errors.append(f'volume {key}: option {extra!r} is not allowed')
         if not name.startswith(project + '_') or bad_name(name):
             errors.append(f'volume {key}: resolved name {name!r} is not prefixed with {project}_')
     networks = cfg.get('networks') or {}
     if not networks:
         errors.append('no networks rendered')
     for key, n in networks.items():
-        name = (n or {}).get('name', '')
-        if (n or {}).get('external'):
+        n = n or {}
+        name = n.get('name', '')
+        if n.get('external'):
             errors.append(f'network {key}: external networks are not allowed')
+        if n.get('driver', 'bridge') != 'bridge':
+            errors.append(f'network {key}: driver {n.get("driver")!r} is not allowed')
+        if 'driver_opts' in n:
+            errors.append(f'network {key}: driver_opts are not allowed ({json.dumps(n["driver_opts"])})')
+        if n.get('ipam') not in (None, {}):
+            errors.append(f'network {key}: ipam settings are not allowed')
+        for extra in sorted(set(n) - {'name', 'external', 'driver', 'driver_opts', 'ipam'}):
+            errors.append(f'network {key}: option {extra!r} is not allowed')
         if name != f'{project}_net':
             errors.append(f'network {key}: resolved name {name!r} is not {project}_net')
 
