@@ -4,6 +4,7 @@ import { isServerOwner, OWNER_ONLY_ERROR } from '../lib/direct-agents';
 import { generateBotToken } from '../auth/bot-tokens';
 import { Permissions, computePermissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
+import { usernameTaken } from '../lib/usernames';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -208,6 +209,10 @@ export async function botRoutes(app: FastifyInstance) {
 
         const botId = generateUlid();
 
+        if (await usernameTaken(db, username)) {
+            return reply.status(409).send({ error: 'username_taken' });
+        }
+
         try {
             await db.query(
                 `INSERT INTO users (id, username, bot, bot_owner_id, server_id, avatar_url)
@@ -216,7 +221,7 @@ export async function botRoutes(app: FastifyInstance) {
             );
         } catch (err: any) {
             if (err.code === '23505') {
-                return reply.status(409).send({ error: 'Username already taken' });
+                return reply.status(409).send({ error: 'username_taken' });
             }
             throw err;
         }
@@ -343,6 +348,9 @@ export async function botRoutes(app: FastifyInstance) {
         }
 
         if (username) {
+            if (await usernameTaken(db, username, botId)) {
+                return reply.status(409).send({ error: 'username_taken' });
+            }
             try {
                 await db.query(
                     'UPDATE users SET username = $1 WHERE id = $2',
@@ -350,7 +358,7 @@ export async function botRoutes(app: FastifyInstance) {
                 );
             } catch (err: any) {
                 if (err.code === '23505') {
-                    return reply.status(409).send({ error: 'Username already taken' });
+                    return reply.status(409).send({ error: 'username_taken' });
                 }
                 throw err;
             }

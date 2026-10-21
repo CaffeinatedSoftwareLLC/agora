@@ -264,7 +264,8 @@ No token is returned for pending accounts.
 | 400    | `invite_code_required`    | Policy is `invite_only` but no invite code provided |
 | 400    | _(validation error)_      | Missing/invalid body fields                        |
 | 404    | `invalid_invite_code`     | Invite code not found, expired, or max uses reached |
-| 409    | `username_or_email_taken` | Username or email already exists                   |
+| 409    | `username_taken`          | Username already exists, ignoring case (humans and bots share names) |
+| 409    | `username_or_email_taken` | Email already exists                               |
 
 **Side effects:** When using an invite code (`invite_only` policy), the user is automatically added to the invite's server and the invite's `use_count` is incremented.
 
