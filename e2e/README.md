@@ -94,9 +94,32 @@ encryption key, setup token, the two seeded passwords) live in `e2e/.env.e2e` an
 | `passkeys.spec.ts` | `ID-03.passkey` via a CDP virtual authenticator (Chromium only; `not_applicable` elsewhere) |
 | `mobile.spec.ts` (Pixel 7 project) | `UI-08.mobile-nav` (no sideways scroll, 44 px composer targets, nav overlay), `UI-08.mobile-thread` |
 
-Not covered yet (plan §2.2): the fake agent host (working indicator, tool/run cards, rate-limit
-sleep, diff review, checkpoints, handoffs), code runs (blocked on the shared daemon until #126 is
-fixed), voice, admin approval/ban flows, roles/directors, WebKit.
+## Fake agent host scenarios (not in the smoke set)
+
+`lib/fake-host.ts` starts a real `agora-host` from this checkout (built on first use) against the
+e2e API, with run-tagged host, channel and agents registered through the API. Its profiles run
+`fake-cli/fake-claude.mjs`, a stand-in for `claude -p --output-format stream-json`: no model, no
+provider key (api_key profiles get a dummy `ANTHROPIC_API_KEY`). The host refuses `.cmd`/`.js`
+executables, so on Windows a tiny native launcher is compiled from `fake-cli/launcher.cs` with the
+.NET Framework's `csc.exe` into the run's temp folder. The workdir is a throwaway git repo with a
+local bare `origin`; `GH_CONFIG_DIR` points at an empty folder, so `gh` has no login. The host
+config (host and bot tokens) and log live in `secrets/`; `stop()` kills the host's process tree
+(`taskkill /T /F`) and deletes the temp folder. Tests drive the fake by what they post:
+`#fake-sleep=20`, `#fake-edit=a,b`, `#fake-edits=35`, `#fake-tokens=2000`, `#fake-deny=gh`,
+`#fake-ratelimit`, `#fake-fail`, `#fake-silent` (see the script's header). Each spec file starts
+its own host; `fkdirector-e2e` (a run-tagged role with DirectAgents) plays the director.
+
+| Spec | Scenarios |
+|---|---|
+| `sessions.spec.ts` | `AG-01.host-seen`, `AG-01.start` (Shelve / Keep / Cancel), `AG-01.sessions` (`branch @ sha`), `AG-01.working`, `AG-07.changed-files`, `AG-01.budget`, `AG-01.rate-limit`, `AG-01.lurk`, `AG-08.verify`, `AG-09.terminal` |
+| `cards.spec.ts` | `AG-04.tool-card`, `AG-04.run-approval`, `AG-04.permission-relay`, `AG-05.handoff` (incl. a 60 s expiry), `AG-05.reservations` |
+| `agent-workspace.spec.ts` | `AG-07.checkpoints`, `AG-07.review-actions`, `UI-06.project-pin-file`, `UI-06.task-flow` |
+| `diff-review.mobile.spec.ts` (Pixel 7) | `AG-07.diff-review` |
+| `preview.spec.ts` | `AG-08.browser-preview` (Playwright's Chromium as the host's preview browser) |
+| `canvas-extra.spec.ts` | `UI-05.canvas-versions`, `UI-05.canvas-escape-nav` (no host needed) |
+
+Not covered yet (plan §2.2): code runs (blocked on the shared daemon until #126 is fixed), voice
+(needs a Whisper stub), admin approval/ban flows, WebKit.
 
 ## Vision check costs
 
