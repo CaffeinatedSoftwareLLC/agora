@@ -6,6 +6,7 @@ import { generateUlid } from '../utils/ulid';
 import type { LoginLimiter } from '../auth/login-limit';
 import { requireAuth } from '../auth/middleware';
 import { clearSessionCookies, deliverToken, sessionTokenFromHeaders } from '../auth/session-cookie';
+import { usernameTaken } from '../lib/usernames';
 
 export async function authRoutes(app: FastifyInstance) {
     // POST /auth/register — policy-aware registration
@@ -74,6 +75,10 @@ export async function authRoutes(app: FastifyInstance) {
         // Determine account_status based on policy
         const accountStatus = policy === 'approval' ? 'pending' : 'active';
 
+        if (await usernameTaken(db, username)) {
+            return reply.status(409).send({ error: 'username_taken' });
+        }
+
         const id = generateUlid();
         const passwordHash = await hashPassword(password);
 
@@ -84,6 +89,10 @@ export async function authRoutes(app: FastifyInstance) {
             );
         } catch (err: any) {
             if (err.code === '23505') {
+                // The unique index also closes the race after the precheck.
+                if (err.constraint === 'users_username_lower_key' || err.constraint === 'uq_users_username') {
+                    return reply.status(409).send({ error: 'username_taken' });
+                }
                 return reply.status(409).send({ error: 'username_or_email_taken' });
             }
             throw err;
