@@ -94,10 +94,14 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     // Each CLI keeps its settings and login in the profile's stateDir. For Gemini that also keeps
     // the user's own ~/.gemini (and any Google login cached there) out of hosted runs.
     env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
-    // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md)
+    // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md).
+    // The codex CLI (0.163 `exec`, no login in CODEX_HOME) reads only CODEX_API_KEY and ignores
+    // OPENAI_API_KEY (#165), so it always gets the key under that name. codex-acp keeps the
+    // configured name: its `openai-api-key` / `codex-api-key` methods each read their own (terms.ts).
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
         const key = source[profile.apiKeyEnv];
-        if (key) env[profile.apiKeyEnv] = key;
+        const name = profile.adapter === 'codex' && profile.protocol !== 'acp' ? 'CODEX_API_KEY' : profile.apiKeyEnv;
+        if (key) env[name] = key;
     }
     return env;
 }

@@ -68,8 +68,11 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
   between sessions the owner started. Everyone else is refused with a channel notice.
 - `"auth": "api_key"` with `"apiKeyEnv"`: the host passes that one variable from its own
   environment to the child. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or
-  `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini). The host refuses to
-  start if the variable is unset, and never prints its value. Ordinary authority rules apply.
+  `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini). The codex CLI
+  reads only `CODEX_API_KEY`, so a codex profile (protocol `cli`) gets the key as
+  `CODEX_API_KEY` whichever of the two names holds it on the host; codex-acp gets it under the
+  configured name. The host refuses to start if the variable is unset, and never prints its
+  value. Ordinary authority rules apply.
 - `"auth": "siwc"` (codex only): Sign in with ChatGPT. The agent runs `codex app-server` on the
   ChatGPT Plus/Pro plan of the person who connected it, with the plan's OAuth access token in
   the child's environment (never its arguments), not on the machine's `codex login`. Connect
