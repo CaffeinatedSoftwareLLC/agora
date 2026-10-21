@@ -163,7 +163,7 @@ export class Scheduler {
                         const rateLimited = !a.stop && finished && !!result.rateLimit;
                         await this.api.fail(claim, { claimToken: claim.run.claimToken, error: a.stop ?? (rateLimited ? 'rate_limited' : result.error ?? 'cli_failed'),
                             ...(savedCheckpoint ? { checkpoint: savedCheckpoint } : {}),
-                            message: rateLimited ? 'The CLI hit its rate limit' : 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
+                            message: rateLimited ? 'The CLI hit its rate limit' : result.errorMessage ?? 'Agent run did not complete', tokensUsed: result.tokensUsed, changedPaths: result.changedPaths,
                             retryable: a.stop !== 'cancelled' && !NON_RETRYABLE.has(result.error ?? '') && !ACP_FATAL.has(result.error ?? ''),
                             ...(result.deniedTools?.length ? { deniedTools: result.deniedTools } : {}),
                             ...(rateLimited ? { rateLimit: result.rateLimit } : {}) }, reportAbort);

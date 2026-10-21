@@ -198,6 +198,79 @@ describe('ACP permission rules', () => {
 });
 
 describe('ACP session turn (fake agent)', () => {
+    const legacyModels = JSON.stringify({ currentModelId: 'auto', availableModels: [
+        { modelId: 'auto', name: 'Auto' }, { modelId: 'gemini-flash', name: 'Gemini Flash' },
+    ] });
+    it.each(['new', 'resume', 'load'])('selects a legacy session model for %s without configOptions (#172)', async mode => {
+        const nativeSessionId = mode === 'new' ? null : 'sess-old';
+        const r = await run({ ACP_MODELS: legacyModels, ACP_OMIT_CONFIG: '1', ACP_RESUME: mode },
+            { model: 'GEMINI FLASH', nativeSessionId });
+        expect(r.result.success).toBe(true);
+        expect(r.sent('session/set_model').map(m => m.params)).toEqual([{ sessionId: nativeSessionId ?? 'sess-1', modelId: 'gemini-flash' }]);
+        expect(r.sent('session/set_config_option')).toHaveLength(0);
+        expect(r.sent('session/prompt')).toHaveLength(1);
+    });
+    it('keeps a selected legacy model and the unconfigured default without a set call', async () => {
+        for (const model of ['auto', null]) {
+            const r = await run({ ACP_MODELS: legacyModels, ACP_OMIT_CONFIG: '1' }, { model });
+            expect(r.result.success).toBe(true);
+            expect(r.sent('session/set_model')).toHaveLength(0);
+            expect(r.sent('session/set_config_option')).toHaveLength(0);
+        }
+    });
+    it('prefers a model configOption over legacy models and keeps effort selection', async () => {
+        const r = await run({ ACP_MODELS: legacyModels, ACP_CONFIG: JSON.stringify([
+            { id: 'model', category: 'model', type: 'select', currentValue: 'flash', options: [{ value: 'pro', name: 'Pro' }] },
+            { id: 'effort', category: 'thought_level', type: 'select', currentValue: 'low', options: [{ value: 'high', name: 'High' }] },
+        ]) }, { model: 'Pro', effort: 'high' });
+        expect(r.result.success).toBe(true);
+        expect(r.sent('session/set_model')).toHaveLength(0);
+        expect(r.sent('session/set_config_option').map(m => m.params)).toEqual([
+            { sessionId: 'sess-1', configId: 'model', value: 'pro' },
+            { sessionId: 'sess-1', configId: 'effort', value: 'high' },
+        ]);
+    });
+    it('uses legacy models alongside an effort-only configOptions list', async () => {
+        const r = await run({ ACP_MODELS: legacyModels, ACP_CONFIG: JSON.stringify([
+            { id: 'effort', category: 'thought_level', type: 'select', currentValue: 'low', options: [{ value: 'high', name: 'High' }] },
+        ]) }, { model: 'gemini-flash', effort: 'high' });
+        expect(r.result.success).toBe(true);
+        expect(r.sent('session/set_model')[0].params).toEqual({ sessionId: 'sess-1', modelId: 'gemini-flash' });
+        expect(r.sent('session/set_config_option')[0].params).toEqual({ sessionId: 'sess-1', configId: 'effort', value: 'high' });
+    });
+    it('bounds and sanitizes the advertised model IDs without relaying agent descriptions', async () => {
+        const r = await run({ ACP_MODELS: JSON.stringify({ availableModels: Array.from({ length: 12 }, (_, i) => ({
+            modelId: `model-${i}-${'x'.repeat(180)}\n`, name: 'Private display name', description: 'DO_NOT_RELAY',
+        })) }), ACP_OMIT_CONFIG: '1' }, { model: 'missing' });
+        expect(r.result.error).toBe('acp_model_unavailable');
+        expect(r.result.errorMessage).toContain('(and 4 more)');
+        expect(r.result.errorMessage!.length).toBeLessThanOrEqual(2000);
+        expect(r.result.errorMessage).not.toMatch(/[\r\n]|Private display name|DO_NOT_RELAY/);
+        expect(r.sent('session/prompt')).toHaveLength(0);
+    });
+    it('reports available legacy model IDs and never prompts for an unavailable model', async () => {
+        const r = await run({ ACP_MODELS: legacyModels, ACP_OMIT_CONFIG: '1' }, { model: 'missing' });
+        expect(r.result).toMatchObject({ success: false, error: 'acp_model_unavailable',
+            errorMessage: 'Requested model "missing" is unavailable. Available model IDs: auto, gemini-flash.' });
+        expect(r.sent('session/set_model')).toHaveLength(0);
+        expect(r.sent('session/prompt')).toHaveLength(0);
+    });
+    it('reports configOption IDs without falling back to an incompatible legacy list', async () => {
+        const r = await run({ ACP_MODELS: legacyModels, ACP_CONFIG: JSON.stringify([
+            { id: 'model', category: 'model', type: 'select', currentValue: 'pro', options: [{ value: 'pro', name: 'Pro' }] },
+        ]) }, { model: 'gemini-flash' });
+        expect(r.result).toMatchObject({ success: false, error: 'acp_model_unavailable',
+            errorMessage: 'Requested model "gemini-flash" is unavailable. Available model IDs: pro.' });
+        expect(r.sent('session/set_model')).toHaveLength(0);
+        expect(r.sent('session/prompt')).toHaveLength(0);
+    });
+    it('does not prompt when selecting a legacy model fails', async () => {
+        const r = await run({ ACP_MODELS: legacyModels, ACP_OMIT_CONFIG: '1',
+            ACP_SET_MODEL_ERROR: JSON.stringify({ code: -32603, message: 'failed to select' }) }, { model: 'gemini-flash' });
+        expect(r.result).toMatchObject({ success: false, error: 'acp_request_failed' });
+        expect(r.sent('session/set_model')).toHaveLength(1);
+        expect(r.sent('session/prompt')).toHaveLength(0);
+    });
     it('runs one turn: answers permissions from the rules, reports denials, diffs, plan, usage', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);
         // The fake agent asks for `gh`; a narrow Bash(gh:*) rule needs it on PATH

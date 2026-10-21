@@ -24,6 +24,14 @@ function setup() {
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
 afterEach(() => { vi.useRealTimers(); });
 describe('scheduler with fake processes', () => {
+    it('reports available ACP models with a stable nonretryable error code (#172)', async () => {
+        const s = setup(); const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(0);
+        s.children[0].finish.resolve({ ...successful, success: false, error: 'acp_model_unavailable',
+            errorMessage: 'Requested model "missing" is unavailable. Available model IDs: auto, gemini-flash.' });
+        await work;
+        expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'acp_model_unavailable',
+            message: 'Requested model "missing" is unavailable. Available model IDs: auto, gemini-flash.', retryable: false }), expect.anything());
+    });
     it('reports success and cleans up the per-run configuration', async () => {
         const s = setup(); const work = s.scheduler.submit(claim(), 0); await vi.advanceTimersByTimeAsync(0);
         s.children[0].finish.resolve(successful); await work;
