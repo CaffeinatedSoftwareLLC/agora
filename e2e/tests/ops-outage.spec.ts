@@ -127,7 +127,9 @@ test.describe('outages (OP-03)', () => {
             expect(attempts.length).toBeLessThanOrEqual(2);
             if (attempts.length === 2) {
                 const first = (s.recentRuns as any[]).find(r => trimId(r.id) === attempts[0].runId);
-                expect(first?.status, 'a lost report: the first attempt expired, then the batch was redelivered').toBe('expired');
+                // Expired (its report was lost) or failed (the CLI's own Agora calls failed while
+                // Postgres was paused); either way the batch was redelivered and replied once
+                expect(['expired', 'failed'], 'the first attempt ended, then the batch was redelivered').toContain(first?.status);
             }
             ti.annotations.push({ type: 'agent-run', description: `${attempts.length} attempt(s)` });
 
