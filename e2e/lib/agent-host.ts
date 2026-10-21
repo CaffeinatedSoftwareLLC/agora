@@ -40,7 +40,7 @@ export type AgentMode = 'live' | 'fake';
 export type AuthMode = 'api_key' | 'subscription' | 'siwc';
 
 /** §3.1 caps, applied to every server profile (and maxBudgetUsd to Claude CLI profiles). */
-export const AGENT_CAPS = { wakeBudget: 10, tokenBudget: 200_000, runTimeoutSec: 300, claudeMaxBudgetUsd: 0.5 } as const;
+export const AGENT_CAPS = { wakeBudget: 10, tokenBudget: Number(process.env.E2E_AGENT_SESSION_BUDGET ?? 200_000), runTimeoutSec: 300, claudeMaxBudgetUsd: 0.5 } as const;
 
 export const MODEL_VARS: Record<AgentAdapter, string> = { claude: 'E2E_MODEL_CLAUDE', codex: 'E2E_MODEL_CODEX', gemini: 'E2E_MODEL_GEMINI' };
 
