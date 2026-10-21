@@ -73,7 +73,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, data.error || 'unknown_error');
+  if (!res.ok) {
+    const gatewayError = res.status === 504
+      ? 'The server did not answer in time. Try again.'
+      : [502, 503].includes(res.status) ? 'The server is temporarily unavailable. Try again in a few seconds.' : 'unknown_error';
+    throw new ApiError(res.status, (typeof data?.error === 'string' && data.error) || gatewayError);
+  }
   return data as T;
 }
 
