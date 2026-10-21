@@ -1343,7 +1343,7 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 | POST | `/servers/:serverId/ai/providers` | `{ adapter, label?, apiKey?, baseUrl? }` → `201`; `409` duplicate label |
 | PATCH | `/servers/:serverId/ai/providers/:providerId` | `{ label?, apiKey? (null clears), baseUrl?, enabled? }` |
 | DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it |
-| POST | `/servers/:serverId/ai/providers/:providerId/test` | `{ model? }` → `{ ok, error? }` using the stored key |
+| POST | `/servers/:serverId/ai/providers/:providerId/test` | `{ model?, capability? }` → `{ ok, error? }` using the stored key; OpenAI-compatible speech tests use model metadata, with no audio generation. Saved routes supply the default capability/model. |
 | GET | `/servers/:serverId/ai/routes` | Capability routes |
 | PUT | `/servers/:serverId/ai/routes/:capability` | `{ providerId, model, enabled?, dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros?, inputPriceMicrosPerMtok?, outputPriceMicrosPerMtok? }`. `enabled` defaults to `true` for `chat`, `false` otherwise. `400` if the adapter can't serve the capability |
 | DELETE | `/servers/:serverId/ai/routes/:capability` | Remove a route |

@@ -78,6 +78,11 @@ For development, `docker compose --profile voice up -d kokoro whisper` publishes
 
 Cloud alternatives work the same way with an API key: OpenAI (`gpt-4o-mini-tts` / `whisper-1`, `gpt-4o-transcribe`), Groq (`whisper-large-v3-turbo`), or Gemini for Speech. Using a provider's API with your own API key is within its terms ([provider terms](provider-terms.md)); no CLI login is involved.
 
+For OpenAI-compatible providers, choose **Speech** or **Transcription** beside **Test**. Saved routes
+select the default; a provider without a route can be tested too. This checks the
+speech server connection without generating audio. Use read-aloud or the microphone
+to verify the actual output.
+
 ### 3. Each person
 
 Account & security → **Read replies aloud**. The microphone needs HTTPS (or `localhost`): the Caddy and tailnet setups provide it; plain `http://<lan-ip>` does not.

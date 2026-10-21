@@ -1,5 +1,6 @@
-import type { Adapter, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
+import type { Adapter, Capability, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
 import { apiError, joinUrl, networkError, sseJson } from './sse';
+import { testOpenAISpeechConnection } from './openai-speech-test';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
@@ -162,7 +163,8 @@ export const openaiAdapter: Adapter = {
         return { text: json.text.trim(), usage };
     },
 
-    async testConnection(creds: ProviderCredentials, model: string) {
+    async testConnection(creds: ProviderCredentials, model: string, capability: Capability = 'chat') {
+        if (capability === 'tts' || capability === 'stt') return testOpenAISpeechConnection(creds, model);
         try {
             const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/chat/completions'), {
                 method: 'POST',

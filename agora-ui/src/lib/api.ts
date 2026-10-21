@@ -579,8 +579,10 @@ export const aiApi = {
   deleteProvider: (serverId: string, providerId: string) =>
     api.delete<{ deleted: true }>(`/servers/${serverId}/ai/providers/${providerId}`),
 
-  testProvider: (serverId: string, providerId: string, model?: string) =>
-    api.post<AIConnectionResult>(`/servers/${serverId}/ai/providers/${providerId}/test`, model ? { model } : {}),
+  testProvider: (serverId: string, providerId: string, model?: string, capability?: AICapability) =>
+    api.post<AIConnectionResult>(`/servers/${serverId}/ai/providers/${providerId}/test`, {
+      ...(model ? { model } : {}), ...(capability ? { capability } : {}),
+    }),
 
   listRoutes: (serverId: string) =>
     api.get<AIRoute[]>(`/servers/${serverId}/ai/routes`),
