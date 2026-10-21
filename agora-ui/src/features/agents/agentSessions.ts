@@ -179,6 +179,11 @@ export function isSleeping(s: AgentSession, now = Date.now()): boolean {
   return s.state === 'live' && !!s.sleepingUntil && Date.parse(s.sleepingUntil) > now;
 }
 
+/** When a rate limit resets, as a clock time in the viewer's locale ("2:05 PM", "14:05"). */
+export function resetTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 const RANK: Record<ChipState, number> = { working: 0, idle: 1, sleeping: 2, standby: 3, shelved: 4, ended: 5 };
 
 function byRecent(a: AgentSession, b: AgentSession): number {

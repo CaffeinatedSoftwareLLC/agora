@@ -6,7 +6,7 @@ import { useMessageStore, type Message } from '../../stores/messageStore';
 import { useThreadStore } from '../../stores/threadStore';
 import { useUIStore } from '../../stores/uiStore';
 import { ConsoleStrip } from './ConsoleStrip';
-import type { AgentSession } from './agentSessions';
+import { resetTime, type AgentSession } from './agentSessions';
 
 vi.hoisted(() => {
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
@@ -65,6 +65,21 @@ describe('ConsoleStrip', () => {
     expect(within(thread).getByText('→ codex')).toBeTruthy();
     fireEvent.click(thread);
     expect(onOpenThread).toHaveBeenCalledWith('T1');
+  });
+
+  it('shows Sleeping and the reset time on a rate-limited agent chip (#147)', async () => {
+    const until = new Date(Date.now() + 3 * 3600_000).toISOString();
+    post.mockResolvedValue({ sessions: [
+      live({ running: false, sleepingUntil: until }),
+      live({ id: 'B'.repeat(26), profile: 'codex', running: false, tokensUsed: 900 }),
+    ] });
+    render(<ConsoleStrip channelId={CH} onOpenThread={vi.fn()} />);
+
+    const claude = await screen.findByRole('button', { name: `claude: sleeping (rate limited), resets ${resetTime(until)}, 14k tokens. Open session controls` });
+    expect(claude.textContent).toBe(`claudeSleeping · resets ${resetTime(until)}14k`);
+    expect(claude.textContent).toMatch(/\d{1,2}:\d\d/);
+    // An agent that isn't sleeping shows no such text
+    expect(screen.getByRole('button', { name: /^codex: live and idle, 900 tokens/ }).textContent).not.toContain('Sleeping');
   });
 
   it('shows the latest server protocol before opening and tracks live replies', async () => {
