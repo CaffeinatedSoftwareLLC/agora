@@ -264,3 +264,31 @@ describe('MCP handshake with a stub Claude Code client', () => {
         await client.close();
     });
 });
+
+describe('--no-permission-relay (S0506)', () => {
+    it('[AG-09.no-permission-relay] registers no permission handler: a prompt sent anyway files no relay and the channel still pushes', async () => {
+        const options = parseChannelOptions(['--channel-mode', '--no-permission-relay'], {});
+        expect(options.permissionRelay).toBe(false);
+        const server = new McpServer({ name: 'agora', version: 'test' }, channelServerOptions(options));
+        server.tool('chat_send', 'send', async () => ({ content: [{ type: 'text' as const, text: 'sent' }] }));
+        const api = fakeApi();
+        const socket = new EventEmitter();
+        const channel = startChannel(server.server, { on: (e, h) => socket.on(e, h), emit: () => true, disconnect: () => {} }, api, options);
+        const client = new Client({ name: 'claude-code-stub', version: '0' });
+        const received: { method: string; params?: any }[] = [];
+        client.fallbackNotificationHandler = async n => { received.push(n as any); };
+        const [a, b] = InMemoryTransport.createLinkedPair();
+        await Promise.all([server.connect(a), client.connect(b)]);
+        // Without the capability Claude Code keeps the prompt in the terminal
+        expect(client.getServerCapabilities()?.experimental).toEqual({ 'claude/channel': {} });
+
+        await channel.onReady({ botId: SELF, channels: [CH] });
+        await client.notification({ method: PERMISSION_REQUEST_NOTIFICATION,
+            params: { request_id: 'qwert', tool_name: 'Bash', description: 'Run shell command', input_preview: '{}' } } as any);
+        socket.emit('Message', msg({ content: 'after the prompt' }));
+        await vi.waitFor(() => expect(received.some(r => r.method === CHANNEL_NOTIFICATION)).toBe(true));
+        expect(api.relayPermission).not.toHaveBeenCalled();
+        expect(received.filter(r => r.method === PERMISSION_NOTIFICATION)).toEqual([]);
+        await client.close();
+    });
+});
