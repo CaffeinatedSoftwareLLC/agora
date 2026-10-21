@@ -1,5 +1,5 @@
 import type { Adapter, ChatRequest, ProviderCredentials, StreamCallbacks } from './types';
-import { apiError, joinUrl, networkError, sseJson } from './sse';
+import { apiError, joinUrl, sseJson, testConnectionWithTimeout } from './sse';
 
 const DEFAULT_BASE = 'https://api.anthropic.com';
 
@@ -60,8 +60,9 @@ export const anthropicAdapter: Adapter = {
     },
 
     async testConnection(creds: ProviderCredentials, model: string) {
-        try {
+        return testConnectionWithTimeout(async signal => {
             const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/v1/messages'), {
+                signal,
                 method: 'POST',
                 headers: headers(creds),
                 body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
@@ -70,8 +71,6 @@ export const anthropicAdapter: Adapter = {
                 return { ok: false, error: await apiError('Claude', res) };
             }
             return { ok: true };
-        } catch (err) {
-            return { ok: false, error: networkError(err) };
-        }
+        });
     },
 };
