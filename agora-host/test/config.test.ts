@@ -5,6 +5,16 @@ import { configSchema, loadConfig } from '../src/config.js';
 import { config, tempDir } from './helpers.js';
 
 describe('local JSON configuration', () => {
+    it('explains the batch executable rule when loading an old verify command (#142)', async () => {
+        const temp = await tempDir();
+        try {
+            const data = config(temp.dir); const path = join(temp.dir, 'host.local.json');
+            data.profiles.builder.verify = { commands: ['npm.cmd test'], timeoutSeconds: 60 };
+            await writeFile(path, JSON.stringify(data));
+            await expect(loadConfig(path)).rejects.toThrow(
+                "verify commands are plain words separated by single spaces, and the first word can't be a .cmd or .bat file");
+        } finally { await temp.cleanup(); }
+    });
     it('loads trusted absolute paths without accepting server-provided raw flags', async () => {
         const temp = await tempDir();
         try {

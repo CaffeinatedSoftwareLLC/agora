@@ -33,7 +33,8 @@ const profile = z.object({
     // Verify before yield (verify.ts): the exact commands this host may run in a session
     // worktree when a channel's owner asks for one. Without this, no verify command runs.
     verify: z.object({
-        commands: z.array(z.string().max(300).regex(VERIFY_COMMAND, 'verify commands are plain words separated by single spaces')).max(20),
+        commands: z.array(z.string().max(300).refine(command => VERIFY_COMMAND.test(command),
+            "verify commands are plain words separated by single spaces, and the first word can't be a .cmd or .bat file")).max(20),
         timeoutSeconds: z.number().int().min(10).max(3600).default(600),
     }).strict().optional(),
     // "acp": drive an Agent Client Protocol agent (gemini --acp, claude-code-acp, codex-acp) over
