@@ -376,18 +376,10 @@ export async function adminRoutes(app: FastifyInstance) {
                         type: 'array',
                         items: { type: 'string', pattern: '^[a-z0-9]+$' },
                     },
-                    'files.retention_days': {
-                        oneOf: [
-                            { type: 'null' },
-                            { type: 'integer', minimum: 1, maximum: 3650 },
-                        ],
-                    },
-                    'files.storage_quota_bytes': {
-                        oneOf: [
-                            { type: 'null' },
-                            { type: 'integer', minimum: 1 },
-                        ],
-                    },
+                    // null = no limit. A type array, not oneOf: Ajv's type coercion turned
+                    // null into 0 while trying the integer branch of oneOf (#155)
+                    'files.retention_days': { type: ['integer', 'null'], minimum: 1, maximum: 3650 },
+                    'files.storage_quota_bytes': { type: ['integer', 'null'], minimum: 1 },
                     'files.exif_strip': { type: 'boolean' },
                 },
                 additionalProperties: false,
@@ -463,7 +455,7 @@ export async function adminRoutes(app: FastifyInstance) {
             body: {
                 type: 'object', required: ['codeRetentionDays'], additionalProperties: false,
                 properties: {
-                    codeRetentionDays: { oneOf: [{ type: 'null' }, { type: 'integer', minimum: 1, maximum: 3650 }] },
+                    codeRetentionDays: { type: ['integer', 'null'], minimum: 1, maximum: 3650 },
                     confirm: { type: 'boolean' },
                 },
             },
@@ -511,7 +503,9 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const stats = statsRes.rows[0];
         const settings = await getFileSettings(db);
-        const quotaBytes = settings['files.storage_quota_bytes'] ?? null;
+        // A stored 0 or negative quota (written by the #155 coercion bug) means no quota, not a division by zero
+        const rawQuota = settings['files.storage_quota_bytes'];
+        const quotaBytes = rawQuota != null && Number.isSafeInteger(Number(rawQuota)) && Number(rawQuota) > 0 ? Number(rawQuota) : null;
 
         return reply.send({
             totalFiles: stats.total_files,
