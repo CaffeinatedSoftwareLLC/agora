@@ -116,6 +116,22 @@ it('refuses path traversal, git internals, directories, symlinks and foreign che
     await expect(cmd('restore',{checkpoint:{sha:w.baseSha,ref:`refs/agora/checkpoints/${id(88)}/1`}})).rejects.toThrow('invalid_checkpoint');
 });
 function dirnameSafe(path:string) { return join(path,'..'); }
+// beta-test-plan §6.2 "Workspace commands": each refused through the discard command itself, with the fixed code, nothing changed
+it('discard refuses ../, .git, GIT~1, a trailing dot and a link out with unsafe_path, leaving every file as it was',async()=>{
+    const {w,cmd}=await setup();
+    const victim=join(w.cwd,'..','victim.txt');await writeFile(victim,'outside');
+    await writeFile(join(w.cwd,'file.txt'),'session change\n');
+    await symlink(dirnameSafe(w.cwd),join(w.cwd,'linked'),process.platform==='win32'?'junction':'dir');
+    const gitEntry=join(w.cwd,'.git');const gitBefore=await readFile(gitEntry).catch(()=>null);
+    for(const path of ['../victim.txt','.git/config','.git','GIT~1/config','Git~1','file.txt.','file.txt ','.git./config','linked/victim.txt']){
+        await expect(cmd('discard',{path}),path).rejects.toThrow('unsafe_path');
+    }
+    expect(await readFile(victim,'utf8')).toBe('outside');
+    expect(await readFile(join(w.cwd,'file.txt'),'utf8')).toBe('session change\n');
+    expect(await readFile(gitEntry).catch(()=>null)).toEqual(gitBefore);
+    // Control: the same file by its real name is discarded
+    await cmd('discard',{path:'file.txt'});expect(await readFile(join(w.cwd,'file.txt'),'utf8')).toBe('base\n');
+});
 it('refuses changed branches and profile/workdir mappings',async()=>{
     const {w,cmd,local}=await setup();local.workdirAlias='moved';await expect(cmd('diff')).rejects.toThrow('workspace_mapping_changed');
     local.workdirAlias='agora';await git(w.cwd,['switch','-c','unexpected']);await expect(cmd('diff')).rejects.toThrow('unsafe_workspace_reuse');

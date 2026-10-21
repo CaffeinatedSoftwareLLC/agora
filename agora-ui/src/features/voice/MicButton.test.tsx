@@ -103,6 +103,34 @@ describe('MicButton', () => {
     expect(FakeRecorder.last?.state).toBe('inactive');
   });
 
+  // beta-test-plan §6.4 "Recording length": holding the mic past the admin limit stops the recording there
+  it('stops a held recording at the admin limit and transcribes it once, without a release', async () => {
+    transcribe.mockResolvedValue('long note');
+    const onText = vi.fn();
+    useVoiceStore.setState({ channels: { C1: { ...SERVER, maxRecordingSeconds: 10 } } });
+    render(<MicButton channelId="C1" onText={onText} />);
+
+    fireEvent.pointerDown(mic(), { button: 0, pointerId: 1 });
+    await waitFor(() => expect(FakeRecorder.last?.state).toBe('recording'));
+    now += 9_000;
+    await act(async () => { await new Promise(r => setTimeout(r, 400)); });
+    expect(FakeRecorder.last?.state).toBe('recording');
+    expect(transcribe).not.toHaveBeenCalled();
+
+    now += 1_000; // 10 s held; the pointer is still down
+    await waitFor(() => expect(FakeRecorder.last?.state).toBe('inactive'));
+    await waitFor(() => expect(onText).toHaveBeenCalledWith('long note'));
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(stopTrack).toHaveBeenCalled();
+
+    // The late release does not start or send anything more
+    now += 5_000;
+    fireEvent.pointerUp(mic(), { pointerId: 1 });
+    await act(async () => { await new Promise(r => setTimeout(r, 300)); });
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(FakeRecorder.last?.state).toBe('inactive');
+  });
+
   it('says when the microphone is refused', async () => {
     (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
     render(<MicButton channelId="C1" onText={vi.fn()} />);

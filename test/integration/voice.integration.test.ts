@@ -327,3 +327,103 @@ describe('read-aloud preference', () => {
         expect((await ctx.request.get('/users/@me/preferences').set(owner.auth)).body.readAloud).toBeUndefined();
     });
 });
+
+/** beta-test-plan §6.4 Voice limits, on the server routes. */
+describe('beta §6.4: voice limits', () => {
+    const speech = (msgId: string, auth: object = member.auth) => ctx.request.post(`/channels/${channelId}/messages/${msgId}/speech`).set(auth);
+    const ttsUsage = async () => (await ctx.db.query(
+        `SELECT count(*)::int AS n FROM ai_usage_events WHERE server_id = $1 AND capability = 'tts'
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, [serverId])).rows[0].n;
+    /** A message longer than people can post (an agent's streamed reply), straight into the table. */
+    async function longMessage(text: string): Promise<string> {
+        const id = (await post('placeholder'));
+        await ctx.db.query('UPDATE messages SET content = $2 WHERE id = $1', [id, text]);
+        return id;
+    }
+
+    beforeAll(async () => {
+        await putRoute('tts');
+        await putRoute('stt');
+        const res = await ctx.request.patch(adminVoice()).set(owner.auth).send({ readAloudServer: true, readAloudMaxChars: 1500, voiceInputEnabled: true });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+    });
+
+    it('a 5,000-character message is sent to the Speech route cut at a sentence within 1,500, saying the rest is in the message', async () => {
+        const sentence = (i: number) => `Step ${i} of the release checklist is done and verified. `;
+        let text = '';
+        for (let i = 1; text.length < 5000; i++) text += sentence(i);
+        text = text.slice(0, 5000);
+        expect(text.length).toBe(5000);
+        const msgId = await longMessage(text);
+        const fetchMock = mockAudioApi();
+        const res = await speech(msgId);
+        expect(res.status).toBe(200);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const input: string = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).input;
+        const SUFFIX = ' The rest is in the message.';
+        expect(input.endsWith(`verified.${SUFFIX}`)).toBe(true);
+        const body = input.slice(0, -SUFFIX.length);
+        expect(body.length).toBeLessThanOrEqual(1500);
+        expect(body.length).toBeGreaterThan(1000);
+        expect(text.startsWith(body)).toBe(true);
+    });
+
+    it('bots are refused both voice routes, and no provider is called', async () => {
+        const bot = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: 'voicebot2' });
+        expect(bot.status).toBe(201);
+        await ctx.request.post(`/channels/${channelId}/bots/${bot.body.id}`).set(owner.auth);
+        const token = await ctx.request.post(`/servers/${serverId}/bots/${bot.body.id}/tokens`).set(owner.auth).send({});
+        const botAuth = { Authorization: `Bot ${token.body.token}` };
+        const fetchMock = mockAudioApi();
+        const usageBefore = (await ctx.db.query('SELECT count(*)::int AS n FROM ai_usage_events WHERE server_id = $1', [serverId])).rows[0].n;
+        // The bot route allowlist (src/auth/middleware.ts) refuses before voice.ts's own bot check
+        const transcribe = await ctx.request.post(`/channels/${channelId}/voice/transcribe`).set(botAuth).set('Content-Type', 'audio/webm').send(WEBM());
+        expect(transcribe.status).toBe(403);
+        expect(transcribe.body.error).toBe('Bots cannot access this endpoint');
+        const msgId = await post('Read me, bot');
+        const spoken = await speech(msgId, botAuth);
+        expect(spoken.status).toBe(403);
+        expect(spoken.body.error).toBe('Bots cannot access this endpoint');
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect((await ctx.db.query('SELECT count(*)::int AS n FROM ai_usage_events WHERE server_id = $1', [serverId])).rows[0].n).toBe(usageBefore);
+    });
+
+    it('a daily limit of 2 on tts: repeats come from the cache without counting, and a third message is refused', async () => {
+        const used = await ttsUsage();
+        await putRoute('tts', { dailyRequestLimit: used + 2 });
+        try {
+            const fetchMock = mockAudioApi();
+            const a = await post('First message to read.');
+            const b = await post('Second message to read.');
+            const c = await post('Third message to read.');
+            expect((await speech(a)).status).toBe(200);
+            expect((await speech(a, owner.auth)).status).toBe(200);
+            expect(await ttsUsage()).toBe(used + 1);
+            expect((await speech(b)).status).toBe(200);
+            expect(await ttsUsage()).toBe(used + 2);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            const third = await speech(c);
+            expect(third.status).toBe(429);
+            expect(third.body.code).toBe('budget_exceeded');
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            expect(await ttsUsage()).toBe(used + 2);
+        } finally { await putRoute('tts'); }
+    });
+
+    // #143 (beta §6.4: pending). The intended behaviour is Eryk's decision; until then this is an
+    // expected failure. Fix the route → drop `.fails`; decision "keep as is" → delete this test.
+    it.fails('once the daily limit is spent, a message already voiced is still served from the cache (#143)', async () => {
+        const used = await ttsUsage();
+        await putRoute('tts', { dailyRequestLimit: used + 1 });
+        try {
+            const fetchMock = mockAudioApi();
+            const a = await post('Voiced before the limit.');
+            expect((await speech(a)).status).toBe(200);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            const repeat = await speech(a);
+            expect(repeat.status, JSON.stringify(repeat.body)).toBe(200);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(await ttsUsage()).toBe(used + 1);
+        } finally { await putRoute('tts'); }
+    });
+});

@@ -60,6 +60,56 @@ describe('local image references', () => {
     });
 });
 
+// beta-test-plan §6.2 "Image auto-attach": an outside file named .png, a UNC path, an ADS path and a
+// link out are skipped, nothing is uploaded from them, and the run still completes
+describe('image auto-attach refusals', () => {
+    async function badReferences() {
+        const { cwd, outside } = await dirs();
+        await writeFile(path.join(outside, 'win.ini.png'), '[fonts]\r\n[extensions]\r\n');
+        await writeFile(path.join(outside, 'secret.png'), 'secret');
+        await writeFile(path.join(cwd, 'a.png'), 'main stream');
+        await writeFile(path.join(cwd, 'ok.png'), 'fine');
+        await symlink(outside, path.join(cwd, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+        const content = [`\`${path.join(outside, 'win.ini.png')}\``, '`C:\\Windows\\win.ini.png`', '`\\\\server\\share\\x.png`',
+            '`//server/share/y.png`', '`a.png:stream.png`', '`escape/secret.png`', '`ok.png`'].join(' ');
+        return { cwd, content };
+    }
+    it('skips every bad reference and uploads only the image inside the run', async () => {
+        const { cwd, content } = await badReferences();
+        // UNC and ADS paths are never even treated as references; readRunImage refuses an ADS too (above)
+        const refs = extractImagePaths(content);
+        expect(refs.some(r => r.startsWith('\\\\') || r.startsWith('//') || r.includes('.png:'))).toBe(false);
+        expect(refs).toHaveLength(4);
+        const uploadImage = vi.fn(async () => {}); const logs: string[] = [];
+        const api = { imageMessages: async () => ({ maxBytes: 1000, messages: [{ id: 'm1', content }] }), uploadImage } as unknown as HostApi;
+        await attachRunImages(api, claim(), cwd, undefined, code => logs.push(code));
+        expect(uploadImage).toHaveBeenCalledOnce();
+        expect(uploadImage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ messageId: 'm1', reference: 'ok.png', filename: 'ok.png' }), undefined);
+        // outside absolute, C:\Windows\win.ini.png (missing or outside) and the junction
+        expect(logs).toEqual(['image_reference_skipped', 'image_reference_skipped', 'image_reference_skipped']);
+    });
+    it('still completes the run when every reference is bad', async () => {
+        const { Scheduler } = await import('../src/scheduler.js');
+        const { cwd, content } = await badReferences();
+        const uploadImage = vi.fn(async () => {}); const logs: string[] = [];
+        const api = {
+            claim: vi.fn(async () => null), heartbeat: vi.fn(async () => ({ cancel: false as const, leaseUntil: '2026-10-17T21:03:00.000Z' })),
+            complete: vi.fn(async () => {}), fail: vi.fn(async () => {}),
+            imageMessages: vi.fn(async () => ({ maxBytes: 1000, messages: [{ id: 'm1', content: content.replace('`ok.png`', '') }] })), uploadImage,
+        };
+        const runner = { start: vi.fn(() => ({ result: Promise.resolve({ success: true, nativeSessionId: null, tokensUsed: 5, summary: 'Posted a screenshot' }), kill: vi.fn(async () => {}) })) };
+        const scheduler = new Scheduler(config(), api as unknown as HostApi, runner, { now: () => Date.now(), tickMs: 10, log: code => logs.push(code),
+            prepare: async () => ({ executable: 'fake', args: [], env: {}, cwd, stdin: '', adapter: 'codex' as const, cleanup: async () => {} }) });
+        await scheduler.submit(claim(), Date.now());
+        expect(api.imageMessages).toHaveBeenCalledOnce();
+        expect(uploadImage).not.toHaveBeenCalled();
+        expect(logs.filter(l => l === 'image_reference_skipped')).toHaveLength(3);
+        expect(api.fail).not.toHaveBeenCalled();
+        expect(api.complete).toHaveBeenCalledOnce();
+        expect(api.complete).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ summary: 'Posted a screenshot', tokensUsed: 5 }), expect.anything());
+    });
+});
+
 describe('passive turns', () => {
     it.each(['quiet', 'balanced', 'vocal'] as const)('gives the %s dial and exact silent output instruction', dial => {
         const c = claim(); c.inbox[0].reason = 'lurk'; c.session.lurkMode = dial;

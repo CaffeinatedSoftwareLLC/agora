@@ -74,6 +74,34 @@ test('concurrent redemption issues exactly one token', async () => {
     expect(after.rows[0].n - before.rows[0].n).toBe(1);
 });
 
+// beta-test-plan §6.3 Invites: replay, expiry and a race each give 410 with a fixed code and mint nothing
+test('replayed, expired and raced invites answer 410 invite_invalid_or_expired and mint no token', async () => {
+    const tokens = async () => (await ctx.db.query('SELECT count(*)::int AS n FROM bot_tokens WHERE bot_id=$1', [botId])).rows[0].n;
+    const used = await createInvite();
+    const first = await redeem(used.body.code);
+    expect(first.status).toBe(200);
+    const afterFirst = await tokens();
+    const replay = await redeem(used.body.code);
+    expect(replay.status).toBe(410);
+    expect(replay.body).toEqual({ error: 'invite_invalid_or_expired' });
+
+    const expired = await createInvite();
+    await ctx.db.query("UPDATE agent_invites SET expires_at=now()-interval '1 second' WHERE id=$1", [expired.body.id]);
+    const late = await redeem(expired.body.code);
+    expect(late.status).toBe(410);
+    expect(late.body).toEqual({ error: 'invite_invalid_or_expired' });
+    expect((await ctx.db.query('SELECT redeemed_at FROM agent_invites WHERE id=$1', [expired.body.id])).rows[0].redeemed_at).toBeNull();
+    expect(await tokens()).toBe(afterFirst);
+
+    const raced = await createInvite();
+    const results = await Promise.all(Array.from({ length: 5 }, () => redeem(raced.body.code)));
+    const winners = results.filter(r => r.status === 200);
+    expect(winners).toHaveLength(1);
+    for (const r of results.filter(r => r.status !== 200)) expect(r.body).toEqual({ error: 'invite_invalid_or_expired' });
+    expect(await tokens()).toBe(afterFirst + 1);
+    expect((await ctx.request.get('/bots/@me').set('Authorization', `Bot ${winners[0].body.token}`)).status).toBe(200);
+});
+
 test('token issuance failure rolls back consumption so the invite can still be used', async () => {
     const invite = await createInvite();
     const generator = vi.spyOn(botTokens, 'generateBotToken').mockRejectedValueOnce(new Error('Simulated token failure'));

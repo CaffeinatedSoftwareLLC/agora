@@ -76,6 +76,26 @@ it('sets and turns off the verify command, refusing shell syntax', async () => {
   await waitFor(() => expect(mocks.setVerify).toHaveBeenCalledWith('C1', null));
 });
 
+// beta-test-plan §6.2 "Verify command limits": the UI refuses shell syntax before it reaches the server
+it.each([
+  ['npm test; rm -rf /'],
+  ['npm test && rm -rf /'],
+  ['npm test $HOME'],
+  ['npm test "--watch"'],
+  ["npm test '--watch'"],
+  ['npm test | tee out'],
+  ['npm  test'],
+])('refuses the verify command %j and never saves it', async (value) => {
+  render(<ProjectPanel />);
+  const cmd = await screen.findByLabelText('Verify command');
+  fireEvent.change(cmd, { target: { value } });
+  expect(screen.getByText(/no quotes, pipes or ;/)).toBeTruthy();
+  const save = screen.getByRole('button', { name: 'Save verify' }) as HTMLButtonElement;
+  expect(save.disabled).toBe(true);
+  fireEvent.click(save);
+  expect(mocks.setVerify).not.toHaveBeenCalled();
+});
+
 it('is read-only for members who cannot direct, as plain text', async () => {
   mocks.get.mockResolvedValue({ ...base, instructions: '<img src=x onerror=alert(1)>', canEdit: false, canEditVerify: false,
     verify: { command: 'npm run verify', maxRetries: 2 } });

@@ -82,6 +82,19 @@ describe('providers', () => {
         expect(row.rows[0].api_key_enc).not.toContain('g-secret-key');
     });
 
+    // beta-test-plan §6.1 "Host CLI keys never leave the host", server-managed keys: never returned
+    test('the provider list never returns the key, nor its ciphertext', async () => {
+        const list = await ctx.request.get(`${base()}/providers`).set(owner.auth);
+        expect(list.status).toBe(200);
+        const mine = list.body.find((p: any) => p.id === geminiId);
+        expect(mine).toMatchObject({ hasApiKey: true });
+        const row = (await ctx.db.query('SELECT api_key_enc FROM ai_providers WHERE id = $1', [geminiId])).rows[0];
+        const text = JSON.stringify(list.body);
+        expect(text).not.toContain('g-secret-key');
+        expect(text).not.toContain(String(row.api_key_enc));
+        expect(text).not.toMatch(/api_?key_?(enc|iv|tag)|"apiKey"/i);
+    });
+
     test('duplicate label is 409', async () => {
         const res = await ctx.request.post(`${base()}/providers`).set(owner.auth).send({ adapter: 'gemini', apiKey: 'k2' });
         expect(res.status).toBe(409);

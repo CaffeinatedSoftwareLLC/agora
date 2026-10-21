@@ -74,6 +74,14 @@ test('a typed username narrows the passkey prompt; a rejected passkey shows why'
   expect(useAuthStore.getState().status).toBe('idle');
 });
 
+// beta-test-plan §6.1 Branding: plain-text names with the not-affiliated line, no provider sign-in
+test('shows the not-affiliated line and no provider sign-in on the login page', () => {
+  renderLogin();
+  expect(screen.getByText('Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.')).toBeInTheDocument();
+  expect(screen.queryByText(/(sign in|log in|continue) with (claude|google|anthropic|openai|chatgpt)/i)).toBeNull();
+  expect(document.querySelectorAll('img')).toHaveLength(0);
+});
+
 test('no passkey button when the browser has no WebAuthn', () => {
   supported.value = false;
   useAuthStore.setState({ user: null, status: 'idle' });

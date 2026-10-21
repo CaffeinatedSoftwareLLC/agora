@@ -146,6 +146,18 @@ it('forks into a new shelved session only after the host proves the requested br
     expect(fork.state).toBe('shelved');expect(fork.profile_id.trim()).toBe(profileId);expect(fork.base_sha).toBe(sha);expect(fork.native_session_id).toBeNull();
     expect((await ctx.db.query('SELECT state FROM agent_sessions WHERE id=$1',[sessionId])).rows[0].state).toBe('live');
 });
+// beta-test-plan §6.2 "Workspace commands", server side: fixed code, nothing queued for the host
+it('refuses an unsafe discard path with 400 unsafe_path and queues nothing',async()=>{
+    const paths=['../x','a/../../x','.git','.git/config','src/.git/hooks/pre-commit','GIT~1/config','git~1','.GIT/config','.git./config','.git~/x',
+        'file.txt.','dir./file','file.txt ','C:/Windows/win.ini','a\\b','a.png:stream','/abs','a//b','./a'];
+    for(const path of paths){
+        const res=await queue({action:'discard',path});
+        expect(res.status,path).toBe(400);expect(res.body,path).toEqual({error:'unsafe_path'});
+    }
+    expect((await ctx.db.query('SELECT count(*)::int AS n FROM agent_workspace_commands WHERE session_id=$1',[sessionId])).rows[0].n).toBe(0);
+    expect((await next()).status).toBe(204);
+    expect((await queue({action:'discard',path:'src/file.txt'})).status).toBe(202);
+});
 it('validates paths, payload bounds, revoked hosts and isolated checkpoint access',async()=>{
     for(const path of ['../bad','.git/config','C:/bad','a\\b']) expect((await queue({action:'discard',path})).status).toBe(400);
     expect((await queue({action:'commit',message:' '})).status).toBe(400);
