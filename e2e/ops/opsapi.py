@@ -3,7 +3,10 @@
 
   opsapi.py seed   --base URL --env ENVFILE --manifest OUT.json
   opsapi.py verify --base URL --env ENVFILE --manifest IN.json [--no-write] [--report OUT.json]
-  opsapi.py provider-test --base URL --env ENVFILE --manifest IN.json
+  opsapi.py provider-test --base URL --env ENVFILE --manifest IN.json [--expect decrypts|decrypt-error]
+
+Every call also takes --state DIR (lib.sh passes e2e/ops/.state); env, manifest and report
+paths must resolve inside it.
 
 Fake data only: users ops-owner / ops-member, a provider whose key is a CANARY string and
 whose base URL is a dead loopback port inside the API container (so a provider test proves
@@ -22,6 +25,14 @@ import uuid
 import zlib
 
 DECRYPT_ERROR = 'Stored API key could not be decrypted'
+# The seeded provider: openai adapter on a loopback port that fetch refuses before connecting.
+# Only adapter.testConnection can answer DEAD_PORT_BODY, and the test route checks the adapter,
+# the base URL and decrypts the key before calling it (src/routes/ai-providers.ts).
+PROVIDER_ADAPTER = 'openai'
+DEAD_BASE_URL = 'http://127.0.0.1:9/v1'
+DEAD_PORT_BODY = {'ok': False, 'error': 'fetch failed (bad port)'}
+DECRYPT_ERROR_BODY = {'ok': False, 'error': DECRYPT_ERROR}
+ALLOWED_BASES = ('http://127.0.0.1:3300', 'http://127.0.0.1:3400')
 
 
 class Api:
@@ -116,6 +127,18 @@ def provider_test(owner, server_id, provider_id):
     return status, data
 
 
+def decryption_proof(owner, server_id, provider_id):
+    """(ok, detail): the provider is still the seeded openai one on the dead URL, and its
+    test answers exactly DEAD_PORT_BODY. Preflight refusals (unknown adapter, base URL
+    validation) and the decrypt error all fail this."""
+    status, provs, _ = owner.req('GET', f'/servers/{server_id}/ai/providers')
+    p = next((x for x in provs or [] if x.get('id') == provider_id), None) if status == 200 else None
+    if not p or p.get('adapter') != PROVIDER_ADAPTER or p.get('baseUrl') != DEAD_BASE_URL or not p.get('hasApiKey'):
+        return False, f'not the seeded {PROVIDER_ADAPTER} provider on {DEAD_BASE_URL}: {json.dumps(p) if p else status}'
+    t_status, t_data = provider_test(owner, server_id, provider_id)
+    return t_status == 200 and t_data == DEAD_PORT_BODY, f'HTTP {t_status} {json.dumps(t_data)}'
+
+
 def seed(args):
     env = read_env(args.env)
     api = Api(args.base)
@@ -171,7 +194,7 @@ def seed(args):
     canary = f'sk-test-CANARY-{uuid.uuid4().hex}-SECRET'
     owner.ok('PATCH', '/admin/settings/ai', {'allowPrivateBaseUrls': True})
     prov = owner.ok('POST', f'/servers/{server_id}/ai/providers', {
-        'adapter': 'openai', 'label': f'ops-canary-{tag}', 'apiKey': canary, 'baseUrl': 'http://127.0.0.1:9/v1',
+        'adapter': PROVIDER_ADAPTER, 'label': f'ops-canary-{tag}', 'apiKey': canary, 'baseUrl': DEAD_BASE_URL,
     }, expect=(201,))
     provider_id = prov['id'].strip()
     t_status, t_data = provider_test(owner, server_id, provider_id)
@@ -216,8 +239,9 @@ def seed(args):
     print(f'seeded: {len(messages)} messages, {len(files)} files, provider {provider_id}, '
           f'{len(agents)} profiles, {len(sessions)} sessions; provider test at seed: {t_status} {json.dumps(t_data)}')
     print(f'files settings PATCH: {fs_status}; GET /admin/storage: {st_status} {json.dumps(st_data)[:200]}')
-    if t_data and t_data.get('error') == DECRYPT_ERROR:
-        raise RuntimeError('provider key did not decrypt right after seeding')
+    proved, detail = decryption_proof(owner, server_id, provider_id)
+    if not proved:
+        raise RuntimeError(f'decryption proof failed right after seeding: {detail}')
 
 
 class Checks:
@@ -273,11 +297,8 @@ def verify(args):
     p = next((x for x in provs or [] if x['id'] == man['provider']['id']), None) if status == 200 else None
     c.check('provider config present with hasApiKey', bool(p and p.get('hasApiKey')), json.dumps(p) if p else f'HTTP {status}')
     c.check('provider list never returns the key', man['provider']['canaryKey'].encode() not in raw)
-    t_status, t_data = provider_test(owner, sid, man['provider']['id'])
-    err = (t_data or {}).get('error') if isinstance(t_data, dict) else None
-    c.check('stored provider key decrypts (test reaches the dead URL)',
-            t_status == 200 and err not in (None, DECRYPT_ERROR) and (t_data or {}).get('ok') is False,
-            f'HTTP {t_status} {json.dumps(t_data)}')
+    proved, detail = decryption_proof(owner, sid, man['provider']['id'])
+    c.check(f'stored provider key decrypts (test answers exactly {json.dumps(DEAD_PORT_BODY)})', proved, detail)
 
     status, profs, _ = member.req('GET', f'/servers/{sid}/agent-profiles')
     names = {x.get('name') for x in profs} if status == 200 else set()
@@ -318,9 +339,13 @@ def cmd_provider_test(args):
     env = read_env(args.env)
     man = json.load(open(args.manifest))
     owner = login(Api(args.base), 'ops-owner', env['OPS_OWNER_PASSWORD'])
-    status, data = provider_test(owner, man['serverId'], man['provider']['id'])
-    print(json.dumps({'status': status, 'body': data}))
-    return 0
+    if args.expect == 'decrypts':
+        proved, detail = decryption_proof(owner, man['serverId'], man['provider']['id'])
+    else:
+        status, data = provider_test(owner, man['serverId'], man['provider']['id'])
+        proved, detail = status == 200 and data == DECRYPT_ERROR_BODY, f'HTTP {status} {json.dumps(data)}'
+    print(f"{'PASS' if proved else 'FAIL'} provider test answers as expected ({args.expect}): {detail}")
+    return 0 if proved else 1
 
 
 def cmd_approve_check(args):
@@ -356,10 +381,20 @@ def main():
     ap.add_argument('--manifest', required=True)
     ap.add_argument('--report')
     ap.add_argument('--no-write', action='store_true')
+    ap.add_argument('--expect', choices=['decrypts', 'decrypt-error'], default='decrypts')
+    ap.add_argument('--state', required=True)
     args = ap.parse_args()
-    for port in ('80', '443', '3000', '8080', '3200', '8280'):
-        if args.base.rstrip('/').endswith(':' + port):
-            sys.exit(f'refusing base URL on port {port} (live or e2e stack)')
+    if args.base.rstrip('/') not in ALLOWED_BASES:
+        sys.exit(f'refusing base URL {args.base} (only the ops projects: {", ".join(ALLOWED_BASES)})')
+    # Every file read or written must resolve inside e2e/ops/.state (symlinks resolved)
+    state = os.path.realpath(args.state)
+    for name in ('env', 'manifest', 'report'):
+        value = getattr(args, name)
+        if value is not None:
+            real = os.path.realpath(value)
+            if not real.startswith(state + os.sep):
+                sys.exit(f'refusing --{name} {value}: outside {state}')
+            setattr(args, name, real)
     if args.cmd == 'seed':
         seed(args)
         return 0
