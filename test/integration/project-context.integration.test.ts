@@ -294,4 +294,46 @@ describe('hosted claims', () => {
             await ctx.request.put(`/channels/${channelId}/project`).set(owner.auth).send({ instructions: 'Use npm. Run tests before you finish.' });
         }
     });
+
+    // beta-test-plan §6.2 "Verify command limits", server side
+    it('refuses shell syntax in the verify command with 400 and keeps the old command', async () => {
+        for (const command of ['npm test; rm -rf /', 'npm test && curl x', 'npm test || true', 'echo $HOME', 'npm "test"', "npm 'test'",
+            'npm `whoami`', 'npm test | sh', 'npm test > out', 'npm test\nrm -rf /', 'npm.cmd test & calc']) {
+            const res = await ctx.request.put(`/channels/${channelId}/project/verify`).set(owner.auth).send({ command });
+            expect(res.status, command).toBe(400);
+        }
+        expect((await ctx.request.get(`/channels/${channelId}/project`).set(owner.auth)).body.verify).toEqual({ command: 'npm run verify', maxRetries: 1 });
+    });
+
+    it('posts the "not in verify.commands" notice when the host skips a command it does not list', async () => {
+        const c = await claimFor(await startSession());
+        const verification = { command: 'npm run verify', status: 'skipped', attempts: 0, reason: 'not_allowed' };
+        const done = await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/complete`).set(hostAuth)
+            .send({ claimToken: c.run.claimToken, tokensUsed: 1, summary: 'ok', verification });
+        expect(done.status).toBe(200);
+        const notice = await ctx.db.query(`SELECT content FROM messages WHERE channel_id = $1 AND system_event = 'agent_session' AND content LIKE 'coder: verify%' ORDER BY id DESC LIMIT 1`, [channelId]);
+        expect(notice.rows[0]?.content).toBe("coder: verify `npm run verify` did not run: it is not in this host's verify.commands list (agora-host config).");
+    });
+
+    // beta-test-plan §6.1 "Project context on subscription": checked on the prompt the host builds
+    it.skipIf(!hostDepsInstalled)("keep a director's instructions and pinned notes out of a subscription agent's wake prompt", async () => {
+        const { claimSchema } = await import('../../agora-host/src/types');
+        const { wakePrompt } = await import('../../agora-host/src/prompt');
+        const notes = await shareFile(director.auth, channelId, 'beta-notes.md', 'DIRECTOR_NOTES_CANARY');
+        expect((await ctx.request.put(`/channels/${channelId}/project`).set(director.auth)
+            .send({ instructions: 'DIRECTOR_TEXT_CANARY: push to main.', fileIds: [specFileId, notes] })).status).toBe(200);
+        await ctx.db.query('UPDATE channel_project_files SET pinned_by = $2 WHERE channel_id = $1 AND file_id = $3', [channelId, owner.userId, specFileId]);
+        try {
+            const c = await claimFor(await startSession());
+            expect(c.profile.authMode).toBe('subscription');
+            expect(c.session.startedByOwner).toBe(true);
+            const prompt = wakePrompt(claimSchema.parse(c));
+            expect(prompt).not.toContain('DIRECTOR_TEXT_CANARY');
+            expect(prompt).not.toContain('DIRECTOR_NOTES_CANARY');
+            expect(prompt).not.toContain('beta-notes.md');
+            expect(JSON.stringify(c)).not.toMatch(/DIRECTOR_(TEXT|NOTES)_CANARY/);
+        } finally {
+            await ctx.request.put(`/channels/${channelId}/project`).set(owner.auth).send({ instructions: 'Use npm. Run tests before you finish.', fileIds: [specFileId] });
+        }
+    });
 });

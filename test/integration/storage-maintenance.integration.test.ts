@@ -4,7 +4,8 @@ import path from 'node:path';
 import { randomBytes } from 'crypto';
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { setupTestApp, cleanDatabase, authedUser, createServer } from '../helpers';
-import { diskStore, type ObjectStore } from '../../src/lib/storage';
+import { diskStore, storage, type ObjectStore } from '../../src/lib/storage';
+import { config } from '../../src/config';
 import { encryptFile, decryptFile, encryptString, decryptString } from '../../src/lib/encryption';
 import { keyFingerprint, verifyEncryptionKey } from '../../src/lib/key-fingerprint';
 import { stripFilenamesFromStorageKeys, rotateEncryptionKey, KeyRotationError } from '../../src/lib/storage-maintenance';
@@ -230,5 +231,47 @@ describe('new uploads', () => {
         expect(download.status).toBe(200);
         expect(download.headers['content-disposition']).toContain('confidential offer.txt');
         expect(download.text ?? download.body.toString()).toContain('plain text body');
+    });
+
+    // beta-test-plan §6.3 "Encryption at rest": the bytes the storage driver holds are ciphertext
+    test('store a marker text file encrypted: the raw blob and the disk never hold the plaintext', async () => {
+        const owner = await authedUser(ctx.request, 'atrest');
+        const server = await createServer(ctx.request, owner.auth, 'At rest');
+        const marker = `AGORA-AT-REST-MARKER-${randomBytes(8).toString('hex')}`;
+        const body = Buffer.from(`${marker}\nline two ${marker}\n`);
+        const res = await ctx.request.post('/files/upload').set(owner.auth)
+            .field('channel_id', server.generalChannelId).attach('file', body, 'marker.txt');
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+        const row = (await ctx.db.query('SELECT storage_key, encryption_iv, encryption_tag FROM files WHERE id = $1', [res.body.id])).rows[0];
+        expect(row.encryption_iv).toBeTruthy();
+        expect(row.encryption_tag).toBeTruthy();
+        const raw = (await storage.get(row.storage_key))!;
+        expect(raw).toBeTruthy();
+        expect(raw.includes(Buffer.from(marker))).toBe(false);
+        expect(raw.includes(Buffer.from(marker, 'utf16le'))).toBe(false);
+        expect(raw.equals(body)).toBe(false);
+        // It is this file, encrypted with the instance key
+        const iv = Buffer.isBuffer(row.encryption_iv) ? row.encryption_iv : Buffer.from(row.encryption_iv, 'hex');
+        const tag = Buffer.isBuffer(row.encryption_tag) ? row.encryption_tag : Buffer.from(row.encryption_tag, 'hex');
+        expect(decryptFile(raw, config.encryptionKey, iv, tag).equals(body)).toBe(true);
+
+        // "grep the volume": with the disk driver, no file under the storage root holds the marker
+        if (storage.kind === 'disk') {
+            const hits: string[] = [];
+            const walk = async (dir: string) => {
+                for (const e of await fs.readdir(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory()) await walk(p);
+                    else if ((await fs.readFile(p)).includes(Buffer.from(marker))) hits.push(p);
+                }
+            };
+            await walk(config.storage.dir);
+            expect(hits).toEqual([]);
+        }
+        // The owner still downloads the plaintext
+        const download = await ctx.request.get(`/files/${res.body.id}`).set(owner.auth);
+        expect(download.status).toBe(200);
+        expect(download.text ?? download.body.toString()).toContain(marker);
     });
 });

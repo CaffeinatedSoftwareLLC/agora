@@ -92,3 +92,33 @@ describe('GET /users/search', () => {
         expect(res.body.length).toBeLessThanOrEqual(20);
     });
 });
+
+/**
+ * Extra check (beta security pass). This pins what the route does TODAY, as a finding, not
+ * as the wanted behaviour: `users` has no RLS policy, the query is instance-wide, and `q` goes
+ * into ILIKE unescaped, so `%` and `_` act as wildcards. If the route is changed to escape them
+ * or to scope results to shared servers, these assertions flip.
+ */
+describe('GET /users/search: scope and wildcards (current behaviour)', () => {
+    test('a user with no shared server is found, and % / _ list everyone', async () => {
+        await cleanDatabase(ctx.db);
+        const a = await authedUser(ctx.request, 'scopealice');
+        const b = await authedUser(ctx.request, 'scopebob');
+        await ctx.request.post('/servers').set(a.auth).send({ name: 'A only' });
+        await ctx.request.post('/servers').set(b.auth).send({ name: 'B only' });
+        const shared = await ctx.db.query(
+            `SELECT count(*)::int AS n FROM server_members x JOIN server_members y ON x.server_id = y.server_id WHERE x.user_id = $1 AND y.user_id = $2`,
+            [a.userId, b.userId]);
+        expect(shared.rows[0].n).toBe(0);
+
+        const byPrefix = await ctx.request.get('/users/search?q=scopeb').set(a.auth);
+        expect(byPrefix.status).toBe(200);
+        expect(byPrefix.body.map((u: any) => u.username)).toEqual(['scopebob']);
+
+        for (const q of ['%', '_', '%bob', 's_o_e']) {
+            const res = await ctx.request.get(`/users/search?q=${encodeURIComponent(q)}`).set(a.auth);
+            expect(res.status, q).toBe(200);
+            expect(res.body.map((u: any) => u.username), q).toEqual(['scopebob']);
+        }
+    });
+});

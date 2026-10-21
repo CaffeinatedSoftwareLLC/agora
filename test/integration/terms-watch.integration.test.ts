@@ -137,6 +137,36 @@ describe('terms checks', () => {
         await check('Another change');
         expect((await ctx.db.query('SELECT analysis_status FROM terms_changes ORDER BY id DESC LIMIT 1')).rows[0].analysis_status).toBe('analysis_failed');
     });
+    // beta-test-plan §6.1 "Terms watcher triage uses API keys only"
+    it('with only a keyless local model, falls back to a plain review notice and never runs an agent or a model', async () => {
+        await ctx.db.query(`INSERT INTO instance_settings (key, value) VALUES ('ai.allow_private_base_urls', 'true'::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb`);
+        const providerId=generateUlid();
+        await ctx.db.query("INSERT INTO ai_providers (id,server_id,adapter,label,base_url) VALUES ($1,$2,'openai','Local model','http://127.0.0.1:11434/v1')",[providerId,server.serverId]);
+        await ctx.db.query("INSERT INTO ai_capability_routes (server_id,capability,provider_id,model,enabled) VALUES ($1,'chat',$2,'qwen3',true)",[server.serverId,providerId]);
+        // A hosted agent on the owner's subscription sits on this server: triage must not use it
+        const host=await ctx.request.post(`/servers/${server.serverId}/agent-hosts`).set(admin.auth).send({name:'pc'});
+        expect(host.status).toBe(201);
+        const agent=await ctx.request.post(`/servers/${server.serverId}/agents`).set(admin.auth)
+            .send({name:'claude',adapter:'claude',hostId:host.body.host.id,workdirAlias:'agora',channelId:server.generalChannelId});
+        expect(agent.status,JSON.stringify(agent.body)).toBe(201);
+        expect(agent.body.profile.authMode ?? 'subscription').toBe('subscription');
+        const streams=['openai','anthropic','gemini'].map(id=>vi.spyOn(getAdapter(id)!,'streamChat'));
+        const notices: Notice[]=[];
+        await check('baseline',n=>notices.push(n)); await check('changed terms',n=>notices.push(n));
+        for (const s of streams) expect(s).not.toHaveBeenCalled();
+        expect(global.fetch).not.toHaveBeenCalled();
+        const change=(await ctx.db.query('SELECT analysis_status,impact,summary FROM terms_changes')).rows;
+        expect(change).toHaveLength(1);
+        expect(change[0]).toMatchObject({analysis_status:'no_api_key_provider',impact:'review'});
+        expect(notices).toHaveLength(1);
+        expect(notices[0].event.content).toContain('Test terms — review');
+        const side=(await ctx.db.query(`SELECT (SELECT count(*)::int FROM agent_runs) AS runs, (SELECT count(*)::int FROM agent_inbox) AS wakes,
+            (SELECT count(*)::int FROM agent_sessions) AS sessions, (SELECT count(*)::int FROM ai_usage_events) AS usage`)).rows[0];
+        expect(side).toEqual({runs:0,wakes:0,sessions:0,usage:0});
+        expect((await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set({Authorization:`AgentHost ${host.body.token}`})).status).toBe(204);
+    });
+
     it('serializes concurrent manual runs and rolls back a notice failure without emitting', async () => {
         await check('one'); let release!:()=>void; let started!:()=>void;
         const entered=new Promise<void>(r=>{started=r;}); const held=new Promise<void>(r=>{release=r;});
