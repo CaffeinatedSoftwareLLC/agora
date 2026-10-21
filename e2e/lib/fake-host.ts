@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Api } from './api';
-import { E2E_DIR, e2eEnv, SECRETS_DIR, SEED_FILE } from './env';
+import { artifactsDir, E2E_DIR, e2eEnv, runId, SECRETS_DIR, SEED_FILE } from './env';
 import type { Seed } from './seed-types';
 
 const REPO = path.resolve(E2E_DIR, '..');
@@ -75,13 +75,34 @@ export async function waitFor<T>(what: string, fn: () => Promise<T | null | unde
     }
 }
 
+/**
+ * Build agora-host and agora-mcp from this checkout once per run, whatever dist/ already
+ * holds: an old dist/ would run code other than what the run claims to test. What was built
+ * goes to artifacts/<run-id>/build-provenance.json (commit, a hash of uncommitted changes in
+ * both packages, node version).
+ */
 function ensureBuilt() {
+    const marker = path.join(SECRETS_DIR, `built-${runId()}`);
+    if (fs.existsSync(marker)) return;
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     for (const dir of [HOST_DIR, MCP_DIR]) {
-        if (fs.existsSync(path.join(dir, 'dist', 'index.js'))) continue;
-        const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
         if (!fs.existsSync(path.join(dir, 'node_modules'))) execFileSync(npm, ['ci', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'ignore', shell: process.platform === 'win32' });
         execFileSync(npm, ['run', 'build'], { cwd: dir, stdio: 'ignore', shell: process.platform === 'win32' });
     }
+    const dirty = git(REPO, ['status', '--porcelain', '--', 'agora-host', 'agora-mcp']);
+    const diff = dirty ? git(REPO, ['diff', 'HEAD', '--', 'agora-host', 'agora-mcp']) + dirty : '';
+    const provenance = {
+        commit: git(REPO, ['rev-parse', 'HEAD']),
+        dirty: dirty !== '',
+        dirtyHash: dirty ? crypto.createHash('sha256').update(diff).digest('hex') : null,
+        node: process.version,
+        builtAt: new Date().toISOString(),
+        packages: ['agora-host', 'agora-mcp'],
+    };
+    fs.mkdirSync(artifactsDir(), { recursive: true });
+    fs.writeFileSync(path.join(artifactsDir(), 'build-provenance.json'), JSON.stringify(provenance, null, 2));
+    fs.mkdirSync(SECRETS_DIR, { recursive: true });
+    fs.writeFileSync(marker, '');
 }
 
 /** The fake CLI as a native executable the host accepts (no .cmd/.js shims on Windows). */
