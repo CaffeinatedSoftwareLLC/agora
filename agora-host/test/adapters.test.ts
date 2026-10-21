@@ -83,6 +83,24 @@ describe('argv/config isolation', () => {
         expect(env).toEqual({ Path: '/trusted/path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir,
             ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) });
     });
+    it('passes a codex api_key profile its key as CODEX_API_KEY, the only name codex exec reads (#165)', () => {
+        const os = { Path: '/trusted/path', SystemRoot: 'os', ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) };
+        const source = { Path: '/trusted/path', SystemRoot: 'os', OPENAI_API_KEY: 'profile-key', CODEX_API_KEY: 'host-own', ANTHROPIC_API_KEY: 'a', GEMINI_API_KEY: 'g' };
+        const profile = (p: object) => configSchema.parse({ ...config(), profiles: { builder: { ...config().profiles.builder, ...p } } }).profiles.builder;
+        // OPENAI_API_KEY configured: only the profile's key, under CODEX_API_KEY; the host's own CODEX_API_KEY never reaches it
+        const openai = profile({ auth: 'api_key', apiKeyEnv: 'OPENAI_API_KEY' });
+        expect(childEnv(openai, source)).toEqual({ ...os, CODEX_HOME: openai.stateDir, CODEX_API_KEY: 'profile-key' });
+        const codexKey = profile({ auth: 'api_key', apiKeyEnv: 'CODEX_API_KEY' });
+        expect(childEnv(codexKey, source)).toEqual({ ...os, CODEX_HOME: codexKey.stateDir, CODEX_API_KEY: 'host-own' });
+        // codex-acp authenticates with the method for the configured name, which reads that name
+        const acp = profile({ protocol: 'acp', auth: 'api_key', apiKeyEnv: 'OPENAI_API_KEY' });
+        expect(childEnv(acp, source)).toEqual({ ...os, CODEX_HOME: acp.stateDir, OPENAI_API_KEY: 'profile-key' });
+        // claude and gemini: unchanged, the configured name only
+        const claude = profile({ adapter: 'claude', auth: 'api_key', apiKeyEnv: 'ANTHROPIC_API_KEY' });
+        expect(childEnv(claude, source)).toEqual({ ...os, CLAUDE_CONFIG_DIR: claude.stateDir, ANTHROPIC_API_KEY: 'a' });
+        const gemini = profile({ adapter: 'gemini', protocol: 'acp', acpArgs: ['--acp'], auth: 'api_key', apiKeyEnv: 'GEMINI_API_KEY' });
+        expect(childEnv(gemini, source)).toEqual({ ...os, GEMINI_CLI_HOME: gemini.stateDir, GEMINI_API_KEY: 'g' });
+    });
     it('rejects missing/mismatched local mappings, unsupported effort, and ambiguous resume', async () => {
         const { c, delivery } = await setup(); delivery.profile.workdirAlias = 'untrusted';
         await expect(prepare(c, delivery)).rejects.toThrow('unmapped_profile');
