@@ -37,6 +37,32 @@ describe('task and subtask wake prompts', () => {
         expect(p).toContain(`thread ${id(31)} only, and never in the parent's thread`);
     });
 
+    it('a /start or /resume notice alone asks for one hello; mixed, lurk and task card batches do not (#166)', () => {
+        const notice = (c: ReturnType<typeof claim>) => {
+            c.inbox[0] = { ...c.inbox[0], threadId: null, reason: 'command', authorId: null, authorName: null, authorBot: false,
+                content: 'owner started a builder session (01ABC).' };
+            return c;
+        };
+        const hello = 'post one short hello';
+        const start = wakePrompt(claimSchema.parse(notice(claim())));
+        expect(start).toContain(hello);
+        expect(start).toContain('in the channel with chat_send (client_key rule above)');
+        expect(start).toContain('do not make changes or run commands');
+        // A thread-scoped session says it in its thread
+        const threaded = notice(claim()); threaded.session.threadId = id(33);
+        expect(wakePrompt(claimSchema.parse(threaded))).toContain(`post one short hello in thread ${id(33)}`);
+        // Mixed with a real request: handle the request as before
+        const mixed = notice(claim());
+        mixed.inbox.push({ ...claim().inbox[0], messageId: id(34), reason: 'direct', authority: 'owner', content: 'Fix the build.' });
+        expect(wakePrompt(claimSchema.parse(mixed))).not.toContain(hello);
+        const lurk = claim(); lurk.inbox[0].reason = 'lurk';
+        expect(wakePrompt(claimSchema.parse(lurk))).not.toContain(hello);
+        // A task card's kickoff is a command notice that carries the task
+        const card = notice(claim()); card.session.threadId = id(30); card.session.scope = { kind: 'task', title: 'Fix login' };
+        expect(wakePrompt(claimSchema.parse(card))).not.toContain(hello);
+        expect(wakePrompt(claim())).not.toContain(hello);
+    });
+
     it('rejects an unknown wake reason', () => {
         const c: any = claim();
         c.inbox[0].reason = 'subtask';
