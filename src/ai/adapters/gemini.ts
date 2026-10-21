@@ -2,7 +2,7 @@ import type {
     Adapter, ChatRequest, DialogueRequest, ImageRequest, MediaResult, ProviderCredentials, SearchRequest, SearchResult,
     SpeechRequest, StreamCallbacks, Usage, VideoRequest,
 } from './types';
-import { apiError, joinUrl, networkError, sseJson } from './sse';
+import { apiError, joinUrl, networkError, sseJson, testConnectionWithTimeout } from './sse';
 import { pcmRate, pcmToWav } from './audio';
 
 const DEFAULT_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -310,9 +310,10 @@ export const geminiAdapter: Adapter = {
     },
 
     async testConnection(creds: ProviderCredentials, model: string) {
-        try {
+        return testConnectionWithTimeout(async signal => {
             const url = joinUrl(creds.baseUrl || DEFAULT_BASE, `${modelPath(model)}:generateContent`);
             const res = await fetch(url, {
+                signal,
                 method: 'POST',
                 headers: headers(creds),
                 body: JSON.stringify(buildBody({ model, messages: [{ role: 'user', content: 'ping' }] }, 1)),
@@ -321,8 +322,6 @@ export const geminiAdapter: Adapter = {
                 return { ok: false, error: await apiError('Gemini', res) };
             }
             return { ok: true };
-        } catch (err) {
-            return { ok: false, error: networkError(err) };
-        }
+        });
     },
 };

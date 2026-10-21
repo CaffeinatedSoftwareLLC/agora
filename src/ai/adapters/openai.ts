@@ -1,7 +1,16 @@
 import type { Adapter, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
-import { apiError, joinUrl, networkError, sseJson } from './sse';
+import { apiError, joinUrl, networkError, sseJson, testConnectionWithTimeout } from './sse';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
+
+function officialOpenAI(base: string): boolean {
+    return new URL(base).hostname.toLowerCase().replace(/\.$/, '') === 'api.openai.com';
+}
+
+/** OpenAI's current field; compatible endpoints retain the widely supported legacy field. */
+function tokenLimit(base: string, limit: number): Record<string, number> {
+    return { [officialOpenAI(base) ? 'max_completion_tokens' : 'max_tokens']: limit };
+}
 
 /** OpenAI's voices; Kokoro-FastAPI maps these names to its own voices too. */
 const DEFAULT_VOICE = 'alloy';
@@ -67,7 +76,7 @@ export const openaiAdapter: Adapter = {
             headers: headers(creds),
             body: JSON.stringify({
                 model: req.model,
-                max_tokens: req.maxTokens ?? 4096,
+                ...tokenLimit(creds.baseUrl || DEFAULT_BASE, req.maxTokens ?? 4096),
                 stream: true,
                 stream_options: { include_usage: true },
                 messages: apiMessages,
@@ -163,18 +172,20 @@ export const openaiAdapter: Adapter = {
     },
 
     async testConnection(creds: ProviderCredentials, model: string) {
-        try {
-            const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/chat/completions'), {
-                method: 'POST',
+        return testConnectionWithTimeout(async signal => {
+            const base = creds.baseUrl || DEFAULT_BASE;
+            const official = officialOpenAI(base);
+            // Model metadata checks the key/model without spending reasoning tokens on a ping.
+            const res = await fetch(joinUrl(base, official ? `/models/${encodeURIComponent(model)}` : '/chat/completions'), {
+                signal,
+                method: official ? 'GET' : 'POST',
                 headers: headers(creds),
-                body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
+                ...(official ? {} : { body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }) }),
             });
             if (!res.ok) {
                 return { ok: false, error: await apiError('OpenAI', res) };
             }
             return { ok: true };
-        } catch (err) {
-            return { ok: false, error: networkError(err) };
-        }
+        });
     },
 };
