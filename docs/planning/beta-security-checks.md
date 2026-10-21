@@ -14,7 +14,7 @@ Result states follow §0: `passed`, `failed`, `blocked`, `manual`, `not_applicab
 | 6.4 Voice limits (6) | 5 | 1 | 0 | 0 | 0 |
 | **Total (42)** | **34** | **2** | **2** | **4** | **0** |
 
-Suites at head `4afa793`, re-run 2026-10-21, with the two known bugs marked as linked expected failures (`it.fails`, see "Product bugs found"):
+Suites with the two known bugs marked as linked expected failures (`it.fails`, see "Product bugs found"). Integration and agora-host were re-run at head `4afa793` on 2026-10-21. Unit, agora-mcp and agora-ui are from `81dbb1f`: no file those suites run changed after it.
 
 | Suite | Result |
 |---|---|
