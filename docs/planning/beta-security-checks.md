@@ -94,6 +94,8 @@ The two failing tests are the product bugs listed at the end. Each one asserts t
 
 ## Product bugs found
 
+Filed as #142 (`.cmd` verify) and #143 (tts cache after the daily limit). Both tests are marked as **expected failures** (`it.fails`, with the issue number in the title), so the default suites stay green and the tests turn red as soon as the behaviour changes. The fix PR removes `.fails`. If #143 is decided as "keep as is", its test is deleted instead. Their beta result stays `failed` (#142) and `pending decision` (#143) until then.
+
 1. **The host runs a Windows `.cmd`/`.bat` verify command when it is named explicitly.**
    - **Where:** `agora-host/src/verify.ts:45-47` (`resolveExecutable` returns an absolute name, or one with a path separator, as-is, with no extension check), `verify.ts:22` (`VERIFY_COMMAND` allows `.` and `/`, so `./scripts/check.cmd` is a valid command), and the Windows job wrapper in `runVerify`, which starts the file with `Process.Start`. Windows runs `.cmd` and `.bat` through `cmd.exe`.
    - **Expected:** plan §6.2 says Windows `.cmd` is "refused by … host", and `docs/project-context.md:61` says Windows can't start `.cmd` shims without a shell.

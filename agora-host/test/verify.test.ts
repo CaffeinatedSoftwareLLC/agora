@@ -89,7 +89,9 @@ describe('Windows .cmd shims', () => {
             expect(resolveExecutable('npm', work, { PATH: bin }, 'win32')).toBe(join(bin, 'npm.exe'));
         } finally { await rm(root, { recursive: true, force: true }); }
     });
-    it.runIf(process.platform === 'win32')('does not run a .cmd named explicitly', async () => {
+    // Known bug #142 (beta §6.2: failed). Expected to fail until it is fixed, then this
+    // turns red: drop `.fails` in the fix PR.
+    it.runIf(process.platform === 'win32').fails('does not run a .cmd named explicitly (#142)', async () => {
         const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
         const { existsSync } = await import('node:fs');
         const { tmpdir } = await import('node:os');
