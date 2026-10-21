@@ -185,6 +185,9 @@ Uploaded files are stored on the `files-data` volume, mounted into `api` and `ca
 curl https://your-domain.com/health
 ```
 
+`/health` checks PostgreSQL. A database outage returns 503; Docker healthchecks
+that use this endpoint report the API unhealthy until database access recovers.
+
 Open **https://your-domain.com** in your browser — you should see the setup wizard. Caddy auto-provisions a Let's Encrypt certificate, so HTTPS works immediately (make sure DNS points to your server first).
 
 The setup token is printed in the API logs:

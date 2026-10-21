@@ -90,6 +90,33 @@ describe('request-only PostgreSQL deadlines', () => {
             await new Promise<void>(resolve => server.close(() => resolve()));
         }
     }, 10000);
+
+    it('onResponse deactivates its own request scope for continuations created before the reply', async () => {
+        const query = vi.spyOn(Client.prototype, 'query').mockResolvedValue(ok as never);
+        const app = Fastify();
+        let release!: () => void;
+        let background: Promise<unknown> | undefined;
+        app.addHook('onRequest', (_req, _reply, done) => enterRequestDbScope(done));
+        app.addHook('onResponse', async () => {
+            await Promise.resolve(); // Like the production hook's awaited commitRequest.
+            leaveRequestDbScope();
+            release();
+        });
+        app.get('/', async () => {
+            background = new Promise<void>(resolve => { release = resolve; })
+                .then(() => new RequestClient().query('SELECT after_reply'));
+            await new RequestClient().query('SELECT during_request');
+            return {};
+        });
+        try {
+            expect((await app.inject('/')).statusCode).toBe(200);
+            await background;
+            expect(query.mock.calls).toEqual([
+                [{ text: 'SELECT during_request', values: undefined, query_timeout: DB_QUERY_TIMEOUT_MS }],
+                ['SELECT after_reply'],
+            ]);
+        } finally { await app.close(); }
+    });
 });
 
 describe('dependency error responses', () => {
