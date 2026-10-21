@@ -91,6 +91,9 @@ test.describe('soak (OP-08)', () => {
 
         fh = await startFakeHost(seed, { label: 'soak', profiles: [{ key: 'a' }, { key: 'b' }, { key: 'c' }] });
         const agentKeys = ['a', 'b', 'c'];
+        // A session is shelved after its profile's wake budget (default 50 runs); a 30-minute soak
+        // wakes each agent about 50-75 times, so the budget is raised for these run-tagged profiles
+        for (const k of agentKeys) await owner.ok('PATCH', `/servers/${seed.serverId}/agent-profiles/${fh.agents[k].profileId}`, { wakeBudget: 1000 });
         const ag = await agentChannel(seed, fh, `soak-ag-${tag}`, agentKeys);
         const agents: Chan = { id: ag.id, name: ag.name, kind: 'agents', viewers: ['owner', 'member', 'director', 'admin', 'outsider'], marker: `soakG-${tag}` };
         const sessionIds: string[] = [];
@@ -377,6 +380,7 @@ test.describe('soak (OP-08)', () => {
         const batches = Object.fromEntries(batchRows.map(r => r.split('\t')).map(([k, v]) => [k, Number(v)]));
         const agentReplies = stored.get(agents.id)!.filter(m => agentBotIds.has(trimId(m.authorId))).length;
         const runs = agentKeys.reduce((n, k) => n + fh!.traces(k).filter(t => t.outcome).length, 0);
+        const sessionStates = (await readOnlyQuery(`SELECT state || ':' || COALESCE(end_reason, '-') || ':' || wakes_used FROM agent_sessions WHERE id IN (${sessionList}) ORDER BY id`));
         const cards = ((await owner.ok('GET', `/channels/${pub.id}/tasks`)) as any).cards.length;
 
         // ---- metrics ----
@@ -389,7 +393,7 @@ test.describe('soak (OP-08)', () => {
             events: { lost, duplicated, crossTenantFrames: crossTenant, perClient },
             api: { missing: missingInApi, duplicated: duplicatedInApi, refusals },
             view,
-            agents: { mentions: mentions.length, inboxRows, acked, distinctMsgs, batches, runs, agentReplies, drained, peakQueue: Math.max(...queue.map(q => q.inbox + q.running)), peakInbox: Math.max(...queue.map(q => q.inbox)), finalQueue: queue[queue.length - 1] },
+            agents: { sessions: sessionStates, mentions: mentions.length, inboxRows, acked, distinctMsgs, batches, runs, agentReplies, drained, peakQueue: Math.max(...queue.map(q => q.inbox + q.running)), peakInbox: Math.max(...queue.map(q => q.inbox)), finalQueue: queue[queue.length - 1] },
             memory: {
                 samples: mem.length,
                 dockerMiB: { first: +(mem[0].docker / MiB).toFixed(1), peak: +(Math.max(...mem.map(m => m.docker)) / MiB).toFixed(1), last: +(mem[mem.length - 1].docker / MiB).toFixed(1),
@@ -418,6 +422,7 @@ test.describe('soak (OP-08)', () => {
             expect(v.liveNotOnce, `${who}: latest messages not shown exactly once (live)`).toBe(0);
             expect(v.reloadedNotOnce, `${who}: latest messages not shown exactly once (after reload)`).toBe(0);
         }
+        expect(sessionStates.filter(x => !x.startsWith('live:')), 'sessions that left live (state:reason:wakes)').toEqual([]);
         expect(drained, 'the agent inbox and running batches drained').toBe(true);
         expect(inboxRows, 'every mention delivered to its session once').toBe(mentionIds.length);
         expect(distinctMsgs).toBe(mentionIds.length);
