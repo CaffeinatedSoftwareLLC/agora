@@ -20,7 +20,7 @@ import type { Api } from '../lib/api';
 let fh: FakeHost;
 /** Lease 120 s after the last heartbeat (every 30 s): a killed run can't come back sooner than this. */
 const MIN_REDELIVERY_MS = 85_000;
-const TIMED_OUT_NOTICE = 'Workspace command timed out. Check repository state before retrying.';
+const TIMED_OUT_NOTICE = 'Workspace command timed out. Check repository state and possible Git lock files before retrying.';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const git = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
