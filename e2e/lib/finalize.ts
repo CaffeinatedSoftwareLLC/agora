@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { artifactsDir, readEnvFile, SECRETS_DIR, SEED_FILE } from './env';
 import { knownSecrets, scanDir } from './leak-scan';
+import { runtimeSecrets } from './sensitive';
 
 export async function finalize(summary?: unknown) {
     const dir = artifactsDir();
@@ -23,7 +24,8 @@ export async function finalize(summary?: unknown) {
         const e = readEnvFile();
         envSecrets = { a: e.DB_PASSWORD, b: e.JWT_SECRET, c: e.AGORA_ENCRYPTION_KEY, d: e.AGORA_SETUP_TOKEN, e: e.E2E_OWNER_PASSWORD, f: e.E2E_MEMBER_PASSWORD };
     } catch { /* gone */ }
-    const secrets = knownSecrets([seedSecrets, envSecrets]);
+    // Plus values tests registered while running (minted tokens, invite codes): lib/sensitive.ts
+    const secrets = knownSecrets([seedSecrets, envSecrets, { ...runtimeSecrets() }]);
 
     if (summary && fs.existsSync(dir)) fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(summary, null, 2));
 
