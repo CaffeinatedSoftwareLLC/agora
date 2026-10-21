@@ -2,6 +2,7 @@ import { browserSupportsWebAuthn, startAuthentication, startRegistration } from 
 import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 import { api } from './api';
 import type { AuthResponse } from './contracts/auth';
+import { signInErrorMessage } from './auth-errors';
 
 /**
  * Passkeys (#78). The browser ceremony is @simplewebauthn/browser's; the server
@@ -52,9 +53,8 @@ export function passkeyErrorMessage(err: unknown): string | null {
     case 'origin_not_allowed': return 'Passkeys are not enabled for this address. Ask the admin to add it to WEBAUTHN_ORIGINS.';
     case 'passkey_exists': return 'That passkey is already registered.';
     case 'too_many_passkeys': return 'You have reached the passkey limit. Remove one first.';
-    case 'account_suspended': return 'Your account has been suspended. Contact an administrator.';
-    case 'too_many_attempts': return 'Too many attempts. Wait a minute and try again.';
     case 'ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED': return 'That passkey is already registered.';
-    default: return code ?? (err instanceof Error ? err.message : 'Something went wrong.');
+    // account_suspended, too_many_attempts, login_unavailable: worded the same as the password form
+    default: return signInErrorMessage(code) ?? code ?? (err instanceof Error ? err.message : 'Something went wrong.');
   }
 }
