@@ -83,6 +83,8 @@ export interface Result {
     tokensUsed: number | null;
     summary: string | null;
     error?: string;
+    /** A bounded, host-generated explanation, never raw CLI or RPC output. */
+    errorMessage?: string;
     changedPaths?: string[];
     /** Tool rules the CLI denied during the run, for the owner to approve (#73). */
     deniedTools?: string[];

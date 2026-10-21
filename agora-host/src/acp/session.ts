@@ -15,8 +15,9 @@ import { AUTH_REQUIRED, Connection, METHOD_NOT_FOUND, RpcError } from './rpc.js'
  *
  * `initialize` → (`authenticate`, API-key profiles only) → `session/new`, or
  * `session/resume` / `session/load` with the stored session ID → model and effort through
- * `session/set_config_option` → one `session/prompt`. The host advertises no file system or
- * terminal capability, so the agent uses its own tools in the session worktree, and every
+ * `session/set_config_option` (or legacy `session/set_model`) → one `session/prompt`.
+ * The host advertises no file system or terminal capability, so the agent uses its own
+ * tools in the session worktree, and every
  * tool call it may not run alone comes back as `session/request_permission`
  * (permissions.ts). `session/update`s give the progress line, plan and diff paths.
  *
@@ -49,7 +50,7 @@ export interface AcpPlan {
 export const ACP_FATAL = new Set(['acp_protocol_unsupported', 'acp_auth_required', 'acp_api_key_auth_unavailable', 'native_resume_unsupported', 'acp_model_unavailable']);
 
 class AcpFailure extends Error {
-    constructor(public readonly code: string, public readonly rateLimit?: RateLimit) { super(code); }
+    constructor(public readonly code: string, public readonly rateLimit?: RateLimit, public readonly detail?: string) { super(code); }
 }
 
 export const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -64,6 +65,10 @@ const initSchema = z.object({
 }).passthrough();
 const optionSchema = z.object({ id: z.string(), type: z.string().optional(), category: z.string().nullish(), currentValue: z.unknown().optional(),
     options: z.array(z.unknown()).catch([]).default([]) }).passthrough();
+const modelsSchema = z.object({
+    availableModels: z.array(z.object({ modelId: z.string().min(1).max(200), name: z.string().optional() }).passthrough()).catch([]).default([]),
+    currentModelId: z.string().nullish(),
+}).catch({ availableModels: [] });
 const permissionSchema = z.object({ sessionId: z.string(), toolCall: z.object({ toolCallId: z.string() }).passthrough(),
     options: z.array(z.object({ optionId: z.string(), kind: z.string() }).passthrough()) });
 
@@ -102,6 +107,15 @@ function pick(option: z.infer<typeof optionSchema> | undefined, wanted: string):
     if (!option || option.type !== 'select') return null;
     const all = values(option), lower = wanted.toLowerCase();
     return (all.find(o => o.value === wanted) ?? all.find(o => o.value.toLowerCase() === lower || o.name.toLowerCase() === lower))?.value ?? null;
+}
+
+/** Only model IDs, never the agent's descriptions or raw RPC errors; bounded for the server. */
+function modelUnavailable(wanted: string, option: z.infer<typeof optionSchema>): AcpFailure {
+    const ids = [...new Set(values(option).map(o => o.value))];
+    const list = ids.slice(0, 8).map(id => oneLine(id).slice(0, 200)).join(', ') || '(none advertised)';
+    const more = ids.length > 8 ? ` (and ${ids.length - 8} more)` : '';
+    return new AcpFailure('acp_model_unavailable', undefined,
+        `Requested model "${oneLine(wanted).slice(0, 200)}" is unavailable. Available model IDs: ${list}${more}.`);
 }
 
 /** The run summary from the agent's final message: its JSON summary, else the text itself. */
@@ -260,9 +274,17 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
             const options = z.array(optionSchema).catch([]).parse(opened?.configOptions ?? []);
             if (plan.model) {
                 const option = options.find(o => o.category === 'model');
-                const value = pick(option, plan.model);
-                if (!option || !value) throw new AcpFailure('acp_model_unavailable');
-                if (value !== option.currentValue) await conn.request('session/set_config_option', { sessionId, configId: option.id, value }, timeout);
+                // Gemini 0.62 advertises the ACP session-model API, without configOptions.
+                // A model configOption takes precedence when an agent supports both shapes.
+                const legacy = modelsSchema.parse(opened?.models ?? {});
+                const selection = option ?? { id: 'model', type: 'select', currentValue: legacy.currentModelId,
+                    options: legacy.availableModels.map(m => ({ value: m.modelId, name: m.name ?? m.modelId })) };
+                const value = pick(selection, plan.model);
+                if (!value) throw modelUnavailable(plan.model, selection);
+                if (value !== selection.currentValue) {
+                    if (option) await conn.request('session/set_config_option', { sessionId, configId: option.id, value }, timeout);
+                    else await conn.request('session/set_model', { sessionId, modelId: value }, timeout);
+                }
             }
             if (plan.effort) {
                 // Effort is a hint: an agent without a reasoning level option runs at its default
@@ -288,7 +310,8 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         const success = !failure && stopReason === 'end_turn' && (final !== null || !!launch.lurk);
         const error = failure?.code ?? (stopReason && stopReason !== 'end_turn' ? `acp_${stopReason}` : 'cli_failed_or_invalid_output');
         return { success, nativeSessionId: sessionId, tokensUsed, summary: final === '[pass]' ? null : final, changedPaths: [...changed],
-            ...(success ? {} : { error }), ...(denied.length ? { deniedTools: denied } : {}), ...(failure?.rateLimit ? { rateLimit: failure.rateLimit } : {}) };
+            ...(success ? {} : { error }), ...(failure?.detail ? { errorMessage: failure.detail } : {}),
+            ...(denied.length ? { deniedTools: denied } : {}), ...(failure?.rateLimit ? { rateLimit: failure.rateLimit } : {}) };
     })();
 
     return {
