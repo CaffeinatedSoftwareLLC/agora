@@ -4,12 +4,14 @@ import { api } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
 import { MessageContent } from '../messages/MessageContent';
 import { decisionError } from './agentSessions';
+import { useViewerAuthority } from './viewerAuthority';
 
 /**
  * A hosted agent was denied a tool (#73). The owner or a director approves it once (the
  * agent's next run may use it, and it is woken to retry) or denies it; the owner can always
  * allow it (added to the agent's profile in Settings → Agents). Same layout as the code-run
- * approval card; the server enforces who may decide.
+ * approval card. Only those who may decide see the buttons (#146); the server enforces it
+ * (src/routes/agent-tool-requests.ts).
  */
 
 type Decision = 'once' | 'always' | 'deny';
@@ -35,6 +37,11 @@ export function ToolApprovalCard({ message }: { message: Message }) {
   const [busy, setBusy] = useState<Decision | null>(null);
   const [error, setError] = useState('');
   const status = STATUS[data.status ?? ''];
+  const open = data.status === 'pending' && !!data.requestId;
+  const authority = useViewerAuthority(message.channelId, open);
+  // A failed lookup shows the buttons: the server's answer is the guard then
+  const canDecide = authority === 'owner' || authority === 'director' || authority === 'unknown';
+  const canAlways = authority === 'owner' || authority === 'unknown';
 
   async function decide(decision: Decision) {
     if (!data.requestId || !message.channelId) return;
@@ -68,13 +75,14 @@ export function ToolApprovalCard({ message }: { message: Message }) {
           {typeof data.cwd === 'string' && data.cwd && <p className="mt-1 break-all text-xs text-text-muted">in <code>{data.cwd}</code></p>}
         </details>
       )}
-      {data.status === 'pending' && data.requestId && (
+      {open && canDecide && (
         <div className="mt-2 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
           <Button onClick={() => void decide('once')} loading={busy === 'once'} disabled={busy !== null} className={TOUCH}>Approve once</Button>
-          <Button variant="secondary" onClick={() => void decide('always')} loading={busy === 'always'} disabled={busy !== null} className={TOUCH}>Always allow</Button>
+          {canAlways && <Button variant="secondary" onClick={() => void decide('always')} loading={busy === 'always'} disabled={busy !== null} className={TOUCH}>Always allow</Button>}
           <Button variant="danger" onClick={() => void decide('deny')} loading={busy === 'deny'} disabled={busy !== null} className={TOUCH}>Deny</Button>
         </div>
       )}
+      {open && authority === null && <p className="mt-2 text-xs text-text-muted">The owner or a director decides.</p>}
       {error && <p className="mt-2 text-sm text-danger" role="alert">{error}</p>}
     </div>
   );
