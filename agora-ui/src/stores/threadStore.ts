@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
-import type { Message } from './messageStore';
+import { findOptimistic, tempMessageId, type Message } from './messageStore';
 import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, ThreadMetadataUpdatePayload, ProtocolInfo } from '../lib/contracts/ws-events';
 
 export interface ThreadSummary {
@@ -150,7 +150,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   sendReply: async (channelId, messageId, content, authorId, authorUsername) => {
-    const tempId = `pending-${Date.now()}`;
+    const tempId = tempMessageId();
     const optimistic: Message = {
       id: tempId,
       content,
@@ -208,8 +208,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       const nextReplies = new Map(state.repliesByThread);
       const current = nextReplies.get(threadId) ?? [];
 
-      // Reconcile optimistic send
-      const pendingIdx = current.findIndex((m) => m.pending && m.id === msg.id);
+      // Reconcile optimistic send: by real ID, or by author and text if the echo beat the POST response
+      const pendingIdx = current.some((m) => !m.pending && m.id === msg.id) ? -1 : findOptimistic(current, msg);
       if (pendingIdx !== -1) {
         const updated = [...current];
         updated[pendingIdx] = {
