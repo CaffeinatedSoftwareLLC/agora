@@ -6,7 +6,7 @@ import { checkChannelPermissions as checkFilePermissions } from '../lib/channel-
 import { storage } from '../lib/storage';
 import { encryptFile, decryptFile } from '../lib/encryption';
 import { INLINE_SAFE_MIMES } from '../lib/file-validation';
-import { storeFile } from '../lib/file-store';
+import { storeFile, uploadByteLimit, FILE_TOO_LARGE } from '../lib/file-store';
 import { searchChannelFiles, MAX_LIMIT } from '../lib/file-search';
 import { readFileText, READ_MAX_CHARS } from '../lib/file-read';
 import { readFileImage, isBotPaused } from '../lib/file-image';
@@ -30,8 +30,9 @@ export async function fileRoutes(app: FastifyInstance) {
         const userId = request.userId;
         const db = request.dbClient!;
 
-        // Parse multipart
-        const data = await request.file();
+        // Parse multipart. The admin setting is the only size cap: without a fileSize here,
+        // multipart stopped at Fastify's 1 MiB bodyLimit before storeFile saw the file (#157)
+        const data = await request.file({ limits: { fileSize: await uploadByteLimit(db) } });
         if (!data) {
             return reply.status(400).send({ error: 'No file uploaded' });
         }
@@ -49,8 +50,19 @@ export async function fileRoutes(app: FastifyInstance) {
             return reply.status(permCheck.status!).send({ error: permCheck.error });
         }
 
+        let buffer: Buffer;
+        try {
+            buffer = await data.toBuffer();
+        } catch (err) {
+            // Over the setting: multipart stops reading, and the answer is storeFile's own refusal
+            if (err instanceof app.multipartErrors.RequestFileTooLargeError) {
+                return reply.status(FILE_TOO_LARGE.status).send({ error: FILE_TOO_LARGE.error });
+            }
+            throw err;
+        }
+
         const result = await storeFile(db, app.db, {
-            buffer: await data.toBuffer(),
+            buffer,
             filename: data.filename,
             uploaderId: userId,
             channelId,
