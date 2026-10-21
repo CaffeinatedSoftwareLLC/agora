@@ -235,6 +235,85 @@ describe('messageStore', () => {
     });
   });
 
+  describe('sendMessage vs its socket echo (#149)', () => {
+    function deferred<T>() {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => { resolve = r; });
+      return { promise, resolve };
+    }
+    const copies = (text: string) =>
+      useMessageStore.getState().byChannel.get('ch-1')!.filter((m) => m.content === text);
+
+    beforeEach(() => {
+      useMessageStore.setState({ byChannel: new Map([['ch-1', []]]), hasMore: new Map() });
+    });
+
+    it('keeps one copy when the echo arrives before the POST response', async () => {
+      const post = deferred<{ id: string }>();
+      mockApi.post.mockReturnValueOnce(post.promise);
+      const sending = useMessageStore.getState().sendMessage('ch-1', 'Live check', 'u1', 'alice');
+      expect(copies('Live check')).toHaveLength(1);
+
+      useMessageStore.getState().addMessage(makePayload({ id: 'real-id', content: 'Live check' }));
+      // The echo replaces the optimistic row at once: no moment with two copies
+      expect(copies('Live check')).toHaveLength(1);
+      expect(copies('Live check')[0]).toMatchObject({ id: 'real-id' });
+      expect(copies('Live check')[0].pending).toBeUndefined();
+
+      post.resolve({ id: 'real-id' });
+      await sending;
+      expect(copies('Live check')).toHaveLength(1);
+      expect(copies('Live check')[0].id).toBe('real-id');
+    });
+
+    it('keeps one copy when the POST response arrives before the echo', async () => {
+      const post = deferred<{ id: string }>();
+      mockApi.post.mockReturnValueOnce(post.promise);
+      const sending = useMessageStore.getState().sendMessage('ch-1', 'Live check', 'u1', 'alice');
+
+      post.resolve({ id: 'real-id' });
+      await sending;
+      expect(copies('Live check')).toHaveLength(1);
+      expect(copies('Live check')[0]).toMatchObject({ id: 'real-id', pending: true });
+
+      useMessageStore.getState().addMessage(makePayload({ id: 'real-id', content: 'Live check' }));
+      expect(copies('Live check')).toHaveLength(1);
+      expect(copies('Live check')[0].pending).toBeUndefined();
+    });
+
+    it('confirms two sends of the same text as two messages, echoes first', async () => {
+      const first = deferred<{ id: string }>();
+      const second = deferred<{ id: string }>();
+      mockApi.post.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const a = useMessageStore.getState().sendMessage('ch-1', 'ok', 'u1', 'alice');
+      const b = useMessageStore.getState().sendMessage('ch-1', 'ok', 'u1', 'alice');
+
+      useMessageStore.getState().addMessage(makePayload({ id: 'id-a', content: 'ok' }));
+      useMessageStore.getState().addMessage(makePayload({ id: 'id-b', content: 'ok' }));
+      first.resolve({ id: 'id-a' });
+      second.resolve({ id: 'id-b' });
+      await Promise.all([a, b]);
+
+      expect(copies('ok').map((m) => m.id)).toEqual(['id-a', 'id-b']);
+      expect(copies('ok').every((m) => !m.pending)).toBe(true);
+    });
+
+    it('does not take an echo from another author as the optimistic row', async () => {
+      const post = deferred<{ id: string }>();
+      mockApi.post.mockReturnValueOnce(post.promise);
+      const sending = useMessageStore.getState().sendMessage('ch-1', 'hi', 'u1', 'alice');
+
+      useMessageStore.getState().addMessage(makePayload({ id: 'other', content: 'hi', authorId: 'u2', authorUsername: 'bob' }));
+      expect(copies('hi')).toHaveLength(2);
+
+      post.resolve({ id: 'mine' });
+      await sending;
+      useMessageStore.getState().addMessage(makePayload({ id: 'mine', content: 'hi' }));
+      expect(copies('hi').map((m) => m.id)).toEqual(['mine', 'other']);
+      expect(copies('hi').every((m) => !m.pending)).toBe(true);
+    });
+  });
+
   describe('editMessage (optimistic)', () => {
     it('updates content optimistically, then keeps it on success', async () => {
       useMessageStore.setState({

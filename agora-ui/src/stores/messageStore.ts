@@ -67,6 +67,26 @@ interface MessageState {
 
 const PAGE_SIZE = 50;
 
+// Temporary ids for optimistic rows. The counter keeps two sends in the same millisecond apart.
+const TEMP_PREFIX = 'pending-';
+let tempSeq = 0;
+export function tempMessageId(): string {
+  return `${TEMP_PREFIX}${Date.now()}-${++tempSeq}`;
+}
+
+/**
+ * The optimistic row a socket echo of the user's own post confirms, or -1 (#149).
+ * The POST response and the echo race. If the response came first, the row already has
+ * the real id. If the echo comes first, the row still has its temporary id: the echo
+ * carries no client nonce, so match the oldest unconfirmed row with the same author and text.
+ */
+export function findOptimistic(list: Message[], msg: MessagePayload): number {
+  const byId = list.findIndex((m) => m.pending && m.id === msg.id);
+  if (byId !== -1) return byId;
+  return list.findIndex((m) =>
+    m.pending && m.id.startsWith(TEMP_PREFIX) && m.authorId === msg.authorId && (m.content ?? '') === (msg.content ?? ''));
+}
+
 export const useMessageStore = create<MessageState>((set, get) => ({
   byChannel: new Map(),
   hasMore: new Map(),
@@ -143,7 +163,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
 
   sendMessage: async (channelId, content, authorId, authorUsername, attachmentIds?) => {
     // Create optimistic message
-    const tempId = `pending-${Date.now()}`;
+    const tempId = tempMessageId();
     const optimistic: Message = {
       id: tempId,
       content,
@@ -166,7 +186,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       if (content) body.content = content;
       if (attachmentIds && attachmentIds.length > 0) body.attachments = attachmentIds;
       const res = await api.post<{ id: string }>(`/channels/${channelId}/messages`, body);
-      // Reconcile: if WS already delivered the real message, drop the optimistic row.
+      // Reconcile: if WS already delivered the real message, drop the optimistic row
+      // (a no-op when addMessage already replaced it in place).
       // Otherwise remap tempId → real ID so addMessage can match when WS arrives.
       set((state) => {
         const nextByChannel = new Map(state.byChannel);
@@ -272,10 +293,9 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       const nextByChannel = new Map(state.byChannel);
       const current = nextByChannel.get(msg.channelId) ?? [];
 
-      // Check if this is confirming an optimistic (pending) message by real ID
-      const pendingIdx = current.findIndex(
-        (m) => m.pending && m.id === msg.id
-      );
+      // Check if this is confirming an optimistic (pending) message, by real ID or,
+      // when the echo beat the POST response, by author and text
+      const pendingIdx = current.some((m) => !m.pending && m.id === msg.id) ? -1 : findOptimistic(current, msg);
 
       if (pendingIdx !== -1) {
         // Replace the optimistic message with the confirmed server version
@@ -297,7 +317,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         };
         nextByChannel.set(msg.channelId, updated);
       } else {
-        // Ignore duplicate (WS arrived before POST response updated the ID)
+        // Ignore duplicate (the same event delivered twice, or already loaded)
         if (current.some((m) => m.id === msg.id)) {
           return state;
         }
