@@ -154,7 +154,8 @@ test.describe('agent sessions with the fake host', () => {
         expect((await sessionOf(owner, ch.id, a.name, sid)).tokenBudget).toBe(1000);
 
         await compose(page, ch.name, `@${a.name} expensive #fake-tokens=2000`);
-        const shelved = `Session for ${a.name} shelved: its budget is used up. /resume ${sid} after raising the budget.`;
+        // Before and after #185's wording ("its token budget is used up (N of M tokens)")
+        const shelved = new RegExp(`Session for ${a.name} shelved: its (?:token )?budget is used up.*/resume ${sid}`);
         await expectNotice(page, shelved);
         const s = await sessionOf(owner, ch.id, a.name, sid);
         expect([s.state, s.endReason]).toEqual(['shelved', 'budget']);
