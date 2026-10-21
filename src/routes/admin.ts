@@ -104,19 +104,10 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const row = updateRes.rows[0];
 
-        // Auto-join the approved user to the instance server
-        const serverIdResult = await db.query(
-            "SELECT value FROM instance_config WHERE key = 'instance_server_id'"
-        );
-        const instanceServerId = serverIdResult.rows[0]?.value;
-        if (instanceServerId) {
-            await db.query(
-                `INSERT INTO server_members (server_id, user_id)
-                 VALUES ($1, $2)
-                 ON CONFLICT DO NOTHING`,
-                [instanceServerId, targetId]
-            );
-        }
+        // Auto-join the approved user to the instance server. RLS lets app_user insert only
+        // itself into server_members, so the join goes through a SECURITY DEFINER function
+        // that checks the caller is an instance admin (migration 060, #158)
+        await db.query('SELECT admin_join_instance_server($1)', [targetId]);
 
         await logAdminAction(db, userId, 'user_approve', 'user', targetId, {
             before: { accountStatus: 'pending' },

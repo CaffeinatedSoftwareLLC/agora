@@ -222,6 +222,74 @@ describe('Phase 2 — Admin Dashboard', () => {
             expect(loginRes.status).toBe(200);
             expect(loginRes.body.accessToken).toBeDefined();
         });
+
+        // #158: with an instance server set, the approve inserts the *target* into server_members
+        // while RLS identifies the admin, and members_self_insert refused it (500)
+        describe('with an instance server', () => {
+            async function instanceWithPendingUser(username: string) {
+                const admin = await insertUser('active', `${username}admin`, true);
+                const { serverId } = await createServer(ctx.request, admin.auth, 'Instance Server');
+                await ctx.db.query(
+                    "INSERT INTO instance_config (key, value) VALUES ('instance_server_id', $1)", [serverId]);
+                const policy = await ctx.request.patch('/admin/instance').set(admin.auth).send({ registrationPolicy: 'approval' });
+                expect(policy.status).toBe(200);
+                const reg = await ctx.request.post('/auth/register').send({
+                    username, email: `${username}@test.com`, password: 'TestPass123!',
+                });
+                expect(reg.status).toBe(201);
+                expect(reg.body.status).toBe('pending');
+                const userId = (await ctx.db.query('SELECT id FROM users WHERE username = $1', [username])).rows[0].id.trim();
+                return { admin, serverId, userId };
+            }
+            const statusOf = async (id: string) =>
+                (await ctx.db.query('SELECT account_status FROM users WHERE id = $1', [id])).rows[0].account_status;
+            const isMember = async (serverId: string, id: string) =>
+                (await ctx.db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [serverId, id])).rows.length === 1;
+
+            test('approving activates the user and joins them to the instance server', async () => {
+                const { admin, serverId, userId } = await instanceWithPendingUser('joinpend');
+                expect(await isMember(serverId, userId)).toBe(false);
+
+                const res = await ctx.request.post(`/admin/approve-user/${userId}`).set(admin.auth);
+                expect(res.status).toBe(200);
+                expect(res.body.user.accountStatus).toBe('active');
+                expect(await statusOf(userId)).toBe('active');
+                expect(await isMember(serverId, userId)).toBe(true);
+
+                const login = await ctx.request.post('/auth/login').send({ login: 'joinpend', password: 'TestPass123!' });
+                expect(login.status).toBe(200);
+            });
+
+            test('a non-admin cannot approve, and nothing changes', async () => {
+                const { serverId, userId } = await instanceWithPendingUser('nojoinpend');
+                const member = await insertUser('active', 'notanadmin');
+
+                const res = await ctx.request.post(`/admin/approve-user/${userId}`).set(member.auth);
+                expect(res.status).toBe(403);
+                expect(await statusOf(userId)).toBe('pending');
+                expect(await isMember(serverId, userId)).toBe(false);
+            });
+
+            test('the join function refuses a caller who is not an instance admin', async () => {
+                const { serverId, userId } = await instanceWithPendingUser('dbguardpend');
+                const member = await insertUser('active', 'dbguardmember');
+                await ctx.db.query("UPDATE users SET account_status = 'active' WHERE id = $1", [userId]);
+
+                // As the app runs a request for `member`: RLS role and user id set, inside a transaction
+                const client = await ctx.db.connect();
+                try {
+                    await client.query('BEGIN');
+                    await client.query('SET LOCAL ROLE app_user');
+                    await client.query("SELECT set_config('app.current_user_id', $1, true)", [member.userId]);
+                    await expect(client.query('SELECT admin_join_instance_server($1)', [userId]))
+                        .rejects.toMatchObject({ code: '42501' });
+                } finally {
+                    await client.query('ROLLBACK');
+                    client.release();
+                }
+                expect(await isMember(serverId, userId)).toBe(false);
+            });
+        });
     });
 
     // ─── POST /admin/reject-user/:id ───
