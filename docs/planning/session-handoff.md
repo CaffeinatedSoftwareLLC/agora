@@ -17,25 +17,15 @@ Run **every test in `docs/planning/beta-test-plan.md`**, fix what fails, Codex r
 - **Disposable e2e instance:** `agora-e2e` on the WSL daemon (web 8280, api 3200), built from `.worktrees/combined` at main. It has extra instance-lifetime users: `director-e2e`, `admin-e2e`, `outsider-e2e`, `fkdirector-e2e` (registration is limited to 5 per hour).
 - **Worktrees have no `.env`:** load the repo's (`set -a && . <repo>/.env && set +a`), or tests fail with `28P01`. Root `npm run build` runs out of memory on main (#136); type-check `src/` alone with a temporary tsconfig instead.
 
-## Open PRs (all reviewed by Codex in #general thread `01M5DVWVMHZSBKXQ13PE4MFTCZ`)
-| PR | What | Review |
-|---|---|---|
-| #138 | agora-host tests pass on Linux and without gh (#137) | clear |
-| #139 | coverage ledger reconciled, report, env manifest | clear |
-| #140 | e2e wave A1 (chat/roles/files/bots) + secret-aware failure evidence | P2 resolved |
-| #144 | §6 security checks; #142/#143 as linked `it.fails` | P2 resolved |
-| #148 | host accepts `pr_status` (#145) | clear |
-| #151 | e2e wave A2: fake agent host + session specs; build provenance | P2 fixes pushed (`6f624c9`, `608a619`), awaiting re-review |
-| #152 | own message shown twice (#149) | new |
-| #153 | tool card buttons only for owner/directors (#146) | new |
-| #154 | rate-limit chip shows Sleeping + reset (#147) | new |
-
-Combined candidate: local `.worktrees/combined` branch `test/combined-beta-2` = main + #138, #139, #140, #144, #148, #151, #152, #153, #154 (clean merge). Non-E2E suites were running on it. The E2E run needs the instance rebuilt from that branch **after wave B finishes**. Then post the results in the review thread, get Codex's DECIDE, and ask Eryk to merge (he merges these; the earlier "merge after Codex approves" order covered only #131 to #135).
+## Approved batch, on hold (2026-10-21 02:48)
+Codex **AGREE**d the combined candidate `80192a5` (local `.worktrees/combined`, branch `test/combined-beta-2`) at these heads:
+#138 `655b02d`, #139 `ea9ddab`, #140 `7bf4d89`, #144 `7be585f`, #148 `d686677`, #151 `6406ef6`, #152 `4edbb70`, #153 `3b9dc6b`, #154 `63d439f`, #156 `befe0db` (stacked on #144), #160 `85fa1ff` (stacked on #140), #161 `badbd9b`, #162 `d290f54`, #163 `2579e78` (migration 060), #164 `a6e24f9`.
+Results on `80192a5`: Playwright 84 passed / 0 failed / 2 n/a; integration 1075; unit 341; UI 292; host 290 + 4 skipped; mcp 161.
+**Eryk: "we wait for tests"**. Don't merge or deploy until he says so. When he does: merge in the order above with `gh pr merge --merge --match-head-commit <sha>`, retarget #156 and #160 to `main` once their parents have merged, then check that main's tree equals `80192a5`. Any head change needs a Codex re-review. Deploying needs its own go: run `agora-deploy.sh`, then rebuild and restart AgoraHost (#148 changes host code).
 
 ## Running jobs (threads in #general)
 - **Job 3, Playwright E2E** (`01M5DSJW5KC3MHWVPEQ94SN6TH`): wave B (setup/auth/admin/storage/mobile, which changes instance-wide settings) runs as a subagent on local branch `test/e2e-wave-b`, built on wave A1.
-- **Job 4, §6 security** (`01M5DSMN39H2T0RRDBJMVC5X5Z`): done, in PR #144. Waiting on Eryk's #143 decision: A = check the cache before the tts limit (recommended), B = keep it and delete the test.
-- Jobs 1 and 2 are closed.
+- Jobs 1, 2 and 4 and the batch review thread are closed. Job 3 E2E thread `01M5DSJW5KC3MHWVPEQ94SN6TH` is done pending the merge. **Job 5, agent E2E** (`01M5E4JXRH9ZHFF57S7SM355S4`) is approved by Eryk (keys in, provider caps set). Models: `claude-haiku-5-5`, `gpt-6-luna` (fallback `gpt-5.6-luna`), `gemini-3.1-flash-lite` (fallback `gemini-2.5-flash-lite`). The runner is on local branch `test/e2e-agent` (subagent). Merge `80192a5` into it before any live run.
 
 ## Open beta-test issues
 #136 (tsc OOM), #137 (fixed in #138), #141 (M: /users/search instance-wide, wildcards), #142 (L: `.cmd` verify), #143 (L: tts cache, decision pending), #145 (fixed in #148), #146 (fixed in #153), #147 (fixed in #154), #149 (fixed in #152), #150 (L: e2e not repeatable with `--repeat-each`). Plan wording questions: there's no kick endpoint, and channel rename/delete and leave-server don't exist (PR #139 report).
