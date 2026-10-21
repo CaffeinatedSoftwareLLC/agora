@@ -15,9 +15,9 @@ Run **every test in `docs/planning/beta-test-plan.md`**, fix what fails, Codex r
 
 ## State (2026-10-21 ~20:45 UTC)
 - **main @ `4b2e488`**: the 15-PR batch plus 14 PRs merged on Eryk's go (#167 #168 #170 #173 #174 #177 #178 #179 #181 #186 #187 #191 #190 #192). Tree equals tested `test/combined-beta-3` (unit 434, integration 1,149, UI 324, host 323+4, mcp 173, Playwright 84/84). Migrations 060/061/062.
-- **Live: still `11e998c`. NOT deployed.** Deploy needs Eryk's go: backup, `agora-deploy.sh` (migrations 060-062; 061 stops and lists case-colliding usernames if any), then rebuild/restart AgoraHost.
-- **Open PRs, both AGREEd, waiting on Eryk's merge go:** #193 (pin nginx 1.31.7-alpine + caddy 2.11.7 by digest), #194 (#169 chat_wait cross-thread attention, migration 063), #195 (coverage-gap tests on main, ledger 0 gaps, integration 1,204).
-- **Release:** Eryk asked for "0.4.0"; the latest release is already v0.5.0 and `agora-mcp-release.yml` requires tag == agora-mcp version (0.5.0). Asked him to confirm **0.6.0** (bump root + agora-mcp, CHANGELOG Unreleased → 0.6.0, tag after merges). Pending.
+- **Live: `f1d8c58`, deployed 2026-10-21 ~21:43 UTC on Eryk's go** (backup `~/agora-backups/pre-deploy-20261021-1741.dump` + roles `post-deploy-roles-20261021-1743.sql`; migrations 060-063; health 200; caddy 2.11.7). AgoraHost rebuilt and restarted (PID 40072). Version stays 0.5 (Eryk: no release).
+- Merged and deployed after the batch: #193 (image pins), #194 (#169 cross-thread attention, migration 063), #195 (coverage-gap tests; ledger 0 gaps). Merged main: integration 1,214, unit 437, mcp 186.
+- Release: none cut (Eryk: leave it at 0.5). Open question to Eryk: set `"windowsSandbox": "unelevated"` in `~/.agora-host/host.local.json` (elevated pops a dialog that blocks unattended codex runs).
 - All job threads (3, 5, 6, 7, 8) closed. Codex coordinates top-level in #general.
 - e2e instance `agora-e2e` is built from `test/combined-beta-3`. Local Docker Desktop test Postgres holds throwaway review DBs (accord_review_*, accord_cov*, accord_combined3); `accord_test` has a stale `060_case_insensitive_usernames` row (auto-mode refused deleting it; use fresh DBs).
 - PHP "php2shell" CVE-2026-109618/109619 check (19:00): no PHP anywhere; live nginx 1.31.7.
@@ -28,7 +28,7 @@ Run **every test in `docs/planning/beta-test-plan.md`**, fix what fails, Codex r
 - Open issues from today: #169 (M, cross-thread mentions), #180 (L, test typecheck), #184 (L, speech-only Test 404), #185 (L, base URL UI + wake-budget notice). Older open: #150.
 
 ## Next (after Eryk)
-0. Eryk: merge #193/#194/#195, release number, deploy go.
+0. Manual sessions M01+ with Eryk on the deployed build (beta-test-plan §7.1); macOS pass needs the Mac agent.
 1. ~~Linux platform pass~~ done 16:40: mcp 173/173, host 299 + 7 skipped (node:22, `git archive` of agora-host, agora-mcp and src).
 2. Codex: #184, then #185.
 3. Eryk: merge/deploy go → manual sessions M01+ (beta-test-plan §7.1), macOS pass (needs the Mac agent).
