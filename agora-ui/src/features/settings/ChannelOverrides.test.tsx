@@ -30,8 +30,8 @@ describe('ChannelOverrides channel selection', () => {
     fireEvent.change(select, { target: { value: 'channel-1' } });
     await screen.findByText('Moderator');
     fireEvent.change(select, { target: { value: '' } });
-    expect(screen.queryByText('Moderator')).not.toBeInTheDocument();
-    expect(select).toHaveValue('');
+    expect(screen.queryByText('Moderator')).toBeNull();
+    expect((select as HTMLSelectElement).value).toBe('');
     expect(roleApi.getOverrides).toHaveBeenCalledExactlyOnceWith('channel-1');
   });
 
@@ -43,7 +43,7 @@ describe('ChannelOverrides channel selection', () => {
     fireEvent.change(select, { target: { value: 'channel-1' } });
     await screen.findByText('Cannot load overrides');
     fireEvent.change(select, { target: { value: '' } });
-    await waitFor(() => expect(screen.queryByText('Cannot load overrides')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Cannot load overrides')).toBeNull());
     expect(roleApi.getOverrides).toHaveBeenCalledExactlyOnceWith('channel-1');
   });
 });
