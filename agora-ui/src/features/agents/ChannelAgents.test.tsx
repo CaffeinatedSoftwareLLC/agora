@@ -27,7 +27,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 async function open() {
   render(<ChannelAgentsControl channelId="channel" serverId="server" />);
-  const trigger = await screen.findByRole('button', { name: 'Manage channel agents' });
+  const trigger = await screen.findByRole('button', { name: 'Add agent to channel' });
   trigger.focus();
   fireEvent.click(trigger);
   await screen.findByRole('button', { name: 'Add claude' });
@@ -58,7 +58,7 @@ describe('channel agent access', () => {
     vi.mocked(serverApi.getAccess).mockResolvedValue({ permissions, isInstanceAdmin: false, hasModerationAccess: false, hasServerAdminAccess: false });
     render(<ChannelAgentsControl channelId="channel" serverId="server" />);
     await act(async () => {});
-    expect(screen.queryByRole('button', { name: 'Manage channel agents' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add agent to channel' })).toBeNull();
     expect(botApi.list).not.toHaveBeenCalled();
   });
 
@@ -81,7 +81,7 @@ describe('channel agent access', () => {
     expect(screen.queryByRole('button', { name: 'Remove claude' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
     await screen.findByRole('button', { name: 'Add claude' });
-    expect(botApi.list).toHaveBeenCalledTimes(2);
+    expect(botApi.list).toHaveBeenCalledTimes(3);
   });
 
   it('disables membership changes until the pending write completes', async () => {
@@ -96,18 +96,46 @@ describe('channel agent access', () => {
   });
 
   it('reports a failed list load and can load an empty list on retry', async () => {
-    vi.mocked(botApi.list).mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce([]);
+    vi.mocked(botApi.list).mockRejectedValue(new Error('network'));
     render(<ChannelAgentsControl channelId="channel" serverId="server" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Manage channel agents' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent to channel' }));
     await screen.findByText('Could not load channel agents. Try again.');
+    vi.mocked(botApi.list).mockResolvedValue([]);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
     await screen.findByText(/No agents on this server yet/);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('makes adding explicit and shows the empty hint until the first bot is added', async () => {
+    vi.mocked(botApi.get).mockImplementation(async (_server, id) => bot(id, false));
+    render(<ChannelAgentsControl channelId="channel" serverId="server" />);
+    await screen.findByText('No agents in this channel ·');
+    expect(screen.getByRole('button', { name: 'Add agent to channel' }).textContent).toContain('＋ Add agent');
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent to channel' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add claude' }));
+    await screen.findByRole('button', { name: 'Remove claude' });
+    expect(screen.queryByText('No agents in this channel ·')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove claude' }));
+    await screen.findByText('No agents in this channel ·');
+  });
+
+  it('does not call a channel empty merely because it has no hosted sessions', async () => {
+    render(<ChannelAgentsControl channelId="channel" serverId="server" />);
+    await act(async () => {});
+    expect(screen.queryByText('No agents in this channel ·')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does not claim the channel is empty when membership lookup fails', async () => {
+    vi.mocked(botApi.list).mockRejectedValue(new Error('offline'));
+    render(<ChannelAgentsControl channelId="channel" serverId="server" />);
+    await act(async () => {});
+    expect(screen.queryByText('No agents in this channel ·')).toBeNull();
+  });
+
   it('closes the dialog on Escape and restores focus to Agents', async () => {
     await open();
-    const trigger = screen.getByRole('button', { name: 'Manage channel agents' });
+    const trigger = screen.getByRole('button', { name: 'Add agent to channel' });
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));

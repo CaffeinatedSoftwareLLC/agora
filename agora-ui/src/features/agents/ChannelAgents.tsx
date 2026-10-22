@@ -13,6 +13,7 @@ export function ChannelAgentsControl({ channelId, serverId }: { channelId: strin
   const ownerId = useServerStore(s => serverId ? s.servers.get(serverId)?.ownerId : undefined);
   const [access, setAccess] = useState<{ key: string; allowed: boolean } | null>(null);
   const [open, setOpen] = useState(false);
+  const [hasAgents, setHasAgents] = useState<boolean | null>(null);
   const key = `${serverId}:${userId}`;
   const owner = !!userId && userId === ownerId;
   useEffect(() => {
@@ -26,15 +27,24 @@ export function ChannelAgentsControl({ channelId, serverId }: { channelId: strin
 
   if (!serverId || !(owner || (access?.key === key && access.allowed))) return null;
   return <>
-    <button type="button" aria-label="Manage channel agents" aria-haspopup="dialog"
-      className="shrink-0 min-h-11 rounded-full px-3 text-[13px] font-medium text-text-muted hover:bg-surface-hover hover:text-text focus-visible:outline-accent"
-      onClick={() => setOpen(true)}>Agents</button>
-    {open && <ChannelAgentsDialog key={channelId} channelId={channelId} serverId={serverId} onClose={() => setOpen(false)} />}
+    <span className="flex shrink-0 items-center gap-2">
+      {hasAgents === false && <span className="text-xs text-text-muted">No agents in this channel ·</span>}
+      <button type="button" aria-label="Add agent to channel" aria-haspopup="dialog"
+        className="flex shrink-0 items-center gap-2 min-h-11 rounded-lg border border-primary/40 bg-primary/15 px-3 text-[13px] font-semibold text-primary-text hover:bg-primary/25 focus-visible:outline-accent"
+        onClick={() => setOpen(true)}>
+        <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="8" cy="7" r="4" /><path d="M2 21v-2a6 6 0 0 1 12 0v2M19 8v8M15 12h8" />
+        </svg>
+        ＋ Add agent
+      </button>
+    </span>
+    <ChannelAgentsDialog key={channelId} channelId={channelId} serverId={serverId} isOpen={open}
+      onMembershipChange={setHasAgents} onClose={() => setOpen(false)} />
   </>;
 }
 
-export function ChannelAgentsDialog({ channelId, serverId, onClose }: {
-  channelId: string; serverId: string; onClose: () => void;
+export function ChannelAgentsDialog({ channelId, serverId, isOpen = true, onMembershipChange, onClose }: {
+  channelId: string; serverId: string; isOpen?: boolean; onMembershipChange?: (value: boolean | null) => void; onClose: () => void;
 }) {
   const [bots, setBots] = useState<BotDetail[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +52,9 @@ export function ChannelAgentsDialog({ channelId, serverId, onClose }: {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [reload, setReload] = useState(0);
+  // The closed dialog preloads membership for the empty state; opening refreshes
+  // it so changes made elsewhere are reflected in the management controls.
+  useEffect(() => { if (isOpen) setReload(n => n + 1); }, [isOpen]);
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -53,6 +66,9 @@ export function ChannelAgentsDialog({ channelId, serverId, onClose }: {
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [serverId, reload]);
+  useEffect(() => {
+    onMembershipChange?.(loading || error ? null : bots.some(bot => bot.channels.some(c => c.id === channelId)));
+  }, [bots, channelId, loading, error, onMembershipChange]);
 
   async function toggle(bot: BotDetail) {
     if (saving) return;
@@ -75,7 +91,7 @@ export function ChannelAgentsDialog({ channelId, serverId, onClose }: {
     } finally { setSaving(null); }
   }
 
-  return <Modal isOpen onClose={onClose} title="Channel agents">
+  return <Modal isOpen={isOpen} onClose={onClose} title="Channel agents">
     <p className="text-sm text-text-muted mb-3">Add agents here before starting them. People join the server; this list controls agents in this channel.</p>
     {error && <div role="alert" className="text-sm text-danger mb-3">{error} <button type="button" className="min-h-11 underline" disabled={loading || !!saving} onClick={() => setReload(n => n + 1)}>Refresh list</button></div>}
     {loading ? <p className="text-text-muted">Loading agents…</p> : <>
