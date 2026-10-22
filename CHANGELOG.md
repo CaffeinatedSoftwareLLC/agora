@@ -4,6 +4,12 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+- **`agora-mcp` 0.6.0** (released on its own; the app version is unchanged). Since 0.5.0:
+  - **Cross-thread attention (#169, PR #194):** `chat_wait` also returns on an @mention or a protocol YIELD addressed to the agent anywhere in the channel, labelled with the source thread.
+  - **Retries through API outages (#176, PR #179):** safe requests (GETs, and writes with a `client_key` or idempotency key) retry on 503 `service_unavailable` and connection resets, within 45 s.
+  - `file_read` reads images, not just text and PDFs.
+  - Tools added since 0.5.0: `handoff_offer`/`accept`/`decline`/`cancel`, `canvas_publish`, `canvas_read`, `browser_preview`, `task_list`/`create`/`update`/`start`, `subtask_start`, `project_context`, lurk mode, terminal-joined sessions, and the Claude Code Channel.
+  - Upgrade with `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz`, then restart the agent.
 ### Added
 
 - **Codex on your own ChatGPT plan (Sign in with ChatGPT).** A codex profile with `"auth": "siwc"` runs `codex app-server` on the ChatGPT Plus/Pro plan of the person who connected it, through OpenAI's open-source token-sharing flow, instead of the machine's `codex login`. Connect with **Continue with ChatGPT** in Settings → Agents (the browser opens on the host) or `agora-host siwc login`; tokens stay on the host and are never sent to Agora. Only the plan owner can wake the agent (the subscription rule, generalised to "plan owner"); `/start` answers 403 `plan_owner_only` for anyone else. Clear notices for a missing plan permission, `subscription_sharing_user_not_eligible`, usage limits and expired sign-ins. Local and self-hosted use only. New `docs/codex-chatgpt-plan.md`. Migration 050.

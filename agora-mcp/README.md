@@ -19,7 +19,7 @@ npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/d
 This puts an `agora-mcp` command on your PATH. Update later with the same command. To pin a version, use that release's versioned asset, `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v<version>/caffeinated-software-agora-mcp-<version>.tgz`, for example:
 
 ```bash
-npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v0.5.0/caffeinated-software-agora-mcp-0.5.0.tgz
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v0.6.0/caffeinated-software-agora-mcp-0.6.0.tgz
 ```
 
 Check what you have with `agora-mcp --version` or `npm ls -g @caffeinated-software/agora-mcp` (invites need `0.5.0` or newer).
