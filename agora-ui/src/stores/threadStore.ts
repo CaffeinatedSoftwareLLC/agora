@@ -34,13 +34,15 @@ interface ThreadState {
   openThreadChannelId: string | null;
   repliesByThread: Map<string, Message[]>;
   hasMore: Map<string, boolean>;
+  loadingReplies: Map<string, boolean>;
+  replyLoadErrors: Map<string, string>;
   activeThreads: Map<string, ThreadSummary[]>;
   hasMoreThreads: Map<string, boolean>;
 
   openThread: (channelId: string, messageId: string) => void;
   closeThread: () => void;
   loadReplies: (channelId: string, messageId: string) => Promise<void>;
-  loadNewer: (channelId: string, messageId: string) => Promise<void>;
+  loadOlder: (channelId: string, messageId: string) => Promise<void>;
   sendReply: (channelId: string, messageId: string, content: string, authorId: string, authorUsername: string, attachmentIds?: string[]) => Promise<boolean>;
   editReply: (channelId: string, threadId: string, replyId: string, content: string) => Promise<void>;
   deleteReply: (channelId: string, threadId: string, replyId: string) => Promise<void>;
@@ -58,6 +60,12 @@ interface ThreadState {
 }
 
 const REPLY_PAGE_SIZE = 50;
+const replyLoads = new Map<string, symbol>();
+const olderReplyLoads = new Map<string, Promise<void>>();
+
+function mapReply(m: MessagePayload): Message {
+  return { ...m, authorUsername: m.authorUsername ?? '' };
+}
 
 // Active-thread list requests, one per channel at a time. A load or a metadata event
 // that arrives while one is in flight marks the channel dirty, and the request loop
@@ -76,12 +84,14 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   openThreadChannelId: null,
   repliesByThread: new Map(),
   hasMore: new Map(),
+  loadingReplies: new Map(),
+  replyLoadErrors: new Map(),
   activeThreads: new Map(),
   hasMoreThreads: new Map(),
 
   openThread: (channelId, messageId) => {
     set({ openThreadId: messageId, openThreadChannelId: channelId });
-    get().loadReplies(channelId, messageId);
+    void get().loadReplies(channelId, messageId).catch(() => {});
   },
 
   closeThread: () => {
@@ -89,69 +99,69 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   loadReplies: async (channelId, messageId) => {
-    const data = await api.get<MessagePayload[]>(
-      `/channels/${channelId}/messages/${messageId}/replies?limit=${REPLY_PAGE_SIZE}`
-    );
-    const replies: Message[] = data.map((m) => ({
-      id: m.id,
-      content: m.content,
-      authorId: m.authorId,
-      authorUsername: m.authorUsername ?? '',
-      authorBot: m.authorBot,
-      authorAvatarUrl: m.authorAvatarUrl,
-      channelId: m.channelId,
-      createdAt: m.createdAt,
-      editedAt: m.editedAt,
-      deletedAt: m.deletedAt,
-      attachments: m.attachments,
-      artifact: m.artifact,
-      systemEvent: m.systemEvent,
-      systemData: m.systemData,
-      protocol: m.protocol,
-    }));
-    set((state) => {
-      const nextReplies = new Map(state.repliesByThread);
-      const nextHasMore = new Map(state.hasMore);
-      nextReplies.set(messageId, replies);
-      nextHasMore.set(messageId, data.length === REPLY_PAGE_SIZE);
-      return { repliesByThread: nextReplies, hasMore: nextHasMore };
-    });
+    const token = Symbol();
+    replyLoads.set(messageId, token);
+    const before = new Map((get().repliesByThread.get(messageId) ?? []).map(m => [m.id, m]));
+    set(state => ({ loadingReplies: new Map(state.loadingReplies).set(messageId, true),
+      replyLoadErrors: new Map(state.replyLoadErrors).set(messageId, '') }));
+    try {
+      const data = await api.get<MessagePayload[]>(
+        `/channels/${channelId}/messages/${messageId}/replies?limit=${REPLY_PAGE_SIZE}&order=desc`
+      );
+      if (replyLoads.get(messageId) !== token) return;
+      const replies = [...data].reverse().map(mapReply);
+      set(state => {
+        const held = state.repliesByThread.get(messageId) ?? [];
+        const merged = new Map(replies.map(m => [m.id, m]));
+        const latest = replies.at(-1)?.id ?? '';
+        // Retain socket changes/new arrivals and optimistic sends made during this GET.
+        // Older cached pages are intentionally dropped when reopening at the newest page.
+        for (const m of held) {
+          if (m.pending || m.failed || (before.get(m.id) !== m && (merged.has(m.id) || m.id > latest))) merged.set(m.id, m);
+        }
+        const sorted = [...merged.values()].sort((a, b) => {
+          if (!!a.pending !== !!b.pending) return a.pending ? 1 : -1;
+          return a.id.localeCompare(b.id);
+        });
+        return { repliesByThread: new Map(state.repliesByThread).set(messageId, sorted),
+          hasMore: new Map(state.hasMore).set(messageId, data.length === REPLY_PAGE_SIZE) };
+      });
+    } catch (error) {
+      if (replyLoads.get(messageId) === token) set(state => ({ replyLoadErrors: new Map(state.replyLoadErrors).set(messageId, 'Could not load replies. Try again.') }));
+      throw error;
+    } finally {
+      if (replyLoads.get(messageId) === token) set(state => ({ loadingReplies: new Map(state.loadingReplies).set(messageId, false) }));
+    }
   },
 
-  loadNewer: async (channelId, messageId) => {
+  loadOlder: (channelId, messageId) => {
+    const inFlight = olderReplyLoads.get(messageId);
+    if (inFlight) return inFlight;
     const existing = get().repliesByThread.get(messageId);
-    if (!existing || existing.length === 0) return;
-    if (!get().hasMore.get(messageId)) return;
-
-    const lastId = existing[existing.length - 1].id;
-    const data = await api.get<MessagePayload[]>(
-      `/channels/${channelId}/messages/${messageId}/replies?limit=${REPLY_PAGE_SIZE}&after=${lastId}`
-    );
-    const newer: Message[] = data.map((m) => ({
-      id: m.id,
-      content: m.content,
-      authorId: m.authorId,
-      authorUsername: m.authorUsername ?? '',
-      authorBot: m.authorBot,
-      authorAvatarUrl: m.authorAvatarUrl,
-      channelId: m.channelId,
-      createdAt: m.createdAt,
-      editedAt: m.editedAt,
-      deletedAt: m.deletedAt,
-      attachments: m.attachments,
-      artifact: m.artifact,
-      systemEvent: m.systemEvent,
-      systemData: m.systemData,
-      protocol: m.protocol,
-    }));
-    set((state) => {
-      const nextReplies = new Map(state.repliesByThread);
-      const nextHasMore = new Map(state.hasMore);
-      const current = nextReplies.get(messageId) ?? [];
-      nextReplies.set(messageId, [...current, ...newer]);
-      nextHasMore.set(messageId, data.length === REPLY_PAGE_SIZE);
-      return { repliesByThread: nextReplies, hasMore: nextHasMore };
-    });
+    const first = existing?.find(m => !m.pending && !m.failed);
+    if (!first || !get().hasMore.get(messageId) || get().loadingReplies.get(messageId)) return Promise.resolve();
+    const token = replyLoads.get(messageId);
+    const generation = listGeneration;
+    let run: Promise<void> | undefined;
+    run = (async () => {
+      try {
+        const data = await api.get<MessagePayload[]>(
+          `/channels/${channelId}/messages/${messageId}/replies?limit=${REPLY_PAGE_SIZE}&order=desc&before=${first.id}`
+        );
+        if (generation !== listGeneration || replyLoads.get(messageId) !== token) return;
+        const older = [...data].reverse().map(mapReply);
+        set(state => {
+          const current = state.repliesByThread.get(messageId) ?? [];
+          const currentIds = new Set(current.map(m => m.id));
+          return { repliesByThread: new Map(state.repliesByThread).set(messageId, [...older.filter(m => !currentIds.has(m.id)), ...current]),
+            hasMore: new Map(state.hasMore).set(messageId, data.length === REPLY_PAGE_SIZE) };
+        });
+      } finally {
+        if (olderReplyLoads.get(messageId) === run) olderReplyLoads.delete(messageId);
+      }
+    })();
+    olderReplyLoads.set(messageId, run);
+    return run;
   },
 
   sendReply: async (channelId, messageId, content, authorId, authorUsername, attachmentIds) => {
@@ -479,6 +489,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   clear: () => {
+    replyLoads.clear();
+    olderReplyLoads.clear();
     listGeneration++;
     listLoads.clear();
     listDirty.clear();
@@ -488,6 +500,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       openThreadChannelId: null,
       repliesByThread: new Map(),
       hasMore: new Map(),
+      loadingReplies: new Map(),
+      replyLoadErrors: new Map(),
       activeThreads: new Map(),
       hasMoreThreads: new Map(),
     });

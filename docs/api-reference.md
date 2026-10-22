@@ -793,7 +793,7 @@ Create a reply to a message, starting or continuing a thread.
 
 ### GET /channels/:id/messages/:msgId/replies
 
-Fetch replies in a thread with cursor-based pagination. Returns oldest first.
+Fetch replies in a thread with cursor-based pagination. Defaults to oldest first for existing bot clients. Use `order=desc` to open at the newest replies, then `order=desc&before=<oldest-loaded-id>` to fetch the next older page. Descending pages arrive newest first; reverse them when displaying a conversation chronologically.
 
 **Auth:** Required (must have access to the channel)
 
@@ -802,7 +802,9 @@ Fetch replies in a thread with cursor-based pagination. Returns oldest first.
 | Param    | Type   | Required | Default | Constraints                   |
 |----------|--------|----------|---------|-------------------------------|
 | `limit`  | number | no       | 50      | 1-100                         |
-| `before` | string | no       | -       | ULID cursor                   |
+| `after`  | string | no       | -       | Exclusive ULID cursor (newer replies) |
+| `before` | string | no       | -       | Exclusive ULID cursor (older replies); cannot combine with `after` |
+| `order`  | string | no       | `asc`   | `asc` or `desc`                |
 
 **Response** `200` — array of message objects with `threadId` field.
 

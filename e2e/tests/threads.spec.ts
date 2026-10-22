@@ -2,6 +2,11 @@ import { test, expect, apis, openChannel, storageStateFor } from '../lib/fixture
 import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { snap } from '../lib/snap';
 import { freshChannel, rowWith } from '../lib/helpers';
+import { checkThreadPagination } from '../lib/thread-pagination';
+
+test('[UI-01.thread-pagination] newest page, older prepend anchor and live replies beyond 50', async ({ page, seed }, ti) => {
+    await checkThreadPagination(page, seed, ti, false);
+});
 
 test('[UI-01.thread-attachment] pick a file and send an attachment-only reply', async ({ page, seed }) => {
     const { owner } = apis(seed);
