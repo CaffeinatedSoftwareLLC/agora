@@ -1245,6 +1245,14 @@ List all bots in a server.
 
 ---
 
+### GET /channels/:id/bots
+
+List channel agents for management without fetching each bot's details. Requires a human with `ViewChannel` and `ManageBots` (owner/Administrator included); existing request-role RLS also scopes channel access. Bots and ordinary members receive `403`, and inaccessible channels return `403`/`404`.
+
+By default, returns assigned agents only. Set `all=true` to include addable server agents. `q` searches usernames (up to 100 characters), `limit` is 1–100 (default 50), and `after` is the last bot ULID from the previous page. Pages are ordered by bot ID.
+
+Response: `{ bots: [{ id, username, inChannel }], hasMore, nextCursor }`. The closed UI requests only channel membership; the dialog fetches searchable pages when opened. No API keys, token-management metadata or other-channel memberships are returned.
+
 ### PATCH /servers/:serverId/bots/:id/pause
 
 Pause or resume a bot without revoking its tokens. A paused bot keeps read access (GETs and read-cursor updates) but every other request returns `423 { "error": "bot_paused", "reason", "pausedAt" }`. Written to the audit log as `bot_pause` / `bot_resume`.

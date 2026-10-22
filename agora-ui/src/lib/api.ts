@@ -161,6 +161,9 @@ export interface BotDetail extends Bot {
   channels: { id: string; name: string; channelType: number; canDirect?: boolean }[];
 }
 
+export interface ChannelAgent { id: string; username: string; inChannel: boolean }
+export interface ChannelAgentPage { bots: ChannelAgent[]; hasMore: boolean; nextCursor: string | null }
+
 export interface BotToken {
   id: string;
   name: string | null;
@@ -176,6 +179,15 @@ export interface CreateTokenResponse {
 }
 
 export const botApi = {
+  channelAgents: (channelId: string, options: { all?: boolean; query?: string; after?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.all) params.set('all', 'true');
+    if (options.query) params.set('q', options.query);
+    if (options.after) params.set('after', options.after);
+    if (options.limit) params.set('limit', String(options.limit));
+    const query = params.toString();
+    return api.get<ChannelAgentPage>(`/channels/${channelId}/bots${query ? `?${query}` : ''}`);
+  },
   list: (serverId: string) =>
     api.get<Bot[]>(`/servers/${serverId}/bots`),
 
