@@ -187,6 +187,32 @@ Clef passes everything Jev passes. Clef Flash and Metis fail the same two kinds 
 
 **Default model, recommendation.** On these tests **Clef (27B) on Workers AI is the one that can replace Jev**: it passes the whole live contract, scores the needles like Jev and is less fooled by control6. It costs $0.24 per 1M input tokens against Jev's $0.042 (about $0.0005–0.0007 per tagging call), and is limited to about 20 calls a minute. Clef Flash, cheaper ($0.038), is not good enough as the default for injection screening: it misses API docs and is borderline on one needle. It is fine for tagging if the misses on tag relevance are acceptable. Metis behaves like Clef Flash and costs more (€0.12 per 1M); its reasons to exist are EU hosting and the 32k context. Six documents and one golden set are a small sample; the owner's 1,000-chat benchmark is the bigger evidence and shows Clef Flash close to Clef on most labels.
 
+## Laya (community)
+
+> Research only, 2026-10-22: model cards, Hugging Face API listings and the Laya and llama.cpp READMEs. Nothing downloaded or run. Sizes and licences spot-checked on the Hugging Face API.
+
+**Laya** (Convai Innovations, Apache-2.0, https://huggingface.co/convaiinnovations/laya, code https://github.com/NandhaKishorM/laya) is a non-autoregressive decision model on an encoder: `laya` and `laya-typed-decisions` are ModernBERT-large (421M, 843 MB bf16), `laya-multilingual` is mmBERT-base (322M, 644 MB + 34 MB tokenizer). llama.cpp serves it at `/v1/systemone` (PR #29818; `ggml-org/Laya-GGUF`, Q8_0 449 MB), so Agora could talk to it with the same self-hosted System One adapter as a local Clef. Untuned it is near chance on typed decisions (0.362; the owner's round-1 benchmark dropped it for that reason).
+
+Three facts that change the picture for Agora:
+- **CPU is hundreds of milliseconds per question, not tens** (tens is a T4 GPU). The vendor's BENCHMARKS.md: 288 ms for one short question on a Ryzen 9 6900HX (AVX2, WSL2), 2.6 s for ten; cost is linear in questions because the text is re-encoded for every question.
+- **Short context.** `laya` was trained at 512 tokens, `laya-typed-decisions` and most fine-tunes at 1024; only `laya-multilingual` is documented up to 8,192. A 6k-token chunk is about 8 windows per question.
+- Known issues: English `noul` answers can follow the criteria labels instead of the text (issue #156; ask a two-option `choice` instead), and probabilities need calibration on your own data.
+
+**Community fine-tunes.** About 194 on `laya`, 84 on `laya-multilingual`, 14 on `laya-typed-decisions` (https://huggingface.co/models?other=base_model:finetune:convaiinnovations/laya). **None is shown to work zero-shot on arbitrary typed questions**: the safety ones expect their trained wording, the general ones report in-domain numbers. The candidates worth a test (claims are the authors', unverified):
+
+| Rank | Repo | Base, context | Download | Licence | What it is, reported results | Runs on stock llama-server? |
+|---|---|---|---|---|---|---|
+| 1 (injection) | `Abhi268170/bulwark` | laya, 1024 | 843 MB | Apache-2.0 | 22.8k items from 10 public injection/jailbreak sets plus synthetic attacks inside documents; held-out AUROC 0.911 (base 0.72–0.74), calibration error 0.024; has a phrasing for retrieved passages. English only; needs its exact question wording and text cleaning | Probably (standard Laya layout; untested) |
+| 2 (injection) | `OidoStudio/laya-mm-guard-v3-gguf` | laya-multilingual | 723 MB (629 MB GGUF + 60 MB head + tokenizer) | Apache-2.0 | 64k rows incl. indirect injections in 13 document types and 9 languages; public test F1 0.949, independent gold set (n=89) AUROC 0.967; tolerant of wording; ~85 ms per question on CPU (author) | **No**: encoder-only GGUF with a separate head, needs `laya-go-server` (0 stars) |
+| 3 (snippets) | `3p3r/sentinel-laya-multilingual` | laya-multilingual, 512 | 678 MB | Apache-2.0 | Distilled from a prompt-injection classifier; mean binary F1 0.919 on 5 outside sets; trained on prompts, not documents | Probably |
+| tags (best bet) | `chand1012/laya-instinct` | laya, 1024 | 846 MB | Apache-2.0 (training data mixed) | 505k decisions distilled largely from Jev data; 71.3% vs base 43.5%, in-domain only | Probably |
+
+`Beko2210/statim-decide-en-large` has the only held-out evidence (54 suites, no regressions) but is now PolyForm Noncommercial.
+
+**Estimated CPU cost on the i7-14700F** (PyTorch; estimates from the vendor's numbers): a search snippet with one question 0.15–0.4 s (421M) or 0.05–0.2 s (322M); a 6k-token chunk with one injection question 3–8 s (421M) or 1–3 s (322M); the same chunk with 10 tag questions 30–80 s or 12–30 s. RAM about 1.7 GB per 421M model in fp32.
+
+**Verdict.** A small Laya guard is the only local option that fits the CPU for **screening short search snippets** (well under a second per item). For **injection screening of whole files** it is a background-job cost (seconds per chunk); for **file tagging with admin-written tags** nothing is proven zero-shot, so it would need calibration or training on Agora's own labels. Before adopting any, benchmark the top three against `deepset/deberta-v3-base-injection` (184M, not Laya), which did better on unseen document attacks in one author's comparison, using Agora's golden injection set and the six smoke documents. Downloads to ask for: `bulwark` 843 MB, `laya-mm-guard-v3-gguf` 723 MB, `sentinel-laya-multilingual` 678 MB (about 2.2 GB for all three), plus the vendor's `laya` package or a llama.cpp CPU build.
+
 ## What the owner needs to create
 
 - **Cloudflare:** the account ID (dashboard → AI → Workers AI → Use REST API), and an API token from the "Create a Workers AI API Token" template, or a custom token with **Workers AI - Read** and **Workers AI - Edit** on that account. Beyond 10,000 neurons a day, the Workers Paid plan.
