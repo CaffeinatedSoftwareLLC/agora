@@ -952,6 +952,14 @@ Download a file. The API decrypts it and sends the original bytes.
 
 ---
 
+### POST /files/:fileId/trust · DELETE /files/:fileId/trust
+
+Clear a flagged file's injection warning, or undo that owner decision. **Server owner only**: members, directors, administrators who are not the owner, and bots cannot change trust. The file must be posted in a visible message in the owner's server. POST returns `409` for an unflagged file. Both methods are idempotent and return the current `FileAttachmentUpdate` payload.
+
+Trust records the owner's user ID and time (`trustedBy`, `trustedAt`, `trustedByOwner`). It clears the alarm in message attachments, file search and file text; the model's original screening result remains stored so Undo can restore the warning. File text remains data, never instructions. Changes create a channel notice and audit entry, and emit `FileAttachmentUpdate` after commit. RLS plus a column-change guard prevent an uploader from setting or clearing trust directly; changing a file's encrypted bytes or shared location invalidates its trust.
+
+---
+
 ### DELETE /files/:fileId
 
 Delete a file. Allowed for the uploader, or a member with `ManageMessages` in the file's channel.
@@ -1810,6 +1818,27 @@ Broadcast to `channel:{channelId}` when a message is edited.
   "editedAt": "2025-01-15T11:00:00.000Z"
 }
 ```
+
+---
+
+#### FileAttachmentUpdate
+
+Broadcast to `channel:{channelId}` after a file-tagging result commits. Only files attached to a live message are broadcast; private, unposted uploads are excluded. Merge the metadata into the matching file without changing the message's text, edit time or protocol. New message/reply responses and events also include current tagging metadata on attachments.
+
+```json
+{
+  "channelId": "01HYX...",
+  "messageId": "01HYX...",
+  "threadId": "01HYX...",
+  "fileId": "01HYX...",
+  "tags": ["protocol"],
+  "tagging": "done",
+  "partial": false,
+  "injectionWarning": true
+}
+```
+
+`threadId` is present for replies. `tagging` can be `pending`, `running`, `done`, `failed` or `skipped`. Boolean fields are explicit so clients can clear an earlier warning or partial-coverage indicator. Trust changes use the same event, adding `trustedByOwner` (boolean), `trustedBy` (owner user ID or null), and `trustedAt` (timestamp or null).
 
 ---
 
