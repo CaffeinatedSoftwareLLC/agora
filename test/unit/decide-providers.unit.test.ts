@@ -191,7 +191,7 @@ describe('cloudflare adapter (Clef, Clef Flash)', () => {
         expect(adapterSupports('cloudflare', 'chat')).toBe(false);
         expect(cloudflareAdapter.requiresAccountId).toBe(true);
         expect(cloudflareAdapter.supportsBaseUrl).toBe(false);
-        expect(cloudflareAdapter.defaultModels).toEqual({ decide: '@cf/cloudflare/clef-flash' });
+        expect(cloudflareAdapter.defaultModels).toEqual({ decide: '@cf/cloudflare/clef' });
         expect(cloudflareAdapter.modelChoices).toEqual({ decide: ['@cf/cloudflare/clef-flash', '@cf/cloudflare/clef'] });
         expect(cloudflareAdapter.decideLimits!.maxQuestions).toBe(64);
     });

@@ -12,7 +12,7 @@ import type { DecideQuestion } from '../../src/ai/adapters';
  *     JEV_LIVE=1 JEV_KEY=... npx vitest run test/live                     # TypeSafe Jev
  *     DECIDE_LIVE=1 DECIDE_ADAPTER=greenpt DECIDE_KEY=... npx vitest run test/live
  *     DECIDE_LIVE=1 DECIDE_ADAPTER=cloudflare DECIDE_ACCOUNT_ID=... DECIDE_KEY=... \
- *         DECIDE_MODEL=@cf/cloudflare/clef npx vitest run test/live          # Clef Flash without DECIDE_MODEL
+ *         DECIDE_MODEL=@cf/cloudflare/clef-flash npx vitest run test/live    # Clef without DECIDE_MODEL
  *
  * DECIDE_MODEL defaults to the adapter's decide model; DECIDE_BASE_URL is used by
  * adapters that accept one. Skipped unless a key is set. DECIDE_MIN_INTERVAL_MS

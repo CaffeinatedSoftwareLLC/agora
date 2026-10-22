@@ -82,8 +82,10 @@ export const cloudflareAdapter: Adapter = {
     supportsBaseUrl: false,
     requiresAccountId: true,
     defaultBaseUrl: DEFAULT_BASE,
-    defaultModels: { decide: '@cf/cloudflare/clef-flash' },
+    // Clef (27B): the only Workers AI model that passed the live contract and matched Jev on injections (2026-10-22)
+    defaultModels: { decide: '@cf/cloudflare/clef' },
     modelChoices: { decide: MODEL_IDS },
+    // The smaller context, for any model without limits of its own
     decideLimits: MODELS['@cf/cloudflare/clef-flash'].limits,
     decideModelLimits: Object.fromEntries(MODEL_IDS.map(id => [id, MODELS[id].limits])),
 

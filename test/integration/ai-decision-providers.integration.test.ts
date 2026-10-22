@@ -62,7 +62,7 @@ describe('adapters list', () => {
         expect(byId.greenpt).toMatchObject({ label: 'GreenPT Metis (decisions)', capabilities: ['decide'], requiresApiKey: true, defaultModels: { decide: 'metis' } });
         expect(byId.cloudflare).toMatchObject({
             label: 'Cloudflare Clef (decisions)', capabilities: ['decide'], requiresApiKey: true, requiresAccountId: true, supportsBaseUrl: false,
-            defaultModels: { decide: '@cf/cloudflare/clef-flash' }, modelChoices: { decide: ['@cf/cloudflare/clef-flash', '@cf/cloudflare/clef'] },
+            defaultModels: { decide: '@cf/cloudflare/clef' }, modelChoices: { decide: ['@cf/cloudflare/clef-flash', '@cf/cloudflare/clef'] },
         });
     });
 });
@@ -131,13 +131,13 @@ describe('Cloudflare provider', () => {
     });
 
     test('the provider test calls Workers AI with the stored account and token', async () => {
-        const calls = stubFetch(url => jsonResponse({ result: systemOne('clef-flash'), success: true, errors: [], messages: [] }));
+        const calls = stubFetch(url => jsonResponse({ result: systemOne('clef'), success: true, errors: [], messages: [] }));
         const res = await ctx.request.post(`${base()}/providers/${providerId}/test`).set(owner.auth).send({});
         expect(res.body).toEqual({ ok: true });
         expect(calls).toHaveLength(1);
-        expect(calls[0].url).toBe(CF_URL('@cf/cloudflare/clef-flash'));
+        expect(calls[0].url).toBe(CF_URL('@cf/cloudflare/clef'));
         expect(calls[0].auth).toBe('Bearer cf-secret-token');
-        expect(calls[0].body.model).toBe('clef-flash');
+        expect(calls[0].body.model).toBe('clef');
     });
 
     test.each([

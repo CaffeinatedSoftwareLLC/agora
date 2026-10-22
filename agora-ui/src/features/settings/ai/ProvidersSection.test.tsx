@@ -102,7 +102,7 @@ it('does not offer URL editing for an adapter without base URL support', () => {
 
 const cloudflare = { id: 'cloudflare', label: 'Cloudflare Clef (decisions)', capabilities: ['decide'] as AICapability[],
   requiresApiKey: true, supportsBaseUrl: false, requiresAccountId: true, defaultBaseUrl: 'https://api.cloudflare.com/client/v4',
-  defaultModels: { decide: '@cf/cloudflare/clef-flash' } };
+  defaultModels: { decide: '@cf/cloudflare/clef' } };
 const ACCOUNT = '0123456789abcdef0123456789abcdef';
 
 function cloudflareView(accountId: string | null = ACCOUNT) {
@@ -131,7 +131,7 @@ it('shows and edits the account ID of a Cloudflare provider, and offers no base 
   render(cloudflareView());
   expect(screen.getByText(`Account ${ACCOUNT}`)).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Edit base URL' })).toBeNull();
-  expect(screen.getByLabelText('Test model for Clef')).toHaveProperty('value', '@cf/cloudflare/clef-flash');
+  expect(screen.getByLabelText('Test model for Clef')).toHaveProperty('value', '@cf/cloudflare/clef');
 
   fireEvent.click(screen.getByRole('button', { name: 'Edit account ID' }));
   fireEvent.change(screen.getByLabelText('Account ID for Clef'), { target: { value: 'not valid!' } });
