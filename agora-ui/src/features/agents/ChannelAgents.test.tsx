@@ -114,7 +114,7 @@ describe('channel agent access', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add agent to channel' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Add claude' }));
     await screen.findByRole('button', { name: 'Remove claude' });
-    expect(screen.queryByText('No agents in this channel ·')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('No agents in this channel ·')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'Remove claude' }));
     await screen.findByText('No agents in this channel ·');
   });
