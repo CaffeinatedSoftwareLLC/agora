@@ -30,13 +30,13 @@ it.each(['Roles', 'Role Assignment', 'Channel Overrides', 'Bots', 'Agents', 'AI'
   mount();
   expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
   expect(screen.queryByRole('main')).toBeNull();
-  fireEvent.click(screen.getByRole('link', { name: label, exact: true }));
+  fireEvent.click(screen.getByRole('link', { name: label }));
   expect(screen.queryByRole('navigation')).toBeNull();
   expect(screen.getByRole('main', { name: 'Settings section' })).toBeTruthy();
   expect(screen.getAllByRole('link', { name: /^Back/ })).toHaveLength(1);
   fireEvent.click(screen.getByRole('link', { name: 'Back to settings' }));
   expect(screen.queryByRole('main')).toBeNull();
-  expect(document.activeElement).toBe(screen.getByRole('link', { name: label, exact: true }));
+  expect(document.activeElement).toBe(screen.getByRole('link', { name: label }));
 });
 
 it('supports deep links and switches to two columns when rotated wider', () => {
