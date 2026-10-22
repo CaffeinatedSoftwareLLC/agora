@@ -254,8 +254,11 @@ export async function adminRoutes(app: FastifyInstance) {
         // invites, run tokens and not-yet-started runs. Restoring the account later brings none
         // of it back; the owner issues new tokens.
         const bots = 'SELECT id FROM users WHERE bot = true AND (id = $1 OR bot_owner_id = $1)';
-        await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE revoked_at IS NULL AND bot_id IN (${bots})`, [targetId]);
+        // Invites first: a concurrent redeem holds its invite row until it commits, so this waits
+        // for it, and the token revoke below, a new statement under read committed, then sees the
+        // token that redeem minted. In the other order that token could be missed.
         await db.query('SELECT expire_agent_invites_for_suspended($1)', [targetId]);
+        await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE revoked_at IS NULL AND bot_id IN (${bots})`, [targetId]);
         await db.query(
             `UPDATE exec_run_tokens SET revoked_at = NOW()
              WHERE revoked_at IS NULL AND run_id IN (SELECT id FROM exec_runs WHERE submitted_by IN (${bots}))`,
