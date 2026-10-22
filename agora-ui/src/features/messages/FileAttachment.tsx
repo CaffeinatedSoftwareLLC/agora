@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Attachment } from '../../stores/messageStore';
-import { getAuthHeaders } from '../../lib/api';
+import { api, getAuthHeaders } from '../../lib/api';
 import { usePalette } from '../../theme';
+import { useFileMetadataStore } from '../../stores/fileMetadataStore';
+import { useMessageStore } from '../../stores/messageStore';
+import { useThreadStore } from '../../stores/threadStore';
+import { useViewerAuthority } from '../agents/viewerAuthority';
+import { Modal } from '../../components/ui/Modal';
+import type { FileAttachmentUpdatePayload } from '../../lib/contracts/ws-events';
 
 /** Keyboard focus ring shared by every interactive attachment control. */
 const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
@@ -13,21 +19,40 @@ function formatFileSize(bytes: number): string {
 }
 
 /** A file in a message, with the tags the server's decision model gave it (when it tags files). */
-export function FileAttachment({ attachment }: { attachment: Attachment }) {
+export function FileAttachment({ attachment, channelId }: { attachment: Attachment; channelId?: string }) {
   return (
     <>
       <AttachmentBody attachment={attachment} />
-      {!attachment.deletedAt && <FileTags attachment={attachment} />}
+      {!attachment.deletedAt && <FileTags attachment={attachment} channelId={channelId} />}
     </>
   );
 }
 
 /** Tag chips under a file, and a warning when its text tries to instruct an AI reader. */
-export function FileTags({ attachment }: { attachment: Pick<Attachment, 'tags' | 'tagging' | 'partial' | 'injectionWarning'> }) {
+export function FileTags({ attachment: snapshot, channelId }: { channelId?: string; attachment: Pick<Attachment, 'tags' | 'tagging' | 'partial' | 'injectionWarning' | 'trustedByOwner' | 'trustedAt'> & { id?: string } }) {
+  const live = useFileMetadataStore(s => snapshot.id ? s.byFile.get(snapshot.id) : undefined);
+  const attachment = live ? { ...snapshot, ...live } : snapshot;
+  const authority = useViewerAuthority(channelId, !!attachment.injectionWarning || !!attachment.trustedByOwner);
+  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const canTrust = authority === 'owner' && !!snapshot.id;
+  async function changeTrust(trust: boolean) {
+    if (!snapshot.id || saving || !canTrust) return;
+    setSaving(true); setError('');
+    try {
+      const endpoint = `/files/${snapshot.id}/trust`;
+      const update = trust ? await api.post<FileAttachmentUpdatePayload>(endpoint, {}) : await api.delete<FileAttachmentUpdatePayload>(endpoint);
+      useMessageStore.getState().updateFileAttachment(update);
+      useThreadStore.getState().updateFileAttachment(update);
+      setConfirming(false);
+    } catch { setError('Could not change file trust. Try again.'); }
+    finally { setSaving(false); }
+  }
   const P = usePalette();
   const tags = attachment.tags ?? [];
   const busy = attachment.tagging === 'pending' || attachment.tagging === 'running';
-  if (tags.length === 0 && !attachment.injectionWarning && !busy) return null;
+  if (tags.length === 0 && !attachment.injectionWarning && !attachment.trustedByOwner && !busy && !error) return null;
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]" style={{ color: P.muted }}>
       {tags.map(tag => (
@@ -37,11 +62,25 @@ export function FileTags({ attachment }: { attachment: Pick<Attachment, 'tags' |
       ))}
       {attachment.partial && tags.length > 0 && <span title="The file was longer than what was read">(partly read)</span>}
       {busy && <span>tagging…</span>}
-      {attachment.injectionWarning && (
-        <span style={{ color: P.warn }} title="A decision model judged that this file contains text addressed to an AI">
+      {attachment.injectionWarning && !attachment.trustedByOwner && (
+        <span className="basis-full text-[13px]" style={{ color: P.warn }} title="A decision model judged that this file contains text addressed to an AI">
           ⚠ Contains text that tries to instruct an AI
         </span>
       )}
+      {attachment.trustedByOwner && <span className="text-[13px]" title={attachment.trustedAt ? `Trusted ${new Date(attachment.trustedAt).toLocaleString()}` : undefined}>✓ Trusted by owner</span>}
+      {canTrust && attachment.injectionWarning && !attachment.trustedByOwner && <button type="button" disabled={saving}
+        className={`min-h-11 min-w-11 rounded pr-2 text-left text-[13px] font-medium underline ${FOCUS_RING}`} onClick={() => setConfirming(true)}>Mark as trusted</button>}
+      {canTrust && attachment.trustedByOwner && <button type="button" disabled={saving}
+        className={`min-h-11 min-w-11 rounded px-2 text-[13px] underline ${FOCUS_RING}`} onClick={() => void changeTrust(false)}>Undo</button>}
+      {error && !confirming && <span role="alert">{error}</span>}
+      <Modal isOpen={confirming} title="Trust this file?" onClose={() => { if (!saving) setConfirming(false); }}>
+        <p className="text-sm text-text">Agents will no longer be warned about this file. Its content remains data, not instructions.</p>
+        {error && <p role="alert" className="mt-2 text-sm text-danger">{error}</p>}
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button type="button" disabled={saving} className="min-h-11 rounded px-3 text-text" onClick={() => setConfirming(false)}>Cancel</button>
+          <button type="button" disabled={saving} className="min-h-11 rounded bg-primary px-3 font-medium text-on-primary" onClick={() => void changeTrust(true)}>{saving ? 'Saving…' : 'Trust file'}</button>
+        </div>
+      </Modal>
     </div>
   );
 }

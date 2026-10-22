@@ -12,6 +12,7 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { useUnreadStore } from '../../stores/unreadStore';
 import { useThreadStore } from '../../stores/threadStore';
+import { useFileMetadataStore } from '../../stores/fileMetadataStore';
 import type {
   ReadyPayload,
   MessagePayload,
@@ -22,6 +23,7 @@ import type {
   AgentPresencePayload,
   ThreadMetadataUpdatePayload,
   BotMessageStreamPayload,
+  FileAttachmentUpdatePayload,
 } from '../../lib/contracts/ws-events';
 import { SocketContext } from './SocketContext';
 import { useVoiceStore } from '../voice/voiceStore';
@@ -47,6 +49,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const s = createSocket();
 
     s.on('connect', () => {
+      useFileMetadataStore.getState().clear();
       setConnectionStatus('connected');
       setSocket(s);
       // Signed in and connected: pick up the theme saved on this account (another device may have changed it)
@@ -108,6 +111,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           }
         }
       }
+    });
+
+    s.on('FileAttachmentUpdate', (data: FileAttachmentUpdatePayload) => {
+      useMessageStore.getState().updateFileAttachment(data);
+      useThreadStore.getState().updateFileAttachment(data);
     });
 
     s.on('MessageUpdate', (data: MessageUpdatePayload) => {

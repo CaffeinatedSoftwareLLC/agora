@@ -143,6 +143,41 @@ describe('Threads', () => {
         expect(page1.body[0].threadId).toBe(pid);
     });
 
+    test('newest-first replies page backward without gaps or changing the default forward API', async () => {
+        const parent = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Newest-page parent' });
+        const pid = parent.body.id;
+        const ids: string[] = [];
+        for (let i = 0; i < 7; i++) {
+            const res = await ctx.request.post(`/channels/${channelId}/messages/${pid}/replies`).set(owner.auth).send({ content: `newest-${i}` });
+            expect(res.status).toBe(201);
+            ids.push(res.body.id);
+        }
+        const endpoint = `/channels/${channelId}/messages/${pid}/replies`;
+        const newest = await ctx.request.get(`${endpoint}?limit=3&order=desc`).set(owner.auth);
+        expect(newest.status).toBe(200);
+        expect(newest.body.map((m: any) => m.id)).toEqual(ids.slice(-3).reverse());
+        const older = await ctx.request.get(`${endpoint}?limit=3&order=desc&before=${newest.body[2].id}`).set(owner.auth);
+        expect(older.status).toBe(200);
+        expect(older.body.map((m: any) => m.id)).toEqual(ids.slice(1, 4).reverse());
+        const oldest = await ctx.request.get(`${endpoint}?limit=3&order=desc&before=${older.body[2].id}`).set(owner.auth);
+        expect(oldest.body.map((m: any) => m.id)).toEqual([ids[0]]);
+        const empty = await ctx.request.get(`${endpoint}?order=desc&before=${ids[0]}`).set(owner.auth);
+        expect(empty.body).toEqual([]);
+        const forward = await ctx.request.get(`${endpoint}?limit=3&after=${ids[0]}`).set(owner.auth);
+        expect(forward.body.map((m: any) => m.id)).toEqual(ids.slice(1, 4));
+        const defaultPage = await ctx.request.get(`${endpoint}?limit=3`).set(owner.auth);
+        expect(defaultPage.body.map((m: any) => m.id)).toEqual(ids.slice(0, 3));
+        const clamped = await ctx.request.get(`${endpoint}?limit=500&order=desc`).set(owner.auth);
+        expect(clamped.status).toBe(200);
+        expect(clamped.body).toHaveLength(7);
+        const outsider = await authedUser(ctx.request, 'newestoutsider');
+        expect((await ctx.request.get(`${endpoint}?order=desc&before=${ids[6]}`).set(outsider.auth)).status).toBe(403);
+        expect((await ctx.request.get(`${endpoint}?before=${ids[3]}&after=${ids[0]}`).set(owner.auth)).status).toBe(400);
+        expect((await ctx.request.get(`${endpoint}?order=invalid`).set(owner.auth)).status).toBe(400);
+        expect((await ctx.request.get(`${endpoint}?before=not-a-ulid&order=desc`).set(owner.auth)).status).toBe(400);
+        expect((await ctx.request.get(`${endpoint}?after=${ids[0]}&after=${ids[1]}`).set(owner.auth)).status).toBe(400);
+    });
+
     test('active threads endpoint returns threads ordered by last_reply_at DESC', async () => {
         // Create 3 threads with staggered replies
         const msgIds: string[] = [];

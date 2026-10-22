@@ -30,7 +30,7 @@ describe('shared shell actions', () => {
     const ui = useUIStore.getState();
     const lock = vi.spyOn(api, 'patch');
     ui.openThreadView('channel-a', 'parent');
-    expect(api.get).toHaveBeenCalledWith('/channels/channel-a/messages/parent/replies?limit=50');
+    expect(api.get).toHaveBeenCalledWith('/channels/channel-a/messages/parent/replies?limit=50&order=desc');
     ui.closeAux();
     expect(useThreadStore.getState().openThreadId).toBe('parent');
     expect(lock).not.toHaveBeenCalled();
