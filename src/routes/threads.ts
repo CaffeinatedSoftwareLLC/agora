@@ -23,7 +23,7 @@ export async function threadRoutes(app: FastifyInstance) {
             body: {
                 type: 'object',
                 properties: {
-                    content: { type: 'string', minLength: 1, maxLength: 4000 },
+                    content: { type: 'string', maxLength: 4000 },
                     client_key: { type: 'string', minLength: 1, maxLength: 100 },
                     attachments: messageAttachmentsSchema,
                     // A rendered document for the canvas pane (src/lib/artifacts.ts)

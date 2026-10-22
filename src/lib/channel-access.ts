@@ -4,14 +4,20 @@ import { checkChannelMembership } from '../routes/shared';
 /**
  * Whether a user holds the given permissions in a channel: server membership, then
  * the layered permission computation (roles, channel overrides). For a channel with
- * no server, channel membership.
+ * no server, channel membership. Explicitly assigned bots can opt into the same
+ * role/override calculation with isBot, using their channel access as membership.
  */
 export async function checkChannelPermissions(
     db: any,
     channelId: string,
     userId: string,
-    requiredPerms: bigint
+    requiredPerms: bigint,
+    options: { isBot?: boolean } = {},
 ): Promise<{ allowed: boolean; error?: string; status?: number }> {
+    // Explicit bot assignment replaces human membership, not channel permissions.
+    if (options.isBot && !await checkChannelMembership(db, channelId, userId, true)) {
+        return { allowed: false, error: 'This bot has no access to the channel', status: 403 };
+    }
     const channelRow = await db.query('SELECT id, server_id FROM channels WHERE id = $1', [channelId]);
     if (channelRow.rows.length === 0) return { allowed: false, error: 'Channel not found', status: 404 };
     const channel = channelRow.rows[0];
@@ -21,8 +27,10 @@ export async function checkChannelPermissions(
         const serverRow = await db.query('SELECT owner_id, everyone_role_id FROM servers WHERE id = $1', [serverId]);
         if (serverRow.rows.length === 0) return { allowed: false, error: 'Server not found', status: 404 };
 
-        const memberCheck = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [channel.server_id, userId]);
-        if (memberCheck.rows.length === 0) return { allowed: false, error: 'Not a server member', status: 403 };
+        if (!options.isBot) {
+            const memberCheck = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [channel.server_id, userId]);
+            if (memberCheck.rows.length === 0) return { allowed: false, error: 'Not a server member', status: 403 };
+        }
 
         const userRolesRes = await db.query('SELECT role_id FROM member_roles WHERE server_id = $1 AND user_id = $2', [channel.server_id, userId]);
         const roleIds = userRolesRes.rows.map((r: any) => r.role_id.trim());

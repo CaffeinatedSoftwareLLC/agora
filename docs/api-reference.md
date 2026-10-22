@@ -893,7 +893,7 @@ To attach a file to a message, upload it first, then pass its `id` in the `attac
 
 Upload one file to a channel.
 
-**Auth:** Required. Needs `UploadFiles` and `SendMessages` in the channel.
+**Auth:** Human session or `Authorization: Bot <token>`. Needs `UploadFiles` and `SendMessages` in the channel. Bots also need explicit `bot_channel_access` and `ViewChannel`; they use `@everyone` plus applicable role/channel overrides without human server membership. Paused bots receive `423`.
 
 **Rate limit:** 20 uploads per minute per user.
 
@@ -926,12 +926,15 @@ curl -X POST http://localhost:3000/files/upload \
 | Status | Meaning |
 |---|---|
 | `400` | No file, or `channel_id` missing |
-| `403` | Not a server member, or missing permissions |
+| `403` | Missing human membership, bot channel access, or required permissions |
 | `404` | Channel not found |
 | `413` | Larger than the instance's max file size |
 | `415` | Extension not allowed, or the content doesn't match an allowed type (checked by magic bytes) |
+| `423` | Bot is paused |
 | `502` | The file could not be written to storage |
 | `507` | Instance storage quota exceeded |
+
+People and bots share the encryption, quota, rate limit and tagging pipeline. This response creates an unposted file; share it with `attachments: [fileId]` in a channel message or thread reply. MCP agents can use `file_upload` for both steps. A `413` follows the instance admin's `files.max_size_bytes`; reduce the file or ask the admin to change that setting.
 
 ---
 
