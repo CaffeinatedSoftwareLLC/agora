@@ -67,7 +67,7 @@ For protection against a stolen disk or a copied volume, add full-disk or volume
 
 ## What leaves the instance when a decision model is used
 
-A decision model is optional and every use is off by default. When a use is switched on, the text below is sent to the decision provider (TypeSafe, for the built-in adapter) over HTTPS. Nothing is sent for a use that is off.
+A decision model is optional and every use is off by default. When a use is switched on, the text below is sent to the decision provider (TypeSafe, GreenPT or Cloudflare Workers AI, whichever the `decide` route names) over HTTPS. Nothing is sent for a use that is off.
 
 | Use | What is sent |
 |---|---|

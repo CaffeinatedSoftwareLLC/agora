@@ -895,7 +895,7 @@ Key validation lives in `src/config.ts`: the key must be 64 hex characters when 
 
 ## Decision Model
 
-An optional model that answers typed questions about text (TypeSafe Jev is the first adapter). The plan and its decisions are in [`planning/jev-wbs.md`](planning/jev-wbs.md). Three rules hold everywhere:
+An optional model that answers typed questions about text: TypeSafe Jev, GreenPT Metis, or Cloudflare Clef and Clef Flash on Workers AI ([`planning/decision-models-clef-metis.md`](planning/decision-models-clef-metis.md)). The plan and its decisions are in [`planning/jev-wbs.md`](planning/jev-wbs.md). Three rules hold everywhere:
 
 1. **Optional.** With no `decide` route, or a use switched off, the code path makes no decision call and behaves as before. Every caller has a named fallback.
 2. **Advisory.** An answer orders, labels or routes. It never grants access, loosens a limit or picks a provider.
@@ -906,7 +906,7 @@ An optional model that answers typed questions about text (TypeSafe Jev is the f
 | Layer | File | What it does |
 |---|---|---|
 | Contract | `src/ai/adapters/types.ts` | `DecideQuestion` (`noul` yes/no, `choice`, `score`), `DecideAnswer`, `DecideError`. Provider-neutral: another decision model is another adapter |
-| Adapter | `src/ai/adapters/typesafe.ts` | `POST /v1/systemone`. One total deadline (3 s by default) that covers retries; backoff on 429 and 529 honouring `Retry-After`; errors without key material |
+| Adapters | `src/ai/adapters/typesafe.ts`, `greenpt.ts`, `cloudflare.ts`, `decide-http.ts` | All three speak System One (`state` and typed `questions` in, `answers` out). `systemOneAdapter()` builds TypeSafe and GreenPT (`POST /v1/systemone`; their errors are `{ detail }` and `{ error, code }`); Cloudflare posts the same body to Workers AI (`/accounts/{accountId}/ai/run/@cf/cloudflare/clef[-flash]`) and unwraps its `{ result, success, errors }` envelope. `decide-http.ts`: one total deadline (3 s by default) that covers retries; backoff on each provider's retryable statuses honouring `Retry-After`; errors without key material. Limits can differ per model (`decideModelLimits`) and may cap questions and answer options per request |
 | Validation | `src/ai/decide-validate.ts` | Request size guards before the call. After it: every question answered and none extra, types match, probabilities finite and in 0–1, a choice that was offered |
 | Service | `src/ai/decide.ts` | **The only caller of an adapter's `decide`.** Resolves the server's route, checks the use's switch, the route's budget and the use's share, calls, validates, records usage with `decision_use`. Returns a typed outcome: `ok`, `disabled`, `unconfigured`, `over_budget`, `too_large`, `provider_error`, `invalid_response` |
 | Questions | `src/ai/decision-questions.ts` | The wording of every question, versioned. A version is stored with each result |

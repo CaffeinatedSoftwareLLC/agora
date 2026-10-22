@@ -415,8 +415,11 @@ Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImag
 
 **Decision model (optional).** Settings → AI → Decision model. A decision model answers quick yes/no and pick-one questions about text. Agora works the same without one; each use below is off until you switch it on.
 
-1. Add a provider of type **TypeSafe Jev (decisions)** with your TypeSafe API key, and press Test.
-2. Under Capabilities, set **Decide** to that provider (model `jev-latest`) and turn it on. Set daily limits there if you want a ceiling; Jev's price is entered as $0.042 per 1M input tokens.
+1. Add a decision provider and press Test. There are three types:
+   - **TypeSafe Jev (decisions)**: your TypeSafe API key. Model `jev-latest`, $0.042 per 1M input tokens.
+   - **GreenPT Metis (decisions)**: your GreenPT API key. Model `metis`. Served from the EU; Metis runs Cloudflare's Clef Flash.
+   - **Cloudflare Clef (decisions)**: your Cloudflare **account ID** and an **API token** with the *Workers AI - Read* and *Workers AI - Edit* permissions (dashboard → AI → Workers AI → Use REST API → Create a Workers AI API Token; the account ID is on the same page). Model `@cf/cloudflare/clef-flash` ($0.038 per 1M input tokens) or `@cf/cloudflare/clef` ($0.24 per 1M). Beyond Workers AI's free 10,000 neurons a day you need the Workers Paid plan.
+2. Under Capabilities, set **Decide** to that provider and model and turn it on. Set daily limits there if you want a ceiling, and enter the input price above so costs are counted (output is free for all three).
 3. Under **Decision model**, switch on what you want:
    - *Assistant routing*: the assistant works out what an `@assistant` request is asking for. With a Search route enabled, this is also what lets the assistant search the web ("@assistant look up …"): it posts the results as a card and, with Tavily, follows with its own written answer, which costs one extra chat call per search.
    - *Search screening*: web search results are checked for text that tries to give instructions to the AI reading them; such text is withheld. *Strict* refuses a search whose results could not be checked. Gemini-grounded results cannot be screened (Google's terms), so strict screening needs Tavily.
