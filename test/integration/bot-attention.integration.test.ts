@@ -24,6 +24,8 @@ beforeEach(async () => {
     expect(ch.status).toBe(201); channelId = ch.body.id;
     for (const id of [botId, otherBotId]) expect((await ctx.request.post(`/channels/${channelId}/bots/${id}`).set(owner.auth)).status).toBe(201);
     a = (await post('Thread A')).id; b = (await post('Thread B')).id;
+    // Begin watching before each test's new attention is posted.
+    expect((await feed()).status).toBe(200);
 });
 
 async function post(content: string, thread?: string, credentials: Record<string, string> = owner.auth) {
@@ -34,6 +36,49 @@ async function post(content: string, thread?: string, credentials: Record<string
 const feed = (query = '') => ctx.request.get(`/channels/${channelId}/attention${query}`).set(auth);
 const ack = (id: string, target = channelId) => ctx.request.put(`/bots/@me/attention-cursors/${target}`).set(auth).send({ lastReadId: id });
 const yieldTo = (name: string) => `[AGORA/v1 MODE=fix STATE=TURN]\nPlease review\n[YIELD to=${name}]`;
+
+async function unwatchedChannel() {
+    const ch = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth)
+        .send({ name: `fresh-${generateUlid().toLowerCase()}`, channelType: 3 });
+    expect(ch.status).toBe(201);
+    expect((await ctx.request.post(`/channels/${ch.body.id}/bots/${botId}`).set(owner.auth)).status).toBe(201);
+    return ch.body.id as string;
+}
+
+it('first use skips historical mentions, persists the baseline, and delivers later attention', async () => {
+    const fresh = await unwatchedChannel();
+    const old = await ctx.request.post(`/channels/${fresh}/messages`).set(owner.auth).send({ content: '@AttCodex already handled' });
+    expect(old.status).toBe(201);
+    await ctx.db.query("UPDATE messages SET created_at = NOW() - INTERVAL '4 days' WHERE id = $1", [old.body.id]);
+    const read = () => ctx.request.get(`/channels/${fresh}/attention`).set(auth);
+    expect((await read()).body).toEqual([]);
+    const saved = await ctx.request.get('/bots/@me/attention-cursors').set(auth);
+    expect(saved.body).toContainEqual(expect.objectContaining({ channelId: fresh, lastReadId: old.body.id }));
+    const next = await ctx.request.post(`/channels/${fresh}/messages`).set(owner.auth).send({ content: '@AttCodex new task' });
+    expect(next.status).toBe(201);
+    expect((await read()).body.map((m: any) => m.id)).toEqual([next.body.id]);
+    // The initializer never consumes the native channel history.
+    expect((await ctx.request.get('/bots/@me/cursors').set(auth)).body.some((c: any) => c.channelId === fresh)).toBe(false);
+    expect((await ctx.request.get(`/channels/${fresh}/messages`).set(auth)).body.map((m: any) => m.id)).toContain(old.body.id);
+});
+
+it('first use in an empty channel does not baseline away its first future post', async () => {
+    const fresh = await unwatchedChannel();
+    expect((await ctx.request.get(`/channels/${fresh}/attention`).set(auth)).body).toEqual([]);
+    const next = await ctx.request.post(`/channels/${fresh}/messages`).set(owner.auth).send({ content: yieldTo('AttCodex') });
+    expect(next.status).toBe(201);
+    expect((await ctx.request.get(`/channels/${fresh}/attention`).set(auth)).body.map((m: any) => m.id)).toEqual([next.body.id]);
+});
+
+it('an explicit first-use after cursor opts into pending historical attention', async () => {
+    const fresh = await unwatchedChannel();
+    const old = await ctx.request.post(`/channels/${fresh}/messages`).set(owner.auth).send({ content: '@AttCodex intentionally requested history' });
+    expect(old.status).toBe(201);
+    const history = await ctx.request.get(`/channels/${fresh}/attention?after=00000000000000000000000000`).set(auth);
+    expect(history.body.map((m: any) => m.id)).toEqual([old.body.id]);
+    // Repeat GET remains read-only once initialized: only ack advances delivery.
+    expect((await ctx.request.get(`/channels/${fresh}/attention`).set(auth)).body.map((m: any) => m.id)).toEqual([old.body.id]);
+});
 
 it('finds mentions and strict protocol YIELDs across replies and top-level posts with trusted envelopes', async () => {
     await post('Earlier unrelated context', b);
@@ -128,7 +173,7 @@ it('a paused bot can still receive attention and acknowledge its read cursor', a
 });
 
 it('RLS hides other bots cursors and refuses a forged cursor row', async () => {
-    await ctx.db.query('INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id) VALUES ($1, $3, $4), ($2, $3, $4)', [botId, otherBotId, channelId, a]);
+    await ctx.db.query('INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id) VALUES ($1, $3, $4), ($2, $3, $4) ON CONFLICT DO NOTHING', [botId, otherBotId, channelId, a]);
     const client = await ctx.db.connect();
     try {
         await client.query('BEGIN'); await client.query('SET LOCAL ROLE app_user');

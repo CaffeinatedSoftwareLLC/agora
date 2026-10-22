@@ -56,6 +56,17 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         if (!await botAccess(request, reply, channelId)) return;
         const { after, limit = 100 } = request.query as { after?: string; limit?: number };
         const db = request.dbClient!;
+        // A newly upgraded client starts watching now, rather than replaying days
+        // of old mentions. An explicit `after` opts into an earlier starting point.
+        // Persist even for an empty channel so the next post can be delivered.
+        // Separate statements give a concurrent initializer's committed cursor a
+        // fresh READ COMMITTED snapshot before the feed query below.
+        await db.query(`INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id)
+            SELECT $1, $2, COALESCE($3::CHAR(26), (
+                SELECT id FROM messages WHERE channel_id = $2 ORDER BY id DESC LIMIT 1
+            ), '00000000000000000000000000'::CHAR(26))
+            WHERE NOT EXISTS (SELECT 1 FROM bot_attention_cursors WHERE bot_id = $1 AND channel_id = $2)
+            ON CONFLICT (bot_id, channel_id) DO NOTHING`, [request.userId, channelId, after ?? null]);
         const rows = await db.query(`WITH cutoff AS (
             SELECT GREATEST(COALESCE($3::CHAR(26), ''::CHAR(26)), COALESCE((
                 SELECT a.last_read_id FROM bot_attention_cursors a WHERE a.bot_id = $1 AND a.channel_id = $2

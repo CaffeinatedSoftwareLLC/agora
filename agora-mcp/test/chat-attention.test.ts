@@ -108,11 +108,22 @@ it('loads the persisted attention cursor on a new MCP instance', async () => {
     expect(f.api.getAttentionCursors).toHaveBeenCalledTimes(2);
 });
 
-it('first use does not baseline away already-pending attention', async () => {
+it('delivers all attention supplied by the server without adding a client-side baseline', async () => {
     const f = fixture([message('001', 'B'), message('002', 'B')]);
     const text = await f.read(f.wait);
     expect(text).toContain('(001)');
     expect(text).toContain('(002)');
+});
+
+it('honors an empty first-use server baseline, then delivers new cross-thread attention', async () => {
+    const f = fixture([]);
+    const initial = await f.read(f.wait);
+    expect(initial).toContain('no new messages');
+    expect(f.api.updateAttentionCursor).not.toHaveBeenCalled();
+    f.api.getAttention.mockResolvedValue([message('003', 'B')]);
+    const next = await f.read(f.wait);
+    expect(next).toContain('(003)');
+    expect(f.api.updateAttentionCursor).toHaveBeenLastCalledWith('C', '003');
 });
 
 it('reports unsupported server attention rather than silently waiting only in one thread', async () => {
