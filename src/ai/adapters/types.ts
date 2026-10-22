@@ -10,6 +10,8 @@ export interface ProviderCredentials {
     apiKey?: string;
     /** Adapter-specific API root (e.g. an OpenAI-compatible server). Falls back to the adapter default. */
     baseUrl?: string;
+    /** Account the key belongs to, for APIs that address one in the URL (Cloudflare). */
+    accountId?: string;
 }
 
 export interface ConversationMessage {
@@ -47,6 +49,8 @@ export interface AdapterInfo {
     capabilities: Capability[];
     requiresApiKey: boolean;
     supportsBaseUrl: boolean;
+    /** The provider needs an account ID besides the key (Cloudflare Workers AI). */
+    requiresAccountId?: boolean;
     defaultBaseUrl: string;
     /** Suggested model per capability; admins can enter any model ID. */
     defaultModels: Partial<Record<Capability, string>>;
@@ -193,6 +197,10 @@ export interface DecideLimits {
     maxChoiceOptions: number;
     minScoreLevels: number;
     maxScoreLevels: number;
+    /** Questions per request, when the provider caps them (Cloudflare Clef: 64). */
+    maxQuestions?: number;
+    /** Answer options across the whole request, when capped (a yes/no question has two). */
+    maxOptions?: number;
 }
 
 export type DecideFailureKind = 'transient' | 'permanent' | 'timeout' | 'invalid_response';
@@ -231,5 +239,7 @@ export interface Adapter extends AdapterInfo {
     decide?(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult>;
     /** Present exactly when the adapter lists `decide`. */
     decideLimits?: DecideLimits;
+    /** Limits of particular models, where they differ from `decideLimits` (Clef and Clef Flash). */
+    decideModelLimits?: Record<string, DecideLimits>;
     testConnection(creds: ProviderCredentials, model: string, capability?: Capability): Promise<ConnectionResult>;
 }

@@ -367,7 +367,7 @@ describe('tavily adapter', () => {
 describe('adapter registry', () => {
     it('lists adapters with capabilities and no functions', () => {
         const list = listAdapters();
-        expect(list.map(a => a.id)).toEqual(['anthropic', 'openai', 'gemini', 'tavily', 'typesafe']);
+        expect(list.map(a => a.id)).toEqual(['anthropic', 'openai', 'gemini', 'tavily', 'typesafe', 'greenpt', 'cloudflare']);
         for (const a of list) {
             expect(a.capabilities.length).toBeGreaterThan(0);
             expect(Object.values(a).some(v => typeof v === 'function')).toBe(false);

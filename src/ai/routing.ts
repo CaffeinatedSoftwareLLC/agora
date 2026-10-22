@@ -50,7 +50,7 @@ export function decryptProviderKey(row: { api_key_enc: string | null; api_key_iv
  */
 export async function resolveRoute(db: Queryable, serverId: string, capability: Capability): Promise<ResolveResult> {
     const res = await db.query(
-        `SELECT r.*, p.adapter, p.base_url, p.enabled AS provider_enabled,
+        `SELECT r.*, p.adapter, p.base_url, p.account_id, p.enabled AS provider_enabled,
                 p.api_key_enc, p.api_key_iv, p.api_key_tag
          FROM ai_capability_routes r
          JOIN ai_providers p ON p.id = r.provider_id
@@ -73,6 +73,8 @@ export async function resolveRoute(db: Queryable, serverId: string, capability: 
         if (!check.ok) return { ok: false, error: check.error };
     }
 
+    if (adapter.requiresAccountId && !row.account_id) return { ok: false, error: `${adapter.label} needs an account ID` };
+
     let apiKey: string | undefined;
     try {
         apiKey = decryptProviderKey(row);
@@ -86,7 +88,7 @@ export async function resolveRoute(db: Queryable, serverId: string, capability: 
             route: row,
             providerId: row.provider_id.trim(),
             adapter,
-            credentials: { apiKey, baseUrl: row.base_url || undefined },
+            credentials: { apiKey, baseUrl: row.base_url || undefined, accountId: row.account_id || undefined },
             model: row.model,
         },
     };

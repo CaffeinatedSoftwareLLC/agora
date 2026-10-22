@@ -1,4 +1,4 @@
-import { DecideError, type DecideAnswer, type DecideLimits, type DecideQuestion, type DecideRequest, type DecideResult } from './adapters';
+import { DecideError, type Adapter, type DecideAnswer, type DecideLimits, type DecideQuestion, type DecideRequest, type DecideResult } from './adapters';
 
 /**
  * Checks on both sides of a decision call. Requests are checked before any provider
@@ -17,34 +17,46 @@ export function estimateTokens(value: unknown): number {
     return Math.ceil(text.length / 3);
 }
 
+/** The limits that apply to one model of a decision adapter. */
+export function decideLimitsFor(adapter: Pick<Adapter, 'decideLimits' | 'decideModelLimits'>, model: string): DecideLimits | undefined {
+    return adapter.decideModelLimits?.[model] ?? adapter.decideLimits;
+}
+
 /** Null when the request is acceptable, otherwise why not. */
 export function checkDecideRequest(req: Pick<DecideRequest, 'state' | 'questions'>, limits: DecideLimits): string | null {
     const ids = Object.keys(req.questions);
     if (ids.length === 0) return 'No questions';
+    if (limits.maxQuestions !== undefined && ids.length > limits.maxQuestions) return `More than ${limits.maxQuestions} questions`;
 
     let longest = 0;
     let total = estimateTokens(req.state);
+    let options = 0;
     for (const id of ids) {
         if (!QUESTION_ID.test(id)) return `Invalid question id "${id.slice(0, 64)}"`;
         const q = req.questions[id];
         if (q.type === 'choice') {
-            const options = Object.keys(q.criteria);
-            if (options.length < 2) return `Question "${id}" needs at least 2 options`;
-            if (options.length > limits.maxChoiceOptions) return `Question "${id}" has more than ${limits.maxChoiceOptions} options`;
+            const count = Object.keys(q.criteria).length;
+            if (count < 2) return `Question "${id}" needs at least 2 options`;
+            if (count > limits.maxChoiceOptions) return `Question "${id}" has more than ${limits.maxChoiceOptions} options`;
+            options += count;
         } else if (q.type === 'score') {
             if (q.criteria.length < limits.minScoreLevels || q.criteria.length > limits.maxScoreLevels) {
                 return `Question "${id}" needs ${limits.minScoreLevels} to ${limits.maxScoreLevels} levels`;
             }
+            options += q.criteria.length;
+        } else {
+            options += 2;
         }
         const size = estimateTokens(q);
         longest = Math.max(longest, size);
-        total += size;
+        total += size + estimateTokens(id);
     }
 
     if (estimateTokens(req.state) + longest > limits.stateTokens) {
         return `State and the longest question exceed ${limits.stateTokens} tokens`;
     }
     if (total > limits.requestTokens) return `Request exceeds ${limits.requestTokens} tokens`;
+    if (limits.maxOptions !== undefined && options > limits.maxOptions) return `More than ${limits.maxOptions} answer options in one request`;
     return null;
 }
 

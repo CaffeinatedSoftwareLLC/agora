@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type { DecideQuestion } from '../ai/adapters';
 import { decide, decisionReady } from '../ai/decide';
-import { estimateTokens } from '../ai/decide-validate';
+import { decideLimitsFor, estimateTokens } from '../ai/decide-validate';
 import { injectionQuestion, tagQuestion, QUESTION_VERSIONS } from '../ai/decision-questions';
 import { decryptFile } from '../lib/encryption';
 import { STALE_TAGS_SQL, sweepFileTagging } from '../lib/file-tagging-queue';
@@ -173,14 +173,17 @@ interface AskedTag {
     question: DecideQuestion;
 }
 
-/** Pack tag questions into calls that fit the model's request size. */
-function questionBatches(tags: AskedTag[]): AskedTag[][] {
+/**
+ * Pack tag questions into calls that fit the model: `room.tokens` of questions and
+ * `room.count` questions per call (what the model allows after the text and the injection question).
+ */
+function questionBatches(tags: AskedTag[], room: { tokens: number; count: number }): AskedTag[][] {
     const out: AskedTag[][] = [];
     let current: AskedTag[] = [];
     let size = 0;
     for (const tag of tags) {
-        const tokens = estimateTokens(tag.question);
-        if (current.length > 0 && size + tokens > QUESTION_TOKENS_PER_CALL) {
+        const tokens = estimateTokens(tag.question) + estimateTokens(questionId(tag.id));
+        if (current.length > 0 && (size + tokens > room.tokens || current.length >= room.count)) {
             out.push(current);
             current = [];
             size = 0;
@@ -243,8 +246,16 @@ export async function processTaggingJob(deps: TaggingDeps, job: ClaimedJob): Pro
     let chunks = chunked.chunks;
     let partial = extracted.truncated || chunked.truncated;
 
-    // With no tags to ask (injection check only) there is still one call per chunk
-    const batches = tags.length > 0 ? questionBatches(tags) : [[]];
+    // With no tags to ask (injection check only) there is still one call per chunk.
+    // Some models count every question against one context (Clef), so the room for
+    // questions is what the longest chunk and the injection question leave.
+    const limits = decideLimitsFor(ready.route.adapter, ready.route.model)!;
+    const fixed = Math.max(...chunks.map(c => estimateTokens({ document: c }))) + estimateTokens(injectionQuestion('document'));
+    const room = {
+        tokens: Math.max(1, Math.min(QUESTION_TOKENS_PER_CALL, limits.requestTokens - fixed)),
+        count: Math.max(1, (limits.maxQuestions ?? Infinity) - 1),
+    };
+    const batches = tags.length > 0 ? questionBatches(tags, room) : [[]];
     const maxCalls = deps.maxCallsPerFile ?? DEFAULTS.maxCallsPerFile;
     if (chunks.length * batches.length > maxCalls) {
         chunks = chunks.slice(0, Math.max(1, Math.floor(maxCalls / batches.length)));

@@ -9,6 +9,8 @@ import { allowPrivateBaseUrls, decryptProviderKey } from '../ai/routing';
 import { auditAiChange, changedFields, providerSnapshot, recentAiChanges, routeSnapshot } from '../lib/ai-audit';
 
 const nullableInt = (minimum: number) => ({ type: ['integer', 'null'], minimum });
+/** Cloudflare account IDs are 32 hex characters; the column allows a little more for other providers. */
+const ACCOUNT_ID = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' };
 
 function providerDto(row: any) {
     return {
@@ -16,6 +18,7 @@ function providerDto(row: any) {
         adapter: row.adapter,
         label: row.label,
         baseUrl: row.base_url ?? null,
+        accountId: row.account_id ?? null,
         hasApiKey: !!row.api_key_enc,
         enabled: row.enabled,
         capabilities: row.capabilities ?? [],
@@ -87,17 +90,24 @@ export async function aiProviderRoutes(app: FastifyInstance) {
                     label: { type: 'string', minLength: 1, maxLength: 100 },
                     apiKey: { type: 'string', minLength: 1, maxLength: 4096 },
                     baseUrl: { type: ['string', 'null'], maxLength: 2048 },
+                    accountId: ACCOUNT_ID,
                 },
             },
         },
     }, async (request, reply) => {
         const { serverId } = request.params as any;
-        const { adapter: adapterId, label, apiKey, baseUrl } = request.body as any;
+        const { adapter: adapterId, label, apiKey, baseUrl, accountId } = request.body as any;
         const db = request.dbClient!;
         const adapter = getAdapter(adapterId)!;
 
         if (adapter.requiresApiKey && !apiKey) {
             return reply.status(400).send({ error: `${adapter.label} requires an API key` });
+        }
+        if (adapter.requiresAccountId && !accountId) {
+            return reply.status(400).send({ error: `${adapter.label} requires an account ID` });
+        }
+        if (!adapter.requiresAccountId && accountId) {
+            return reply.status(400).send({ error: `${adapter.label} does not take an account ID` });
         }
         const urlError = await validateBaseUrl(db, adapterId, baseUrl);
         if (urlError) return reply.status(400).send({ error: urlError });
@@ -107,10 +117,10 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         try {
             await db.query('SAVEPOINT create_provider');
             const result = await db.query(
-                `INSERT INTO ai_providers (id, server_id, adapter, label, base_url, api_key_enc, api_key_iv, api_key_tag)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                `INSERT INTO ai_providers (id, server_id, adapter, label, base_url, account_id, api_key_enc, api_key_iv, api_key_tag)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                  RETURNING *`,
-                [id, serverId, adapterId, label ?? adapter.label, baseUrl || null,
+                [id, serverId, adapterId, label ?? adapter.label, baseUrl || null, accountId ?? null,
                  key?.encrypted ?? null, key?.iv ?? null, key?.authTag ?? null]
             );
             await db.query('RELEASE SAVEPOINT create_provider');
@@ -137,6 +147,7 @@ export async function aiProviderRoutes(app: FastifyInstance) {
                     label: { type: 'string', minLength: 1, maxLength: 100 },
                     apiKey: { type: ['string', 'null'], maxLength: 4096 },
                     baseUrl: { type: ['string', 'null'], maxLength: 2048 },
+                    accountId: ACCOUNT_ID,
                     enabled: { type: 'boolean' },
                 },
             },
@@ -158,6 +169,9 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         if (body.apiKey !== undefined && !body.apiKey && adapter?.requiresApiKey) {
             return reply.status(400).send({ error: `${adapter.label} requires an API key` });
         }
+        if (body.accountId !== undefined && !adapter?.requiresAccountId) {
+            return reply.status(400).send({ error: `${adapter?.label ?? current.adapter} does not take an account ID` });
+        }
 
         const sets: string[] = [];
         const params: unknown[] = [];
@@ -165,6 +179,7 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         if (body.label !== undefined) set('label', body.label);
         if (body.enabled !== undefined) set('enabled', body.enabled);
         if (body.baseUrl !== undefined) set('base_url', body.baseUrl || null);
+        if (body.accountId !== undefined) set('account_id', body.accountId);
         if (body.apiKey !== undefined) {
             const key = body.apiKey ? encryptString(body.apiKey, config.encryptionKey) : null;
             set('api_key_enc', key?.encrypted ?? null);
@@ -257,7 +272,8 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         } catch {
             return reply.send({ ok: false, error: 'Stored API key could not be decrypted' });
         }
-        return reply.send(await adapter.testConnection({ apiKey, baseUrl: row.base_url || undefined }, testModel ?? '', testCapability));
+        const creds = { apiKey, baseUrl: row.base_url || undefined, accountId: row.account_id || undefined };
+        return reply.send(await adapter.testConnection(creds, testModel ?? '', testCapability));
     });
 
     // ─── Capability routes ───

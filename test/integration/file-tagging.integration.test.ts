@@ -301,6 +301,44 @@ describe('worker: tagging a file (C.3)', () => {
         expect(calls.filter(c => 'injection' in c.questions)).toHaveLength(1);   // asked once per chunk, not once per call
         expect(Object.keys(await tagsOf(ctx.db, id))).toHaveLength(DEFAULT_TAGS.length + 90);
     });
+
+    test('with Clef Flash, calls keep to its 64 questions and its context, text and questions together', async () => {
+        ({ serverId, generalChannelId: channelId } = await createServer(ctx.request, owner.auth, 'Clef tags'));
+        const provider = await ctx.request.post(`/servers/${serverId}/ai/providers`).set(owner.auth)
+            .send({ adapter: 'cloudflare', apiKey: 'cf-token', accountId: '0123456789abcdef0123456789abcdef' });
+        await ctx.request.put(`/servers/${serverId}/ai/routes/decide`).set(owner.auth)
+            .send({ providerId: provider.body.id, model: '@cf/cloudflare/clef-flash', enabled: true });
+        await setTagging(true);
+        expect((await ctx.request.get(tagsUrl()).set(owner.auth)).status).toBe(200);
+        // 90 short tags (more than 64 per call) and 30 long ones (more than the context allows beside the text)
+        await ctx.db.query(
+            `INSERT INTO file_tag_definitions (id, server_id, name, instructions, criteria_true, criteria_false)
+             SELECT gen_ulid(), $1, 'bulk-' || n, CASE WHEN n <= 30 THEN repeat('i', 480) ELSE 'short' END,
+                    CASE WHEN n <= 30 THEN repeat('t', 480) ELSE NULL END, CASE WHEN n <= 30 THEN repeat('f', 480) ELSE NULL END
+             FROM generate_series(1, 90) n`,
+            [serverId]
+        );
+        const answer = tagAnswers(RULES);
+        const calls: JevCall[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+            expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/cloudflare/clef-flash');
+            const call = JSON.parse(init.body as string);
+            calls.push(call);
+            return jsonResponse({ result: { ...answer(call), model: 'clef-flash' }, success: true, errors: [], messages: [] });
+        }));
+        const id = await upload(ctx.request, owner.auth, channelId, 'protocol.md', `${PROTOCOL_DOC}\n${'More text. '.repeat(2000)}`);
+        expect(await runTaggingOnce(deps())).toEqual(['done']);
+
+        expect(calls.length).toBeGreaterThan(1);
+        for (const call of calls) {
+            expect(Object.keys(call.questions).length).toBeLessThanOrEqual(64);
+            // The whole body, estimated high (3 characters a token), fits the 24,576-token context
+            expect(Math.ceil(JSON.stringify({ state: call.state, questions: call.questions }).length / 3)).toBeLessThanOrEqual(24_576);
+        }
+        expect(calls.filter(c => 'injection' in c.questions)).toHaveLength(1);
+        expect(Object.keys(await tagsOf(ctx.db, id))).toHaveLength(DEFAULT_TAGS.length + 90);
+        expect((await jobOf(ctx.db, id)).state).toBe('done');
+    });
 });
 
 describe('worker: when the model is unavailable', () => {

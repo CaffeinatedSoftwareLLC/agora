@@ -1,5 +1,5 @@
 import { DecideError, type DecideAnswer, type DecideQuestion, type DecideText, type Usage } from './adapters';
-import { checkDecideRequest, validateDecideResult } from './decide-validate';
+import { checkDecideRequest, decideLimitsFor, validateDecideResult } from './decide-validate';
 import { checkBudget, recordUsage, resolveRoute, type Queryable, type ResolvedRoute, type RouteRow } from './routing';
 
 /**
@@ -190,7 +190,7 @@ export async function decide(db: Queryable, call: DecideCall): Promise<DecideOut
     if (!ready.ok) return { status: ready.status, reason: ready.reason, retryable: ready.status === 'over_budget' };
 
     const { route } = ready;
-    const tooLarge = checkDecideRequest(call, route.adapter.decideLimits!);
+    const tooLarge = checkDecideRequest(call, decideLimitsFor(route.adapter, route.model)!);
     if (tooLarge) return { status: 'too_large', reason: tooLarge, retryable: false };
 
     const started = Date.now();
