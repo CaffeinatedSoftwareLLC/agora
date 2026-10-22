@@ -1,5 +1,5 @@
 import type { Adapter, ProviderCredentials, SearchRequest, SearchResult } from './types';
-import { apiError, joinUrl, networkError } from './sse';
+import { apiError, joinUrl, networkError, refuseRedirect } from './sse';
 
 const DEFAULT_BASE = 'https://api.tavily.com';
 
@@ -14,12 +14,14 @@ async function tavilySearch(creds: ProviderCredentials, depth: string, query: st
     try {
         res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/search'), {
             method: 'POST',
+            redirect: 'manual',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${creds.apiKey ?? ''}` },
             body: JSON.stringify({ query, search_depth: depth, max_results: maxResults, include_answer: 'basic' }),
         });
     } catch (err) {
         throw new Error(networkError(err));
     }
+    refuseRedirect(res, 'Tavily');
     if (!res.ok) throw new Error(await apiError('Tavily', res));
     return res.json();
 }

@@ -2,7 +2,7 @@ import type {
     Adapter, ChatRequest, DialogueRequest, ImageRequest, MediaResult, ProviderCredentials, SearchRequest, SearchResult,
     SpeechRequest, StreamCallbacks, Usage, VideoRequest,
 } from './types';
-import { apiError, joinUrl, networkError, sseJson, testConnectionWithTimeout } from './sse';
+import { apiError, joinUrl, networkError, redirectError, refuseRedirect, sseJson, testConnectionWithTimeout } from './sse';
 import { pcmRate, pcmToWav } from './audio';
 
 const DEFAULT_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -40,10 +40,11 @@ async function generate(creds: ProviderCredentials, model: string, body: Record<
     const url = joinUrl(creds.baseUrl || DEFAULT_BASE, `${modelPath(model)}:generateContent`);
     let res: Response;
     try {
-        res = await fetch(url, { method: 'POST', headers: headers(creds), body: JSON.stringify(body) });
+        res = await fetch(url, { method: 'POST', redirect: 'manual', headers: headers(creds), body: JSON.stringify(body) });
     } catch (err) {
         throw new Error(networkError(err));
     }
+    refuseRedirect(res, 'Gemini');
     if (!res.ok) throw new Error(await apiError('Gemini', res));
     return res.json();
 }
@@ -93,10 +94,11 @@ const DEFAULT_VIDEO_POLL_MS = 10_000;
 async function getJson(url: string, creds: ProviderCredentials, label: string): Promise<any> {
     let res: Response;
     try {
-        res = await fetch(url, { headers: headers(creds) });
+        res = await fetch(url, { redirect: 'manual', headers: headers(creds) });
     } catch (err) {
         throw new Error(networkError(err));
     }
+    refuseRedirect(res, label);
     if (!res.ok) throw new Error(await apiError(label, res));
     return res.json();
 }
@@ -190,12 +192,14 @@ export const geminiAdapter: Adapter = {
         try {
             res = await fetch(joinUrl(base, `${modelPath(req.model)}:predictLongRunning`), {
                 method: 'POST',
+                redirect: 'manual',
                 headers: headers(creds),
                 body: JSON.stringify({ instances: [{ prompt: req.prompt }], ...(Object.keys(parameters).length ? { parameters } : {}) }),
             });
         } catch (err) {
             throw new Error(networkError(err));
         }
+        refuseRedirect(res, 'Veo');
         if (!res.ok) throw new Error(await apiError('Veo', res));
         let op = await res.json();
         const name = typeof op?.name === 'string' ? op.name : '';
@@ -279,8 +283,14 @@ export const geminiAdapter: Adapter = {
             headers: headers(creds),
             body: JSON.stringify(buildBody(req, req.maxTokens ?? 4096)),
             signal: req.signal,
+            redirect: 'manual',
         });
 
+        const redirected = redirectError(res, 'Gemini');
+        if (redirected) {
+            await callbacks.onError(new Error(redirected));
+            return;
+        }
         if (!res.ok) {
             await callbacks.onError(new Error(await apiError('Gemini', res)));
             return;
@@ -314,10 +324,12 @@ export const geminiAdapter: Adapter = {
             const url = joinUrl(creds.baseUrl || DEFAULT_BASE, `${modelPath(model)}:generateContent`);
             const res = await fetch(url, {
                 signal,
+                redirect: 'manual',
                 method: 'POST',
                 headers: headers(creds),
                 body: JSON.stringify(buildBody({ model, messages: [{ role: 'user', content: 'ping' }] }, 1)),
             });
+            refuseRedirect(res, 'Gemini');
             if (!res.ok) {
                 return { ok: false, error: await apiError('Gemini', res) };
             }

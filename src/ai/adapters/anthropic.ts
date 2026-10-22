@@ -1,5 +1,5 @@
 import type { Adapter, ChatRequest, ProviderCredentials, StreamCallbacks } from './types';
-import { apiError, joinUrl, sseJson, testConnectionWithTimeout } from './sse';
+import { apiError, joinUrl, redirectError, refuseRedirect, sseJson, testConnectionWithTimeout } from './sse';
 
 const DEFAULT_BASE = 'https://api.anthropic.com';
 
@@ -31,11 +31,17 @@ export const anthropicAdapter: Adapter = {
 
         const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/v1/messages'), {
             signal: req.signal,
+            redirect: 'manual',
             method: 'POST',
             headers: headers(creds),
             body: JSON.stringify(body),
         });
 
+        const redirected = redirectError(res, 'Claude');
+        if (redirected) {
+            await callbacks.onError(new Error(redirected));
+            return;
+        }
         if (!res.ok) {
             await callbacks.onError(new Error(await apiError('Claude', res)));
             return;
@@ -63,10 +69,12 @@ export const anthropicAdapter: Adapter = {
         return testConnectionWithTimeout(async signal => {
             const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/v1/messages'), {
                 signal,
+                redirect: 'manual',
                 method: 'POST',
                 headers: headers(creds),
                 body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
             });
+            refuseRedirect(res, 'Claude');
             if (!res.ok) {
                 return { ok: false, error: await apiError('Claude', res) };
             }

@@ -50,8 +50,8 @@ export async function apiError(provider: string, res: Response): Promise<string>
 }
 
 /**
- * Fetches to an admin-set base URL pass `redirect: 'manual'`: the URL is checked once
- * (url-guard) and following a redirect would skip that check. A 3xx is an error.
+ * Every provider fetch passes `redirect: 'manual'`: a base URL is checked once (url-guard)
+ * and following a redirect would skip that check and carry the key along. A 3xx is an error.
  */
 export function redirectError(res: Response, what: string): string | null {
     return res.status >= 300 && res.status < 400 ? `${what} redirected (HTTP ${res.status}); redirects are not followed` : null;
