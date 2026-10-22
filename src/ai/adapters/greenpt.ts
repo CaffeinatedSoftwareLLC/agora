@@ -1,4 +1,15 @@
+import type { DecideQuestion } from './types';
 import { systemOneAdapter } from './typesafe';
+
+/**
+ * Metis answers `500 internal_error` to any question whose `instructions` is an
+ * object, although its docs allow one (seen live 2026-10-22; object criteria are
+ * fine). Such instructions go as their JSON text, which reads the same to the model.
+ */
+export function metisQuestions(questions: Record<string, DecideQuestion>): Record<string, DecideQuestion> {
+    return Object.fromEntries(Object.entries(questions).map(([id, q]) =>
+        [id, q.instructions !== null && typeof q.instructions === 'object' ? { ...q, instructions: JSON.stringify(q.instructions) } as DecideQuestion : q]));
+}
 
 /**
  * GreenPT Metis: TypeSafe's System One API (`POST /v1/systemone`, the same request
@@ -12,7 +23,7 @@ export const greenptAdapter = systemOneAdapter({
     id: 'greenpt',
     label: 'GreenPT Metis (decisions)',
     provider: 'GreenPT',
-    baseUrl: 'https://api.greenpt.ai',
+    baseUrl: 'https://api.eu.greenpt.ai',
     model: 'metis',
     // 32,768 tokens for the whole request (state, every question, a fixed instruction and
     // the prompt format), 32 questions, 2,048 options in all (a noul counts two)
@@ -22,4 +33,5 @@ export const greenptAdapter = systemOneAdapter({
     },
     // Rate limited (429; 600 requests per 5 minutes per account) or at capacity (503, Retry-After: 5)
     retryable: new Set([429, 503]),
+    questions: metisQuestions,
 });

@@ -195,7 +195,7 @@ describe('GreenPT Metis provider', () => {
         const calls = stubFetch(() => jsonResponse(systemOne('metis', 0.2)));
         expect(await decide(ctx.db, { serverId: sid, use: 'routing', state: 'x', questions: QUESTIONS }))
             .toMatchObject({ status: 'ok', model: 'metis', answers: { q: { probability: 0.2 } } });
-        expect(calls[0]).toMatchObject({ url: 'https://api.greenpt.ai/v1/systemone', auth: 'Bearer gp-secret', body: { model: 'metis' } });
+        expect(calls[0]).toMatchObject({ url: 'https://api.eu.greenpt.ai/v1/systemone', auth: 'Bearer gp-secret', body: { model: 'metis' } });
 
         stubFetch(() => jsonResponse({ error: 'Insufficient credits', code: 'insufficient_credits' }, 402));
         expect(await decide(ctx.db, { serverId: sid, use: 'routing', state: 'x', questions: QUESTIONS }))

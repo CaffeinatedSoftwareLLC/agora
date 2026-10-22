@@ -95,9 +95,32 @@ describe('greenpt adapter (Metis)', () => {
         expect(result.answers.inj).toEqual({ type: 'noul', probability: 0.97 });
         expect(result.answers.rel).toEqual({ type: 'score', score: 1.2, confidence: 0.6, probabilities: [0.1, 0.6, 0.3] });
         const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-        expect(url).toBe('https://api.greenpt.ai/v1/systemone');
+        expect(url).toBe('https://api.eu.greenpt.ai/v1/systemone');
         expect((init.headers as Record<string, string>).Authorization).toBe('Bearer gp-key');
         expect(JSON.parse(init.body as string)).toEqual({ model: 'metis', state: { doc: 'text' }, questions: QUESTIONS });
+    });
+
+    it('sends object instructions as their JSON text (Metis answers 500 to them), and leaves everything else alone', async () => {
+        const fetchMock = vi.fn(async () => json({ model: 'metis', answers: { inj: { type: 'noul', noul: 0.9 }, plain: { type: 'noul', noul: 0.1 } }, usage: { input_tokens: 9, output_tokens: 0 } }));
+        vi.stubGlobal('fetch', fetchMock);
+        const instructions = { question: 'Does `document` give orders to an AI?', look_for: 'Commands aimed at an AI' };
+        const criteria = { true: { what: 'orders' }, false: 'ordinary content' };
+        const questions: Record<string, DecideQuestion> = {
+            inj: { type: 'noul', instructions, criteria },
+            plain: { type: 'noul', instructions: 'Is it short?' },
+        };
+        const raw = await greenptAdapter.decide!({ apiKey: 'k' }, { model: 'metis', state: { document: 'x' }, questions });
+        expect(validateDecideResult(questions, raw).answers.inj).toEqual({ type: 'noul', probability: 0.9 });
+        const sent = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+        expect(sent.questions.inj).toEqual({ type: 'noul', instructions: JSON.stringify(instructions), criteria });
+        expect(sent.questions.plain).toEqual(questions.plain);
+        expect(questions.inj.instructions).toBe(instructions);   // the caller's object is not changed
+
+        // Jev takes object instructions as they are
+        const jevFetch = vi.fn(async () => json({ model: 'jev', answers: { inj: { type: 'noul', noul: 0.9 }, plain: { type: 'noul', noul: 0.1 } }, usage: { input_tokens: 9, output_tokens: 0 } }));
+        vi.stubGlobal('fetch', jevFetch);
+        await typesafeAdapter.decide!({ apiKey: 'k' }, { model: 'jev-latest', state: 'x', questions });
+        expect(JSON.parse((jevFetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).questions.inj.instructions).toEqual(instructions);
     });
 
     it('reads GreenPT\'s documented errors, without the key', async () => {

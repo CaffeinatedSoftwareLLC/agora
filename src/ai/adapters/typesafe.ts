@@ -1,4 +1,4 @@
-import type { Adapter, DecideLimits, DecideRequest, DecideResult, ProviderCredentials } from './types';
+import type { Adapter, DecideLimits, DecideQuestion, DecideRequest, DecideResult, ProviderCredentials } from './types';
 import { joinUrl } from './sse';
 import { DECIDE_DEFAULT_TIMEOUT_MS, postDecision } from './decide-http';
 
@@ -72,6 +72,8 @@ interface SystemOneProvider {
     limits: DecideLimits;
     /** Statuses worth another try inside the deadline (rate limited, overloaded). */
     retryable: ReadonlySet<number>;
+    /** Rewrites questions the provider cannot take as they are (default: sent unchanged). */
+    questions?: (questions: Record<string, DecideQuestion>) => Record<string, DecideQuestion>;
 }
 
 /**
@@ -103,7 +105,7 @@ export function systemOneAdapter(p: SystemOneProvider): Adapter {
         async decide(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult> {
             return fromSystemOne(await call(
                 creds,
-                { model: req.model, state: req.state, questions: req.questions },
+                { model: req.model, state: req.state, questions: p.questions ? p.questions(req.questions) : req.questions },
                 req.timeoutMs ?? DECIDE_DEFAULT_TIMEOUT_MS,
             ));
         },
