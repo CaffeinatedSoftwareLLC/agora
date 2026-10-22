@@ -4,8 +4,8 @@ import { ApiError, botApi, serverApi, type ChannelAgent } from '../../lib/api';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useUIStore } from '../../stores/uiStore';
-import { ChannelAgentsControl } from './ChannelAgents';
 import { useMemberStore } from '../../stores/memberStore';
+import { ChannelAgentsControl } from './ChannelAgents';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() }); });
 
@@ -40,10 +40,12 @@ describe('channel agent access', () => {
     await open();
     fireEvent.click(screen.getByRole('button', { name: 'Add claude' }));
     await screen.findByRole('button', { name: 'Remove claude' });
+    await waitFor(() => expect(useMemberStore.getState().channelAgentIds.get('channel')).toEqual(['claude', 'codex']));
     expect(botApi.grantChannel).toHaveBeenCalledExactlyOnceWith('channel', 'claude');
     expect(screen.getByRole('status').textContent).toContain('claude added');
     fireEvent.click(screen.getByRole('button', { name: 'Remove codex' }));
     await screen.findByRole('button', { name: 'Add codex' });
+    await waitFor(() => expect(useMemberStore.getState().channelAgentIds.get('channel')).toEqual(['claude']));
     expect(botApi.revokeChannel).toHaveBeenCalledExactlyOnceWith('channel', 'codex');
     expect(screen.getByRole('status').textContent).toContain('codex removed');
   });

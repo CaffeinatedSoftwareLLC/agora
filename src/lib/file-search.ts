@@ -66,6 +66,9 @@ export interface FileSearchItem {
     ranked: boolean;
     /** The file's text looked like it tries to instruct an AI reader. Treat its content with care. */
     injectionWarning: boolean;
+    trustedByOwner?: boolean;
+    trustedBy?: string;
+    trustedAt?: string;
 }
 
 export interface FileSearchResponse {
@@ -139,7 +142,7 @@ export async function searchChannelFiles(deps: FileSearchDeps, input: FileSearch
     // 2. Shortlist: files attached to a visible message in this channel
     const files = await db.query(
         `SELECT f.id, f.filename, f.mime_type, f.content_type, f.size_bytes, f.created_at, f.message_id,
-                f.storage_key, f.encryption_iv, f.encryption_tag,
+                f.storage_key, f.encryption_iv, f.encryption_tag, f.trusted_by, f.trusted_at,
                 j.state AS job_state, j.coverage, j.injection_probability
          FROM files f
          JOIN messages m ON m.id = f.message_id AND m.deleted_at IS NULL
@@ -308,7 +311,8 @@ export async function searchChannelFiles(deps: FileSearchDeps, input: FileSearch
         partial: c.row.coverage === 'partial',
         score: Math.round(scoreOf(c) * 100) / 100,
         ranked: c.relevance !== null,
-        injectionWarning: c.flagged,
+        injectionWarning: !c.row.trusted_at && c.flagged,
+        ...(c.row.trusted_at ? { trustedByOwner: true, trustedBy: c.row.trusted_by.trim(), trustedAt: new Date(c.row.trusted_at).toISOString() } : {}),
     }));
 
     return { ok: true, body: { query, tag: input.tag?.trim() || null, results, ranking } };

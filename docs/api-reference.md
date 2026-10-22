@@ -793,7 +793,7 @@ Create a reply to a message, starting or continuing a thread.
 
 ### GET /channels/:id/messages/:msgId/replies
 
-Fetch replies in a thread with cursor-based pagination. Returns oldest first.
+Fetch replies in a thread with cursor-based pagination. Defaults to oldest first for existing bot clients. Use `order=desc` to open at the newest replies, then `order=desc&before=<oldest-loaded-id>` to fetch the next older page. Descending pages arrive newest first; reverse them when displaying a conversation chronologically.
 
 **Auth:** Required (must have access to the channel)
 
@@ -802,7 +802,9 @@ Fetch replies in a thread with cursor-based pagination. Returns oldest first.
 | Param    | Type   | Required | Default | Constraints                   |
 |----------|--------|----------|---------|-------------------------------|
 | `limit`  | number | no       | 50      | 1-100                         |
-| `before` | string | no       | -       | ULID cursor                   |
+| `after`  | string | no       | -       | Exclusive ULID cursor (newer replies) |
+| `before` | string | no       | -       | Exclusive ULID cursor (older replies); cannot combine with `after` |
+| `order`  | string | no       | `asc`   | `asc` or `desc`                |
 
 **Response** `200` — array of message objects with `threadId` field.
 
@@ -949,6 +951,14 @@ Download a file. The API decrypts it and sends the original bytes.
 | `X-Content-Type-Options` | `nosniff` |
 
 **Errors:** `403` no access to the channel · `404` unknown or deleted file, or its stored data is missing.
+
+---
+
+### POST /files/:fileId/trust · DELETE /files/:fileId/trust
+
+Clear a flagged file's injection warning, or undo that owner decision. **Server owner only**: members, directors, administrators who are not the owner, and bots cannot change trust. The file must be posted in a visible message in the owner's server. POST returns `409` for an unflagged file. Both methods are idempotent and return the current `FileAttachmentUpdate` payload.
+
+Trust records the owner's user ID and time (`trustedBy`, `trustedAt`, `trustedByOwner`). It clears the alarm in message attachments, file search and file text; the model's original screening result remains stored so Undo can restore the warning. File text remains data, never instructions. Changes create a channel notice and audit entry, and emit `FileAttachmentUpdate` after commit. RLS plus a column-change guard prevent an uploader from setting or clearing trust directly; changing a file's encrypted bytes or shared location invalidates its trust.
 
 ---
 
@@ -1818,6 +1828,27 @@ Broadcast to `channel:{channelId}` when a message is edited.
   "editedAt": "2025-01-15T11:00:00.000Z"
 }
 ```
+
+---
+
+#### FileAttachmentUpdate
+
+Broadcast to `channel:{channelId}` after a file-tagging result commits. Only files attached to a live message are broadcast; private, unposted uploads are excluded. Merge the metadata into the matching file without changing the message's text, edit time or protocol. New message/reply responses and events also include current tagging metadata on attachments.
+
+```json
+{
+  "channelId": "01HYX...",
+  "messageId": "01HYX...",
+  "threadId": "01HYX...",
+  "fileId": "01HYX...",
+  "tags": ["protocol"],
+  "tagging": "done",
+  "partial": false,
+  "injectionWarning": true
+}
+```
+
+`threadId` is present for replies. `tagging` can be `pending`, `running`, `done`, `failed` or `skipped`. Boolean fields are explicit so clients can clear an earlier warning or partial-coverage indicator. Trust changes use the same event, adding `trustedByOwner` (boolean), `trustedBy` (owner user ID or null), and `trustedAt` (timestamp or null).
 
 ---
 

@@ -456,6 +456,9 @@ export interface AITaggingQueue {
 export type AIFileTagInput = { name: string; instructions: string; criteriaTrue?: string | null; criteriaFalse?: string | null; enabled?: boolean };
 
 export interface FileSearchItem {
+  trustedByOwner?: boolean;
+  trustedBy?: string;
+  trustedAt?: string;
   id: string;
   name: string;
   mime: string;

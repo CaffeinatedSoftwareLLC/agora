@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type KeyboardEvent } from 'react';
 import { useMemberStore } from '../../stores/memberStore';
+import { Avatar } from '../../components/ui/Avatar';
 
 interface MentionAutocompleteProps {
   query: string;
@@ -79,9 +80,7 @@ function MentionAutocompleteInner({ query, serverId, onSelect, onClose }: Omit<M
             i === selectedIndex ? 'bg-surface-hover text-text' : 'text-text-muted hover:bg-surface-hover/50'
           }`}
         >
-          <span className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-[11px] font-bold text-on-primary shrink-0">
-            {member.username[0].toUpperCase()}
-          </span>
+          <Avatar userId={member.id} username={member.username} className="h-6 w-6 text-[11px]" />
           <span className="font-medium">{member.username}</span>
         </button>
       ))}
