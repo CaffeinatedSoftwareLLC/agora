@@ -145,7 +145,7 @@ test('bot allowlist removal disconnects a live bot', async () => {
     await disconnected;
 });
 
-test('suspending a bot owner disconnects the bot and blocks reconnect', async () => {
+test('suspending a bot owner disconnects the bot, revokes its token and blocks reconnect', async () => {
     const b = await bot();
     const { socket } = await ready(b.token, true);
     const admin = await authedUser(ctx.request, 'gatewayadmin');
@@ -153,6 +153,16 @@ test('suspending a bot owner disconnects the bot and blocks reconnect', async ()
     const disconnected = event(socket, 'disconnect');
     expect((await ctx.request.post(`/admin/users/${owner.userId}/ban`).set(admin.auth)).status).toBe(200);
     await disconnected;
+    // The ban revokes the owner's bot tokens, so the old token is now simply invalid
+    const retry = connect(b.token, true);
+    const rejected = event(retry, 'connect_error');
+    retry.connect();
+    expect((await rejected).message).toBe('Invalid bot token');
+});
+
+test('a bot whose owner is suspended cannot connect with a live token', async () => {
+    const b = await bot();
+    await ctx.db.query(`UPDATE users SET account_status = 'suspended' WHERE id = $1`, [owner.userId]);
     const retry = connect(b.token, true);
     const rejected = event(retry, 'connect_error');
     retry.connect();
