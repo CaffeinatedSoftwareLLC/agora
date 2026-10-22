@@ -117,7 +117,11 @@ test.describe('agent sessions with the fake host', () => {
         await snap(page, ti, 'AG-01.working', '01-working', 'A line above the message box saying the agent is working with a seconds timer', { ready: working });
 
         // Finished: "finished." plus the changed files, from the host's worktree comparison
-        await expect(activity.getByRole('status').filter({ hasText: `${a.name} finished.` })).toBeVisible({ timeout: 45_000 });
+        const finishedToggle = activity.getByRole('button', { name: /^\d+ agent updates?/ });
+        await expect(finishedToggle).toBeVisible({ timeout: 45_000 });
+        await expect(finishedToggle).toHaveAttribute('aria-expanded', 'false');
+        await finishedToggle.click();
+        await expect(activity.getByRole('status').filter({ hasText: `${a.name} finished.` })).toBeVisible();
         const files = activity.locator('details').filter({ hasText: '2 changed files' });
         await files.locator('summary').click();
         await expect(files.getByRole('listitem')).toHaveText(['src/app.txt', 'src/new-file.txt']);
@@ -160,7 +164,11 @@ test.describe('agent sessions with the fake host', () => {
         const s = await sessionOf(owner, ch.id, a.name, sid);
         expect([s.state, s.endReason]).toEqual(['shelved', 'budget']);
         expect(s.tokensUsed).toBeGreaterThanOrEqual(2000);
-        await expect(page.getByLabel('Agent run activity').getByText(`${a.name} paused: session budget used up.`)).toBeVisible();
+        const pausedActivity = page.getByLabel('Agent run activity');
+        const pausedToggle = pausedActivity.getByRole('button', { name: /^\d+ agent updates?/ });
+        await expect(pausedToggle).toBeVisible();
+        if ((await pausedToggle.getAttribute('aria-expanded')) === 'false') await pausedToggle.click();
+        await expect(pausedActivity.getByText(`${a.name} paused: session budget used up.`)).toBeVisible();
 
         // /resume refused: 409 budget_exhausted, still shelved, no notice, no run
         const runsBefore = fh.traces('budget').length;

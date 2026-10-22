@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { checkAgentMessageRuns } from '../lib/agent-message-runs';
 import { checkThreadPagination } from '../lib/thread-pagination';
 import { checkPhoneSettings } from '../lib/phone-settings';
 import { checkThreadReplyActions } from '../lib/thread-reply-actions';
@@ -32,6 +33,9 @@ const overflowX = (page: Page) => page.evaluate(() => document.documentElement.s
 
 // Runs only in the pixel-7 project (see playwright.config.ts).
 test.describe('mobile viewport @smoke', () => {
+    test('[UI-08.agent-runs] phone agent drawers wrap names and preserve cards and protocol badges', async ({ page, seed }, ti) => {
+        await checkAgentMessageRuns(page, seed, ti);
+    });
     test('[UI-08.thread-pagination] phone thread opens newest and pages older beyond 50', async ({ page, seed }, ti) => {
         await checkThreadPagination(page, seed, ti, true);
     });
@@ -113,7 +117,7 @@ test.describe('mobile touch targets and width', () => {
 
         // Notice drawer (32 px allowed): collapsed toggle, then the expanded notices
         await openChannel(page, seed.channels.notices, `notices-${seed.runTag}`);
-        const toggle = page.getByRole('button', { name: /\d+ system notices/ }).first();
+        const toggle = page.getByRole('button', { name: /^\d+ notices$/ }).first();
         await expect(toggle).toBeVisible();
         const drawerRow = rows.filter({ has: toggle });
         const collapsed = await buttonsIn(drawerRow);

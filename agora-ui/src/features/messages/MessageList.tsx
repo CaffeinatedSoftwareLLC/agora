@@ -10,8 +10,9 @@ import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
 import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
-import { computeNoticeRuns, isHiddenInRun, resizeRunRows } from './systemNotices';
-import { NoticeRunToggle } from './SystemNoticeRun';
+import { isHiddenInRun } from './systemNotices';
+import { computeMessageRuns, resizeChangedRunRows } from './messageRuns';
+import { AgentMessageRunToggle, AgentRunCollapse } from './AgentMessageRun';
 import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 
 interface MessageListProps {
@@ -45,20 +46,22 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   const count = messages?.length ?? 0;
   const hasMessages = count > 0;
 
-  // Consecutive plain system notices fold into one "N system notices" row (#118).
+  // Consecutive bot posts, notices and resolved cards share one activity section (2+).
   // Every message keeps its own virtual row; hidden members of a collapsed run render empty (0px).
-  const noticeRuns = useMemo(() => computeNoticeRuns(messages ?? []), [messages]);
+  const noticeRuns = useMemo(() => computeMessageRuns(messages ?? []), [messages]);
   const { isExpanded: isRunExpanded, toggle: toggleRun, keys: expandedKeys } = useExpandedNoticeRuns(userId);
   const estimateAt = (index: number): number => {
     if (!messages?.[index]) return 48;
     const run = noticeRuns[index];
     if (run) {
-      const expanded = isRunExpanded(run.key);
+      const expanded = isRunExpanded(run.key, run.aliases, run.defaultExpanded);
       if (isHiddenInRun(run, expanded)) return 0;
-      if (run.position === 0) return expanded ? 76 : 36;
+      if (run.position === 0) {
+        return expanded ? 48 + estimateMessageHeight(undefined, messages[index]) : 48;
+      }
     }
-    const prev = index > 0 ? messages[index - 1] : undefined;
-    return estimateMessageHeight(prev, messages[index]);
+    const prev = index > 0 && noticeRuns[index - 1]?.key === run?.key ? messages[index - 1] : undefined;
+    return estimateMessageHeight(prev, messages[index]) + (run && isRunExpanded(run.key, run.aliases, run.defaultExpanded) && run.position === run.size - 1 ? 48 : 0);
   };
 
   const virtualizer = useVirtualizer({
@@ -69,16 +72,26 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     getItemKey: (index) => messages?.[index]?.id ?? String(index),
   });
 
-  // A run opened or closed: drop the cached heights of its rows, offscreen ones included
+  // Toggles and live arrivals/deletions can change a row's role; clear offscreen caches too.
   const prevExpandedRef = useRef(expandedKeys);
+  const runRows = useMemo(() => (messages ?? []).map((message, index) => ({ id: message.id, run: noticeRuns[index] })), [messages, noticeRuns]);
+  // Content-only updates create new message arrays without changing any row's role.
+  // Keep the layout effect keyed to those roles, not to snapshot object identity.
+  const runLayout = useMemo(() => JSON.stringify(runRows.map(({ id, run }) => [id, run?.key, run?.position,
+    run ? run.position === run.size - 1 : false, run?.defaultExpanded, run?.noticeOnly,
+    run?.position === 0 ? run.aliases : undefined])), [runRows]);
+  const prevRunRowsRef = useRef(runRows);
   useLayoutEffect(() => {
     const prev = prevExpandedRef.current;
+    const previousRows = prevRunRowsRef.current;
+    // Commit the snapshot before resizeItem can notify React or scroll observers.
     prevExpandedRef.current = expandedKeys;
-    if (prev === expandedKeys) return;
-    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)));
-    if (changed.size > 0) resizeRunRows(virtualizer, noticeRuns, changed, estimateAt);
+    prevRunRowsRef.current = runRows;
+    if (prev === expandedKeys && previousRows === runRows) return;
+    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)).map(key => key.replace(/^collapsed:/, '')));
+    resizeChangedRunRows(virtualizer, previousRows, runRows, changed, estimateAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedKeys]);
+  }, [expandedKeys, runLayout]);
 
   // Load messages on channel change
   useEffect(() => {
@@ -278,14 +291,14 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
         >
           {virtualItems.map((virtualRow) => {
             const msg = messages[virtualRow.index];
-            const prevMsg = virtualRow.index > 0 ? messages[virtualRow.index - 1] : undefined;
             const run = noticeRuns[virtualRow.index];
-            const runExpanded = run ? isRunExpanded(run.key) : false;
+            const prevMsg = virtualRow.index > 0 && noticeRuns[virtualRow.index - 1]?.key === run?.key ? messages[virtualRow.index - 1] : undefined;
+            const runExpanded = run ? isRunExpanded(run.key, run.aliases, run.defaultExpanded) : false;
             return (
               <div
                 key={msg.id}
                 data-index={virtualRow.index}
-                data-notice-hidden={isHiddenInRun(run, runExpanded) || undefined}
+                data-agent-hidden={isHiddenInRun(run, runExpanded) || undefined}
                 ref={virtualizer.measureElement}
                 style={{
                   position: 'absolute',
@@ -296,17 +309,21 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                 }}
               >
                 {run?.position === 0 && (
-                  <NoticeRunToggle count={run.size} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
+                  <AgentMessageRunToggle count={run.size} names={run.names} noticeCount={run.noticeCount} noticeOnly={run.noticeOnly} expanded={runExpanded} onToggle={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />
                 )}
                 {(!run || runExpanded) && (
+                  <div data-agent-run={run?.key} data-agent-run-end={run?.position === (run?.size ?? 0) - 1 || undefined}
+                    className={run ? `mx-4 border-l-2 border-primary/40 bg-surface/30 ${run.position === run.size - 1 ? 'rounded-b-lg border-b border-border' : ''}` : undefined}>
                   <MessageItem
                     message={msg}
-                    isGrouped={shouldGroup(prevMsg, msg)}
+                    isGrouped={shouldGroup(run?.position === 0 ? undefined : prevMsg, msg)}
                     isOwn={msg.authorId === userId}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
                     channelId={channelId}
                   />
+                  {run && run.position === run.size - 1 && <AgentRunCollapse count={run.size} noticeOnly={run.noticeOnly} onCollapse={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />}
+                  </div>
                 )}
               </div>
             );
