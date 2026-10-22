@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import { Avatar } from '../../components/ui/Avatar';
 import { useServerStore } from '../../stores/serverStore';
 import { botApi, serverApi, runtimeApi, ApiError } from '../../lib/api';
 import type { Bot, BotDetail, BotToken, RuntimeAccess } from '../../lib/api';
@@ -447,17 +448,7 @@ function BotDetailPanel({
       <section>
         <h4 className="text-sm font-semibold text-text mb-2">Avatar</h4>
         <div className="flex items-start gap-3">
-          {detail.avatarUrl ? (
-            <img
-              src={detail.avatarUrl}
-              alt={detail.username}
-              className="w-12 h-12 rounded-full object-cover shrink-0"
-            />
-          ) : (
-            <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-on-primary shrink-0">
-              {(detail.username || '?')[0].toUpperCase()}
-            </div>
-          )}
+          <Avatar userId={botId} username={detail.username} avatarUrl={detail.avatarUrl} className="h-12 w-12 text-sm" />
           <div className="flex-1 min-w-0">
             <input
               type="text"

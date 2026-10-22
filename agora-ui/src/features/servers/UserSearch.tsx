@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { userApi } from '../../lib/api';
+import { Avatar } from '../../components/ui/Avatar';
 import type { UserSearchResult } from '../../lib/contracts/server';
 
 interface UserSearchProps {
@@ -61,9 +62,7 @@ export function UserSearch({ onSelect }: UserSearchProps) {
               }}
               className="w-full px-3 py-2 text-left text-text hover:bg-surface-hover flex items-center gap-2 transition-colors"
             >
-              <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-white shrink-0">
-                {user.username[0].toUpperCase()}
-              </div>
+              <Avatar userId={user.id} username={user.username} className="h-7 w-7 text-xs" />
               <span className="text-sm">{user.username}</span>
             </button>
           ))}

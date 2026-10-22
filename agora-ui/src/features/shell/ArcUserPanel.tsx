@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { usePalette, hexToRgb } from '../../theme';
+import { Avatar } from '../../components/ui/Avatar';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -42,7 +43,6 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [menuOpen]);
 
-  const initial = user?.username?.[0]?.toUpperCase() ?? '?';
   const displayName = user?.username ?? 'Unknown';
 
   // Size variants
@@ -91,12 +91,7 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
             className={`${avatarRingSize} rounded-full ${avatarRingPadding}`}
             style={{ background: `linear-gradient(135deg, ${P.primary}, ${P.accent})` }}
           >
-            <div
-              className={`w-full h-full rounded-full flex items-center justify-center ${avatarTextSize} font-bold`}
-              style={{ background: P.bg, color: P.text }}
-            >
-              {initial}
-            </div>
+            <Avatar userId={user?.id} username={displayName} className={`h-full w-full ${avatarTextSize}`} />
           </div>
           {/* Presence dot (online, bottom-left) */}
           <div className="absolute -bottom-0.5 -left-0.5">
