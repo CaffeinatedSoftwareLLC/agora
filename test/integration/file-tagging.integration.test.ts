@@ -10,6 +10,7 @@ import { claimTaggingJob, processTaggingJob, runTaggingOnce, MAX_TAGGING_ATTEMPT
 import { DEFAULT_TAGS } from '../../src/lib/file-tags';
 import { io } from 'socket.io-client';
 import { prepareMessageAttachments, bindMessageAttachments } from '../../src/lib/message-attachments';
+import { QUESTION_VERSIONS } from '../../src/ai/decision-questions';
 
 /**
  * File tagging (docs/planning/jev-wbs.md, C.1–C.5): the tag list API, the upload
@@ -253,11 +254,12 @@ describe('worker: tagging a file (C.3)', () => {
 
     test('waits for a posting transaction when tagging finishes between attachment preparation and binding', async () => {
         stubJev(tagAnswers(RULES));
-        // Injection-only: tag INSERT foreign-key checks would themselves wait on the
-        // posting transaction's file lock before the job could reach its commit.
-        const enabledTags = (await ctx.db.query('SELECT id FROM file_tag_definitions WHERE server_id = $1 AND enabled', [serverId])).rows.map((row: any) => row.id);
-        await ctx.db.query('UPDATE file_tag_definitions SET enabled = false WHERE id = ANY($1)', [enabledTags]);
         const fileId = await upload(ctx.request, owner.auth, channelId, 'racing.md', PROTOCOL_DOC);
+        // Injection-only: preload this fixture's current tag results. New tag INSERT
+        // foreign-key checks would wait on the file lock before the job could commit.
+        await ctx.db.query(`INSERT INTO file_tags (file_id, tag_id, tag_revision, question_version, probability, model)
+            SELECT $1, id, revision, $3, 0.03, 'race-fixture' FROM file_tag_definitions WHERE server_id = $2 AND enabled`,
+            [fileId, serverId, QUESTION_VERSIONS.tagging]);
         const messageId = (await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Binding race' })).body.id;
         const client = await ctx.db.connect();
         const emit = vi.fn();
@@ -277,7 +279,6 @@ describe('worker: tagging a file (C.3)', () => {
             await client.query('ROLLBACK').catch(() => {});
             client.release();
             await processing;
-            await ctx.db.query('UPDATE file_tag_definitions SET enabled = true WHERE id = ANY($1)', [enabledTags]);
         }
     });
 
