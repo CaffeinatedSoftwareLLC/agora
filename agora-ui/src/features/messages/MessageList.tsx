@@ -75,15 +75,23 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   // Toggles and live arrivals/deletions can change a row's role; clear offscreen caches too.
   const prevExpandedRef = useRef(expandedKeys);
   const runRows = useMemo(() => (messages ?? []).map((message, index) => ({ id: message.id, run: noticeRuns[index] })), [messages, noticeRuns]);
+  // Content-only updates create new message arrays without changing any row's role.
+  // Keep the layout effect keyed to those roles, not to snapshot object identity.
+  const runLayout = useMemo(() => JSON.stringify(runRows.map(({ id, run }) => [id, run?.key, run?.position,
+    run ? run.position === run.size - 1 : false, run?.defaultExpanded, run?.noticeOnly,
+    run?.position === 0 ? run.aliases : undefined])), [runRows]);
   const prevRunRowsRef = useRef(runRows);
   useLayoutEffect(() => {
     const prev = prevExpandedRef.current;
+    const previousRows = prevRunRowsRef.current;
+    // Commit the snapshot before resizeItem can notify React or scroll observers.
     prevExpandedRef.current = expandedKeys;
-    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)).map(key => key.replace(/^collapsed:/, '')));
-    resizeChangedRunRows(virtualizer, prevRunRowsRef.current, runRows, changed, estimateAt);
     prevRunRowsRef.current = runRows;
+    if (prev === expandedKeys && previousRows === runRows) return;
+    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)).map(key => key.replace(/^collapsed:/, '')));
+    resizeChangedRunRows(virtualizer, previousRows, runRows, changed, estimateAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedKeys, runRows]);
+  }, [expandedKeys, runLayout]);
 
   // Load messages on channel change
   useEffect(() => {
