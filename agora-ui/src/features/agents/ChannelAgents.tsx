@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ApiError, botApi, serverApi, type BotDetail } from '../../lib/api';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerStore } from '../../stores/serverStore';
+import { useMemberStore } from '../../stores/memberStore';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 
@@ -68,6 +69,8 @@ export function ChannelAgentsDialog({ channelId, serverId, isOpen = true, onMemb
   }, [serverId, reload]);
   useEffect(() => {
     onMembershipChange?.(loading || error ? null : bots.some(bot => bot.channels.some(c => c.id === channelId)));
+    if (!loading && !error) useMemberStore.getState().setChannelAgents(channelId,
+      bots.filter(bot => bot.channels.some(c => c.id === channelId)).map(bot => bot.id));
   }, [bots, channelId, loading, error, onMembershipChange]);
 
   async function toggle(bot: BotDetail) {

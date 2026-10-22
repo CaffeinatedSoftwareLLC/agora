@@ -1,4 +1,5 @@
 import { useUIStore } from '../../stores/uiStore';
+import { Avatar } from '../../components/ui/Avatar';
 import { ProviderTermsNotice } from './ProviderTermsNotice';
 import { useState, useRef } from 'react';
 import type { Message } from '../../stores/messageStore';
@@ -239,17 +240,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         />
       )}
       {/* Avatar */}
-      {message.authorAvatarUrl ? (
-        <img
-          src={message.authorAvatarUrl}
-          alt={message.authorUsername || '?'}
-          className="w-10 h-10 rounded-full object-cover shrink-0 mt-0.5"
-        />
-      ) : (
-        <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-on-primary shrink-0 mt-0.5">
-          {(message.authorUsername || '?')[0].toUpperCase()}
-        </div>
-      )}
+      <Avatar userId={message.authorId} username={message.authorUsername} avatarUrl={message.authorAvatarUrl} className="h-10 w-10 mt-0.5 text-sm" />
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">

@@ -26,6 +26,7 @@ import type {
   FileAttachmentUpdatePayload,
 } from '../../lib/contracts/ws-events';
 import { SocketContext } from './SocketContext';
+import { ChannelAvatars } from '../../components/ui/ChannelAvatars';
 import { useVoiceStore } from '../voice/voiceStore';
 
 /** A new message is on screen: in the open channel, or (a thread reply) in the open thread. */
@@ -200,7 +201,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
   return (
     <SocketContext.Provider value={socket}>
-      {children}
+      <ChannelAvatars>{children}</ChannelAvatars>
     </SocketContext.Provider>
   );
 }

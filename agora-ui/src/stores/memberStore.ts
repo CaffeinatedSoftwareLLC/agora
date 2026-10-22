@@ -7,12 +7,21 @@ const loading = new Set<string>();
 
 interface MemberState {
   byServer: Map<string, Member[]>;
+  /** Explicit agent membership supplied by the existing ChannelAgents loader. */
+  channelAgentIds: Map<string, string[]>;
+  setChannelAgents: (channelId: string, ids: string[]) => void;
   loadMembers: (serverId: string) => Promise<void>;
   clear: () => void;
 }
 
 export const useMemberStore = create<MemberState>((set) => ({
   byServer: new Map(),
+  channelAgentIds: new Map(),
+  setChannelAgents: (channelId, ids) => set(state => {
+    const nextIds = [...new Set(ids)].sort();
+    if (JSON.stringify(state.channelAgentIds.get(channelId)) === JSON.stringify(nextIds)) return state;
+    return { channelAgentIds: new Map(state.channelAgentIds).set(channelId, nextIds) };
+  }),
   loadMembers: async (serverId) => {
     if (loading.has(serverId)) return;
     loading.add(serverId);
@@ -37,5 +46,5 @@ export const useMemberStore = create<MemberState>((set) => ({
       loading.delete(serverId);
     }
   },
-  clear: () => set({ byServer: new Map() }),
+  clear: () => set({ byServer: new Map(), channelAgentIds: new Map() }),
 }));
