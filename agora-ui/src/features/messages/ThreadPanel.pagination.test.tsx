@@ -40,6 +40,15 @@ it('opens on the newest reply, prepends older replies at the top without jumping
   let height = 1000;
   Object.defineProperty(list, 'scrollHeight', { get: () => height });
   Object.defineProperty(list, 'clientHeight', { get: () => 300 });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+    if (this === list) return new DOMRect(0, 0, 300, 300);
+    if (this.classList.contains('prose-msg') && this.textContent === 'Reply 16') {
+      const prepended = useThreadStore.getState().repliesByThread.get('parent')?.[0].content === 'Reply 1';
+      // Header grouping/button removal make this delta differ from total scrollHeight.
+      return new DOMRect(0, (prepended ? 470 : 80) - list.scrollTop, 200, 20);
+    }
+    return new DOMRect();
+  });
   await act(async () => { newest.resolve(page(16, 65)); await newest.promise; });
   expect(screen.getByText('Reply 65')).toBeTruthy();
   expect(screen.queryByText('Reply 1')).toBeNull();
@@ -55,7 +64,8 @@ it('opens on the newest reply, prepends older replies at the top without jumping
   await act(async () => { height = 1440; older.resolve(page(1, 15)); await older.promise; });
   expect(screen.getByText('Reply 1')).toBeTruthy();
   expect(screen.getByText('Reply 66')).toBeTruthy();
-  expect(list.scrollTop).toBe(400);
+  expect(list.scrollTop).toBe(390);
+  expect(screen.getByText('Reply 16').closest('.prose-msg')!.getBoundingClientRect().top).toBe(80);
   expect(screen.queryByRole('button', { name: 'Load older replies' })).toBeNull();
   list.scrollTop = 1140; fireEvent.scroll(list);
   act(() => { height = 1480; useThreadStore.getState().addReply(reply(67)); });
