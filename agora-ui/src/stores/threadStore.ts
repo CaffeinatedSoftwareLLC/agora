@@ -40,6 +40,8 @@ interface ThreadState {
   loadReplies: (channelId: string, messageId: string) => Promise<void>;
   loadNewer: (channelId: string, messageId: string) => Promise<void>;
   sendReply: (channelId: string, messageId: string, content: string, authorId: string, authorUsername: string) => Promise<boolean>;
+  editReply: (channelId: string, threadId: string, replyId: string, content: string) => Promise<void>;
+  deleteReply: (channelId: string, threadId: string, replyId: string) => Promise<void>;
   addReply: (msg: MessagePayload) => void;
   updateReply: (payload: MessageUpdatePayload) => void;
   removeReply: (payload: MessageDeletePayload) => void;
@@ -197,6 +199,59 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         return { repliesByThread: nextReplies };
       });
       return false;
+    }
+  },
+
+  editReply: async (channelId, threadId, replyId, content) => {
+    const original = get().repliesByThread.get(threadId)?.find(m => m.id === replyId);
+    const optimistic = original ? { ...original, content, editedAt: new Date().toISOString() } : undefined;
+    if (optimistic) {
+      set(state => {
+        const next = new Map(state.repliesByThread);
+        next.set(threadId, (next.get(threadId) ?? []).map(m => m.id === replyId ? optimistic : m));
+        return { repliesByThread: next };
+      });
+    }
+    try {
+      await api.patch(`/channels/${channelId}/messages/${replyId}`, { content });
+      // MessageUpdate supplies the authoritative timestamp and parsed protocol.
+    } catch {
+      if (original && optimistic) {
+        set(state => {
+          const current = state.repliesByThread.get(threadId);
+          // Don't restore a stale value over a socket event, later edit, or clear().
+          if (!current?.includes(optimistic)) return state;
+          const next = new Map(state.repliesByThread);
+          next.set(threadId, current.map(m => m === optimistic ? original : m));
+          return { repliesByThread: next };
+        });
+      }
+    }
+  },
+
+  deleteReply: async (channelId, threadId, replyId) => {
+    const original = get().repliesByThread.get(threadId)?.find(m => m.id === replyId);
+    const optimistic = original ? { ...original, content: null, deletedAt: new Date().toISOString(), protocol: undefined } : undefined;
+    if (optimistic) {
+      set(state => {
+        const next = new Map(state.repliesByThread);
+        next.set(threadId, (next.get(threadId) ?? []).map(m => m.id === replyId ? optimistic : m));
+        return { repliesByThread: next };
+      });
+    }
+    try {
+      await api.delete(`/channels/${channelId}/messages/${replyId}`);
+      // MessageDelete supplies the authoritative tombstone.
+    } catch {
+      if (original && optimistic) {
+        set(state => {
+          const current = state.repliesByThread.get(threadId);
+          if (!current?.includes(optimistic)) return state;
+          const next = new Map(state.repliesByThread);
+          next.set(threadId, current.map(m => m === optimistic ? original : m));
+          return { repliesByThread: next };
+        });
+      }
     }
   },
 
