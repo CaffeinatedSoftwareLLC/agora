@@ -17,6 +17,10 @@ export async function checkAgentMessageRuns(page: Page, seed: Seed, ti: TestInfo
     await claude.api.ok('POST', `/channels/${ch.id}/messages`, {
         content: '[AGORA/v1 MODE=fix STATE=TURN]\nFirst review update.\n[YIELD to=Codex]',
     }, [201]);
+    // The seeded subscription profile has no running host: start/end only posts real notices.
+    await owner.ok('POST', `/channels/${ch.id}/bots/${seed.agents.codexSub.botId}`, undefined, [200, 201]);
+    await owner.ok('POST', `/channels/${ch.id}/agent-commands`, { command: 'start', profile: seed.agents.codexSub.name }, [200, 201, 202]);
+    await owner.ok('POST', `/channels/${ch.id}/agent-commands`, { command: 'end', profile: seed.agents.codexSub.name }, [200, 201, 202]);
     await codex.api.ok('POST', `/channels/${ch.id}/messages`, { content: 'Second review update.' }, [201]);
     await claude.api.ok('POST', `/channels/${ch.id}/messages`, { content: 'Third review update.' }, [201]);
     const title = 'Review notes';
@@ -25,7 +29,7 @@ export async function checkAgentMessageRuns(page: Page, seed: Seed, ti: TestInfo
     }, [201]);
     await owner.ok('POST', `/channels/${ch.id}/messages`, { content: 'Thanks, keep the card visible.' }, [201]);
     await openChannel(page, ch.id, ch.name);
-    const toggle = page.getByRole('button', { name: `3 agent messages (${claudeName}, ${codexName})` });
+    const toggle = page.getByRole('button', { name: `5 agent updates (${claudeName}, ${codexName}) · 2 notices` });
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByText('Second review update.', { exact: true })).toBeHidden();
@@ -41,11 +45,15 @@ export async function checkAgentMessageRuns(page: Page, seed: Seed, ti: TestInfo
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByText('Second review update.', { exact: true })).toBeVisible();
     await expect(page.getByText('TURN', { exact: true })).toBeVisible();
-    await expect(card).toBeVisible();
+    await expect(page.locator('[data-agent-run]')).toHaveCount(5);
+    await expect(page.locator('[data-agent-run-end]')).toHaveCount(1);
+    await expect(toggle.locator('svg')).toHaveClass(/rotate-90/);
     await snap(page, ti, 'UI-02.agent-runs', '02-expanded', 'Agent messages open with the TURN protocol badge; the review card remains usable', { ready: toggle });
     await page.reload();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await toggle.click();
+    const footer = page.getByRole('button', { name: 'Collapse 5 agent updates', exact: true });
+    await footer.scrollIntoViewIfNeeded();
+    await footer.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByText('Second review update.', { exact: true })).toBeHidden();
     await expect(card).toBeVisible();

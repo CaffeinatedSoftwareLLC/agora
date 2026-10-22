@@ -158,7 +158,7 @@ export async function expectNotice(page: Page, text: string | RegExp, timeoutMs 
     // The channel list is virtualized ([data-index] rows); a thread panel is a plain list
     const target = (scope ? scope : root.locator('[data-index]')).getByText(text).first();
     await expect.poll(async () => {
-        for (const t of await root.getByRole('button', { name: /^\W*\d+ system notices$/ }).all()) {
+        for (const t of await root.getByRole('button', { name: /^(?:\W*\d+ system notices$|\d+ agent updates)/ }).all()) {
             if ((await t.getAttribute('aria-expanded').catch(() => null)) === 'false') await t.click().catch(() => undefined);
         }
         return target.isVisible();

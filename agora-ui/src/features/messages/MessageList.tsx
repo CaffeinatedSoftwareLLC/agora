@@ -12,8 +12,7 @@ import { EmptyChannel } from './EmptyChannel';
 import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
 import { isHiddenInRun } from './systemNotices';
 import { computeMessageRuns, resizeChangedRunRows } from './messageRuns';
-import { AgentMessageRunToggle } from './AgentMessageRun';
-import { NoticeRunToggle } from './SystemNoticeRun';
+import { AgentMessageRunToggle, AgentRunCollapse } from './AgentMessageRun';
 import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 
 interface MessageListProps {
@@ -47,7 +46,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   const count = messages?.length ?? 0;
   const hasMessages = count > 0;
 
-  // Plain notices (2+) and ordinary agent messages (3+) fold into separate runs.
+  // Consecutive bot posts, notices and resolved cards share one activity section (2+).
   // Every message keeps its own virtual row; hidden members of a collapsed run render empty (0px).
   const noticeRuns = useMemo(() => computeMessageRuns(messages ?? []), [messages]);
   const { isExpanded: isRunExpanded, toggle: toggleRun, keys: expandedKeys } = useExpandedNoticeRuns(userId);
@@ -55,15 +54,14 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     if (!messages?.[index]) return 48;
     const run = noticeRuns[index];
     if (run) {
-      const expanded = isRunExpanded(run.key);
+      const expanded = isRunExpanded(run.key, run.aliases);
       if (isHiddenInRun(run, expanded)) return 0;
       if (run.position === 0) {
-        if (run.kind === 'agents') return expanded ? 48 + estimateMessageHeight(undefined, messages[index]) : 48;
-        return expanded ? 76 : 36;
+        return expanded ? 48 + estimateMessageHeight(undefined, messages[index]) : 48;
       }
     }
     const prev = index > 0 ? messages[index - 1] : undefined;
-    return estimateMessageHeight(prev, messages[index]);
+    return estimateMessageHeight(prev, messages[index]) + (run && isRunExpanded(run.key, run.aliases) && run.position === run.size - 1 ? 48 : 0);
   };
 
   const virtualizer = useVirtualizer({
@@ -287,13 +285,12 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
             const msg = messages[virtualRow.index];
             const prevMsg = virtualRow.index > 0 ? messages[virtualRow.index - 1] : undefined;
             const run = noticeRuns[virtualRow.index];
-            const runExpanded = run ? isRunExpanded(run.key) : false;
+            const runExpanded = run ? isRunExpanded(run.key, run.aliases) : false;
             return (
               <div
                 key={msg.id}
                 data-index={virtualRow.index}
-                data-notice-hidden={run?.kind === 'notices' && isHiddenInRun(run, runExpanded) || undefined}
-                data-agent-hidden={run?.kind === 'agents' && isHiddenInRun(run, runExpanded) || undefined}
+                data-agent-hidden={isHiddenInRun(run, runExpanded) || undefined}
                 ref={virtualizer.measureElement}
                 style={{
                   position: 'absolute',
@@ -303,13 +300,12 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                {run?.position === 0 && run.kind === 'notices' && (
-                  <NoticeRunToggle count={run.size} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
-                )}
-                {run?.position === 0 && run.kind === 'agents' && (
-                  <AgentMessageRunToggle count={run.size} names={run.names!} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
+                {run?.position === 0 && (
+                  <AgentMessageRunToggle count={run.size} names={run.names} noticeCount={run.noticeCount} expanded={runExpanded} onToggle={() => toggleRun(run.key, run.aliases)} />
                 )}
                 {(!run || runExpanded) && (
+                  <div data-agent-run={run?.key} data-agent-run-end={run?.position === (run?.size ?? 0) - 1 || undefined}
+                    className={run ? `mx-4 border-l-2 border-primary/40 bg-surface/30 ${run.position === run.size - 1 ? 'rounded-b-lg border-b border-border' : ''}` : undefined}>
                   <MessageItem
                     message={msg}
                     isGrouped={shouldGroup(run?.position === 0 ? undefined : prevMsg, msg)}
@@ -318,6 +314,8 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                     onDelete={handleDelete}
                     channelId={channelId}
                   />
+                  {run && run.position === run.size - 1 && <AgentRunCollapse count={run.size} onCollapse={() => toggleRun(run.key, run.aliases)} />}
+                  </div>
                 )}
               </div>
             );

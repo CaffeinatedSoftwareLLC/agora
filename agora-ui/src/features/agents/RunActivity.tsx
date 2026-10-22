@@ -2,10 +2,23 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentRunProgressPayload, AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
 import { elapsedTime, listSessions, terminalUsage, type AgentSession } from './agentSessions';
+import { useAuthStore } from '../../stores/authStore';
+import { useExpandedNoticeRuns } from '../messages/useExpandedNoticeRuns';
+import { AgentMessageRunToggle, AgentRunCollapse } from '../messages/AgentMessageRun';
+
+const isWorking = (s: AgentSession) => s.kind === 'terminal' ? s.state === 'live' && !!s.running
+  : s.run?.status === 'claimed' && !(s.state === 'shelved' && s.endReason === 'budget');
+const isHistorical = (s: AgentSession) => s.kind !== 'terminal' && !isWorking(s)
+  && ((s.state === 'shelved' && s.endReason === 'budget') || s.run?.error === 'nothing_posted'
+    || s.run?.status === 'failed' || s.run?.status === 'expired' || !!s.run?.changedPaths.length);
 
 /** Mounted with a channel key so requests and timers cannot leak into another channel. */
 export function RunActivity({ channelId }: { channelId: string }) {
   const socket = useSocket();
+  const userId = useAuthStore(s => s.user?.id);
+  const { isExpanded, toggle } = useExpandedNoticeRuns(userId);
+  const sectionKey = `activity:${channelId}`;
+  const expanded = isExpanded(sectionKey);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [now, setNow] = useState(() => Date.now());
   // Latest progress per session, from ACP agents' heartbeats; kept only for the run it names
@@ -36,8 +49,8 @@ export function RunActivity({ channelId }: { channelId: string }) {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [running]);
-  return <div className="shrink-0 px-4 text-sm text-text-muted" aria-label="Agent run activity">
-    {sessions.map(s => {
+  const historical = sessions.filter(isHistorical);
+  const renderSession = (s: AgentSession) => {
       // A terminal session (#112) has no runs: agora-mcp reports working while the agent calls tools
       if (s.kind === 'terminal') {
         if (s.state !== 'live' || !s.running) return null;
@@ -66,6 +79,16 @@ export function RunActivity({ channelId }: { channelId: string }) {
         </details>}
         {failed && <button type="button" className="underline" onClick={refresh}>Refresh run status</button>}
       </div>;
-    })}
+    };
+  return <div className="shrink-0 text-sm text-text-muted" aria-label="Agent run activity">
+    <div className="px-4">{sessions.filter(isWorking).map(renderSession)}</div>
+    {historical.length > 0 && <>
+      <AgentMessageRunToggle count={historical.length} names={[...new Set(historical.map(s => s.botUsername || s.profile))]}
+        noticeCount={historical.length} expanded={expanded} onToggle={() => toggle(sectionKey)} />
+      {expanded && <div className="mx-4 max-h-[25dvh] overflow-y-auto rounded-b-lg border-b border-l-2 border-border border-l-primary/40 bg-surface/30 px-3" data-agent-activity-group>
+        {historical.map(renderSession)}
+        <AgentRunCollapse count={historical.length} onCollapse={() => toggle(sectionKey)} />
+      </div>}
+    </>}
   </div>;
 }

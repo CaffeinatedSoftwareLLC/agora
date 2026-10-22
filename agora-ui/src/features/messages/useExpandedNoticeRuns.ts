@@ -12,10 +12,12 @@ export function useExpandedNoticeRuns(userId: string | undefined) {
   }
   const { keys } = current;
 
-  const isExpanded = (key: string) => keys.includes(key);
-  const toggle = useCallback((key: string) => {
+  const isExpanded = (key: string, aliases: readonly string[] = []) => keys.includes(key) || aliases.some(alias => keys.includes(alias));
+  const toggle = useCallback((key: string, aliases: readonly string[] = []) => {
     setState(prev => {
-      const next = toggleRunKey(prev.keys, key);
+      const allKeys = new Set([key, ...aliases]);
+      const next = prev.keys.some(held => allKeys.has(held))
+        ? prev.keys.filter(held => !allKeys.has(held)) : toggleRunKey(prev.keys, key);
       saveExpandedRuns(prev.userId, next);
       return { userId: prev.userId, keys: next };
     });
