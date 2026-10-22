@@ -3,7 +3,7 @@ import { addTaggingToAttachments } from '../lib/file-tags';
 import { messageAttachmentsSchema, prepareMessageAttachments, bindMessageAttachments } from '../lib/message-attachments';
 import { generateUlid } from '../utils/ulid';
 import { resolveMentions, mentionsEveryoneIn } from './shared';
-import { canViewChannel } from '../lib/channel-access';
+import { canPostInChannel, canViewChannel } from '../lib/channel-access';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
@@ -48,9 +48,9 @@ export async function messageRoutes(app: FastifyInstance) {
         const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
         const db = request.dbClient!;
 
-        const access = await canViewChannel(db, channelId, userId, isBot);
+        const access = await canPostInChannel(db, channelId, userId, !!isBot);
         if (!access.allowed) {
-            return reply.status(403).send({ error: 'Channel access denied' });
+            return reply.status(403).send({ error: access.error });
         }
         // Nothing left after cleaning (only escape codes)
         if (!content && !attachmentIds?.length && !artifact) return reply.status(400).send({ error: 'empty_content' });
@@ -166,8 +166,8 @@ export async function messageRoutes(app: FastifyInstance) {
         const resolvedAttachments = prepared.attachments;
         const messageId = generateUlid();
 
-        // Parse and resolve @mentions (shared helper)
-        const mentionsEveryone = mentionsEveryoneIn(content);
+        // Parse and resolve @mentions (shared helper). @everyone without MentionEveryone stays plain text.
+        const mentionsEveryone = access.mentionEveryone && mentionsEveryoneIn(content);
         const protocol = parseProtocol(content);
 
         const couldDirect = await stampAuthority(db, channelId, userId, !!request.isBot);
@@ -187,7 +187,7 @@ export async function messageRoutes(app: FastifyInstance) {
             await insert();
         }
 
-        const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
+        const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content, access.mentionEveryone);
 
         await bindMessageAttachments(db, messageId, resolvedAttachments);
 
@@ -388,9 +388,10 @@ export async function messageRoutes(app: FastifyInstance) {
         const content = sanitizeMessageText((request.body as any).content);
         const db = request.dbClient!;
 
-        const access = await canViewChannel(db, channelId, userId, !!request.isBot);
+        // An edit says something new, so it needs SendMessages as a post does
+        const access = await canPostInChannel(db, channelId, userId, !!request.isBot);
         if (!access.allowed) {
-            return reply.status(403).send({ error: 'Channel access denied' });
+            return reply.status(403).send({ error: access.error });
         }
         // Nothing left after cleaning (only escape codes)
         if (!content) return reply.status(400).send({ error: 'empty_content' });

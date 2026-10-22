@@ -119,6 +119,12 @@ export async function serverRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Not a member of this server' });
         }
 
+        // @everyone holds CreateInvites by default; the owner and Administrator always do
+        const perms = await loadAndComputePermissions(db, userId, serverId);
+        if (!(perms & Permissions.CreateInvites) && !(perms & Permissions.Administrator)) {
+            return reply.status(403).send({ error: 'Missing CreateInvites permission' });
+        }
+
         // Generate short invite code (8 hex chars, max 12 per spec)
         const code = crypto.randomBytes(4).toString('hex');
 

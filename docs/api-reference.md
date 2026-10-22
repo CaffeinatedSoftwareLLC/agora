@@ -406,7 +406,7 @@ List all members of a server with their assigned roles.
 
 Create an invite code for a server.
 
-**Auth:** Required (must be a server member)
+**Auth:** Required (must be a server member with CreateInvites, which `@everyone` has by default; the owner and Administrators always may)
 
 **Response** `201`
 ```json
@@ -422,6 +422,7 @@ The code is 8 hex characters.
 | Status | Error                          | Cause              |
 |--------|--------------------------------|---------------------|
 | 403    | `Not a member of this server`  | User is not a member |
+| 403    | `Missing CreateInvites permission` | Member lacks CreateInvites |
 
 ---
 
@@ -457,7 +458,7 @@ New joins validate the code's expiry and remaining uses atomically. Repeating a 
 
 Create a new channel in a server.
 
-**Auth:** Required (must be a server member)
+**Auth:** Required (must be a server member with ManageChannels, which `@everyone` has by default; the owner and Administrators always may). Bot tokens are refused.
 
 **Request Body**
 ```json
@@ -487,6 +488,7 @@ Create a new channel in a server.
 | Status | Error                          | Cause              |
 |--------|--------------------------------|---------------------|
 | 403    | `Not a member of this server`  | User is not a member |
+| 403    | `Missing ManageChannels permission` | Member lacks ManageChannels |
 
 ---
 
@@ -496,7 +498,7 @@ Create a new channel in a server.
 
 Send a message to a channel. Parses `@username` mentions from content and tracks `@everyone` mentions.
 
-**Auth:** Required (must have access to the channel)
+**Auth:** Required (ViewChannel and SendMessages in the channel; for a bot, channel access and SendMessages)
 
 **Request Body**
 ```json
@@ -527,19 +529,20 @@ Send a message to a channel. Parses `@username` mentions from content and tracks
 | Field             | Type     | Description                                          |
 |-------------------|----------|------------------------------------------------------|
 | `mentions`        | string[] | User IDs of resolved `@username` mentions            |
-| `mentionsEveryone`| boolean  | Whether the message contains `@everyone`             |
+| `mentionsEveryone`| boolean  | Whether the message contains `@everyone` and the author holds MentionEveryone |
 
 **Errors**
 
 | Status | Error                            | Cause                         |
 |--------|----------------------------------|-------------------------------|
 | 403    | `Channel access denied`   | User lacks channel access     |
+| 403    | `Missing SendMessages permission` | User can see the channel but lacks SendMessages |
 
 **Side effects:**
 - Broadcasts `Message` event to the channel's Socket.IO room (after transaction commits).
 - Inserts rows into `message_mentions` for resolved @mentions.
 - Increments `mention_count` in `channel_unreads` for mentioned users.
-- If `@everyone` is used, increments `mention_count` for all channel/server members except the author.
+- If `@everyone` is used by an author with MentionEveryone, increments `mention_count` for all channel/server members except the author. Without MentionEveryone the text is posted as is and notifies no one.
 
 ---
 
@@ -589,7 +592,7 @@ Deleted messages have `content: null` and a non-null `deletedAt` timestamp.
 
 Edit a message. Only the original author can edit their own messages.
 
-**Auth:** Required (must be channel member and message author)
+**Auth:** Required (message author, with ViewChannel and SendMessages in the channel)
 
 **Request Body**
 ```json
@@ -616,6 +619,7 @@ Edit a message. Only the original author can edit their own messages.
 | Status | Error                            | Cause                              |
 |--------|----------------------------------|------------------------------------|
 | 403    | `Channel access denied`   | User lacks channel access          |
+| 403    | `Missing SendMessages permission` | User lacks SendMessages in the channel |
 | 403    | `Not the message author`         | User did not author this message   |
 | 404    | `Message not found`              | Message does not exist in channel  |
 
@@ -745,7 +749,7 @@ Set the command agora-host runs in the session worktree after a run that changed
 
 Create a reply to a message, starting or continuing a thread.
 
-**Auth:** Required (must have access to the channel)
+**Auth:** Required (as for `POST /channels/:id/messages`; `@everyone` follows the same MentionEveryone rule)
 
 **Request Body**
 ```json
@@ -782,6 +786,7 @@ Create a reply to a message, starting or continuing a thread.
 |--------|--------------------------------|------------------------------------|
 | 400    | Attachment validation error | Missing, deleted, duplicate, foreign, cross-channel or already-bound file |
 | 403    | `Channel access denied` | User lacks channel access          |
+| 403    | `Missing SendMessages permission` | User can see the channel but lacks SendMessages |
 | 404    | `Parent message not found`     | Message does not exist or is deleted |
 | 409    | `Thread is closed`             | Thread has been closed             |
 

@@ -362,8 +362,10 @@ describe('thread and case-insensitive mentions (#120)', () => {
         expect((await inbox(sm)).map(x => x.message_id)).toEqual([top.id]);
         expect((await inbox(sx)).map(x => x.message_id)).toEqual([loud.id]);
 
-        const everyone = await post(member.auth, 'hello @Everyone');
+        const everyone = await post(owner.auth, 'hello @Everyone');
         expect(everyone.mentionsEveryone).toBe(true);
+        // Without MentionEveryone (not in @everyone by default) it stays plain text
+        expect((await post(member.auth, 'hello @Everyone')).mentionsEveryone).toBe(false);
     });
 
     it('a mention of a non-participant in a bound thread wakes it; participants keep the bound rules', async () => {

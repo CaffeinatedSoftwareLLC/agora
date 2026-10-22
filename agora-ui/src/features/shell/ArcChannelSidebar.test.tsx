@@ -10,7 +10,10 @@ import { usePresenceStore } from '../../stores/presenceStore';
 import { api } from '../../lib/api';
 
 vi.mock('./ArcUserPanel', () => ({ ArcUserPanel: () => null }));
-const access = vi.hoisted(() => ({ hasModerationAccess: false, hasServerAdminAccess: false, isInstanceAdmin: false, loading: false }));
+const access = vi.hoisted(() => ({
+  hasModerationAccess: false, hasServerAdminAccess: false, isInstanceAdmin: false, loading: false,
+  canManageChannels: false, canCreateInvites: false,
+}));
 vi.mock('../../hooks/useServerAccess', () => ({ useServerAccess: () => access }));
 
 beforeEach(() => {
@@ -18,7 +21,7 @@ beforeEach(() => {
   useChannelStore.getState().setChannels([{ id: 'channel', serverId: 'server', channelType: 3, name: 'general' }]);
   useMemberStore.getState().clear();
   usePresenceStore.getState().setOnlineUsers(['owner', 'member']);
-  Object.assign(access, { hasModerationAccess: false, hasServerAdminAccess: false });
+  Object.assign(access, { hasModerationAccess: false, hasServerAdminAccess: false, canManageChannels: false, canCreateInvites: false });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -52,7 +55,7 @@ it('the header gear opens server settings, for server admins only', async () => 
   expect(screen.queryByRole('button', { name: 'Server Settings' })).toBeNull();
   unmount();
 
-  Object.assign(access, { hasModerationAccess: true, hasServerAdminAccess: true });
+  Object.assign(access, { hasModerationAccess: true, hasServerAdminAccess: true, canCreateInvites: true });
   sidebar();
   // Invite and Moderation stay in the header next to the gear
   expect(screen.getByRole('button', { name: 'Invite People' })).toBeTruthy();
@@ -63,4 +66,17 @@ it('the header gear opens server settings, for server admins only', async () => 
   expect(gear.querySelectorAll('circle[r="1"]').length).toBe(0);
   await userEvent.click(gear);
   expect(screen.getByText('server settings page')).toBeTruthy();
+});
+
+it('shows the create-channel and invite buttons only with ManageChannels and CreateInvites', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue([]);
+  render(<MemoryRouter><ArcChannelSidebar /></MemoryRouter>);
+  expect(screen.queryByRole('button', { name: 'Create Channel' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Invite People' })).toBeNull();
+  cleanup();
+
+  Object.assign(access, { canManageChannels: true, canCreateInvites: true });
+  render(<MemoryRouter><ArcChannelSidebar /></MemoryRouter>);
+  expect(screen.getByRole('button', { name: 'Create Channel' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Invite People' })).toBeTruthy();
 });

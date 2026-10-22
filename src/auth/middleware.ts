@@ -10,6 +10,8 @@ import { isSafeMethod, sessionTokenFromHeaders, setSessionCookies, validCsrf } f
  */
 export const BACKGROUND_HEADER = 'x-agora-background';
 
+// Channel creation, edits and deletion are never on this list: bots don't manage channels
+// (src/routes/channels.ts refuses them as well).
 const BOT_ALLOWED_ROUTES = new Set([
     'GET /channels/:id/file-reservations',
     'POST /channels/:id/file-reservations',

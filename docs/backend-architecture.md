@@ -347,7 +347,21 @@ permissions = (permissions & ~deny) | allow
 
 ### Default @everyone permissions
 
-New servers' `@everyone` role gets (`DEFAULT_EVERYONE_PERMS`): `ViewChannel`, `SendMessages`, `ReadMessageHistory`, `EmbedLinks`, `UploadFiles`, `UseExternalEmoji`, `CreateInvites`, `ChangeNickname`.
+New servers' `@everyone` role gets (`DEFAULT_EVERYONE_PERMS`): `ViewChannel`, `SendMessages`, `ReadMessageHistory`, `EmbedLinks`, `UploadFiles`, `UseExternalEmoji`, `CreateInvites`, `ChangeNickname`, `ManageChannels`. Migration `066` added `ManageChannels` to the `@everyone` role of servers created before it.
+
+### Where bits are enforced
+
+| Bit | Checked by |
+|-----|-----------|
+| SendMessages | Posting, replying and editing a message (`canPostInChannel` in `src/lib/channel-access.ts`), uploads. People also need ViewChannel; a bot's channel access stands in for ViewChannel, but SendMessages still applies to it through `@everyone` and the channel's overrides. |
+| MentionEveryone | `@everyone` in a post or reply notifies members only when the author holds it; otherwise it stays plain text (`mentionsEveryone` is false, no mention counts). |
+| ManageChannels | Creating a channel (checked against the server's permissions). Bots are refused whatever their roles. |
+| CreateInvites | Creating an invite. |
+| ManageRoles | Role and override routes, with the hierarchy rule below. |
+
+The owner holds every bit, and Administrator implies every bit except DirectAgents.
+
+**Role hierarchy.** A caller who is neither the owner nor an Administrator may only edit, delete, assign or unassign a role, or set an override on it, when the role's current permissions are all their own; a new value must also be within their permissions. A role carrying Administrator is therefore out of a non-admin's reach. Roles that carry DirectAgents stay with the owner whoever the caller is. `@everyone` follows the same rule; since every member inherits its bits, only the new value can exceed a caller's permissions.
 
 ---
 

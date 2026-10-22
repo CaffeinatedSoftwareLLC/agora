@@ -80,7 +80,8 @@ function ChannelCategory({
   activeChannelId: string | null;
   accentColor: string;
   onChannelClick: (channelId: string) => void;
-  onCreateChannel: () => void;
+  /** Absent when the user lacks ManageChannels: no create button */
+  onCreateChannel?: () => void;
   renderItem?: (ch: { id: string; name: string }) => React.ReactNode;
 }) {
   const P = usePalette();
@@ -125,26 +126,28 @@ function ChannelCategory({
             />
           )}
         </button>
-        <button
-          onClick={onCreateChannel}
-          className="transition-colors shrink-0 min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:h-8 md:w-8 flex items-center justify-center rounded-lg hover:bg-surface-hover"
-          style={{ color: P.muted }}
-          title="Create Channel"
-          aria-label="Create Channel"
-        >
-          <svg
-            className="h-4 w-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+        {onCreateChannel && (
+          <button
+            onClick={onCreateChannel}
+            className="transition-colors shrink-0 min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:h-8 md:w-8 flex items-center justify-center rounded-lg hover:bg-surface-hover"
+            style={{ color: P.muted }}
+            title="Create Channel"
+            aria-label="Create Channel"
           >
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Channel list */}
@@ -179,7 +182,7 @@ export function ArcChannelSidebar() {
   const byServer = useChannelStore(s => s.byServer);
   const activeChannelId = useChannelStore(s => s.activeChannelId);
   const setActiveChannel = useChannelStore(s => s.setActiveChannel);
-  const { hasModerationAccess, hasServerAdminAccess } = useServerAccess(instanceServerId);
+  const { hasModerationAccess, hasServerAdminAccess, canManageChannels, canCreateInvites } = useServerAccess(instanceServerId);
 
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(['Text channels']),
@@ -280,28 +283,30 @@ export function ArcChannelSidebar() {
           {/* Action buttons */}
           <div className="flex items-center gap-0.5 shrink-0">
             {/* Invite button */}
-            <button
-              onClick={() => setShowInvite(true)}
-              className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
-              style={{ color: P.muted }}
-              title="Invite People"
-              aria-label="Invite People"
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+            {canCreateInvites && (
+              <button
+                onClick={() => setShowInvite(true)}
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 md:h-9 md:w-9 rounded-lg flex items-center justify-center transition-colors hover:bg-surface-hover"
+                style={{ color: P.muted }}
+                title="Invite People"
+                aria-label="Invite People"
               >
-                <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <line x1="19" y1="8" x2="19" y2="14" />
-                <line x1="22" y1="11" x2="16" y2="11" />
-              </svg>
-            </button>
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <line x1="19" y1="8" x2="19" y2="14" />
+                  <line x1="22" y1="11" x2="16" y2="11" />
+                </svg>
+              </button>
+            )}
 
             {/* Moderation button (shield) */}
             {hasModerationAccess && (
@@ -363,7 +368,7 @@ export function ArcChannelSidebar() {
           activeChannelId={activeChannelId}
           accentColor={accentColor}
           onChannelClick={handleChannelClick}
-          onCreateChannel={() => setShowCreateChannel(true)}
+          onCreateChannel={canManageChannels ? () => setShowCreateChannel(true) : undefined}
         />
       </div>
 

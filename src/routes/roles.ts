@@ -71,6 +71,24 @@ async function checkEscalation(
     return null;
 }
 
+/**
+ * Role hierarchy guard: a caller who is neither the server owner nor an Administrator
+ * may only edit, delete, assign or unassign a role whose current permissions are all
+ * their own. That keeps roles carrying Administrator, or any bit the caller lacks,
+ * out of their reach.
+ */
+async function checkRoleHierarchy(
+    db: any,
+    callerPerms: bigint,
+    currentRolePermissions: bigint,
+    serverId: string,
+    callerId: string,
+): Promise<string | null> {
+    return await checkEscalation(db, callerPerms, currentRolePermissions, serverId, callerId)
+        ? 'Cannot manage a role with permissions you do not have'
+        : null;
+}
+
 // ─── PreHandler for channel overrides: membership + ManageRoles ───
 
 async function requireManageRolesForChannel(request: FastifyRequest, reply: FastifyReply) {
@@ -250,13 +268,18 @@ export async function roleRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'Cannot rename the @everyone role' });
         }
 
-        // Privilege escalation check on new permissions
-        if (body.permissions !== undefined) {
-            const newPerms = parsePerms(body.permissions);
-            if (newPerms === null) return reply.status(400).send({ error: 'Invalid permissions' });
+        const newPerms = body.permissions !== undefined ? parsePerms(body.permissions) : undefined;
+        if (newPerms === null) return reply.status(400).send({ error: 'Invalid permissions' });
+        if (newPerms !== undefined) {
             const ownerErr = await directorGuard(db, serverId, userId, BigInt(role.permissions), newPerms);
             if (ownerErr) return reply.status(403).send({ error: ownerErr });
-            const callerPerms = await loadAndComputePermissions(db, userId, serverId);
+        }
+        // Hierarchy on what the role holds now (any edit, @everyone included), then
+        // the escalation check on what it will hold
+        const callerPerms = await loadAndComputePermissions(db, userId, serverId);
+        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.permissions), serverId, userId);
+        if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
+        if (newPerms !== undefined) {
             const err = await checkEscalation(db, callerPerms, newPerms, serverId, userId);
             if (err) return reply.status(403).send({ error: err });
         }
@@ -331,6 +354,9 @@ export async function roleRoutes(app: FastifyInstance) {
         }
         const ownerErr = await directorRoleGuard(db, serverId, request.userId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
+        const callerPerms = await loadAndComputePermissions(db, request.userId, serverId);
+        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.rows[0].permissions), serverId, request.userId);
+        if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
 
         await db.query(
             'DELETE FROM roles WHERE id = $1 AND server_id = $2',
@@ -371,7 +397,8 @@ export async function roleRoutes(app: FastifyInstance) {
             return reply.status(404).send({ error: 'User is not a member of this server' });
         }
 
-        // Escalation check: can't assign a role with perms you don't have
+        // Escalation and hierarchy check in one: the role's current permissions must all be
+        // the caller's, so a role carrying Administrator is out of a non-admin's reach
         const rolePerms = BigInt(role.rows[0].permissions);
         const ownerErr = await directorRoleGuard(db, serverId, callerId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
@@ -404,6 +431,12 @@ export async function roleRoutes(app: FastifyInstance) {
 
         const ownerErr = await directorRoleGuard(db, serverId, request.userId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
+        const role = await db.query('SELECT permissions FROM roles WHERE id = $1 AND server_id = $2', [roleId, serverId]);
+        if (role.rows[0]) {
+            const callerPerms = await loadAndComputePermissions(db, request.userId, serverId);
+            const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.rows[0].permissions), serverId, request.userId);
+            if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
+        }
 
         const result = await db.query(
             'DELETE FROM member_roles WHERE server_id = $1 AND user_id = $2 AND role_id = $3 RETURNING role_id',
@@ -482,7 +515,7 @@ export async function roleRoutes(app: FastifyInstance) {
 
         // Verify role belongs to the server
         const role = await db.query(
-            'SELECT 1 FROM roles WHERE id = $1 AND server_id = $2',
+            'SELECT permissions FROM roles WHERE id = $1 AND server_id = $2',
             [roleId, serverId]
         );
         if (!role.rows[0]) {
@@ -498,6 +531,10 @@ export async function roleRoutes(app: FastifyInstance) {
         const ownerErr = await directorGuard(db, serverId, userId, BigInt(prev.rows[0]?.allow ?? 0), allowBits)
             ?? await directorGuard(db, serverId, userId, BigInt(prev.rows[0]?.deny ?? 0), denyBits);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
+
+        // Overrides on a role above the caller are as far out of reach as the role itself
+        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.rows[0].permissions), serverId, userId);
+        if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
 
         // Escalation check on the allow bits
         const err = await checkEscalation(db, callerPerms, allowBits, serverId, userId);
@@ -529,6 +566,11 @@ export async function roleRoutes(app: FastifyInstance) {
         if (prev.rows[0]) {
             const ownerErr = await directorGuard(db, (request as any)._serverId, request.userId, BigInt(prev.rows[0].allow) | BigInt(prev.rows[0].deny), 0n);
             if (ownerErr) return reply.status(403).send({ error: ownerErr });
+            const role = await db.query('SELECT permissions FROM roles WHERE id = $1', [roleId]);
+            if (role.rows[0]) {
+                const hierarchyErr = await checkRoleHierarchy(db, (request as any)._callerPerms, BigInt(role.rows[0].permissions), (request as any)._serverId, request.userId);
+                if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
+            }
         }
 
         const result = await db.query(

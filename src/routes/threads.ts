@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { generateUlid } from '../utils/ulid';
 import { resolveMentions, mentionsEveryoneIn } from './shared';
-import { canViewChannel } from '../lib/channel-access';
+import { canPostInChannel, canViewChannel } from '../lib/channel-access';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
@@ -42,9 +42,9 @@ export async function threadRoutes(app: FastifyInstance) {
         const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
         const db = request.dbClient!;
 
-        const access = await canViewChannel(db, channelId, userId, isBot);
+        const access = await canPostInChannel(db, channelId, userId, !!isBot);
         if (!access.allowed) {
-            return reply.status(403).send({ error: 'Channel access denied' });
+            return reply.status(403).send({ error: access.error });
         }
         // Nothing left after cleaning (only escape codes)
         if (!content && !artifact && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
@@ -180,8 +180,8 @@ export async function threadRoutes(app: FastifyInstance) {
         const resolvedAttachments = prepared.attachments;
         const replyId = generateUlid();
 
-        // Parse mentionsEveryone for INSERT column
-        const mentionsEveryone = mentionsEveryoneIn(content);
+        // Parse mentionsEveryone for INSERT column. @everyone without MentionEveryone stays plain text.
+        const mentionsEveryone = access.mentionEveryone && mentionsEveryoneIn(content);
 
         const protocol = parseProtocol(content);
         const couldDirect = await stampAuthority(db, channelId, userId, !!request.isBot);
@@ -212,7 +212,7 @@ export async function threadRoutes(app: FastifyInstance) {
         );
 
         // Resolve @mentions (shared helper)
-        const { mentionedUsers } = await resolveMentions(db, replyId, channelId, serverId, userId, content);
+        const { mentionedUsers } = await resolveMentions(db, replyId, channelId, serverId, userId, content, access.mentionEveryone);
         const artifactRef = artifact ? await attachArtifact(db, { channelId, messageId: replyId, authorId: userId, input: artifact }) : null;
 
         // Wake agents this reply is addressed to (same transaction as the reply)
