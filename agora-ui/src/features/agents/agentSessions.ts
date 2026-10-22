@@ -87,7 +87,7 @@ export interface CommandResponse {
 export const ERRORS: Record<string, string> = {
   budget_exhausted: 'This session has used its budget. The owner can raise its token budget, or start a fresh session.',
   unknown_profile: 'No agent profile with that name on this server.',
-  bot_not_in_channel: "That agent's bot hasn't been added to this channel.",
+  bot_not_in_channel: "That agent isn't in this channel yet. Open Agents in this channel to add it, or ask the server owner or an administrator.",
   no_live_session: 'That agent has no live session here.',
   not_resumable: 'Only a shelved session from this channel can be resumed.',
   session_live: 'That agent already has a live session here.',
