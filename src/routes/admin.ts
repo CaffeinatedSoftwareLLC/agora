@@ -250,6 +250,15 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const row = updateRes.rows[0];
 
+        // Revoke the tokens of the target (if it is a bot) and of every bot it owns.
+        // Restoring the account later does not bring them back; the owner issues new ones.
+        await db.query(
+            `UPDATE bot_tokens SET revoked_at = NOW()
+             WHERE revoked_at IS NULL
+               AND bot_id IN (SELECT id FROM users WHERE bot = true AND (id = $1 OR bot_owner_id = $1))`,
+            [targetId]
+        );
+
         await logAdminAction(db, userId, 'user_ban', 'user', targetId, {
             before: { accountStatus: 'active' },
             after: { accountStatus: 'suspended' },

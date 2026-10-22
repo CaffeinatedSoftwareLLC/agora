@@ -133,9 +133,11 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 
         // O(1) lookup by primary key
         const tokenRow = await db.query(
-            `SELECT t.id, t.bot_id, t.secret_hash, u.bot_paused_at, u.bot_paused_reason
+            `SELECT t.id, t.bot_id, t.secret_hash, u.bot_paused_at, u.bot_paused_reason,
+                    u.account_status, o.account_status AS owner_status
              FROM bot_tokens t
              JOIN users u ON u.id = t.bot_id
+             LEFT JOIN users o ON o.id = u.bot_owner_id
              WHERE t.id = $1 AND t.revoked_at IS NULL`,
             [parsed.tokenId]
         );
@@ -146,6 +148,16 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         const valid = await verifyBotSecret(parsed.secret, tokenRow.rows[0].secret_hash);
         if (!valid) {
             return reply.status(401).send({ error: 'Invalid bot token' });
+        }
+
+        // Same account rules as the gateway (socketAccountError): the bot and its owner
+        // must both be active, and a missing owner fails closed
+        const { account_status: botStatus, owner_status: ownerStatus } = tokenRow.rows[0];
+        if (botStatus !== 'active') {
+            return reply.status(403).send({ error: `account_${botStatus}` });
+        }
+        if (ownerStatus !== 'active') {
+            return reply.status(403).send({ error: 'bot_owner_inactive' });
         }
 
         // Route allowlist check
