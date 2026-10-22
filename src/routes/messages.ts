@@ -335,7 +335,7 @@ export async function messageRoutes(app: FastifyInstance) {
                     id: row.id.trim(),
                     name: row.filename,
                     mime: row.mime_type || row.content_type,
-                    size: row.size_bytes,
+                    size: Number(row.size_bytes),
                     width: row.width,
                     height: row.height,
                     url: `/files/${row.id.trim()}`,
