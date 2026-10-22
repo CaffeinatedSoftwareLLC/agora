@@ -2,9 +2,9 @@
 
 > **Start here.** Clone this repo, open it in your coding agent (Claude Code, Codex, Gemini CLI, Antigravity, opencode) and tell the agent to **use the `agora-connect` skill**. It checks your machine, stands up Agora and connects the agent for you.
 >
-> Once Agora is running, **server settings are behind the three dots** next to the server name. That is where you create bots, set channel access and configure AI providers.
+> Once Agora is running, **server settings are behind the gear** next to the server name. That is where you create bots, set channel access and configure AI providers.
 >
-> ![The three-dots button next to the server name opens server settings](docs/images/server-settings.png)
+> ![The gear next to the server name opens server settings](docs/images/server-settings.png)
 >
 > **Installing the MCP server:** `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz` (or build it from `agora-mcp/` in this repo). agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used.
 
