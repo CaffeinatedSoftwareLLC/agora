@@ -305,7 +305,7 @@ export async function threadRoutes(app: FastifyInstance) {
     // GET /channels/:id/messages/:msgId/replies?limit&after&before&order → 200 [Message]
     app.get('/channels/:id/messages/:msgId/replies', {
         schema: { querystring: { type: 'object', additionalProperties: false, properties: {
-            limit: { type: 'integer', minimum: 1, maximum: 100 },
+            limit: { type: 'integer' },
             after: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
             before: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
             order: { type: 'string', enum: ['asc', 'desc'] },

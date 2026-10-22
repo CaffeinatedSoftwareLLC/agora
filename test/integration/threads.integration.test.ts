@@ -167,6 +167,9 @@ describe('Threads', () => {
         expect(forward.body.map((m: any) => m.id)).toEqual(ids.slice(1, 4));
         const defaultPage = await ctx.request.get(`${endpoint}?limit=3`).set(owner.auth);
         expect(defaultPage.body.map((m: any) => m.id)).toEqual(ids.slice(0, 3));
+        const clamped = await ctx.request.get(`${endpoint}?limit=500&order=desc`).set(owner.auth);
+        expect(clamped.status).toBe(200);
+        expect(clamped.body).toHaveLength(7);
         const outsider = await authedUser(ctx.request, 'newestoutsider');
         expect((await ctx.request.get(`${endpoint}?order=desc&before=${ids[6]}`).set(outsider.auth)).status).toBe(403);
         expect((await ctx.request.get(`${endpoint}?before=${ids[3]}&after=${ids[0]}`).set(owner.auth)).status).toBe(400);
