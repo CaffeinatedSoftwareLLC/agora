@@ -301,7 +301,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                 }}
               >
                 {run?.position === 0 && (
-                  <AgentMessageRunToggle count={run.size} names={run.names} noticeCount={run.noticeCount} expanded={runExpanded} onToggle={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />
+                  <AgentMessageRunToggle count={run.size} names={run.names} noticeCount={run.noticeCount} noticeOnly={run.noticeOnly} expanded={runExpanded} onToggle={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />
                 )}
                 {(!run || runExpanded) && (
                   <div data-agent-run={run?.key} data-agent-run-end={run?.position === (run?.size ?? 0) - 1 || undefined}
@@ -314,7 +314,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                     onDelete={handleDelete}
                     channelId={channelId}
                   />
-                  {run && run.position === run.size - 1 && <AgentRunCollapse count={run.size} onCollapse={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />}
+                  {run && run.position === run.size - 1 && <AgentRunCollapse count={run.size} noticeOnly={run.noticeOnly} onCollapse={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />}
                   </div>
                 )}
               </div>

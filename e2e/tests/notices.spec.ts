@@ -9,11 +9,11 @@ test.describe('system notices and long history @smoke', () => {
     test('[UI-02.notice-drawer] consecutive notices collapse; expand shows them; state survives reload', async ({ page, seed }, ti) => {
         const name = `notices-${seed.runTag}`;
         await openChannel(page, seed.channels.notices, name);
-        const toggle = page.getByRole('button', { name: /^\d+ agent updates.*notices/ });
+        const toggle = page.getByRole('button', { name: /^\d+ notices$/ });
         await expect(toggle).toBeVisible();
         await expect(toggle).toHaveAttribute('aria-expanded', 'false');
         const label = (await toggle.innerText()).trim();
-        const n = Number(/(\d+) agent updates/.exec(label)?.[1]);
+        const n = Number(/(\d+) notices/.exec(label)?.[1]);
         expect(n, `collapsed row "${label}" counts the seeded start/end notices`).toBeGreaterThanOrEqual(4);
         const endedText = page.getByText(new RegExp(`ended ${seed.agents.codexSub.name}'s session`)).first();
         await expect(endedText).toBeHidden();
@@ -25,7 +25,7 @@ test.describe('system notices and long history @smoke', () => {
         await snap(page, ti, 'UI-02.notice-drawer', '02-expanded', 'Several system notices about starting and ending an agent session, listed one per line', { ready: endedText });
 
         await page.reload();
-        const again = page.getByRole('button', { name: /^\d+ agent updates.*notices/ });
+        const again = page.getByRole('button', { name: /^\d+ notices$/ });
         await expect(again).toHaveAttribute('aria-expanded', 'true');
         await again.click();
         await expect(again).toHaveAttribute('aria-expanded', 'false');

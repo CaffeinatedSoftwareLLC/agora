@@ -59,7 +59,7 @@ describe('system notice runs in MessageList', () => {
       msg('m2', 'bye'),
     ]);
     const { unmount } = render(<MessageList channelId="channel" channelName="general" />);
-    const toggle = screen.getByRole('button', { name: /3 agent updates.*3 notices/ });
+    const toggle = screen.getByRole('button', { name: /^3 notices/ });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.querySelector('svg')?.classList.contains('rotate-90')).toBe(false);
     expect(screen.queryByText('Session standby')).toBeNull();
@@ -75,7 +75,7 @@ describe('system notice runs in MessageList', () => {
 
     unmount();
     render(<MessageList channelId="channel" channelName="general" />);
-    expect(screen.getByRole('button', { name: /^3 agent updates/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: /^3 notices/ }).getAttribute('aria-expanded')).toBe('true');
   });
 
   it('renders a lone notice without a drawer', () => {
@@ -90,9 +90,19 @@ describe('system notice runs in MessageList', () => {
     vi.spyOn(storage, 'setItem').mockImplementation(() => { throw new Error('denied'); });
     setMessages([msg('n1', 'a', 'agent_session'), msg('n2', 'b', 'agent_session'), msg('human', 'Next task')]);
     render(<MessageList channelId="channel" channelName="general" />);
-    const toggle = screen.getByRole('button', { name: /2 agent updates/ });
+    const toggle = screen.getByRole('button', { name: /^2 notices/ });
     act(() => { fireEvent.click(toggle); });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+  it('keeps a trailing notice-only run collapsed and labels it without agent-update counts', () => {
+    setMessages([msg('n1', 'Trust granted', 'file_trust'), msg('n2', 'Trust removed', 'file_trust')]);
+    render(<MessageList channelId="channel" channelName="general" />);
+    const toggle = screen.getByRole('button', { name: '2 notices' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Trust granted')).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText('Trust granted')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Collapse 2 notices' })).toBeTruthy();
   });
 });
 
