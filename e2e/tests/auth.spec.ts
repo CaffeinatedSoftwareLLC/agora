@@ -67,8 +67,8 @@ test.describe('auth @smoke', () => {
         await expect(page.getByPlaceholder(/^Message #/)).toBeVisible();
 
         // Logout via the user menu
-        await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await page.getByRole('button', { name: 'Log out', exact: true }).click();
+        await page.getByRole('button', { name: 'Account menu' }).click();
+        await page.getByRole('menuitem', { name: 'Log out', exact: true }).click();
         await page.waitForURL(/\/login/);
         await snap(page, ti, 'ID-02.cookie', '01-after-logout', 'The login page after logging out',
             { ready: page.getByRole('button', { name: 'Sign in', exact: true }) });
@@ -323,9 +323,9 @@ test.describe('auth: policies, lockout and sessions', () => {
             await expect.poll(() => io().filter(s => !s.closed).length, { message: 'B has an open socket' }).toBeGreaterThan(0);
             expect((await b.ctx.request.get('/auth/session')).status()).toBe(200);
 
-            await a.page.getByRole('button', { name: 'Settings', exact: true }).click();
+            await a.page.getByRole('button', { name: 'Account menu' }).click();
             const out = a.page.waitForResponse(r => new URL(r.url()).pathname === '/auth/logout-all');
-            await a.page.getByRole('button', { name: 'Log out all sessions' }).click();
+            await a.page.getByRole('menuitem', { name: 'Log out all sessions' }).click();
             expect((await out).status()).toBe(200);
             await a.page.waitForURL(/\/login/);
 

@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* Every scroller gets the thin, palette-coloured scrollbar the console strip has, never the
+   OS default with arrows. Chromium and Firefox read the standard properties; older WebKit
+   (Safari) reads the pseudo-elements. */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--color-text-dim); }
+*::-webkit-scrollbar-button { display: none; }
+
 /* Touch swipes stay unobstructed; mouse users get a draggable scroll affordance. */
 .console-strip { scrollbar-width: none; }
 .console-strip::-webkit-scrollbar { display: none; }

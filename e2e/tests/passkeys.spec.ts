@@ -30,8 +30,8 @@ test.describe('passkeys @smoke', () => {
 
         // Log out, sign in with the passkey (no password)
         await page.goto('/app');
-        await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await page.getByRole('button', { name: 'Log out', exact: true }).click();
+        await page.getByRole('button', { name: 'Account menu' }).click();
+        await page.getByRole('menuitem', { name: 'Log out', exact: true }).click();
         await page.waitForURL(/\/login/);
         await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
         await page.waitForURL(/\/app/, { timeout: 15_000 });
