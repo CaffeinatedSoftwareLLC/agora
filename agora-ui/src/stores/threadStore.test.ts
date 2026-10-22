@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useThreadStore, type ThreadSummary } from './threadStore';
+import type { Message } from './messageStore';
 
 vi.mock('../lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -84,6 +85,96 @@ function deferred<T>() {
   const promise = new Promise<T>((r) => { resolve = r; });
   return { promise, resolve };
 }
+
+describe('thread reply edit/delete (#204)', () => {
+  const original: Message = {
+    id: 'reply-1', channelId: 'ch-1', authorId: 'u1', authorUsername: 'alice',
+    content: 'original', createdAt: '2026-10-20T12:00:00Z', editedAt: '2026-10-20T12:01:00Z',
+    protocol: { version: 1, mode: 'fix', state: 'TURN', yieldTo: 'codex' },
+    attachments: [],
+  };
+  function seedReplies() {
+    useThreadStore.setState({ repliesByThread: new Map([
+      ['parent-1', [original]], ['parent-2', [{ ...original, id: 'other-reply' }]],
+    ]) });
+  }
+  const reply = () => useThreadStore.getState().repliesByThread.get('parent-1')![0];
+
+  it('edits optimistically, calls the reply endpoint, then accepts the socket timestamp/protocol', async () => {
+    seedReplies();
+    const request = deferred<unknown>();
+    mockApi.patch.mockReturnValueOnce(request.promise);
+    const pending = useThreadStore.getState().editReply('ch-1', 'parent-1', 'reply-1', 'edited');
+    expect(reply().content).toBe('edited');
+    expect(reply().editedAt).not.toBe(original.editedAt);
+    expect(mockApi.patch).toHaveBeenCalledWith('/channels/ch-1/messages/reply-1', { content: 'edited' });
+    request.resolve({});
+    await pending;
+    useThreadStore.getState().updateReply({ id: 'reply-1', channelId: 'ch-1', threadId: 'parent-1', content: 'edited', editedAt: 'server-time' });
+    expect(reply().editedAt).toBe('server-time');
+    expect(reply().protocol).toBeUndefined();
+    expect(useThreadStore.getState().repliesByThread.get('parent-2')![0].content).toBe('original');
+  });
+
+  it('soft-deletes optimistically and accepts the socket tombstone', async () => {
+    seedReplies();
+    const request = deferred<unknown>();
+    mockApi.delete.mockReturnValueOnce(request.promise);
+    const pending = useThreadStore.getState().deleteReply('ch-1', 'parent-1', 'reply-1');
+    expect(reply().content).toBeNull();
+    expect(reply().deletedAt).toBeTruthy();
+    expect(reply().protocol).toBeUndefined();
+    expect(mockApi.delete).toHaveBeenCalledWith('/channels/ch-1/messages/reply-1');
+    request.resolve({});
+    await pending;
+    useThreadStore.getState().removeReply({ id: 'reply-1', channelId: 'ch-1', threadId: 'parent-1', deletedAt: 'server-time' });
+    expect(reply().deletedAt).toBe('server-time');
+  });
+
+  it.each(['edit', 'delete'] as const)('restores the whole reply after a rejected %s without losing newly arrived replies', async action => {
+    seedReplies();
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<unknown>((_resolve, fail) => { reject = fail; });
+    (action === 'edit' ? mockApi.patch : mockApi.delete).mockReturnValueOnce(promise);
+    const pending = action === 'edit'
+      ? useThreadStore.getState().editReply('ch-1', 'parent-1', 'reply-1', 'edited')
+      : useThreadStore.getState().deleteReply('ch-1', 'parent-1', 'reply-1');
+    useThreadStore.getState().addReply({ ...original, id: 'new-reply', threadId: 'parent-1', content: 'new arrival' });
+    reject(new Error('permission denied'));
+    await pending;
+    expect(reply()).toEqual(original);
+    expect(useThreadStore.getState().repliesByThread.get('parent-1')).toHaveLength(2);
+  });
+
+  it.each(['edit', 'delete'] as const)('does not roll back a newer socket update after a failed %s', async action => {
+    seedReplies();
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<unknown>((_resolve, fail) => { reject = fail; });
+    (action === 'edit' ? mockApi.patch : mockApi.delete).mockReturnValueOnce(promise);
+    const pending = action === 'edit'
+      ? useThreadStore.getState().editReply('ch-1', 'parent-1', 'reply-1', 'edited')
+      : useThreadStore.getState().deleteReply('ch-1', 'parent-1', 'reply-1');
+    useThreadStore.getState().removeReply({ id: 'reply-1', channelId: 'ch-1', threadId: 'parent-1', deletedAt: 'newer-delete' });
+    reject(new Error('connection lost'));
+    await pending;
+    expect(reply().deletedAt).toBe('newer-delete');
+    expect(reply().content).toBeNull();
+  });
+
+  it.each(['edit', 'delete'] as const)('does not resurrect cleared replies after a rejected %s', async action => {
+    seedReplies();
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<unknown>((_resolve, fail) => { reject = fail; });
+    (action === 'edit' ? mockApi.patch : mockApi.delete).mockReturnValueOnce(promise);
+    const pending = action === 'edit'
+      ? useThreadStore.getState().editReply('ch-1', 'parent-1', 'reply-1', 'edited')
+      : useThreadStore.getState().deleteReply('ch-1', 'parent-1', 'reply-1');
+    useThreadStore.getState().clear();
+    reject(new Error('connection lost'));
+    await pending;
+    expect(useThreadStore.getState().repliesByThread.size).toBe(0);
+  });
+});
 
 describe('threadStore active-thread list races (#128)', () => {
   it('a thread whose event arrives while a refresh is pending is fetched by a trailing refresh', async () => {

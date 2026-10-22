@@ -1,4 +1,5 @@
 import { test, expect, apis, openChannel, storageStateFor } from '../lib/fixtures';
+import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { snap } from '../lib/snap';
 import { freshChannel, rowWith } from '../lib/helpers';
 
@@ -102,4 +103,7 @@ test.describe('threads: replies, active-threads bar, who may close', () => {
         expect((await rootState()).threadClosedAt).toBeUndefined();
         await ctx.close();
     });
+});
+test('[UI-01.thread-reply-actions] edit and delete an own reply, including another client', async ({ page, seed }) => {
+    await checkThreadReplyActions(page, seed, false);
 });
