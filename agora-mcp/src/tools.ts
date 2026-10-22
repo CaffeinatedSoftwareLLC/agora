@@ -1018,7 +1018,7 @@ export function registerTools(
             } finally { await local.handle.close(); }
             const key = randomUUID();
             try {
-                const post = await api.postFile(ch.id, file.id, message ?? '', { threadId: thread, idempotencyKey: key });
+                const post = await api.postFile(ch.id, file.id, message, { threadId: thread, idempotencyKey: key });
                 return { content: [{ type: 'text' as const, text: `Uploaded ${oneLine(file.name)} (file ${file.id}, ${file.size} bytes) to ${label(ch.name, thread)} as message ${post.id}.` }] };
             } catch (error) {
                 // Keep the file available for recovery; never upload or delete it again automatically.

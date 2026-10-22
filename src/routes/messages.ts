@@ -23,7 +23,7 @@ export async function messageRoutes(app: FastifyInstance) {
             body: {
                 type: 'object',
                 properties: {
-                    content: { type: 'string', minLength: 1, maxLength: 4000 },
+                    content: { type: 'string', maxLength: 4000 },
                     client_key: { type: 'string', minLength: 1, maxLength: 100 },
                     // Set by agora-mcp session_wake: refuse the post (403 cannot_direct) when the
                     // author can't direct here, since it would wake no one (#75).
@@ -53,7 +53,7 @@ export async function messageRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
         // Nothing left after cleaning (only escape codes)
-        if (rawContent && !content && !attachmentIds?.length && !artifact) return reply.status(400).send({ error: 'empty_content' });
+        if (!content && !attachmentIds?.length && !artifact) return reply.status(400).send({ error: 'empty_content' });
         // Before the insert: a request that fails later still commits what it wrote
         if (artifact) {
             const bad = await checkArtifact(db, channelId, artifact);

@@ -57,7 +57,7 @@ describe('file_upload', () => {
         const { api, call } = setup();
         expect((await call({ path: 'report.txt' })).content[0].text).toContain('as message M1');
         expect(api.uploadFile).toHaveBeenCalledWith('C1', expect.objectContaining({ name: 'report.txt', size: 5 }));
-        expect(api.postFile).toHaveBeenLastCalledWith('C1', 'F1', '', { threadId: undefined, idempotencyKey: expect.any(String) });
+        expect(api.postFile).toHaveBeenLastCalledWith('C1', 'F1', undefined, { threadId: undefined, idempotencyKey: expect.any(String) });
         await call({ path: 'report.txt', thread: 'T1', message: 'Report attached.' });
         expect(api.postFile).toHaveBeenLastCalledWith('C1', 'F1', 'Report attached.', { threadId: 'T1', idempotencyKey: expect.any(String) });
     });
@@ -119,7 +119,10 @@ describe('multipart API', () => {
         expect(bodies[0].includes(bytes)).toBe(true);
         await api.postFile('C1', 'F1', '', { threadId: 'T1', idempotencyKey: 'key' });
         expect(fetchMock.mock.calls[1][0]).toContain('/channels/C1/messages/T1/replies');
-        expect(JSON.parse(bodies[1].toString())).toEqual({ content: '', attachments: ['F1'] });
+        expect(JSON.parse(bodies[1].toString())).toEqual({ attachments: ['F1'] });
+        await api.postFile('C1', 'F1', undefined, { idempotencyKey: 'key2' });
+        expect(fetchMock.mock.calls[2][0]).toBe('http://localhost:3000/channels/C1/messages');
+        expect(JSON.parse(bodies[2].toString())).toEqual({ attachments: ['F1'] });
     });
     it.each([403, 413, 415, 507, 503])('surfaces %i and never retries the upload', async status => {
         const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'refused' }), { status }));

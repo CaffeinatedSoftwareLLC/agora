@@ -40,6 +40,29 @@ test('bot upload returns 201 and can be attached to a channel post and a thread 
     expect(Buffer.isBuffer(download.body) ? download.body.toString() : download.text).toBe('report from a bot');
 });
 
+test.each(['bot', 'human'])('%s can post an attachment with no content key or an explicitly empty caption', async actor => {
+    const headers = actor === 'bot' ? auth : owner.auth;
+    for (const content of [undefined, '']) {
+        const file = await ctx.request.post('/files/upload').set(headers).field('channel_id', channelId).attach('file', Buffer.from('attachment only'), 'only.txt');
+        expect(file.status, JSON.stringify(file.body)).toBe(201);
+        const body = { ...(content !== undefined ? { content } : {}), attachments: [file.body.id] };
+        const post = await ctx.request.post(`/channels/${channelId}/messages`).set(headers).send(body);
+        expect(post.status, JSON.stringify(post.body)).toBe(201);
+        expect(post.body.content).toBeNull();
+        expect(post.body.attachments[0].id).toBe(file.body.id);
+        const replyFile = await ctx.request.post('/files/upload').set(headers).field('channel_id', channelId).attach('file', Buffer.from('reply only'), 'reply.txt');
+        expect(replyFile.status).toBe(201);
+        const reply = await ctx.request.post(`/channels/${channelId}/messages/${post.body.id}/replies`).set(headers)
+            .send({ ...(content !== undefined ? { content } : {}), attachments: [replyFile.body.id] });
+        expect(reply.status, JSON.stringify(reply.body)).toBe(201);
+        expect(reply.body.content).toBeNull();
+    }
+});
+
+test.each([{}, { content: '' }, { attachments: [] }, { content: '', attachments: [] }])('refuses an empty channel post without a file or artifact: %j', async body => {
+    expect((await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send(body)).status).toBe(400);
+});
+
 test.each([Permissions.UploadFiles, Permissions.SendMessages, Permissions.ViewChannel])('bot upload enforces channel permission %s without storing a file', async deny => {
     const before = await count();
     await ctx.db.query('INSERT INTO channel_role_overrides (channel_id, role_id, allow, deny) VALUES ($1, $2, 0, $3) ON CONFLICT (channel_id, role_id) DO UPDATE SET deny = EXCLUDED.deny', [channelId, roleId, deny.toString()]);

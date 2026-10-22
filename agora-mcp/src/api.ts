@@ -577,9 +577,9 @@ export class AgoraApi {
         } finally { stream.destroy(); }
     }
 
-    async postFile(channelId: string, fileId: string, content: string, opts: { threadId?: string; idempotencyKey: string }): Promise<Message & { replayed?: boolean }> {
+    async postFile(channelId: string, fileId: string, content: string | undefined, opts: { threadId?: string; idempotencyKey: string }): Promise<Message & { replayed?: boolean }> {
         const path = opts.threadId ? `/channels/${channelId}/messages/${opts.threadId}/replies` : `/channels/${channelId}/messages`;
-        return this.request('POST', path, { content, attachments: [fileId] }, { 'Idempotency-Key': opts.idempotencyKey });
+        return this.request('POST', path, { ...(content ? { content } : {}), attachments: [fileId] }, { 'Idempotency-Key': opts.idempotencyKey });
     }
 
     /** Post a canvas artifact (or its next version), with optional text, to a channel or thread. */
