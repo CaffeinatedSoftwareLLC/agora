@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, type AgoraMcpConfig } from './config.js';
+import { loadConfig, loadUploadConfig, type AgoraMcpConfig } from './config.js';
 
 export function parseInvite(value: string): string {
     if (/^[a-f0-9]{64}$/.test(value)) return value;
@@ -38,6 +38,7 @@ export async function loadStartupConfig(args: string[], options: {
     }
     const instance = url.origin;
     const defaultChannel = arg('--channel') ?? process.env.AGORA_DEFAULT_CHANNEL;
+    const uploadConfig = loadUploadConfig(args);
     const directory = options.credentialDir ?? join(homedir(), '.agora', 'credentials');
     await mkdir(directory, { recursive: true, mode: 0o700 });
     // mkdir's mode only applies when it creates the directory; tighten a pre-existing one too.
@@ -54,7 +55,7 @@ export async function loadStartupConfig(args: string[], options: {
             if (!saved || saved.instance !== instance || typeof saved.token !== 'string' || !saved.token.startsWith('bot_')) {
                 throw new Error('Invalid saved Agora credentials.');
             }
-            return { instance, token: saved.token, defaultChannel };
+            return { instance, token: saved.token, defaultChannel, ...uploadConfig };
         } catch (error: any) {
             if (error.code === 'ENOENT') return undefined;
             throw error;

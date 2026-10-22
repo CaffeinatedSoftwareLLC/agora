@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { openLocalUpload, type UploadConfig } from './local-upload.js';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgoraApiError } from './api.js';
@@ -306,7 +307,7 @@ export function registerTools(
     server: McpServer,
     api: AgoraApi,
     cursors: CursorTracker,
-    config: { defaultChannel?: string; listening?: { start(): void; stop(): void }; activity?: ToolActivity },
+    config: UploadConfig & { defaultChannel?: string; listening?: { start(): void; stop(): void }; activity?: ToolActivity },
 ) {
     if (config.activity) server = withActivity(server, config.activity);
     let botInfo: BotInfo | null = null;
@@ -992,6 +993,37 @@ export function registerTools(
             const ch = await resolveChannel(channel);
             const result = await api.searchFiles(ch.id, { query, tag, limit });
             return { content: [{ type: 'text' as const, text: `#${oneLine(ch.name)} — ${formatFileSearch(result)}` }] };
+        },
+    );
+
+    server.tool(
+        'file_upload',
+        'Upload a local file and share it as an attachment in a channel or thread. Paths are restricted to the configured working folder (including symlink targets) unless the operator enables outside access. Server file-size, extension, quota and channel permissions apply; a 413 means the server size limit was exceeded. Do not blindly retry an upload whose outcome is unknown.',
+        {
+            path: z.string().min(1).describe('Local file path, absolute or relative to the configured working folder'),
+            channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
+            thread: threadParam,
+            message: z.string().optional().describe('Optional text to post with the file'),
+        },
+        async ({ path, channel, thread, message }) => {
+            const ch = await resolveChannel(channel);
+            const local = await openLocalUpload(path, config);
+            let file;
+            try {
+                file = await api.uploadFile(ch.id, { name: local.name, size: local.size,
+                    stream: local.handle.createReadStream({ autoClose: false }) });
+            } catch (error) {
+                if (error instanceof AgoraApiError && error.status === 413) throw new Error('Upload refused (413): file exceeds the server maximum allowed size. Ask the instance admin to check the upload limit.');
+                throw error;
+            } finally { await local.handle.close(); }
+            const key = randomUUID();
+            try {
+                const post = await api.postFile(ch.id, file.id, message ?? '', { threadId: thread, idempotencyKey: key });
+                return { content: [{ type: 'text' as const, text: `Uploaded ${oneLine(file.name)} (file ${file.id}, ${file.size} bytes) to ${label(ch.name, thread)} as message ${post.id}.` }] };
+            } catch (error) {
+                // Keep the file available for recovery; never upload or delete it again automatically.
+                throw new Error(`Uploaded file ${file.id}, but posting was not confirmed (post Idempotency-Key: ${key}). Check ${label(ch.name, thread)} before retrying; reuse this attachment ID through the message API. ${error instanceof Error ? error.message : String(error)}`);
+            }
         },
     );
 

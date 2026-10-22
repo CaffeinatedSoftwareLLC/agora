@@ -19,6 +19,8 @@ describe('loadConfig', () => {
         delete process.env.AGORA_INSTANCE;
         delete process.env.AGORA_BOT_TOKEN;
         delete process.env.AGORA_DEFAULT_CHANNEL;
+        delete process.env.AGORA_UPLOAD_ROOT;
+        delete process.env.AGORA_ALLOW_OUTSIDE_WORKDIR;
     });
 
     afterEach(() => {
@@ -109,5 +111,17 @@ describe('loadConfig', () => {
         const config = loadConfig(['--config', '/path/to/config.json', '--instance', 'http://cli', '--token', 'cli-tok']);
         expect(config.instance).toBe('http://from-file');
         expect(config.token).toBe('file-token');
+    });
+
+    it('reads upload scope from CLI, environment and JSON without accepting a string boolean from JSON', () => {
+        process.env.AGORA_INSTANCE = 'http://env-instance'; process.env.AGORA_BOT_TOKEN = 'token';
+        process.env.AGORA_UPLOAD_ROOT = process.cwd(); process.env.AGORA_ALLOW_OUTSIDE_WORKDIR = 'false';
+        expect(loadConfig([])).toMatchObject({ uploadRoot: process.cwd(), allowOutsideWorkdir: false });
+        expect(loadConfig(['--allow-outside-workdir'])).toMatchObject({ allowOutsideWorkdir: true });
+        expect(() => loadConfig(['--upload-root'])).toThrow('Missing value');
+        mockedReadFileSync.mockReturnValue(JSON.stringify({ instance: 'http://x', token: 't', uploadRoot: process.cwd(), allowOutsideWorkdir: false }));
+        expect(loadConfig(['--config', 'config.json'])).toMatchObject({ uploadRoot: process.cwd(), allowOutsideWorkdir: false });
+        mockedReadFileSync.mockReturnValue(JSON.stringify({ instance: 'http://x', token: 't', allowOutsideWorkdir: 'false' }));
+        expect(() => loadConfig(['--config', 'config.json'])).toThrow('must be a boolean');
     });
 });

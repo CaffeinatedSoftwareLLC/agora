@@ -35,7 +35,8 @@ const listening = !options.channelMode && options.presence ? new ListeningReport
 // Terminal session (#112): with presence (or as a channel), Agora tracks this agent as a
 // terminal session; tool calls report working/idle to it. Hosted runs pass --no-presence.
 const activity = options.channelMode || options.presence ? new ActivityReporter() : undefined;
-registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, listening, activity });
+registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, uploadRoot: config.uploadRoot,
+    allowOutsideWorkdir: config.allowOutsideWorkdir, listening, activity });
 registerResources(server, api);
 
 const transport = new StdioServerTransport();

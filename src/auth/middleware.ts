@@ -45,6 +45,7 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /files/:fileId/text',
     'GET /files/:fileId/image',
     'GET /files/:fileId',
+    'POST /files/upload',
     'PATCH /channels/:id/messages/:msgId/thread',
     // Claude Code Channel: relay a permission prompt as an owner-only card, and read its answer
     'POST /channels/:id/permission-relays',

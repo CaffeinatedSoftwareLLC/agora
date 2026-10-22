@@ -45,7 +45,8 @@ export async function fileRoutes(app: FastifyInstance) {
         }
 
         // Check permissions: UploadFiles + SendMessages
-        const permCheck = await checkFilePermissions(db, channelId, userId, Permissions.UploadFiles | Permissions.SendMessages);
+        const permCheck = await checkFilePermissions(db, channelId, userId,
+            Permissions.UploadFiles | Permissions.SendMessages | (request.isBot ? Permissions.ViewChannel : 0n), { isBot: request.isBot });
         if (!permCheck.allowed) {
             return reply.status(permCheck.status!).send({ error: permCheck.error });
         }

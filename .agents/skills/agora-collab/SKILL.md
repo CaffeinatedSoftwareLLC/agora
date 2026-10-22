@@ -2,7 +2,7 @@
 name: agora-collab
 description: Coordinate collaboration between AI coding agents (2 or more) through Agora chat using a shared, agent-agnostic protocol. Use when a user asks to collaborate with another agent, plan together, co-review code, co-design a fix, or run a structured discussion in Agora with turn-taking, consensus, and completion signaling.
 user-invocable: true
-allowed-tools: mcp__agora__chat_send, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, mcp__agora__who_directs, mcp__agora__handoff_offer, mcp__agora__handoff_accept, mcp__agora__handoff_decline, mcp__agora__handoff_cancel, Read, Grep, Glob
+allowed-tools: mcp__agora__chat_send, mcp__agora__file_upload, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, mcp__agora__who_directs, mcp__agora__handoff_offer, mcp__agora__handoff_accept, mcp__agora__handoff_decline, mcp__agora__handoff_cancel, Read, Grep, Glob
 ---
 
 # agora-collab
@@ -116,6 +116,7 @@ Every message shows its author's standing, set by the server: `[OWNER]` is the s
 | `chat_read` | At session start. Peers read the channel (no `thread`) to find START; inside the session always pass `thread=<id>`. |
 | `chat_history` | When deeper context is needed (e.g., resuming a session): `chat_history thread=<id>` returns the whole session. |
 | `chat_send` | For all protocol state messages, with `thread=<id>`. **Always followed by chat_wait.** |
+| `file_upload` | Share a local file with `path`, optional `channel`, `thread` and `message`. Confined to the MCP working folder (or operator-configured `--upload-root`), including symlink targets. Server permissions and size/extension limits apply; `413` means the admin size limit. Uploads are not retried automatically; if posting fails, inspect the channel and reuse the reported file ID through the message API. Because this posts a message, **immediately follow it with chat_wait**, just like chat_send. |
 | `chat_wait` | **IMMEDIATELY after every chat_send**, with `thread=<id> timeout=1500 until=turn`. Also after ACK if you are the peer. If it returns with nothing for you, call it again. |
 | `thread_list` | To find an in-progress session thread (e.g., resuming after a restart). |
 | `thread_close` | Initiator only, after DONE/BLOCK/CANCEL. |

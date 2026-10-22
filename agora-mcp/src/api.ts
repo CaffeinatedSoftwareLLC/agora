@@ -1,3 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+
+export interface UploadedFile { id: string; name: string; mime: string; size: number; width: number | null; height: number | null; url: string }
+
 export interface BotInfo {
     id: string;
     username: string;
@@ -286,21 +291,24 @@ export class AgoraApi {
         path: string,
         body?: unknown,
         headers?: Record<string, string>,
+        multipart?: { stream: Readable; boundary: string; length: number },
     ): Promise<T> {
         const url = `${this.baseUrl}${path}`;
         // Serialize once: a retry must carry exactly the original idempotency identity/content.
-        const init: RequestInit = {
+        const init: RequestInit & { duplex?: 'half' } = {
             method,
             headers: {
                 'Authorization': `Bot ${this.token}`,
-                ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+                ...(multipart ? { 'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`, 'Content-Length': String(multipart.length) }
+                    : body !== undefined ? { 'Content-Type': 'application/json' } : {}),
                 ...headers,
             },
-            body: body !== undefined ? JSON.stringify(body) : undefined,
+            body: multipart ? multipart.stream as unknown as BodyInit : body !== undefined ? JSON.stringify(body) : undefined,
+            ...(multipart ? { duplex: 'half' as const } : {}),
         };
         const clientKey = (body as { client_key?: unknown } | undefined)?.client_key;
-        const safe = method === 'GET' || (typeof clientKey === 'string' && clientKey.trim().length > 0)
-            || Object.entries(headers ?? {}).some(([name, value]) => name.toLowerCase() === 'idempotency-key' && value.trim().length > 0);
+        const safe = !multipart && (method === 'GET' || (typeof clientKey === 'string' && clientKey.trim().length > 0)
+            || Object.entries(headers ?? {}).some(([name, value]) => name.toLowerCase() === 'idempotency-key' && value.trim().length > 0));
         const deadline = Date.now() + RETRY_BUDGET_MS;
         if (safe) init.signal = AbortSignal.timeout(RETRY_BUDGET_MS);
         let lastError: unknown;
@@ -554,6 +562,24 @@ export class AgoraApi {
 
     async getPermissionRelay(channelId: string, requestId: string): Promise<{ id: string; relayId: string; status: string }> {
         return this.request('GET', `/channels/${channelId}/permission-relays/${requestId}`);
+    }
+
+    /** Stream multipart bytes without loading an admin-sized file into memory. Never retry a blob upload. */
+    async uploadFile(channelId: string, file: { name: string; size: number; stream: AsyncIterable<Uint8Array> }): Promise<UploadedFile> {
+        const boundary = `agora-${randomUUID()}`;
+        const filename = file.name.replace(/["\\\r\n\u0000]/g, '_');
+        const prefix = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="channel_id"\r\n\r\n${channelId}\r\n`
+            + `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
+        const suffix = Buffer.from(`\r\n--${boundary}--\r\n`);
+        const stream = Readable.from((async function* () { yield prefix; yield* file.stream; yield suffix; })());
+        try {
+            return await this.request('POST', '/files/upload', undefined, undefined, { stream, boundary, length: prefix.length + file.size + suffix.length });
+        } finally { stream.destroy(); }
+    }
+
+    async postFile(channelId: string, fileId: string, content: string, opts: { threadId?: string; idempotencyKey: string }): Promise<Message & { replayed?: boolean }> {
+        const path = opts.threadId ? `/channels/${channelId}/messages/${opts.threadId}/replies` : `/channels/${channelId}/messages`;
+        return this.request('POST', path, { content, attachments: [fileId] }, { 'Idempotency-Key': opts.idempotencyKey });
     }
 
     /** Post a canvas artifact (or its next version), with optional text, to a channel or thread. */
