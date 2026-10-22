@@ -393,14 +393,13 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             sockets.add(socket.id);
             onlineUsers.set(trimmedUserId, sockets);
 
-            if (!wasOnline) {
-                // Broadcast PresenceUpdate 'online' to all channel rooms
-                for (const roomId of channelRoomIds) {
-                    socket.to(`channel:${roomId}`).emit('PresenceUpdate', {
-                        userId: trimmedUserId,
-                        status: 'online',
-                    });
-                }
+            if (!wasOnline && channelRoomIds.length > 0) {
+                // One broadcast across all channel rooms: Socket.IO sends it once per socket,
+                // however many of those rooms a co-member shares (#239)
+                socket.to(channelRoomIds.map(roomId => `channel:${roomId}`)).emit('PresenceUpdate', {
+                    userId: trimmedUserId,
+                    status: 'online',
+                });
             }
 
             // --- Typing handler ---
@@ -426,15 +425,13 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                         sockets.delete(socket.id);
                         if (sockets.size === 0) {
                             onlineUsers.delete(trimmedUserId);
-                            // Broadcast PresenceUpdate 'offline' to all their channel rooms
+                            // Broadcast PresenceUpdate 'offline' once across all their channel rooms
                             const rooms = (socket as any).channelRooms as string[] | undefined;
-                            if (rooms) {
-                                for (const roomId of rooms) {
-                                    socket.to(`channel:${roomId}`).emit('PresenceUpdate', {
-                                        userId: trimmedUserId,
-                                        status: 'offline',
-                                    });
-                                }
+                            if (rooms?.length) {
+                                socket.to(rooms.map(roomId => `channel:${roomId}`)).emit('PresenceUpdate', {
+                                    userId: trimmedUserId,
+                                    status: 'offline',
+                                });
                             }
                         }
                     }
