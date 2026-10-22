@@ -11,6 +11,9 @@ import { ThreadPanel } from './ThreadPanel';
 vi.hoisted(() => vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() }));
 vi.mock('../agents/handoffs', () => ({ useThreadOwner: () => null }));
 vi.mock('../voice/MicButton', () => ({ MicButton: () => null }));
+// Each reply's action buttons, rendered 66 times and walked by every role query, pushed the first test to
+// 3–6 s, past vitest's 5 s timeout. Scrolling never uses them; MessageItem's real .prose-msg anchor stays.
+vi.mock('./MessageActions', () => ({ MessageActions: () => null }));
 const reply = (n: number): MessagePayload => ({ id: String(n).padStart(26, '0'), content: `Reply ${n}`,
   channelId: 'channel', threadId: 'parent', authorId: 'other', authorUsername: 'other', createdAt: '2026-10-22T12:00:00Z' });
 const page = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, i) => reply(last - i));
