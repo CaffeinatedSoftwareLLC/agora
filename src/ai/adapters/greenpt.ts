@@ -1,6 +1,10 @@
 import type { DecideQuestion } from './types';
 import { systemOneAdapter } from './typesafe';
 
+const METIS_CONTEXT = 32_768;
+/** Room for the fixed instruction and the prompt format around state and questions. */
+const FRAMING_MARGIN = 2_048;
+
 /**
  * Metis answers `500 internal_error` to any question whose `instructions` is an
  * object, although its docs allow one (seen live 2026-10-22; object criteria are
@@ -26,10 +30,12 @@ export const greenptAdapter = systemOneAdapter({
     baseUrl: 'https://api.eu.greenpt.ai',
     model: 'metis',
     // 32,768 tokens for the whole request (state, every question, a fixed instruction and
-    // the prompt format), 32 questions, 2,048 options in all (a noul counts two)
+    // the prompt format), 32 questions, 2,048 options in all (a noul counts two). GreenPT
+    // answers 422 to an oversized request, but Metis is Clef Flash, whose own loader cuts
+    // state silently, so sizes are counted in bytes as for Clef: a bound, not a hope.
     limits: {
-        stateTokens: 30_000, requestTokens: 30_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10,
-        maxQuestions: 32, maxOptions: 2048,
+        stateTokens: METIS_CONTEXT - FRAMING_MARGIN, requestTokens: METIS_CONTEXT - FRAMING_MARGIN,
+        maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 32, maxOptions: 2048, countBytes: true,
     },
     // Rate limited (429; 600 requests per 5 minutes per account) or at capacity (503, Retry-After: 5)
     retryable: new Set([429, 503]),

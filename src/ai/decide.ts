@@ -1,5 +1,5 @@
 import { DecideError, type DecideAnswer, type DecideQuestion, type DecideText, type Usage } from './adapters';
-import { checkDecideRequest, decideLimitsFor, validateDecideResult } from './decide-validate';
+import { checkDecideCall, validateDecideResult } from './decide-validate';
 import { redact, secretsOf } from './adapters/decide-http';
 import { checkBudget, recordUsage, resolveRoute, type Queryable, type ResolvedRoute, type RouteRow } from './routing';
 
@@ -191,7 +191,8 @@ export async function decide(db: Queryable, call: DecideCall): Promise<DecideOut
     if (!ready.ok) return { status: ready.status, reason: ready.reason, retryable: ready.status === 'over_budget' };
 
     const { route } = ready;
-    const tooLarge = checkDecideRequest(call, decideLimitsFor(route.adapter, route.model)!);
+    // Measured as sent: after the adapter's rewrite of the questions, in bytes where the model cuts state
+    const tooLarge = checkDecideCall(route.adapter, route.model, call);
     if (tooLarge) return { status: 'too_large', reason: tooLarge, retryable: false };
 
     const started = Date.now();

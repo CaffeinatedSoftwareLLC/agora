@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
-import type { DecideLimits, DecideQuestion } from '../ai/adapters';
+import type { Adapter, DecideLimits, DecideQuestion } from '../ai/adapters';
 import { decide, decisionReady } from '../ai/decide';
-import { decideLimitsFor, estimateTokens, splitToFit } from '../ai/decide-validate';
+import { BODY_OVERHEAD, decideLimitsFor, estimateTokens, questionSize, splitToFit } from '../ai/decide-validate';
 import { injectionQuestion, tagQuestion, QUESTION_VERSIONS } from '../ai/decision-questions';
 import { decryptFile } from '../lib/encryption';
 import { STALE_TAGS_SQL, sweepFileTagging } from '../lib/file-tagging-queue';
@@ -177,12 +177,12 @@ interface AskedTag {
  * Pack tag questions into calls that fit the model: `room.tokens` of questions and
  * `room.count` questions per call (what the model allows after the text and the injection question).
  */
-function questionBatches(tags: AskedTag[], room: { tokens: number; count: number }, limits: DecideLimits): AskedTag[][] {
+function questionBatches(tags: AskedTag[], room: { tokens: number; count: number }, adapter: Adapter, limits: DecideLimits): AskedTag[][] {
     const out: AskedTag[][] = [];
     let current: AskedTag[] = [];
     let size = 0;
     for (const tag of tags) {
-        const tokens = estimateTokens(tag.question, limits) + estimateTokens(questionId(tag.id), limits);
+        const tokens = questionSize(adapter, questionId(tag.id), tag.question, limits);
         if (current.length > 0 && (size + tokens > room.tokens || current.length >= room.count)) {
             out.push(current);
             current = [];
@@ -266,12 +266,13 @@ export async function processTaggingJob(deps: TaggingDeps, job: ClaimedJob): Pro
     // With no tags to ask (injection check only) there is still one call per chunk.
     // Some models count every question against one context (Clef), so the room for
     // questions is what the longest chunk and the injection question leave.
-    const fixed = Math.max(...chunks.map(c => estimateTokens({ document: c }, limits))) + estimateTokens(injectionQuestion('document'), limits);
+    const fixed = Math.max(...chunks.map(c => estimateTokens({ document: c }, limits)))
+        + questionSize(ready.route.adapter, 'injection', injectionQuestion('document'), limits);
     const room = {
-        tokens: Math.max(1, Math.min(QUESTION_TOKENS_PER_CALL, limits.requestTokens - fixed)),
+        tokens: Math.max(1, Math.min(QUESTION_TOKENS_PER_CALL, limits.requestTokens - fixed - (limits.countBytes ? BODY_OVERHEAD : 0))),
         count: Math.max(1, (limits.maxQuestions ?? Infinity) - 1),
     };
-    const batches = tags.length > 0 ? questionBatches(tags, room, limits) : [[]];
+    const batches = tags.length > 0 ? questionBatches(tags, room, ready.route.adapter, limits) : [[]];
     const maxCalls = deps.maxCallsPerFile ?? DEFAULTS.maxCallsPerFile;
     if (chunks.length * batches.length > maxCalls) {
         chunks = chunks.slice(0, Math.max(1, Math.floor(maxCalls / batches.length)));

@@ -202,10 +202,13 @@ export interface DecideLimits {
     /** Answer options across the whole request, when capped (a yes/no question has two). */
     maxOptions?: number;
     /**
-     * The provider cuts state to fit its context instead of refusing (Workers AI), so a
-     * low estimate would get a verdict on text the model never read. Sizes are then
-     * counted as UTF-8 bytes of the JSON sent: a byte-level BPE token is at least one
-     * byte, so this is an upper bound whatever the text (digits, base64, CJK, emoji).
+     * Count sizes as UTF-8 bytes of the JSON actually sent (questions as the adapter
+     * rewrites them), never as an estimate. A byte-level BPE token is at least one
+     * byte, so bytes bound the tokens of any text: digits, base64, rare CJK, private-use
+     * characters and emoji, which can take several tokens per character. Set for
+     * Clef-based models: Workers AI cuts state to fit instead of refusing, so a low
+     * count would get a verdict on text the model never read. The limits above are
+     * then the context minus a margin for the model's prompt framing.
      */
     countBytes?: boolean;
 }
@@ -244,6 +247,8 @@ export interface Adapter extends AdapterInfo {
     restrictedSearchResults?: boolean;
     /** Typed decisions. Throws `DecideError`; callers go through `src/ai/decide.ts`, never here directly. */
     decide?(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult>;
+    /** The questions as `decide` will send them, when it rewrites them (Metis): what size checks must measure. */
+    decideWireQuestions?(questions: Record<string, DecideQuestion>): Record<string, DecideQuestion>;
     /** Present exactly when the adapter lists `decide`. */
     decideLimits?: DecideLimits;
     /** Limits of particular models, where they differ from `decideLimits` (Clef and Clef Flash). */

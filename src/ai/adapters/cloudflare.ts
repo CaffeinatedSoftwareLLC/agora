@@ -15,15 +15,15 @@ const RETRYABLE = new Set([429, 503]);
  * unseen), so the limits keep state plus every question under the context, with room
  * for the prompt template, counting UTF-8 bytes as an upper bound on tokens (`countBytes`).
  */
+/** Room for the prompt template around state and questions, out of each model's context. */
+const FRAMING_MARGIN = 1_536;
+const clefLimits = (context: number): DecideLimits => ({
+    stateTokens: context - FRAMING_MARGIN, requestTokens: context - FRAMING_MARGIN,
+    maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64, countBytes: true,
+});
 const MODELS: Record<string, { selector: string; limits: DecideLimits }> = {
-    '@cf/cloudflare/clef-flash': {
-        selector: 'clef-flash',
-        limits: { stateTokens: 23_000, requestTokens: 23_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64, countBytes: true },
-    },
-    '@cf/cloudflare/clef': {
-        selector: 'clef',
-        limits: { stateTokens: 62_000, requestTokens: 62_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64, countBytes: true },
-    },
+    '@cf/cloudflare/clef-flash': { selector: 'clef-flash', limits: clefLimits(24_576) },
+    '@cf/cloudflare/clef': { selector: 'clef', limits: clefLimits(65_536) },
 };
 const MODEL_IDS = Object.keys(MODELS);
 

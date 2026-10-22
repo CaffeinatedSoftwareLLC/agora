@@ -4,7 +4,7 @@ import { greenptAdapter } from '../../src/ai/adapters/greenpt';
 import { cloudflareAdapter } from '../../src/ai/adapters/cloudflare';
 import { redact } from '../../src/ai/adapters/decide-http';
 import type { Adapter, DecideQuestion, ProviderCredentials } from '../../src/ai/adapters';
-import { decideLimitsFor, estimateTokens, fitPrefix, splitToFit } from '../../src/ai/decide-validate';
+import { checkDecideCall, decideLimitsFor, estimateTokens, fitPrefix, splitToFit } from '../../src/ai/decide-validate';
 import { injectionQuestion } from '../../src/ai/decision-questions';
 
 /**
@@ -107,6 +107,7 @@ describe('a provider that cuts state is never given more than it reads', () => {
         ['base64', Buffer.from(Array.from({ length: 45_000 }, (_, i) => (i * 7919 + 13) % 256)).toString('base64')],
         ['CJK', '漢字の文書を読む。'.repeat(3000)],
         ['emoji', '🌱🪴🌿'.repeat(5000)],
+        ['rare CJK and private use', '𠀀𠀁𠀂\uE000\uE001\uF8FF'.repeat(2500)],   // 4- and 3-byte characters, one token per byte at worst
         ['control characters', '\u0001\u0002\u001f'.repeat(5000)],   // 6 bytes each once JSON-escaped
     ];
 
@@ -131,6 +132,42 @@ describe('a provider that cuts state is never given more than it reads', () => {
             const size = estimateTokens({ document: piece }, flash) + estimateTokens(injectionQuestion('document'), flash) + estimateTokens('injection', flash);
             expect(size).toBeLessThanOrEqual(flash.requestTokens);
         }
+    });
+
+    it.each([
+        ['Clef Flash', cloudflareAdapter, '@cf/cloudflare/clef-flash'],
+        ['Clef', cloudflareAdapter, '@cf/cloudflare/clef'],
+        ['Metis', greenptAdapter, 'metis'],
+    ] as const)('%s: a request that passes is within the limit in UTF-8 bytes of the body actually sent', (_name, adapter, model) => {
+        const limits = decideLimitsFor(adapter, model)!;
+        const questions = { injection: injectionQuestion('document') };   // object instructions: Metis sends them as escaped JSON text
+        let passed = 0;
+        for (const [, body] of dense) {
+            const state = { document: fitPrefix(`${body}${INJECTION}`, limits.requestTokens - 2_000, limits) };
+            if (checkDecideCall(adapter, model, { state, questions }) !== null) continue;
+            passed++;
+            const sent = adapter.decideWireQuestions ? adapter.decideWireQuestions(questions) : questions;
+            expect(Buffer.byteLength(JSON.stringify({ state, questions: sent }), 'utf8')).toBeLessThanOrEqual(limits.requestTokens);
+        }
+        expect(passed).toBe(dense.length);
+        // And one byte over is refused, whatever the characters
+        const over = { document: '𠀀'.repeat(Math.ceil(limits.requestTokens / 4)) };
+        expect(checkDecideCall(adapter, model, { state: over, questions })).toMatch(/exceed|Request exceeds/);
+    });
+
+    it('Metis is measured after its rewrite: escaping the instructions into JSON text can push a request over', () => {
+        const limits = decideLimitsFor(greenptAdapter, 'metis')!;
+        // Instructions full of quotes: each one gains a backslash when the object is sent as JSON text
+        const instructions = { question: 'Is it "quoted"?', note: '"'.repeat(4_000) };
+        const questions: Record<string, DecideQuestion> = { q: { type: 'noul', instructions } };
+        const asObject = Buffer.byteLength(JSON.stringify({ questions }), 'utf8');
+        const asSent = Buffer.byteLength(JSON.stringify({ questions: greenptAdapter.decideWireQuestions!(questions) }), 'utf8');
+        expect(asSent - asObject).toBeGreaterThan(4_000);
+        // A state that fits beside the object form but not beside the escaped form
+        const pad = limits.requestTokens - asObject - 2_000;
+        const state = { document: 'a'.repeat(pad) };
+        expect(Buffer.byteLength(JSON.stringify({ state, questions }), 'utf8')).toBeLessThanOrEqual(limits.requestTokens);
+        expect(checkDecideCall(greenptAdapter, 'metis', { state, questions })).toMatch(/exceed/);
     });
 
     it('fitPrefix keeps surrogate pairs whole, and splitToFit refuses a budget that fits nothing', () => {

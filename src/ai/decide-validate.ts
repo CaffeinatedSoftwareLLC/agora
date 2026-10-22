@@ -61,6 +61,28 @@ export function splitToFit(text: string, budget: number, limits?: Pick<DecideLim
     return pieces;
 }
 
+/** The questions as the adapter will send them. */
+export function wireQuestions(adapter: Pick<Adapter, 'decideWireQuestions'>, questions: Record<string, DecideQuestion>) {
+    return adapter.decideWireQuestions ? adapter.decideWireQuestions(questions) : questions;
+}
+
+/** In bytes, the body's own punctuation around state and questions (`{"state":…,"questions":{…}}`), with room to spare. */
+export const BODY_OVERHEAD = 64;
+
+/**
+ * One question's share of a request as sent: the question (rewritten as the adapter
+ * sends it), its id, and in bytes the `:` and `,` that join it to the others.
+ */
+export function questionSize(adapter: Pick<Adapter, 'decideWireQuestions'>, id: string, q: DecideQuestion, limits: DecideLimits): number {
+    return estimateTokens(wireQuestions(adapter, { [id]: q })[id], limits) + estimateTokens(id, limits) + (limits.countBytes ? 2 : 0);
+}
+
+/** Check a request as `adapter` will send it to `model`: null when acceptable, otherwise why not. */
+export function checkDecideCall(adapter: Pick<Adapter, 'decideLimits' | 'decideModelLimits' | 'decideWireQuestions'>, model: string,
+    req: Pick<DecideRequest, 'state' | 'questions'>): string | null {
+    return checkDecideRequest({ state: req.state, questions: wireQuestions(adapter, req.questions) }, decideLimitsFor(adapter, model)!);
+}
+
 /** The limits that apply to one model of a decision adapter. */
 export function decideLimitsFor(adapter: Pick<Adapter, 'decideLimits' | 'decideModelLimits'>, model: string): DecideLimits | undefined {
     return adapter.decideModelLimits?.[model] ?? adapter.decideLimits;
@@ -100,7 +122,9 @@ export function checkDecideRequest(req: Pick<DecideRequest, 'state' | 'questions
     if (stateSize + longest > limits.stateTokens) {
         return `State and the longest question exceed ${limits.stateTokens} tokens`;
     }
-    if (total > limits.requestTokens) return `Request exceeds ${limits.requestTokens} tokens`;
+    // Counting bytes, the bound is the body itself, not a sum of parts
+    if (limits.countBytes) total = Buffer.byteLength(JSON.stringify({ state: req.state ?? '', questions: req.questions }), 'utf8');
+    if (total > limits.requestTokens) return `Request exceeds ${limits.requestTokens} ${limits.countBytes ? 'bytes' : 'tokens'}`;
     if (limits.maxOptions !== undefined && options > limits.maxOptions) return `More than ${limits.maxOptions} answer options in one request`;
     return null;
 }

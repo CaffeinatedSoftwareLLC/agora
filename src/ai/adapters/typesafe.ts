@@ -102,6 +102,7 @@ export function systemOneAdapter(p: SystemOneProvider): Adapter {
         defaultBaseUrl: p.baseUrl,
         defaultModels: { decide: p.model },
         decideLimits: p.limits,
+        ...(p.questions ? { decideWireQuestions: p.questions } : {}),
 
         async decide(creds: ProviderCredentials, req: DecideRequest): Promise<DecideResult> {
             return fromSystemOne(await call(

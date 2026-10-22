@@ -361,6 +361,9 @@ describe('worker: tagging a file (C.3)', () => {
         ['base64', Buffer.from(Array.from({ length: 30_000 }, (_, i) => (i * 7919 + 13) % 256)).toString('base64')],
         ['CJK', '漢字の文書を読む。'.repeat(2000)],
         ['emoji', '🌱🪴🌿'.repeat(4000)],
+        // CJK Extension B (4 UTF-8 bytes each, a surrogate pair in JS) and private-use characters (3 bytes):
+        // a tokenizer with no merges for them falls back to one token per byte
+        ['rare CJK and private use', '𠀀𠀁𠀂\uE000\uE001\uF8FF'.repeat(2000)],
     ];
     test.each(dense)('with Clef Flash, %s with an injection at the very end: every byte is read and the file is flagged', async (kind, body) => {
         const calls = await clefServer(`Clef dense ${kind}`);

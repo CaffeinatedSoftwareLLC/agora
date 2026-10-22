@@ -50,8 +50,8 @@ describe('per-model limits and question caps', () => {
     });
 
     it('uses a model\'s own limits where it has them, else the adapter\'s', () => {
-        expect(decideLimitsFor(cloudflareAdapter, '@cf/cloudflare/clef')!.requestTokens).toBe(62_000);
-        expect(decideLimitsFor(cloudflareAdapter, '@cf/cloudflare/clef-flash')!.requestTokens).toBe(23_000);
+        expect(decideLimitsFor(cloudflareAdapter, '@cf/cloudflare/clef')!.requestTokens).toBe(65_536 - 1_536);
+        expect(decideLimitsFor(cloudflareAdapter, '@cf/cloudflare/clef-flash')!.requestTokens).toBe(24_576 - 1_536);
         expect(decideLimitsFor(typesafeAdapter, 'jev-latest')).toBe(typesafeAdapter.decideLimits);
     });
 
@@ -60,11 +60,11 @@ describe('per-model limits and question caps', () => {
         // 60,000 digits: 20,000 by a characters-per-token estimate, but Clef's tokenizer splits every digit
         const digits = '1234567890'.repeat(6000);
         expect(checkDecideRequest({ state: digits, questions: { q: QUESTIONS.inj } }, typesafeAdapter.decideLimits!)).toBeNull();
-        expect(checkDecideRequest({ state: digits, questions: { q: QUESTIONS.inj } }, flash)).toMatch(/23000 tokens/);
+        expect(checkDecideRequest({ state: digits, questions: { q: QUESTIONS.inj } }, flash)).toMatch(/23040 (tokens|bytes)/);
         // Questions count too: twenty 3,000-character questions are over the context with any state
         const filler = 'q'.repeat(3000);
         const questions = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: 'noul' as const, instructions: filler }]));
-        expect(checkDecideRequest({ state: 'x', questions }, flash)).toMatch(/23000 tokens/);
+        expect(checkDecideRequest({ state: 'x', questions }, flash)).toMatch(/23040 (tokens|bytes)/);
         const many = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`q${i}`, QUESTIONS.inj]));
         expect(checkDecideRequest({ state: 'x', questions: many }, flash)).toBe('More than 64 questions');
     });
@@ -87,7 +87,7 @@ describe('greenpt adapter (Metis)', () => {
         expect(greenptAdapter.defaultModels).toEqual({ decide: 'metis' });
         expect(greenptAdapter.requiresApiKey).toBe(true);
         expect(greenptAdapter.requiresAccountId).toBeUndefined();
-        expect(greenptAdapter.decideLimits).toMatchObject({ requestTokens: 30_000, maxQuestions: 32, maxOptions: 2048 });
+        expect(greenptAdapter.decideLimits).toMatchObject({ requestTokens: 32_768 - 2_048, maxQuestions: 32, maxOptions: 2048, countBytes: true });
     });
 
     it('posts System One to GreenPT and maps the three answer shapes', async () => {

@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import type { DecideQuestion } from '../ai/adapters';
 import { decide, decisionReady, loadDecisionSettings, type DecideFailure } from '../ai/decide';
-import { decideLimitsFor, estimateTokens, fitPrefix } from '../ai/decide-validate';
+import { BODY_OVERHEAD, decideLimitsFor, estimateTokens, fitPrefix, questionSize } from '../ai/decide-validate';
 import { relevanceQuestion, tagRelevanceQuestion, QUESTION_VERSIONS } from '../ai/decision-questions';
 import { canViewChannel } from './channel-access';
 import { decryptFile } from './encryption';
@@ -195,11 +195,11 @@ export async function searchChannelFiles(deps: FileSearchDeps, input: FileSearch
             const defs = await db.query('SELECT * FROM file_tag_definitions WHERE id = ANY($1)', [[...usedTags.keys()]]);
             const questions: Record<string, DecideQuestion> = {};
             const limits = decideLimitsFor(ready.route.adapter, ready.route.model)!;
-            const room = Math.min(TAG_QUESTION_TOKENS, limits.requestTokens - estimateTokens({ query }, limits));
+            const room = Math.min(TAG_QUESTION_TOKENS, limits.requestTokens - estimateTokens({ query }, limits) - (limits.countBytes ? BODY_OVERHEAD : 0));
             let size = 0;
             for (const def of defs.rows.map(tagFromRow)) {
                 const q = tagRelevanceQuestion(def);
-                size += estimateTokens(q, limits) + estimateTokens(`tag_${def.id}`, limits);
+                size += questionSize(ready.route.adapter, `tag_${def.id}`, q, limits);
                 if (size > room || Object.keys(questions).length >= (limits.maxQuestions ?? Infinity)) break;
                 questions[`tag_${def.id}`] = q;
             }
@@ -247,7 +247,8 @@ export async function searchChannelFiles(deps: FileSearchDeps, input: FileSearch
                 // Ranking reads the start of the file; for a model that counts bytes the start is cut to fit
                 const start = chunkText(extracted.text, RERANK_CHARS, 1).chunks[0];
                 const limits = decideLimitsFor(ready.route.adapter, ready.route.model)!;
-                const room = limits.requestTokens - estimateTokens({ query, document: '' }, limits) - estimateTokens(relevanceQuestion(), limits);
+                const room = limits.requestTokens - estimateTokens({ query, document: '' }, limits)
+                    - questionSize(ready.route.adapter, 'relevance', relevanceQuestion(), limits) - (limits.countBytes ? BODY_OVERHEAD : 0);
                 const document = start && fitPrefix(start, room, limits);
                 if (!document) return;
                 const outcome = await decide(db, {
