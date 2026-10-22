@@ -170,6 +170,9 @@ export interface RuntimeRun {
 
 /** One file found by file search: metadata only, never the file's text. */
 export interface FileSearchItem {
+    trustedByOwner?: boolean;
+    trustedBy?: string;
+    trustedAt?: string;
     id: string;
     name: string;
     mime: string;
@@ -193,6 +196,9 @@ export interface FileSearchResult {
 }
 
 export interface FileText {
+    trustedByOwner?: boolean;
+    trustedBy?: string;
+    trustedAt?: string;
     id: string;
     name: string;
     mime: string;

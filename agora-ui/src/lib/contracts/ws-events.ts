@@ -19,6 +19,27 @@ export interface MessageAttachmentPayload {
   height: number | null;
   url: string;
   deletedAt?: string;
+  tags?: string[];
+  tagging?: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+  partial?: boolean;
+  injectionWarning?: boolean;
+  trustedByOwner?: boolean;
+  trustedBy?: string | null;
+  trustedAt?: string | null;
+}
+
+export interface FileAttachmentUpdatePayload {
+  channelId: string;
+  messageId: string;
+  threadId?: string;
+  fileId: string;
+  tags: string[];
+  tagging?: MessageAttachmentPayload['tagging'];
+  partial: boolean;
+  injectionWarning: boolean;
+  trustedByOwner?: boolean;
+  trustedBy?: string | null;
+  trustedAt?: string | null;
 }
 
 /** Parsed agora-collab protocol header (server: src/lib/protocol.ts). */

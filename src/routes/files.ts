@@ -13,9 +13,70 @@ import { readFileImage, isBotPaused } from '../lib/file-image';
 import { canViewChannel } from '../lib/channel-access';
 import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
+import { fileAttachmentUpdateInTransaction } from '../lib/file-attachment-updates';
 
+/** Bound uploader text for a plain-text audit notice (no Markdown interpretation). */
+function auditFilename(filename: string): string {
+    const characters = Array.from(filename.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' '));
+    const label = characters.length > 80 ? characters.slice(0, 79).join('') + '…' : characters.join('');
+    return `"${label}"`;
+}
 
 export async function fileRoutes(app: FastifyInstance) {
+
+    app.route({
+        method: ['POST', 'DELETE'], url: '/files/:fileId/trust',
+        schema: { params: { type: 'object', required: ['fileId'], properties: {
+            fileId: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
+        } } },
+        handler: async (request, reply) => {
+            if (request.isBot) return reply.status(403).send({ error: 'Only the server owner may change file trust' });
+            request.pendingEvents ??= [];
+            const { fileId } = request.params as { fileId: string };
+            const db = request.dbClient!;
+            const file = (await db.query(`SELECT f.channel_id, f.message_id, f.filename, c.server_id, s.owner_id,
+                    j.injection_probability, COALESCE(a.screening_flag_threshold, 0.7) AS flag_threshold
+                FROM files f JOIN channels c ON c.id = f.channel_id JOIN servers s ON s.id = c.server_id
+                JOIN messages m ON m.id = f.message_id AND m.deleted_at IS NULL
+                LEFT JOIN file_tag_jobs j ON j.file_id = f.id
+                LEFT JOIN ai_decision_settings a ON a.server_id = c.server_id
+                WHERE f.id = $1 AND f.deleted_at IS NULL AND (f.expires_at IS NULL OR f.expires_at > NOW())`, [fileId])).rows[0];
+            if (!file) return reply.status(404).send({ error: 'File not found' });
+            if (file.owner_id.trim() !== request.userId) return reply.status(403).send({ error: 'Only the server owner may change file trust' });
+            const member = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [file.server_id, request.userId]);
+            if (!member.rows.length) return reply.status(403).send({ error: 'Server membership required' });
+            const current = (await db.query(`SELECT trusted_by, trusted_at FROM files WHERE id = $1 AND channel_id = $2
+                AND message_id = $3 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW()) FOR UPDATE`, [fileId, file.channel_id, file.message_id])).rows[0];
+            const parent = await db.query('SELECT 1 FROM messages WHERE id = $1 AND deleted_at IS NULL FOR SHARE', [file.message_id]);
+            if (!current || !parent.rows.length) return reply.status(404).send({ error: 'File not found' });
+            const trust = request.method === 'POST';
+            if (trust && !current.trusted_at && !(file.injection_probability !== null && Number(file.injection_probability) >= Number(file.flag_threshold))) {
+                return reply.status(409).send({ error: 'File is not flagged for prompt injection' });
+            }
+            if (trust !== !!current.trusted_at) {
+                const changed = await db.query('UPDATE files SET trusted_by = $2, trusted_at = CASE WHEN $2::CHAR(26) IS NULL THEN NULL ELSE NOW() END WHERE id = $1 RETURNING id',
+                    [fileId, trust ? request.userId : null]);
+                if (!changed.rows.length) return reply.status(403).send({ error: 'Only the server owner may change file trust' });
+                const username = (await db.query('SELECT username FROM users WHERE id = $1', [request.userId])).rows[0].username;
+                // Unlike POST /messages, this system-notice path never resolves mentions or protocol.
+                const content = `${username} ${trust ? 'marked' : 'removed trust from'} ${auditFilename(file.filename)}${trust ? ' as trusted' : ''}.`;
+                const noticeId = generateUlid();
+                const notice = (await db.query(`INSERT INTO messages (id, channel_id, author_id, content, system_event)
+                    VALUES ($1, $2, NULL, $3, 'file_trust') RETURNING created_at`, [noticeId, file.channel_id, content])).rows[0];
+                request.pendingEvents.push({ room: `channel:${file.channel_id.trim()}`, event: 'Message', data: {
+                    id: noticeId, channelId: file.channel_id.trim(), content, authorId: null, authorUsername: null,
+                    createdAt: notice.created_at, systemEvent: 'file_trust',
+                } });
+                await db.query(`INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
+                    VALUES ($1, $2, $3, $4, 'file', $5, $6::jsonb)`,
+                    [generateUlid(), file.server_id, request.userId, trust ? 'file_trust' : 'file_untrust', fileId, JSON.stringify({ trusted: trust })]);
+            }
+            const update = await fileAttachmentUpdateInTransaction(db, fileId);
+            if (!update) return reply.status(404).send({ error: 'File not found' });
+            request.pendingEvents.push({ room: `channel:${update.channelId}`, event: 'FileAttachmentUpdate', data: update });
+            return reply.send(update);
+        },
+    });
 
     // POST /files/upload → 201 { id, name, mime, size, width, height, url }
     app.post('/files/upload', {
