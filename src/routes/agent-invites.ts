@@ -63,10 +63,13 @@ export async function agentInviteRoutes(app: FastifyInstance) {
         reply.header('Cache-Control', 'no-store');
         const db = request.dbClient!;
         const { code } = request.body as { code: string };
-        // Rechecks the predicate after waiting for a concurrent updater's commit.
-        const redeemed = await db.query(`UPDATE agent_invites SET redeemed_at=clock_timestamp()
-            WHERE code_hash=$1 AND redeemed_at IS NULL AND expires_at > clock_timestamp()
-            RETURNING id, bot_id, server_id`, [hashCode(code)]);
+        // Rechecks the predicate after waiting for a concurrent updater's commit. The bot and
+        // its owner must both be active, as for bot tokens; otherwise the invite is unusable.
+        const redeemed = await db.query(`UPDATE agent_invites i SET redeemed_at=clock_timestamp()
+            FROM users b JOIN users o ON o.id = b.bot_owner_id
+            WHERE i.code_hash=$1 AND i.redeemed_at IS NULL AND i.expires_at > clock_timestamp()
+              AND b.id = i.bot_id AND b.account_status = 'active' AND o.account_status = 'active'
+            RETURNING i.id, i.bot_id, i.server_id`, [hashCode(code)]);
         if (!redeemed.rowCount) {
             await db.query(`INSERT INTO audit_log (id, action, target_type, changes)
                 VALUES ($1,'agent_invite_redeem_failed','agent_invite',$2)`, [generateUlid(), JSON.stringify({ ip: request.ip })]);

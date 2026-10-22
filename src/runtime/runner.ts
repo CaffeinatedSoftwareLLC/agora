@@ -89,10 +89,10 @@ export function statusFor(outcome: RunOutcome): { status: FinalStatus; error: st
 /**
  * Atomically move a cleared run from `queued` to `running`, respecting the per-server
  * concurrency limit. Returns null if the run isn't claimable (wrong state, not
- * approved), 'full' if the server is at capacity, or 'paused' if the submitting bot
- * is paused (the run is then denied).
+ * approved), 'full' if the server is at capacity, 'paused' if the submitting bot is
+ * paused, or 'inactive' if it or its owner is not active (the run is then denied).
  */
-async function claimRun(db: Pool, runId: string, perServer: number): Promise<any | null | 'full' | 'paused'> {
+async function claimRun(db: Pool, runId: string, perServer: number): Promise<any | null | 'full' | 'paused' | 'inactive'> {
     const client = await db.connect();
     try {
         await client.query('BEGIN');
@@ -108,15 +108,19 @@ async function claimRun(db: Pool, runId: string, perServer: number): Promise<any
         );
         if (running.rows[0].n >= perServer) { await client.query('ROLLBACK'); return 'full'; }
 
-        // A bot paused after its run was queued or approved (manually or by a tripwire) doesn't get to run it
+        // A bot paused after its run was queued or approved (manually or by a tripwire) doesn't get
+        // to run it, nor does one that is no longer active or whose owner isn't (a missing owner fails closed)
         const refused = await client.query(
-            `UPDATE exec_runs r SET status = 'denied', error = 'The submitting bot is paused', finished_at = NOW()
-             FROM users u
-             WHERE r.id = $1 AND r.status = 'queued' AND u.id = r.submitted_by AND u.bot_paused_at IS NOT NULL
-             RETURNING r.id`,
+            `UPDATE exec_runs r SET status = 'denied', finished_at = NOW(),
+                 error = CASE WHEN u.bot_paused_at IS NOT NULL THEN 'The submitting bot is paused'
+                              ELSE 'The submitting bot or its owner is not active' END
+             FROM users u LEFT JOIN users o ON o.id = u.bot_owner_id
+             WHERE r.id = $1 AND r.status = 'queued' AND u.id = r.submitted_by
+               AND (u.bot_paused_at IS NOT NULL OR u.account_status <> 'active' OR o.account_status IS DISTINCT FROM 'active')
+             RETURNING r.id, u.bot_paused_at IS NOT NULL AS paused`,
             [runId]
         );
-        if (refused.rows.length > 0) { await client.query('COMMIT'); return 'paused'; }
+        if (refused.rows.length > 0) { await client.query('COMMIT'); return refused.rows[0].paused ? 'paused' : 'inactive'; }
 
         // Defense in depth (T8): only runs the gate cleared, and approved if approval was required
         const claimed = await client.query(
@@ -141,9 +145,9 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
 
     const run = await claimRun(db, runId, config.perServerConcurrency);
     if (run === 'full') return { kind: 'deferred' };
-    if (run === 'paused') {
+    if (run === 'paused' || run === 'inactive') {
         await deps.onFinished?.(runId, 'denied').catch(e => deps.log?.error({ err: e, runId }, 'onFinished hook failed'));
-        return { kind: 'skipped', reason: 'bot paused' };
+        return { kind: 'skipped', reason: run === 'paused' ? 'bot paused' : 'bot or owner inactive' };
     }
     if (!run) {
         deps.log?.warn({ runId }, 'Run is not claimable (not queued or not cleared by the gate); skipping');

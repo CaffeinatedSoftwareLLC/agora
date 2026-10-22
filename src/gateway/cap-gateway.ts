@@ -337,10 +337,11 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         const tokenHash = hashToken(token);
         const res = await db.query(
             `SELECT t.capabilities, t.bound_ip, r.id, r.server_id, r.channel_id, r.thread_id, r.submitted_by, r.limits,
-                    u.bot_paused_at
+                    u.bot_paused_at, u.account_status, o.account_status AS owner_status
              FROM exec_run_tokens t
              JOIN exec_runs r ON r.id = t.run_id
              LEFT JOIN users u ON u.id = r.submitted_by
+             LEFT JOIN users o ON o.id = u.bot_owner_id
              WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND t.expires_at > NOW() AND r.status = 'running'`,
             [tokenHash]
         );
@@ -366,6 +367,9 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
 
         if (row.bot_paused_at) return fail(reply, 423, 'bot_paused', 'The bot that submitted this run is paused');
         if (!row.submitted_by) return fail(reply, 403, 'no_submitter', 'The run has no submitting bot');
+        // Same account rules as bot tokens (requireAuth): the bot and its owner must be active
+        if (row.account_status !== 'active') return fail(reply, 403, `account_${row.account_status}`, 'The bot that submitted this run is not active');
+        if (row.owner_status !== 'active') return fail(reply, 403, 'bot_owner_inactive', 'The owner of the bot that submitted this run is not active');
 
         request.run = {
             runId: row.id.trim(),

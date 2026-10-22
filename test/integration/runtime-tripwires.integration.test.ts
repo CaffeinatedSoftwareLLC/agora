@@ -215,3 +215,35 @@ describe('pausing stops the bot\'s code', () => {
         expect(card.rows).toHaveLength(1);
     });
 });
+
+describe('account status stops the bot\'s code', () => {
+    test.each([
+        ['the bot is suspended', 'bot'],
+        ['its owner is suspended', 'owner'],
+    ])('a queued run is denied without starting a container when %s', async (_label, who) => {
+        const botId = await newBot(`inactive${who}bot`);
+        const runId = await insertRun(botId);
+        const target = who === 'bot' ? botId : owner.userId;
+        await ctx.db.query("UPDATE users SET account_status = 'suspended' WHERE id = $1", [target]);
+        try {
+            finished.length = 0;
+            const { sandbox, state } = fakeDocker({ exitCode: 0 });
+            expect(await processRun(deps(sandbox), runId)).toEqual({ kind: 'skipped', reason: 'bot or owner inactive' });
+            expect(state.created).toBe(0);
+            expect(finished).toEqual([{ runId, status: 'denied' }]);
+            const run = (await ctx.db.query('SELECT status, error, started_at FROM exec_runs WHERE id = $1', [runId])).rows[0];
+            expect(run).toEqual({ status: 'denied', error: 'The submitting bot or its owner is not active', started_at: null });
+        } finally {
+            await ctx.db.query("UPDATE users SET account_status = 'active' WHERE id = $1", [target]);
+        }
+    });
+
+    test('a queued run of a bot without an owner is denied (fails closed)', async () => {
+        const botId = await newBot('orphanrunbot');
+        const runId = await insertRun(botId);
+        await ctx.db.query('UPDATE users SET bot_owner_id = NULL WHERE id = $1', [botId]);
+        const { sandbox, state } = fakeDocker({ exitCode: 0 });
+        expect(await processRun(deps(sandbox), runId)).toEqual({ kind: 'skipped', reason: 'bot or owner inactive' });
+        expect(state.created).toBe(0);
+    });
+});

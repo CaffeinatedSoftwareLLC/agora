@@ -250,12 +250,21 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const row = updateRes.rows[0];
 
-        // Revoke the tokens of the target (if it is a bot) and of every bot it owns.
-        // Restoring the account later does not bring them back; the owner issues new ones.
+        // The target (if it is a bot) and every bot it owns lose their tokens, unredeemed agent
+        // invites, run tokens and not-yet-started runs. Restoring the account later brings none
+        // of it back; the owner issues new tokens.
+        const bots = 'SELECT id FROM users WHERE bot = true AND (id = $1 OR bot_owner_id = $1)';
+        await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE revoked_at IS NULL AND bot_id IN (${bots})`, [targetId]);
+        await db.query('SELECT expire_agent_invites_for_suspended($1)', [targetId]);
         await db.query(
-            `UPDATE bot_tokens SET revoked_at = NOW()
-             WHERE revoked_at IS NULL
-               AND bot_id IN (SELECT id FROM users WHERE bot = true AND (id = $1 OR bot_owner_id = $1))`,
+            `UPDATE exec_run_tokens SET revoked_at = NOW()
+             WHERE revoked_at IS NULL AND run_id IN (SELECT id FROM exec_runs WHERE submitted_by IN (${bots}))`,
+            [targetId]
+        );
+        // Denied, as the runner does for a paused bot's run and the sweep does for an expired approval
+        await db.query(
+            `UPDATE exec_runs SET status = 'denied', error = 'The submitting bot or its owner was suspended', finished_at = NOW()
+             WHERE status IN ('submitted', 'gated', 'awaiting_approval', 'queued') AND submitted_by IN (${bots})`,
             [targetId]
         );
 
