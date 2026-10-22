@@ -1029,7 +1029,7 @@ The readable text of a text file or PDF, in pages. For members with `ViewChannel
 
 - `hasMore`: ask again with `offset` = `offset + text.length`.
 - `truncated`: the file is longer than the reading limits (20 MB, 50 PDF pages, 192,000 characters).
-- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` when no such check was made (file tagging off, or not done yet). File text is untrusted data in every case.
+- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` unless the whole file was checked (file tagging off, not done yet, or the file too long to check in full). File text is untrusted data in every case.
 
 **Errors:** `404` unknown, deleted, not attached to a message, or in a channel the caller cannot see (the same answer for all four) · `415` no readable text (images, audio, video, archives, empty files) · `413` larger than 20 MB · `422` the file could not be parsed.
 
@@ -1360,16 +1360,16 @@ The feed excludes self-authored/deleted messages and posts already read through 
 
 ## AI Providers
 
-Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`). **Providers** are configured instances of an adapter, each with its own encrypted key and optional base URL. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`, `stt`) to a provider and model. The built-in assistant uses the `chat` route.
+Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`, `greenpt`, `cloudflare`). **Providers** are configured instances of an adapter, each with its own encrypted key, optional base URL and, for `cloudflare`, an account ID. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`, `stt`) to a provider and model. The built-in assistant uses the `chat` route.
 
-All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key.
+All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key. A key with spaces, line breaks, control or non-ASCII characters is refused (`400`).
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/servers/:serverId/ai/adapters` | Available adapters: `id`, `label`, `capabilities`, `requiresApiKey`, `supportsBaseUrl`, `defaultModels` |
-| GET | `/servers/:serverId/ai/providers` | Configured providers, with the capabilities each serves |
-| POST | `/servers/:serverId/ai/providers` | `{ adapter, label?, apiKey?, baseUrl? }` → `201`; `409` duplicate label |
-| PATCH | `/servers/:serverId/ai/providers/:providerId` | `{ label?, apiKey? (null clears), baseUrl?, enabled? }` |
+| GET | `/servers/:serverId/ai/adapters` | Available adapters: `id`, `label`, `capabilities`, `requiresApiKey`, `supportsBaseUrl`, `requiresAccountId` (only when true), `defaultModels`, `modelChoices` (only where the model is one of a fixed set) |
+| GET | `/servers/:serverId/ai/providers` | Configured providers, with the capabilities each serves, and `accountId` (null unless the adapter takes one) |
+| POST | `/servers/:serverId/ai/providers` | `{ adapter, label?, apiKey?, baseUrl?, accountId? }` → `201`; `400` a required key or account ID missing, or an account ID for an adapter that takes none; `409` duplicate label |
+| PATCH | `/servers/:serverId/ai/providers/:providerId` | `{ label?, apiKey? (null clears), baseUrl?, accountId?, enabled? }` |
 | DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it |
 | POST | `/servers/:serverId/ai/providers/:providerId/test` | `{ model?, capability? }` → `{ ok, error? }` using the stored key; OpenAI-compatible speech tests use model metadata, with no audio generation. Saved routes supply the default capability/model. |
 | GET | `/servers/:serverId/ai/routes` | Capability routes |
@@ -1378,6 +1378,8 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 | GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals |
 
 **Budgets:** daily limits are UTC-day totals per capability. Once one is reached, calls are refused and the assistant posts a notice instead of answering. Cost is recorded only when the route has prices set, in micro-USD per 1M tokens.
+
+**Account IDs** (the `cloudflare` adapter) are 1–64 letters, digits, `_` or `-` (a Cloudflare account ID is 32 hex characters). They are not secret and are returned as they are; the API token is the key.
 
 **Base URLs** (the `openai` adapter: Ollama, OpenRouter, Groq, vLLM, …) must be http(s). Hosts that resolve to private, loopback or link-local addresses are rejected unless an instance admin enables `PATCH /admin/settings/ai { "allowPrivateBaseUrls": true }`, e.g. for a local Ollama server.
 
@@ -1455,7 +1457,15 @@ Any member who can see the channel (not bots), when an admin has turned on read-
 
 ## Decision model
 
-Optional. A decision model answers typed questions about a piece of text (yes/no, pick one, rate) and returns probabilities; it writes no text. The first adapter is `typesafe` (TypeSafe Jev). Configure it like any provider: add a `typesafe` provider with its key, then set the `decide` capability route. With no `decide` route, or with every use below switched off (the default), Agora makes no decision calls and behaves as it did before.
+Optional. A decision model answers typed questions about a piece of text (yes/no, pick one, rate) and returns probabilities; it writes no text. Three adapters serve it, all speaking TypeSafe's System One API:
+
+| Adapter | Provider and models | Credentials | Limits per request |
+|---|---|---|---|
+| `typesafe` | TypeSafe Jev, `jev-latest` | API key | 64k tokens; 32k for state plus the longest question |
+| `greenpt` | GreenPT Metis, `metis` (Cloudflare's Clef Flash, served from the EU at `api.eu.greenpt.ai`) | API key | 32,768 tokens for the whole request; 32 questions; 2,048 answer options. Questions whose `instructions` is an object are sent with it as JSON text: Metis answers `500` to object instructions |
+| `cloudflare` | Cloudflare Workers AI: `@cf/cloudflare/clef` (default) or `@cf/cloudflare/clef-flash` (no other model is accepted) | Account ID and API token (*Workers AI - Read* and *Edit*) | Clef Flash 24,576 tokens, Clef 65,536, for state and every question together; 64 questions |
+
+Configure one like any provider, then set the `decide` capability route. A request over the model's limits is refused before any call (`too_large`); file tagging and search screening split their text and questions to fit. For the Clef-based models (`cloudflare`, `greenpt`) the limit is checked in UTF-8 bytes of the request body as sent, an upper bound on tokens for any text. Workers AI would otherwise cut the text it was given to fit and answer about the part it read, which is why Agora keeps the whole request inside the context. With no `decide` route, or with every use below switched off (the default), Agora makes no decision calls and behaves as it did before.
 
 A decision informs Agora's code. It never grants access, loosens a limit, or picks a provider.
 
@@ -1486,7 +1496,7 @@ All endpoints below require **Administrator**; bots cannot call them. Changes ap
   "screeningSuspectThreshold": 0.35,
   "screeningStrict": false,
   "tagThreshold": 0.5,
-  "route": { "configured": true, "enabled": true, "provider": "TypeSafe Jev (decisions)", "adapter": "typesafe", "model": "jev-latest" },
+  "route": { "configured": true, "enabled": true, "provider": "Cloudflare Clef (decisions)", "adapter": "cloudflare", "model": "@cf/cloudflare/clef" },
   "today": { "routing": { "requests": 0, "tokens": 0, "errors": 0 }, "search_screening": { }, "file_tagging": { }, "file_ranking": { } },
   "warnings": []
 }

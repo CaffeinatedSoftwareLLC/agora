@@ -4,6 +4,7 @@ import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { encryptString } from '../lib/encryption';
 import { testConnection } from '../ai/providers';
+import { BAD_KEY, badKey } from '../ai/credentials';
 import { getAdapter, LEGACY_PROVIDER_ADAPTER } from '../ai/adapters';
 import { config } from '../config';
 import { auditAiChange, changedFields, routeSnapshot } from '../lib/ai-audit';
@@ -165,6 +166,7 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         const userId = request.userId;
         const db = request.dbClient!;
         const { provider, model, apiKey, systemPrompt, maxContext } = request.body as any;
+        if (badKey(apiKey)) return reply.status(400).send({ error: BAD_KEY });
         const adapterId = toAdapterId(provider);
         const adapter = getAdapter(adapterId)!;
 
@@ -321,6 +323,7 @@ export async function aiConfigRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { provider, model, apiKey } = request.body as any;
+        if (badKey(apiKey)) return reply.status(400).send({ error: BAD_KEY });
 
         const result = await testConnection({ provider: toAdapterId(provider), model, apiKey });
         return reply.status(200).send(result);

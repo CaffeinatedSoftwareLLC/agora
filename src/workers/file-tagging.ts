@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
-import type { DecideQuestion } from '../ai/adapters';
+import type { Adapter, DecideLimits, DecideQuestion } from '../ai/adapters';
 import { decide, decisionReady } from '../ai/decide';
-import { estimateTokens } from '../ai/decide-validate';
+import { BODY_OVERHEAD, decideLimitsFor, estimateTokens, questionSize, splitToFit } from '../ai/decide-validate';
 import { injectionQuestion, tagQuestion, QUESTION_VERSIONS } from '../ai/decision-questions';
 import { decryptFile } from '../lib/encryption';
 import { STALE_TAGS_SQL, sweepFileTagging } from '../lib/file-tagging-queue';
@@ -176,14 +176,17 @@ interface AskedTag {
     question: DecideQuestion;
 }
 
-/** Pack tag questions into calls that fit the model's request size. */
-function questionBatches(tags: AskedTag[]): AskedTag[][] {
+/**
+ * Pack tag questions into calls that fit the model: `room.tokens` of questions and
+ * `room.count` questions per call (what the model allows after the text and the injection question).
+ */
+function questionBatches(tags: AskedTag[], room: { tokens: number; count: number }, adapter: Adapter, limits: DecideLimits): AskedTag[][] {
     const out: AskedTag[][] = [];
     let current: AskedTag[] = [];
     let size = 0;
     for (const tag of tags) {
-        const tokens = estimateTokens(tag.question);
-        if (current.length > 0 && size + tokens > QUESTION_TOKENS_PER_CALL) {
+        const tokens = questionSize(adapter, questionId(tag.id), tag.question, limits);
+        if (current.length > 0 && (size + tokens > room.tokens || current.length >= room.count)) {
             out.push(current);
             current = [];
             size = 0;
@@ -256,12 +259,37 @@ async function processTaggingJobInner(deps: TaggingDeps, job: ClaimedJob): Promi
     const extracted = await extractText(plain, mime, deps.extractLimits ?? DEFAULT_EXTRACT_LIMITS);
     if (!extracted.ok) return finish(db, job, extracted.reason === 'failed' ? 'failed' : 'skipped', extracted.detail);
 
-    const chunked = chunkText(extracted.text, deps.chunkChars ?? DEFAULTS.chunkChars, deps.maxChunks ?? DEFAULTS.maxChunks);
-    let chunks = chunked.chunks;
+    const limits = decideLimitsFor(ready.route.adapter, ready.route.model)!;
+    const maxChunks = deps.maxChunks ?? DEFAULTS.maxChunks;
+    const chunked = chunkText(extracted.text, deps.chunkChars ?? DEFAULTS.chunkChars, maxChunks);
     let partial = extracted.truncated || chunked.truncated;
 
-    // With no tags to ask (injection check only) there is still one call per chunk
-    const batches = tags.length > 0 ? questionBatches(tags) : [[]];
+    // A chunk can still be too large for the model: Clef counts bytes, and 24,000
+    // characters of digits, base64 or CJK are far more than 24,000 bytes. Such a chunk
+    // is split so that every character is read, keeping half the request for questions.
+    // Coverage is never assumed: pieces that do not fit in `maxChunks` mark the file partial.
+    const textBudget = Math.floor(limits.requestTokens / 2) - estimateTokens({ document: '' }, limits);
+    let chunks: string[] = [];
+    for (const chunk of chunked.chunks) {
+        const pieces = splitToFit(chunk, textBudget, limits);
+        if (!pieces) return finish(db, job, 'failed', 'The decision model leaves no room for the document');
+        chunks.push(...pieces);
+    }
+    if (chunks.length > maxChunks) {
+        chunks = chunks.slice(0, maxChunks);
+        partial = true;
+    }
+
+    // With no tags to ask (injection check only) there is still one call per chunk.
+    // Some models count every question against one context (Clef), so the room for
+    // questions is what the longest chunk and the injection question leave.
+    const fixed = Math.max(...chunks.map(c => estimateTokens({ document: c }, limits)))
+        + questionSize(ready.route.adapter, 'injection', injectionQuestion('document'), limits);
+    const room = {
+        tokens: Math.max(1, Math.min(QUESTION_TOKENS_PER_CALL, limits.requestTokens - fixed - (limits.countBytes ? BODY_OVERHEAD : 0))),
+        count: Math.max(1, (limits.maxQuestions ?? Infinity) - 1),
+    };
+    const batches = tags.length > 0 ? questionBatches(tags, room, ready.route.adapter, limits) : [[]];
     const maxCalls = deps.maxCallsPerFile ?? DEFAULTS.maxCallsPerFile;
     if (chunks.length * batches.length > maxCalls) {
         chunks = chunks.slice(0, Math.max(1, Math.floor(maxCalls / batches.length)));

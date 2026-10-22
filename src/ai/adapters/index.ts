@@ -4,10 +4,12 @@ import { openaiAdapter } from './openai';
 import { geminiAdapter } from './gemini';
 import { tavilyAdapter } from './tavily';
 import { typesafeAdapter } from './typesafe';
+import { greenptAdapter } from './greenpt';
+import { cloudflareAdapter } from './cloudflare';
 
 export * from './types';
 
-const ADAPTERS: Adapter[] = [anthropicAdapter, openaiAdapter, geminiAdapter, tavilyAdapter, typesafeAdapter];
+const ADAPTERS: Adapter[] = [anthropicAdapter, openaiAdapter, geminiAdapter, tavilyAdapter, typesafeAdapter, greenptAdapter, cloudflareAdapter];
 const BY_ID = new Map(ADAPTERS.map(a => [a.id, a]));
 
 /** Legacy `ai_provider_config.provider` values → adapter IDs. */
@@ -30,6 +32,7 @@ export function adapterSupports(id: string, capability: Capability): boolean {
 
 /** Public metadata for clients (no functions). */
 export function listAdapters(): AdapterInfo[] {
-    return ADAPTERS.map(({ id, label, capabilities, requiresApiKey, supportsBaseUrl, defaultBaseUrl, defaultModels, modelChoices }) =>
-        ({ id, label, capabilities, requiresApiKey, supportsBaseUrl, defaultBaseUrl, defaultModels, ...(modelChoices ? { modelChoices } : {}) }));
+    return ADAPTERS.map(({ id, label, capabilities, requiresApiKey, supportsBaseUrl, requiresAccountId, defaultBaseUrl, defaultModels, modelChoices }) =>
+        ({ id, label, capabilities, requiresApiKey, supportsBaseUrl, ...(requiresAccountId ? { requiresAccountId } : {}),
+           defaultBaseUrl, defaultModels, ...(modelChoices ? { modelChoices } : {}) }));
 }

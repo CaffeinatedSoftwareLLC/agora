@@ -20,6 +20,9 @@ interface Props {
 const errorText = (err: unknown, fallback: string) =>
   err instanceof ApiError ? (err.message || err.code) : fallback;
 
+/** Cloudflare account IDs: 32 hex characters (dashboard → Workers AI → "Use REST API"). */
+const ACCOUNT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function ProvidersSection({
   serverId, adapters, providers, testModels, isInstanceAdmin, allowPrivateBaseUrls, onChanged, onAllowPrivateChanged,
 }: Props) {
@@ -89,6 +92,7 @@ function AddProviderForm({ serverId, adapters, onCancel, onCreated }: {
   const [label, setLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [accountId, setAccountId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const adapter = adapters.find(a => a.id === adapterId);
@@ -96,6 +100,7 @@ function AddProviderForm({ serverId, adapters, onCancel, onCreated }: {
   async function save() {
     if (!adapter) return;
     if (adapter.requiresApiKey && !apiKey) { setError(`${adapter.label} requires an API key`); return; }
+    if (adapter.requiresAccountId && !ACCOUNT_ID.test(accountId.trim())) { setError(`${adapter.label} requires an account ID`); return; }
     setSaving(true);
     setError('');
     try {
@@ -104,6 +109,7 @@ function AddProviderForm({ serverId, adapters, onCancel, onCreated }: {
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(apiKey ? { apiKey } : {}),
         ...(adapter.supportsBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+        ...(adapter.requiresAccountId ? { accountId: accountId.trim() } : {}),
       });
       onCreated();
     } catch (err) {
@@ -121,8 +127,16 @@ function AddProviderForm({ serverId, adapters, onCancel, onCreated }: {
         </select>
       </div>
       <Input label="Label" value={label} onChange={e => setLabel(e.target.value)} placeholder={adapter?.label ?? ''} />
+      {adapter?.requiresAccountId && (
+        <div>
+          <Input label="Account ID" autoComplete="off" value={accountId} onChange={e => setAccountId(e.target.value)} />
+          <p className="text-xs text-text-muted mt-1">
+            Your Cloudflare account ID (Workers AI → Use REST API). The token needs Workers AI Read and Edit.
+          </p>
+        </div>
+      )}
       <Input
-        label={adapter?.requiresApiKey ? 'API key' : 'API key (optional)'}
+        label={adapter?.requiresAccountId ? 'API token' : adapter?.requiresApiKey ? 'API key' : 'API key (optional)'}
         type="password"
         autoComplete="off"
         value={apiKey}
@@ -169,6 +183,8 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
   const [editingUrl, setEditingUrl] = useState(false);
   const [newBaseUrl, setNewBaseUrl] = useState(provider.baseUrl ?? '');
   const [savingUrl, setSavingUrl] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(false);
+  const [newAccountId, setNewAccountId] = useState(provider.accountId ?? '');
   const [error, setError] = useState('');
 
   async function run(action: () => Promise<unknown>, fallback: string) {
@@ -229,6 +245,7 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
         </span>
       </div>
       {provider.baseUrl && <p className="text-xs text-text-muted mt-1 break-all">{provider.baseUrl}</p>}
+      {provider.accountId && <p className="text-xs text-text-muted mt-1 break-all">Account {provider.accountId}</p>}
 
       <div className="flex items-center gap-2 mt-3 flex-wrap">
         {provider.adapter === 'openai' && (
@@ -248,6 +265,9 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
         {adapter?.supportsBaseUrl && <Button variant="secondary" disabled={testing || savingUrl} onClick={() => {
           setNewBaseUrl(provider.baseUrl ?? ''); setEditingUrl(v => !v); setError('');
         }}>Edit base URL</Button>}
+        {adapter?.requiresAccountId && <Button variant="secondary" onClick={() => {
+          setNewAccountId(provider.accountId ?? ''); setEditingAccount(v => !v); setError('');
+        }}>Edit account ID</Button>}
         <Button variant="secondary" onClick={() => setEditingKey(v => !v)}>
           {provider.hasApiKey ? 'Replace key' : 'Add key'}
         </Button>
@@ -283,6 +303,29 @@ function ProviderRow({ serverId, provider, adapter, testModel, onChanged }: {
             <Button onClick={saveBaseUrl} loading={savingUrl}>Save base URL</Button>
             <Button variant="secondary" disabled={savingUrl} onClick={() => setEditingUrl(false)}>Cancel</Button>
           </div>
+        </div>
+      )}
+
+      {editingAccount && (
+        <div className="flex items-center gap-2 mt-2">
+          <input
+            className={`${inputClass} py-1 text-sm flex-1`}
+            autoComplete="off"
+            value={newAccountId}
+            onChange={e => setNewAccountId(e.target.value)}
+            placeholder="Account ID"
+            aria-label={`Account ID for ${provider.label}`}
+          />
+          <Button
+            onClick={() => run(async () => {
+              await aiApi.updateProvider(serverId, provider.id, { accountId: newAccountId.trim() });
+              setEditingAccount(false);
+              setResult(null);
+            }, 'Failed to save account ID')}
+            disabled={!ACCOUNT_ID.test(newAccountId.trim())}
+          >
+            Save account ID
+          </Button>
         </div>
       )}
 

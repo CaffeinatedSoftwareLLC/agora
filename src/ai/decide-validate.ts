@@ -1,4 +1,4 @@
-import { DecideError, type DecideAnswer, type DecideLimits, type DecideQuestion, type DecideRequest, type DecideResult } from './adapters';
+import { DecideError, type Adapter, type DecideAnswer, type DecideLimits, type DecideQuestion, type DecideRequest, type DecideResult } from './adapters';
 
 /**
  * Checks on both sides of a decision call. Requests are checked before any provider
@@ -9,42 +9,123 @@ import { DecideError, type DecideAnswer, type DecideLimits, type DecideQuestion,
 const QUESTION_ID = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /**
- * Rough token count. Deliberately high (3 characters per token; English prose is
- * nearer 4) so a request that passes here is not refused by the provider.
+ * Token count of a value as sent. By default a rough, deliberately high estimate
+ * (3 characters per token; English prose is nearer 4) for providers that refuse an
+ * oversized request. For providers that cut state instead (`limits.countBytes`), the
+ * UTF-8 bytes of its JSON: a hard upper bound, since no token is shorter than a byte.
  */
-export function estimateTokens(value: unknown): number {
-    const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+export function estimateTokens(value: unknown, limits?: Pick<DecideLimits, 'countBytes'>): number {
+    const json = JSON.stringify(value ?? '');
+    if (limits?.countBytes) return Buffer.byteLength(json, 'utf8');
+    const text = typeof value === 'string' ? value : json;
     return Math.ceil(text.length / 3);
+}
+
+/** Never end a piece between the two halves of a surrogate pair (an emoji, say). */
+const safeEnd = (text: string, end: number) => {
+    const code = text.charCodeAt(end - 1);
+    return end > 0 && end < text.length && code >= 0xd800 && code <= 0xdbff ? end - 1 : end;
+};
+
+/** The longest prefix of `text` whose estimate (as a JSON string) is at most `budget`. */
+export function fitPrefix(text: string, budget: number, limits?: Pick<DecideLimits, 'countBytes'>): string {
+    if (estimateTokens(text, limits) <= budget) return text;
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (estimateTokens(text.slice(0, mid), limits) <= budget) lo = mid;
+        else hi = mid - 1;
+    }
+    return text.slice(0, safeEnd(text, lo));
+}
+
+/**
+ * Split `text` into consecutive pieces that each fit `budget` and together are the
+ * whole text, preferring to break at a paragraph, line or sentence in each piece's
+ * last fifth. Null when not even one character fits.
+ */
+export function splitToFit(text: string, budget: number, limits?: Pick<DecideLimits, 'countBytes'>): string[] | null {
+    const pieces: string[] = [];
+    let rest = text;
+    while (rest.length > 0) {
+        let piece = fitPrefix(rest, budget, limits);
+        if (piece.length === 0) return null;
+        if (piece.length < rest.length) {
+            const cut = Math.max(piece.lastIndexOf('\n\n'), piece.lastIndexOf('\n'), piece.lastIndexOf('. ') + 1);
+            if (cut > piece.length * 0.8) piece = piece.slice(0, cut);
+        }
+        pieces.push(piece);
+        rest = rest.slice(piece.length);
+    }
+    return pieces;
+}
+
+/** The questions as the adapter will send them. */
+export function wireQuestions(adapter: Pick<Adapter, 'decideWireQuestions'>, questions: Record<string, DecideQuestion>) {
+    return adapter.decideWireQuestions ? adapter.decideWireQuestions(questions) : questions;
+}
+
+/** In bytes, the body's own punctuation around state and questions (`{"state":…,"questions":{…}}`), with room to spare. */
+export const BODY_OVERHEAD = 64;
+
+/**
+ * One question's share of a request as sent: the question (rewritten as the adapter
+ * sends it), its id, and in bytes the `:` and `,` that join it to the others.
+ */
+export function questionSize(adapter: Pick<Adapter, 'decideWireQuestions'>, id: string, q: DecideQuestion, limits: DecideLimits): number {
+    return estimateTokens(wireQuestions(adapter, { [id]: q })[id], limits) + estimateTokens(id, limits) + (limits.countBytes ? 2 : 0);
+}
+
+/** Check a request as `adapter` will send it to `model`: null when acceptable, otherwise why not. */
+export function checkDecideCall(adapter: Pick<Adapter, 'decideLimits' | 'decideModelLimits' | 'decideWireQuestions'>, model: string,
+    req: Pick<DecideRequest, 'state' | 'questions'>): string | null {
+    return checkDecideRequest({ state: req.state, questions: wireQuestions(adapter, req.questions) }, decideLimitsFor(adapter, model)!);
+}
+
+/** The limits that apply to one model of a decision adapter. */
+export function decideLimitsFor(adapter: Pick<Adapter, 'decideLimits' | 'decideModelLimits'>, model: string): DecideLimits | undefined {
+    return adapter.decideModelLimits?.[model] ?? adapter.decideLimits;
 }
 
 /** Null when the request is acceptable, otherwise why not. */
 export function checkDecideRequest(req: Pick<DecideRequest, 'state' | 'questions'>, limits: DecideLimits): string | null {
     const ids = Object.keys(req.questions);
     if (ids.length === 0) return 'No questions';
+    if (limits.maxQuestions !== undefined && ids.length > limits.maxQuestions) return `More than ${limits.maxQuestions} questions`;
 
     let longest = 0;
-    let total = estimateTokens(req.state);
+    const stateSize = estimateTokens(req.state, limits);
+    let total = stateSize;
+    let options = 0;
     for (const id of ids) {
         if (!QUESTION_ID.test(id)) return `Invalid question id "${id.slice(0, 64)}"`;
         const q = req.questions[id];
         if (q.type === 'choice') {
-            const options = Object.keys(q.criteria);
-            if (options.length < 2) return `Question "${id}" needs at least 2 options`;
-            if (options.length > limits.maxChoiceOptions) return `Question "${id}" has more than ${limits.maxChoiceOptions} options`;
+            const count = Object.keys(q.criteria).length;
+            if (count < 2) return `Question "${id}" needs at least 2 options`;
+            if (count > limits.maxChoiceOptions) return `Question "${id}" has more than ${limits.maxChoiceOptions} options`;
+            options += count;
         } else if (q.type === 'score') {
             if (q.criteria.length < limits.minScoreLevels || q.criteria.length > limits.maxScoreLevels) {
                 return `Question "${id}" needs ${limits.minScoreLevels} to ${limits.maxScoreLevels} levels`;
             }
+            options += q.criteria.length;
+        } else {
+            options += 2;
         }
-        const size = estimateTokens(q);
+        const size = estimateTokens(q, limits);
         longest = Math.max(longest, size);
-        total += size;
+        total += size + estimateTokens(id, limits);
     }
 
-    if (estimateTokens(req.state) + longest > limits.stateTokens) {
+    if (stateSize + longest > limits.stateTokens) {
         return `State and the longest question exceed ${limits.stateTokens} tokens`;
     }
-    if (total > limits.requestTokens) return `Request exceeds ${limits.requestTokens} tokens`;
+    // Counting bytes, the bound is the body itself, not a sum of parts
+    if (limits.countBytes) total = Buffer.byteLength(JSON.stringify({ state: req.state ?? '', questions: req.questions }), 'utf8');
+    if (total > limits.requestTokens) return `Request exceeds ${limits.requestTokens} ${limits.countBytes ? 'bytes' : 'tokens'}`;
+    if (limits.maxOptions !== undefined && options > limits.maxOptions) return `More than ${limits.maxOptions} answer options in one request`;
     return null;
 }
 

@@ -38,7 +38,10 @@ export function routeSnapshot(row: any) {
 }
 
 export function providerSnapshot(row: any) {
-    return { adapter: row.adapter, label: row.label, baseUrl: row.base_url ?? null, enabled: row.enabled, hasApiKey: !!row.api_key_enc };
+    return {
+        adapter: row.adapter, label: row.label, baseUrl: row.base_url ?? null, accountId: row.account_id ?? null,
+        enabled: row.enabled, hasApiKey: !!row.api_key_enc,
+    };
 }
 
 /** Keys whose values differ between two snapshots (null `before` means "created"). */

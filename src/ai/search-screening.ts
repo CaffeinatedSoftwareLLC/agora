@@ -1,6 +1,6 @@
-import type { Adapter, DecideQuestion, SearchCitation, SearchResult } from './adapters';
+import type { Adapter, DecideLimits, DecideQuestion, SearchCitation, SearchResult } from './adapters';
 import { decide, decisionReady, loadDecisionSettings, type DecisionSettings } from './decide';
-import { estimateTokens } from './decide-validate';
+import { BODY_OVERHEAD, decideLimitsFor, estimateTokens, questionSize } from './decide-validate';
 import { injectionQuestion, QUESTION_VERSIONS } from './decision-questions';
 import type { Queryable } from './routing';
 
@@ -100,14 +100,26 @@ function verdictOf(probability: number, settings: DecisionSettings): ScreenVerdi
 const WORST: Record<ScreenVerdict, number> = { clean: 0, unscreened: 1, suspect: 2, flagged: 3 };
 const worst = (verdicts: ScreenVerdict[]): ScreenVerdict => verdicts.reduce((a, b) => (WORST[b] > WORST[a] ? b : a), 'clean');
 
-/** Pack items into as few requests as fit the model's limits. */
-function batches(items: Item[]): Item[][] {
+/**
+ * Pack items into as few requests as fit the model's limits. With `limits`, each
+ * item's question is counted too (some models hold every question in one context)
+ * and a request has at most `maxQuestions` items.
+ */
+function batches(items: Item[], route?: { adapter: Adapter; limits: DecideLimits }): Item[][] {
+    const limits = route?.limits;
+    // Bytes (Clef) are counted against the whole request; the default estimate against the state share
+    const budget = limits ? Math.min(limits.countBytes ? limits.requestTokens - BODY_OVERHEAD : BATCH_STATE_TOKENS, limits.requestTokens) : BATCH_STATE_TOKENS;
+    const maxItems = limits?.maxQuestions ?? Infinity;
     const out: Item[][] = [];
     let current: Item[] = [];
     let size = 0;
     for (const item of items) {
-        const tokens = estimateTokens(item.text);
-        if (current.length > 0 && size + tokens > BATCH_STATE_TOKENS) {
+        // The item's text under its key, plus its question (all questions share one context in Clef)
+        const tokens = limits
+            ? estimateTokens({ [item.id]: item.text }, limits) + questionSize(route!.adapter, item.id, injectionQuestion(`items.${item.id}`), limits)
+                + (limits.countBytes ? 2 : 0)   // the `,` joining it to the other items
+            : estimateTokens(item.text);
+        if (current.length > 0 && (size + tokens > budget || current.length >= maxItems)) {
             out.push(current);
             current = [];
             size = 0;
@@ -163,7 +175,9 @@ export async function screenSearchResult(db: Queryable, input: {
     let model: string | undefined;
     let failure: string | undefined;
 
-    const groups = batches(items);
+    // The route's limits, when there is a usable route; otherwise `decide` reports why not
+    const ready = items.length > 0 ? await decisionReady(db, input.serverId, 'search_screening') : null;
+    const groups = batches(items, ready?.ok ? { adapter: ready.route.adapter, limits: decideLimitsFor(ready.route.adapter, ready.route.model)! } : undefined);
     if (groups.length > MAX_BATCHES) {
         failure = 'Too much text to screen';
         for (const group of groups.splice(MAX_BATCHES)) for (const item of group) verdicts.set(item.id, 'unscreened');
