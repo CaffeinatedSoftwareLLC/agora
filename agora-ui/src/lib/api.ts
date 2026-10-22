@@ -253,6 +253,8 @@ export interface AIAdapter {
   capabilities: AICapability[];
   requiresApiKey: boolean;
   supportsBaseUrl: boolean;
+  /** Needs an account ID besides the key (Cloudflare Workers AI). */
+  requiresAccountId?: boolean;
   defaultBaseUrl: string;
   defaultModels: Partial<Record<AICapability, string>>;
   /** When set for a capability, the only valid "model" values (e.g. Tavily's search depths). */
@@ -264,6 +266,8 @@ export interface AIProvider {
   adapter: string;
   label: string;
   baseUrl: string | null;
+  /** Set for adapters that need one (Cloudflare). Not a secret. */
+  accountId?: string | null;
   hasApiKey: boolean;
   enabled: boolean;
   capabilities: AICapability[];
@@ -575,10 +579,10 @@ export const aiApi = {
   listProviders: (serverId: string) =>
     api.get<AIProvider[]>(`/servers/${serverId}/ai/providers`),
 
-  createProvider: (serverId: string, data: { adapter: string; label?: string; apiKey?: string; baseUrl?: string | null }) =>
+  createProvider: (serverId: string, data: { adapter: string; label?: string; apiKey?: string; baseUrl?: string | null; accountId?: string }) =>
     api.post<AIProvider>(`/servers/${serverId}/ai/providers`, data),
 
-  updateProvider: (serverId: string, providerId: string, data: { label?: string; apiKey?: string | null; baseUrl?: string | null; enabled?: boolean }) =>
+  updateProvider: (serverId: string, providerId: string, data: { label?: string; apiKey?: string | null; baseUrl?: string | null; accountId?: string; enabled?: boolean }) =>
     api.patch<AIProvider>(`/servers/${serverId}/ai/providers/${providerId}`, data),
 
   deleteProvider: (serverId: string, providerId: string) =>

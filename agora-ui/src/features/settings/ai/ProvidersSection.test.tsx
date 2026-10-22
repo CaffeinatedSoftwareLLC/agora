@@ -99,3 +99,44 @@ it('does not offer URL editing for an adapter without base URL support', () => {
   render(view(['tts'], undefined, false));
   expect(screen.queryByRole('button', { name: 'Edit base URL' })).toBeNull();
 });
+
+const cloudflare = { id: 'cloudflare', label: 'Cloudflare Clef (decisions)', capabilities: ['decide'] as AICapability[],
+  requiresApiKey: true, supportsBaseUrl: false, requiresAccountId: true, defaultBaseUrl: 'https://api.cloudflare.com/client/v4',
+  defaultModels: { decide: '@cf/cloudflare/clef-flash' } };
+const ACCOUNT = '0123456789abcdef0123456789abcdef';
+
+function cloudflareView(accountId: string | null = ACCOUNT) {
+  return <ProvidersSection serverId="S" adapters={[cloudflare]}
+    providers={accountId === null ? [] : [{ id: 'C', label: 'Clef', adapter: 'cloudflare', baseUrl: null, accountId, hasApiKey: true,
+      enabled: true, capabilities: ['decide'], createdAt: '', updatedAt: '' }]} testModels={{}}
+    isInstanceAdmin={false} allowPrivateBaseUrls={false} onChanged={() => {}} onAllowPrivateChanged={() => {}} />;
+}
+
+it('asks for an account ID and an API token when adding a Cloudflare provider', async () => {
+  const create = vi.spyOn(aiApi, 'createProvider').mockResolvedValue({} as never);
+  render(cloudflareView(null));
+  fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+  fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'cf-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+  await screen.findByText('Cloudflare Clef (decisions) requires an account ID');
+  expect(create).not.toHaveBeenCalled();
+
+  fireEvent.change(screen.getByLabelText('Account ID'), { target: { value: ` ${ACCOUNT} ` } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+  await waitFor(() => expect(create).toHaveBeenCalledExactlyOnceWith('S', { adapter: 'cloudflare', apiKey: 'cf-token', accountId: ACCOUNT }));
+});
+
+it('shows and edits the account ID of a Cloudflare provider, and offers no base URL', async () => {
+  const update = vi.spyOn(aiApi, 'updateProvider').mockResolvedValue({} as never);
+  render(cloudflareView());
+  expect(screen.getByText(`Account ${ACCOUNT}`)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Edit base URL' })).toBeNull();
+  expect(screen.getByLabelText('Test model for Clef')).toHaveProperty('value', '@cf/cloudflare/clef-flash');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Edit account ID' }));
+  fireEvent.change(screen.getByLabelText('Account ID for Clef'), { target: { value: 'not valid!' } });
+  expect(screen.getByRole('button', { name: 'Save account ID' })).toHaveProperty('disabled', true);
+  fireEvent.change(screen.getByLabelText('Account ID for Clef'), { target: { value: 'fedcba9876543210fedcba9876543210' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save account ID' }));
+  await waitFor(() => expect(update).toHaveBeenCalledExactlyOnceWith('S', 'C', { accountId: 'fedcba9876543210fedcba9876543210' }));
+});
