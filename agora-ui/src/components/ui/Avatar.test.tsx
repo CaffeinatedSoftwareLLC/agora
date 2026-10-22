@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import { Avatar, avatarColor, AVATAR_COLORS } from './Avatar';
+import { Avatar, avatarColor, AVATAR_COLORS, resolveAvatarColors } from './Avatar';
+import { deltaE2000, hexToLab } from './avatarColorDistance.test-support';
 
 afterEach(cleanup);
 
@@ -28,4 +29,29 @@ it('keeps white initials at readable contrast across the entire theme-independen
     const luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
     expect(1.05 / (luminance + 0.05), hex).toBeGreaterThanOrEqual(4.5);
   }
+});
+
+it('keeps every palette pair perceptually distinct (CIEDE2000 >= 20)', () => {
+  // Sharma reference pairs guard the distance implementation itself.
+  expect(deltaE2000([50, 2.6772, -79.7751], [50, 0, -82.7485])).toBeCloseTo(2.0425, 4);
+  expect(deltaE2000([50, 3.1571, -77.2803], [50, 0, -82.7485])).toBeCloseTo(2.8615, 4);
+  for (let i = 0; i < AVATAR_COLORS.length; i++) for (let j = i + 1; j < AVATAR_COLORS.length; j++) {
+    expect(deltaE2000(hexToLab(AVATAR_COLORS[i]), hexToLab(AVATAR_COLORS[j])), `${AVATAR_COLORS[i]} vs ${AVATAR_COLORS[j]}`)
+      .toBeGreaterThanOrEqual(20);
+  }
+});
+
+it('probes hash collisions deterministically for eight bots regardless of input order', () => {
+  const buckets = new Map<string, string[]>();
+  for (let i = 0; i < 200; i++) {
+    const id = `bot-${i}`;
+    const bucket = buckets.get(avatarColor(id)) ?? [];
+    bucket.push(id); buckets.set(avatarColor(id), bucket);
+  }
+  const ids = [...buckets.values()].find(bucket => bucket.length >= 8)!.slice(0, 8);
+  const colors = resolveAvatarColors(ids);
+  expect(new Set(colors.values()).size).toBe(8);
+  expect(resolveAvatarColors([...ids].reverse())).toEqual(colors);
+  expect(resolveAvatarColors([...ids, ids[0] + ' '])).toEqual(colors);
+  expect(new Set(resolveAvatarColors(Array.from({ length: AVATAR_COLORS.length }, (_, i) => `user-${i}`)).values()).size).toBe(AVATAR_COLORS.length);
 });

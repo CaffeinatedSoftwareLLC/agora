@@ -1,22 +1,47 @@
-/** White initials keep at least 4.5:1 contrast on every swatch in either theme. */
+import { createContext, useContext } from 'react';
+
+/** Every pair has CIEDE2000 distance >= 20; white initials have contrast >= 4.5. */
 export const AVATAR_COLORS = [
-  '#1d4ed8', '#4338ca', '#6d28d9', '#7e22ce', '#a21caf', '#be185d', '#be123c', '#b91c1c',
-  '#c2410c', '#b45309', '#a16207', '#4d7c0f', '#15803d', '#0f766e', '#0e7490', '#475569',
+  '#7c4941', '#03890c', '#0f7fa0', '#041808', '#0f038b', '#d20cc4', '#966f03', '#1e0b18',
+  '#75738d', '#005f4e', '#473604', '#eb0408', '#404cf8', '#7d0b56', '#db045d', '#40444a', '#70765e',
 ] as const;
 
-export function avatarColor(userId: string): string {
+function avatarHash(userId: string): number {
   let hash = 2166136261;
   for (const character of userId.trim()) hash = Math.imul(hash ^ character.codePointAt(0)!, 16777619);
-  return AVATAR_COLORS[(hash >>> 0) % AVATAR_COLORS.length];
+  return hash >>> 0;
 }
+
+export function avatarColor(userId: string): string {
+  return AVATAR_COLORS[avatarHash(userId) % AVATAR_COLORS.length];
+}
+
+/** Stable regardless of message/roster order; all views share this channel assignment. */
+export function resolveAvatarColors(userIds: Iterable<string>): Map<string, string> {
+  const result = new Map<string, string>();
+  const used = new Set<string>();
+  for (const id of [...new Set(Array.from(userIds, id => id.trim()).filter(Boolean))].sort()) {
+    const start = avatarHash(id) % AVATAR_COLORS.length;
+    let slot = start;
+    while (used.has(AVATAR_COLORS[slot]) && used.size < AVATAR_COLORS.length) slot = (slot + 1) % AVATAR_COLORS.length;
+    const color = AVATAR_COLORS[slot];
+    result.set(id, color);
+    used.add(color);
+  }
+  return result;
+}
+
+export const AvatarColorsContext = createContext<ReadonlyMap<string, string>>(new Map());
 
 export function Avatar({ userId, username, avatarUrl, className = 'h-10 w-10 text-sm' }: {
   userId?: string | null; username?: string | null; avatarUrl?: string | null; className?: string;
 }) {
+  const colors = useContext(AvatarColorsContext);
+  const identity = userId?.trim() || username || '?';
   if (avatarUrl) return <img src={avatarUrl} alt={username || '?'} className={`shrink-0 rounded-full object-cover ${className}`} />;
   return <span role="img" aria-label={`${username || 'Unknown'} avatar`} data-avatar-user={userId || undefined}
     className={`flex shrink-0 items-center justify-center rounded-full font-bold ${className}`}
-    style={{ backgroundColor: avatarColor(userId?.trim() || username || '?'), color: '#fff' }}>
+    style={{ backgroundColor: colors.get(identity) ?? avatarColor(identity), color: '#fff' }}>
     {Array.from(username || '?')[0].toUpperCase()}
   </span>;
 }
