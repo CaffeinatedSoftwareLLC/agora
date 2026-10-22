@@ -207,6 +207,47 @@ describe('upload hook (C.4)', () => {
 describe('worker: tagging a file (C.3)', () => {
     beforeAll(async () => { await freshServer('Worker'); });
 
+    test('a text file gets a probability per tag, an injection check, and nothing but the document is sent', async () => {
+        const { calls } = stubJev(tagAnswers(RULES));
+        const id = await upload(ctx.request, owner.auth, channelId, 'protocol.md', PROTOCOL_DOC);
+        expect(await runTaggingOnce(deps())).toEqual(['done']);
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0].state).toEqual({ document: PROTOCOL_DOC });
+        const ids = Object.keys(calls[0].questions);
+        expect(ids).toHaveLength(DEFAULT_TAGS.length + 1);
+        expect(ids).toContain('injection');
+        expect(ids.filter(i => i.startsWith('tag_')).map(i => tagNameOf(calls[0].questions[i])).sort()).toEqual(DEFAULT_TAGS.map(t => t.name).sort());
+        // The file's text is state only: it is in no question
+        expect(JSON.stringify(calls[0].questions)).not.toContain('Agents take turns');
+
+        const tags = await tagsOf(ctx.db, id);
+        expect(tags.protocol).toBe(0.95);
+        expect(tags.plan).toBe(0.03);
+        expect(Object.keys(tags)).toHaveLength(DEFAULT_TAGS.length);
+        const stored = (await ctx.db.query('SELECT DISTINCT tag_revision, question_version, model FROM file_tags WHERE file_id = $1', [id])).rows;
+        expect(stored).toEqual([{ tag_revision: 1, question_version: 'tagging-1', model: 'jev-1.13.0' }]);
+
+        const job = await jobOf(ctx.db, id);
+        expect(job).toMatchObject({ state: 'done', attempts: 0, coverage: 'full', detail: null, lease_expires_at: null });
+        expect(Number(job.injection_probability)).toBeCloseTo(0.01);
+
+        const usage = await taggingUsage();
+        expect(usage).toHaveLength(1);
+        expect(usage[0].channel_id.trim()).toBe(channelId);
+        expect(usage[0].user_id.trim()).toBe(owner.userId);
+
+        // No file text was stored anywhere
+        const dump = JSON.stringify((await ctx.db.query('SELECT * FROM file_tags')).rows) + JSON.stringify((await ctx.db.query('SELECT * FROM file_tag_jobs')).rows);
+        expect(dump).not.toContain('Agents take turns');
+    });
+
+    test('a finished job is not worked twice', async () => {
+        const { calls } = stubJev(tagAnswers(RULES));
+        expect(await runTaggingOnce(deps())).toEqual([]);
+        expect(calls).toHaveLength(0);
+    });
+
     test.each(['channel', 'thread'])('publishes committed screening results to an already-connected %s viewer', async kind => {
         stubJev(tagAnswers(RULES));
         const address = ctx.app.server.address() as { port: number };
@@ -280,47 +321,6 @@ describe('worker: tagging a file (C.3)', () => {
             client.release();
             await processing;
         }
-    });
-
-    test('a text file gets a probability per tag, an injection check, and nothing but the document is sent', async () => {
-        const { calls } = stubJev(tagAnswers(RULES));
-        const id = await upload(ctx.request, owner.auth, channelId, 'protocol.md', PROTOCOL_DOC);
-        expect(await runTaggingOnce(deps())).toEqual(['done']);
-
-        expect(calls).toHaveLength(1);
-        expect(calls[0].state).toEqual({ document: PROTOCOL_DOC });
-        const ids = Object.keys(calls[0].questions);
-        expect(ids).toHaveLength(DEFAULT_TAGS.length + 1);
-        expect(ids).toContain('injection');
-        expect(ids.filter(i => i.startsWith('tag_')).map(i => tagNameOf(calls[0].questions[i])).sort()).toEqual(DEFAULT_TAGS.map(t => t.name).sort());
-        // The file's text is state only: it is in no question
-        expect(JSON.stringify(calls[0].questions)).not.toContain('Agents take turns');
-
-        const tags = await tagsOf(ctx.db, id);
-        expect(tags.protocol).toBe(0.95);
-        expect(tags.plan).toBe(0.03);
-        expect(Object.keys(tags)).toHaveLength(DEFAULT_TAGS.length);
-        const stored = (await ctx.db.query('SELECT DISTINCT tag_revision, question_version, model FROM file_tags WHERE file_id = $1', [id])).rows;
-        expect(stored).toEqual([{ tag_revision: 1, question_version: 'tagging-1', model: 'jev-1.13.0' }]);
-
-        const job = await jobOf(ctx.db, id);
-        expect(job).toMatchObject({ state: 'done', attempts: 0, coverage: 'full', detail: null, lease_expires_at: null });
-        expect(Number(job.injection_probability)).toBeCloseTo(0.01);
-
-        const usage = await taggingUsage();
-        expect(usage).toHaveLength(1);
-        expect(usage[0].channel_id.trim()).toBe(channelId);
-        expect(usage[0].user_id.trim()).toBe(owner.userId);
-
-        // No file text was stored anywhere
-        const dump = JSON.stringify((await ctx.db.query('SELECT * FROM file_tags')).rows) + JSON.stringify((await ctx.db.query('SELECT * FROM file_tag_jobs')).rows);
-        expect(dump).not.toContain('Agents take turns');
-    });
-
-    test('a finished job is not worked twice', async () => {
-        const { calls } = stubJev(tagAnswers(RULES));
-        expect(await runTaggingOnce(deps())).toEqual([]);
-        expect(calls).toHaveLength(0);
     });
 
     test('a PDF is read and tagged; an injection in a file is recorded', async () => {
