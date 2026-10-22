@@ -171,6 +171,8 @@ describe('Threads', () => {
         expect((await ctx.request.get(`${endpoint}?order=desc&before=${ids[6]}`).set(outsider.auth)).status).toBe(403);
         expect((await ctx.request.get(`${endpoint}?before=${ids[3]}&after=${ids[0]}`).set(owner.auth)).status).toBe(400);
         expect((await ctx.request.get(`${endpoint}?order=invalid`).set(owner.auth)).status).toBe(400);
+        expect((await ctx.request.get(`${endpoint}?before=not-a-ulid&order=desc`).set(owner.auth)).status).toBe(400);
+        expect((await ctx.request.get(`${endpoint}?after=${ids[0]}&after=${ids[1]}`).set(owner.auth)).status).toBe(400);
     });
 
     test('active threads endpoint returns threads ordered by last_reply_at DESC', async () => {
