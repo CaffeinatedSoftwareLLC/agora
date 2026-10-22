@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react';
+import { usePalette } from '../../theme';
 
 /** Every pair has CIEDE2000 distance >= 20; white initials have contrast >= 4.5.
  * Colours are unique for up to 17 IDs in a channel map; base swatches repeat after that.
@@ -39,11 +40,13 @@ export function Avatar({ userId, username, avatarUrl, className = 'h-10 w-10 tex
   userId?: string | null; username?: string | null; avatarUrl?: string | null; className?: string;
 }) {
   const colors = useContext(AvatarColorsContext);
+  const palette = usePalette();
   const identity = userId?.trim() || username || '?';
   if (avatarUrl) return <img src={avatarUrl} alt={username || '?'} className={`shrink-0 rounded-full object-cover ${className}`} />;
   return <span role="img" aria-label={`${username || 'Unknown'} avatar`} data-avatar-user={userId || undefined}
     className={`flex shrink-0 items-center justify-center rounded-full font-bold ${className}`}
-    style={{ backgroundColor: colors.get(identity) ?? avatarColor(identity), color: '#fff' }}>
+    style={{ backgroundColor: colors.get(identity) ?? avatarColor(identity), color: '#fff',
+      boxShadow: `inset 0 0 0 2px ${palette.text}` }}>
     {Array.from(username || '?')[0].toUpperCase()}
   </span>;
 }

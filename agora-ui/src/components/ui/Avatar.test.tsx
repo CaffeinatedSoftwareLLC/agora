@@ -2,6 +2,8 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { Avatar, avatarColor, AVATAR_COLORS, resolveAvatarColors } from './Avatar';
 import { deltaE2000, hexToLab } from './avatarColorDistance.test-support';
+import { PALETTES } from '../../theme/palettes';
+import { useUIStore } from '../../stores/uiStore';
 
 afterEach(cleanup);
 
@@ -38,6 +40,25 @@ it('keeps every palette pair perceptually distinct (CIEDE2000 >= 20)', () => {
   for (let i = 0; i < AVATAR_COLORS.length; i++) for (let j = i + 1; j < AVATAR_COLORS.length; j++) {
     expect(deltaE2000(hexToLab(AVATAR_COLORS[i]), hexToLab(AVATAR_COLORS[j])), `${AVATAR_COLORS[i]} vs ${AVATAR_COLORS[j]}`)
       .toBeGreaterThanOrEqual(20);
+  }
+});
+
+it('gives every default circle a neutral 2px boundary with >=3 contrast against both theme surfaces', () => {
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  for (const key of ['aegean', 'terracotta'] as const) {
+    useUIStore.setState({ paletteKey: key });
+    const palette = PALETTES[key];
+    const view = render(<Avatar userId="user" username="User" />);
+    expect(view.getByRole('img').style.boxShadow).toBe(`inset 0 0 0 2px ${palette.text}`);
+    for (const surface of [palette.bg, palette.surface, palette.surfaceHover]) {
+      const [light, dark] = [luminance(palette.text), luminance(surface)].sort((a, b) => b - a);
+      expect((light + 0.05) / (dark + 0.05), `${key} ${surface}`).toBeGreaterThanOrEqual(3);
+    }
+    view.unmount();
   }
 });
 
