@@ -48,6 +48,9 @@ export interface FileReadResponse {
     injectionWarning: boolean;
     /** True only when the whole file was checked: false with tagging off, not done yet, or done on part of the file. */
     injectionChecked: boolean;
+    trustedByOwner?: boolean;
+    trustedBy?: string;
+    trustedAt?: string;
 }
 
 export type FileReadOutcome =
@@ -64,7 +67,7 @@ export async function readFileText(deps: FileReadDeps, input: FileReadInput): Pr
     // Only files attached to a message that still exists: the same set file search lists
     const res = await db.query(
         `SELECT f.id, f.channel_id, f.filename, f.mime_type, f.content_type, f.storage_key, f.encryption_iv, f.encryption_tag,
-                j.injection_probability, j.coverage, COALESCE(s.screening_flag_threshold, 0.7) AS flag_threshold
+                j.injection_probability, j.coverage, COALESCE(s.screening_flag_threshold, 0.7) AS flag_threshold, f.trusted_by, f.trusted_at
          FROM files f
          JOIN messages m ON m.id = f.message_id AND m.deleted_at IS NULL
          JOIN channels c ON c.id = f.channel_id
@@ -118,8 +121,10 @@ export async function readFileText(deps: FileReadDeps, input: FileReadInput): Pr
             totalChars: extracted.text.length,
             hasMore: offset + text.length < extracted.text.length,
             truncated: extracted.truncated,
-            injectionWarning: scored && Number(file.injection_probability) >= Number(file.flag_threshold),
+            // A flag from part of the file still warns; only the owner's trust lifts it
+            injectionWarning: !file.trusted_at && scored && Number(file.injection_probability) >= Number(file.flag_threshold),
             injectionChecked: checked,
+            ...(file.trusted_at ? { trustedByOwner: true, trustedBy: file.trusted_by.trim(), trustedAt: new Date(file.trusted_at).toISOString() } : {}),
         },
     };
 }

@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useMemberStore } from '../../stores/memberStore';
 import { useServerStore } from '../../stores/serverStore';
 import { PresenceDot } from '../live/PresenceDot';
+import { Avatar } from '../../components/ui/Avatar';
 
 export function MembersSidebar() {
   const instanceServerId = useServerStore(s => s.instanceServerId);
@@ -33,9 +34,7 @@ export function MembersSidebar() {
             style={{ width: 'calc(100% - 8px)' }}
           >
             <div className="relative shrink-0">
-              <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-[11px] font-bold text-on-primary">
-                {member.username[0].toUpperCase()}
-              </div>
+              <Avatar userId={member.id} username={member.username} className="h-7 w-7 text-[11px]" />
               <div className="absolute -bottom-0.5 -right-0.5">
                 <PresenceDot userId={member.id} size="sm" />
               </div>

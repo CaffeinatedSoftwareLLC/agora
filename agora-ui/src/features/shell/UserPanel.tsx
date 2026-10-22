@@ -1,6 +1,7 @@
 import { useAuthStore } from '../../stores/authStore';
 import { ConnectionIndicator } from './ConnectionIndicator';
 import { PresenceDot } from '../live/PresenceDot';
+import { Avatar } from '../../components/ui/Avatar';
 
 export function UserPanel() {
   const user = useAuthStore(s => s.user);
@@ -9,9 +10,7 @@ export function UserPanel() {
   return (
     <div className="p-3 border-t border-border flex items-center gap-3">
       <div className="relative shrink-0">
-        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-white">
-          {user.username[0].toUpperCase()}
-        </div>
+        <Avatar userId={user.id} username={user.username} className="h-8 w-8 text-sm" />
         <div className="absolute -bottom-0.5 -right-0.5">
           <PresenceDot userId={user.id} size="sm" />
         </div>

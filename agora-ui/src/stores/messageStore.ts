@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
+import { fileMetadata, useFileMetadataStore } from './fileMetadataStore';
+import type { FileAttachmentUpdatePayload } from '../lib/contracts/ws-events';
 import type { ArtifactRef, MessagePayload, MessageUpdatePayload, MessageDeletePayload, ProtocolInfo } from '../lib/contracts/ws-events';
 
 export interface Attachment {
@@ -18,6 +20,9 @@ export interface Attachment {
   partial?: boolean;
   /** The file's text looked like it tries to instruct an AI reader. */
   injectionWarning?: boolean;
+  trustedByOwner?: boolean;
+  trustedBy?: string | null;
+  trustedAt?: string | null;
 }
 
 export interface Message {
@@ -57,6 +62,7 @@ interface MessageState {
 
   addMessage: (msg: MessagePayload) => void;
   updateMessage: (payload: MessageUpdatePayload) => void;
+  updateFileAttachment: (payload: FileAttachmentUpdatePayload) => void;
   removeMessage: (payload: MessageDeletePayload) => void;
   updateThreadMetadata: (channelId: string, messageId: string, replyCount: number, lastReplyAt: string | null, threadClosedAt?: string | null) => void;
   streamUpdate: (messageId: string, channelId: string, content: string, streaming: boolean, attachments?: Message['attachments']) => void;
@@ -344,6 +350,18 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
   },
 
+  updateFileAttachment: payload => {
+    useFileMetadataStore.getState().update(payload);
+    set(state => {
+      const current = state.byChannel.get(payload.channelId);
+      if (!current) return state;
+      const next = new Map(state.byChannel);
+      next.set(payload.channelId, current.map(message => message.id === payload.messageId && !message.deletedAt
+        ? { ...message, attachments: message.attachments?.map(file => file.id === payload.fileId && !file.deletedAt ? { ...file, ...fileMetadata(payload) } : file) } : message));
+      return { byChannel: next };
+    });
+  },
+
   updateMessage: (payload) => {
     set((state) => {
       const nextByChannel = new Map(state.byChannel);
@@ -415,5 +433,5 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     });
   },
 
-  clear: () => set({ byChannel: new Map(), hasMore: new Map() }),
+  clear: () => { useFileMetadataStore.getState().clear(); set({ byChannel: new Map(), hasMore: new Map() }); },
 }));

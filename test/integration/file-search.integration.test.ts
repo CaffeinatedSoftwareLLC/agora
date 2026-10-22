@@ -554,7 +554,8 @@ describe('tags on files in messages (C.6)', () => {
     test('a tagged file carries its tags, state and any injection warning', async () => {
         const files = await attachmentsOf(channelId);
         expect(files['release-plan.txt']).toMatchObject({ tags: ['plan'], tagging: 'done' });
-        expect(files['release-plan.txt']).not.toHaveProperty('injectionWarning');
+        // Since the owner-trust change every tagged attachment carries explicit booleans: no warning is `false`, not absent
+        expect(files['release-plan.txt']).toMatchObject({ injectionWarning: false, trustedByOwner: false });
         expect(files['poisoned-notes.txt']).toMatchObject({ tagging: 'done', injectionWarning: true });
         expect(files['poisoned-notes.txt'].tags).toContain('meeting notes');
         // Probabilities and criteria are not sent with messages

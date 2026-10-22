@@ -7,6 +7,7 @@ import { decryptFile } from '../lib/encryption';
 import { STALE_TAGS_SQL, sweepFileTagging } from '../lib/file-tagging-queue';
 import type { ObjectStore } from '../lib/storage';
 import { chunkText, extractText, isExtractable, DEFAULT_EXTRACT_LIMITS, type ExtractLimits } from '../lib/text-extract';
+import { readFileAttachmentUpdate, type FileAttachmentUpdate } from '../lib/file-attachment-updates';
 
 /**
  * File tagging worker (docs/planning/jev-wbs.md, C.3). For each queued file: decrypt
@@ -43,6 +44,8 @@ export interface TaggingDeps {
     decideTimeoutMs?: number;
     /** Test seam: runs after the model has answered, before results are written. */
     beforeStore?: (job: ClaimedJob) => Promise<void>;
+    /** Called only after both the job write and the attachment snapshot commit. */
+    emit?: (update: FileAttachmentUpdate) => void;
     log?: { warn(obj: unknown, msg: string): void; error(obj: unknown, msg: string): void };
 }
 
@@ -197,6 +200,20 @@ function questionBatches(tags: AskedTag[], room: { tokens: number; count: number
 
 /** Work one claimed job to an outcome. Throws only for unexpected errors (the lease then expires and the job is claimed again). */
 export async function processTaggingJob(deps: TaggingDeps, job: ClaimedJob): Promise<JobResult> {
+    const result = await processTaggingJobInner(deps, job);
+    if (deps.emit && ['done', 'failed', 'skipped', 'requeued'].includes(result)) {
+        try {
+            const update = await readFileAttachmentUpdate(deps.db, job.fileId);
+            if (update) deps.emit(update);
+        } catch (error) {
+            // Results already committed: a delivery failure must not rerun the model.
+            deps.log?.warn({ err: error, fileId: job.fileId }, 'File tagging live update failed');
+        }
+    }
+    return result;
+}
+
+async function processTaggingJobInner(deps: TaggingDeps, job: ClaimedJob): Promise<JobResult> {
     const { db } = deps;
 
     // A job abandoned over and over (a file that crashes its worker) must not loop forever

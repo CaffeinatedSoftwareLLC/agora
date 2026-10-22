@@ -74,7 +74,7 @@ function rowToPasskey(row: any) {
 export async function passkeyRoutes(app: FastifyInstance) {
     // GET /auth/passkeys: the signed-in user's passkeys
     app.get('/auth/passkeys', { preHandler: [requireAuth] }, async (request, reply) => {
-        if (!humanOnly(request, reply)) return;
+        if (!humanOnly(request, reply)) return reply;
         const rows = await request.dbClient!.query(
             `SELECT id, name, rp_id, device_type, backed_up, created_at, last_used_at
              FROM user_passkeys WHERE user_id = $1 ORDER BY created_at`,
@@ -88,7 +88,7 @@ export async function passkeyRoutes(app: FastifyInstance) {
         preHandler: [requireAuth],
         config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     }, async (request, reply) => {
-        if (!humanOnly(request, reply)) return;
+        if (!humanOnly(request, reply)) return reply;
         const rp = relyingParty(request);
         if (!rp) return reply.status(400).send({ error: 'origin_not_allowed' });
         const db = request.dbClient!;
@@ -138,7 +138,7 @@ export async function passkeyRoutes(app: FastifyInstance) {
             },
         },
     }, async (request, reply) => {
-        if (!humanOnly(request, reply)) return;
+        if (!humanOnly(request, reply)) return reply;
         const body = request.body as { flowId: string; name?: string; response: any };
         const ceremony = await takeCeremony(body.flowId, 'register');
         // A flow belongs to the user who started it
@@ -188,7 +188,7 @@ export async function passkeyRoutes(app: FastifyInstance) {
         preHandler: [requireAuth],
         schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', minLength: 26, maxLength: 26 } } } },
     }, async (request, reply) => {
-        if (!humanOnly(request, reply)) return;
+        if (!humanOnly(request, reply)) return reply;
         const { id } = request.params as { id: string };
         // Scoped to the caller explicitly as well as by RLS: someone else's id is a 404
         const result = await request.dbClient!.query(

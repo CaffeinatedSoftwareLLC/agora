@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { addTaggingToAttachments } from './file-tags';
 
 export const messageAttachmentsSchema = {
     type: 'array', items: { type: 'string', minLength: 26, maxLength: 26 }, maxItems: 10,
@@ -7,6 +8,8 @@ export const messageAttachmentsSchema = {
 export interface MessageAttachment {
     id: string; name: string; mime: string; size: number;
     width: number | null; height: number | null; url: string;
+    tags?: string[]; tagging?: string; partial?: boolean; injectionWarning?: boolean;
+    trustedByOwner?: boolean; trustedBy?: string; trustedAt?: string;
 }
 
 /** Validate and lock before creating a message. Locks stay held until the request commits. */
@@ -28,10 +31,12 @@ export async function prepareMessageAttachments(db: PoolClient, userId: string, 
         if (file.channel_id?.trim() !== channelId.trim()) return { ok: false, error: 'Attachment channel mismatch' };
         if (file.message_id) return { ok: false, error: 'Attachment already bound to a message' };
     }
-    return { ok: true, attachments: files.rows.map(f => ({
+    const attachments = files.rows.map(f => ({
         id: f.id.trim(), name: f.filename, mime: f.mime_type || f.content_type,
         size: Number(f.size_bytes), width: f.width, height: f.height, url: `/files/${f.id.trim()}`,
-    })) };
+    }));
+    await addTaggingToAttachments(db, attachments);
+    return { ok: true, attachments };
 }
 
 /** Bind only the files validated and locked by prepareMessageAttachments in this transaction. */
@@ -45,6 +50,8 @@ export async function bindMessageAttachments(db: PoolClient, messageId: string, 
 export async function replayMessageAttachments(db: PoolClient, messageId: string): Promise<MessageAttachment[]> {
     const files = await db.query(`SELECT id, filename, mime_type, content_type, size_bytes, width, height
         FROM files WHERE message_id = $1 AND deleted_at IS NULL ORDER BY id`, [messageId]);
-    return files.rows.map(f => ({ id: f.id.trim(), name: f.filename, mime: f.mime_type || f.content_type,
+    const attachments = files.rows.map(f => ({ id: f.id.trim(), name: f.filename, mime: f.mime_type || f.content_type,
         size: Number(f.size_bytes), width: f.width, height: f.height, url: `/files/${f.id.trim()}` }));
+    await addTaggingToAttachments(db, attachments);
+    return attachments;
 }

@@ -39,7 +39,8 @@ async function main() {
 
     // File tagging worker: idle unless a server has switched file tagging on
     // (stopped in shutdown below: hooks cannot be added once the server is listening)
-    const stopTagging = startFileTaggingWorker({ db, store: storage, encryptionKey: config.encryptionKey, log: app.log });
+    const stopTagging = startFileTaggingWorker({ db, store: storage, encryptionKey: config.encryptionKey, log: app.log,
+        emit: update => app.io.to(`channel:${update.channelId}`).emit('FileAttachmentUpdate', update) });
     const stopTermsWatch = startTermsWatchWorker({ db, log: app.log,
         emit: n => app.io.to(`channel:${n.channelId}`).emit('Message', n.event) });
 

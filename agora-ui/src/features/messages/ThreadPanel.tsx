@@ -1,6 +1,6 @@
 import { AuxPanelControl } from '../shell/AuxPanelControl';
 import { useDraftStore, sendDraft, type DraftKey } from '../../stores/draftStore';
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useThreadStore } from '../../stores/threadStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -18,6 +18,12 @@ import { appendDictation } from '../voice/appendDictation';
 import { useUploadStore } from '../../stores/uploadStore';
 import { UploadPreview } from './UploadPreview';
 
+// Anchor the readable content: a prepend can remove its author header through grouping.
+function replyContent(row: HTMLElement) { return row.querySelector<HTMLElement>('.prose-msg') ?? row; }
+function findReply(list: HTMLElement, id: string) {
+  return [...list.querySelectorAll<HTMLElement>('[data-message-id]')].find(row => row.dataset.messageId === id);
+}
+
 export function ThreadPanel() {
   const P = usePalette();
   const openThreadId = useThreadStore(s => s.openThreadId);
@@ -29,6 +35,11 @@ export function ThreadPanel() {
   const closeThreadRemote = useThreadStore(s => s.closeThreadRemote);
   const reopenThread = useThreadStore(s => s.reopenThread);
   const activeThreads = useThreadStore(s => s.activeThreads);
+  const loadOlder = useThreadStore(s => s.loadOlder);
+  const loadReplies = useThreadStore(s => s.loadReplies);
+  const hasOlder = useThreadStore(s => !!(openThreadId && s.hasMore.get(openThreadId)));
+  const loadingReplies = useThreadStore(s => !!(openThreadId && s.loadingReplies.get(openThreadId)));
+  const replyLoadError = useThreadStore(s => openThreadId ? s.replyLoadErrors.get(openThreadId) : undefined);
 
   const user = useAuthStore(s => s.user);
   const byChannel = useMessageStore(s => s.byChannel);
@@ -38,6 +49,12 @@ export function ThreadPanel() {
   const setContent = (text: string) => useDraftStore.getState().setDraft(draftKey, text);
   const [sending, setSending] = useState(false);
   const nearBottom = useRef(true);
+  const [olderState, setOlderState] = useState({ threadId: '', loading: false, error: '' });
+  const loadingOlder = olderState.threadId === openThreadId && olderState.loading;
+  const olderError = olderState.threadId === openThreadId ? olderState.error : '';
+  const olderRequest = useRef<symbol | null>(null);
+  const prepend = useRef<{ threadId: string; firstId: string; replyId: string; offset: number } | null>(null);
+  const previousThread = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,13 +79,29 @@ export function ThreadPanel() {
   const threadOwner = useThreadOwner(openThreadChannelId, openThreadId, handoffVersion);
   const { isExpanded: isRunExpanded, toggle: toggleRun } = useExpandedNoticeRuns(user?.id);
 
-  useEffect(() => {
-    nearBottom.current = true;
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [openThreadId]);
-  useEffect(() => {
-    if (listRef.current && nearBottom.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [replies]);
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (previousThread.current !== openThreadId) {
+      previousThread.current = openThreadId;
+      nearBottom.current = true;
+      prepend.current = null;
+      olderRequest.current = null;
+    }
+    if (!el) return;
+    const anchor = prepend.current;
+    if (anchor?.threadId === openThreadId) {
+      if (replies[0]?.id !== anchor.firstId) {
+        const row = findReply(el, anchor.replyId);
+        if (row) el.scrollTop += replyContent(row).getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset;
+        prepend.current = null;
+        return;
+      }
+      const row = findReply(el, anchor.replyId);
+      if (row) anchor.offset = replyContent(row).getBoundingClientRect().top - el.getBoundingClientRect().top;
+      if (!loadingOlder) prepend.current = null;
+    }
+    if (nearBottom.current) el.scrollTop = el.scrollHeight;
+  }, [openThreadId, replies, loadingReplies, loadingOlder]);
   useEffect(() => {
     const el = listRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -79,6 +112,33 @@ export function ThreadPanel() {
     for (const child of el.children) observer.observe(child);
     return () => observer.disconnect();
   }, [replies]);
+
+  const handleLoadOlder = async () => {
+    if (!openThreadId || !openThreadChannelId || !hasOlder || loadingReplies || olderRequest.current) return;
+    const token = Symbol();
+    olderRequest.current = token;
+    const threadId = openThreadId;
+    nearBottom.current = false;
+    const list = listRef.current;
+    if (list && replies[0]) {
+      const bounds = list.getBoundingClientRect();
+      const rows = [...list.querySelectorAll<HTMLElement>('[data-message-id]')];
+      const row = rows.find(row => { const r = replyContent(row).getBoundingClientRect(); return r.bottom > bounds.top && r.top < bounds.bottom; }) ?? rows[0];
+      if (row?.dataset.messageId) prepend.current = { threadId, firstId: replies[0].id,
+        replyId: row.dataset.messageId, offset: replyContent(row).getBoundingClientRect().top - bounds.top };
+    }
+    setOlderState({ threadId, loading: true, error: '' });
+    try {
+      await loadOlder(openThreadChannelId, threadId);
+    } catch {
+      if (olderRequest.current === token) setOlderState({ threadId, loading: false, error: 'Could not load older replies. Try again.' });
+    } finally {
+      if (olderRequest.current === token) {
+        olderRequest.current = null;
+        setOlderState(state => ({ ...state, loading: false }));
+      }
+    }
+  };
 
   if (!openThreadId || !openThreadChannelId) return null;
 
@@ -206,11 +266,26 @@ export function ThreadPanel() {
       )}
 
       {/* Reply list */}
-      <div ref={listRef} onScroll={e => {
+      <div ref={listRef} role="log" aria-label="Thread replies" style={{ overflowAnchor: 'none' }} onScroll={e => {
         const el = e.currentTarget;
         nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 60;
+        const anchor = prepend.current;
+        if (anchor?.threadId === openThreadId) {
+          const row = findReply(el, anchor.replyId);
+          if (row) anchor.offset = replyContent(row).getBoundingClientRect().top - el.getBoundingClientRect().top;
+        }
+        if (el.scrollTop < 100) void handleLoadOlder();
       }} className="flex-1 overflow-y-auto px-2 py-2 min-h-0">
-        {replies.length === 0 && (
+        {loadingReplies && <p role="status" className="px-2 py-2 text-[13px] text-text-muted">Loading replies…</p>}
+        {replyLoadError && <div role="alert" className="px-2 py-2 text-[13px] text-text-muted">{replyLoadError}{' '}
+          <button className="min-h-11 px-2 text-primary-text" onClick={() => void loadReplies(openThreadChannelId, openThreadId).catch(() => {})}>Retry</button>
+        </div>}
+        {hasOlder && !loadingReplies && <button type="button" disabled={loadingOlder} onClick={() => void handleLoadOlder()}
+          className="min-h-11 w-full rounded px-2 text-[13px] text-primary-text hover:bg-surface-hover disabled:text-text-muted">
+          {loadingOlder ? 'Loading older replies…' : 'Load older replies'}
+        </button>}
+        {olderError && <p role="alert" className="px-2 py-2 text-[13px] text-text-muted">{olderError}</p>}
+        {replies.length === 0 && !loadingReplies && !replyLoadError && (
           <div className="flex items-center justify-center h-full">
             <p className="text-[15px]" style={{ color: P.muted }}>No replies yet</p>
           </div>
@@ -225,8 +300,8 @@ export function ThreadPanel() {
           const run = noticeRuns[i];
           const runExpanded = run ? isRunExpanded(run.key) : false;
           const item = (
+            <div key={reply.id} data-message-id={reply.id}>
             <MessageItem
-              key={reply.id}
               message={reply}
               isGrouped={isGrouped}
               isOwn={reply.authorId === user?.id}
@@ -234,6 +309,7 @@ export function ThreadPanel() {
               onDelete={handleDelete}
               channelId={openThreadChannelId}
             />
+            </div>
           );
           if (!run) return item;
           if (run.position === 0) {
