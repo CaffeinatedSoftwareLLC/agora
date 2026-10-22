@@ -32,6 +32,12 @@ async function file(overrides: { uploaderId?: string; channelId?: string; messag
 const post = (body: Record<string, unknown>) => ctx.request.post(`/channels/${channelId}/messages/${parentId}/replies`).set(owner.auth).send(body);
 
 describe('thread reply attachments (#207)', () => {
+    it('returns numeric attachment sizes on channel posts as well as replies', async () => {
+        const id = await file();
+        const res = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ attachments: [id] });
+        expect(res.status).toBe(201);
+        expect(res.body.attachments[0].size).toBe(3);
+    });
     it('creates an attachment-only reply with response and read envelopes', async () => {
         const id = await file();
         const res = await post({ attachments: [id] });

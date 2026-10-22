@@ -30,7 +30,7 @@ export async function prepareMessageAttachments(db: PoolClient, userId: string, 
     }
     return { ok: true, attachments: files.rows.map(f => ({
         id: f.id.trim(), name: f.filename, mime: f.mime_type || f.content_type,
-        size: f.size_bytes, width: f.width, height: f.height, url: `/files/${f.id.trim()}`,
+        size: Number(f.size_bytes), width: f.width, height: f.height, url: `/files/${f.id.trim()}`,
     })) };
 }
 
@@ -46,5 +46,5 @@ export async function replayMessageAttachments(db: PoolClient, messageId: string
     const files = await db.query(`SELECT id, filename, mime_type, content_type, size_bytes, width, height
         FROM files WHERE message_id = $1 AND deleted_at IS NULL ORDER BY id`, [messageId]);
     return files.rows.map(f => ({ id: f.id.trim(), name: f.filename, mime: f.mime_type || f.content_type,
-        size: f.size_bytes, width: f.width, height: f.height, url: `/files/${f.id.trim()}` }));
+        size: Number(f.size_bytes), width: f.width, height: f.height, url: `/files/${f.id.trim()}` }));
 }

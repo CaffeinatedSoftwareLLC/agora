@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PoolClient } from 'pg';
-import { bindMessageAttachments, prepareMessageAttachments } from '../../src/lib/message-attachments';
+import { bindMessageAttachments, prepareMessageAttachments, replayMessageAttachments } from '../../src/lib/message-attachments';
 
 const row = { id: 'file', uploader_id: 'user ', channel_id: 'channel ', message_id: null,
-    filename: 'note.txt', mime_type: null, content_type: 'text/plain', size_bytes: 3,
+    filename: 'note.txt', mime_type: null, content_type: 'text/plain', size_bytes: '3',
     width: null, height: null, deleted_at: null };
 function client(rows: unknown[]) {
     const query = vi.fn().mockResolvedValue({ rows });
@@ -23,6 +23,10 @@ describe('shared message attachments', () => {
         expect(await prepareMessageAttachments(db, 'user', 'channel')).toEqual({ ok: true, attachments: [] });
         await bindMessageAttachments(db, 'message', []);
         expect(query).not.toHaveBeenCalled();
+    });
+    it('returns numeric BIGINT sizes in replay envelopes too', async () => {
+        const { db } = client([row]);
+        expect((await replayMessageAttachments(db, 'message'))[0].size).toBe(3);
     });
     it.each([
         { ids: ['file', 'file'], rows: [row], error: 'Duplicate attachment IDs' },
