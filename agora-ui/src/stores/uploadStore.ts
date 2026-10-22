@@ -5,6 +5,7 @@ export interface PendingUpload {
   id: string;          // temporary client ID
   file: File;
   channelId: string;
+  threadId?: string;   // omitted for the channel composer
   progress: number;    // 0-100
   status: 'uploading' | 'done' | 'error';
   result?: { id: string; name: string; mime: string; size: number; width: number | null; height: number | null; url: string };
@@ -13,19 +14,19 @@ export interface PendingUpload {
 
 interface UploadState {
   uploads: Map<string, PendingUpload>;
-  addUpload: (channelId: string, file: File) => string;
+  addUpload: (channelId: string, file: File, threadId?: string) => string;
   removeUpload: (id: string) => void;
-  clearCompleted: (channelId: string) => void;
-  getChannelUploads: (channelId: string) => PendingUpload[];
-  getCompletedIds: (channelId: string) => string[];
+  clearCompleted: (channelId: string, threadId?: string) => void;
+  getChannelUploads: (channelId: string, threadId?: string) => PendingUpload[];
+  getCompletedIds: (channelId: string, threadId?: string) => string[];
 }
 
 export const useUploadStore = create<UploadState>((set, get) => ({
   uploads: new Map(),
 
-  addUpload: (channelId, file) => {
+  addUpload: (channelId, file, threadId) => {
     const id = `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const upload: PendingUpload = { id, file, channelId, progress: 0, status: 'uploading' };
+    const upload: PendingUpload = { id, file, channelId, threadId, progress: 0, status: 'uploading' };
 
     set(state => {
       const next = new Map(state.uploads);
@@ -63,11 +64,11 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     });
   },
 
-  clearCompleted: (channelId) => {
+  clearCompleted: (channelId, threadId) => {
     set(state => {
       const next = new Map(state.uploads);
       for (const [id, u] of next) {
-        if (u.channelId === channelId && (u.status === 'done' || u.status === 'error')) {
+        if (u.channelId === channelId && u.threadId === threadId && (u.status === 'done' || u.status === 'error')) {
           next.delete(id);
         }
       }
@@ -75,13 +76,13 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     });
   },
 
-  getChannelUploads: (channelId) => {
-    return Array.from(get().uploads.values()).filter(u => u.channelId === channelId);
+  getChannelUploads: (channelId, threadId) => {
+    return Array.from(get().uploads.values()).filter(u => u.channelId === channelId && u.threadId === threadId);
   },
 
-  getCompletedIds: (channelId) => {
+  getCompletedIds: (channelId, threadId) => {
     return Array.from(get().uploads.values())
-      .filter(u => u.channelId === channelId && u.status === 'done' && u.result)
+      .filter(u => u.channelId === channelId && u.threadId === threadId && u.status === 'done' && u.result)
       .map(u => u.result!.id);
   },
 }));

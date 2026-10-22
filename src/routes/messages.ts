@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { addTaggingToAttachments } from '../lib/file-tags';
+import { messageAttachmentsSchema, prepareMessageAttachments, bindMessageAttachments } from '../lib/message-attachments';
 import { generateUlid } from '../utils/ulid';
 import { resolveMentions, mentionsEveryoneIn } from './shared';
 import { canViewChannel } from '../lib/channel-access';
@@ -27,11 +28,7 @@ export async function messageRoutes(app: FastifyInstance) {
                     // Set by agora-mcp session_wake: refuse the post (403 cannot_direct) when the
                     // author can't direct here, since it would wake no one (#75).
                     require_direct: { type: 'boolean' },
-                    attachments: {
-                        type: 'array',
-                        items: { type: 'string', minLength: 26, maxLength: 26 },
-                        maxItems: 10,
-                    },
+                    attachments: messageAttachmentsSchema,
                     // A rendered document for the canvas pane (src/lib/artifacts.ts)
                     artifact: artifactBodySchema,
                 },
@@ -156,6 +153,17 @@ export async function messageRoutes(app: FastifyInstance) {
             } catch { /* non-fatal */ }
         }
 
+        const prepared = await prepareMessageAttachments(db, userId, channelId, attachmentIds);
+        if (!prepared.ok) {
+            // A concurrent keyed retry may have waited for the winner's file locks.
+            if (clientKey) {
+                const winner = await findClientKey(db, userId, clientKey, keyTarget);
+                if (winner.kind === 'replay') return reply.status(200).send(winner.message);
+                if (winner.kind === 'conflict') return reply.status(409).send({ error: 'client_key_conflict' });
+            }
+            return reply.status(400).send({ error: prepared.error });
+        }
+        const resolvedAttachments = prepared.attachments;
         const messageId = generateUlid();
 
         // Parse and resolve @mentions (shared helper)
@@ -181,60 +189,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         const { mentionedUsers } = await resolveMentions(db, messageId, channelId, serverId, userId, content);
 
-        // Validate and bind attachments
-        let resolvedAttachments: any[] = [];
-
-        if (attachmentIds && attachmentIds.length > 0) {
-            // Reject duplicates
-            const uniqueIds = [...new Set(attachmentIds)] as string[];
-            if (attachmentIds.length !== uniqueIds.length) {
-                return reply.status(400).send({ error: 'Duplicate attachment IDs' });
-            }
-
-            if (uniqueIds.length > 10) {
-                return reply.status(400).send({ error: 'Too many attachments (max 10)' });
-            }
-
-            // Validate all attachments (lock rows with FOR UPDATE)
-            const filesResult = await db.query(`
-                SELECT id, uploader_id, channel_id, message_id, filename, mime_type, content_type, size_bytes, width, height, deleted_at
-                FROM files WHERE id = ANY($1) FOR UPDATE
-            `, [uniqueIds]);
-
-            // Cardinality check
-            if (filesResult.rows.length !== uniqueIds.length) {
-                return reply.status(400).send({ error: 'One or more attachment IDs are invalid or deleted' });
-            }
-
-            for (const file of filesResult.rows) {
-                if (file.deleted_at) {
-                    return reply.status(400).send({ error: 'One or more attachments are deleted' });
-                }
-                if (file.uploader_id.trim() !== userId.trim()) {
-                    return reply.status(400).send({ error: 'Attachment does not belong to you' });
-                }
-                if (file.channel_id?.trim() !== channelId.trim()) {
-                    return reply.status(400).send({ error: 'Attachment channel mismatch' });
-                }
-                if (file.message_id) {
-                    return reply.status(400).send({ error: 'Attachment already bound to a message' });
-                }
-            }
-
-            // Bind files to message
-            await db.query('UPDATE files SET message_id = $1 WHERE id = ANY($2)', [messageId, uniqueIds]);
-
-            // Resolve attachment metadata for response
-            resolvedAttachments = filesResult.rows.map((f: any) => ({
-                id: f.id.trim(),
-                name: f.filename,
-                mime: f.mime_type || f.content_type,
-                size: f.size_bytes,
-                width: f.width,
-                height: f.height,
-                url: `/files/${f.id.trim()}`,
-            }));
-        }
+        await bindMessageAttachments(db, messageId, resolvedAttachments);
 
         const artifactRef = artifact ? await attachArtifact(db, { channelId, messageId, authorId: userId, input: artifact }) : null;
 
@@ -380,7 +335,7 @@ export async function messageRoutes(app: FastifyInstance) {
                     id: row.id.trim(),
                     name: row.filename,
                     mime: row.mime_type || row.content_type,
-                    size: row.size_bytes,
+                    size: Number(row.size_bytes),
                     width: row.width,
                     height: row.height,
                     url: `/files/${row.id.trim()}`,

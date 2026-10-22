@@ -3,6 +3,40 @@ import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { snap } from '../lib/snap';
 import { freshChannel, rowWith } from '../lib/helpers';
 
+test('[UI-01.thread-attachment] pick a file and send an attachment-only reply', async ({ page, seed }) => {
+    const { owner } = apis(seed);
+    const ch = await freshChannel(seed, 'thread-attachment');
+    const content = `Attachment parent ${seed.runTag}`;
+    const root = await owner.ok('POST', `/channels/${ch.id}/messages`, { content }, [201]) as { id: string };
+    await openChannel(page, ch.id, ch.name);
+    const rootRow = rowWith(page, content).first();
+    await rootRow.hover();
+    await rootRow.getByRole('button', { name: 'Reply in thread' }).click();
+    const pane = page.locator('aside[aria-label="thread"]');
+    const chooser = page.waitForEvent('filechooser');
+    await pane.getByRole('button', { name: 'Attach file to reply' }).click();
+    await (await chooser).setFiles({ name: 'thread-note.txt', mimeType: 'text/plain', buffer: Buffer.from('thread attachment contents') });
+    await expect(pane.getByText('thread-note.txt', { exact: true })).toBeVisible();
+    const send = pane.getByRole('button', { name: 'Send reply' });
+    await expect(send).toBeEnabled();
+    const response = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/channels/${ch.id}/messages/${root.id.trim()}/replies`);
+    await send.click();
+    const posted = await response;
+    expect(posted.status()).toBe(201);
+    const reply = await posted.json();
+    expect(reply.content).toBeNull();
+    expect(reply.attachments).toHaveLength(1);
+    expect(reply.attachments[0].name).toBe('thread-note.txt');
+    await expect(pane.getByRole('button', { name: /thread-note\.txt/ })).toBeVisible();
+    await page.reload();
+    await expect(page.getByPlaceholder(`Message #${ch.name}`)).toBeVisible();
+    await rowWith(page, content).first().hover();
+    await rowWith(page, content).first().getByRole('button', { name: 'Reply in thread' }).click();
+    await expect(pane.getByRole('button', { name: /thread-note\.txt/ })).toBeVisible();
+    const stored = await owner.ok('GET', `/channels/${ch.id}/messages/${root.id.trim()}/replies`) as { id: string; attachments: { name: string }[] }[];
+    expect(stored.find(r => r.id === reply.id)?.attachments[0].name).toBe('thread-note.txt');
+});
+
 test.describe('threads: replies, active-threads bar, who may close', () => {
     test('[UI-01.thread-member-close] owner starts and replies; member sees it but cannot close or reopen (403, no change)', async ({ page, browser, seed }, ti) => {
         const { owner, member } = apis(seed);
