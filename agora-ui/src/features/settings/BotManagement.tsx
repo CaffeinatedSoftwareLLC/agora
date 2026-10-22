@@ -47,7 +47,7 @@ export function BotManagement() {
       <div>
         <h2 className="text-xl font-bold text-text mb-4">Bot Management</h2>
         <p className="text-text-muted mb-4">You don't have permission to manage bots.</p>
-        <Link to="/app" className="min-h-11 md:min-h-8 inline-flex items-center text-primary-text hover:underline">Back to chat</Link>
+        <Link to="/app" className="hidden min-h-11 items-center text-primary-text hover:underline sm:inline-flex md:min-h-8">Back to chat</Link>
       </div>
     );
   }
@@ -58,7 +58,7 @@ export function BotManagement() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h2 className="text-xl font-bold text-text">Bot Management</h2>
         <div className="flex gap-2">
           <Button onClick={() => setShowInvite(true)}>Invite Agent</Button>
