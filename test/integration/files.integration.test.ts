@@ -390,17 +390,14 @@ describe('Message attachments', () => {
         expect(msgWithFile.attachments[0].url).toBe(`/files/${fileId}`);
     });
 
-    test('message with empty attachments array and no content succeeds (empty array is valid)', async () => {
-        // Fastify schema treats an empty array as satisfying the `attachments` key in anyOf,
-        // and the handler treats zero-length attachmentIds as no attachments.
-        // This is a valid edge case — the message is created with no content and no attachments.
+    test('refuses a message with an empty attachments array and no content', async () => {
         const res = await ctx.request
             .post(`/channels/${channelId}/messages`)
             .set(owner.auth)
             .send({ attachments: [] });
 
-        // Server accepts this; content ends up null and attachments empty
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('empty_content');
     });
 });
 
