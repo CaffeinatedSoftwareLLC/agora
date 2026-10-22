@@ -1,5 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import { checkAgentMessageRuns } from '../lib/agent-message-runs';
+import { checkThreadPagination } from '../lib/thread-pagination';
+import { checkPhoneSettings } from '../lib/phone-settings';
 import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { test, expect, openChannel, apis } from '../lib/fixtures';
 import { snap } from '../lib/snap';
@@ -33,6 +35,12 @@ const overflowX = (page: Page) => page.evaluate(() => document.documentElement.s
 test.describe('mobile viewport @smoke', () => {
     test('[UI-08.agent-runs] phone agent drawers wrap names and preserve cards and protocol badges', async ({ page, seed }, ti) => {
         await checkAgentMessageRuns(page, seed, ti);
+    });
+    test('[UI-08.thread-pagination] phone thread opens newest and pages older beyond 50', async ({ page, seed }, ti) => {
+        await checkThreadPagination(page, seed, ti, true);
+    });
+    test('[UI-08.settings-sections] every phone settings section is full width with one Back control', async ({ page }, ti) => {
+        await checkPhoneSettings(page, ti);
     });
     test('[UI-08.mobile-nav] phone layout: channel view, nav overlay, no sideways scroll, 44px composer targets', async ({ page, seed }, ti) => {
         const name = `agents-${seed.runTag}`;

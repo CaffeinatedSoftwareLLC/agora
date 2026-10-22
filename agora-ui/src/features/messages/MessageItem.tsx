@@ -1,4 +1,5 @@
 import { useUIStore } from '../../stores/uiStore';
+import { Avatar } from '../../components/ui/Avatar';
 import { ProviderTermsNotice } from './ProviderTermsNotice';
 import { useState, useRef } from 'react';
 import type { Message } from '../../stores/messageStore';
@@ -141,8 +142,10 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   if (message.systemEvent) {
     return (
       <div className="flex items-start justify-center gap-2 py-2 px-4">
-        <svg className="mt-[3px] h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke={P.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
+        <svg className="mt-[3px] h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke={P.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          {message.systemEvent === 'file_trust'
+            ? <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Zm-4 9 3 3 5-6" />
+            : <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />}
         </svg>
         <NoticeText text={message.content} className="text-[13px] leading-5 text-text-muted" />
       </div>
@@ -198,7 +201,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
             {message.attachments.map(att => (
-              <FileAttachment key={att.id} attachment={att} />
+              <FileAttachment key={att.id} attachment={att} channelId={channelId ?? message.channelId} />
             ))}
           </div>
         )}
@@ -237,17 +240,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         />
       )}
       {/* Avatar */}
-      {message.authorAvatarUrl ? (
-        <img
-          src={message.authorAvatarUrl}
-          alt={message.authorUsername || '?'}
-          className="w-10 h-10 rounded-full object-cover shrink-0 mt-0.5"
-        />
-      ) : (
-        <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-sm font-bold text-on-primary shrink-0 mt-0.5">
-          {(message.authorUsername || '?')[0].toUpperCase()}
-        </div>
-      )}
+      <Avatar userId={message.authorId} username={message.authorUsername} avatarUrl={message.authorAvatarUrl} className="h-10 w-10 mt-0.5 text-sm" />
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -271,7 +264,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
             {message.attachments.map(att => (
-              <FileAttachment key={att.id} attachment={att} />
+              <FileAttachment key={att.id} attachment={att} channelId={channelId ?? message.channelId} />
             ))}
           </div>
         )}
