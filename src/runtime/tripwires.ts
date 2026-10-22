@@ -108,11 +108,22 @@ export async function checkTokenMisuse(db: Pool, tokenHash: string): Promise<Tri
     return tripBot(db, res.rows[0].run_id, 'token_misuse');
 }
 
-/** Whether the run's submitting bot is paused (the runner polls this while a run executes). */
-export async function isSubmitterPaused(db: Pool, runId: string): Promise<boolean> {
+export type StopReason = 'paused' | 'inactive';
+
+/**
+ * Why the run's submitting bot may no longer run code, or null if it still may (the runner
+ * polls this while a run executes): it is paused, or it or its owner is not active, with the
+ * same predicate as claimRun (a missing owner fails closed).
+ */
+export async function submitterStopReason(db: Pool, runId: string): Promise<StopReason | null> {
     const res = await db.query(
-        `SELECT u.bot_paused_at FROM exec_runs r JOIN users u ON u.id = r.submitted_by WHERE r.id = $1`,
+        `SELECT u.bot_paused_at, u.account_status, o.account_status AS owner_status
+         FROM exec_runs r JOIN users u ON u.id = r.submitted_by LEFT JOIN users o ON o.id = u.bot_owner_id
+         WHERE r.id = $1`,
         [runId]
     );
-    return !!res.rows[0]?.bot_paused_at;
+    const row = res.rows[0];
+    if (!row) return null;
+    if (row.bot_paused_at) return 'paused';
+    return row.account_status !== 'active' || row.owner_status !== 'active' ? 'inactive' : null;
 }

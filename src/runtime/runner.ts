@@ -5,7 +5,7 @@ import { buildContainerSpec } from './container-spec';
 import type { SandboxDocker, RunOutcome } from './docker';
 import type { RunLimits } from './limits';
 import type { BridgedEvent } from '../lib/event-bridge';
-import { checkFailureTripwire, isSubmitterPaused } from './tripwires';
+import { checkFailureTripwire, submitterStopReason, type StopReason } from './tripwires';
 
 /**
  * Sandbox runner (WBS 3.2). Consumes `{ runId }` jobs from the `runtime` queue,
@@ -78,8 +78,12 @@ export function redact(text: string, secrets: string[]): string {
     return out;
 }
 
-export function statusFor(outcome: RunOutcome): { status: FinalStatus; error: string | null } {
-    if (outcome.stopped) return { status: 'killed', error: 'Run stopped because the submitting bot was paused' };
+export function statusFor(outcome: RunOutcome, stopReason: StopReason | null = null): { status: FinalStatus; error: string | null } {
+    if (outcome.stopped) {
+        return { status: 'killed', error: stopReason === 'inactive'
+            ? 'Run stopped because the submitting bot or its owner is no longer active'
+            : 'Run stopped because the submitting bot was paused' };
+    }
     if (outcome.timedOut) return { status: 'timeout', error: 'Run exceeded its time limit' };
     if (outcome.oomKilled) return { status: 'killed', error: 'Run exceeded its memory limit' };
     if (outcome.exitCode === 0) return { status: 'succeeded', error: null };
@@ -160,6 +164,7 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
 
     let final: { status: FinalStatus; error: string | null };
     let outcome: RunOutcome | null = null;
+    let stopReason: StopReason | null = null;
     try {
         await db.query(
             `INSERT INTO exec_run_tokens (token_hash, run_id, server_id, capabilities, expires_at)
@@ -186,10 +191,10 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
             onStarted: async (containerId) => {
                 await db.query('UPDATE exec_runs SET container_id = $1 WHERE id = $2', [containerId, runId]);
             },
-            shouldStop: () => isSubmitterPaused(db, runId),
+            shouldStop: async () => (stopReason = await submitterStopReason(db, runId)) !== null,
             stopPollMs: config.stopPollMs,
         });
-        final = statusFor(outcome);
+        final = statusFor(outcome, stopReason);
     } catch (err) {
         deps.log?.error({ err, runId }, 'Sandbox run failed to execute');
         final = { status: 'error', error: err instanceof Error ? err.message : String(err) };
