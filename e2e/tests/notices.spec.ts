@@ -1,7 +1,11 @@
 import { test, expect, openChannel } from '../lib/fixtures';
 import { snap } from '../lib/snap';
+import { checkAgentMessageRuns } from '../lib/agent-message-runs';
 
 test.describe('system notices and long history @smoke', () => {
+    test('[UI-02.agent-runs] agent messages collapse, expand with badges, and preserve cards', async ({ page, seed }, ti) => {
+        await checkAgentMessageRuns(page, seed, ti);
+    });
     test('[UI-02.notice-drawer] consecutive notices collapse; expand shows them; state survives reload', async ({ page, seed }, ti) => {
         const name = `notices-${seed.runTag}`;
         await openChannel(page, seed.channels.notices, name);

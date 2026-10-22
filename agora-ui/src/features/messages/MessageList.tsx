@@ -10,7 +10,9 @@ import { MessageItem } from './MessageItem';
 import { NewMessagesPill } from './NewMessagesPill';
 import { EmptyChannel } from './EmptyChannel';
 import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollCorrection } from './grouping';
-import { computeNoticeRuns, isHiddenInRun, resizeRunRows } from './systemNotices';
+import { isHiddenInRun } from './systemNotices';
+import { computeMessageRuns, resizeChangedRunRows } from './messageRuns';
+import { AgentMessageRunToggle } from './AgentMessageRun';
 import { NoticeRunToggle } from './SystemNoticeRun';
 import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 
@@ -45,9 +47,9 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   const count = messages?.length ?? 0;
   const hasMessages = count > 0;
 
-  // Consecutive plain system notices fold into one "N system notices" row (#118).
+  // Plain notices (2+) and ordinary agent messages (3+) fold into separate runs.
   // Every message keeps its own virtual row; hidden members of a collapsed run render empty (0px).
-  const noticeRuns = useMemo(() => computeNoticeRuns(messages ?? []), [messages]);
+  const noticeRuns = useMemo(() => computeMessageRuns(messages ?? []), [messages]);
   const { isExpanded: isRunExpanded, toggle: toggleRun, keys: expandedKeys } = useExpandedNoticeRuns(userId);
   const estimateAt = (index: number): number => {
     if (!messages?.[index]) return 48;
@@ -55,7 +57,10 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     if (run) {
       const expanded = isRunExpanded(run.key);
       if (isHiddenInRun(run, expanded)) return 0;
-      if (run.position === 0) return expanded ? 76 : 36;
+      if (run.position === 0) {
+        if (run.kind === 'agents') return expanded ? 48 + estimateMessageHeight(undefined, messages[index]) : 48;
+        return expanded ? 76 : 36;
+      }
     }
     const prev = index > 0 ? messages[index - 1] : undefined;
     return estimateMessageHeight(prev, messages[index]);
@@ -69,16 +74,18 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     getItemKey: (index) => messages?.[index]?.id ?? String(index),
   });
 
-  // A run opened or closed: drop the cached heights of its rows, offscreen ones included
+  // Toggles and live arrivals/deletions can change a row's role; clear offscreen caches too.
   const prevExpandedRef = useRef(expandedKeys);
+  const runRows = useMemo(() => (messages ?? []).map((message, index) => ({ id: message.id, run: noticeRuns[index] })), [messages, noticeRuns]);
+  const prevRunRowsRef = useRef(runRows);
   useLayoutEffect(() => {
     const prev = prevExpandedRef.current;
     prevExpandedRef.current = expandedKeys;
-    if (prev === expandedKeys) return;
     const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)));
-    if (changed.size > 0) resizeRunRows(virtualizer, noticeRuns, changed, estimateAt);
+    resizeChangedRunRows(virtualizer, prevRunRowsRef.current, runRows, changed, estimateAt);
+    prevRunRowsRef.current = runRows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedKeys]);
+  }, [expandedKeys, runRows]);
 
   // Load messages on channel change
   useEffect(() => {
@@ -285,7 +292,8 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
               <div
                 key={msg.id}
                 data-index={virtualRow.index}
-                data-notice-hidden={isHiddenInRun(run, runExpanded) || undefined}
+                data-notice-hidden={run?.kind === 'notices' && isHiddenInRun(run, runExpanded) || undefined}
+                data-agent-hidden={run?.kind === 'agents' && isHiddenInRun(run, runExpanded) || undefined}
                 ref={virtualizer.measureElement}
                 style={{
                   position: 'absolute',
@@ -295,13 +303,16 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                {run?.position === 0 && (
+                {run?.position === 0 && run.kind === 'notices' && (
                   <NoticeRunToggle count={run.size} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
+                )}
+                {run?.position === 0 && run.kind === 'agents' && (
+                  <AgentMessageRunToggle count={run.size} names={run.names!} expanded={runExpanded} onToggle={() => toggleRun(run.key)} />
                 )}
                 {(!run || runExpanded) && (
                   <MessageItem
                     message={msg}
-                    isGrouped={shouldGroup(prevMsg, msg)}
+                    isGrouped={shouldGroup(run?.position === 0 ? undefined : prevMsg, msg)}
                     isOwn={msg.authorId === userId}
                     onEdit={handleEdit}
                     onDelete={handleDelete}

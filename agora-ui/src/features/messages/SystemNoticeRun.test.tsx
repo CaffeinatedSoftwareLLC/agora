@@ -96,6 +96,67 @@ describe('system notice runs in MessageList', () => {
   });
 });
 
+describe('agent message drawers in MessageList', () => {
+  const bot = (id: string, content: string, extra: Partial<Message> = {}): Message => ({
+    ...msg(id, content), authorBot: true, authorUsername: 'Claude', ...extra,
+  });
+
+  it('expands real messages with protocol badges, persists per user, and leaves human replies visible', () => {
+    setMessages([bot('a1', 'First agent update', { protocol: { version: 1, mode: 'fix', state: 'TURN', yieldTo: 'Codex' } }),
+      bot('a2', 'Second agent update', { authorId: 'codex', authorUsername: 'Codex' }), bot('a3', 'Third agent update'),
+      msg('human', 'Please continue')]);
+    const { unmount } = render(<MessageList channelId="channel" channelName="general" />);
+    const toggle = screen.getByRole('button', { name: '3 agent messages (Claude, Codex)' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('First agent update')).toBeNull();
+    expect(screen.queryByText('TURN')).toBeNull();
+    expect(screen.getByText('Please continue')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(screen.getByText('First agent update')).toBeTruthy();
+    expect(screen.getByText('TURN')).toBeTruthy();
+    expect(JSON.parse(storage.data.get(expandedRunsKey('me'))!)).toEqual(['agents:a1']);
+    unmount();
+    const second = render(<MessageList channelId="channel" channelName="general" />);
+    expect(screen.getByRole('button', { name: /3 agent messages/ }).getAttribute('aria-expanded')).toBe('true');
+    second.unmount();
+    useAuthStore.setState({ user: { id: 'another', username: 'another' } });
+    render(<MessageList channelId="channel" channelName="general" />);
+    expect(screen.getByRole('button', { name: /3 agent messages/ }).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('forms a drawer on the third live message and unfolds when a message is deleted', () => {
+    const list = [bot('a1', 'First update'), bot('a2', 'Second update')];
+    setMessages(list);
+    render(<MessageList channelId="channel" channelName="general" />);
+    expect(screen.getByText('First update')).toBeTruthy();
+    act(() => setMessages([...list, bot('a3', 'Third update')]));
+    expect(screen.getByRole('button', { name: /3 agent messages/ })).toBeTruthy();
+    expect(screen.queryByText('First update')).toBeNull();
+    act(() => setMessages([list[0], { ...list[1], deletedAt: '2026-10-22' }, bot('a3', 'Third update')]));
+    expect(screen.queryByRole('button', { name: /agent messages/ })).toBeNull();
+    expect(screen.getByText('First update')).toBeTruthy();
+    expect(screen.getByText('Third update')).toBeTruthy();
+  });
+
+  it('keeps an interactive card outside two folded runs and updates an open run on arrival', () => {
+    const list = [bot('a1', 'One'), bot('a2', 'Two'), bot('a3', 'Three'),
+      bot('card', 'Read the notes', { artifact: { id: 'notes', version: 1, latestVersion: 1, title: 'Review notes', kind: 'markdown' } }),
+      bot('b1', 'Four'), bot('b2', 'Five'), bot('b3', 'Six')];
+    setMessages(list);
+    render(<MessageList channelId="channel" channelName="general" />);
+    const toggles = screen.getAllByRole('button', { name: /3 agent messages/ });
+    expect(toggles).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Review notes in the canvas' }));
+    expect(useUIStore.getState().aux).toBe('canvas');
+    expect(useUIStore.getState().canvas).toMatchObject({ channelId: 'channel', artifactId: 'notes' });
+    fireEvent.click(toggles[1]);
+    act(() => setMessages([...list, bot('b4', 'Seven')]));
+    expect(screen.getByRole('button', { name: /4 agent messages/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Seven')).toBeTruthy();
+    expect(screen.queryByText('One')).toBeNull();
+  });
+});
+
 describe('NoticeText', () => {
   it('links to the wake-budget settings while keeping other markup as text', () => {
     render(<NoticeText text="Raise the wake budget in [Agent settings](/settings/agents). [other](https://example.com)" />);
