@@ -12,6 +12,7 @@ import {
   type AgentProfile, type AgentSession, type OwnSessionStatus,
 } from './agentSessions';
 import { SessionSheet, StateDot, type SheetMode } from './SessionSheet';
+import { ChannelAgentsControl } from './ChannelAgents';
 
 /**
  * Console Strip (docs/planning/ui-redesign.md 6.2): one horizontally scrolling row under the
@@ -214,6 +215,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
         );
       })}
 
+      <ChannelAgentsControl key={channelId} channelId={channelId} serverId={serverId} />
       <button type="button" className={CHIP_TARGET} aria-haspopup="dialog" aria-label="Start an agent" onClick={openStart}>
         <span className={`${CHIP_PILL} border-dashed text-text-muted group-hover:text-text`}>+ Agent</span>
       </button>
