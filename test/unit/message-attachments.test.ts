@@ -6,7 +6,7 @@ const row = { id: 'file', uploader_id: 'user ', channel_id: 'channel ', message_
     filename: 'note.txt', mime_type: null, content_type: 'text/plain', size_bytes: '3',
     width: null, height: null, deleted_at: null };
 function client(rows: unknown[]) {
-    const query = vi.fn().mockResolvedValue({ rows });
+    const query = vi.fn().mockImplementation(async (sql: string) => ({ rows: sql.includes('FROM file_tag_jobs') ? [] : rows }));
     return { db: { query } as unknown as PoolClient, query };
 }
 describe('shared message attachments', () => {
@@ -27,6 +27,18 @@ describe('shared message attachments', () => {
     it('returns numeric BIGINT sizes in replay envelopes too', async () => {
         const { db } = client([row]);
         expect((await replayMessageAttachments(db, 'message'))[0].size).toBe(3);
+    });
+    it('includes queued tagging metadata in new posts and completed metadata in durable replays', async () => {
+        const { db, query } = client([row]);
+        query.mockResolvedValueOnce({ rows: [row] })
+            .mockResolvedValueOnce({ rows: [{ file_id: 'file', state: 'pending', coverage: null, injection_probability: null, tag_threshold: 0.5, flag_threshold: 0.7 }] })
+            .mockResolvedValueOnce({ rows: [] });
+        const prepared = await prepareMessageAttachments(db, 'user', 'channel', ['file']);
+        expect(prepared.ok && prepared.attachments[0]).toMatchObject({ tagging: 'pending', tags: [] });
+        query.mockResolvedValueOnce({ rows: [row] })
+            .mockResolvedValueOnce({ rows: [{ file_id: 'file', state: 'done', coverage: 'partial', injection_probability: 0.99, tag_threshold: 0.5, flag_threshold: 0.7 }] })
+            .mockResolvedValueOnce({ rows: [{ file_id: 'file', name: 'protocol', probability: 0.9 }] });
+        expect((await replayMessageAttachments(db, 'message'))[0]).toMatchObject({ tagging: 'done', tags: ['protocol'], partial: true, injectionWarning: true });
     });
     it.each([
         { ids: ['file', 'file'], rows: [row], error: 'Duplicate attachment IDs' },

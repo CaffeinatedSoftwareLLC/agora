@@ -139,6 +139,7 @@ export function FilesPanel() {
                 {result.query && ` · match ${Math.round(file.score * 100)}%`}
               </div>
               <FileTags attachment={{
+                id: file.id,
                 tags: file.tags.map(t => t.name),
                 tagging: file.tagging === 'none' ? undefined : file.tagging,
                 partial: file.partial,

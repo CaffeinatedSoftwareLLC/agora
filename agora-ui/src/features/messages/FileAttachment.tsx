@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { Attachment } from '../../stores/messageStore';
 import { getAuthHeaders } from '../../lib/api';
 import { usePalette } from '../../theme';
+import { useFileMetadataStore } from '../../stores/fileMetadataStore';
 
 /** Keyboard focus ring shared by every interactive attachment control. */
 const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
@@ -23,7 +24,9 @@ export function FileAttachment({ attachment }: { attachment: Attachment }) {
 }
 
 /** Tag chips under a file, and a warning when its text tries to instruct an AI reader. */
-export function FileTags({ attachment }: { attachment: Pick<Attachment, 'tags' | 'tagging' | 'partial' | 'injectionWarning'> }) {
+export function FileTags({ attachment: snapshot }: { attachment: Pick<Attachment, 'tags' | 'tagging' | 'partial' | 'injectionWarning'> & { id?: string } }) {
+  const live = useFileMetadataStore(s => snapshot.id ? s.byFile.get(snapshot.id) : undefined);
+  const attachment = live ? { ...snapshot, ...live } : snapshot;
   const P = usePalette();
   const tags = attachment.tags ?? [];
   const busy = attachment.tagging === 'pending' || attachment.tagging === 'running';

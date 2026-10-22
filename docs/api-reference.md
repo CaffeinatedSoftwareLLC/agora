@@ -1813,6 +1813,27 @@ Broadcast to `channel:{channelId}` when a message is edited.
 
 ---
 
+#### FileAttachmentUpdate
+
+Broadcast to `channel:{channelId}` after a file-tagging result commits. Only files attached to a live message are broadcast; private, unposted uploads are excluded. Merge the metadata into the matching file without changing the message's text, edit time or protocol. New message/reply responses and events also include current tagging metadata on attachments.
+
+```json
+{
+  "channelId": "01HYX...",
+  "messageId": "01HYX...",
+  "threadId": "01HYX...",
+  "fileId": "01HYX...",
+  "tags": ["protocol"],
+  "tagging": "done",
+  "partial": false,
+  "injectionWarning": true
+}
+```
+
+`threadId` is present for replies. `tagging` can be `pending`, `running`, `done`, `failed` or `skipped`. Boolean fields are explicit so clients can clear an earlier warning or partial-coverage indicator.
+
+---
+
 #### MessageDelete
 
 Broadcast to `channel:{channelId}` when a message is soft-deleted.

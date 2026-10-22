@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
 import { findOptimistic, tempMessageId, type Message } from './messageStore';
+import { fileMetadata, useFileMetadataStore } from './fileMetadataStore';
+import type { FileAttachmentUpdatePayload } from '../lib/contracts/ws-events';
 import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, ThreadMetadataUpdatePayload, ProtocolInfo } from '../lib/contracts/ws-events';
 
 export interface ThreadSummary {
@@ -44,6 +46,7 @@ interface ThreadState {
   deleteReply: (channelId: string, threadId: string, replyId: string) => Promise<void>;
   addReply: (msg: MessagePayload) => void;
   updateReply: (payload: MessageUpdatePayload) => void;
+  updateFileAttachment: (payload: FileAttachmentUpdatePayload) => void;
   removeReply: (payload: MessageDeletePayload) => void;
   streamUpdate: (threadId: string, messageId: string, content: string, streaming: boolean, attachments?: Message['attachments']) => void;
   loadActiveThreads: (channelId: string) => Promise<void>;
@@ -307,6 +310,19 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       }
 
       return { repliesByThread: nextReplies };
+    });
+  },
+
+  updateFileAttachment: payload => {
+    useFileMetadataStore.getState().update(payload);
+    set(state => {
+      if (!payload.threadId) return state;
+      const current = state.repliesByThread.get(payload.threadId);
+      if (!current) return state;
+      const next = new Map(state.repliesByThread);
+      next.set(payload.threadId, current.map(message => message.id === payload.messageId && message.channelId === payload.channelId && !message.deletedAt
+        ? { ...message, attachments: message.attachments?.map(file => file.id === payload.fileId && !file.deletedAt ? { ...file, ...fileMetadata(payload) } : file) } : message));
+      return { repliesByThread: next };
     });
   },
 
