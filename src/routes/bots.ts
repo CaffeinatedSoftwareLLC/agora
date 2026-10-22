@@ -5,6 +5,7 @@ import { generateBotToken } from '../auth/bot-tokens';
 import { Permissions, computePermissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { usernameTaken } from '../lib/usernames';
+import { checkChannelPermissions } from '../lib/channel-access';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -179,6 +180,34 @@ async function requireManageBotsForChannelConfig(request: FastifyRequest, reply:
 }
 
 export async function botRoutes(app: FastifyInstance) {
+    // One channel-scoped query replaces the UI's per-server-bot detail fan-out.
+    app.get('/channels/:id/bots', {
+        schema: {
+            params: { type: 'object', required: ['id'], properties: { id: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' } } },
+            querystring: { type: 'object', additionalProperties: false, properties: {
+                all: { type: 'boolean', default: false }, q: { type: 'string', maxLength: 100 },
+                after: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
+                limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+            } },
+        },
+    }, async (request, reply) => {
+        if (request.isBot) return reply.status(403).send({ error: 'Bots cannot manage channel agents' });
+        const { id: channelId } = request.params as { id: string };
+        const db = request.dbClient!;
+        const access = await checkChannelPermissions(db, channelId, request.userId, Permissions.ViewChannel | Permissions.ManageBots);
+        if (!access.allowed) return reply.status(access.status!).send({ error: access.error });
+        const channel = (await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId])).rows[0];
+        if (!channel?.server_id) return reply.status(400).send({ error: 'Channel agents require a server channel' });
+        const { all = false, q = '', after, limit = 50 } = request.query as { all?: boolean; q?: string; after?: string; limit?: number };
+        const result = await db.query(`SELECT u.id, u.username, (bca.bot_id IS NOT NULL) AS in_channel
+            FROM users u LEFT JOIN bot_channel_access bca ON bca.bot_id = u.id AND bca.channel_id = $2
+            WHERE u.bot = true AND u.server_id = $1 AND ($3::boolean OR bca.bot_id IS NOT NULL)
+                AND u.username ILIKE $4 AND ($5::CHAR(26) IS NULL OR u.id > $5)
+            ORDER BY u.id LIMIT $6`, [channel.server_id, channelId, all, `%${q.trim()}%`, after ?? null, limit + 1]);
+        const bots = result.rows.slice(0, limit).map(row => ({ id: row.id.trim(), username: row.username, inChannel: row.in_channel === true }));
+        const hasMore = result.rows.length > limit;
+        return reply.send({ bots, hasMore, nextCursor: hasMore ? bots[bots.length - 1].id : null });
+    });
 
     // ─── Bot Management (human auth, requires ManageBots) ───
 
