@@ -34,6 +34,26 @@ const CHIP_TARGET = 'group flex min-h-[44px] shrink-0 items-center rounded-full 
 const CHIP_PILL = 'flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-surface-hover px-3 text-[13px] text-text transition-colors group-hover:bg-bg group-focus-visible:outline-2 group-focus-visible:outline-offset-1 group-focus-visible:outline-accent';
 
 export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const onWheel = (event: WheelEvent) => {
+      // Preserve horizontal trackpad gestures, Shift+wheel and browser zoom.
+      if (event.ctrlKey || event.shiftKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      const max = strip.scrollWidth - strip.clientWidth;
+      if (max <= 0) return;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? strip.clientWidth : 1;
+      const next = Math.max(0, Math.min(max, strip.scrollLeft + event.deltaY * unit));
+      if (next === strip.scrollLeft) return;
+      strip.scrollLeft = next;
+      event.preventDefault();
+    };
+    // React's delegated wheel listener can be passive; cancellation is needed only
+    // when this strip consumes a vertical wheel. At either edge, let the page scroll.
+    strip.addEventListener('wheel', onWheel, { passive: false });
+    return () => strip.removeEventListener('wheel', onWheel);
+  }, []);
   const socket = useSocket();
   const serverId = useChannelStore(s => s.channels.get(channelId)?.serverId ?? null);
   const [loaded, setLoaded] = useState<{ channelId: string; sessions: AgentSession[] }>({ channelId, sessions: [] });
@@ -128,9 +148,10 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 
   return (
     <div
+      ref={stripRef}
       role="toolbar"
       aria-label="Agents and active threads"
-      className="flex min-h-[44px] w-full min-w-0 max-w-full shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-surface/60 px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="console-strip flex min-h-[44px] w-full min-w-0 max-w-full shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-surface/60 px-3"
     >
       {chips.map(chip => {
         const tokens = chip.session.state !== 'ended' && chip.session.tokensUsed > 0 ? compactTokens(chip.session.tokensUsed) : null;

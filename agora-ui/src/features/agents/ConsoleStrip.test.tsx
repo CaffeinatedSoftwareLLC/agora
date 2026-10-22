@@ -43,6 +43,66 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('ConsoleStrip', () => {
+  function scrollableStrip() {
+    post.mockResolvedValue({ sessions: [] });
+    const view = render(<ConsoleStrip channelId={CH} onOpenThread={vi.fn()} />);
+    const strip = screen.getByRole('toolbar', { name: 'Agents and active threads' });
+    Object.defineProperties(strip, {
+      scrollWidth: { configurable: true, value: 600 },
+      clientWidth: { configurable: true, value: 200 },
+    });
+    return { strip, ...view };
+  }
+
+  function wheel(strip: HTMLElement, init: WheelEventInit) {
+    const event = new WheelEvent('wheel', { bubbles: true, cancelable: true, ...init });
+    fireEvent(strip, event);
+    return event;
+  }
+
+  it('maps vertical wheels in both directions and releases the page at strip edges', async () => {
+    const { strip } = scrollableStrip();
+    await act(async () => {});
+    expect(wheel(strip, { deltaY: 80 }).defaultPrevented).toBe(true);
+    expect(strip.scrollLeft).toBe(80);
+    expect(wheel(strip, { deltaY: -30 }).defaultPrevented).toBe(true);
+    expect(strip.scrollLeft).toBe(50);
+    wheel(strip, { deltaY: 999 });
+    expect(strip.scrollLeft).toBe(400);
+    expect(wheel(strip, { deltaY: 40 }).defaultPrevented).toBe(false);
+    wheel(strip, { deltaY: -999 });
+    expect(strip.scrollLeft).toBe(0);
+    expect(wheel(strip, { deltaY: -40 }).defaultPrevented).toBe(false);
+  });
+
+  it('leaves horizontal gestures, zoom, Shift+wheel and non-overflowing strips native', async () => {
+    const { strip } = scrollableStrip();
+    await act(async () => {});
+    for (const init of [
+      { deltaX: 50, deltaY: 10 }, { deltaY: 50, ctrlKey: true }, { deltaY: 50, shiftKey: true },
+    ]) expect(wheel(strip, init).defaultPrevented).toBe(false);
+    expect(strip.scrollLeft).toBe(0);
+    Object.defineProperty(strip, 'scrollWidth', { value: 200 });
+    expect(wheel(strip, { deltaY: 50 }).defaultPrevented).toBe(false);
+    expect(strip.scrollLeft).toBe(0);
+  });
+
+  it('normalizes line and page wheel deltas', async () => {
+    const { strip } = scrollableStrip();
+    await act(async () => {});
+    wheel(strip, { deltaY: 3, deltaMode: 1 });
+    expect(strip.scrollLeft).toBe(48);
+    wheel(strip, { deltaY: 1, deltaMode: 2 });
+    expect(strip.scrollLeft).toBe(248);
+  });
+
+  it('removes the non-passive wheel listener on unmount', () => {
+    const { strip, unmount } = scrollableStrip();
+    unmount();
+    expect(wheel(strip, { deltaY: 80 }).defaultPrevented).toBe(false);
+    expect(strip.scrollLeft).toBe(0);
+  });
+
   it('shows live agents first with state and compact tokens, then thread chips', async () => {
     post.mockResolvedValue({ sessions: [
       live({ id: 'B'.repeat(26), profile: 'codex', state: 'shelved', running: false, tokensUsed: 900 }),
