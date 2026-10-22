@@ -109,7 +109,7 @@ test.describe('mobile touch targets and width', () => {
 
         // Notice drawer (32 px allowed): collapsed toggle, then the expanded notices
         await openChannel(page, seed.channels.notices, `notices-${seed.runTag}`);
-        const toggle = page.getByRole('button', { name: /^\d+ agent updates.*notices/ }).first();
+        const toggle = page.getByRole('button', { name: /^\d+ notices$/ }).first();
         await expect(toggle).toBeVisible();
         const drawerRow = rows.filter({ has: toggle });
         const collapsed = await buttonsIn(drawerRow);
