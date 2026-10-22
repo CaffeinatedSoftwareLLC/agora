@@ -32,6 +32,7 @@ export async function fileRoutes(app: FastifyInstance) {
         } } },
         handler: async (request, reply) => {
             if (request.isBot) return reply.status(403).send({ error: 'Only the server owner may change file trust' });
+            request.pendingEvents ??= [];
             const { fileId } = request.params as { fileId: string };
             const db = request.dbClient!;
             const file = (await db.query(`SELECT f.channel_id, f.message_id, f.filename, c.server_id, s.owner_id,
