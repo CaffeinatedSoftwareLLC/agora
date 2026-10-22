@@ -1,4 +1,5 @@
 import { artifactsForMessages } from './artifacts';
+import { replayMessageAttachments } from './message-attachments';
 
 /**
  * Durable duplicate protection for posts (docs/planning/agent-sessions-wbs.md, "Duplicate
@@ -41,6 +42,7 @@ export async function findClientKey(db: any, authorId: string, key: string, targ
     const sameContent = (existing.content ?? null) === (target.content ?? null);
     if (!sameChannel || !sameParent || !sameContent) return { kind: 'conflict' };
     const artifact = (await artifactsForMessages(db, [existing.id])).get(existing.id.trim());
+    const attachments = await replayMessageAttachments(db, existing.id);
 
     return {
         kind: 'replay',
@@ -55,6 +57,7 @@ export async function findClientKey(db: any, authorId: string, key: string, targ
             createdAt: new Date(existing.created_at).toISOString(),
             ...(existing.thread_id ? { threadId: existing.thread_id.trim() } : {}),
             mentionsEveryone: existing.mentions_everyone,
+            attachments,
             ...(existing.protocol ? { protocol: existing.protocol } : {}),
             ...(artifact ? { artifact } : {}),
             replayed: true,

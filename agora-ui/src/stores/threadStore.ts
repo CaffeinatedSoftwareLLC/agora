@@ -39,7 +39,7 @@ interface ThreadState {
   closeThread: () => void;
   loadReplies: (channelId: string, messageId: string) => Promise<void>;
   loadNewer: (channelId: string, messageId: string) => Promise<void>;
-  sendReply: (channelId: string, messageId: string, content: string, authorId: string, authorUsername: string) => Promise<boolean>;
+  sendReply: (channelId: string, messageId: string, content: string, authorId: string, authorUsername: string, attachmentIds?: string[]) => Promise<boolean>;
   editReply: (channelId: string, threadId: string, replyId: string, content: string) => Promise<void>;
   deleteReply: (channelId: string, threadId: string, replyId: string) => Promise<void>;
   addReply: (msg: MessagePayload) => void;
@@ -151,7 +151,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     });
   },
 
-  sendReply: async (channelId, messageId, content, authorId, authorUsername) => {
+  sendReply: async (channelId, messageId, content, authorId, authorUsername, attachmentIds) => {
     const tempId = tempMessageId();
     const optimistic: Message = {
       id: tempId,
@@ -171,9 +171,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     });
 
     try {
-      const res = await api.post<{ id: string }>(
+      const body: { content?: string; attachments?: string[] } = {};
+      if (content) body.content = content;
+      if (attachmentIds?.length) body.attachments = attachmentIds;
+      const res = await api.post<{ id: string; attachments?: Message['attachments'] }>(
         `/channels/${channelId}/messages/${messageId}/replies`,
-        { content }
+        body
       );
       set((state) => {
         const nextReplies = new Map(state.repliesByThread);
@@ -183,7 +186,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           nextReplies.set(messageId, current.filter((m) => m.id !== tempId));
         } else {
           nextReplies.set(messageId, current.map((m) =>
-            m.id === tempId ? { ...m, id: res.id, pending: true } : m
+            m.id === tempId ? { ...m, id: res.id, pending: true, attachments: res.attachments } : m
           ));
         }
         return { repliesByThread: nextReplies };

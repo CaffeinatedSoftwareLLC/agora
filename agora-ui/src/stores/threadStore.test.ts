@@ -30,6 +30,14 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+it('sends attachment-only replies and retains HTTP attachment metadata before the socket echo (#207)', async () => {
+  const attachment = { id: 'file', name: 'note.txt', mime: 'text/plain', size: 3, width: null, height: null, url: '/files/file' };
+  mockApi.post.mockResolvedValueOnce({ id: 'reply', attachments: [attachment] });
+  expect(await useThreadStore.getState().sendReply('channel', 'parent', '', 'me', 'me', ['file'])).toBe(true);
+  expect(mockApi.post).toHaveBeenCalledWith('/channels/channel/messages/parent/replies', { attachments: ['file'] });
+  expect(useThreadStore.getState().repliesByThread.get('parent')![0].attachments).toEqual([attachment]);
+});
+
 describe('threadStore.updateParentMetadata', () => {
   it('updates a thread the channel list already holds', () => {
     useThreadStore.setState({ activeThreads: new Map([['ch-1', [summary()]]]) });

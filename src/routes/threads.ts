@@ -12,6 +12,7 @@ import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact } from '../lib/artifacts';
+import { messageAttachmentsSchema, prepareMessageAttachments, bindMessageAttachments } from '../lib/message-attachments';
 
 export async function threadRoutes(app: FastifyInstance) {
 
@@ -24,17 +25,18 @@ export async function threadRoutes(app: FastifyInstance) {
                 properties: {
                     content: { type: 'string', minLength: 1, maxLength: 4000 },
                     client_key: { type: 'string', minLength: 1, maxLength: 100 },
+                    attachments: messageAttachmentsSchema,
                     // A rendered document for the canvas pane (src/lib/artifacts.ts)
                     artifact: artifactBodySchema,
                 },
-                anyOf: [{ required: ['content'] }, { required: ['artifact'] }],
+                anyOf: [{ required: ['content'] }, { required: ['artifact'] }, { required: ['attachments'] }],
             },
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
         const isBot = request.isBot;
-        const { client_key: clientKey, artifact } = request.body as any;
+        const { client_key: clientKey, artifact, attachments: attachmentIds } = request.body as any;
         // Terminal escapes and private keys never reach the database (#88)
         const rawContent = (request.body as any).content;
         const content = rawContent ? sanitizeMessageText(rawContent) || null : null;
@@ -45,7 +47,7 @@ export async function threadRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
         // Nothing left after cleaning (only escape codes)
-        if (!content && !artifact) return reply.status(400).send({ error: 'empty_content' });
+        if (!content && !artifact && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
 
         // Fetch parent message
         const parent = await db.query(
@@ -165,6 +167,17 @@ export async function threadRoutes(app: FastifyInstance) {
             try { await getRedis().del(guardKey); } catch { /* non-fatal */ }
         }
 
+        const prepared = await prepareMessageAttachments(db, userId, channelId, attachmentIds);
+        if (!prepared.ok) {
+            // A concurrent keyed retry may have waited for the winner's file locks.
+            if (clientKey) {
+                const winner = await findClientKey(db, userId, clientKey, keyTarget);
+                if (winner.kind === 'replay') return reply.status(200).send(winner.message);
+                if (winner.kind === 'conflict') return reply.status(409).send({ error: 'client_key_conflict' });
+            }
+            return reply.status(400).send({ error: prepared.error });
+        }
+        const resolvedAttachments = prepared.attachments;
         const replyId = generateUlid();
 
         // Parse mentionsEveryone for INSERT column
@@ -187,6 +200,8 @@ export async function threadRoutes(app: FastifyInstance) {
         } else {
             await insert();
         }
+
+        await bindMessageAttachments(db, replyId, resolvedAttachments);
 
         // Update parent metadata
         const parentUpdate = await db.query(
@@ -255,6 +270,7 @@ export async function threadRoutes(app: FastifyInstance) {
             threadId: msgId.trim(),
             mentions: mentionedUserIds,
             mentionsEveryone,
+            attachments: resolvedAttachments,
             ...(artifactRef ? { artifact: artifactRef } : {}),
             ...(protocol ? { protocol } : {}),
         };

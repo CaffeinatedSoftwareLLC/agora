@@ -756,7 +756,8 @@ Create a reply to a message, starting or continuing a thread.
 
 | Field     | Type   | Required | Constraints      |
 |-----------|--------|----------|------------------|
-| `content` | string | yes, unless `attachments` (posts only) or `artifact` is given | 1-4000 characters |
+| `content` | string | yes, unless `attachments` or `artifact` is given | 1-4000 characters |
+| `attachments` | string[] | no | Up to 10 unique, live, unbound files uploaded by you in this channel. May be sent without text. |
 | `artifact` | object | no | A canvas artifact: `title`, `kind`, `content`, or `id` to add a version. See [canvas-and-preview.md](canvas-and-preview.md). |
 
 **Response** `201`
@@ -770,7 +771,8 @@ Create a reply to a message, starting or continuing a thread.
   "threadId": "01HYX...",
   "createdAt": "2025-01-15T10:30:00.000Z",
   "mentions": [],
-  "mentionsEveryone": false
+  "mentionsEveryone": false,
+  "attachments": []
 }
 ```
 
@@ -778,6 +780,7 @@ Create a reply to a message, starting or continuing a thread.
 
 | Status | Error                          | Cause                              |
 |--------|--------------------------------|------------------------------------|
+| 400    | Attachment validation error | Missing, deleted, duplicate, foreign, cross-channel or already-bound file |
 | 403    | `Channel access denied` | User lacks channel access          |
 | 404    | `Parent message not found`     | Message does not exist or is deleted |
 | 409    | `Thread is closed`             | Thread has been closed             |
