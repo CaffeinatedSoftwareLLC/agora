@@ -39,6 +39,18 @@ it.each(['Roles', 'Role Assignment', 'Channel Overrides', 'Bots', 'Agents', 'AI'
   expect(document.activeElement).toBe(screen.getByRole('link', { name: label }));
 });
 
+it('phone list opens with no section focused, so none looks selected', () => {
+  mount();
+  expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
+  expect(document.activeElement).toBe(document.body);
+});
+
+it('phone Back from a deep-linked section focuses that section link', () => {
+  mount('/settings/bots');
+  fireEvent.click(screen.getByRole('link', { name: 'Back to settings' }));
+  expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Bots' }));
+});
+
 it('supports deep links and switches to two columns when rotated wider', () => {
   mount('/settings/agents');
   expect(screen.getByRole('heading', { name: 'Section content' })).toBeTruthy();

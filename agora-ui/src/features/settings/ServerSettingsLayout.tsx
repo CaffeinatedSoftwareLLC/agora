@@ -19,13 +19,16 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
   const atIndex = pathname.replace(/\/$/, '') === '/settings';
   const navRef = useRef<HTMLElement>(null);
   const backRef = useRef<HTMLAnchorElement>(null);
-  const lastSection = useRef('/settings/roles');
-  if (!atIndex) lastSection.current = pathname;
+  const lastSection = useRef<string | null>(null);
   useEffect(() => {
+    if (!atIndex) lastSection.current = pathname;
     if (!narrow) return;
-    if (atIndex) [...(navRef.current?.querySelectorAll<HTMLAnchorElement>('a') ?? [])]
-      .find(link => link.getAttribute('href') === lastSection.current)?.focus();
-    else backRef.current?.focus();
+    // Only Back from a section returns focus to its link; the list's first render focuses nothing.
+    if (atIndex) {
+      const section = lastSection.current;
+      if (section) [...(navRef.current?.querySelectorAll<HTMLAnchorElement>('a') ?? [])]
+        .find(link => link.getAttribute('href') === section)?.focus();
+    } else backRef.current?.focus();
   }, [narrow, atIndex, pathname, instanceServerId]);
 
   if (!instanceServerId) {
