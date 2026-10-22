@@ -53,7 +53,7 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         } } },
     }, async (request, reply) => {
         const { id: channelId } = request.params as { id: string };
-        if (!await botAccess(request, reply, channelId)) return;
+        if (!await botAccess(request, reply, channelId)) return reply;
         const { after, limit = 100 } = request.query as { after?: string; limit?: number };
         const db = request.dbClient!;
         // A newly upgraded client starts watching now, rather than replaying days
@@ -90,7 +90,7 @@ export async function botAttentionRoutes(app: FastifyInstance) {
     });
 
     app.get('/bots/@me/attention-cursors', async (request, reply) => {
-        if (!await botAccess(request, reply)) return;
+        if (!await botAccess(request, reply)) return reply;
         const result = await request.dbClient!.query(`SELECT channel_id, last_read_id, updated_at
             FROM bot_attention_cursors WHERE bot_id = $1 ORDER BY channel_id`, [request.userId]);
         return reply.send(result.rows.map(r => ({ channelId: r.channel_id.trim(), lastReadId: r.last_read_id.trim(), updatedAt: r.updated_at })));
@@ -100,7 +100,7 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         schema: { body: { type: 'object', additionalProperties: false, required: ['lastReadId'], properties: { lastReadId: ulid } } },
     }, async (request, reply) => {
         const { channelId } = request.params as { channelId: string };
-        if (!await botAccess(request, reply, channelId)) return;
+        if (!await botAccess(request, reply, channelId)) return reply;
         const { lastReadId } = request.body as { lastReadId: string };
         const db = request.dbClient!;
         const addressed = await db.query(`SELECT 1 FROM messages m JOIN users self ON self.id = $1
