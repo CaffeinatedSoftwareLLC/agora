@@ -29,7 +29,7 @@ export async function checkAgentMessageRuns(page: Page, seed: Seed, ti: TestInfo
     }, [201]);
     await owner.ok('POST', `/channels/${ch.id}/messages`, { content: 'Thanks, keep the card visible.' }, [201]);
     await openChannel(page, ch.id, ch.name);
-    const toggle = page.getByRole('button', { name: `5 agent updates (${claudeName}, ${codexName}) · 2 notices` });
+    const toggle = page.getByRole('button', { name: `5 agent updates (${claudeName}, ${codexName}) · incl. 2 notices` });
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByText('Second review update.', { exact: true })).toBeHidden();

@@ -54,14 +54,14 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     if (!messages?.[index]) return 48;
     const run = noticeRuns[index];
     if (run) {
-      const expanded = isRunExpanded(run.key, run.aliases);
+      const expanded = isRunExpanded(run.key, run.aliases, run.defaultExpanded);
       if (isHiddenInRun(run, expanded)) return 0;
       if (run.position === 0) {
         return expanded ? 48 + estimateMessageHeight(undefined, messages[index]) : 48;
       }
     }
-    const prev = index > 0 ? messages[index - 1] : undefined;
-    return estimateMessageHeight(prev, messages[index]) + (run && isRunExpanded(run.key, run.aliases) && run.position === run.size - 1 ? 48 : 0);
+    const prev = index > 0 && noticeRuns[index - 1]?.key === run?.key ? messages[index - 1] : undefined;
+    return estimateMessageHeight(prev, messages[index]) + (run && isRunExpanded(run.key, run.aliases, run.defaultExpanded) && run.position === run.size - 1 ? 48 : 0);
   };
 
   const virtualizer = useVirtualizer({
@@ -79,7 +79,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
   useLayoutEffect(() => {
     const prev = prevExpandedRef.current;
     prevExpandedRef.current = expandedKeys;
-    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)));
+    const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)).map(key => key.replace(/^collapsed:/, '')));
     resizeChangedRunRows(virtualizer, prevRunRowsRef.current, runRows, changed, estimateAt);
     prevRunRowsRef.current = runRows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -283,9 +283,9 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
         >
           {virtualItems.map((virtualRow) => {
             const msg = messages[virtualRow.index];
-            const prevMsg = virtualRow.index > 0 ? messages[virtualRow.index - 1] : undefined;
             const run = noticeRuns[virtualRow.index];
-            const runExpanded = run ? isRunExpanded(run.key, run.aliases) : false;
+            const prevMsg = virtualRow.index > 0 && noticeRuns[virtualRow.index - 1]?.key === run?.key ? messages[virtualRow.index - 1] : undefined;
+            const runExpanded = run ? isRunExpanded(run.key, run.aliases, run.defaultExpanded) : false;
             return (
               <div
                 key={msg.id}
@@ -301,7 +301,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                 }}
               >
                 {run?.position === 0 && (
-                  <AgentMessageRunToggle count={run.size} names={run.names} noticeCount={run.noticeCount} expanded={runExpanded} onToggle={() => toggleRun(run.key, run.aliases)} />
+                  <AgentMessageRunToggle count={run.size} names={run.names} noticeCount={run.noticeCount} expanded={runExpanded} onToggle={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />
                 )}
                 {(!run || runExpanded) && (
                   <div data-agent-run={run?.key} data-agent-run-end={run?.position === (run?.size ?? 0) - 1 || undefined}
@@ -314,7 +314,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
                     onDelete={handleDelete}
                     channelId={channelId}
                   />
-                  {run && run.position === run.size - 1 && <AgentRunCollapse count={run.size} onCollapse={() => toggleRun(run.key, run.aliases)} />}
+                  {run && run.position === run.size - 1 && <AgentRunCollapse count={run.size} onCollapse={() => toggleRun(run.key, run.aliases, run.defaultExpanded)} />}
                   </div>
                 )}
               </div>

@@ -7,6 +7,8 @@ export interface MessageRun extends NoticeRun {
   noticeCount: number;
   /** Existing notice/bot drawer keys that were absorbed by this unified section. */
   aliases: string[];
+  /** Keep the answer visible until a human posts after it; explicit toggles win. */
+  defaultExpanded: boolean;
 }
 
 const RESOLVED_CARDS: Record<string, readonly string[]> = {
@@ -35,6 +37,8 @@ export function isFoldableAgentUpdate(message: Message): boolean {
 
 export function computeMessageRuns(messages: readonly Message[]): (MessageRun | null)[] {
   const runs: (MessageRun | null)[] = new Array(messages.length).fill(null);
+  let lastHuman = -1;
+  messages.forEach((message, index) => { if (!message.systemEvent && !message.authorBot) lastHuman = index; });
   let i = 0;
   while (i < messages.length) {
     if (!isFoldableAgentUpdate(messages[i])) { i++; continue; }
@@ -50,7 +54,7 @@ export function computeMessageRuns(messages: readonly Message[]): (MessageRun | 
         if (isPlainNotice(messages[row]) && (row === i || !isPlainNotice(messages[row - 1]))) aliases.add(messages[row].id);
         if (isFoldableAgentMessage(messages[row]) && (row === i || !isFoldableAgentMessage(messages[row - 1]))) aliases.add(`agents:${messages[row].id}`);
       }
-      for (let row = i; row < end; row++) runs[row] = { key, size: end - i, position: row - i, kind: 'agents', names, noticeCount, aliases: [...aliases] };
+      for (let row = i; row < end; row++) runs[row] = { key, size: end - i, position: row - i, kind: 'agents', names, noticeCount, aliases: [...aliases], defaultExpanded: i > lastHuman };
     }
     i = end;
   }
@@ -69,6 +73,7 @@ export function resizeChangedRunRows(
   next.forEach(({ id, run }, index) => {
     const before = previousById.get(id);
     if (before?.key !== run?.key || before?.position !== run?.position
+      || before?.defaultExpanded !== run?.defaultExpanded
       || (!!before && before.position === before.size - 1) !== (!!run && run.position === run.size - 1)
       || before?.aliases.join(',') !== run?.aliases.join(',')
       || (run && run.aliases.some(key => changedKeys.has(key)))) list.resizeItem(index, estimate(index));

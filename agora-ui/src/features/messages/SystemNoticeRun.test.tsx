@@ -88,7 +88,7 @@ describe('system notice runs in MessageList', () => {
   it('keeps working when storage throws', () => {
     vi.spyOn(storage, 'getItem').mockImplementation(() => { throw new Error('denied'); });
     vi.spyOn(storage, 'setItem').mockImplementation(() => { throw new Error('denied'); });
-    setMessages([msg('n1', 'a', 'agent_session'), msg('n2', 'b', 'agent_session')]);
+    setMessages([msg('n1', 'a', 'agent_session'), msg('n2', 'b', 'agent_session'), msg('human', 'Next task')]);
     render(<MessageList channelId="channel" channelName="general" />);
     const toggle = screen.getByRole('button', { name: /2 agent updates/ });
     act(() => { fireEvent.click(toggle); });
@@ -130,8 +130,9 @@ describe('agent message drawers in MessageList', () => {
     render(<MessageList channelId="channel" channelName="general" />);
     expect(screen.getByText('First update')).toBeTruthy();
     act(() => setMessages([...list, bot('a2', 'Second update')]));
-    expect(screen.getByRole('button', { name: /2 agent updates/ })).toBeTruthy();
-    expect(screen.queryByText('First update')).toBeNull();
+    expect(screen.getByRole('button', { name: /^2 agent updates/ })).toBeTruthy();
+    expect(screen.getByText('First update')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^2 agent updates/ }).getAttribute('aria-expanded')).toBe('true');
     act(() => setMessages([list[0], bot('a2', 'Second update', { deletedAt: '2026-10-22' }), bot('a3', 'Third update')]));
     expect(screen.queryByRole('button', { name: /agent updates/ })).toBeNull();
     expect(screen.getByText('First update')).toBeTruthy();
@@ -139,17 +140,17 @@ describe('agent message drawers in MessageList', () => {
   });
 
   it('keeps an interactive card outside two folded runs and updates an open run on arrival', () => {
-    const list = [bot('a1', 'One'), bot('a2', 'Two'), bot('a3', 'Three'),
+    const list = [bot('a1', 'One'), bot('a2', 'Two'), bot('a3', 'Three'), msg('human', 'Next task'),
       bot('card', 'Read the notes', { artifact: { id: 'notes', version: 1, latestVersion: 1, title: 'Review notes', kind: 'markdown' } }),
       bot('b1', 'Four'), bot('b2', 'Five'), bot('b3', 'Six')];
     setMessages(list);
     render(<MessageList channelId="channel" channelName="general" />);
-    const toggles = screen.getAllByRole('button', { name: /3 agent updates/ });
+    const toggles = screen.getAllByRole('button', { name: /^3 agent updates/ });
     expect(toggles).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Open Review notes in the canvas' }));
     expect(useUIStore.getState().aux).toBe('canvas');
     expect(useUIStore.getState().canvas).toMatchObject({ channelId: 'channel', artifactId: 'notes' });
-    fireEvent.click(toggles[1]);
+    expect(toggles[1].getAttribute('aria-expanded')).toBe('true');
     act(() => setMessages([...list, bot('b4', 'Seven')]));
     expect(screen.getByRole('button', { name: /^4 agent updates/ }).getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Seven')).toBeTruthy();
@@ -168,13 +169,13 @@ describe('agent message drawers in MessageList', () => {
     expect(container.querySelectorAll('[data-agent-run-end]')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Collapse 4 agent updates' }));
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(JSON.parse(storage.data.get(expandedRunsKey('me'))!)).toEqual([]);
+    expect(JSON.parse(storage.data.get(expandedRunsKey('me'))!)).toEqual(['collapsed:agents:a1']);
     unmount();
     render(<MessageList channelId="channel" channelName="general" />);
     expect(screen.getByRole('button', { name: /4 agent updates/ }).getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('keeps a pending approval visible, then folds the resolved card with adjacent activity', () => {
+  it('keeps a resolved approval visible in a trailing run and folds it after a human posts', () => {
     const card = { ...msg('approval', 'Run the review?', 'agent_run_approval'), systemData: { status: 'pending', approvalId: 'request' } };
     setMessages([bot('a1', 'Before approval'), card, bot('a2', 'After approval')]);
     render(<MessageList channelId="channel" channelName="general" />);
@@ -182,10 +183,44 @@ describe('agent message drawers in MessageList', () => {
     expect(screen.queryByRole('button', { name: /agent updates/ })).toBeNull();
     act(() => setMessages([bot('a1', 'Before approval'), { ...card, systemData: { ...card.systemData, status: 'approved' } }, bot('a2', 'After approval')]));
     const toggle = screen.getByRole('button', { name: /^3 agent updates.*1 notice/ });
-    expect(screen.queryByText('Run the review?')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('APPROVED')).toBeTruthy();
+    act(() => setMessages([bot('a1', 'Before approval'), { ...card, systemData: { ...card.systemData, status: 'approved' } }, bot('a2', 'After approval'), msg('human', 'Thanks')]));
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('APPROVED')).toBeNull();
     fireEvent.click(toggle);
     expect(screen.getByText('APPROVED')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve run' })).toBeNull();
+  });
+
+  it('persists a manual collapse of the trailing run through remount and later human posts', () => {
+    const list = [bot('a1', 'Latest answer'), bot('a2', 'More detail')];
+    setMessages(list);
+    const first = render(<MessageList channelId="channel" channelName="general" />);
+    const toggle = screen.getByRole('button', { name: /^2 agent updates/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(screen.queryByText('Latest answer')).toBeNull();
+    first.unmount();
+    render(<MessageList channelId="channel" channelName="general" />);
+    expect(screen.getByRole('button', { name: /^2 agent updates/ }).getAttribute('aria-expanded')).toBe('false');
+    act(() => setMessages([...list, msg('human', 'Next task')]));
+    expect(screen.queryByText('Latest answer')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^2 agent updates/ }));
+    act(() => setMessages([...list, msg('human', 'Next task'), msg('human2', 'Still open')]));
+    expect(screen.getByText('Latest answer')).toBeTruthy();
+  });
+
+  it('shows an author and avatar on the first message after a folded run', () => {
+    setMessages([bot('a1', 'One'), bot('a2', 'Two'),
+      bot('a3', 'File stays visible', { attachments: [{ id: 'file', name: 'notes.txt', mime: 'text/plain', size: 1, width: null, height: null, url: '/files/file' }] }),
+      msg('human', 'Thanks')]);
+    render(<MessageList channelId="channel" channelName="general" />);
+    expect(screen.queryByText('One')).toBeNull();
+    expect(screen.getByText('File stays visible')).toBeTruthy();
+    // One visible bot avatar plus the human avatar; hidden run members have none.
+    expect(screen.getAllByText('C').length).toBe(1);
+    expect(screen.getByText('Claude')).toBeTruthy();
   });
 });
 

@@ -9,6 +9,20 @@ const bot = (id: string, extra: Partial<Message> = {}): Message => ({
 });
 
 describe('agent message runs', () => {
+  it('keeps activity after the last human expanded, even across a visible bot attachment', () => {
+    const messages = [bot('1'), bot('2'), bot('human', { authorBot: false }), bot('3'), bot('4'),
+      bot('file', { attachments: [{ id: 'file' }] } as Partial<Message>)];
+    const runs = computeMessageRuns(messages);
+    expect(runs[0]?.defaultExpanded).toBe(false);
+    expect(runs[3]?.defaultExpanded).toBe(true);
+    expect(computeMessageRuns([...messages, bot('human2', { authorBot: false })])[3]?.defaultExpanded).toBe(false);
+    const previous = messages.map((m, i) => ({ id: m.id, run: runs[i] }));
+    const next = computeMessageRuns([...messages, bot('human2', { authorBot: false })]);
+    const resized: number[] = [];
+    resizeChangedRunRows({ resizeItem: index => resized.push(index) }, previous,
+      messages.map((m, i) => ({ id: m.id, run: next[i] })), new Set(), () => 48);
+    expect(resized).toEqual([3, 4]);
+  });
   it('folds two or more updates, counts all authors and keeps a lone update visible', () => {
     expect(computeMessageRuns([bot('1')])).toEqual([null]);
     expect(computeMessageRuns([bot('1'), bot('2')])[0]?.size).toBe(2);

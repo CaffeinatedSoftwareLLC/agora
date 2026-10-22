@@ -67,14 +67,14 @@ export function RunActivity({ channelId }: { channelId: string }) {
       const working = run?.status === 'claimed' && !paused;
       if (!working && !paused && !blocked && !failed && !run?.changedPaths.length) return null;
       const step = working ? progress[s.id] : undefined;
-      return <div key={s.id} className="py-1">
+      return <div key={s.id} className={isHistorical(s) ? 'px-3 py-1' : 'py-1'}>
         <p role="status">{s.profile}{paused ? ' paused: session budget used up.' : working ? ` is working\u2026 ${elapsedTime(run.startedAt, now)}` : blocked ? ' finished without posting a reply (possibly blocked).' : failed ? ` run failed: ${run.error ?? 'lease expired'}.` : ' finished.'}</p>
         {step && step.runId === run?.id && <p className="truncate text-xs" aria-label={`${s.profile} progress`}>
           {[step.step, `${step.toolCalls} tool ${step.toolCalls === 1 ? 'call' : 'calls'}`,
             step.planTotal ? `plan ${step.planDone ?? 0}/${step.planTotal}` : null].filter(Boolean).join(' \u00b7 ')}
         </p>}
         {run && run.changedPaths.length > 0 && <details>
-          <summary className="cursor-pointer">{run.changedPaths.length} changed {run.changedPaths.length === 1 ? 'file' : 'files'}</summary>
+          <summary className="min-h-11 cursor-pointer content-center">{run.changedPaths.length} changed {run.changedPaths.length === 1 ? 'file' : 'files'}</summary>
           <ul className="max-h-40 overflow-y-auto font-mono text-xs">{run.changedPaths.map(path => <li className="break-all" key={path}>{path}</li>)}</ul>
         </details>}
         {failed && <button type="button" className="underline" onClick={refresh}>Refresh run status</button>}
@@ -84,8 +84,8 @@ export function RunActivity({ channelId }: { channelId: string }) {
     <div className="px-4">{sessions.filter(isWorking).map(renderSession)}</div>
     {historical.length > 0 && <>
       <AgentMessageRunToggle count={historical.length} names={[...new Set(historical.map(s => s.botUsername || s.profile))]}
-        noticeCount={historical.length} expanded={expanded} onToggle={() => toggle(sectionKey)} />
-      {expanded && <div className="mx-4 max-h-[25dvh] overflow-y-auto rounded-b-lg border-b border-l-2 border-border border-l-primary/40 bg-surface/30 px-3" data-agent-activity-group>
+        expanded={expanded} onToggle={() => toggle(sectionKey)} />
+      {expanded && <div className="mx-4 max-h-[25dvh] overflow-y-auto rounded-b-lg border-b border-l-2 border-border border-l-primary/40 bg-surface/30" data-agent-activity-group>
         {historical.map(renderSession)}
         <AgentRunCollapse count={historical.length} onCollapse={() => toggle(sectionKey)} />
       </div>}

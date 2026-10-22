@@ -61,7 +61,7 @@ describe('run activity', () => {
     const paused = session({ id: 'paused', profile: 'claude', state: 'shelved', endReason: 'budget' });
     post.mockResolvedValue({ sessions: [done, paused, s] });
     const first = render(<RunActivity channelId="channel" />);
-    const toggle = await screen.findByRole('button', { name: '2 agent updates (codex, claude) · 2 notices' });
+    const toggle = await screen.findByRole('button', { name: '2 agent updates (codex, claude)' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByText(/claude is working/)).toBeTruthy();
     expect(screen.queryByText('1 changed file')).toBeNull();
