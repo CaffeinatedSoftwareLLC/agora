@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import type { FileAttachmentUpdatePayload } from '../lib/contracts/ws-events';
 
 export function fileMetadata(data: FileAttachmentUpdatePayload) {
-  return { tags: data.tags, tagging: data.tagging, partial: data.partial, injectionWarning: data.injectionWarning };
+  return { tags: data.tags, tagging: data.tagging, partial: data.partial, injectionWarning: data.injectionWarning,
+    ...(data.trustedByOwner !== undefined ? { trustedByOwner: data.trustedByOwner, trustedBy: data.trustedBy ?? null, trustedAt: data.trustedAt ?? null } : {}) };
 }
 
 /** Retain live results that can beat the message event or an in-flight history GET. */

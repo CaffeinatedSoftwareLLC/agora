@@ -23,6 +23,9 @@ export interface MessageAttachmentPayload {
   tagging?: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
   partial?: boolean;
   injectionWarning?: boolean;
+  trustedByOwner?: boolean;
+  trustedBy?: string | null;
+  trustedAt?: string | null;
 }
 
 export interface FileAttachmentUpdatePayload {
@@ -34,6 +37,9 @@ export interface FileAttachmentUpdatePayload {
   tagging?: MessageAttachmentPayload['tagging'];
   partial: boolean;
   injectionWarning: boolean;
+  trustedByOwner?: boolean;
+  trustedBy?: string | null;
+  trustedAt?: string | null;
 }
 
 /** Parsed agora-collab protocol header (server: src/lib/protocol.ts). */

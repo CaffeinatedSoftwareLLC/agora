@@ -198,7 +198,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
             {message.attachments.map(att => (
-              <FileAttachment key={att.id} attachment={att} />
+              <FileAttachment key={att.id} attachment={att} channelId={channelId ?? message.channelId} />
             ))}
           </div>
         )}
@@ -271,7 +271,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
             {message.attachments.map(att => (
-              <FileAttachment key={att.id} attachment={att} />
+              <FileAttachment key={att.id} attachment={att} channelId={channelId ?? message.channelId} />
             ))}
           </div>
         )}

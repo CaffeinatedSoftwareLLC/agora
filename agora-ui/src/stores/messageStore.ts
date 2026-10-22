@@ -20,6 +20,9 @@ export interface Attachment {
   partial?: boolean;
   /** The file's text looked like it tries to instruct an AI reader. */
   injectionWarning?: boolean;
+  trustedByOwner?: boolean;
+  trustedBy?: string | null;
+  trustedAt?: string | null;
 }
 
 export interface Message {

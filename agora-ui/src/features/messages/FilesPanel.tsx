@@ -138,12 +138,14 @@ export function FilesPanel() {
                 {formatSize(file.size)} · {new Date(file.uploadedAt).toLocaleDateString()}
                 {result.query && ` · match ${Math.round(file.score * 100)}%`}
               </div>
-              <FileTags attachment={{
+              <FileTags channelId={channelId} attachment={{
                 id: file.id,
                 tags: file.tags.map(t => t.name),
                 tagging: file.tagging === 'none' ? undefined : file.tagging,
                 partial: file.partial,
                 injectionWarning: file.injectionWarning,
+                trustedByOwner: file.trustedByOwner,
+                trustedAt: file.trustedAt,
               }}
               />
             </li>

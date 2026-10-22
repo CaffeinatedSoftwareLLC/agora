@@ -105,9 +105,9 @@ export async function addTaggingToAttachments(db: Queryable, attachments: { id: 
     if (attachments.length === 0) return;
     const ids = attachments.map(a => a.id);
     const jobs = await db.query(
-        `SELECT j.file_id, j.state, j.coverage, j.injection_probability,
+        `SELECT j.file_id, j.state, j.coverage, j.injection_probability, f.trusted_by, f.trusted_at,
                 COALESCE(s.tag_threshold, 0.5) AS tag_threshold, COALESCE(s.screening_flag_threshold, 0.7) AS flag_threshold
-         FROM file_tag_jobs j LEFT JOIN ai_decision_settings s ON s.server_id = j.server_id
+         FROM file_tag_jobs j JOIN files f ON f.id = j.file_id LEFT JOIN ai_decision_settings s ON s.server_id = j.server_id
          WHERE j.file_id = ANY($1)`,
         [ids]
     );
@@ -124,12 +124,17 @@ export async function addTaggingToAttachments(db: Queryable, attachments: { id: 
         const job = jobByFile.get(attachment.id);
         if (!job) continue;
         attachment.tagging = job.state;
+        if (job.trusted_at && job.trusted_by) {
+            attachment.trustedByOwner = true;
+            attachment.trustedBy = job.trusted_by.trim();
+            attachment.trustedAt = new Date(job.trusted_at).toISOString();
+        }
         attachment.tags = tags.rows
             .filter((r: any) => r.file_id.trim() === attachment.id && Number(r.probability) >= Number(job.tag_threshold))
             .slice(0, MAX_TAGS_SHOWN)
             .map((r: any) => r.name);
         if (job.coverage === 'partial') attachment.partial = true;
-        if (job.injection_probability !== null && Number(job.injection_probability) >= Number(job.flag_threshold)) {
+        if (!job.trusted_at && job.injection_probability !== null && Number(job.injection_probability) >= Number(job.flag_threshold)) {
             attachment.injectionWarning = true;
         }
     }

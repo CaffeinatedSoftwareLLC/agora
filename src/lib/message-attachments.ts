@@ -9,6 +9,7 @@ export interface MessageAttachment {
     id: string; name: string; mime: string; size: number;
     width: number | null; height: number | null; url: string;
     tags?: string[]; tagging?: string; partial?: boolean; injectionWarning?: boolean;
+    trustedByOwner?: boolean; trustedBy?: string; trustedAt?: string;
 }
 
 /** Validate and lock before creating a message. Locks stay held until the request commits. */
