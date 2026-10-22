@@ -15,7 +15,9 @@ import type { DecideQuestion } from '../../src/ai/adapters';
  *         DECIDE_MODEL=@cf/cloudflare/clef npx vitest run test/live          # Clef Flash without DECIDE_MODEL
  *
  * DECIDE_MODEL defaults to the adapter's decide model; DECIDE_BASE_URL is used by
- * adapters that accept one. Skipped unless a key is set.
+ * adapters that accept one. Skipped unless a key is set. DECIDE_MIN_INTERVAL_MS
+ * spaces calls out for providers with low rate limits (Workers AI: 3100, about 20 a
+ * minute per model); test timeouts grow to match. One run makes about 87 calls.
  *
  * Run it after any change to an adapter or to a question's wording. It asserts
  * the response contract and verdict classes for the golden inputs, never exact
@@ -28,8 +30,20 @@ const apiKey = process.env.DECIDE_KEY || (adapterId === 'typesafe' ? process.env
 const live = !!(process.env.DECIDE_LIVE || process.env.JEV_LIVE) && !!apiKey && !!adapter?.decide;
 const model = process.env.DECIDE_MODEL || adapter?.defaultModels.decide || '';
 const creds = { apiKey, accountId: process.env.DECIDE_ACCOUNT_ID, baseUrl: adapter?.supportsBaseUrl ? process.env.DECIDE_BASE_URL : undefined };
-const decide = (req: { state: any; questions: Record<string, DecideQuestion>; timeoutMs?: number }) =>
-    adapter.decide!(creds, { model, ...req });
+const interval = Number(process.env.DECIDE_MIN_INTERVAL_MS) || 0;
+let nextSlot = 0;
+/** Calls start at least `interval` apart, whatever the test's concurrency. */
+async function paced() {
+    const wait = Math.max(0, nextSlot - Date.now());
+    nextSlot = Math.max(nextSlot, Date.now()) + interval;
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+}
+const decide = async (req: { state: any; questions: Record<string, DecideQuestion>; timeoutMs?: number }) => {
+    await paced();
+    return adapter.decide!(creds, { model, ...req });
+};
+/** A test's timeout: its own allowance plus the pacing of the calls it makes. */
+const allow = (ms: number, calls: number) => ms + calls * interval;
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'decisions', name), 'utf8'));
 
 const FLAG = 0.7;
@@ -51,6 +65,7 @@ describe.skipIf(!live)(`${adapter?.label ?? adapterId} live contract`, () => {
     });
 
     test('a bad key is a 401 or 403 the adapter reports without echoing the key', async () => {
+        await paced();
         const err = await adapter.decide!({ ...creds, apiKey: 'not-a-real-key' }, { model, state: 'x', questions: { q: { type: 'noul', instructions: 'ok?' } } }).catch(e => e);
         expect(err.kind).toBe('permanent');
         expect([401, 403]).toContain(err.status);
@@ -58,6 +73,7 @@ describe.skipIf(!live)(`${adapter?.label ?? adapterId} live contract`, () => {
     });
 
     test('testConnection succeeds', async () => {
+        await paced();
         expect(await adapter.testConnection(creds, model)).toEqual({ ok: true });
     });
 
@@ -79,7 +95,7 @@ describe.skipIf(!live)(`${adapter?.label ?? adapterId} live contract`, () => {
 
         const narrowed = await ask('search the web for the latest gVisor release', ['chat', 'audio_overview']);
         expect(['chat', 'audio_overview']).toContain(narrowed.choice);
-    }, 60_000);
+    }, allow(60_000, 21));
 
     test('tagging, tag relevance and ranking questions with the default tags', async () => {
         const fx = fixture('tagging.json') as {
@@ -112,7 +128,7 @@ describe.skipIf(!live)(`${adapter?.label ?? adapterId} live contract`, () => {
             if (best.id !== q.best) wrong.push(`"${q.query}": best document was ${best.id}, expected ${q.best}`);
         }
         expect(wrong).toEqual([]);
-    }, 120_000);
+    }, allow(120_000, 62));
 
     test('injection question: golden inputs land in their verdict class, batched in one call', async () => {
         const { cases } = fixture('injection.json') as { cases: { id: string; expect: string; text: string }[] };
@@ -131,5 +147,5 @@ describe.skipIf(!live)(`${adapter?.label ?? adapterId} live contract`, () => {
             if (c.expect === 'flagged' && p < FLAG) wrong.push(`${c.id}: ${p} (expected flagged)`);
         }
         expect(wrong).toEqual([]);
-    });
+    }, allow(30_000, 1));
 });

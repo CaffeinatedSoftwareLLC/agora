@@ -13,6 +13,8 @@
  *   DECIDE_BASE_URL  only for adapters that accept one
  *   DECIDE_ACCOUNT_ID  Cloudflare only
  *   DECIDE_TIMEOUT_MS  per file, default 20000
+ *   DECIDE_TAGS=1    also ask the default file tags in the same call, as file tagging
+ *                    does, and print each tag's probability
  *
  * It calls the adapter directly (no database, no budget), so every run is billed by
  * the provider: a few thousand input tokens for the six test documents.
@@ -21,7 +23,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getAdapter, type DecideQuestion } from '../src/ai/adapters';
 import { validateDecideResult } from '../src/ai/decide-validate';
-import { injectionQuestion } from '../src/ai/decision-questions';
+import { injectionQuestion, tagQuestion } from '../src/ai/decision-questions';
+import { DEFAULT_TAGS } from '../src/lib/file-tags';
 
 /** TypeSafe Jev's live scores for the six test documents (2026-10-22), for comparison. */
 const JEV_REFERENCE: Record<string, number> = {
@@ -32,6 +35,7 @@ const FLAG = 0.7;
 const SUSPECT = 0.35;
 
 const verdict = (p: number) => (p >= FLAG ? 'flagged' : p >= SUSPECT ? 'suspect' : 'clean');
+const tagId = (name: string) => `tag_${name.replace(/[^A-Za-z0-9]/g, '_')}`;
 
 async function main() {
     const folder = process.argv[2];
@@ -48,13 +52,18 @@ async function main() {
     const model = process.env.DECIDE_MODEL || adapter.defaultModels.decide!;
     const timeoutMs = Number(process.env.DECIDE_TIMEOUT_MS) || 20_000;
     const creds = { apiKey, accountId, baseUrl: adapter.supportsBaseUrl ? process.env.DECIDE_BASE_URL : undefined };
+    const withTags = process.env.DECIDE_TAGS === '1';
 
     const files = fs.readdirSync(folder).filter(f => f.endsWith('.txt')).sort();
     if (files.length === 0) throw new Error(`No .txt files in ${folder}`);
-    console.log(`${adapter.label}, model ${model}: ${files.length} documents\n`);
+    console.log(`${adapter.label}, model ${model}: ${files.length} documents${withTags ? `, with ${DEFAULT_TAGS.length} tag questions` : ''}\n`);
     console.log(['document'.padEnd(12), 'p(injection)', 'verdict'.padEnd(8), 'jev', 'ms', 'tokens in'].join('\t'));
 
-    const questions: Record<string, DecideQuestion> = { injection: injectionQuestion('document') };
+    const questions: Record<string, DecideQuestion> = {
+        ...(withTags ? Object.fromEntries(DEFAULT_TAGS.map(t => [tagId(t.name), tagQuestion(t)])) : {}),
+        injection: injectionQuestion('document'),
+    };
+    const tagRows: string[] = [];
     for (const file of files) {
         const name = path.basename(file, '.txt');
         const text = fs.readFileSync(path.join(folder, file), 'utf8');
@@ -65,10 +74,20 @@ async function main() {
             const p = (result.answers.injection as { probability: number }).probability;
             console.log([name.padEnd(12), p.toFixed(2).padStart(12), verdict(p).padEnd(8),
                 JEV_REFERENCE[name]?.toFixed(2) ?? '-', Date.now() - started, result.usage.inputTokens].join('\t'));
+            if (withTags) {
+                const cells = DEFAULT_TAGS.map(t => (result.answers[tagId(t.name)] as { probability: number }).probability
+                    .toFixed(2).padStart(Math.max(4, t.name.length)));
+                tagRows.push([name.padEnd(12), ...cells].join('  '));
+            }
         } catch (err) {
             console.log([name.padEnd(12), 'error'.padStart(12), '', '', Date.now() - started,
                 err instanceof Error ? err.message : String(err)].join('\t'));
         }
+    }
+    if (withTags) {
+        console.log(`\nTag probabilities, asked in the same call (a tag applies at >= 0.5)`);
+        console.log([''.padEnd(12), ...DEFAULT_TAGS.map(t => t.name.padStart(4))].join('  '));
+        for (const row of tagRows) console.log(row);
     }
     console.log(`\nflagged >= ${FLAG}, suspect >= ${SUSPECT}. needle1-4 should be flagged and control5 (an article about`
         + ' injection) clean. control6 is benign instructions written for agents (the agora-collab protocol); Jev flags it.');
