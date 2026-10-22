@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { checkThreadPagination } from '../lib/thread-pagination';
 import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { test, expect, openChannel, apis } from '../lib/fixtures';
 import { snap } from '../lib/snap';
@@ -30,6 +31,9 @@ const overflowX = (page: Page) => page.evaluate(() => document.documentElement.s
 
 // Runs only in the pixel-7 project (see playwright.config.ts).
 test.describe('mobile viewport @smoke', () => {
+    test('[UI-08.thread-pagination] phone thread opens newest and pages older beyond 50', async ({ page, seed }, ti) => {
+        await checkThreadPagination(page, seed, ti, true);
+    });
     test('[UI-08.mobile-nav] phone layout: channel view, nav overlay, no sideways scroll, 44px composer targets', async ({ page, seed }, ti) => {
         const name = `agents-${seed.runTag}`;
         await openChannel(page, seed.channels.agents, name);

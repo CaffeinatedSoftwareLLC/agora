@@ -302,11 +302,14 @@ export async function threadRoutes(app: FastifyInstance) {
         return reply.status(201).send(replyMessage);
     });
 
-    // GET /channels/:id/messages/:msgId/replies?limit&after → 200 [Message]
+    // GET /channels/:id/messages/:msgId/replies?limit&after&before&order → 200 [Message]
     app.get('/channels/:id/messages/:msgId/replies', async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
-        const { limit: rawLimit, after } = request.query as any;
+        const { limit: rawLimit, after, before, order = 'asc' } = request.query as any;
+        if ((order !== 'asc' && order !== 'desc') || (after && before)) {
+            return reply.status(400).send({ error: 'Use order=asc|desc and only one of before or after' });
+        }
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, !!request.isBot);
@@ -327,30 +330,18 @@ export async function threadRoutes(app: FastifyInstance) {
         if (isNaN(limit) || limit < 1) limit = 50;
         if (limit > 100) limit = 100;
 
-        let query: string;
-        let params: any[];
-
-        if (after) {
-            query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.protocol, m.author_could_direct
-                     FROM messages m
-                     LEFT JOIN users u ON u.id = m.author_id
-                     WHERE m.thread_id = $1 AND m.channel_id = $2 AND m.id > $3
-                     ORDER BY m.id ASC
-                     LIMIT $4`;
-            params = [msgId, channelId, after, limit];
-        } else {
-            query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
-                            m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.protocol, m.author_could_direct
-                     FROM messages m
-                     LEFT JOIN users u ON u.id = m.author_id
-                     WHERE m.thread_id = $1 AND m.channel_id = $2
-                     ORDER BY m.id ASC
-                     LIMIT $3`;
-            params = [msgId, channelId, limit];
-        }
+        const cursor = before || after;
+        const params = cursor ? [msgId, channelId, cursor, limit] : [msgId, channelId, limit];
+        // Only fixed SQL fragments enter the query; cursor values stay parameterized.
+        const cursorClause = cursor ? `AND m.id ${before ? '<' : '>'} $3` : '';
+        const query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
+                             m.thread_id, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
+                             m.system_event, m.system_data, m.protocol, m.author_could_direct
+                      FROM messages m
+                      LEFT JOIN users u ON u.id = m.author_id
+                      WHERE m.thread_id = $1 AND m.channel_id = $2 ${cursorClause}
+                      ORDER BY m.id ${order === 'desc' ? 'DESC' : 'ASC'}
+                      LIMIT $${params.length}`;
 
         const result = await db.query(query, params);
 
