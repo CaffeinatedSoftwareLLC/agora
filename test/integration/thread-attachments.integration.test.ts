@@ -24,9 +24,9 @@ async function file(overrides: { uploaderId?: string; channelId?: string; messag
     const id = generateUlid();
     await ctx.db.query(`INSERT INTO files
         (id, uploader_id, channel_id, message_id, filename, content_type, mime_type, size_bytes, bucket, path, storage_key, encryption_iv, encryption_tag, deleted_at)
-        VALUES ($1,$2,$3,$4,'note.txt','text/plain','text/plain',3,'agora-files',$5,$5,$6,$7,$8)`,
+        VALUES ($1,$2,$3,$4,'note.txt','text/plain','text/plain',3,'agora-files',$5,$6,$7,$8,$9)`,
         [id, overrides.uploaderId ?? owner.userId, overrides.channelId ?? channelId, overrides.messageId ?? null,
-            `${id}/note.txt`, Buffer.alloc(12), Buffer.alloc(16), overrides.deleted ? new Date() : null]);
+            `${id}/note.txt`, `${id}/note.txt`, Buffer.alloc(12), Buffer.alloc(16), overrides.deleted ? new Date() : null]);
     return id;
 }
 const post = (body: Record<string, unknown>) => ctx.request.post(`/channels/${channelId}/messages/${parentId}/replies`).set(owner.auth).send(body);
