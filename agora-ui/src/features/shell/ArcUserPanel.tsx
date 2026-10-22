@@ -61,8 +61,9 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
   // Which item takes focus when the menu opens: first (click, Enter, ArrowDown) or last (ArrowUp)
   const openFocus = useRef<'first' | 'last'>('first');
   const menuId = useId();
+  const errorId = useId();
 
-  const items = () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+  const items = () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
 
   const openMenu = (focus: 'first' | 'last') => {
     openFocus.current = focus;
@@ -112,6 +113,8 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
   };
 
   const handleLogoutAll = async () => {
+    // aria-disabled rather than disabled, so the item keeps keyboard focus while pending
+    if (revoking) return;
     setRevoking(true);
     setLogoutError('');
     try {
@@ -141,7 +144,7 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
     }
   };
 
-  const itemClass = 'w-full min-h-11 md:min-h-9 flex items-center gap-2.5 px-3 py-2 text-[13px] text-left rounded-lg outline-none transition-colors disabled:opacity-50';
+  const itemClass = 'w-full min-h-11 md:min-h-9 flex items-center gap-2.5 px-3 py-2 text-[13px] text-left rounded-lg outline-none transition-colors aria-disabled:opacity-50 aria-disabled:cursor-default';
   const plainItem = `${itemClass} hover:bg-surface-hover focus-visible:bg-surface-hover`;
   const dangerItem = `${itemClass} hover:bg-danger/10 focus-visible:bg-danger/10`;
 
@@ -194,36 +197,43 @@ export function ArcUserPanel({ compact = false }: ArcUserPanelProps) {
           </svg>
         </button>
 
+        {/* The error sits beside the menu, not in it: a menu may only hold menu items */}
         {menuOpen && (
           <div
             ref={menuRef}
-            id={menuId}
-            role="menu"
-            aria-label="Account"
-            onKeyDown={onMenuKeyDown}
             className="absolute bottom-full left-0 right-0 mb-2 rounded-xl p-1 shadow-lg z-50"
             style={{ background: P.surface, border: `1px solid ${P.border}` }}
           >
-            <button role="menuitem" tabIndex={-1} onClick={() => go('/account')} className={plainItem} style={{ color: P.text }}>
-              <span style={{ color: P.muted }}><AccountIcon /></span>
-              Account &amp; security
-            </button>
-            {user?.isInstanceAdmin && (
-              <button role="menuitem" tabIndex={-1} onClick={() => go('/admin')} className={plainItem} style={{ color: P.text }}>
-                <span style={{ color: P.muted }}><AdminIcon /></span>
-                Instance admin
+            <div id={menuId} role="menu" aria-label="Account" onKeyDown={onMenuKeyDown}>
+              <button role="menuitem" tabIndex={-1} onClick={() => go('/account')} className={plainItem} style={{ color: P.text }}>
+                <span style={{ color: P.muted }}><AccountIcon /></span>
+                Account &amp; security
               </button>
-            )}
-            <div role="separator" className="my-1 h-px" style={{ background: P.border }} />
-            <button role="menuitem" tabIndex={-1} onClick={handleLogout} className={dangerItem} style={{ color: P.danger }}>
-              <LogoutIcon />
-              Log out
-            </button>
-            <button role="menuitem" tabIndex={-1} onClick={handleLogoutAll} disabled={revoking} className={dangerItem} style={{ color: P.danger }}>
-              <LogoutAllIcon />
-              {revoking ? 'Logging out…' : 'Log out all sessions'}
-            </button>
-            {logoutError && <p role="alert" className="px-3 py-2 text-xs" style={{ color: P.danger }}>{logoutError}</p>}
+              {user?.isInstanceAdmin && (
+                <button role="menuitem" tabIndex={-1} onClick={() => go('/admin')} className={plainItem} style={{ color: P.text }}>
+                  <span style={{ color: P.muted }}><AdminIcon /></span>
+                  Instance admin
+                </button>
+              )}
+              <div role="separator" className="my-1 h-px" style={{ background: P.border }} />
+              <button role="menuitem" tabIndex={-1} onClick={handleLogout} className={dangerItem} style={{ color: P.danger }}>
+                <LogoutIcon />
+                Log out
+              </button>
+              <button
+                role="menuitem"
+                tabIndex={-1}
+                onClick={handleLogoutAll}
+                aria-disabled={revoking}
+                aria-describedby={logoutError ? errorId : undefined}
+                className={dangerItem}
+                style={{ color: P.danger }}
+              >
+                <LogoutAllIcon />
+                {revoking ? 'Logging out…' : 'Log out all sessions'}
+              </button>
+            </div>
+            {logoutError && <p id={errorId} role="alert" className="px-3 py-2 text-xs" style={{ color: P.danger }}>{logoutError}</p>}
           </div>
         )}
       </div>

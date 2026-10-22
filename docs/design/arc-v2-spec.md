@@ -18,7 +18,7 @@ This document defines the design direction for Agora's frontend UI redesign. The
 
 5. **Two palettes, one layout.** The entire UI is palette-agnostic. Every color reference goes through a palette object (`P`). Switching palettes changes every surface, border, and text color. The layout and component structure stay identical.
 
-6. **Original user panel.** The user panel at the bottom of every sidebar matches the existing Agora design: avatar with a gradient ring (orange-to-purple), presence dot (bottom-left), username, "Online" status text, mic button, and settings gear.
+6. **Compact user panel.** The user panel at the bottom of the channel sidebar is a small card: avatar with a presence dot (bottom-right), username, "Online" status text, and one ⋮ account menu that holds every account action.
 
 7. **Breathing room over density.** Message spacing is generous. Server rows in the home view are tall enough to show a last-message preview. The tab bar has padding. This is not a power-user-density design — it prioritizes scannability.
 
@@ -222,7 +222,7 @@ The mockup is a single monolithic component with hardcoded data. The real implem
 | `ServerView` | *(replaces AppShell's middle+right)* | Channel sidebar + message area + members |
 | `ArcChannelSidebar` | `ChannelSidebar` | Server-specific channel list with collapsible categories |
 | `FloatingMessageInput` | `MessageInput` (in features/messages) | Pill-shaped glass-blur input |
-| `ArcUserPanel` | `UserPanel` | Gradient-ring avatar, mic, settings |
+| `ArcUserPanel` | `UserPanel` | Avatar with presence dot, name, status, one account menu |
 
 ### Components to Keep As-Is
 
@@ -248,31 +248,30 @@ The mockup is a single monolithic component with hardcoded data. The real implem
 
 ## User Panel Specification
 
-The user panel appears at the bottom of every sidebar (DM sidebar in home view, channel sidebar in server view). It must match the existing Agora design exactly.
+The user panel (`ArcUserPanel`) appears at the bottom of the channel sidebar, as a card with a `P.border` outline on `P.bg`.
 
 ```
 ┌──────────────────────────────────────────┐
 │  ┌──────┐                                │
-│  │ (E)  │  Eryk          [🎤]  [⚙]     │
-│  │      │  Online                        │
+│  │ (E)  │  Espresso                [⋮]  │
+│  │     ●│  Online                        │
 │  └──────┘                                │
 └──────────────────────────────────────────┘
 ```
 
 **Avatar:**
-- 40px (home) or 36px (server sidebar) circle
-- 2.5px gradient ring: `linear-gradient(135deg, #F97316, #C77DFF)` (orange → purple)
-- Inner circle: solid `P.bg` background with white initial letter
-- Presence dot: bottom-left, 10px, green with `P.bg` ring shadow
+- 36px (server sidebar) or 40px circle, the shared `Avatar` with the user's colour and initial
+- Presence dot: bottom-right, 12px, `P.online` with a `P.bg` ring shadow
 
 **Text:**
 - Username: 13px, semibold, `P.text`
 - Status: 11px, normal, `P.muted`
 
-**Buttons:**
-- Microphone icon (16px stroke icon)
-- Settings gear icon (16px stroke icon)
-- Both: `P.dim` color, standard hover behavior
+**Account menu:**
+- One ⋮ button ("Account menu"), `P.muted`, 44px on touch and 36px from `md` up
+- Opens upward with: Account & security, Instance admin (instance admins only), a separator, Log out, Log out all sessions (both `P.danger`)
+- ARIA menu semantics; arrow keys, Home/End and Escape (focus returns to the button); closes on Tab or an outside click
+- Moderation and Server Settings are not here: they are the shield and gear in the server header
 
 ## Accent Tinting Rules
 
@@ -293,7 +292,7 @@ Per-server color is stored as a hex string on the server object. When a server t
 - Members toggle button when active
 
 **Where accent color does NOT appear:**
-- User panel (always uses the fixed gradient ring, not server accent)
+- User panel (palette colours only, not server accent)
 - Text body colors (always `P.text`)
 - Presence dots (always use `P.online` / `P.warn` / `P.dim`)
 - DM sidebar (uses `P.accent` not server accent)

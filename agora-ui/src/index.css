@@ -1,14 +1,21 @@
 @import "tailwindcss";
 
-/* Every scroller gets the thin, palette-coloured scrollbar the console strip has, never the
-   OS default with arrows. Chromium and Firefox read the standard properties; older WebKit
-   (Safari) reads the pseudo-elements. */
-* { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
-*::-webkit-scrollbar { width: 6px; height: 6px; }
-*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
-*::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
-*::-webkit-scrollbar-thumb:hover { background: var(--color-text-dim); }
-*::-webkit-scrollbar-button { display: none; }
+/* Every scroller gets a thin, palette-coloured scrollbar like the console strip's, never the
+   OS default with arrows. The thumb is text-dim (about 2.5:1 or better on bg and surface in
+   both palettes). Chromium and Safari get the pseudo-elements: once scrollbar-width or
+   scrollbar-color is set, Chromium ignores them and draws arrow buttons on Windows. Browsers
+   without the pseudo-elements (Firefox) get the standard properties, which have no arrows
+   there and no hover colour. In base, so utilities and the console strip can override it. */
+@layer base {
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--color-text-dim); border-radius: 3px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+  *::-webkit-scrollbar-button { display: none; }
+  @supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: thin; scrollbar-color: var(--color-text-dim) transparent; }
+  }
+}
 
 /* Touch swipes stay unobstructed; mouse users get a draggable scroll affordance. */
 .console-strip { scrollbar-width: none; }

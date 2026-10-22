@@ -81,7 +81,11 @@ it('Log out all sessions revokes every session, and shows an error when that fai
   renderPanel();
   await userEvent.click(trigger());
   await userEvent.click(screen.getByRole('menuitem', { name: 'Log out all sessions' }));
-  expect((await screen.findByRole('alert')).textContent).toMatch(/Could not log out all sessions/);
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toMatch(/Could not log out all sessions/);
+  // The alert sits beside the menu (a menu holds only menu items) and describes the item
+  expect(screen.getByRole('menu').contains(alert)).toBe(false);
+  expect(screen.getByRole('menuitem', { name: 'Log out all sessions' }).getAttribute('aria-describedby')).toBe(alert.id);
   await userEvent.click(screen.getByRole('menuitem', { name: 'Log out all sessions' }));
   expect(logoutAll).toHaveBeenCalledTimes(2);
   expect(await screen.findByText('login page')).toBeTruthy();
@@ -119,4 +123,27 @@ it('closes on an outside click', async () => {
   expect(screen.getByRole('menu')).toBeTruthy();
   await userEvent.click(document.body);
   expect(screen.queryByRole('menu')).toBeNull();
+});
+
+it('Log out all sessions keeps keyboard focus while pending and ignores repeat presses', async () => {
+  let finish!: () => void;
+  logoutAll.mockImplementation(() => new Promise<void>(r => { finish = r; }));
+  const user = userEvent.setup();
+  renderPanel();
+  trigger().focus();
+  await user.keyboard('{ArrowUp}');
+  const item = screen.getByRole('menuitem', { name: 'Log out all sessions' });
+  await waitFor(() => expect(document.activeElement).toBe(item));
+  await user.keyboard('{Enter}');
+  const pending = await screen.findByRole('menuitem', { name: 'Logging out…' });
+  expect(pending.getAttribute('aria-disabled')).toBe('true');
+  expect(pending.hasAttribute('disabled')).toBe(false);
+  expect(document.activeElement).toBe(pending);
+  // Still reachable with the arrow keys while pending
+  await user.keyboard('{ArrowUp}{ArrowDown}');
+  expect(document.activeElement).toBe(pending);
+  await user.keyboard('{Enter}');
+  expect(logoutAll).toHaveBeenCalledTimes(1);
+  finish();
+  expect(await screen.findByText('login page')).toBeTruthy();
 });
