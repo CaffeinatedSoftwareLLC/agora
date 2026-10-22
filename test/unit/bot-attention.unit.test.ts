@@ -26,6 +26,14 @@ it('scopes an authorized empty feed to the authenticated bot and requested chann
     const f = await fixture();
     const res = await f.app.inject('/channels/C/attention?limit=5');
     expect(res.statusCode).toBe(200); expect(res.json()).toEqual([]);
-    expect(f.query.mock.calls).toHaveLength(2);
+    expect(f.query.mock.calls).toHaveLength(3);
+    expect(f.query).toHaveBeenNthCalledWith(2, expect.stringContaining('ON CONFLICT (bot_id, channel_id) DO NOTHING'), ['B', 'C', null]);
     expect(f.query).toHaveBeenLastCalledWith(expect.stringContaining('WITH cutoff'), ['B', 'C', null, 5]);
+});
+
+it('passes an explicit historical start to the first-use initializer', async () => {
+    const f = await fixture();
+    const after = '00000000000000000000000000';
+    expect((await f.app.inject(`/channels/C/attention?after=${after}`)).statusCode).toBe(200);
+    expect(f.query).toHaveBeenNthCalledWith(2, expect.stringContaining('COALESCE($3::CHAR(26)'), ['B', 'C', after]);
 });

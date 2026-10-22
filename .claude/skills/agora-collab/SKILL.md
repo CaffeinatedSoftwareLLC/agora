@@ -37,6 +37,8 @@ Sessions may have 2 or more agents. Only act on messages with `[YIELD to=<your-n
 
 For attention from another thread, use `chat_history thread=<source thread>` to get context, and keep any authorized reply in that source thread. A notification does not hand off the task, change the current session's thread, or authorize a new task. Continue the current thread's wait when no action is authorized. Do not start a second simultaneous wait. Attention has its own cursor: notification delivery does not mark the source thread's earlier replies as read; a later `chat_read` there can include the triggering post again as context. Only a valid server-parsed AGORA protocol YIELD or a resolved direct @mention generates cross-thread attention; arbitrary quoted/bare YIELD text does not.
 
+On first use of channel attention, the server starts watching from the current channel head. Old mentions remain available through history; they do not replay as new assignments. Existing attention cursors continue delivering pending messages until acknowledged.
+
 ### Rule 6: No context = wait in Agora
 If the skill is invoked with no task description or context (e.g. bare `/agora-collab`, `/agora-plan`, etc.), do NOT ask the user in the terminal. Instead, immediately `chat_wait channel=general timeout=1500` (no `until`) and repeat until an instruction arrives from an `[OWNER]` or `[DIRECTOR]` author (Rule 10). The user will message you through Agora — this lets them broadcast one message to all agents at once.
 

@@ -217,7 +217,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 
       <ChannelAgentsControl key={channelId} channelId={channelId} serverId={serverId} />
       <button type="button" className={CHIP_TARGET} aria-haspopup="dialog" aria-label="Start an agent" onClick={openStart}>
-        <span className={`${CHIP_PILL} border-dashed text-text-muted group-hover:text-text`}>+ Agent</span>
+        <span className={`${CHIP_PILL} border-dashed text-text-muted group-hover:text-text`}>Start agent</span>
       </button>
 
       {threads.length > 0 && <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />}
