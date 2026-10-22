@@ -1,6 +1,6 @@
 import type { Adapter, DecideLimits, DecideQuestion, DecideRequest, DecideResult, ProviderCredentials } from './types';
 import { joinUrl } from './sse';
-import { DECIDE_DEFAULT_TIMEOUT_MS, postDecision } from './decide-http';
+import { DECIDE_DEFAULT_TIMEOUT_MS, postDecision, secretsOf } from './decide-http';
 
 export { DECIDE_DEFAULT_TIMEOUT_MS } from './decide-http';
 
@@ -89,6 +89,7 @@ export function systemOneAdapter(p: SystemOneProvider): Adapter {
         body,
         timeoutMs,
         retryable: p.retryable,
+        secrets: secretsOf(creds),
         errorMessage: systemOneErrorMessage,
     });
 

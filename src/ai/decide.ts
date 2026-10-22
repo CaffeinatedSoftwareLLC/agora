@@ -1,5 +1,6 @@
 import { DecideError, type DecideAnswer, type DecideQuestion, type DecideText, type Usage } from './adapters';
 import { checkDecideRequest, decideLimitsFor, validateDecideResult } from './decide-validate';
+import { redact, secretsOf } from './adapters/decide-http';
 import { checkBudget, recordUsage, resolveRoute, type Queryable, type ResolvedRoute, type RouteRow } from './routing';
 
 /**
@@ -208,7 +209,9 @@ export async function decide(db: Queryable, call: DecideCall): Promise<DecideOut
         await recordUsage(db, { ...usageBase, model: result.model, usage: result.usage, latencyMs: Date.now() - started });
         return { status: 'ok', answers: result.answers, model: result.model, usage: result.usage, settings: ready.settings };
     } catch (err) {
-        const failure = err instanceof DecideError ? err : new DecideError('transient', err instanceof Error ? err.message : String(err));
+        // Adapters redact their own messages; this is the backstop before anything is stored or returned
+        const raw = err instanceof DecideError ? err : new DecideError('transient', err instanceof Error ? err.message : String(err));
+        const failure = new DecideError(raw.kind, redact(raw.message, secretsOf(route.credentials)), raw.status);
         await recordUsage(db, {
             ...usageBase, model: route.model, usage: { inputTokens: 0, outputTokens: 0 },
             latencyMs: Date.now() - started, error: failure.message.slice(0, 500),

@@ -460,6 +460,19 @@ describe('reading a file\'s text', () => {
         expect(res.body).toMatchObject({ injectionWarning: true, injectionChecked: true });
     });
 
+    test('a file checked only in part is not reported as checked, and a warning from the part read still shows', async () => {
+        const id = files['collab-protocol.md'];
+        const before = (await ctx.db.query('SELECT coverage, injection_probability FROM file_tag_jobs WHERE file_id = $1', [id])).rows[0];
+        try {
+            await ctx.db.query("UPDATE file_tag_jobs SET coverage = 'partial', injection_probability = 0.01 WHERE file_id = $1", [id]);
+            expect((await read(id)).body).toMatchObject({ injectionWarning: false, injectionChecked: false });
+            await ctx.db.query('UPDATE file_tag_jobs SET injection_probability = 0.99 WHERE file_id = $1', [id]);
+            expect((await read(id)).body).toMatchObject({ injectionWarning: true, injectionChecked: false });
+        } finally {
+            await ctx.db.query('UPDATE file_tag_jobs SET coverage = $2, injection_probability = $3 WHERE file_id = $1', [id, before.coverage, before.injection_probability]);
+        }
+    });
+
     test('long files come in pages', async () => {
         const first = await read(files['collab-protocol.md'], owner.auth, { limit: 20 });
         expect(first.body).toMatchObject({ text: DOCS['collab-protocol.md'].slice(0, 20), offset: 0, hasMore: true });

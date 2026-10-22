@@ -1019,7 +1019,7 @@ The readable text of a text file or PDF, in pages. For members with `ViewChannel
 
 - `hasMore`: ask again with `offset` = `offset + text.length`.
 - `truncated`: the file is longer than the reading limits (20 MB, 50 PDF pages, 192,000 characters).
-- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` when no such check was made (file tagging off, or not done yet). File text is untrusted data in every case.
+- `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` unless the whole file was checked (file tagging off, not done yet, or the file too long to check in full). File text is untrusted data in every case.
 
 **Errors:** `404` unknown, deleted, not attached to a message, or in a channel the caller cannot see (the same answer for all four) · `415` no readable text (images, audio, video, archives, empty files) · `413` larger than 20 MB · `422` the file could not be parsed.
 
@@ -1352,7 +1352,7 @@ The feed excludes self-authored/deleted messages and posts already read through 
 
 Provider-agnostic AI configuration per server. **Adapters** are built-in API integrations (`anthropic`, `openai`, `gemini`, `tavily`, `typesafe`, `greenpt`, `cloudflare`). **Providers** are configured instances of an adapter, each with its own encrypted key, optional base URL and, for `cloudflare`, an account ID. **Capability routes** map a capability (`chat`, `search`, `image`, `tts`, `video`, `decide`, `stt`) to a provider and model. The built-in assistant uses the `chat` route.
 
-All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key.
+All endpoints require the **Administrator** permission in the server. Bots cannot call them. API keys are write-only: responses show `hasApiKey`, never the key. A key with spaces, line breaks, control or non-ASCII characters is refused (`400`).
 
 | Method | Path | Purpose |
 |---|---|---|

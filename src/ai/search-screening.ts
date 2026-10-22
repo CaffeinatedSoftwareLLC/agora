@@ -100,23 +100,23 @@ function verdictOf(probability: number, settings: DecisionSettings): ScreenVerdi
 const WORST: Record<ScreenVerdict, number> = { clean: 0, unscreened: 1, suspect: 2, flagged: 3 };
 const worst = (verdicts: ScreenVerdict[]): ScreenVerdict => verdicts.reduce((a, b) => (WORST[b] > WORST[a] ? b : a), 'clean');
 
-/** One injection question as sent: about the same size for every item. */
-const QUESTION_TOKENS = estimateTokens(injectionQuestion('items.c99_snippet'));
-
 /**
  * Pack items into as few requests as fit the model's limits. With `limits`, each
  * item's question is counted too (some models hold every question in one context)
  * and a request has at most `maxQuestions` items.
  */
 function batches(items: Item[], limits?: DecideLimits): Item[][] {
-    const budget = limits ? Math.min(BATCH_STATE_TOKENS, limits.requestTokens) : BATCH_STATE_TOKENS;
-    const perItem = limits ? QUESTION_TOKENS : 0;
+    // Bytes (Clef) are counted against the whole request; the default estimate against the state share
+    const budget = limits ? Math.min(limits.countBytes ? limits.requestTokens : BATCH_STATE_TOKENS, limits.requestTokens) : BATCH_STATE_TOKENS;
     const maxItems = limits?.maxQuestions ?? Infinity;
     const out: Item[][] = [];
     let current: Item[] = [];
     let size = 0;
     for (const item of items) {
-        const tokens = estimateTokens(item.text) + (limits ? perItem + estimateTokens(item.id) : 0);
+        // The item's text under its key, plus its question (all questions share one context in Clef)
+        const tokens = limits
+            ? estimateTokens({ [item.id]: item.text }, limits) + estimateTokens(injectionQuestion(`items.${item.id}`), limits) + estimateTokens(item.id, limits)
+            : estimateTokens(item.text);
         if (current.length > 0 && (size + tokens > budget || current.length >= maxItems)) {
             out.push(current);
             current = [];

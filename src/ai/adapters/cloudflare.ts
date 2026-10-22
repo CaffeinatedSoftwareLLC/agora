@@ -1,6 +1,6 @@
 import { DecideError, type Adapter, type DecideLimits, type DecideRequest, type DecideResult, type ProviderCredentials } from './types';
 import { joinUrl } from './sse';
-import { DECIDE_DEFAULT_TIMEOUT_MS, postDecision } from './decide-http';
+import { DECIDE_DEFAULT_TIMEOUT_MS, postDecision, secretsOf } from './decide-http';
 import { CONNECTION_TEST, fromSystemOne } from './typesafe';
 
 const DEFAULT_BASE = 'https://api.cloudflare.com/client/v4';
@@ -13,16 +13,16 @@ const RETRYABLE = new Set([429, 503]);
  * they fit, Workers AI cuts `state` to the space left instead of refusing. A judgement
  * about text the model never read is worthless (an injection near the end would go
  * unseen), so the limits keep state plus every question under the context, with room
- * for the prompt template.
+ * for the prompt template, counting UTF-8 bytes as an upper bound on tokens (`countBytes`).
  */
 const MODELS: Record<string, { selector: string; limits: DecideLimits }> = {
     '@cf/cloudflare/clef-flash': {
         selector: 'clef-flash',
-        limits: { stateTokens: 23_000, requestTokens: 23_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64 },
+        limits: { stateTokens: 23_000, requestTokens: 23_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64, countBytes: true },
     },
     '@cf/cloudflare/clef': {
         selector: 'clef',
-        limits: { stateTokens: 62_000, requestTokens: 62_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64 },
+        limits: { stateTokens: 62_000, requestTokens: 62_000, maxChoiceOptions: 255, minScoreLevels: 2, maxScoreLevels: 10, maxQuestions: 64, countBytes: true },
     },
 };
 const MODEL_IDS = Object.keys(MODELS);
@@ -59,11 +59,10 @@ async function run(creds: ProviderCredentials, model: string, body: object, time
         body: { model: MODELS[model].selector, ...body },
         timeoutMs,
         retryable: RETRYABLE,
+        secrets: secretsOf(creds),
         errorMessage: cloudflareErrorMessage,
+        failure: json => (json?.success === false ? cloudflareErrorMessage(JSON.stringify(json)) : null),
     });
-    if (json?.success === false) {
-        throw new DecideError('invalid_response', `Cloudflare reported a failure: ${cloudflareErrorMessage(JSON.stringify(json)).slice(0, 300)}`);
-    }
     return json?.result;
 }
 

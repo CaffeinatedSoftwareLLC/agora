@@ -6,6 +6,7 @@ import { config } from '../config';
 import { requireAdmin } from './ai-config';
 import { CAPABILITIES, adapterIds, getAdapter, listAdapters, type Capability } from '../ai/adapters';
 import { allowPrivateBaseUrls, decryptProviderKey } from '../ai/routing';
+import { BAD_KEY, badKey } from '../ai/credentials';
 import { auditAiChange, changedFields, providerSnapshot, recentAiChanges, routeSnapshot } from '../lib/ai-audit';
 
 const nullableInt = (minimum: number) => ({ type: ['integer', 'null'], minimum });
@@ -103,6 +104,7 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         if (adapter.requiresApiKey && !apiKey) {
             return reply.status(400).send({ error: `${adapter.label} requires an API key` });
         }
+        if (badKey(apiKey)) return reply.status(400).send({ error: BAD_KEY });
         if (adapter.requiresAccountId && !accountId) {
             return reply.status(400).send({ error: `${adapter.label} requires an account ID` });
         }
@@ -169,6 +171,7 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         if (body.apiKey !== undefined && !body.apiKey && adapter?.requiresApiKey) {
             return reply.status(400).send({ error: `${adapter.label} requires an API key` });
         }
+        if (badKey(body.apiKey)) return reply.status(400).send({ error: BAD_KEY });
         if (body.accountId !== undefined && !adapter?.requiresAccountId) {
             return reply.status(400).send({ error: `${adapter?.label ?? current.adapter} does not take an account ID` });
         }

@@ -55,12 +55,16 @@ describe('per-model limits and question caps', () => {
         expect(decideLimitsFor(typesafeAdapter, 'jev-latest')).toBe(typesafeAdapter.decideLimits);
     });
 
-    it('keeps state plus every question inside Clef Flash\'s context, so nothing is cut unread', () => {
+    it('keeps state plus every question inside Clef Flash\'s context, counting bytes, so nothing is cut unread', () => {
         const flash = decideLimitsFor(cloudflareAdapter, '@cf/cloudflare/clef-flash')!;
-        const filler = 'q'.repeat(3000); // about 1,000 tokens each
+        // 60,000 digits: 20,000 by a characters-per-token estimate, but Clef's tokenizer splits every digit
+        const digits = '1234567890'.repeat(6000);
+        expect(checkDecideRequest({ state: digits, questions: { q: QUESTIONS.inj } }, typesafeAdapter.decideLimits!)).toBeNull();
+        expect(checkDecideRequest({ state: digits, questions: { q: QUESTIONS.inj } }, flash)).toMatch(/23000 tokens/);
+        // Questions count too: twenty 3,000-character questions are over the context with any state
+        const filler = 'q'.repeat(3000);
         const questions = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: 'noul' as const, instructions: filler }]));
-        expect(checkDecideRequest({ state: 'x'.repeat(9000), questions }, flash)).toMatch(/23000 tokens/);
-        expect(checkDecideRequest({ state: 'x'.repeat(9000), questions }, typesafeAdapter.decideLimits!)).toBeNull();
+        expect(checkDecideRequest({ state: 'x', questions }, flash)).toMatch(/23000 tokens/);
         const many = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`q${i}`, QUESTIONS.inj]));
         expect(checkDecideRequest({ state: 'x', questions: many }, flash)).toBe('More than 64 questions');
     });

@@ -201,6 +201,13 @@ export interface DecideLimits {
     maxQuestions?: number;
     /** Answer options across the whole request, when capped (a yes/no question has two). */
     maxOptions?: number;
+    /**
+     * The provider cuts state to fit its context instead of refusing (Workers AI), so a
+     * low estimate would get a verdict on text the model never read. Sizes are then
+     * counted as UTF-8 bytes of the JSON sent: a byte-level BPE token is at least one
+     * byte, so this is an upper bound whatever the text (digits, base64, CJK, emoji).
+     */
+    countBytes?: boolean;
 }
 
 export type DecideFailureKind = 'transient' | 'permanent' | 'timeout' | 'invalid_response';

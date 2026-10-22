@@ -46,7 +46,7 @@ export interface FileReadResponse {
     truncated: boolean;
     /** A decision model judged that the text tries to give instructions to an AI reader. */
     injectionWarning: boolean;
-    /** False when no such check has been made (tagging off, or not done yet). */
+    /** True only when the whole file was checked: false with tagging off, not done yet, or done on part of the file. */
     injectionChecked: boolean;
 }
 
@@ -64,7 +64,7 @@ export async function readFileText(deps: FileReadDeps, input: FileReadInput): Pr
     // Only files attached to a message that still exists: the same set file search lists
     const res = await db.query(
         `SELECT f.id, f.channel_id, f.filename, f.mime_type, f.content_type, f.storage_key, f.encryption_iv, f.encryption_tag,
-                j.injection_probability, COALESCE(s.screening_flag_threshold, 0.7) AS flag_threshold
+                j.injection_probability, j.coverage, COALESCE(s.screening_flag_threshold, 0.7) AS flag_threshold
          FROM files f
          JOIN messages m ON m.id = f.message_id AND m.deleted_at IS NULL
          JOIN channels c ON c.id = f.channel_id
@@ -103,7 +103,9 @@ export async function readFileText(deps: FileReadDeps, input: FileReadInput): Pr
     const offset = Math.max(0, input.offset ?? 0);
     const limit = Math.max(1, Math.min(READ_MAX_CHARS, input.limit ?? READ_DEFAULT_CHARS));
     const text = extracted.text.slice(offset, offset + limit);
-    const checked = file.injection_probability !== null && file.injection_probability !== undefined;
+    const scored = file.injection_probability !== null && file.injection_probability !== undefined;
+    // A check that read only part of the file says nothing about the rest: not "checked"
+    const checked = scored && file.coverage !== 'partial';
 
     return {
         ok: true,
@@ -116,7 +118,7 @@ export async function readFileText(deps: FileReadDeps, input: FileReadInput): Pr
             totalChars: extracted.text.length,
             hasMore: offset + text.length < extracted.text.length,
             truncated: extracted.truncated,
-            injectionWarning: checked && Number(file.injection_probability) >= Number(file.flag_threshold),
+            injectionWarning: scored && Number(file.injection_probability) >= Number(file.flag_threshold),
             injectionChecked: checked,
         },
     };

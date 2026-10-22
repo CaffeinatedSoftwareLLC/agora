@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import type { DecideQuestion } from '../ai/adapters';
 import { decide, decisionReady, loadDecisionSettings, type DecideFailure } from '../ai/decide';
-import { decideLimitsFor, estimateTokens } from '../ai/decide-validate';
+import { decideLimitsFor, estimateTokens, fitPrefix } from '../ai/decide-validate';
 import { relevanceQuestion, tagRelevanceQuestion, QUESTION_VERSIONS } from '../ai/decision-questions';
 import { canViewChannel } from './channel-access';
 import { decryptFile } from './encryption';
@@ -195,11 +195,11 @@ export async function searchChannelFiles(deps: FileSearchDeps, input: FileSearch
             const defs = await db.query('SELECT * FROM file_tag_definitions WHERE id = ANY($1)', [[...usedTags.keys()]]);
             const questions: Record<string, DecideQuestion> = {};
             const limits = decideLimitsFor(ready.route.adapter, ready.route.model)!;
-            const room = Math.min(TAG_QUESTION_TOKENS, limits.requestTokens - estimateTokens({ query }));
+            const room = Math.min(TAG_QUESTION_TOKENS, limits.requestTokens - estimateTokens({ query }, limits));
             let size = 0;
             for (const def of defs.rows.map(tagFromRow)) {
                 const q = tagRelevanceQuestion(def);
-                size += estimateTokens(q) + estimateTokens(`tag_${def.id}`);
+                size += estimateTokens(q, limits) + estimateTokens(`tag_${def.id}`, limits);
                 if (size > room || Object.keys(questions).length >= (limits.maxQuestions ?? Infinity)) break;
                 questions[`tag_${def.id}`] = q;
             }
@@ -244,7 +244,11 @@ export async function searchChannelFiles(deps: FileSearchDeps, input: FileSearch
                 }
                 const extracted = await extractText(plain, (c.row.mime_type || c.row.content_type).trim());
                 if (!extracted.ok) return;
-                const document = chunkText(extracted.text, RERANK_CHARS, 1).chunks[0];
+                // Ranking reads the start of the file; for a model that counts bytes the start is cut to fit
+                const start = chunkText(extracted.text, RERANK_CHARS, 1).chunks[0];
+                const limits = decideLimitsFor(ready.route.adapter, ready.route.model)!;
+                const room = limits.requestTokens - estimateTokens({ query, document: '' }, limits) - estimateTokens(relevanceQuestion(), limits);
+                const document = start && fitPrefix(start, room, limits);
                 if (!document) return;
                 const outcome = await decide(db, {
                     serverId, use: 'file_ranking', state: { query, document }, questions: { relevance: relevanceQuestion() },
