@@ -1,19 +1,22 @@
 @import "tailwindcss";
 
-/* Every scroller gets the same thin, palette-coloured scrollbar, never the OS default with
-   arrows. The thumb is text-dim (about 2.5:1 or better on bg and surface in
-   both palettes). Chromium and Safari get the pseudo-elements: once scrollbar-width or
+/* With a mouse or trackpad, every scroller gets the same thin, palette-coloured scrollbar,
+   never the OS default with arrows. Phones and tablets (pointer: coarse) keep their native
+   overlay scrollbars. The thumb is text-dim (about 2.5:1 or better on bg and surface in both
+   palettes). Chromium and Safari get the pseudo-elements: once scrollbar-width or
    scrollbar-color is set, Chromium ignores them and draws arrow buttons on Windows. Browsers
    without the pseudo-elements (Firefox) get the standard properties, which have no arrows
    there and no hover colour. In base, so utilities and the console strip can override it. */
 @layer base {
-  *::-webkit-scrollbar { width: 6px; height: 6px; }
-  *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
-  *::-webkit-scrollbar-thumb { background: var(--color-text-dim); border-radius: 3px; }
-  *::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
-  *::-webkit-scrollbar-button { display: none; }
-  @supports not selector(::-webkit-scrollbar) {
-    * { scrollbar-width: thin; scrollbar-color: var(--color-text-dim) transparent; }
+  @media (pointer: fine) {
+    *::-webkit-scrollbar { width: 6px; height: 6px; }
+    *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+    *::-webkit-scrollbar-thumb { background: var(--color-text-dim); border-radius: 3px; }
+    *::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+    *::-webkit-scrollbar-button { display: none; }
+    @supports not selector(::-webkit-scrollbar) {
+      * { scrollbar-width: thin; scrollbar-color: var(--color-text-dim) transparent; }
+    }
   }
 }
 
