@@ -1,5 +1,5 @@
 import type { Adapter, Capability, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
-import { apiError, joinUrl, networkError, sseJson, testConnectionWithTimeout } from './sse';
+import { apiError, joinUrl, networkError, redirectError, refuseRedirect, sseJson, testConnectionWithTimeout } from './sse';
 import { testOpenAISpeechConnection } from './openai-speech-test';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
@@ -30,11 +30,6 @@ const AUDIO_EXTENSIONS: Record<string, string> = {
 };
 /** Used when the caller passes no signal: a stalled provider must not hold a request forever. */
 const DEFAULT_AUDIO_TIMEOUT_MS = 60_000;
-
-/** The provider URL is checked once (url-guard); following a redirect would skip that check. */
-function refuseRedirect(res: Response, what: string) {
-    if (res.status >= 300 && res.status < 400) throw new Error(`${what} redirected (HTTP ${res.status}); redirects are not followed`);
-}
 
 function audioSignal(signal?: AbortSignal): AbortSignal {
     return signal ?? AbortSignal.timeout(DEFAULT_AUDIO_TIMEOUT_MS);
@@ -73,6 +68,7 @@ export const openaiAdapter: Adapter = {
 
         const res = await fetch(joinUrl(creds.baseUrl || DEFAULT_BASE, '/chat/completions'), {
             signal: req.signal,
+            redirect: 'manual',
             method: 'POST',
             headers: headers(creds),
             body: JSON.stringify({
@@ -84,6 +80,11 @@ export const openaiAdapter: Adapter = {
             }),
         });
 
+        const redirected = redirectError(res, 'OpenAI');
+        if (redirected) {
+            await callbacks.onError(new Error(redirected));
+            return;
+        }
         if (!res.ok) {
             await callbacks.onError(new Error(await apiError('OpenAI', res)));
             return;
@@ -180,10 +181,12 @@ export const openaiAdapter: Adapter = {
             // Model metadata checks the key/model without spending reasoning tokens on a ping.
             const res = await fetch(joinUrl(base, official ? `/models/${encodeURIComponent(model)}` : '/chat/completions'), {
                 signal,
+                redirect: 'manual',
                 method: official ? 'GET' : 'POST',
                 headers: headers(creds),
                 ...(official ? {} : { body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }) }),
             });
+            refuseRedirect(res, 'OpenAI');
             if (!res.ok) {
                 return { ok: false, error: await apiError('OpenAI', res) };
             }

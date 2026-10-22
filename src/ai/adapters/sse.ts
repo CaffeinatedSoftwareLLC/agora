@@ -49,6 +49,19 @@ export async function apiError(provider: string, res: Response): Promise<string>
     return `${provider} API ${res.status}${message ? `: ${message}` : ''}`;
 }
 
+/**
+ * Fetches to an admin-set base URL pass `redirect: 'manual'`: the URL is checked once
+ * (url-guard) and following a redirect would skip that check. A 3xx is an error.
+ */
+export function redirectError(res: Response, what: string): string | null {
+    return res.status >= 300 && res.status < 400 ? `${what} redirected (HTTP ${res.status}); redirects are not followed` : null;
+}
+
+export function refuseRedirect(res: Response, what: string): void {
+    const error = redirectError(res, what);
+    if (error) throw new Error(error);
+}
+
 /** Network failure → readable message (Node's fetch reports "fetch failed" with the cause attached). */
 export function networkError(err: unknown): string {
     if (!(err instanceof Error)) return String(err);
