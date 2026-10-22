@@ -1452,7 +1452,7 @@ Optional. A decision model answers typed questions about a piece of text (yes/no
 | Adapter | Provider and models | Credentials | Limits per request |
 |---|---|---|---|
 | `typesafe` | TypeSafe Jev, `jev-latest` | API key | 64k tokens; 32k for state plus the longest question |
-| `greenpt` | GreenPT Metis, `metis` (Cloudflare's Clef Flash, served from the EU) | API key | 32,768 tokens for the whole request; 32 questions; 2,048 answer options |
+| `greenpt` | GreenPT Metis, `metis` (Cloudflare's Clef Flash, served from the EU at `api.eu.greenpt.ai`) | API key | 32,768 tokens for the whole request; 32 questions; 2,048 answer options. Questions whose `instructions` is an object are sent with it as JSON text: Metis answers `500` to object instructions |
 | `cloudflare` | Cloudflare Workers AI: `@cf/cloudflare/clef-flash` or `@cf/cloudflare/clef` (no other model is accepted) | Account ID and API token (*Workers AI - Read* and *Edit*) | Clef Flash 24,576 tokens, Clef 65,536, for state and every question together; 64 questions |
 
 Configure one like any provider, then set the `decide` capability route. A request over the model's limits is refused before any call (`too_large`); file tagging and search screening split their questions to fit. Workers AI would otherwise cut the text it was given to fit and answer about the part it read, which is why Agora keeps the whole request inside the context. With no `decide` route, or with every use below switched off (the default), Agora makes no decision calls and behaves as it did before.
