@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
-/* Every scroller gets a thin, palette-coloured scrollbar like the console strip's, never the
-   OS default with arrows. The thumb is text-dim (about 2.5:1 or better on bg and surface in
+/* Every scroller gets the same thin, palette-coloured scrollbar, never the OS default with
+   arrows. The thumb is text-dim (about 2.5:1 or better on bg and surface in
    both palettes). Chromium and Safari get the pseudo-elements: once scrollbar-width or
    scrollbar-color is set, Chromium ignores them and draws arrow buttons on Windows. Browsers
    without the pseudo-elements (Firefox) get the standard properties, which have no arrows
@@ -17,13 +17,17 @@
   }
 }
 
-/* Touch swipes stay unobstructed; mouse users get a draggable scroll affordance. */
-.console-strip { scrollbar-width: none; }
+/* Touch swipes stay unobstructed; mouse users get the global scrollbar above as a draggable
+   scroll affordance. Same split: setting scrollbar-width here would bring Chromium's arrows back. */
 .console-strip::-webkit-scrollbar { display: none; }
+@supports not selector(::-webkit-scrollbar) {
+  .console-strip { scrollbar-width: none; }
+}
 @media (pointer: fine) {
-  .console-strip { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
-  .console-strip::-webkit-scrollbar { display: block; height: 6px; }
-  .console-strip::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+  .console-strip::-webkit-scrollbar { display: block; }
+  @supports not selector(::-webkit-scrollbar) {
+    .console-strip { scrollbar-width: thin; }
+  }
 }
 
 @theme {
