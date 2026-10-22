@@ -15,6 +15,13 @@ import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 import { fileAttachmentUpdateInTransaction } from '../lib/file-attachment-updates';
 
+/** Bound uploader text and quote it so embedded backticks cannot close the code span. */
+function auditFilename(filename: string): string {
+    const characters = Array.from(filename.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' '));
+    const label = characters.length > 80 ? characters.slice(0, 79).join('') + '…' : characters.join('');
+    const delimiter = '`'.repeat(Math.max(0, ...(label.match(/`+/g) ?? []).map(run => run.length)) + 1);
+    return `${delimiter} ${label} ${delimiter}`;
+}
 
 export async function fileRoutes(app: FastifyInstance) {
 
@@ -51,7 +58,8 @@ export async function fileRoutes(app: FastifyInstance) {
                     [fileId, trust ? request.userId : null]);
                 if (!changed.rows.length) return reply.status(403).send({ error: 'Only the server owner may change file trust' });
                 const username = (await db.query('SELECT username FROM users WHERE id = $1', [request.userId])).rows[0].username;
-                const content = `${username} ${trust ? 'marked' : 'removed trust from'} "${file.filename}"${trust ? ' as trusted' : ''}.`;
+                // Unlike POST /messages, this system-notice path never resolves mentions or protocol.
+                const content = `${username} ${trust ? 'marked' : 'removed trust from'} ${auditFilename(file.filename)}${trust ? ' as trusted' : ''}.`;
                 const noticeId = generateUlid();
                 const notice = (await db.query(`INSERT INTO messages (id, channel_id, author_id, content, system_event)
                     VALUES ($1, $2, NULL, $3, 'file_trust') RETURNING created_at`, [noticeId, file.channel_id, content])).rows[0];
