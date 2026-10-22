@@ -15,12 +15,11 @@ import { encodeRfc5987 } from '../lib/http-utils';
 import { config } from '../config';
 import { fileAttachmentUpdateInTransaction } from '../lib/file-attachment-updates';
 
-/** Bound uploader text and quote it so embedded backticks cannot close the code span. */
+/** Bound uploader text for a plain-text audit notice (no Markdown interpretation). */
 function auditFilename(filename: string): string {
     const characters = Array.from(filename.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' '));
     const label = characters.length > 80 ? characters.slice(0, 79).join('') + '…' : characters.join('');
-    const delimiter = '`'.repeat(Math.max(0, ...(label.match(/`+/g) ?? []).map(run => run.length)) + 1);
-    return `${delimiter} ${label} ${delimiter}`;
+    return `"${label}"`;
 }
 
 export async function fileRoutes(app: FastifyInstance) {

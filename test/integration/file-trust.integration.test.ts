@@ -69,7 +69,7 @@ test('owner trusts a member upload, viewers update after commit, and read/search
         expect(search.body.results.find((f: any) => f.id === fileId)).toMatchObject({ trustedByOwner: true, injectionWarning: false });
         const messages = await ctx.request.get(`/channels/${channelId}/messages`).set(member.auth);
         expect(messages.body.flatMap((m: any) => m.attachments).find((f: any) => f.id === fileId)).toMatchObject({ trustedByOwner: true, injectionWarning: false });
-        expect(messages.body.some((m: any) => m.systemEvent === 'file_trust' && m.content.includes('trustowner marked ` protocol.md ` as trusted'))).toBe(true);
+        expect(messages.body.some((m: any) => m.systemEvent === 'file_trust' && m.content.includes('trustowner marked "protocol.md" as trusted'))).toBe(true);
         const repeat = await ctx.request.post(`/files/${fileId}/trust`).set(owner.auth).send({});
         expect(repeat.status).toBe(200);
         expect((await ctx.db.query("SELECT 1 FROM audit_log WHERE action = 'file_trust' AND target_id = $1", [fileId])).rows).toHaveLength(1);
@@ -93,7 +93,7 @@ test('owner undo restores the original warning and emits an audit notice', async
     expect(undo.body).toMatchObject({ trustedByOwner: false, trustedBy: null, trustedAt: null, injectionWarning: true });
     expect((await ctx.request.get(`/files/${fileId}/text`).set(botAuth)).body.injectionWarning).toBe(true);
     const notices = await ctx.db.query("SELECT content FROM messages WHERE channel_id = $1 AND system_event = 'file_trust' ORDER BY id DESC LIMIT 1", [channelId]);
-    expect(notices.rows[0].content).toBe('trustowner removed trust from ` protocol.md `.');
+    expect(notices.rows[0].content).toBe('trustowner removed trust from "protocol.md".');
 });
 
 test('quotes and caps an uploader-controlled audit filename without resolving mentions or protocol', async () => {
@@ -103,7 +103,7 @@ test('quotes and caps an uploader-controlled audit filename without resolving me
     expect((await ctx.request.post(`/files/${fileId}/trust`).set(owner.auth).send({})).status).toBe(200);
     const notice = (await ctx.db.query("SELECT id, content, mentions_everyone, protocol FROM messages WHERE channel_id = $1 AND system_event = 'file_trust' ORDER BY id DESC LIMIT 1", [channelId])).rows[0];
     const capped = Array.from(nasty).slice(0, 79).join('') + '…';
-    expect(notice.content).toBe(`trustowner marked \`\` ${capped} \`\` as trusted.`);
+    expect(notice.content).toBe(`trustowner marked "${capped}" as trusted.`);
     expect(notice.mentions_everyone).toBe(false);
     expect(notice.protocol).toBeNull();
     expect((await ctx.db.query('SELECT 1 FROM message_mentions WHERE message_id = $1', [notice.id])).rows).toHaveLength(0);

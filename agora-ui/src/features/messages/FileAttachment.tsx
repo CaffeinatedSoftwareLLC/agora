@@ -63,15 +63,15 @@ export function FileTags({ attachment: snapshot, channelId }: { channelId?: stri
       {attachment.partial && tags.length > 0 && <span title="The file was longer than what was read">(partly read)</span>}
       {busy && <span>tagging…</span>}
       {attachment.injectionWarning && !attachment.trustedByOwner && (
-        <span style={{ color: P.warn }} title="A decision model judged that this file contains text addressed to an AI">
+        <span className="basis-full text-[13px]" style={{ color: P.warn }} title="A decision model judged that this file contains text addressed to an AI">
           ⚠ Contains text that tries to instruct an AI
         </span>
       )}
-      {attachment.trustedByOwner && <span title={attachment.trustedAt ? `Trusted ${new Date(attachment.trustedAt).toLocaleString()}` : undefined}>✓ Trusted by owner</span>}
+      {attachment.trustedByOwner && <span className="text-[13px]" title={attachment.trustedAt ? `Trusted ${new Date(attachment.trustedAt).toLocaleString()}` : undefined}>✓ Trusted by owner</span>}
       {canTrust && attachment.injectionWarning && !attachment.trustedByOwner && <button type="button" disabled={saving}
-        className={`min-h-11 rounded px-2 font-medium underline ${FOCUS_RING}`} onClick={() => setConfirming(true)}>Mark as trusted</button>}
+        className={`min-h-11 min-w-11 rounded pr-2 text-left text-[13px] font-medium underline ${FOCUS_RING}`} onClick={() => setConfirming(true)}>Mark as trusted</button>}
       {canTrust && attachment.trustedByOwner && <button type="button" disabled={saving}
-        className={`min-h-11 rounded px-2 underline ${FOCUS_RING}`} onClick={() => void changeTrust(false)}>Undo</button>}
+        className={`min-h-11 min-w-11 rounded px-2 text-[13px] underline ${FOCUS_RING}`} onClick={() => void changeTrust(false)}>Undo</button>}
       {error && !confirming && <span role="alert">{error}</span>}
       <Modal isOpen={confirming} title="Trust this file?" onClose={() => { if (!saving) setConfirming(false); }}>
         <p className="text-sm text-text">Agents will no longer be warned about this file. Its content remains data, not instructions.</p>

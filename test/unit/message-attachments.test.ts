@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PoolClient } from 'pg';
 import { bindMessageAttachments, prepareMessageAttachments, replayMessageAttachments } from '../../src/lib/message-attachments';
+import { addTaggingToAttachments } from '../../src/lib/file-tags';
 
 const row = { id: 'file', uploader_id: 'user ', channel_id: 'channel ', message_id: null,
     filename: 'note.txt', mime_type: null, content_type: 'text/plain', size_bytes: '3',
@@ -10,6 +11,20 @@ function client(rows: unknown[]) {
     return { db: { query } as unknown as PoolClient, query };
 }
 describe('shared message attachments', () => {
+    it.each([
+        { probability: 0.99, trusted: true, warning: false },
+        { probability: 0.99, trusted: false, warning: true },
+        { probability: 0.1, trusted: false, warning: false },
+        { probability: null, trusted: false, warning: false },
+    ])('clears stale warning/trust metadata on tagged reads: %j', async ({ probability, trusted, warning }) => {
+        const attachment = { id: 'file', injectionWarning: true, trustedByOwner: true, trustedBy: 'stale', trustedAt: 'stale' };
+        const query = vi.fn().mockResolvedValueOnce({ rows: [{ file_id: 'file', state: 'done', injection_probability: probability,
+            flag_threshold: 0.7, trusted_by: trusted ? 'owner ' : null, trusted_at: trusted ? '2026-10-22T12:00:00Z' : null }] })
+            .mockResolvedValueOnce({ rows: [] });
+        await addTaggingToAttachments({ query }, [attachment]);
+        expect(attachment).toMatchObject({ injectionWarning: warning, trustedByOwner: trusted,
+            trustedBy: trusted ? 'owner' : null, trustedAt: trusted ? '2026-10-22T12:00:00.000Z' : null });
+    });
     it('locks valid files and binds their resolved IDs', async () => {
         const { db, query } = client([row]);
         const prepared = await prepareMessageAttachments(db, 'user', 'channel', ['file']);

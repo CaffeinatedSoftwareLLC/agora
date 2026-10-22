@@ -124,19 +124,21 @@ export async function addTaggingToAttachments(db: Queryable, attachments: { id: 
         const job = jobByFile.get(attachment.id);
         if (!job) continue;
         attachment.tagging = job.state;
-        if (job.trusted_at && job.trusted_by) {
-            attachment.trustedByOwner = true;
+        attachment.trustedByOwner = !!(job.trusted_at && job.trusted_by);
+        if (attachment.trustedByOwner) {
             attachment.trustedBy = job.trusted_by.trim();
             attachment.trustedAt = new Date(job.trusted_at).toISOString();
+        } else {
+            attachment.trustedBy = null;
+            attachment.trustedAt = null;
         }
         attachment.tags = tags.rows
             .filter((r: any) => r.file_id.trim() === attachment.id && Number(r.probability) >= Number(job.tag_threshold))
             .slice(0, MAX_TAGS_SHOWN)
             .map((r: any) => r.name);
         if (job.coverage === 'partial') attachment.partial = true;
-        if (!job.trusted_at && job.injection_probability !== null && Number(job.injection_probability) >= Number(job.flag_threshold)) {
-            attachment.injectionWarning = true;
-        }
+        attachment.injectionWarning = !attachment.trustedByOwner && job.injection_probability != null
+            && Number(job.injection_probability) >= Number(job.flag_threshold);
     }
 }
 
