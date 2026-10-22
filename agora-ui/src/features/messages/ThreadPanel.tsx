@@ -286,7 +286,7 @@ export function ThreadPanel() {
               onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); handleFiles(e.clipboardData.files); } }}
               placeholder="Reply..."
               rows={1}
-              className="flex-1 resize-none bg-transparent outline-none text-[16px] md:text-[15px] leading-[1.4] py-2 md:py-1.5 px-1 placeholder:text-text-muted/70"
+              className="flex-1 min-w-0 resize-none bg-transparent outline-none text-[16px] md:text-[15px] leading-[1.4] py-2 md:py-1.5 px-1 placeholder:text-text-muted/70"
               style={{ color: P.text, maxHeight: '104px' }}
             />
             <MicButton

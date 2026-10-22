@@ -37,6 +37,8 @@ describe('thread reply attachments (#207)', () => {
         const res = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ attachments: [id] });
         expect(res.status).toBe(201);
         expect(res.body.attachments[0].size).toBe(3);
+        const reads = await ctx.request.get(`/channels/${channelId}/messages`).set(owner.auth);
+        expect(reads.body.find((m: any) => m.id === res.body.id).attachments[0].size).toBe(3);
     });
     it('creates an attachment-only reply with response and read envelopes', async () => {
         const id = await file();
@@ -46,6 +48,7 @@ describe('thread reply attachments (#207)', () => {
         expect(res.body.threadId).toBe(parentId);
         expect(res.body.attachments).toEqual([expect.objectContaining({ id, name: 'note.txt', mime: 'text/plain', size: 3, url: `/files/${id}` })]);
         const reads = await ctx.request.get(`/channels/${channelId}/messages/${parentId}/replies`).set(owner.auth);
+        expect(reads.body.find((r: any) => r.id === res.body.id).attachments[0].size).toBe(3);
         expect(reads.body.find((r: any) => r.id === res.body.id).attachments).toEqual([expect.objectContaining(res.body.attachments[0])]);
         expect((await ctx.db.query('SELECT message_id FROM files WHERE id=$1', [id])).rows[0].message_id.trim()).toBe(res.body.id);
     });
@@ -100,5 +103,7 @@ describe('thread reply attachments (#207)', () => {
         expect(results.map(r => r.status).sort()).toEqual([200, 201]);
         expect(results[0].body.id).toBe(results[1].body.id);
         expect(results[0].body.attachments).toEqual(results[1].body.attachments);
+        expect(results[0].body.attachments[0].size).toBe(3);
+        expect(results[1].body.attachments[0].size).toBe(3);
     });
 });
