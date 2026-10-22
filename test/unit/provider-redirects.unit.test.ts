@@ -179,3 +179,32 @@ describe('decision adapters refuse redirects', () => {
         expectManual(fetcher);
     });
 });
+
+describe('redirect responses', () => {
+    it('a refused redirect has its body cancelled, not left open', async () => {
+        const res = new Response('moved', { status: 302, headers: { location: 'http://127.0.0.1:9/elsewhere' } });
+        const cancel = vi.spyOn(res.body!, 'cancel');
+        vi.stubGlobal('fetch', vi.fn(async () => res));
+        expect(await anthropicAdapter.testConnection({ apiKey: 'fixture' }, 'm')).toEqual({ ok: false, error: refused('Claude') });
+        expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it('the Veo download follows one key-less hop to storage and no further', async () => {
+        const api = 'https://generativelanguage.googleapis.com/v1beta';
+        const fetcher = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+            const href = String(url);
+            if (href.endsWith(':predictLongRunning')) {
+                return Response.json({ name: 'operations/op1', done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: `${api}/files/v1:download` } }] } } });
+            }
+            if (href.startsWith(api)) return new Response(null, { status: 302, headers: { location: 'https://storage.example/video.mp4' } });
+            return new Response(Buffer.from('mp4'), { status: 200 });
+        });
+        vi.stubGlobal('fetch', fetcher);
+        const result = await geminiAdapter.generateVideo!({ apiKey: 'fixture' }, { model: 'm', prompt: 'p' } as any);
+        expect(result.data.toString()).toBe('mp4');
+        const [first, storage] = fetcher.mock.calls.slice(1);
+        expect(first[1]?.redirect).toBe('manual');
+        expect(String(storage[0])).toBe('https://storage.example/video.mp4');
+        expect(storage[1]).toEqual({ redirect: 'error' });
+    });
+});

@@ -54,7 +54,9 @@ export async function apiError(provider: string, res: Response): Promise<string>
  * and following a redirect would skip that check and carry the key along. A 3xx is an error.
  */
 export function redirectError(res: Response, what: string): string | null {
-    return res.status >= 300 && res.status < 400 ? `${what} redirected (HTTP ${res.status}); redirects are not followed` : null;
+    if (res.status < 300 || res.status >= 400) return null;
+    res.body?.cancel().catch(() => {});
+    return `${what} redirected (HTTP ${res.status}); redirects are not followed`;
 }
 
 export function refuseRedirect(res: Response, what: string): void {

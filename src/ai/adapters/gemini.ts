@@ -134,11 +134,13 @@ async function downloadVideo(uri: string, creds: ProviderCredentials): Promise<B
     if (url.protocol !== 'https:' || url.host !== apiHost) throw new Error('Veo returned an unexpected download URL');
     let res = await fetch(url, { headers: { 'x-goog-api-key': creds.apiKey ?? '' }, redirect: 'manual' });
     if (res.status >= 300 && res.status < 400) {
+        res.body?.cancel().catch(() => {});
         const location = res.headers.get('location');
         if (!location) throw new Error('Veo download redirect had no location');
         const next = new URL(location, url);
         if (next.protocol !== 'https:') throw new Error('Veo download redirected to a non-HTTPS URL');
-        res = await fetch(next);
+        // One hop only: the storage URL must answer directly
+        res = await fetch(next, { redirect: 'error' });
     }
     if (!res.ok) throw new Error(await apiError('Veo download', res));
     return readCapped(res, MAX_VIDEO_BYTES);
