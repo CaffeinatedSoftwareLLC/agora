@@ -38,7 +38,11 @@ export const DEFAULT_EVERYONE_PERMS =
     Permissions.UploadFiles |
     Permissions.UseExternalEmoji |
     Permissions.CreateInvites |
-    Permissions.ChangeNickname;
+    Permissions.ChangeNickname |
+    // Members create channels by default. Creating one is checked against the server's
+    // permissions, so removing the bit from @everyone is what closes it; bots never manage
+    // channels whatever their roles (src/routes/channels.ts)
+    Permissions.ManageChannels;
 
 export function computePermissions(params: {
     userId: string;

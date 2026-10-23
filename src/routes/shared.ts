@@ -25,10 +25,12 @@ export async function resolveMentions(
     serverId: string | null,
     userId: string,
     content: string | null,
+    // The author holds MentionEveryone; without it @everyone notifies no one
+    canMentionEveryone: boolean,
 ): Promise<{ mentionedUsers: { id: string; bot: boolean }[]; mentionsEveryone: boolean }> {
     // Usernames are case-insensitive here, as at login: `@codex` mentions Codex
     const mentionedUsernames = mentionTokens(content);
-    const mentionsEveryone = mentionedUsernames.includes('everyone');
+    const mentionsEveryone = canMentionEveryone && mentionedUsernames.includes('everyone');
 
     const nonEveryoneUsernames = mentionedUsernames.filter((u: string) => u !== 'everyone');
     let mentionedUsers: { id: string; bot: boolean }[] = [];

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { checkChannelPermissions } from '../../src/lib/channel-access';
+import { checkChannelPermissions, uploadPermissions } from '../../src/lib/channel-access';
 import { DEFAULT_EVERYONE_PERMS, Permissions } from '../../src/permissions';
 
-const required = Permissions.ViewChannel | Permissions.SendMessages | Permissions.UploadFiles;
+const required = uploadPermissions(true);
 function client(opts: { access?: boolean; member?: boolean; permissions?: bigint; deny?: bigint; allow?: bigint } = {}) {
     const query = vi.fn(async (sql: string) => {
         if (sql.includes('FROM bot_channel_access')) return { rows: opts.access === false ? [] : [{}] };
@@ -30,9 +30,15 @@ describe('bot upload channel permissions', () => {
         expect(await checkChannelPermissions(db, 'channel', 'bot', required, { isBot: true })).toEqual({ allowed: true });
         expect(db.query.mock.calls.some(([sql]) => sql.includes('FROM server_members'))).toBe(false);
     });
-    it.each([Permissions.UploadFiles, Permissions.SendMessages, Permissions.ViewChannel])('enforces missing permission %s and channel overrides', async permission => {
+    it('enforces UploadFiles and channel overrides', async () => {
+        const permission = Permissions.UploadFiles;
         expect(await checkChannelPermissions(client({ permissions: DEFAULT_EVERYONE_PERMS & ~permission }), 'channel', 'bot', required, { isBot: true })).toMatchObject({ allowed: false, status: 403 });
         expect(await checkChannelPermissions(client({ deny: permission }), 'channel', 'bot', required, { isBot: true })).toMatchObject({ allowed: false, status: 403 });
         expect(await checkChannelPermissions(client({ deny: permission, allow: permission }), 'channel', 'bot', required, { isBot: true })).toEqual({ allowed: true });
+    });
+    it('gates bots by channel access, not SendMessages or ViewChannel; people still need SendMessages', async () => {
+        const denied = Permissions.SendMessages | Permissions.ViewChannel;
+        expect(await checkChannelPermissions(client({ deny: denied }), 'channel', 'bot', required, { isBot: true })).toEqual({ allowed: true });
+        expect(uploadPermissions(false)).toBe(Permissions.UploadFiles | Permissions.SendMessages);
     });
 });

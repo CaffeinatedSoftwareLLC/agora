@@ -63,11 +63,21 @@ test.each([{}, { content: '' }, { attachments: [] }, { content: '', attachments:
     expect((await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send(body)).status).toBe(400);
 });
 
-test.each([Permissions.UploadFiles, Permissions.SendMessages, Permissions.ViewChannel])('bot upload enforces channel permission %s without storing a file', async deny => {
+const denyOnEveryone = (deny: bigint) => ctx.db.query('INSERT INTO channel_role_overrides (channel_id, role_id, allow, deny) VALUES ($1, $2, 0, $3) ON CONFLICT (channel_id, role_id) DO UPDATE SET deny = EXCLUDED.deny', [channelId, roleId, deny.toString()]);
+
+test('bot upload enforces UploadFiles without storing a file', async () => {
     const before = await count();
-    await ctx.db.query('INSERT INTO channel_role_overrides (channel_id, role_id, allow, deny) VALUES ($1, $2, 0, $3) ON CONFLICT (channel_id, role_id) DO UPDATE SET deny = EXCLUDED.deny', [channelId, roleId, deny.toString()]);
+    await denyOnEveryone(Permissions.UploadFiles);
     try { expect((await upload()).status).toBe(403); expect(await count()).toBe(before); }
-    finally { await ctx.db.query('UPDATE channel_role_overrides SET deny = 0 WHERE channel_id = $1 AND role_id = $2', [channelId, roleId]); }
+    finally { await denyOnEveryone(0n); }
+});
+
+// A bot's gate is its channel access, as for posting: "agents post, people watch" channels
+// deny these to @everyone and still let their agents share files
+test('bot upload ignores SendMessages and ViewChannel denies on @everyone', async () => {
+    await denyOnEveryone(Permissions.SendMessages | Permissions.ViewChannel);
+    try { expect((await upload()).status).toBe(201); }
+    finally { await denyOnEveryone(0n); }
 });
 
 test('bot cannot upload to a channel outside its allowlist', async () => {
