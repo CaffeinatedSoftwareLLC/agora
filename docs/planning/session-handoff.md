@@ -1,30 +1,29 @@
-# Session handoff (Claude coordinator), 2026-10-22 ~01:35 UTC (Eryk: stop for tonight)
+# Session handoff (Claude coordinator), 2026-10-23 ~02:25 UTC
 
 Start a new Claude Code session in this repo and say: "read docs/planning/session-handoff.md and continue in Agora".
 
-## Goal of this phase
-Run **every test in `docs/planning/beta-test-plan.md`**, fix what fails, Codex reviews every PR, Eryk merges and deploys (each needs his go).
-
-## How to work in Agora
-1. **Everything for Eryk goes in the active job's thread**, never top-level (he misses messages otherwise). Keep that thread's listener armed with `until="any"`.
-2. Agent coordination: #194 (cross-thread wake) is live since `f1d8c58`. Once Codex confirms his agora-mcp has it (>= `cf37651` or 0.6.0), move Codex coordination into job threads too (#211: top-level #general is cluttered).
-3. Codex (Sol 6.1) builds small fixes and reviews; **no deletion of any kind** for him (skip-permissions). Claude runs integration/E2E/live. Answer every `[YIELD to=Claude]` promptly; he waits.
-4. Use fresh DBs for review runs (`CREATE DATABASE accord_review_<n>` on Docker Desktop `agora-test-postgres-1`, override both `DATABASE_URL` and `TEST_DATABASE_URL`). Auto-mode refuses deleting rows in the shared `accord_test`.
-5. Never post a number you didn't run. Version for the app stays **0.5** (Eryk).
-
 ## State
-- **Live: `9ef181c`** (deployed 2026-10-22 ~01:03 UTC; backup `~/agora-backups/pre-deploy-20261021-2103.dump` + roles `post-deploy-roles-20261021-2103.sql`). Migrations through 063. AgoraHost PID 38088, codex profile `windowsSandbox: unelevated`.
-- Merged 2026-10-21: the 15-PR batch, #167 #168 #170 #173 #174 #177 #178 #179 #181 #186 #187 #190 #191 #192 #193 #194 #195, then #200 #201 #202 #203 #205 #208.
-- **Open PR: #212** (agora-mcp 0.6.0 release bump), waiting for Codex review. After merge: `gh release create v0.6.0` from main (workflow attaches tarballs; tag must equal agora-mcp version). Then tell mac-bot (job 10 thread `01M5GJEAH7DQJQQH5PHP9A66BT`) to reinstall from releases/latest and retry `file_read` on image `01M5GJ7Q9AE1VS8JFEY9WY921K`.
-- **Mac agent:** `mac-bot` (Claude Code on Eryk's Mac mini, tailnet 100.113.157.31) connected. Tailnet grant now `src ["my-phone","Mac"] → agora-home:443`; new devices must be added there. macOS pass done (#213).
-- e2e instance `agora-e2e` is built from `test/combined-m01-m03`.
+- **Live: `62a9c65`** (deployed 2026-10-23 ~02:18 UTC). Migrations through **067**. Backups `~/agora-backups/pre-deploy-20261022-2217.dump` + `post-deploy-roles-20261022-2218.sql`.
+- Merged and live on 2026-10-22: #215 #216 #221 #225 #226 #227 #228 #232 #233 #235 #238 #217 #240 #242 #245 #243.
+- AgoraHost autostarts (it survived an accidental PC reboot). Deploy: `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Users/miste/agora-deploy.sh`, then the roles backup, then **re-arm every Agora listener** (each deploy breaks chat_wait).
+- The owner gave a **standing go**: merge and deploy anything that's tested (full integration on a fresh DB plus the browser suite, main tree equal to the tested tree), reviewed (Codex, or an independent Claude reviewer while Codex is out) and backed up. Don't ask per PR.
+- Codex ran out of usage on 2026-10-22 ~20:30 UTC. His queue is empty. #230, #231, #234 and #236 are unassigned.
 
-## Threads
-- Job 9 manual sessions: `01M5G83H82XF52PN5WEC6S947W` (open). Ledger: `docs/planning/manual-ledger.csv`.
-- Job 10 Mac agent: `01M5GJEAH7DQJQQH5PHP9A66BT` (open until the 0.6.0 retry).
+## Threads (#general)
+- Job 9c, status and owner updates: `01M5J7SPC4T21GDVPA8M2TK2AB` (71+ replies; #221 fixed the 50-reply limit).
+- Job 11, Codex fix wave: `01M5HRNYM37NQZ114K0S1RFNVF`.
+- Job 12, decision models: `01M5JE5Q4177M6B2VKMSMM1W2J`.
 
-## Tests left
-- **Manual sessions M05–M21** (§5): M05 files, M06–M08 sessions/lurk/budget, M09 review, M10 cards, M11 tasks/canvas, M12 preview/handoff, M13 subtasks/voice, M14 voice/settings, M15 bots/admin, M16 PC files + terms, M17 channel/terminal, M18 SIWC approvals (disposable host), M19–M21 destructive (disposable instance). Then items 11 and 100 (Tailscale off, phone removal) last. M04 #22 to retest in a channel with notice runs.
-- **Blocked:** runtime/code-run tests (#126, gVisor on a dedicated host).
-- **Automated gaps:** WebKit Playwright project (#213), OP-04.host-version live run (code-reviewed only), A2 Gemini flash-lite hello flake.
-- **Open beta issues:** #213 macOS/WebKit, #211 fold agent chatter, #210 Agents label, #209 second-install collisions, #206 storage-authority flake, #180 test typecheck, #150 e2e repeatability, #132 session/thread closure.
+## Video
+- **v3 is final**: `video/out/agora-features-v3.mp4` (2:30, Terracotta, the owner's voice-over levelled to -16 LUFS, a lofi bed about 20 dB under). The project is `video/agora-features/` (composition AgoraFeaturesV3; the real-text scenes come from `real-text.json` with the owner's name redacted). The owner plans to post it to r/vibecoding; a draft post is in the job 9c thread.
+
+## Open issues worth picking up
+- **#241 (M):** Settings → Bots renders every bot and re-renders the whole list about every 0.6 s. It makes ID-05/ID-04 e2e fail on the populated e2e instance.
+- #244 (stale approval cards), #246 (follow-ups from the #245 review), #236 (key redaction in the chat, search and speech adapters), #230 (agent liveness and usage monitoring), #231 (local bge-small RAG), #234 (Decision models settings page), #206 (storage-authority race), #150 (e2e flakes).
+- Manual beta sessions M07–M21 are still open (see `docs/planning/manual-ledger.csv`). Agent-session sessions need a separate test agent (`scout`), so they don't collide with the terminal Claude and Codex.
+
+## Working rules learned 2026-10-22
+- Check running jobs yourself every few minutes (processes, log tails). Subagent monitors fail silently.
+- Listener subagents must retry through `fetch failed` for at least 15 minutes and never stop just to report status.
+- Never `git worktree remove`; worktrees share node_modules through junctions.
+- The repo is public: fix security findings before describing them in issues, and use neutral PR wording.
