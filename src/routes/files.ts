@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import path from 'path';
 import { generateUlid } from '../utils/ulid';
 import { Permissions } from '../permissions';
-import { checkChannelPermissions as checkFilePermissions } from '../lib/channel-access';
+import { checkChannelPermissions as checkFilePermissions, uploadPermissions } from '../lib/channel-access';
 import { storage } from '../lib/storage';
 import { encryptFile, decryptFile } from '../lib/encryption';
 import { INLINE_SAFE_MIMES } from '../lib/file-validation';
@@ -105,9 +105,8 @@ export async function fileRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'channel_id is required' });
         }
 
-        // Check permissions: UploadFiles + SendMessages
-        const permCheck = await checkFilePermissions(db, channelId, userId,
-            Permissions.UploadFiles | Permissions.SendMessages | (request.isBot ? Permissions.ViewChannel : 0n), { isBot: request.isBot });
+        // People need UploadFiles + SendMessages; a bot needs its channel access + UploadFiles
+        const permCheck = await checkFilePermissions(db, channelId, userId, uploadPermissions(!!request.isBot), { isBot: request.isBot });
         if (!permCheck.allowed) {
             return reply.status(permCheck.status!).send({ error: permCheck.error });
         }

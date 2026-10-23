@@ -107,6 +107,26 @@ async function checkRoleHierarchy(
 }
 
 /**
+ * Unassigning or deleting a role lifts the denies in its channel overrides, and a lifted deny
+ * is a grant: a caller who is neither the owner nor an Administrator may only lift deny bits
+ * they hold in each of those channels. That keeps a muted member from unmuting themselves (or
+ * everyone) by removing the role that mutes them. Assigning a role only adds denies.
+ */
+async function checkLiftedRoleDenies(db: any, callerPerms: bigint, roleId: string, callerId: string): Promise<string | null> {
+    if (callerPerms & Permissions.Administrator) return null;
+    const overrides = await db.query(
+        'SELECT channel_id, deny FROM channel_role_overrides WHERE role_id = $1 AND deny <> 0',
+        [roleId]
+    );
+    for (const o of overrides.rows) {
+        if (BigInt(o.deny) & ~await channelPermsOf(db, o.channel_id.trim(), callerId)) {
+            return 'Cannot lift denies on permissions you do not have';
+        }
+    }
+    return null;
+}
+
+/**
  * What an override grants in a channel: its allow bits and any deny bits it lifts. A caller
  * who is neither the owner nor an Administrator may only grant bits they hold in that channel,
  * so an override can't open a channel hidden from them or lift a deny that applies to them.
@@ -427,6 +447,9 @@ export async function roleRoutes(app: FastifyInstance) {
         const callerPerms = await loadAndComputePermissions(db, request.userId, serverId);
         const hierarchyErr = await checkRoleHierarchy(db, callerPerms, roleId, BigInt(role.rows[0].permissions), request.userId);
         if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
+        // Its overrides go with it (ON DELETE CASCADE), lifting their denies for every holder
+        const liftErr = await checkLiftedRoleDenies(db, callerPerms, roleId, request.userId);
+        if (liftErr) return reply.status(403).send({ error: liftErr });
 
         await db.query(
             'DELETE FROM roles WHERE id = $1 AND server_id = $2',
@@ -511,6 +534,8 @@ export async function roleRoutes(app: FastifyInstance) {
             if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
             const targetErr = await checkMemberTarget(db, callerPerms, serverId, targetUserId, 'roles');
             if (targetErr) return reply.status(403).send({ error: targetErr });
+            const liftErr = await checkLiftedRoleDenies(db, callerPerms, roleId, request.userId);
+            if (liftErr) return reply.status(403).send({ error: liftErr });
         }
 
         const result = await db.query(

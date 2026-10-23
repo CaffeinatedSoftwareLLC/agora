@@ -184,6 +184,51 @@ describe('Role assignment targets', () => {
     });
 });
 
+describe('Lifting denies through a role', () => {
+    it('a muted ManageRoles-only member cannot unmute themselves or everyone by removing the role; others in reach can', async () => {
+        const w = await roleWorld('ld1');
+        const base = `/servers/${w.serverId}`;
+        const ch = `/channels/${w.generalChannelId}`;
+        // "Muted" holds nothing and denies SendMessages in #general; the manager wears it
+        const muted = await createRole(w.owner.auth, w.serverId, 'Muted', 0n);
+        expect((await ctx.request.put(`${ch}/overrides/roles/${muted}`).set(w.owner.auth)
+            .send({ allow: '0', deny: Permissions.SendMessages.toString() })).status).toBe(200);
+        await assign(w.owner.auth, w.serverId, w.manager.userId, muted);
+        // "Contractors" hides #ops; the manager wears that too
+        const ops = await ctx.request.post(`${base}/channels`).set(w.owner.auth).send({ name: 'ops', channelType: 3 });
+        const contractors = await createRole(w.owner.auth, w.serverId, 'Contractors', 0n);
+        expect((await ctx.request.put(`/channels/${ops.body.id}/overrides/roles/${contractors}`).set(w.owner.auth)
+            .send({ allow: '0', deny: Permissions.ViewChannel.toString() })).status).toBe(200);
+        await assign(w.owner.auth, w.serverId, w.manager.userId, contractors);
+
+        const liftErr = 'Cannot lift denies on permissions you do not have';
+        for (const res of [
+            await ctx.request.delete(`${base}/members/${w.manager.userId}/roles/${muted}`).set(w.manager.auth),
+            await ctx.request.delete(`${base}/roles/${muted}`).set(w.manager.auth),
+            await ctx.request.delete(`${base}/members/${w.manager.userId}/roles/${contractors}`).set(w.manager.auth),
+            await ctx.request.delete(`${base}/roles/${contractors}`).set(w.manager.auth),
+        ]) {
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe(liftErr);
+        }
+        expect((await ctx.request.post(`${ch}/messages`).set(w.manager.auth).send({ content: 'unmuted?' })).status).toBe(403);
+        expect((await ctx.request.get(`/channels/${ops.body.id}/messages`).set(w.manager.auth)).status).toBe(403);
+
+        // A manager who isn't muted can take Muted off a lower member
+        const other = await authedUser(ctx.request, 'ld1other');
+        const plain = await authedUser(ctx.request, 'ld1plain');
+        for (const u of [other, plain]) await joinViaInvite(ctx.request, w.owner.auth, u.auth, w.serverId);
+        await assign(w.owner.auth, w.serverId, other.userId, w.managerRole);
+        await assign(w.owner.auth, w.serverId, plain.userId, muted);
+        expect((await ctx.request.delete(`${base}/members/${plain.userId}/roles/${muted}`).set(other.auth)).status).toBe(200);
+        expect((await ctx.request.post(`${ch}/messages`).set(plain.auth).send({ content: 'back' })).status).toBe(201);
+
+        // An Administrator can always delete it
+        expect((await ctx.request.delete(`${base}/roles/${muted}`).set(w.admin.auth)).status).toBe(200);
+        expect((await ctx.request.post(`${ch}/messages`).set(w.manager.auth).send({ content: 'unmuted' })).status).toBe(201);
+    });
+});
+
 describe('SendMessages', () => {
     async function chat(tag: string) {
         const owner = await authedUser(ctx.request, `${tag}owner`);

@@ -898,7 +898,7 @@ To attach a file to a message, upload it first, then pass its `id` in the `attac
 
 Upload one file to a channel.
 
-**Auth:** Human session or `Authorization: Bot <token>`. Needs `UploadFiles` and `SendMessages` in the channel. Bots also need explicit `bot_channel_access` and `ViewChannel`; they use `@everyone` plus applicable role/channel overrides without human server membership. Paused bots receive `423`.
+**Auth:** Human session or `Authorization: Bot <token>`. People need `UploadFiles` and `SendMessages` in the channel. Bots need explicit `bot_channel_access` and `UploadFiles` (through `@everyone` plus applicable channel overrides, without human server membership); as for posting, `SendMessages` and `ViewChannel` don't gate them. Paused bots receive `423`.
 
 **Rate limit:** 20 uploads per minute per user.
 
