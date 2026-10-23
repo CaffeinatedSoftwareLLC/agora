@@ -118,15 +118,22 @@ function checkChannelGrant(channelPerms: bigint, prevDeny: bigint, allowBits: bi
 }
 
 /**
- * A member override reaches past a member's roles, so a caller who is neither the owner nor
- * an Administrator may only set one on a member whose server permissions are all their own,
- * never on the owner or an Administrator.
+ * Member overrides and role assignments act on one member, so a caller who is neither the
+ * owner nor an Administrator may only change them for a member whose server permissions are
+ * all their own, never for the owner or an Administrator. A role carrying only denies (say,
+ * "Muted") is within anyone's reach, so the target is what keeps it off a more powerful member.
  */
-async function checkMemberTarget(db: any, callerPerms: bigint, serverId: string, targetUserId: string): Promise<string | null> {
+async function checkMemberTarget(
+    db: any,
+    callerPerms: bigint,
+    serverId: string,
+    targetUserId: string,
+    what: 'overrides' | 'roles',
+): Promise<string | null> {
     if (callerPerms & Permissions.Administrator) return null;
     const targetPerms = await loadAndComputePermissions(db, targetUserId, serverId);
     return (targetPerms & Permissions.Administrator) || (targetPerms & ~callerPerms)
-        ? 'Cannot change overrides for a member with permissions you do not have'
+        ? `Cannot change ${what} for a member with permissions you do not have`
         : null;
 }
 
@@ -469,6 +476,8 @@ export async function roleRoutes(app: FastifyInstance) {
         const callerPerms = await loadAndComputePermissions(db, callerId, serverId);
         const err = await checkRoleHierarchy(db, callerPerms, roleId, rolePerms, callerId);
         if (err) return reply.status(403).send({ error: err });
+        const targetErr = await checkMemberTarget(db, callerPerms, serverId, targetUserId, 'roles');
+        if (targetErr) return reply.status(403).send({ error: targetErr });
 
         try {
             await db.query(
@@ -500,6 +509,8 @@ export async function roleRoutes(app: FastifyInstance) {
             const callerPerms = await loadAndComputePermissions(db, request.userId, serverId);
             const hierarchyErr = await checkRoleHierarchy(db, callerPerms, roleId, BigInt(role.rows[0].permissions), request.userId);
             if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
+            const targetErr = await checkMemberTarget(db, callerPerms, serverId, targetUserId, 'roles');
+            if (targetErr) return reply.status(403).send({ error: targetErr });
         }
 
         const result = await db.query(
@@ -699,7 +710,7 @@ export async function roleRoutes(app: FastifyInstance) {
             ?? await directorGuard(db, serverId, callerId, BigInt(prev.rows[0]?.deny ?? 0), denyBits);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
-        const targetErr = await checkMemberTarget(db, callerPerms, serverId, targetUserId);
+        const targetErr = await checkMemberTarget(db, callerPerms, serverId, targetUserId, 'overrides');
         if (targetErr) return reply.status(403).send({ error: targetErr });
 
         // Escalation check on what the override grants in this channel
@@ -732,7 +743,7 @@ export async function roleRoutes(app: FastifyInstance) {
         if (prev.rows[0]) {
             const ownerErr = await directorGuard(db, (request as any)._serverId, request.userId, BigInt(prev.rows[0].allow) | BigInt(prev.rows[0].deny), 0n);
             if (ownerErr) return reply.status(403).send({ error: ownerErr });
-            const targetErr = await checkMemberTarget(db, (request as any)._callerPerms, (request as any)._serverId, targetUserId);
+            const targetErr = await checkMemberTarget(db, (request as any)._callerPerms, (request as any)._serverId, targetUserId, 'overrides');
             if (targetErr) return reply.status(403).send({ error: targetErr });
             // Removing an override lifts its denies
             const grantErr = checkChannelGrant((request as any)._channelPerms, BigInt(prev.rows[0].deny), 0n, 0n);

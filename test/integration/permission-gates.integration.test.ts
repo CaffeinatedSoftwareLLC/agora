@@ -150,6 +150,40 @@ describe('Role hierarchy', () => {
     });
 });
 
+describe('Role assignment targets', () => {
+    it('a ManageRoles-only member cannot put a role on, or take one from, the owner, an Administrator or a more powerful member', async () => {
+        const w = await roleWorld('rt1');
+        const base = `/servers/${w.serverId}`;
+        // "Muted" grants nothing, so it is within anyone's reach; only the target keeps it off
+        const muted = await createRole(w.owner.auth, w.serverId, 'Muted', 0n);
+        expect((await ctx.request.put(`/channels/${w.generalChannelId}/overrides/roles/${muted}`).set(w.owner.auth)
+            .send({ allow: '0', deny: Permissions.SendMessages.toString() })).status).toBe(200);
+        await assign(w.owner.auth, w.serverId, w.member.userId, w.kickRole);
+
+        const targetErr = 'Cannot change roles for a member with permissions you do not have';
+        for (const target of [w.owner, w.admin, w.member]) {
+            const res = await ctx.request.put(`${base}/members/${target.userId}/roles/${muted}`).set(w.manager.auth);
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe(targetErr);
+        }
+        expect((await ctx.request.post(`/channels/${w.generalChannelId}/messages`).set(w.member.auth).send({ content: 'still here' })).status).toBe(201);
+
+        // Taking a role away from a more powerful member is refused the same way
+        await assign(w.owner.auth, w.serverId, w.member.userId, muted);
+        const unassign = await ctx.request.delete(`${base}/members/${w.member.userId}/roles/${muted}`).set(w.manager.auth);
+        expect(unassign.status).toBe(403);
+        expect(unassign.body.error).toBe(targetErr);
+
+        // A plain member is in reach, and an Administrator reaches everyone
+        const plain = await authedUser(ctx.request, 'rt1plain');
+        await joinViaInvite(ctx.request, w.owner.auth, plain.auth, w.serverId);
+        expect((await ctx.request.put(`${base}/members/${plain.userId}/roles/${muted}`).set(w.manager.auth)).status).toBe(200);
+        expect((await ctx.request.post(`/channels/${w.generalChannelId}/messages`).set(plain.auth).send({ content: 'muted' })).status).toBe(403);
+        expect((await ctx.request.delete(`${base}/members/${plain.userId}/roles/${muted}`).set(w.manager.auth)).status).toBe(200);
+        expect((await ctx.request.delete(`${base}/members/${w.member.userId}/roles/${muted}`).set(w.admin.auth)).status).toBe(200);
+    });
+});
+
 describe('SendMessages', () => {
     async function chat(tag: string) {
         const owner = await authedUser(ctx.request, `${tag}owner`);
@@ -372,7 +406,7 @@ describe('Channel overrides', () => {
         // Once the manager sees the channel too, Staff grants nothing they lack
         expect((await ctx.request.put(`/channels/${w.hiddenId}/overrides/members/${w.manager.userId}`).set(w.owner.auth)
             .send(allow(Permissions.ViewChannel))).status).toBe(200);
-        expect((await ctx.request.put(`${base}/members/${w.member.userId}/roles/${staff}`).set(w.manager.auth)).status).toBe(200);
+        expect((await ctx.request.put(`${base}/members/${w.manager.userId}/roles/${staff}`).set(w.manager.auth)).status).toBe(200);
         // An Administrator reaches it regardless
         expect((await ctx.request.delete(`${base}/roles/${staff}`).set(w.admin.auth)).status).toBe(200);
     });
