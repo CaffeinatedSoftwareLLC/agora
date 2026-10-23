@@ -406,7 +406,7 @@ List all members of a server with their assigned roles.
 
 Create an invite code for a server.
 
-**Auth:** Required (must be a server member with CreateInvites, which `@everyone` has by default; the owner and Administrators always may)
+**Auth:** Required (must be a server member with CreateInvites, which `@everyone` has by default; the owner and Administrators always may). Removing CreateInvites does not revoke invites already created.
 
 **Response** `201`
 ```json
@@ -498,7 +498,7 @@ Create a new channel in a server.
 
 Send a message to a channel. Parses `@username` mentions from content and tracks `@everyone` mentions.
 
-**Auth:** Required (ViewChannel and SendMessages in the channel; for a bot, channel access and SendMessages)
+**Auth:** Required (ViewChannel and SendMessages in the channel; for a bot, its channel access, which is not gated by SendMessages)
 
 **Request Body**
 ```json

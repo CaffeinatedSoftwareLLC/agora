@@ -90,25 +90,36 @@ describe('Role hierarchy', () => {
         expect((await ctx.request.delete(`${base}/roles/${within}`).set(w.manager.auth)).status).toBe(200);
     });
 
-    // Every member inherits @everyone's bits, so its current value is always within a member's
-    // permissions; the new value is what can exceed them.
-    it('@everyone edits by a ManageRoles-only member stay within their permissions', async () => {
+    // @everyone reaches every member at once: stripping it (or denying it per channel) would lock
+    // everyone out, so only the owner and Administrators change it
+    it('a ManageRoles-only member cannot change @everyone or its channel overrides; an Administrator can', async () => {
         const w = await roleWorld('rh4');
         const path = `/servers/${w.serverId}/roles/${w.everyoneRoleId}`;
+        const override = `/channels/${w.generalChannelId}/overrides/roles/${w.everyoneRoleId}`;
+        const lockout = { allow: '0', deny: (Permissions.ViewChannel | Permissions.SendMessages).toString() };
 
-        expect((await ctx.request.patch(path).set(w.manager.auth)
-            .send({ permissions: (DEFAULT_EVERYONE_PERMS | Permissions.KickMembers).toString() })).status).toBe(403);
-        expect((await ctx.request.patch(path).set(w.manager.auth)
-            .send({ permissions: Permissions.Administrator.toString() })).status).toBe(403);
-        // Stripping bits does not buy room for one the caller lacks
-        expect((await ctx.request.patch(path).set(w.manager.auth)
-            .send({ permissions: Permissions.KickMembers.toString() })).status).toBe(403);
+        for (const permissions of ['0', (DEFAULT_EVERYONE_PERMS & ~Permissions.SendMessages).toString(),
+            (DEFAULT_EVERYONE_PERMS | Permissions.KickMembers).toString(), Permissions.Administrator.toString()]) {
+            const res = await ctx.request.patch(path).set(w.manager.auth).send({ permissions });
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe('Only the owner and Administrators can change @everyone permissions');
+        }
         expect(await rolePerms(w.everyoneRoleId)).toBe(DEFAULT_EVERYONE_PERMS.toString());
+        // Leaving the permissions as they are is not a change
+        expect((await ctx.request.patch(path).set(w.manager.auth).send({ permissions: DEFAULT_EVERYONE_PERMS.toString() })).status).toBe(200);
 
-        const trimmed = await ctx.request.patch(path).set(w.manager.auth)
-            .send({ permissions: (DEFAULT_EVERYONE_PERMS & ~Permissions.CreateInvites).toString() });
-        expect(trimmed.status).toBe(200);
-        expect(await rolePerms(w.everyoneRoleId)).toBe((DEFAULT_EVERYONE_PERMS & ~Permissions.CreateInvites).toString());
+        expect((await ctx.request.put(override).set(w.manager.auth).send(lockout)).status).toBe(403);
+        const overrides = () => ctx.db.query('SELECT 1 FROM channel_role_overrides WHERE role_id = $1', [w.everyoneRoleId]);
+        expect((await overrides()).rows.length).toBe(0);
+
+        // An Administrator can, and a manager can't undo it either
+        expect((await ctx.request.put(override).set(w.admin.auth).send(lockout)).status).toBe(200);
+        expect((await ctx.request.delete(override).set(w.manager.auth)).status).toBe(403);
+        expect((await overrides()).rows.length).toBe(1);
+        expect((await ctx.request.delete(override).set(w.admin.auth)).status).toBe(200);
+        const trimmed = (DEFAULT_EVERYONE_PERMS & ~Permissions.CreateInvites).toString();
+        expect((await ctx.request.patch(path).set(w.admin.auth).send({ permissions: trimmed })).status).toBe(200);
+        expect(await rolePerms(w.everyoneRoleId)).toBe(trimmed);
     });
 
     it('an Administrator can manage every role except DirectAgents roles, which stay with the owner', async () => {
@@ -183,7 +194,7 @@ describe('SendMessages', () => {
         expect((await ctx.request.post(`${ch}/messages/${c.parentId}/replies`).set(c.member.auth).send({ content: 'yes' })).status).toBe(201);
     });
 
-    it('a bot with channel access posts by default, in a hidden channel too, and a SendMessages deny stops it', async () => {
+    it('a bot posts wherever it has channel access, whatever SendMessages says; removing the access stops it', async () => {
         const c = await chat('sm3');
         const ch = `/channels/${c.generalChannelId}`;
         const bot = await ctx.request.post(`/servers/${c.serverId}/bots`).set(c.owner.auth).send({ username: 'sm3bot' });
@@ -200,9 +211,18 @@ describe('SendMessages', () => {
             .send({ allow: '0', deny: Permissions.ViewChannel.toString() })).status).toBe(200);
         expect((await ctx.request.post(`${ch}/messages`).set(botAuth).send({ content: 'bot in private' })).status).toBe(201);
 
+        // "Agents post, people watch": SendMessages denied to @everyone in the channel and on the server
         expect((await ctx.request.put(`${ch}/overrides/roles/${c.everyoneRoleId}`).set(c.owner.auth)
-            .send({ allow: '0', deny: Permissions.SendMessages.toString() })).status).toBe(200);
-        expect((await ctx.request.post(`${ch}/messages`).set(botAuth).send({ content: 'bot muted' })).status).toBe(403);
+            .send({ allow: '0', deny: (Permissions.ViewChannel | Permissions.SendMessages).toString() })).status).toBe(200);
+        expect((await ctx.request.patch(`/servers/${c.serverId}/roles/${c.everyoneRoleId}`).set(c.owner.auth)
+            .send({ permissions: (DEFAULT_EVERYONE_PERMS & ~Permissions.SendMessages).toString() })).status).toBe(200);
+        expect((await ctx.request.post(`${ch}/messages`).set(botAuth).send({ content: 'bot still posts' })).status).toBe(201);
+        expect((await ctx.request.post(`${ch}/messages/${c.parentId}/replies`).set(botAuth).send({ content: 'and replies' })).status).toBe(201);
+        expect((await ctx.request.post(`${ch}/messages`).set(c.member.auth).send({ content: 'member' })).status).toBe(403);
+
+        // Muting a bot means removing its channel access
+        expect((await ctx.request.delete(`${ch}/bots/${bot.body.id}`).set(c.owner.auth)).status).toBe(200);
+        expect((await ctx.request.post(`${ch}/messages`).set(botAuth).send({ content: 'gone' })).status).toBe(403);
     });
 });
 
@@ -240,6 +260,121 @@ describe('MentionEveryone', () => {
         const fromOwner = await ctx.request.post(`${ch}/messages`).set(owner.auth).send({ content: '@everyone owner' });
         expect(fromOwner.body.mentionsEveryone).toBe(true);
         expect(await mentionCount(generalChannelId, member.userId)).toBe(1);
+    });
+});
+
+describe('Channel overrides', () => {
+    /** roleWorld plus a channel hidden from @everyone and a member holding KickMembers. */
+    async function overrideWorld(tag: string) {
+        const w = await roleWorld(tag);
+        const hidden = await ctx.request.post(`/servers/${w.serverId}/channels`).set(w.owner.auth).send({ name: 'hidden', channelType: 3 });
+        expect(hidden.status).toBe(201);
+        expect((await ctx.request.put(`/channels/${hidden.body.id}/overrides/roles/${w.everyoneRoleId}`).set(w.owner.auth)
+            .send({ allow: '0', deny: Permissions.ViewChannel.toString() })).status).toBe(200);
+        await assign(w.owner.auth, w.serverId, w.member.userId, w.kickRole);
+        return { ...w, hiddenId: hidden.body.id as string };
+    }
+    const deny = (bits: bigint) => ({ allow: '0', deny: bits.toString() });
+    const allow = (bits: bigint) => ({ allow: bits.toString(), deny: '0' });
+
+    it('a ManageRoles-only member cannot set or remove member overrides on the owner, an Administrator or a more powerful member', async () => {
+        const w = await overrideWorld('co1');
+        const ch = `/channels/${w.generalChannelId}/overrides/members`;
+        const lockout = deny(Permissions.ViewChannel | Permissions.SendMessages);
+        for (const target of [w.owner, w.admin, w.member]) {
+            const res = await ctx.request.put(`${ch}/${target.userId}`).set(w.manager.auth).send(lockout);
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe('Cannot change overrides for a member with permissions you do not have');
+        }
+
+        // The owner's allow override for a powerful member stays put
+        expect((await ctx.request.put(`/channels/${w.hiddenId}/overrides/members/${w.member.userId}`).set(w.owner.auth)
+            .send(allow(Permissions.ViewChannel))).status).toBe(200);
+        expect((await ctx.request.put(`/channels/${w.hiddenId}/overrides/members/${w.manager.userId}`).set(w.owner.auth)
+            .send(allow(Permissions.ViewChannel))).status).toBe(200);
+        expect((await ctx.request.delete(`/channels/${w.hiddenId}/overrides/members/${w.member.userId}`).set(w.manager.auth)).status).toBe(403);
+        const kept = await ctx.db.query('SELECT 1 FROM channel_member_overrides WHERE channel_id = $1 AND user_id = $2', [w.hiddenId, w.member.userId]);
+        expect(kept.rows.length).toBe(1);
+
+        // A member with nothing the manager lacks is in reach; an Administrator reaches everyone
+        const plain = await authedUser(ctx.request, 'co1plain');
+        await joinViaInvite(ctx.request, w.owner.auth, plain.auth, w.serverId);
+        expect((await ctx.request.put(`${ch}/${plain.userId}`).set(w.manager.auth).send(deny(Permissions.SendMessages))).status).toBe(200);
+        expect((await ctx.request.delete(`${ch}/${plain.userId}`).set(w.manager.auth)).status).toBe(200);
+        expect((await ctx.request.put(`${ch}/${w.member.userId}`).set(w.admin.auth).send(lockout)).status).toBe(200);
+        expect((await ctx.request.delete(`/channels/${w.hiddenId}/overrides/members/${w.member.userId}`).set(w.admin.auth)).status).toBe(200);
+    });
+
+    it('a ManageRoles-only member cannot open a hidden channel to themselves, by member or role override', async () => {
+        const w = await overrideWorld('co2');
+        const ch = `/channels/${w.hiddenId}/overrides`;
+        for (const res of [
+            await ctx.request.put(`${ch}/members/${w.manager.userId}`).set(w.manager.auth).send(allow(Permissions.ViewChannel)),
+            await ctx.request.put(`${ch}/roles/${w.managerRole}`).set(w.manager.auth).send(allow(Permissions.ViewChannel)),
+            await ctx.request.get(ch).set(w.manager.auth),
+        ]) {
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe('Channel access denied');
+        }
+        expect((await ctx.db.query('SELECT 1 FROM channel_member_overrides WHERE channel_id = $1', [w.hiddenId])).rows.length).toBe(0);
+        expect((await ctx.request.get(`/channels/${w.hiddenId}/messages`).set(w.manager.auth)).status).toBe(403);
+    });
+
+    it('in a channel they see, a ManageRoles-only member grants only bits they hold there and cannot lift a deny on themselves', async () => {
+        const w = await overrideWorld('co3');
+        const ch = `/channels/${w.generalChannelId}/overrides`;
+        // The owner denies SendMessages to the manager's role in #general
+        expect((await ctx.request.put(`${ch}/roles/${w.managerRole}`).set(w.owner.auth).send(deny(Permissions.SendMessages))).status).toBe(200);
+
+        const grantErr = 'Cannot grant permissions you do not have in this channel';
+        for (const res of [
+            await ctx.request.put(`${ch}/members/${w.manager.userId}`).set(w.manager.auth).send(allow(Permissions.SendMessages)),
+            await ctx.request.put(`${ch}/roles/${w.managerRole}`).set(w.manager.auth).send({ allow: '0', deny: '0' }),
+            await ctx.request.delete(`${ch}/roles/${w.managerRole}`).set(w.manager.auth),
+        ]) {
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe(grantErr);
+        }
+        expect((await ctx.request.post(`/channels/${w.generalChannelId}/messages`).set(w.manager.auth).send({ content: 'x' })).status).toBe(403);
+
+        // Bits they hold in the channel are theirs to grant, and the list is theirs to read
+        const helpers = await createRole(w.manager.auth, w.serverId, 'Helpers', 0n);
+        expect((await ctx.request.put(`${ch}/roles/${helpers}`).set(w.manager.auth).send(allow(Permissions.EmbedLinks))).status).toBe(200);
+        expect((await ctx.request.put(`${ch}/roles/${helpers}`).set(w.manager.auth).send(allow(Permissions.SendMessages))).status).toBe(403);
+        const list = await ctx.request.get(ch).set(w.manager.auth);
+        expect(list.status).toBe(200);
+        expect(list.body.roles.map((r: any) => r.roleId)).toContain(helpers);
+    });
+
+    it('a role granting more through channel overrides is out of a ManageRoles-only member\'s reach', async () => {
+        const w = await overrideWorld('co4');
+        // "Staff" holds nothing server-wide but opens the hidden channel
+        const staff = await createRole(w.owner.auth, w.serverId, 'Staff', 0n);
+        expect((await ctx.request.put(`/channels/${w.hiddenId}/overrides/roles/${staff}`).set(w.owner.auth)
+            .send(allow(Permissions.ViewChannel))).status).toBe(200);
+        const plain = await authedUser(ctx.request, 'co4plain');
+        await joinViaInvite(ctx.request, w.owner.auth, plain.auth, w.serverId);
+        await assign(w.owner.auth, w.serverId, plain.userId, staff);
+        const base = `/servers/${w.serverId}`;
+
+        const hierarchyErr = 'Cannot manage a role with permissions you do not have';
+        for (const res of [
+            await ctx.request.put(`${base}/members/${w.manager.userId}/roles/${staff}`).set(w.manager.auth),
+            await ctx.request.patch(`${base}/roles/${staff}`).set(w.manager.auth).send({ name: 'Mine' }),
+            await ctx.request.delete(`${base}/members/${plain.userId}/roles/${staff}`).set(w.manager.auth),
+            await ctx.request.delete(`${base}/roles/${staff}`).set(w.manager.auth),
+        ]) {
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe(hierarchyErr);
+        }
+        expect((await ctx.request.get(`/channels/${w.hiddenId}/messages`).set(w.manager.auth)).status).toBe(403);
+
+        // Once the manager sees the channel too, Staff grants nothing they lack
+        expect((await ctx.request.put(`/channels/${w.hiddenId}/overrides/members/${w.manager.userId}`).set(w.owner.auth)
+            .send(allow(Permissions.ViewChannel))).status).toBe(200);
+        expect((await ctx.request.put(`${base}/members/${w.member.userId}/roles/${staff}`).set(w.manager.auth)).status).toBe(200);
+        // An Administrator reaches it regardless
+        expect((await ctx.request.delete(`${base}/roles/${staff}`).set(w.admin.auth)).status).toBe(200);
     });
 });
 

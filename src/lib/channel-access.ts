@@ -96,16 +96,20 @@ export async function canViewChannel(db: any, channelId: string, userId: string,
 
 /**
  * Whether a user or bot may post in a channel, and whether their @everyone notifies anyone.
- * People need ViewChannel and SendMessages. A bot's explicit channel access stands in for
- * ViewChannel (as in canViewChannel), but SendMessages still applies to it through @everyone
- * and the channel's overrides, as it does for uploads.
+ * People need ViewChannel and SendMessages. A bot's gate is its explicit channel access
+ * (bot_channel_access), together with the pause and account checks it already passes; it
+ * is not gated by SendMessages, so "agents post, people watch" channels can deny SendMessages
+ * to @everyone without muting the agents. To silence a bot, remove its channel access.
+ * MentionEveryone applies to everyone, bots included.
  */
 export async function canPostInChannel(db: any, channelId: string, userId: string, isBot: boolean): Promise<
     { allowed: true; mentionEveryone: boolean } | { allowed: false; error: string }
 > {
     const result = await loadChannelPermissions(db, channelId, userId, { isBot });
     if ('error' in result) return { allowed: false, error: 'Channel access denied' };
-    if (!isBot && !(result.perms & Permissions.ViewChannel)) return { allowed: false, error: 'Channel access denied' };
-    if (!(result.perms & Permissions.SendMessages)) return { allowed: false, error: 'Missing SendMessages permission' };
+    if (!isBot) {
+        if (!(result.perms & Permissions.ViewChannel)) return { allowed: false, error: 'Channel access denied' };
+        if (!(result.perms & Permissions.SendMessages)) return { allowed: false, error: 'Missing SendMessages permission' };
+    }
     return { allowed: true, mentionEveryone: (result.perms & Permissions.MentionEveryone) !== 0n };
 }

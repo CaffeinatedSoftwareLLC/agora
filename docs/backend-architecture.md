@@ -353,15 +353,17 @@ New servers' `@everyone` role gets (`DEFAULT_EVERYONE_PERMS`): `ViewChannel`, `S
 
 | Bit | Checked by |
 |-----|-----------|
-| SendMessages | Posting, replying and editing a message (`canPostInChannel` in `src/lib/channel-access.ts`), uploads. People also need ViewChannel; a bot's channel access stands in for ViewChannel, but SendMessages still applies to it through `@everyone` and the channel's overrides. |
-| MentionEveryone | `@everyone` in a post or reply notifies members only when the author holds it; otherwise it stays plain text (`mentionsEveryone` is false, no mention counts). |
+| SendMessages | People posting, replying and editing a message (`canPostInChannel` in `src/lib/channel-access.ts`, with ViewChannel), uploads. Bots are not gated by it when posting: their explicit channel access (`bot_channel_access`), with the pause and account checks, is the gate, so a channel can deny SendMessages to `@everyone` and still let its agents post. To silence a bot, remove its channel access. The other routes bots post through (subtasks, handoffs, browser previews, run output) follow the same rule. File uploads are the exception: they still need SendMessages and UploadFiles, for bots too (`POST /files/upload`). |
+| MentionEveryone | `@everyone` in a post or reply notifies members only when the author (person or bot) holds it; otherwise it stays plain text (`mentionsEveryone` is false, no mention counts). |
 | ManageChannels | Creating a channel (checked against the server's permissions). Bots are refused whatever their roles. |
-| CreateInvites | Creating an invite. |
+| CreateInvites | Creating an invite. Removing it does not revoke invites already created; delete those separately. |
 | ManageRoles | Role and override routes, with the hierarchy rule below. |
 
 The owner holds every bit, and Administrator implies every bit except DirectAgents.
 
-**Role hierarchy.** A caller who is neither the owner nor an Administrator may only edit, delete, assign or unassign a role, or set an override on it, when the role's current permissions are all their own; a new value must also be within their permissions. A role carrying Administrator is therefore out of a non-admin's reach. Roles that carry DirectAgents stay with the owner whoever the caller is. `@everyone` follows the same rule; since every member inherits its bits, only the new value can exceed a caller's permissions.
+**Role hierarchy.** A caller who is neither the owner nor an Administrator may only edit, delete, assign or unassign a role, or set an override on it, when everything the role grants is their own: its permissions within their server permissions, and each of its channel overrides' allow bits within their permissions in that channel. A new value must also be within their permissions. A role carrying Administrator is therefore out of a non-admin's reach. Roles that carry DirectAgents stay with the owner whoever the caller is. Changing `@everyone`'s permissions, or setting or removing an `@everyone` channel override, needs the owner or Administrator: those reach every member at once, so ManageRoles alone could lock everyone out of a channel or the server.
+
+**Channel overrides.** Listing, setting or removing a channel's overrides needs ManageRoles and ViewChannel in that channel. For a caller who is neither the owner nor an Administrator, what an override grants (its allow bits, and any deny bits it lifts, including by being removed) must be bits they hold in that channel, so an override can't open a channel hidden from them or lift a deny that applies to them. A member override may only target a member whose server permissions are all the caller's, never the owner or an Administrator.
 
 ---
 

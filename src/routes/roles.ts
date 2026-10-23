@@ -3,6 +3,7 @@ import { generateUlid } from '../utils/ulid';
 import { Permissions, computePermissions, KNOWN_PERMS_MASK } from '../permissions';
 import { loadAndComputePermissions } from './bots';
 import { isServerOwner, OWNER_ONLY_ERROR, roleCarriesDirectAgents, touchesDirectAgents } from '../lib/direct-agents';
+import { loadChannelPermissions } from '../lib/channel-access';
 
 /** A permission bitmask from the API, or null if it isn't one or has unknown bits. */
 function parsePerms(value: unknown): bigint | null {
@@ -71,22 +72,72 @@ async function checkEscalation(
     return null;
 }
 
+/** A user's permissions in a channel; none when they can't be worked out (no access). */
+async function channelPermsOf(db: any, channelId: string, userId: string): Promise<bigint> {
+    const result = await loadChannelPermissions(db, channelId, userId);
+    return 'perms' in result ? result.perms : 0n;
+}
+
 /**
  * Role hierarchy guard: a caller who is neither the server owner nor an Administrator
- * may only edit, delete, assign or unassign a role whose current permissions are all
- * their own. That keeps roles carrying Administrator, or any bit the caller lacks,
- * out of their reach.
+ * may only edit, delete, assign or unassign a role (or set its overrides) when everything
+ * the role grants is already theirs: its permissions within their server permissions, and
+ * each channel override's allow bits within their permissions in that channel. That keeps
+ * roles carrying Administrator, or granting a bit the caller lacks anywhere, out of reach.
  */
 async function checkRoleHierarchy(
     db: any,
     callerPerms: bigint,
+    roleId: string,
     currentRolePermissions: bigint,
-    serverId: string,
     callerId: string,
 ): Promise<string | null> {
-    return await checkEscalation(db, callerPerms, currentRolePermissions, serverId, callerId)
-        ? 'Cannot manage a role with permissions you do not have'
+    // The owner holds every bit, Administrator included
+    if (callerPerms & Permissions.Administrator) return null;
+    const error = 'Cannot manage a role with permissions you do not have';
+    if (currentRolePermissions & ~callerPerms) return error;
+    const overrides = await db.query(
+        'SELECT channel_id, allow FROM channel_role_overrides WHERE role_id = $1 AND allow <> 0',
+        [roleId]
+    );
+    for (const o of overrides.rows) {
+        if (BigInt(o.allow) & ~await channelPermsOf(db, o.channel_id.trim(), callerId)) return error;
+    }
+    return null;
+}
+
+/**
+ * What an override grants in a channel: its allow bits and any deny bits it lifts. A caller
+ * who is neither the owner nor an Administrator may only grant bits they hold in that channel,
+ * so an override can't open a channel hidden from them or lift a deny that applies to them.
+ */
+function checkChannelGrant(channelPerms: bigint, prevDeny: bigint, allowBits: bigint, denyBits: bigint): string | null {
+    if (channelPerms & Permissions.Administrator) return null;
+    const granted = allowBits | (prevDeny & ~denyBits);
+    return granted & ~channelPerms ? 'Cannot grant permissions you do not have in this channel' : null;
+}
+
+/**
+ * A member override reaches past a member's roles, so a caller who is neither the owner nor
+ * an Administrator may only set one on a member whose server permissions are all their own,
+ * never on the owner or an Administrator.
+ */
+async function checkMemberTarget(db: any, callerPerms: bigint, serverId: string, targetUserId: string): Promise<string | null> {
+    if (callerPerms & Permissions.Administrator) return null;
+    const targetPerms = await loadAndComputePermissions(db, targetUserId, serverId);
+    return (targetPerms & Permissions.Administrator) || (targetPerms & ~callerPerms)
+        ? 'Cannot change overrides for a member with permissions you do not have'
         : null;
+}
+
+/**
+ * @everyone's permissions and its channel overrides reach every member at once, so only
+ * the owner (who holds every bit) and Administrators may change them.
+ */
+function everyoneGuard(callerPerms: bigint): string | null {
+    return callerPerms & Permissions.Administrator
+        ? null
+        : 'Only the owner and Administrators can change @everyone permissions';
 }
 
 // ─── PreHandler for channel overrides: membership + ManageRoles ───
@@ -125,9 +176,17 @@ async function requireManageRolesForChannel(request: FastifyRequest, reply: Fast
         return reply.status(403).send({ error: 'Missing ManageRoles permission' });
     }
 
+    // Overrides act in one channel: the caller must see it, and grants are checked
+    // against what they hold there
+    const channelPerms = await channelPermsOf(db, channelId, userId);
+    if (!(channelPerms & Permissions.ViewChannel)) {
+        return reply.status(403).send({ error: 'Channel access denied' });
+    }
+
     // Stash serverId + perms for route handler
     (request as any)._serverId = serverId;
     (request as any)._callerPerms = perms;
+    (request as any)._channelPerms = channelPerms;
 }
 
 export async function roleRoutes(app: FastifyInstance) {
@@ -277,7 +336,11 @@ export async function roleRoutes(app: FastifyInstance) {
         // Hierarchy on what the role holds now (any edit, @everyone included), then
         // the escalation check on what it will hold
         const callerPerms = await loadAndComputePermissions(db, userId, serverId);
-        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.permissions), serverId, userId);
+        if (role.is_everyone && newPerms !== undefined && newPerms !== BigInt(role.permissions)) {
+            const everyoneErr = everyoneGuard(callerPerms);
+            if (everyoneErr) return reply.status(403).send({ error: everyoneErr });
+        }
+        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, roleId, BigInt(role.permissions), userId);
         if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
         if (newPerms !== undefined) {
             const err = await checkEscalation(db, callerPerms, newPerms, serverId, userId);
@@ -355,7 +418,7 @@ export async function roleRoutes(app: FastifyInstance) {
         const ownerErr = await directorRoleGuard(db, serverId, request.userId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
         const callerPerms = await loadAndComputePermissions(db, request.userId, serverId);
-        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.rows[0].permissions), serverId, request.userId);
+        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, roleId, BigInt(role.rows[0].permissions), request.userId);
         if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
 
         await db.query(
@@ -397,13 +460,14 @@ export async function roleRoutes(app: FastifyInstance) {
             return reply.status(404).send({ error: 'User is not a member of this server' });
         }
 
-        // Escalation and hierarchy check in one: the role's current permissions must all be
-        // the caller's, so a role carrying Administrator is out of a non-admin's reach
+        // Escalation and hierarchy check in one: everything the role grants (its permissions and
+        // its channel overrides' allows) must be the caller's, so a role carrying Administrator
+        // is out of a non-admin's reach
         const rolePerms = BigInt(role.rows[0].permissions);
         const ownerErr = await directorRoleGuard(db, serverId, callerId, roleId);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
         const callerPerms = await loadAndComputePermissions(db, callerId, serverId);
-        const err = await checkEscalation(db, callerPerms, rolePerms, serverId, callerId);
+        const err = await checkRoleHierarchy(db, callerPerms, roleId, rolePerms, callerId);
         if (err) return reply.status(403).send({ error: err });
 
         try {
@@ -434,7 +498,7 @@ export async function roleRoutes(app: FastifyInstance) {
         const role = await db.query('SELECT permissions FROM roles WHERE id = $1 AND server_id = $2', [roleId, serverId]);
         if (role.rows[0]) {
             const callerPerms = await loadAndComputePermissions(db, request.userId, serverId);
-            const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.rows[0].permissions), serverId, request.userId);
+            const hierarchyErr = await checkRoleHierarchy(db, callerPerms, roleId, BigInt(role.rows[0].permissions), request.userId);
             if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
         }
 
@@ -515,11 +579,15 @@ export async function roleRoutes(app: FastifyInstance) {
 
         // Verify role belongs to the server
         const role = await db.query(
-            'SELECT permissions FROM roles WHERE id = $1 AND server_id = $2',
+            'SELECT permissions, is_everyone FROM roles WHERE id = $1 AND server_id = $2',
             [roleId, serverId]
         );
         if (!role.rows[0]) {
             return reply.status(404).send({ error: 'Role not found in this server' });
+        }
+        if (role.rows[0].is_everyone) {
+            const everyoneErr = everyoneGuard(callerPerms);
+            if (everyoneErr) return reply.status(403).send({ error: everyoneErr });
         }
 
         const allowBits = parsePerms(allow);
@@ -533,11 +601,11 @@ export async function roleRoutes(app: FastifyInstance) {
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
         // Overrides on a role above the caller are as far out of reach as the role itself
-        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, BigInt(role.rows[0].permissions), serverId, userId);
+        const hierarchyErr = await checkRoleHierarchy(db, callerPerms, roleId, BigInt(role.rows[0].permissions), userId);
         if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
 
-        // Escalation check on the allow bits
-        const err = await checkEscalation(db, callerPerms, allowBits, serverId, userId);
+        // Escalation check on what the override grants in this channel
+        const err = checkChannelGrant((request as any)._channelPerms, BigInt(prev.rows[0]?.deny ?? 0), allowBits, denyBits);
         if (err) return reply.status(403).send({ error: err });
 
         await db.query(
@@ -566,11 +634,18 @@ export async function roleRoutes(app: FastifyInstance) {
         if (prev.rows[0]) {
             const ownerErr = await directorGuard(db, (request as any)._serverId, request.userId, BigInt(prev.rows[0].allow) | BigInt(prev.rows[0].deny), 0n);
             if (ownerErr) return reply.status(403).send({ error: ownerErr });
-            const role = await db.query('SELECT permissions FROM roles WHERE id = $1', [roleId]);
+            const role = await db.query('SELECT permissions, is_everyone FROM roles WHERE id = $1', [roleId]);
+            if (role.rows[0]?.is_everyone) {
+                const everyoneErr = everyoneGuard((request as any)._callerPerms);
+                if (everyoneErr) return reply.status(403).send({ error: everyoneErr });
+            }
             if (role.rows[0]) {
-                const hierarchyErr = await checkRoleHierarchy(db, (request as any)._callerPerms, BigInt(role.rows[0].permissions), (request as any)._serverId, request.userId);
+                const hierarchyErr = await checkRoleHierarchy(db, (request as any)._callerPerms, roleId, BigInt(role.rows[0].permissions), request.userId);
                 if (hierarchyErr) return reply.status(403).send({ error: hierarchyErr });
             }
+            // Removing an override lifts its denies
+            const grantErr = checkChannelGrant((request as any)._channelPerms, BigInt(prev.rows[0].deny), 0n, 0n);
+            if (grantErr) return reply.status(403).send({ error: grantErr });
         }
 
         const result = await db.query(
@@ -624,8 +699,11 @@ export async function roleRoutes(app: FastifyInstance) {
             ?? await directorGuard(db, serverId, callerId, BigInt(prev.rows[0]?.deny ?? 0), denyBits);
         if (ownerErr) return reply.status(403).send({ error: ownerErr });
 
-        // Escalation check
-        const err = await checkEscalation(db, callerPerms, allowBits, serverId, callerId);
+        const targetErr = await checkMemberTarget(db, callerPerms, serverId, targetUserId);
+        if (targetErr) return reply.status(403).send({ error: targetErr });
+
+        // Escalation check on what the override grants in this channel
+        const err = checkChannelGrant((request as any)._channelPerms, BigInt(prev.rows[0]?.deny ?? 0), allowBits, denyBits);
         if (err) return reply.status(403).send({ error: err });
 
         await db.query(
@@ -654,6 +732,11 @@ export async function roleRoutes(app: FastifyInstance) {
         if (prev.rows[0]) {
             const ownerErr = await directorGuard(db, (request as any)._serverId, request.userId, BigInt(prev.rows[0].allow) | BigInt(prev.rows[0].deny), 0n);
             if (ownerErr) return reply.status(403).send({ error: ownerErr });
+            const targetErr = await checkMemberTarget(db, (request as any)._callerPerms, (request as any)._serverId, targetUserId);
+            if (targetErr) return reply.status(403).send({ error: targetErr });
+            // Removing an override lifts its denies
+            const grantErr = checkChannelGrant((request as any)._channelPerms, BigInt(prev.rows[0].deny), 0n, 0n);
+            if (grantErr) return reply.status(403).send({ error: grantErr });
         }
 
         const result = await db.query(

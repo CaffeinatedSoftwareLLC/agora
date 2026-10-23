@@ -31,7 +31,7 @@ const PERMISSION_GROUPS: { label: string; perms: { name: string; bit: bigint; de
       { name: 'ManageMessages', bit: 1n << 12n, desc: 'Delete or pin messages' },
       { name: 'EmbedLinks', bit: 1n << 13n, desc: 'Embed links in messages' },
       { name: 'UploadFiles', bit: 1n << 14n, desc: 'Attach files to messages' },
-      { name: 'MentionEveryone', bit: 1n << 16n, desc: 'Use @everyone and @here' },
+      { name: 'MentionEveryone', bit: 1n << 16n, desc: 'Use @everyone to notify every member' },
       { name: 'ReadMessageHistory', bit: 1n << 17n, desc: 'Read older messages' },
       { name: 'UseExternalEmoji', bit: 1n << 18n, desc: 'Use emoji from other servers' },
     ],
