@@ -156,6 +156,36 @@ describe('authentication', () => {
         }
     });
 
+    test.each([
+        ['the submitting bot is suspended', 'bot', 'account_suspended'],
+        ['the submitting bot\'s owner is suspended', 'owner', 'bot_owner_inactive'],
+    ])('a run token is 403 when %s', async (_label, who, code) => {
+        const { auth } = await makeRun();
+        const target = who === 'bot' ? botId : owner.userId;
+        await ctx.db.query("UPDATE users SET account_status = 'suspended' WHERE id = $1", [target]);
+        try {
+            const res = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {} });
+            expect(res.statusCode).toBe(403);
+            expect(res.json().code).toBe(code);
+            expect(await pausedReason()).toBeNull();
+        } finally {
+            await ctx.db.query("UPDATE users SET account_status = 'active' WHERE id = $1", [target]);
+        }
+    });
+
+    test('a run token of a bot without an owner is 403 (fails closed)', async () => {
+        const { auth } = await makeRun();
+        const ownerId = (await ctx.db.query('SELECT bot_owner_id FROM users WHERE id = $1', [botId])).rows[0].bot_owner_id;
+        await ctx.db.query('UPDATE users SET bot_owner_id = NULL WHERE id = $1', [botId]);
+        try {
+            const res = await gw.inject({ method: 'POST', url: '/v1/capabilities/chat', headers: auth, payload: {} });
+            expect(res.statusCode).toBe(403);
+            expect(res.json().code).toBe('bot_owner_inactive');
+        } finally {
+            await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [botId, ownerId]);
+        }
+    });
+
     test('health needs no token', async () => {
         expect((await gw.inject({ method: 'GET', url: '/health' })).json()).toEqual({ status: 'ok' });
     });

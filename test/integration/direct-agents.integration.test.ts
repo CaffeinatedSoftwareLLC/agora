@@ -27,15 +27,15 @@ async function post(auth: object, content: string): Promise<string> {
     return res.body.id;
 }
 
-/** messageId → authorAuthority, as the bot (an agent) reads the channel. */
-async function authorities(): Promise<Map<string, string | null>> {
-    const res = await ctx.request.get(`/channels/${channelId}/messages?limit=100`).set(botAuth);
+/** messageId → authorAuthority, as the bot (an agent) reads the channel unless another reader is given. */
+async function authorities(reader: object = botAuth): Promise<Map<string, string | null>> {
+    const res = await ctx.request.get(`/channels/${channelId}/messages?limit=100`).set(reader);
     expect(res.status).toBe(200);
     return new Map(res.body.map((m: any) => [m.id, m.authorAuthority]));
 }
 
-async function directors(): Promise<Array<{ username: string; authority: string; bot: boolean }>> {
-    const res = await ctx.request.get(`/channels/${channelId}/directors`).set(botAuth);
+async function directors(reader: object = botAuth): Promise<Array<{ username: string; authority: string; bot: boolean }>> {
+    const res = await ctx.request.get(`/channels/${channelId}/directors`).set(reader);
     expect(res.status).toBe(200);
     return res.body.directors;
 }
@@ -208,10 +208,11 @@ describe('human directors who stop qualifying', () => {
         const ownerSaid = await post(owner.auth, 'owner speaking');
         await ctx.db.query(`UPDATE users SET account_status = 'suspended' WHERE id = ANY($1)`, [[member.userId, owner.userId]]);
         try {
-            const auth = await authorities();
+            // The bot's own token is refused while its owner is suspended, so the admin reads
+            const auth = await authorities(admin.auth);
             expect(auth.get(said)).toBeNull();
             expect(auth.get(ownerSaid)).toBeNull();
-            expect((await directors()).length).toBe(0);
+            expect((await directors(admin.auth)).length).toBe(0);
         } finally {
             await ctx.db.query(`UPDATE users SET account_status = 'active' WHERE id = ANY($1)`, [[member.userId, owner.userId]]);
         }
@@ -254,7 +255,10 @@ describe('a bot the owner lets direct', () => {
         const said = await post(botAuth, 'owner active');
         await ctx.db.query(`UPDATE users SET account_status = 'suspended' WHERE id = $1`, [owner.userId]);
         try {
-            expect((await authorities()).get(said)).toBeNull();
+            const refused = await ctx.request.get(`/channels/${channelId}/messages`).set(botAuth);
+            expect(refused.status).toBe(403);
+            expect(refused.body.error).toBe('bot_owner_inactive');
+            expect((await authorities(admin.auth)).get(said)).toBeNull();
         } finally {
             await ctx.db.query(`UPDATE users SET account_status = 'active' WHERE id = $1`, [owner.userId]);
         }

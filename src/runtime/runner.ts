@@ -5,7 +5,7 @@ import { buildContainerSpec } from './container-spec';
 import type { SandboxDocker, RunOutcome } from './docker';
 import type { RunLimits } from './limits';
 import type { BridgedEvent } from '../lib/event-bridge';
-import { checkFailureTripwire, isSubmitterPaused } from './tripwires';
+import { checkFailureTripwire, submitterStopReason, type StopReason } from './tripwires';
 
 /**
  * Sandbox runner (WBS 3.2). Consumes `{ runId }` jobs from the `runtime` queue,
@@ -78,8 +78,12 @@ export function redact(text: string, secrets: string[]): string {
     return out;
 }
 
-export function statusFor(outcome: RunOutcome): { status: FinalStatus; error: string | null } {
-    if (outcome.stopped) return { status: 'killed', error: 'Run stopped because the submitting bot was paused' };
+export function statusFor(outcome: RunOutcome, stopReason: StopReason | null = null): { status: FinalStatus; error: string | null } {
+    if (outcome.stopped) {
+        return { status: 'killed', error: stopReason === 'inactive'
+            ? 'Run stopped because the submitting bot or its owner is no longer active'
+            : 'Run stopped because the submitting bot was paused' };
+    }
     if (outcome.timedOut) return { status: 'timeout', error: 'Run exceeded its time limit' };
     if (outcome.oomKilled) return { status: 'killed', error: 'Run exceeded its memory limit' };
     if (outcome.exitCode === 0) return { status: 'succeeded', error: null };
@@ -89,10 +93,10 @@ export function statusFor(outcome: RunOutcome): { status: FinalStatus; error: st
 /**
  * Atomically move a cleared run from `queued` to `running`, respecting the per-server
  * concurrency limit. Returns null if the run isn't claimable (wrong state, not
- * approved), 'full' if the server is at capacity, or 'paused' if the submitting bot
- * is paused (the run is then denied).
+ * approved), 'full' if the server is at capacity, 'paused' if the submitting bot is
+ * paused, or 'inactive' if it or its owner is not active (the run is then denied).
  */
-async function claimRun(db: Pool, runId: string, perServer: number): Promise<any | null | 'full' | 'paused'> {
+async function claimRun(db: Pool, runId: string, perServer: number): Promise<any | null | 'full' | 'paused' | 'inactive'> {
     const client = await db.connect();
     try {
         await client.query('BEGIN');
@@ -108,15 +112,19 @@ async function claimRun(db: Pool, runId: string, perServer: number): Promise<any
         );
         if (running.rows[0].n >= perServer) { await client.query('ROLLBACK'); return 'full'; }
 
-        // A bot paused after its run was queued or approved (manually or by a tripwire) doesn't get to run it
+        // A bot paused after its run was queued or approved (manually or by a tripwire) doesn't get
+        // to run it, nor does one that is no longer active or whose owner isn't (a missing owner fails closed)
         const refused = await client.query(
-            `UPDATE exec_runs r SET status = 'denied', error = 'The submitting bot is paused', finished_at = NOW()
-             FROM users u
-             WHERE r.id = $1 AND r.status = 'queued' AND u.id = r.submitted_by AND u.bot_paused_at IS NOT NULL
-             RETURNING r.id`,
+            `UPDATE exec_runs r SET status = 'denied', finished_at = NOW(),
+                 error = CASE WHEN u.bot_paused_at IS NOT NULL THEN 'The submitting bot is paused'
+                              ELSE 'The submitting bot or its owner is not active' END
+             FROM users u LEFT JOIN users o ON o.id = u.bot_owner_id
+             WHERE r.id = $1 AND r.status = 'queued' AND u.id = r.submitted_by
+               AND (u.bot_paused_at IS NOT NULL OR u.account_status <> 'active' OR o.account_status IS DISTINCT FROM 'active')
+             RETURNING r.id, u.bot_paused_at IS NOT NULL AS paused`,
             [runId]
         );
-        if (refused.rows.length > 0) { await client.query('COMMIT'); return 'paused'; }
+        if (refused.rows.length > 0) { await client.query('COMMIT'); return refused.rows[0].paused ? 'paused' : 'inactive'; }
 
         // Defense in depth (T8): only runs the gate cleared, and approved if approval was required
         const claimed = await client.query(
@@ -141,9 +149,9 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
 
     const run = await claimRun(db, runId, config.perServerConcurrency);
     if (run === 'full') return { kind: 'deferred' };
-    if (run === 'paused') {
+    if (run === 'paused' || run === 'inactive') {
         await deps.onFinished?.(runId, 'denied').catch(e => deps.log?.error({ err: e, runId }, 'onFinished hook failed'));
-        return { kind: 'skipped', reason: 'bot paused' };
+        return { kind: 'skipped', reason: run === 'paused' ? 'bot paused' : 'bot or owner inactive' };
     }
     if (!run) {
         deps.log?.warn({ runId }, 'Run is not claimable (not queued or not cleared by the gate); skipping');
@@ -156,6 +164,7 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
 
     let final: { status: FinalStatus; error: string | null };
     let outcome: RunOutcome | null = null;
+    let stopReason: StopReason | null = null;
     try {
         await db.query(
             `INSERT INTO exec_run_tokens (token_hash, run_id, server_id, capabilities, expires_at)
@@ -182,10 +191,10 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
             onStarted: async (containerId) => {
                 await db.query('UPDATE exec_runs SET container_id = $1 WHERE id = $2', [containerId, runId]);
             },
-            shouldStop: () => isSubmitterPaused(db, runId),
+            shouldStop: async () => (stopReason = await submitterStopReason(db, runId)) !== null,
             stopPollMs: config.stopPollMs,
         });
-        final = statusFor(outcome);
+        final = statusFor(outcome, stopReason);
     } catch (err) {
         deps.log?.error({ err, runId }, 'Sandbox run failed to execute');
         final = { status: 'error', error: err instanceof Error ? err.message : String(err) };

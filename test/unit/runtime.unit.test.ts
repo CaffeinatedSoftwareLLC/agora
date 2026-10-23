@@ -175,6 +175,10 @@ describe('runner helpers', () => {
         expect(statusFor({ ...o, exitCode: 1 }).status).toBe('failed');
         expect(statusFor({ ...o, exitCode: null, timedOut: true }).status).toBe('timeout');
         expect(statusFor({ ...o, exitCode: 137, oomKilled: true }).status).toBe('killed');
+        expect(statusFor({ ...o, exitCode: 137, stopped: true }, 'paused'))
+            .toEqual({ status: 'killed', error: 'Run stopped because the submitting bot was paused' });
+        expect(statusFor({ ...o, exitCode: 137, stopped: true }, 'inactive'))
+            .toEqual({ status: 'killed', error: 'Run stopped because the submitting bot or its owner is no longer active' });
     });
 
     it('hashes tokens with sha256', () => {

@@ -1,4 +1,5 @@
 import { DecideError, type ProviderCredentials } from './types';
+import { redirectError } from './sse';
 import { CREDENTIAL_CHARS } from '../credentials';
 
 /**
@@ -87,6 +88,7 @@ export async function postDecision(p: DecidePost): Promise<any> {
         try {
             res = await fetch(p.url, {
                 method: 'POST',
+                redirect: 'manual',
                 headers: { 'Content-Type': 'application/json', ...p.headers },
                 body: JSON.stringify(p.body),
                 signal: AbortSignal.timeout(remaining),
@@ -96,6 +98,10 @@ export async function postDecision(p: DecidePost): Promise<any> {
             if (name === 'TimeoutError' || name === 'AbortError') throw timedOut();
             throw new DecideError('transient', networkFailure(p.provider, err));
         }
+
+        // Never followed: the request carries the key
+        const redirected = redirectError(res, p.provider);
+        if (redirected) throw new DecideError('permanent', redirected, res.status);
 
         if (res.ok) {
             let json: any;

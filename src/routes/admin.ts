@@ -250,6 +250,27 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const row = updateRes.rows[0];
 
+        // The target (if it is a bot) and every bot it owns lose their tokens, unredeemed agent
+        // invites, run tokens and not-yet-started runs. Restoring the account later brings none
+        // of it back; the owner issues new tokens.
+        const bots = 'SELECT id FROM users WHERE bot = true AND (id = $1 OR bot_owner_id = $1)';
+        // Invites first: a concurrent redeem holds its invite row until it commits, so this waits
+        // for it, and the token revoke below, a new statement under read committed, then sees the
+        // token that redeem minted. In the other order that token could be missed.
+        await db.query('SELECT expire_agent_invites_for_suspended($1)', [targetId]);
+        await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE revoked_at IS NULL AND bot_id IN (${bots})`, [targetId]);
+        await db.query(
+            `UPDATE exec_run_tokens SET revoked_at = NOW()
+             WHERE revoked_at IS NULL AND run_id IN (SELECT id FROM exec_runs WHERE submitted_by IN (${bots}))`,
+            [targetId]
+        );
+        // Denied, as the runner does for a paused bot's run and the sweep does for an expired approval
+        await db.query(
+            `UPDATE exec_runs SET status = 'denied', error = 'The submitting bot or its owner was suspended', finished_at = NOW()
+             WHERE status IN ('submitted', 'gated', 'awaiting_approval', 'queued') AND submitted_by IN (${bots})`,
+            [targetId]
+        );
+
         await logAdminAction(db, userId, 'user_ban', 'user', targetId, {
             before: { accountStatus: 'active' },
             after: { accountStatus: 'suspended' },
