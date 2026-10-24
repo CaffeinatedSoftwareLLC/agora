@@ -22,6 +22,8 @@ declare module 'fastify' {
         pendingEvents: Array<{ event: string; room: string; data: any }>;
         /** User IDs to force-disconnect after COMMIT (e.g. suspended users). */
         pendingDisconnects: string[];
+        /** Storage keys whose blobs are removed after COMMIT (files soft-deleted in this request). */
+        pendingBlobRemovals?: string[];
         /** Set only after a session revocation effect actually succeeds. */
         gatewayAccessChanged?: boolean;
         /** Redis cache key for bot idempotency. Set when Idempotency-Key header is present. */

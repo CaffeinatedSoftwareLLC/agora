@@ -428,7 +428,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
+                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct, p.system_event,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
                             latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
@@ -465,7 +465,7 @@ export async function threadRoutes(app: FastifyInstance) {
             params = [channelId, before, limit];
         } else {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
+                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct, p.system_event,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
                             latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
@@ -530,6 +530,8 @@ export async function threadRoutes(app: FastifyInstance) {
             editedAt: row.edited_at,
             replyCount: row.reply_count,
             lastReplyAt: row.last_reply_at,
+            // Tells a system line (task card, subtask) from a deleted account's post: both have no author
+            ...(row.system_event ? { systemEvent: row.system_event } : {}),
             canClose: hasManagePerms || (row.author_id?.trim() === userId.trim()),
             latestProtocol: row.latest_protocol ? {
                 ...row.latest_protocol, messageId: row.protocol_message_id.trim(),

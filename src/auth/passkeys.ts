@@ -18,11 +18,12 @@ export const CHALLENGE_TTL_SECONDS = 5 * 60;
 const CHALLENGE_PREFIX = 'webauthn:flow:';
 
 export interface Ceremony {
-    purpose: 'register' | 'login';
+    // reauth: proving it's you before a sensitive change (account deletion)
+    purpose: 'register' | 'login' | 'reauth';
     challenge: string;
     origin: string;
     rpID: string;
-    /** Registration: who is adding the passkey. Sign-in: set only when a username was given. */
+    /** Registration and reauth: the signed-in user. Sign-in: set only when a username was given. */
     userId?: string;
 }
 

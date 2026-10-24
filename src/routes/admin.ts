@@ -3,6 +3,7 @@ import { requireInstanceAdmin } from '../auth/middleware';
 import { generateUlid } from '../utils/ulid';
 import { getFileSettings, invalidateSettingsCache } from '../lib/settings';
 import { codeRetentionDays, countRunsPrunedBy } from '../runtime/service';
+import { DELETED_ACCOUNT_MESSAGES_KEY, deletedAccountMessages } from '../lib/account-deletion';
 
 async function logAdminAction(
     db: any,
@@ -494,6 +495,39 @@ export async function adminRoutes(app: FastifyInstance) {
         );
         await logAdminAction(db, request.userId, 'runtime_settings_update', 'instance_settings', null, { codeRetentionDays: days, previous: current });
         return reply.send({ codeRetentionDays: days });
+    });
+
+    // GET /admin/settings/accounts — what happens to a deleted account's messages
+    app.get('/admin/settings/accounts', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        return reply.send({ deletedAccountMessages: await deletedAccountMessages(request.dbClient!) });
+    });
+
+    // PATCH /admin/settings/accounts — applies to deletions from now on, not to accounts already deleted
+    app.patch('/admin/settings/accounts', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['deletedAccountMessages'],
+                additionalProperties: false,
+                properties: {
+                    deletedAccountMessages: { type: 'string', enum: ['anonymize', 'remove'] },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const { deletedAccountMessages: value } = request.body as { deletedAccountMessages: 'anonymize' | 'remove' };
+        const previous = await deletedAccountMessages(db);
+        await db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+            [DELETED_ACCOUNT_MESSAGES_KEY, JSON.stringify(value)]
+        );
+        await logAdminAction(db, request.userId, 'account_settings_update', 'instance_settings', null, { deletedAccountMessages: value, previous });
+        return reply.send({ deletedAccountMessages: value });
     });
 
     // GET /admin/storage
