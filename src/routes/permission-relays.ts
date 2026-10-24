@@ -3,6 +3,7 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
+import { notifyApproval } from '../lib/notifications';
 
 /**
  * Permission relay for the Claude Code Channel (docs/claude-channel.md).
@@ -89,6 +90,7 @@ export async function permissionRelayRoutes(app: FastifyInstance) {
                 [messageId, channelId, content, JSON.stringify(data)]
             );
             await db.query('UPDATE permission_relays SET message_id = $2 WHERE id = $1', [id, messageId]);
+            await notifyApproval(db, { kind: 'relay', channelId });
             const event = {
                 id: messageId, content, authorId: null, authorUsername: null, channelId: channelId.trim(),
                 createdAt: new Date().toISOString(), systemEvent: 'agent_permission_relay', systemData: data,

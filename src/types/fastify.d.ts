@@ -20,6 +20,8 @@ declare module 'fastify' {
         txFailure?: unknown;
         /** Socket.IO events queued during the request, flushed after COMMIT. */
         pendingEvents: Array<{ event: string; room: string; data: any }>;
+        /** Async work started after COMMIT and not awaited (best effort). */
+        afterCommit?: Array<() => Promise<void>>;
         /** User IDs to force-disconnect after COMMIT (e.g. suspended users). */
         pendingDisconnects: string[];
         /** Set only after a session revocation effect actually succeeds. */

@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import type { Notice } from './agent-runs';
+import { notifyApproval } from './notifications';
 
 /**
  * Provider-terms guardrails (docs/provider-terms.md).
@@ -99,6 +100,7 @@ export async function requestRunApproval(c: PoolClient, session: { id: string; s
         [messageId, channelId, content, JSON.stringify(data)]
     );
     await c.query(`UPDATE agent_run_approvals SET message_id = $2 WHERE id = $1`, [id, messageId]);
+    await notifyApproval(c, { kind: 'run', channelId });
     notices.push({
         channelId,
         event: { id: messageId, content, authorId: null, authorUsername: null, channelId, createdAt: new Date().toISOString(), systemEvent: 'agent_run_approval', systemData: data },
