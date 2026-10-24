@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 
 const KEY = '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0';
-const APNS = { APNS_KEY_FILE: '/run/secrets/apns.p8', APNS_KEY_ID: 'ABC123DEFG', APNS_TEAM_ID: 'TEAM123456', APNS_BUNDLE_ID: 'net.plantbeat.agora' };
+const APNS = { APNS_KEY_FILE: '/run/secrets/apns.p8', APNS_KEY_ID: 'ABC123DEFG', APNS_TEAM_ID: 'TEAM123456', APNS_BUNDLE_ID: 'com.caffeinatedsoftware.agora' };
 
 describe('loadConfig', () => {
     it('applies defaults', () => {
@@ -28,7 +28,7 @@ describe('loadConfig', () => {
     it('reads FCM and APNs settings', () => {
         const c = loadConfig({ RELAY_SECRET_KEY: KEY, FCM_SERVICE_ACCOUNT_FILE: '/run/secrets/fcm.json', ...APNS, APNS_ENVIRONMENT: 'sandbox' });
         expect(c.fcm).toEqual({ serviceAccountFile: '/run/secrets/fcm.json' });
-        expect(c.apns).toEqual({ keyFile: '/run/secrets/apns.p8', keyId: 'ABC123DEFG', teamId: 'TEAM123456', bundleId: 'net.plantbeat.agora', production: false });
+        expect(c.apns).toEqual({ keyFile: '/run/secrets/apns.p8', keyId: 'ABC123DEFG', teamId: 'TEAM123456', bundleId: 'com.caffeinatedsoftware.agora', production: false });
         expect(loadConfig({ RELAY_SECRET_KEY: KEY, ...APNS }).apns?.production).toBe(true);
     });
 

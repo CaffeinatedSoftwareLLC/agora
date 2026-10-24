@@ -1,0 +1,37 @@
+# The Agora push relay, run by Caffeinated Software (agora-push-relay/README.md).
+# It is not part of an Agora instance; self-hosters do not need it.
+#
+#   cp agora-push-relay/.env.example agora-push-relay/.env   # then fill it in
+#   docker compose -f docker-compose.relay.yml up -d --build
+#
+# Serve it over HTTPS with a reverse proxy in front of 127.0.0.1:8787.
+# If one platform is not set up yet, delete its line under services.push-relay.secrets
+# and its entry under the top-level secrets, and clear its variables in the .env.
+services:
+  push-relay:
+    build:
+      context: ./agora-push-relay
+    env_file: ./agora-push-relay/.env
+    secrets:
+      - fcm-service-account.json
+      - apns-key.p8
+    volumes:
+      - relay-data:/data
+    # Loopback only: the reverse proxy on this host terminates TLS.
+    ports:
+      - "127.0.0.1:8787:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+# Plain bind mounts at /run/secrets/<name>, read-only. The files must be readable by
+# uid 1000 (the container's `node` user). The directory is gitignored.
+secrets:
+  fcm-service-account.json:
+    file: ./agora-push-relay/secrets/fcm-service-account.json
+  apns-key.p8:
+    file: ./agora-push-relay/secrets/apns-key.p8
+
+volumes:
+  relay-data:
