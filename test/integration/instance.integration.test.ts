@@ -219,7 +219,7 @@ describe('Phase 0 — Instance Bootstrap', () => {
             // Point to a path that cannot be written
             process.env.AGORA_DATA_DIR = process.platform === 'win32'
                 ? 'Z:\\nonexistent\\readonly'
-                : '/proc/nonexistent/readonly';
+                : '/dev/null/readonly'; // ENOTDIR; a /proc path makes recursive mkdirSync spin forever on Linux
 
             try {
                 const token1 = await getSetupToken();
@@ -252,7 +252,7 @@ describe('Phase 0 — Instance Bootstrap', () => {
             delete process.env.AGORA_SETUP_TOKEN;
             process.env.AGORA_DATA_DIR = process.platform === 'win32'
                 ? 'Z:\\nonexistent\\readonly'
-                : '/proc/nonexistent/readonly';
+                : '/dev/null/readonly'; // ENOTDIR; a /proc path makes recursive mkdirSync spin forever on Linux
             resetSetupTokenCache();
 
             try {

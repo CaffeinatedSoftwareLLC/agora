@@ -55,9 +55,6 @@ jobs:
       - run: npm run build
       - run: npm ci --prefix agora-mcp
       - run: npm ci --prefix agora-host
-      # TEMP diagnostic: the instance test hangs only in CI; print each test as it finishes.
-      - name: instance test, verbose
-        run: timeout -k 10 240 npx vitest run test/integration/instance.integration.test.ts --reporter=verbose --testTimeout=20000 --hookTimeout=20000
       - run: npm test
 
   frontend:
