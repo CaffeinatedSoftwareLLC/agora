@@ -218,6 +218,14 @@ export async function aiProviderRoutes(app: FastifyInstance) {
     app.delete('/servers/:serverId/ai/providers/:providerId', { preHandler: [requireAdmin] }, async (request, reply) => {
         const { serverId, providerId } = request.params as any;
         const db = request.dbClient!;
+        // Model agents keep their provider: delete or move them first
+        const agents = await db.query(
+            'SELECT u.username FROM model_agents a JOIN users u ON u.id = a.bot_id WHERE a.provider_id = $1 AND a.server_id = $2 ORDER BY u.username',
+            [providerId, serverId]
+        );
+        if (agents.rows.length > 0) {
+            return reply.status(409).send({ error: `This provider is used by model agents: ${agents.rows.map((r: any) => r.username).join(', ')}` });
+        }
         const routes = await db.query('SELECT capability FROM ai_capability_routes WHERE provider_id = $1 ORDER BY capability', [providerId]);
         // Routes pointing at this provider cascade away
         const result = await db.query('DELETE FROM ai_providers WHERE id = $1 AND server_id = $2 RETURNING *', [providerId, serverId]);
