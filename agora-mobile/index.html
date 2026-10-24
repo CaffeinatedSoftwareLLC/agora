@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
+  <title>Agora</title>
+  <link rel="stylesheet" href="./src/picker/picker.css" />
+</head>
+<body>
+  <main>
+    <h1>Agora</h1>
+    <p class="lead">Choose the Agora server to open.</p>
+    <ul id="servers" aria-label="Saved servers"></ul>
+    <p id="empty" class="muted" hidden>No servers yet. Add the address of your Agora instance.</p>
+
+    <form id="add" autocomplete="off" novalidate>
+      <label for="address">Add server</label>
+      <div class="row">
+        <input id="address" name="address" type="url" inputmode="url" placeholder="https://agora.example.com" autocapitalize="off" spellcheck="false" required />
+        <button type="submit" id="add-button">Add</button>
+      </div>
+      <p id="status" class="muted" role="status" aria-live="polite"></p>
+    </form>
+
+    <p class="muted small">The server must use HTTPS. Only servers on this list open inside the app; other links open in your browser.</p>
+    <p class="muted small">To come back here: press Back from a server's first page, or long-press the app icon and choose "Switch server".</p>
+    <footer class="muted small">Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.</footer>
+  </main>
+  <script type="module" src="./src/picker/main.ts"></script>
+</body>
+</html>

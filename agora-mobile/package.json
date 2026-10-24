@@ -1,0 +1,35 @@
+{
+  "name": "agora-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Android and iOS app shells for Agora (Capacitor)",
+  "type": "module",
+  "scripts": {
+    "build": "vite build && vite build --config vite.inject.config.ts",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "sync:android": "npm run build && cap sync android",
+    "sync:ios": "npm run build && cap sync ios",
+    "android": "npm run sync:android && cap open android",
+    "ios": "npm run sync:ios && cap open ios"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@capacitor/android": "7.6.9",
+    "@capacitor/core": "7.6.9",
+    "@capacitor/device": "7.0.5",
+    "@capacitor/ios": "7.6.9",
+    "@capacitor/preferences": "7.0.4",
+    "@capacitor/push-notifications": "7.0.7"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.6.9",
+    "@types/node": "22.20.5",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
+  }
+}
