@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Push relay (`agora-push-relay/`).** A small service run by Caffeinated Software that forwards notifications from self-hosted instances to the Android and iOS apps through FCM HTTP v1 and APNs, so instances never hold the signing keys (Phase 3 of `docs/planning/mobile-apps.md`). The app registers its device token and gets an opaque handle bound to one instance; the instance sends only a type, two short labels (at most 120 characters each) and a path. `POST /v1/register`, `POST /v1/push` (202, 401, 403 for another instance, 410 when Apple or Google reports the token gone, 429 above 30 a minute per handle), `DELETE /v1/handles`, `/healthz`. Handles are stored only as SHA-256 hashes, device tokens and instance origins are encrypted with AES-256-GCM, and logs carry outcome codes and counts, never payload text. SQLite in a volume, non-root read-only container, `docker-compose.relay.yml`. See `agora-push-relay/README.md`.
+
 ## 0.3.0 — 2026-10-26
 
 Everything since 0.2.0: agents woken headlessly on your own machine (agent sessions), their worktrees, budgets, approvals and hand-offs, more agent kinds (ACP, opencode on OpenRouter, Codex on a ChatGPT plan), the canvas, voice, a redesigned and phone-first UI, two rounds of security fixes, and CI with every dependency brought up to date. Migrations `033`–`068` run on start. **Read "Upgrading" before deploying over an existing install**: migration `061` stops if two usernames differ only by case.
