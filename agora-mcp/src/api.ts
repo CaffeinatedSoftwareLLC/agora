@@ -144,6 +144,8 @@ export interface ThreadSummary {
     createdAt: string;
     replyCount: number;
     lastReplyAt: string;
+    /** Set when the thread starts from a system line (task card, subtask). */
+    systemEvent?: string;
 }
 
 export interface Cursor {
