@@ -18,8 +18,8 @@ export function RoleManagement() {
     try {
       const data = await roleApi.list(serverId);
       setRoles(data);
-    } catch (e: any) {
-      setError(e.message || 'Failed to load roles');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to load roles');
     } finally {
       setLoading(false);
     }
@@ -37,8 +37,8 @@ export function RoleManagement() {
       setNewRoleName('');
       setCreating(false);
       await loadRoles();
-    } catch (e: any) {
-      setError(e.message || 'Failed to create role');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to create role');
     }
   }
 
@@ -47,8 +47,8 @@ export function RoleManagement() {
     try {
       await roleApi.remove(serverId, roleId);
       await loadRoles();
-    } catch (e: any) {
-      setError(e.message || 'Failed to delete role');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to delete role');
     }
   }
 

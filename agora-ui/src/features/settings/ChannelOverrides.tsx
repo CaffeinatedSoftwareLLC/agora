@@ -24,8 +24,8 @@ export function ChannelOverrides() {
       ]);
       setChannels(channelsData);
       setRoles(rolesData);
-    } catch (e: any) {
-      setError(e.message || 'Failed to load data');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -43,8 +43,8 @@ export function ChannelOverrides() {
     try {
       const data = await roleApi.getOverrides(channelId);
       setOverrides(data);
-    } catch (e: any) {
-      setError(e.message || 'Failed to load overrides');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to load overrides');
     }
   }
 
@@ -53,8 +53,8 @@ export function ChannelOverrides() {
       await roleApi.upsertRoleOverride(selectedChannel, roleId, { allow, deny });
       await loadOverrides(selectedChannel);
       setEditingRole(null);
-    } catch (e: any) {
-      setError(e.message || 'Failed to save override');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to save override');
     }
   }
 
@@ -62,8 +62,8 @@ export function ChannelOverrides() {
     try {
       await roleApi.removeRoleOverride(selectedChannel, roleId);
       await loadOverrides(selectedChannel);
-    } catch (e: any) {
-      setError(e.message || 'Failed to remove override');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to remove override');
     }
   }
 

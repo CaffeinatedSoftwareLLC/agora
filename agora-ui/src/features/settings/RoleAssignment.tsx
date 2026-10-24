@@ -22,8 +22,8 @@ export function RoleAssignment() {
       ]);
       setRoles(rolesData.filter((r) => !r.isEveryone));
       setMembers(membersData);
-    } catch (e: any) {
-      setError(e.message || 'Failed to load data');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -60,8 +60,8 @@ export function RoleAssignment() {
         await roleApi.assignRole(serverId, selectedMember, roleId);
         setMemberRoles((prev) => new Set([...prev, roleId]));
       }
-    } catch (e: any) {
-      setError(e.message || 'Failed to update role');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to update role');
     }
   }
 

@@ -20,7 +20,8 @@ function makeVirtualizer(count: number, estimate: (i: number) => number) {
     observeElementOffset: () => {},
   });
   v._willUpdate();
-  v.getMeasurements();
+  // private in @tanstack/virtual-core; the test needs the measurement cache populated
+  (v as unknown as { getMeasurements(): unknown }).getMeasurements();
   return v;
 }
 

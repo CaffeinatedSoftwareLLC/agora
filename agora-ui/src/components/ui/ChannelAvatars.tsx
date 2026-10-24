@@ -5,7 +5,7 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useThreadStore } from '../../stores/threadStore';
-import { AvatarColorsContext, resolveAvatarColors } from './Avatar';
+import { AvatarColorsContext, resolveAvatarColors } from './avatarColors';
 
 /** One palette for feed, replies, roster, autocomplete and the signed-in user. */
 export function ChannelAvatars({ children }: { children: ReactNode }) {

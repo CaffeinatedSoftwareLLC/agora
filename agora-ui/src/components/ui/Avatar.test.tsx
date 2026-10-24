@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import { Avatar, avatarColor, AVATAR_COLORS, resolveAvatarColors } from './Avatar';
+import { Avatar } from './Avatar';
+import { avatarColor, AVATAR_COLORS, resolveAvatarColors } from './avatarColors';
 import { deltaE2000, hexToLab } from './avatarColorDistance.test-support';
 import { PALETTES } from '../../theme/palettes';
 import { useUIStore } from '../../stores/uiStore';
