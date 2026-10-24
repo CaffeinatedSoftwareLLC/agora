@@ -98,6 +98,24 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  agora-push-relay:
+    name: agora-push-relay (type-check + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agora-push-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agora-push-relay/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
   agora-mcp:
     name: agora-mcp (build + tests)
     runs-on: ubuntu-latest
