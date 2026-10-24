@@ -27,6 +27,7 @@ export interface PermissionOption { optionId: string; kind: string }
 
 const IDENT = /^[A-Za-z][A-Za-z0-9_]{0,99}$/;
 const MCP_TOOL = /^mcp__[A-Za-z0-9_-]{1,64}__[A-Za-z0-9_-]{1,64}$/;
+const AGORA_TOOL = /^agora_([a-z][a-z_]{0,63})$/;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Anything that can chain, redirect or substitute: only a bare `Bash` rule allows these
 const SHELL_SYNTAX = /[;&|<>`$(){}\r\n]/;
@@ -77,7 +78,11 @@ export function ruleForCall(call: ToolCallInfo): string | null {
         default:
             if (named) return named;
             // claude-code-acp titles an MCP call with the tool's full name
-            return typeof call.title === 'string' && MCP_TOOL.test(call.title) ? call.title : null;
+            if (typeof call.title === 'string' && MCP_TOOL.test(call.title)) return call.title;
+            // opencode titles it `<server>_<tool>`. The host passes it only the agora server and
+            // turns off project config, so no other server can take that prefix.
+            const m = typeof call.title === 'string' ? AGORA_TOOL.exec(call.title) : null;
+            return m ? `mcp__agora__${m[1]}` : null;
     }
 }
 
@@ -174,7 +179,8 @@ async function realTarget(target: string): Promise<string> {
 function pathsOf(call: ToolCallInfo): unknown[] {
     const out: unknown[] = [...(call.locations ?? [])];
     const input = (call.rawInput && typeof call.rawInput === 'object' ? call.rawInput : {}) as Record<string, unknown>;
-    for (const k of ['file_path', 'path', 'notebook_path', 'filePath']) if (input[k] !== undefined) out.push(input[k]);
+    // opencode's edit permission request names the file `filepath`
+    for (const k of ['file_path', 'path', 'notebook_path', 'filePath', 'filepath']) if (input[k] !== undefined) out.push(input[k]);
     return out;
 }
 

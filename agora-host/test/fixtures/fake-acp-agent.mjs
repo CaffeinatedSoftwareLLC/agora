@@ -33,7 +33,9 @@ async function prompt(id, { sessionId }) {
         const toolCallId = `call-${n}`;
         update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: tool.title, kind: tool.kind, status: 'pending', rawInput: tool.rawInput, ...(tool.locations ? { locations: tool.locations } : {}),
             ...(tool.name ? { name: tool.name } : {}), content: tool.diff ? [{ type: 'diff', ...tool.diff }] : [] });
-        const answer = await ask('session/request_permission', { sessionId, toolCall: { toolCallId },
+        // opencode: an update with the call's input, then a request that repeats the call with empty fields
+        if (tool.update) update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress', ...tool.update });
+        const answer = await ask('session/request_permission', { sessionId, toolCall: { toolCallId, ...(tool.ask ?? {}) },
             options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }, { optionId: 'always', name: 'Always', kind: 'allow_always' },
                 { optionId: 'no', name: 'Reject', kind: 'reject_once' }, { optionId: 'never', name: 'Never', kind: 'reject_always' }] });
         log({ permission: toolCallId, answer });

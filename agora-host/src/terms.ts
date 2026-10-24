@@ -13,17 +13,25 @@ import type { Claim } from './types.js';
  *   to the child only. The key is never logged, stored or sent to Agora.
  * - Gemini (CLI or Antigravity) must use an API key: Google's terms call third-party access
  *   through its account login a breach. Gemini is hosted only over ACP with an API key.
+ * - opencode runs only over ACP with an API key: it has no account login of its own to host,
+ *   and its fallback (OpenCode Zen) would send the work to a provider the owner didn't pick.
  * - The host never reads, copies or relays a CLI's own login files or OAuth tokens.
  */
 
 export const TERMS_DOC = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/provider-terms.md';
 
+export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode';
+
 /** The environment variables each CLI reads its API key from. */
-export const API_KEY_ENVS: Record<'codex' | 'claude' | 'gemini', string[]> = {
+export const API_KEY_ENVS: Record<Adapter, string[]> = {
     claude: ['ANTHROPIC_API_KEY'],
     codex: ['CODEX_API_KEY', 'OPENAI_API_KEY'],
     gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    opencode: ['OPENROUTER_API_KEY'],
 };
+
+/** The opencode provider each key variable belongs to; the only provider an opencode run may use. */
+export const OPENCODE_PROVIDERS: Record<string, string> = { OPENROUTER_API_KEY: 'openrouter' };
 
 export const GEMINI_SUBSCRIPTION_REFUSAL =
     'a gemini profile must use auth "api_key" (GEMINI_API_KEY). Google\'s Antigravity terms, section 6: '
@@ -34,10 +42,14 @@ export const GEMINI_SUBSCRIPTION_REFUSAL =
 export const GEMINI_NOT_HOSTED =
     'Gemini is hosted only over ACP with an API key: set "protocol": "acp" and "acpArgs": ["--acp"] on the gemini profile (agora-host README, "ACP agents").';
 
+export const OPENCODE_ACP_ONLY =
+    'opencode is hosted only over ACP with an API key: set "protocol": "acp", "acpArgs": ["acp"], "auth": "api_key" and "apiKeyEnv": "OPENROUTER_API_KEY" (agora-host README, "opencode and OpenRouter").';
+
 /**
  * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An
  * api_key profile on ACP must use it, so the agent can't fall back to an account login.
- * Claude Code reads ANTHROPIC_API_KEY itself, so claude needs none.
+ * Claude Code reads ANTHROPIC_API_KEY itself, so claude needs none. opencode reads
+ * OPENROUTER_API_KEY itself and offers only a terminal login, so it needs none either.
  */
 export const ACP_API_KEY_METHODS: Record<string, string> = {
     GEMINI_API_KEY: 'gemini-api-key',
