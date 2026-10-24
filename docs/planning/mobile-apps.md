@@ -118,6 +118,12 @@ The three parts are developed in parallel, so they agree on only these shapes. A
   - `410` when Apple or Google reports the device token is gone. The relay deletes the handle, and the instance should delete it too.
   - `429` when rate-limited. The limit is per handle, 30 a minute.
 
+**What reaches the phone** (agreed between the relay and the app during the build):
+- A notification with the `title` and `body`, plus data keys `{type, url, instance}`.
+- On Android, it goes to notification channel `agora`.
+- On iOS, approvals get category `AGORA_APPROVAL` (when `type` is `"approval"`). That category adds Approve…/Deny… buttons, which open the card and never approve directly.
+- Android has no buttons for now, because that would need data-only FCM messages.
+
 **`DELETE /v1/handles`**:
 - Header: `Authorization: Bearer <handle>`
 - Response: `204`.
