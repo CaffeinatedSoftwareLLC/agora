@@ -15,7 +15,7 @@ import { ChatGPTPlanConnect, type PlanConnection } from './ChatGPTPlanConnect';
 
 interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null }
 interface Profile {
-  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini';
+  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
@@ -163,6 +163,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
   const [form, setForm] = useState({ name: '', adapter: 'codex', hostId: '', workdirAlias: 'agora', workspaceId: 'primary', model: '', effort: 'high', channelId: '' });
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm(f => ({ ...f, [k]: e.target.value }));
   const hostId = form.hostId || hosts[0]?.id || '';
+  const opencode = form.adapter === 'opencode';
 
   const create = async () => {
     try {
@@ -205,6 +206,8 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
                 <option value="claude">Claude Code</option>
                 {/* The host runs it over ACP (gemini --acp) and only with an API key */}
                 <option value="gemini">Gemini CLI (ACP, API key)</option>
+                {/* opencode acp on an OpenRouter key: any OpenRouter model, one model per agent */}
+                <option value="opencode">opencode (ACP, OpenRouter key)</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-text-muted">Host
@@ -215,8 +218,8 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
             <label className="flex flex-col gap-1 text-text-muted">Workdir alias (mapped to a folder in the host config)
               <input className={input} value={form.workdirAlias} maxLength={64} onChange={set('workdirAlias')} />
             </label>
-            <label className="flex flex-col gap-1 text-text-muted">Model (optional)
-              <input className={input} value={form.model} maxLength={64} placeholder="gpt-6.1-sol" onChange={set('model')} />
+            <label className="flex flex-col gap-1 text-text-muted">{opencode ? 'OpenRouter model ID (required)' : 'Model (optional)'}
+              <input className={input} value={form.model} maxLength={64} placeholder={opencode ? 'qwen/qwen3-coder' : 'gpt-6.1-sol'} onChange={set('model')} />
             </label>
             <label className="flex flex-col gap-1 text-text-muted">Workspace ID (same repository = same ID across hosts)
               <input className={input} value={form.workspaceId} maxLength={64} onChange={set('workspaceId')} />
@@ -234,7 +237,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
             </label>
           </div>
           <div className="mt-3">
-            <Button onClick={() => void create()} disabled={!/^[a-z0-9][a-z0-9_-]*$/i.test(form.name.trim()) || !form.workdirAlias.trim()}>
+            <Button onClick={() => void create()} disabled={!/^[a-z0-9][a-z0-9_-]*$/i.test(form.name.trim()) || !form.workdirAlias.trim() || (opencode && !form.model.trim())}>
               Create agent
             </Button>
           </div>
@@ -253,10 +256,13 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   const [wakeBudget, setWakeBudget] = useState(String(profile.wakeBudget));
   const validWakeBudget = Number.isInteger(Number(wakeBudget)) && Number(wakeBudget) >= 1 && Number(wakeBudget) <= 100000;
   const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary') || wakeBudget !== String(profile.wakeBudget);
+  // opencode's own default is an OpenCode Zen model, so an opencode agent always names one
+  const opencode = profile.adapter === 'opencode';
+  const validModel = !opencode || !!model.trim();
 
   const save = async () => {
     try {
-      if (!validWakeBudget) return;
+      if (!validWakeBudget || !validModel) return;
       await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase(), wakeBudget: Number(wakeBudget) });
       onChange();
     } catch (err) { onError(errorText(err)); }
@@ -282,7 +288,8 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
         <label className="flex flex-col text-xs text-text-muted">Workspace ID (end sessions before changing)
           <input className={input} value={workspaceId} maxLength={64} onChange={e => setWorkspaceId(e.target.value)} />
         </label>
-        <input className={input} value={model} placeholder="model (CLI default)" maxLength={64} onChange={e => setModel(e.target.value)} />
+        <input className={input} value={model} placeholder={opencode ? 'OpenRouter model ID (required)' : 'model (CLI default)'} maxLength={64}
+          aria-label={`Model for ${profile.name}`} onChange={e => setModel(e.target.value)} />
         <select className={input} value={effort} onChange={e => setEffort(e.target.value)}>
           {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
         </select>
@@ -290,7 +297,7 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
           <input className={input} type="number" min={1} max={100000} step={1} value={wakeBudget}
             onChange={e => setWakeBudget(e.target.value)} aria-label={`Wake budget for ${profile.name}`} />
         </label>
-        {dirty && <Button variant="secondary" disabled={!validWakeBudget} onClick={() => void save()}>Save</Button>}
+        {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validModel} onClick={() => void save()}>Save</Button>}
       </div>
       {profile.adapter === 'codex' && host && (
         <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}

@@ -3,16 +3,23 @@ import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import { presetSchema } from './presets.js';
 import { VERIFY_COMMAND } from './verify.js';
-import { API_KEY_ENVS, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError } from './terms.js';
+import { API_KEY_ENVS, apiKeyEnvAllowed, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError, OPENCODE_ACP_ONLY } from './terms.js';
 
 const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
 const tool = z.enum(['chat_history', 'chat_read', 'chat_send', 'channel_list', 'thread_start', 'thread_list',
     'thread_close', 'who_directs', 'file_search', 'file_read', 'session_start', 'session_end', 'session_list', 'session_wake', 'session_lurk',
     'file_reserve', 'file_renew', 'file_release', 'file_reservations', 'project_context', 'canvas_publish', 'canvas_read', 'browser_preview']);
-const profile = z.object({
-    // gemini runs only with protocol "acp" and an API key (terms.ts, acp/session.ts)
-    adapter: z.enum(['codex', 'claude', 'gemini']), workdir: absolute, workdirAlias: z.string().min(1),
+/** opencode runs only over ACP on an OpenRouter key, so those are its defaults. */
+function opencodeDefaults(raw: unknown): unknown {
+    if (!raw || typeof raw !== 'object' || (raw as { adapter?: unknown }).adapter !== 'opencode') return raw;
+    const p = raw as Record<string, unknown>;
+    return { ...p, protocol: p.protocol ?? 'acp', acpArgs: p.acpArgs ?? ['acp'], auth: p.auth ?? 'api_key',
+        ...(p.apiKeyEnv === undefined && (p.auth ?? 'api_key') === 'api_key' ? { apiKeyEnv: 'OPENROUTER_API_KEY' } : {}) };
+}
+const profile = z.preprocess(opencodeDefaults, z.object({
+    // gemini and opencode run only with protocol "acp" and an API key (terms.ts, acp/session.ts)
+    adapter: z.enum(['codex', 'claude', 'gemini', 'opencode']), workdir: absolute, workdirAlias: z.string().min(1),
     executable, stateDir: absolute,
     sandbox: z.enum(['read-only', 'workspace-write']).default('workspace-write'),
     // Codex's Windows sandbox mode. --ignore-user-config drops the user's [windows] sandbox
@@ -37,14 +44,14 @@ const profile = z.object({
             "verify commands are plain words separated by single spaces, and the first word can't be a .cmd or .bat file")).max(20),
         timeoutSeconds: z.number().int().min(10).max(3600).default(600),
     }).strict().optional(),
-    // "acp": drive an Agent Client Protocol agent (gemini --acp, claude-code-acp, codex-acp) over
+    // "acp": drive an Agent Client Protocol agent (gemini --acp, claude-code-acp, codex-acp, opencode acp) over
     // JSON-RPC on its stdio instead of the CLI's own headless mode (acp/session.ts)
     protocol: z.enum(['cli', 'acp']).default('cli'),
     // Fixed local arguments for the ACP agent, e.g. ["--acp"]; Agora never supplies any
     acpArgs: z.array(z.string().min(1).max(1000).regex(/^[^\r\n\0]*$/)).max(20).default([]),
 }).strict().superRefine((p, ctx) => {
-    if (p.auth === 'api_key' && (!p.apiKeyEnv || !API_KEY_ENVS[p.adapter].includes(p.apiKeyEnv)))
-        ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')} for ${p.adapter}` });
+    if (p.auth === 'api_key' && (!p.apiKeyEnv || !apiKeyEnvAllowed(p.adapter, p.apiKeyEnv)))
+        ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')}${p.adapter === 'opencode' ? ' or OPENROUTER_API_KEY_<NAME>' : ''} for ${p.adapter}` });
     if (p.auth !== 'api_key' && p.apiKeyEnv !== undefined)
         ctx.addIssue({ code: 'custom', message: 'apiKeyEnv is only used with auth "api_key"' });
     if (p.auth === 'siwc' && p.adapter !== 'codex')
@@ -64,10 +71,13 @@ const profile = z.object({
         ctx.addIssue({ code: 'custom', message: 'Claude over ACP (claude-agent-acp, the Agent SDK) must use auth "api_key" (ANTHROPIC_API_KEY); a Claude subscription is for the unmodified claude CLI (protocol "cli") or the Claude Channel, see docs/provider-terms.md' });
     if (p.protocol === 'acp' && p.adapter === 'codex' && p.auth === 'subscription')
         ctx.addIssue({ code: 'custom', message: 'Codex over ACP (codex-acp) must use auth "api_key" (CODEX_API_KEY or OPENAI_API_KEY); codex-acp is not the official codex binary and reads the ChatGPT login itself, so use protocol "cli" for a subscription, see docs/provider-terms.md' });
+    // opencode has no login of its own to host, and Agora never lets it fall back to OpenCode Zen
+    if (p.adapter === 'opencode' && (p.protocol !== 'acp' || p.auth !== 'api_key')) ctx.addIssue({ code: 'custom', message: OPENCODE_ACP_ONLY });
+    // For opencode the cap is the OpenRouter key's own credit limit (README, "opencode and OpenRouter")
     if (p.protocol === 'acp' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'ACP has no verified USD cap' });
     if (p.caps.maxTokens !== undefined) ctx.addIssue({ code: 'custom', message: 'Neither verified CLI supports a hard per-run token cap; omit maxTokens explicitly' });
     if (p.adapter === 'codex' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'Codex has no verified USD cap' });
-});
+}));
 export const configSchema = z.object({
     instance: z.string().url().refine(s => { const u = new URL(s); return /^https?:$/.test(u.protocol) && !u.username && !u.password && !u.search && !u.hash && u.pathname === '/'; }, 'instance must be an HTTP(S) origin'),
     hostToken: z.string().regex(/^ah_[^\s]+$/),

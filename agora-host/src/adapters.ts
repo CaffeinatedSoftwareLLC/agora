@@ -9,7 +9,7 @@ import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { handoffNotes } from './handoff.js';
 import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, TermsRefusal, type SiwcRunError } from './terms.js';
+import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, OPENCODE_ACP_ONLY, opencodeProvider, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
 import { accessToken, type AccessToken } from './siwc/session.js';
 import { SiwcError } from './siwc/oauth.js';
 import { DEFAULT_DIR } from './siwc/store.js';
@@ -22,7 +22,7 @@ export interface Launch {
     lurk?: boolean;
     workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
-    adapter: 'codex' | 'claude' | 'gemini'; cleanup(): Promise<void>;
+    adapter: Adapter; cleanup(): Promise<void>;
     /** Codex's sandbox for this run, so denials can be read from its output. */
     sandbox?: 'read-only' | 'workspace-write';
     /** Preset names the claim used that this host doesn't define. */
@@ -46,6 +46,15 @@ async function siwcToken(config: Config, profile: string, force = false): Promis
 }
 export const resultSchema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
 const STATE_DIR_ENV = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' } as const;
+/** opencode keeps its config, logins, sessions and caches in the XDG directories, on every OS. */
+const OPENCODE_DIRS = { XDG_CONFIG_HOME: 'config', XDG_DATA_HOME: 'data', XDG_CACHE_HOME: 'cache', XDG_STATE_HOME: 'state' } as const;
+/**
+ * opencode 1.18 switches. The worktree's own opencode.json and .opencode/ could add MCP servers,
+ * plugins (code opencode runs at start) or providers, so project config is off; so are external
+ * plugins, the user's ~/.claude skills and prompts, sharing, update checks and LSP downloads.
+ */
+const OPENCODE_FLAGS = ['OPENCODE_DISABLE_PROJECT_CONFIG', 'OPENCODE_PURE', 'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_EXTERNAL_SKILLS',
+    'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_DISABLE_SHARE', 'OPENCODE_DISABLE_LSP_DOWNLOAD'];
 const osKeys = new Set(['SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC']);
 /**
  * Only the variables the OS needs to find programs and home/temp directories, made so a bare
@@ -92,15 +101,21 @@ export async function repoFreePath(env: NodeJS.ProcessEnv, roots: string[], plat
 export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const env = osEnv(source);
     // Each CLI keeps its settings and login in the profile's stateDir. For Gemini that also keeps
-    // the user's own ~/.gemini (and any Google login cached there) out of hosted runs.
-    env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
+    // the user's own ~/.gemini (and any Google login cached there) out of hosted runs; for
+    // opencode the user's ~/.config/opencode and the logins under ~/.local/share/opencode.
+    if (profile.adapter === 'opencode') {
+        for (const [name, dir] of Object.entries(OPENCODE_DIRS)) env[name] = join(profile.stateDir, dir);
+        for (const name of OPENCODE_FLAGS) env[name] = '1';
+    } else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
     // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md).
     // The codex CLI (0.163 `exec`, no login in CODEX_HOME) reads only CODEX_API_KEY and ignores
     // OPENAI_API_KEY (#165), so it always gets the key under that name. codex-acp keeps the
     // configured name: its `openai-api-key` / `codex-api-key` methods each read their own (terms.ts).
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
         const key = source[profile.apiKeyEnv];
-        const name = profile.adapter === 'codex' && profile.protocol !== 'acp' ? 'CODEX_API_KEY' : profile.apiKeyEnv;
+        // opencode reads only OPENROUTER_API_KEY, whichever OPENROUTER_API_KEY_<NAME> holds this agent's key
+        const name = profile.adapter === 'codex' && profile.protocol !== 'acp' ? 'CODEX_API_KEY'
+            : profile.adapter === 'opencode' ? opencodeProvider(profile.apiKeyEnv)?.env ?? profile.apiKeyEnv : profile.apiKeyEnv;
         if (key) env[name] = key;
     }
     return env;
@@ -109,6 +124,7 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
     // ACP: the protocol version is the gate, not the CLI's version string
     if (profile.protocol === 'acp') return probeAcp({ executable: profile.executable, args: profile.acpArgs, cwd: profile.workdir, env: childEnv(profile) });
     if (profile.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
+    if (profile.adapter === 'opencode') throw new HostConfigError(OPENCODE_ACP_ONLY);
     const { stdout } = await promisify(execFile)(profile.executable, ['--version'], {
         env: childEnv(profile), cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096,
     });
@@ -129,6 +145,26 @@ export function appServerRules(rules: string[], perms: Permissions, approvedTool
     return [...new Set([...rules, ...approvedTools.map(t => `mcp__agora__${t}`),
         ...(perms.codex.sandbox === 'workspace-write' ? ['write'] : []), ...(perms.codex.network ? ['network'] : []),
         ...(perms.codex.webSearch ? ['web_search'] : [])])];
+}
+
+/**
+ * The opencode model ID for a profile's model: `provider/model`. An OpenRouter ID as OpenRouter
+ * writes it (`qwen/qwen3-coder`) gets the `openrouter/` prefix opencode lists it under.
+ */
+export function opencodeModel(model: string, provider: string): string {
+    return model.toLowerCase().startsWith(`${provider}/`) ? model : `${provider}/${model}`;
+}
+
+/**
+ * opencode's inline config (OPENCODE_CONFIG_CONTENT, which overrides every config file but a
+ * managed one). Only the key's provider is enabled, so opencode can't fall back to another
+ * provider or to OpenCode Zen; the profile's model is also the small model (titles), so every
+ * call is billed to the model the owner picked. Every tool asks, and acp/session.ts answers
+ * from the claim's rules, except its own to-do list, which touches nothing outside the session.
+ */
+export function opencodeConfig(model: string, provider: string): string {
+    return JSON.stringify({ model, small_model: model, enabled_providers: [provider], share: 'disabled', autoupdate: false,
+        permission: { '*': 'ask', todowrite: 'allow', todoread: 'allow' } });
 }
 
 /** `prompt` replaces the wake prompt: a verify fix turn resuming the same conversation (verify.ts). */
@@ -152,8 +188,16 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     const acp = local.protocol === 'acp';
     // An ACP agent lists its own reasoning levels; acp/session.ts matches the effort against them
     const efforts = acp ? null : local.adapter === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh', 'max'];
-    const { model, effort } = claim.profile;
+    const { effort } = claim.profile;
+    let { model } = claim.profile;
     if (effort !== null && efforts && !efforts.includes(effort)) throw new Error('unsupported_effort');
+    // opencode's own default would be an OpenCode Zen model, so an opencode profile names its model
+    const provider = local.adapter === 'opencode' ? opencodeProvider(local.apiKeyEnv)?.provider ?? null : null;
+    if (local.adapter === 'opencode') {
+        if (!provider) throw new HostConfigError(OPENCODE_ACP_ONLY);
+        if (model === null) throw new Error('opencode_model_required');
+        model = opencodeModel(model, provider);
+    }
     // ACP session IDs are the agent's own; the CLIs use UUIDs
     const nativeId = acp ? SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
@@ -175,7 +219,8 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
         // This session's own preview ports: the only ones browser_preview will load
         const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([...active, claim.session.id])) : undefined;
         const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,
-            ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}) };
+            ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}),
+            ...(provider && model ? { OPENCODE_CONFIG_CONTENT: opencodeConfig(model, provider) } : {}) };
         // A PATH entry inside the worktree or repository would let a file the agent wrote win a
         // bare-name lookup over the trusted program (acp/permissions.ts executableTrust)
         await repoFreePath(env, [workspace.cwd, workspace.workdir, local.workdir]);

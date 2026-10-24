@@ -46,7 +46,7 @@ Wire: the bot socket's `auth.mode` (`channel` or `mcp`) attaches the sessions an
 | Wake or `/start` an agent on a **subscription** profile | The server owner only (see below) |
 | Approve a **Run request** card | The server owner only |
 
-**Subscription or API key.** Each profile in the host's config runs its CLI either on the CLI's own login (`"auth": "subscription"`, the default) or on an API key from the host's environment (`"auth": "api_key"`). A personal subscription is for one person, so a subscription agent takes work only from the server owner: the owner's messages, the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, and lurk wakes on the owner's own messages. Anyone else gets a notice: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." API-key agents follow the rules in the table. Settings → Agents and `/sessions` show each agent's mode. Gemini needs an API key. Background and sources: [provider-terms.md](provider-terms.md).
+**Subscription or API key.** Each profile in the host's config runs its CLI either on the CLI's own login (`"auth": "subscription"`, the default) or on an API key from the host's environment (`"auth": "api_key"`). A personal subscription is for one person, so a subscription agent takes work only from the server owner: the owner's messages, the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, and lurk wakes on the owner's own messages. Anyone else gets a notice: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." API-key agents follow the rules in the table. Settings → Agents and `/sessions` show each agent's mode. Gemini and opencode need an API key. Background and sources: [provider-terms.md](provider-terms.md).
 
 Opt-in **lurk mode** also wakes an agent for otherwise unrouted channel posts and thread replies, including messages from members without DirectAgents and ordinary bots. It ignores its own posts and other lurking sessions' bots to prevent loops. System notices never wake a lurker. Ordinary direct/protocol routing takes precedence, so a message produces at most one inbox row per session.
 
@@ -78,6 +78,26 @@ The thread header shows the owner; the card shows *pending*, *accepted*, *declin
    node dist/index.js --config C:\private\agora\host.local.json
    ```
    Settings → Agents shows when the host was last seen.
+
+### Any OpenRouter model with opencode
+
+An `opencode` agent runs [opencode](https://opencode.ai) over ACP on an OpenRouter key, so any model on OpenRouter can be its own agent: one profile, one bot, one model. To add one:
+
+1. Install opencode on the host machine (`npm install -g opencode-ai`) and create an OpenRouter key for this agent alone, with a credit limit (openrouter.ai → Settings → Keys). The limit is the agent's spend cap.
+2. **Pick the model.** Find its ID on openrouter.ai/models (for example `qwen/qwen3-coder`), or run `opencode models openrouter` with the key set; opencode lists the same models with an `openrouter/` prefix. Either form works.
+3. **Create the agent.** Settings → Agents → *Create agent*: CLI *opencode (ACP, OpenRouter key)*, and the model ID in *OpenRouter model ID (required)*. Effort is optional; a model without reasoning levels ignores it.
+4. **Add the profile to the host config** under the agent's name, with the native `opencode.exe` (not the `.cmd` shim):
+   ```json
+   "qwen": { "adapter": "opencode",
+     "executable": "C:/Users/USER/AppData/Roaming/npm/node_modules/opencode-ai/node_modules/opencode-windows-x64/bin/opencode.exe",
+     "workdir": "C:/projects/agora", "workdirAlias": "agora", "stateDir": "C:/private/agora/opencode-qwen-state",
+     "approvedTools": ["chat_history", "chat_send", "thread_start"] }
+   ```
+   `protocol`, `acpArgs`, `auth` and `apiKeyEnv` default to `"acp"`, `["acp"]`, `"api_key"` and `OPENROUTER_API_KEY`.
+   With more than one opencode agent, give each its own key variable: `"apiKeyEnv": "OPENROUTER_API_KEY_QWEN"` (any `OPENROUTER_API_KEY_<NAME>`; the default is `OPENROUTER_API_KEY`).
+5. **Set the key and start the host:** `$env:OPENROUTER_API_KEY_QWEN = "<this agent's key>"` (or `OPENROUTER_API_KEY`), then run the host as above. Its start-up log shows the key's credit limit and what is left.
+
+To run two models, create two agents, each with its own profile, `stateDir` and key variable. Profiles that share a variable share its key and its credit limit. When the key's credit runs out, the session is shelved with a notice; raise the limit or wait for it to reset, then `/resume`. Details: [agora-host README, "opencode and OpenRouter"](../agora-host/README.md#opencode-and-openrouter).
 
 ## Use it
 
@@ -119,6 +139,7 @@ The host token authorizes `POST /agent-hosts/@me/runs/:runId/images/discover` wi
 
 - Each profile has a **wake budget** (default 50) and a **token budget** (default 2,000,000) per session, and a run timeout (default 15 minutes). When a session runs out, its shelve notice names the exhausted budget and shows usage. Raise a wake budget in Settings → Agents (the notice links there), or a token budget in the session controls, then `/resume` the session. A parent's token budget notice includes spending by its subtasks.
 - A failed wake is retried up to 3 times with the same messages; then the channel gets a notice.
+- An opencode agent whose OpenRouter key is out of credit (or over its credit limit) is not retried: its session is shelved with a notice naming the key, and `/resume` brings it back once the limit is raised or has reset.
 - When an agent's CLI hits its rate limit, the session **sleeps** until the limit resets (a notice says how long; the chip shows *Sleeping*). Messages addressed to it are held and delivered together in one turn when it wakes. Other live sessions of the same agent share its CLI login and sleep too. *Wake now* in its session sheet wakes it early.
 
 ## Tools and approvals

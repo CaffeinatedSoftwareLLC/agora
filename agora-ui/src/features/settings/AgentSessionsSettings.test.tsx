@@ -32,3 +32,29 @@ it.each(['', '0', '-1', '1.5', '100001'])('does not save an invalid wake budget:
   expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
   expect(patch).not.toHaveBeenCalled();
 });
+
+it('creates an opencode agent only with an OpenRouter model ID', async () => {
+  const post = vi.spyOn(api, 'post').mockResolvedValue({ bot: { username: 'qwen' }, token: 'bot_x' });
+  render(<AgentSessionsSettings />);
+  fireEvent.change(await screen.findByLabelText('CLI'), { target: { value: 'opencode' } });
+  fireEvent.change(screen.getByLabelText('Name (bot and /start name)'), { target: { value: 'qwen' } });
+  const create = screen.getByRole('button', { name: 'Create agent' });
+  expect(create).toHaveProperty('disabled', true);
+  fireEvent.change(screen.getByLabelText('OpenRouter model ID (required)'), { target: { value: 'qwen/qwen3-coder' } });
+  expect(create).toHaveProperty('disabled', false);
+  fireEvent.click(create);
+  await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/agents', expect.objectContaining({ adapter: 'opencode', model: 'qwen/qwen3-coder', name: 'qwen' })));
+});
+
+it('does not save an opencode agent without a model', async () => {
+  vi.mocked(api.get).mockImplementation(async (path: string) => (path.endsWith('/agent-hosts')
+    ? [{ id: 'H', name: 'desktop', revokedAt: null }]
+    : path.endsWith('/agent-profiles') ? [{ id: 'P', name: 'qwen', botId: 'B', hostId: 'H', adapter: 'opencode',
+      model: 'qwen/qwen3-coder', effort: null, workdirAlias: 'agora', workspaceId: 'primary', wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 900 }]
+    : []) as never);
+  const patch = vi.spyOn(api, 'patch');
+  render(<AgentSessionsSettings />);
+  fireEvent.change(await screen.findByLabelText('Model for qwen'), { target: { value: ' ' } });
+  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+  expect(patch).not.toHaveBeenCalled();
+});
