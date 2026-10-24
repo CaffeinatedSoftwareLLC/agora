@@ -13,6 +13,7 @@ export default defineConfig({
         env: { STORAGE_DIR: path.join(os.tmpdir(), 'agora-test-files') },
         // test/sandbox needs Docker + the socket proxy: run with `npm run test:sandbox`.
         // .claude/** holds agent worktrees (copies of this repo's tests).
-        exclude: ['**/node_modules/**', '**/dist/**', 'agora-ui/**', 'test/sandbox/**', '.claude/**'],
+        // agora-ui, agora-mcp and agora-host have their own vitest configs; e2e/ is Playwright.
+        exclude: ['**/node_modules/**', '**/dist/**', 'agora-ui/**', 'agora-mcp/**', 'agora-host/**', 'e2e/**', 'test/sandbox/**', '.claude/**'],
     },
 });
