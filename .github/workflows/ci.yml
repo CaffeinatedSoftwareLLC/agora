@@ -1,0 +1,93 @@
+name: CI
+
+# Runs on every PR and on pushes to main. Fork PRs need manual approval before this
+# runs (repo setting), and the workflow token is read-only. No secrets are used here,
+# so nothing in this workflow is worth stealing.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (build + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: accord
+          POSTGRES_PASSWORD: accord
+          POSTGRES_DB: accord_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U accord -d accord_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgres://accord:accord@localhost:5432/accord_test
+      TEST_DATABASE_URL: postgres://accord:accord@localhost:5432/accord_test
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-secret-not-for-prod
+      # Dummy 32-byte key for tests only; config.ts rejects it outside NODE_ENV=production.
+      AGORA_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  frontend:
+    name: Frontend (lint + build + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: agora-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agora-ui/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+  agora-mcp:
+    name: agora-mcp (build + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: agora-mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agora-mcp/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
