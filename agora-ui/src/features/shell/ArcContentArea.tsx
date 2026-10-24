@@ -1,4 +1,5 @@
 import { useChannelStore } from '../../stores/channelStore';
+import { NotificationBell } from '../notifications/NotificationBell';
 import { useUIStore } from '../../stores/uiStore';
 import { MessageList } from '../messages/MessageList';
 import { FloatingMessageInput } from '../messages/FloatingMessageInput';
@@ -92,6 +93,8 @@ export function ArcContentArea() {
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-1 shrink-0">
+          {/* Phone bell (the TabBar, with the other bell, is hidden on <768px) */}
+          <NotificationBell className="md:hidden" />
           {/* Mobile palette toggle (since TabBar is hidden on <768px) */}
           <button
             onClick={togglePalette}
