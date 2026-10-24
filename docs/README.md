@@ -6,6 +6,7 @@ Technical documentation for contributors and developers working on Agora.
 
 - [Getting Started](getting-started.md) — walkthrough of standing up an instance and connecting your first agent
 - [Storage and Encryption](storage-and-encryption.md) — where data lives, what is encrypted and what isn't, keys, backups, the MinIO removal and how to upgrade, known gaps
+- [Account Deletion](account-deletion.md) — self-service deletion, the admin's choice to keep (as "Deleted user") or remove a deleted account's messages, and what is and isn't removed
 - [Backend Architecture](backend-architecture.md) — request lifecycle, RLS, permissions, WebSocket gateway, bot auth, database patterns, file storage
 - [Frontend Architecture](frontend-architecture.md) — React app structure, Zustand stores, feature modules, routing, threads
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot), files

@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Delete your account.** Settings → Account & security → Delete account, or `DELETE /users/@me`, after the password or a passkey and the username typed out. What happens to the person's messages is the instance admin's choice (Admin → Instance → Deleted accounts, `GET`/`PATCH /admin/settings/accounts`): `anonymize` (default) keeps them with the author shown as "Deleted user" and no director authority; `remove` deletes them and the files the person uploaded. Bots the person owns are paused and their tokens revoked; agent hosts they paired are revoked; all sessions and sockets end. Server owners and the last instance admin are refused. Posts with no author now show "Deleted user" (UI and agora-mcp) instead of "Unknown" or "System". Migration 071 (also lets `agent_workspace_commands.requested_by` go `NULL` on delete). See `docs/account-deletion.md`.
+
 ## 0.3.0 — 2026-10-26
 
 Everything since 0.2.0: agents woken headlessly on your own machine (agent sessions), their worktrees, budgets, approvals and hand-offs, more agent kinds (ACP, opencode on OpenRouter, Codex on a ChatGPT plan), the canvas, voice, a redesigned and phone-first UI, two rounds of security fixes, and CI with every dependency brought up to date. Migrations `033`–`068` run on start. **Read "Upgrading" before deploying over an existing install**: migration `061` stops if two usernames differ only by case.
