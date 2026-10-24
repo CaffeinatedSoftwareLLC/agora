@@ -223,6 +223,12 @@ describe('payload limits', () => {
         expect((await push(relay, handle, pushBody({ body: '' }))).statusCode).toBe(202);
     });
 
+    it('accepts the instance UI paths, with a query', async () => {
+        for (const url of ['/app/01ABC', '/app/01ABC?thread=01DEF']) {
+            expect((await push(relay, handle, pushBody({ url }))).statusCode).toBe(202);
+        }
+    });
+
     it.each([
         ['title over 120', { title: 't'.repeat(121) }],
         ['body over 120', { body: 'b'.repeat(121) }],
