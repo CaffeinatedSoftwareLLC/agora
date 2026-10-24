@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { checkRun, type Notice } from '../lib/agent-runs';
-import { storeFile, getFileSetting } from '../lib/file-store';
+import { storeFile, getFileSetting, readUploadPart, FILE_TOO_LARGE } from '../lib/file-store';
 import { IMAGE_MIMES, validateFileType } from '../lib/file-validation';
 import { extractImagePaths } from '../lib/image-references';
 
@@ -59,7 +59,12 @@ export async function agentImageRoutes(app: FastifyInstance) {
             AND author_id = $3 AND created_at >= (SELECT created_at FROM agent_runs WHERE id = $4) AND created_at <= NOW() AND deleted_at IS NULL FOR UPDATE`,
             [messageId, auth.channelId, auth.botId, auth.run.id]);
         if (!message.rows[0] || !extractImagePaths(message.rows[0].content ?? '').includes(reference)) return reply.status(400).send({ error: 'invalid_reference' });
-        const buffer = await data.toBuffer();
+        let buffer: Buffer | null;
+        try { buffer = await readUploadPart(data); } catch (err) {
+            if (err instanceof app.multipartErrors.RequestFileTooLargeError) buffer = null;
+            else throw err;
+        }
+        if (!buffer) return reply.status(FILE_TOO_LARGE.status).send({ error: FILE_TOO_LARGE.error });
         const digest = createHash('sha256').update(buffer).digest('hex');
         const prior = await db.query('SELECT file_id FROM agent_run_images WHERE run_id = $1 AND digest = $2', [auth.run.id, digest]);
         if (prior.rows.length) return reply.send({ ok: true, repeated: true, fileId: prior.rows[0].file_id.trim() });

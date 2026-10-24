@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { describe, test, expect, beforeAll, afterAll } from 'vitest';
 import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
@@ -240,6 +241,33 @@ describe('Upload size follows the admin setting', () => {
             expect(res.status).toBe(413);
             expect(res.body.error).toBe('File exceeds maximum allowed size');
             expect(res.body.code).toBeUndefined();
+            expect(await fileCount()).toBe(before);
+        } finally {
+            await setMaxSize(26214400);
+        }
+    });
+
+    // 2026-10-23: a 54 MB upload under a 25 MB setting was stored as its first 25 MB with no
+    // error. When a body chunk ends exactly at fileSize and the rest arrives later, busboy sets
+    // `truncated` with nothing left to push, so multipart's toBuffer() never sees it and returns
+    // exactly fileSize bytes. Reproduced here deterministically with a two-chunk stream.
+    test('an upload whose first chunk ends exactly at the limit is refused, not stored cut', async () => {
+        const limit = 100_000;
+        await setMaxSize(limit);
+        try {
+            const before = await fileCount();
+            const B = 'TRUNCATIONBOUNDARY';
+            const head = `--${B}\r\nContent-Disposition: form-data; name="channel_id"\r\n\r\n${channelId}\r\n`
+                + `--${B}\r\nContent-Disposition: form-data; name="file"; filename="cut.txt"\r\nContent-Type: text/plain\r\n\r\n`;
+            const first = Buffer.concat([Buffer.from(head), Buffer.alloc(limit, 'd')]);
+            const rest = Buffer.concat([Buffer.alloc(50_000, 'd'), Buffer.from(`\r\n--${B}--\r\n`)]);
+            async function* body() { yield first; await new Promise(r => setTimeout(r, 50)); yield rest; }
+            const res = await ctx.app.inject({
+                method: 'POST', url: '/files/upload',
+                headers: { ...owner.auth, 'content-type': `multipart/form-data; boundary=${B}` },
+                payload: Readable.from(body()),
+            });
+            expect(res.statusCode, res.body).toBe(413);
             expect(await fileCount()).toBe(before);
         } finally {
             await setMaxSize(26214400);
