@@ -1,0 +1,8 @@
+node_modules/
+dist/
+# FCM service-account JSON and APNs .p8 key. Never commit these.
+secrets/
+*.p8
+*.db
+*.db-wal
+*.db-shm
