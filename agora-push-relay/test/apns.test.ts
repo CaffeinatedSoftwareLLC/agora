@@ -11,7 +11,7 @@ import { IOS_TOKEN, makeRelay, push, register } from './helpers.js';
 // A throwaway P-256 key generated per run, the same kind as an APNs .p8. No Apple credentials.
 const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const KEY_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-const CFG = { keyPem: KEY_PEM, keyId: 'ABC123DEFG', teamId: 'TEAM123456', bundleId: 'net.plantbeat.agora', production: true };
+const CFG = { keyPem: KEY_PEM, keyId: 'ABC123DEFG', teamId: 'TEAM123456', bundleId: 'com.caffeinatedsoftware.agora', production: true };
 const MSG = { type: 'approval', title: 'Approval waiting', body: 'In #general', url: '/channels/1', instance: 'https://agora.example.com' };
 
 interface Seen {
@@ -63,7 +63,7 @@ describe('APNs sender', () => {
         const { headers, body } = seen[0];
         expect(headers[':method']).toBe('POST');
         expect(headers[':path']).toBe(`/3/device/${IOS_TOKEN}`);
-        expect(headers['apns-topic']).toBe('net.plantbeat.agora');
+        expect(headers['apns-topic']).toBe('com.caffeinatedsoftware.agora');
         expect(headers['apns-push-type']).toBe('alert');
         expect(headers['apns-priority']).toBe('10');
         expect(headers['apns-expiration']).toBe(String(t0 / 1000 + 86_400));
