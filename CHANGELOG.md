@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Android and iOS app shells (`agora-mobile/`, not yet in the stores).** A Capacitor 7 app that opens your own Agora instance rather than a bundled UI, so the `SameSite=Strict` session cookie keeps working. A bundled server list adds `https` servers after checking `/health` and `/instance/status`; only saved servers load in the app and other links open in the browser. Saved servers get `window.AgoraNative` (`registerPush`, `unregisterPush`) for native push through the push relay; tapping a notification opens its path on the server that sent it, after checking that server is saved. Android notification channel `agora`; iOS Approve…/Deny… actions on approval notifications, which only open the card. Microphone for push-to-talk on saved servers only. The Capacitor bridge is limited to the main frame of the server list and saved servers, and server pages may call only what push registration needs. App ID `com.caffeinatedsoftware.agora` and relay `https://push.agora.host` are placeholders in `agora-mobile/app.config.json`. See `agora-mobile/README.md` for building, credentials and store release.
+
 ## 0.3.0 — 2026-10-26
 
 Everything since 0.2.0: agents woken headlessly on your own machine (agent sessions), their worktrees, budgets, approvals and hand-offs, more agent kinds (ACP, opencode on OpenRouter, Codex on a ChatGPT plan), the canvas, voice, a redesigned and phone-first UI, two rounds of security fixes, and CI with every dependency brought up to date. Migrations `033`–`068` run on start. **Read "Upgrading" before deploying over an existing install**: migration `061` stops if two usernames differ only by case.
