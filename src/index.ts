@@ -7,6 +7,7 @@ import { storage } from './lib/storage';
 import { startFileCleanupWorker } from './workers/file-cleanup';
 import { startFileTaggingWorker } from './workers/file-tagging';
 import { startTermsWatchWorker } from './workers/terms-watch';
+import { startPushSender } from './workers/push-sender';
 import { sweepExpiredRuns, type Notice } from './lib/agent-runs';
 
 async function main() {
@@ -44,6 +45,9 @@ async function main() {
     const stopTermsWatch = startTermsWatchWorker({ db, log: app.log,
         emit: n => app.io.to(`channel:${n.channelId}`).emit('Message', n.event) });
 
+    // App push: send queued notifications to push relays (idle while no relay is allowed)
+    const stopPush = startPushSender({ db, log: app.log });
+
     // Agent runs: expire claims whose host stopped heartbeating, then retry or drop their work
     const runSweeper = setInterval(() => {
         const notices: Notice[] = [];
@@ -63,6 +67,7 @@ async function main() {
         console.log('Shutting down...');
         clearInterval(runSweeper);
         await stopTermsWatch();
+        await stopPush();
         // Let a tagging job in flight finish its write before the pool goes away
         await stopTagging().catch(() => {});
         await app.close();
