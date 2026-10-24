@@ -16,3 +16,11 @@ export function budgetShelveNotice(profileName: string, sessionId: string, budge
         : `Raise ${own ? 'the' : "the parent session's"} token budget in the session controls`;
     return `${subject} shelved: ${reason} is used up (${usage}). ${fix}, then /resume ${sessionId}.`;
 }
+
+/** A session shelved because its profile's API key is out of credit (agora-host `credit_exhausted`). */
+export function creditShelveNotice(profileName: string, sessionId: string, apiKeyEnv: string | null): string {
+    const fix = apiKeyEnv === 'OPENROUTER_API_KEY'
+        ? "its OpenRouter key is out of credit or has used up its credit limit. Raise the key's limit at https://openrouter.ai/settings/keys or wait for it to reset"
+        : `its API key${apiKeyEnv ? ` (${apiKeyEnv})` : ''} is out of credit. Add credit to the key`;
+    return `Session for ${profileName} shelved: ${fix}, then /resume ${sessionId}.`;
+}
