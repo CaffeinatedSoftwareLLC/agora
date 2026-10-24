@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# Credentials: never commit. See README "Credentials".
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist
+*.keystore
+*.jks
+keystore.properties
+*.p8
+*.p12
+*.mobileprovision
