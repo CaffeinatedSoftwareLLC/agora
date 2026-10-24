@@ -68,7 +68,8 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
   between sessions the owner started. Everyone else is refused with a channel notice.
 - `"auth": "api_key"` with `"apiKeyEnv"`: the host passes that one variable from its own
   environment to the child. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or
-  `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini). The codex CLI
+  `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini), `OPENROUTER_API_KEY`
+  or `OPENROUTER_API_KEY_<NAME>` (opencode). The codex CLI
   reads only `CODEX_API_KEY`, so a codex profile (protocol `cli`) gets the key as
   `CODEX_API_KEY` whichever of the two names holds it on the host; codex-acp gets it under the
   configured name. The host refuses to start if the variable is unset, and never prints its
@@ -87,6 +88,9 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
   Google's Antigravity terms §6. The host runs Gemini only over ACP with an API key
   ([ACP agents](#acp-agents-agent-client-protocol)). The old `allowSubscriptionAtOwnRisk` flag
   opens no path: a gemini profile on account login is never hosted.
+- `adapter: "opencode"` runs only over ACP with `api_key` (`OPENROUTER_API_KEY` or
+  `OPENROUTER_API_KEY_<NAME>`); see
+  [opencode and OpenRouter](#opencode-and-openrouter).
 
 ```json
 "claude-team": { "adapter": "claude", "auth": "api_key", "apiKeyEnv": "ANTHROPIC_API_KEY", "...": "..." },
@@ -301,6 +305,7 @@ codex-acp `main`); the tests use a fake agent. Not yet run against the real agen
 | Gemini CLI | `gemini` | `node.exe` / `[".../@google/gemini-cli/bundle/gemini.js", "--acp"]` | **`api_key` only** (`GEMINI_API_KEY`; `GOOGLE_API_KEY` for Vertex AI) |
 | Claude Code ([claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)) | `claude` | `node.exe` / `[".../@agentclientprotocol/claude-agent-acp/dist/index.js"]` | **`api_key` only** (`ANTHROPIC_API_KEY`; claude-agent-acp wraps the Agent SDK, not the unmodified `claude` binary) |
 | Codex ([codex-acp](https://github.com/zed-industries/codex-acp)) | `codex` | the native `codex-acp.exe` from `@zed-industries/codex-acp-win32-x64` / `[]` | **`api_key` only** (`CODEX_API_KEY` or `OPENAI_API_KEY`; codex-acp embeds Codex's core and reads the login itself) |
+| [opencode](https://opencode.ai) | `opencode` | the native `opencode.exe` from `opencode-ai/node_modules/opencode-windows-x64/bin` / `["acp"]` (the default) | **`api_key` only** (`OPENROUTER_API_KEY`, the default); see [opencode and OpenRouter](#opencode-and-openrouter) |
 
 ```json
 "gemini": { "adapter": "gemini", "protocol": "acp", "executable": "C:/Program Files/nodejs/node.exe",
@@ -364,13 +369,79 @@ number of tool calls and the plan's progress; the channel shows it under "is
 working…" (not stored). Diff paths of completed tool calls are added to the run's
 changed files, alongside the worktree comparison. Tokens come from the prompt
 response's `usage` when the agent reports it, else `null`. ACP has no verified USD
-cap, so `caps.maxBudgetUsd` is refused on ACP profiles.
+cap, so `caps.maxBudgetUsd` is refused on ACP profiles. For opencode the cap is the
+OpenRouter key's own credit limit ([below](#opencode-and-openrouter)).
 
 **Not covered.** ACP agents may load MCP servers and settings from their own config
 in `stateDir` (there is no `--strict-mcp-config`); keep that directory to Agora's use.
 Live approval mid-turn (holding the turn until the owner taps) is implemented for
 Codex app-server only (above); an ACP call is denied at once and retried on the next
 run after approval.
+
+### opencode and OpenRouter
+
+An `opencode` profile runs `opencode acp` (opencode 1.18) on an OpenRouter key, so any
+OpenRouter model can be a dedicated Agora agent: one profile, one bot, one model. Only
+`adapter`, `executable`, `workdir`, `workdirAlias` and `stateDir` are needed; `protocol`
+defaults to `"acp"`, `acpArgs` to `["acp"]`, `auth` to `"api_key"` and `apiKeyEnv` to
+`OPENROUTER_API_KEY`. Anything else (`protocol: "cli"`, `auth: "subscription"`, another key
+variable) is refused.
+
+```json
+"qwen": { "adapter": "opencode",
+  "executable": "C:/Users/USER/AppData/Roaming/npm/node_modules/opencode-ai/node_modules/opencode-windows-x64/bin/opencode.exe",
+  "workdir": "C:/projects/agora", "workdirAlias": "agora", "stateDir": "C:/private/agora/opencode-qwen-state",
+  "approvedTools": ["chat_history", "chat_send", "thread_start"] }
+```
+
+Use the native `opencode.exe` (`npm install -g opencode-ai` puts it under
+`opencode-ai/node_modules/opencode-windows-x64/bin/`; on an older CPU the `-baseline`
+build), not the `opencode.cmd` shim. Set `OPENROUTER_API_KEY` in the host's environment, or
+give each agent its own variable with `"apiKeyEnv": "OPENROUTER_API_KEY_QWEN"` (any
+`OPENROUTER_API_KEY_<NAME>`). opencode reads only `OPENROUTER_API_KEY`, so the host passes
+the profile's key to it under that name; no other key reaches it.
+
+**The model.** Set it on the agent in Settings → Agents; an opencode profile needs one.
+Write the OpenRouter model ID as OpenRouter lists it (`qwen/qwen3-coder`) or with
+opencode's prefix (`openrouter/qwen/qwen3-coder`); the host adds the prefix. The field holds
+up to 64 characters. `opencode models openrouter` (with the key set) lists what opencode
+knows. `opencode acp` has no model flag, so the host passes the model twice: in
+`OPENCODE_CONFIG_CONTENT` (`model` and `small_model`, so titles are billed to the same
+model) and through the session's `model` config option, as for other ACP agents. A model
+opencode doesn't list fails the run with `acp_model_unavailable` and the available IDs.
+
+**What the host sets.** `OPENCODE_CONFIG_CONTENT` enables only the `openrouter` provider, so
+opencode can't fall back to OpenCode Zen or another provider, and makes every tool ask
+(`"permission": { "*": "ask" }`) except its to-do list; the host answers each request from
+the claim's rules as above. opencode's MCP calls are titled `agora_<tool>` and map to
+`mcp__agora__<tool>`. `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
+`XDG_STATE_HOME` point into the profile's `stateDir`, so your own opencode config and
+logins stay out of hosted runs. Project config (`opencode.json` and `.opencode/` in the
+worktree, which could add MCP servers, plugins or providers), external plugins, `~/.claude`
+skills and prompts, sharing, update checks and LSP downloads are turned off with opencode's
+`OPENCODE_*` switches. opencode offers only a terminal login over ACP, so the host never
+calls `authenticate`; opencode reads `OPENROUTER_API_KEY` itself. On Windows opencode runs
+shell commands through PowerShell.
+
+**Spend cap.** Give each opencode agent its own OpenRouter key with a credit limit
+(openrouter.ai → Settings → Keys → limit, optionally resetting daily, weekly or monthly), in
+its own `OPENROUTER_API_KEY_<NAME>`. Profiles that share a variable share its limit.
+OpenRouter refuses requests once the limit is used up. The host recognises OpenRouter's
+out-of-credit and limit messages (HTTP 402, and 403 budget stops) in opencode's error and
+fails the run with `credit_exhausted`, which is not retried: Agora shelves the session and
+posts "Session for *name* shelved: its OpenRouter key is out of credit or has used up its
+credit limit. Raise the key's limit at https://openrouter.ai/settings/keys or wait for it
+to reset, then /resume *id*." At start the host reads the key's limit from
+`GET https://openrouter.ai/api/v1/key` and logs one line, e.g. `Profile qwen: OpenRouter key
+credit limit $10.00, $7.50 left, resets monthly.`, or a warning when the key has no limit.
+Agora's own wake and token budgets apply as for any agent.
+
+**Checked against** opencode 1.18.34 driven through this host's ACP runner, with a local
+mock of OpenRouter's API: model selection, permission requests for shell, read, write
+(inside and outside the worktree) and Agora MCP calls, and a 402 reply. Not yet run against
+OpenRouter itself. When the host refuses one of opencode's requests, opencode ends the turn
+without a final message, so the run reports the denied tool and fails; approve the card and
+wake it again.
 
 ## Execution and recovery
 
