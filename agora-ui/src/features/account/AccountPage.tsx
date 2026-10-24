@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { PasskeySettings } from './PasskeySettings';
 import { ReadAloudSettings } from '../voice/ReadAloudSettings';
+import { DeleteAccount } from './DeleteAccount';
 
 /** Settings → Account & security, for the signed-in user (not a server setting). */
 export function AccountPage() {
@@ -24,6 +25,9 @@ export function AccountPage() {
         </div>
         <div className="bg-surface rounded-lg p-6 border border-border">
           <ReadAloudSettings />
+        </div>
+        <div className="bg-surface rounded-lg p-6 border border-border">
+          <DeleteAccount />
         </div>
       </div>
     </div>
