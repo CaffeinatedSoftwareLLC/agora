@@ -18,7 +18,7 @@ export type AiAuditAction =
     | 'ai_decision_update'
     | 'ai_voice_update'
     | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag'
-    | 'ai_agent_create' | 'ai_agent_update' | 'ai_agent_delete';
+    | 'ai_agent_create' | 'ai_agent_update' | 'ai_agent_delete' | 'ai_agent_budget_update';
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 

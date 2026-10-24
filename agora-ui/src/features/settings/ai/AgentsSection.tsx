@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { aiApi, ApiError, MODEL_AGENT_TOOLS } from '../../../lib/api';
-import type { AIAdapter, AIProvider, ModelAgent, ModelAgentTool } from '../../../lib/api';
+import type { AIAdapter, AIProvider, ModelAgent, ModelAgentBudget, ModelAgentTool } from '../../../lib/api';
 import type { Channel } from '../../../lib/contracts/server';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
@@ -11,6 +11,7 @@ interface Props {
   adapters: AIAdapter[];
   providers: AIProvider[];
   agents: ModelAgent[];
+  budget: ModelAgentBudget;
   channels: Channel[];
   onChanged: () => void;
 }
@@ -36,7 +37,7 @@ const errorText = (err: unknown, fallback: string) =>
  * Settings → AI → Model agents: named bots with their own provider and model that
  * answer @mentions on the server and can use tools (docs/model-agents.md).
  */
-export function AgentsSection({ serverId, adapters, providers, agents, channels, onChanged }: Props) {
+export function AgentsSection({ serverId, adapters, providers, agents, budget, channels, onChanged }: Props) {
   const [adding, setAdding] = useState(false);
   // Only adapters that implement function calling can serve an agent; today that is the OpenAI-compatible one
   const usable = providers.filter(p => p.enabled && p.adapter === 'openai');
@@ -56,6 +57,8 @@ export function AgentsSection({ serverId, adapters, providers, agents, channels,
           Add an OpenAI-compatible provider first (OpenAI, or OpenRouter with base URL https://openrouter.ai/api/v1).
         </p>
       )}
+
+      <BudgetControl key={JSON.stringify({ ...budget, today: undefined })} serverId={serverId} budget={budget} onChanged={onChanged} />
 
       {adding && (
         <AgentForm
@@ -78,6 +81,59 @@ export function AgentsSection({ serverId, adapters, providers, agents, channels,
         </div>
       )}
     </section>
+  );
+}
+
+/** Shared with @assistant on the Chat route (the default), or a separate daily pool for all agents. */
+function BudgetControl({ serverId, budget, onChanged }: { serverId: string; budget: ModelAgentBudget; onChanged: () => void }) {
+  const [mode, setMode] = useState(budget.mode);
+  const [requests, setRequests] = useState(budget.dailyRequestLimit?.toString() ?? '');
+  const [tokens, setTokens] = useState(budget.dailyTokenLimit?.toString() ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  async function save() {
+    setSaving(true);
+    setError('');
+    try {
+      await aiApi.updateAgentBudget(serverId, {
+        mode,
+        ...(mode === 'separate' ? { dailyRequestLimit: optionalInt(requests) || null, dailyTokenLimit: optionalInt(tokens) || null } : {}),
+      });
+      onChanged();
+    } catch (err) {
+      setError(errorText(err, 'Failed to save budget'));
+      setSaving(false);
+    }
+  }
+
+  const dirty = mode !== budget.mode || (mode === 'separate'
+    && ((optionalInt(requests) || null) !== budget.dailyRequestLimit || (optionalInt(tokens) || null) !== budget.dailyTokenLimit));
+
+  return (
+    <fieldset className="border border-border rounded-lg p-3 mb-4">
+      <legend className="text-[13px] text-text-muted px-1">Budget</legend>
+      <label className="min-h-11 md:min-h-8 flex items-start gap-2 text-sm text-text cursor-pointer">
+        <input type="radio" name="agent-budget" checked={mode === 'shared'} onChange={() => setMode('shared')} className="accent-primary mt-1" />
+        <span><b>Shared with the assistant</b> <span className="text-text-muted">Agent calls count toward the Chat capability's daily limits.</span></span>
+      </label>
+      <label className="min-h-11 md:min-h-8 flex items-start gap-2 text-sm text-text cursor-pointer">
+        <input type="radio" name="agent-budget" checked={mode === 'separate'} onChange={() => setMode('separate')} className="accent-primary mt-1" />
+        <span><b>Separate</b> <span className="text-text-muted">Agents have their own daily pool, and the assistant's Chat limits count only its own calls.</span></span>
+      </label>
+      {mode === 'separate' && (
+        <div className="grid sm:grid-cols-2 gap-3 mt-2">
+          <Input label="Agents' daily requests (optional)" id="agent-pool-req" type="number" min={1} value={requests} onChange={e => setRequests(e.target.value)} />
+          <Input label="Agents' daily tokens (optional)" id="agent-pool-tok" type="number" min={1} value={tokens} onChange={e => setTokens(e.target.value)} />
+        </div>
+      )}
+      <p className="text-xs text-text-muted mt-2">
+        Today, all agents: {budget.today.requests} calls, {budget.today.tokens} tokens
+        {budget.today.costMicros !== null ? `, ${formatMicros(budget.today.costMicros)}` : ''}. Each agent's own limits apply in both modes.
+      </p>
+      {error && <p className="text-danger text-sm mt-2">{error}</p>}
+      {dirty && <div className="mt-2"><Button onClick={save} loading={saving}>Save budget</Button></div>}
+    </fieldset>
   );
 }
 

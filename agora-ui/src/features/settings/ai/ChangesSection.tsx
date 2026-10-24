@@ -44,6 +44,8 @@ function describe(c: AIChange): string {
       return `Model agent @${d.after?.name} added (${d.after?.model})`;
     case 'ai_agent_update':
       return `Model agent @${d.after?.name ?? d.before?.name} updated: ${(d.changed ?? []).join(', ')}`;
+    case 'ai_agent_budget_update':
+      return `Model agent budget: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
     case 'ai_agent_delete':
       return `Model agent @${d.before?.name} deleted`;
     case 'ai_voice_update':

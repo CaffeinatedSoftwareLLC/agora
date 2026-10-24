@@ -8,6 +8,7 @@ import { getAdapter } from '../ai/adapters';
 import { MODEL_AGENT_TOOLS } from '../ai/model-agent-tools';
 import { auditAiChange, changedFields } from '../lib/ai-audit';
 import { requireAdmin } from './ai-config';
+import { agentBudgetFromRow, agentPoolToday, loadAgentBudget } from '../ai/model-agent-budget';
 
 /**
  * Model agents (docs/model-agents.md): named bots with their own provider and model,
@@ -257,6 +258,67 @@ export async function modelAgentRoutes(app: FastifyInstance) {
             });
         }
         return reply.send(agentDto(after));
+    });
+
+    // ─── Budget mode for all of the server's agents ───
+
+    const budgetView = async (db: any, serverId: string) => ({
+        ...(await loadAgentBudget(db, serverId)),
+        today: await agentPoolToday(db, serverId),
+    });
+
+    // GET /servers/:serverId/ai/agent-budget → { mode, pool limits, today's agent usage }
+    app.get('/servers/:serverId/ai/agent-budget', { preHandler: [requireAdmin] }, async (request, reply) => {
+        const { serverId } = request.params as { serverId: string };
+        return reply.send(await budgetView(request.dbClient!, serverId));
+    });
+
+    // PATCH /servers/:serverId/ai/agent-budget → change any subset (the row is created on first write)
+    app.patch('/servers/:serverId/ai/agent-budget', {
+        preHandler: [requireAdmin],
+        schema: {
+            body: {
+                type: 'object',
+                minProperties: 1,
+                additionalProperties: false,
+                properties: {
+                    mode: { type: 'string', enum: ['shared', 'separate'] },
+                    dailyRequestLimit: nullableInt(1),
+                    dailyTokenLimit: nullableInt(1),
+                    dailyCostLimitMicros: nullableInt(1),
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const { serverId } = request.params as { serverId: string };
+        const b = request.body as Record<string, unknown>;
+        const db = request.dbClient!;
+        const columns: Record<string, string> = {
+            mode: 'budget_mode', dailyRequestLimit: 'daily_request_limit',
+            dailyTokenLimit: 'daily_token_limit', dailyCostLimitMicros: 'daily_cost_limit_micros',
+        };
+        const keys = Object.keys(columns).filter(k => b[k] !== undefined);
+        if (keys.length === 0) return reply.status(400).send({ error: 'No recognised settings to change' });
+
+        await db.query('INSERT INTO ai_model_agent_settings (server_id) VALUES ($1) ON CONFLICT DO NOTHING', [serverId]);
+        const current = await db.query('SELECT * FROM ai_model_agent_settings WHERE server_id = $1 FOR UPDATE', [serverId]);
+        const before = agentBudgetFromRow(current.rows[0]);
+        const values: unknown[] = keys.map(k => b[k]);
+        values.push(serverId);
+        const updated = await db.query(
+            `UPDATE ai_model_agent_settings SET ${keys.map((k, i) => `${columns[k]} = $${i + 1}`).join(', ')}, updated_at = NOW()
+             WHERE server_id = $${values.length} RETURNING *`,
+            values
+        );
+        const after = agentBudgetFromRow(updated.rows[0]);
+        const changed = changedFields(before as any, after as any);
+        if (changed.length > 0) {
+            await auditAiChange(db, request, {
+                serverId, action: 'ai_agent_budget_update', targetType: 'ai_agent', targetId: null,
+                changes: { before, after, changed },
+            });
+        }
+        return reply.send(await budgetView(db, serverId));
     });
 
     // DELETE /servers/:serverId/ai/agents/:agentId → removes the agent and its bot (tokens and channel access with it)

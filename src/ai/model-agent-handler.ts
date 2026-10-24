@@ -3,6 +3,7 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { internalBus, type AssistantMentionEvent } from './internal-bus';
 import { getAdapter, ProviderHttpError, type Adapter, type ProviderCredentials, type ToolChatMessage, type Usage } from './adapters';
 import { allowPrivateBaseUrls, checkBudget, decryptProviderKey, recordUsage, type BudgetResult, type Queryable, type RouteRow } from './routing';
+import { agentPoolError, loadAgentBudget } from './model-agent-budget';
 import { executeTool, READ_ONLY_TOOLS, toolDefinitions, type AgentApi, type ModelAgentTool } from './model-agent-tools';
 import { authorLabel, displayName, FORMAT_NOTE, formatMessages, oneLine, type EnvelopeMessage } from '../lib/message-envelope';
 import { readAuthorities } from '../lib/direct-agents';
@@ -98,8 +99,9 @@ function agentRoute(agent: ModelAgentRow): RouteRow {
 }
 
 /**
- * The agent's own daily limits, then the server's chat route limits: agent calls are
- * chat usage and count toward the server-wide chat budget too.
+ * The agent's own daily limits, then the server's: the Chat route's limits in `shared`
+ * mode (agent calls count with @assistant's), or the model-agent pool in `separate` mode
+ * (src/ai/model-agent-budget.ts). The mode is read on every call.
  */
 export async function checkAgentBudget(db: Queryable, agent: ModelAgentRow): Promise<BudgetResult> {
     const num = (v: string | number | null) => (v === null || v === undefined ? null : Number(v));
@@ -120,6 +122,11 @@ export async function checkAgentBudget(db: Queryable, agent: ModelAgentRow): Pro
         if (reqLimit !== null && Number(today.requests) >= reqLimit) return { ok: false, error: `Daily request limit reached for @${agent.username} (${reqLimit}/day)` };
         if (tokLimit !== null && Number(today.tokens) >= tokLimit) return { ok: false, error: `Daily token limit reached for @${agent.username} (${tokLimit}/day)` };
         if (costLimit !== null && Number(today.cost) >= costLimit) return { ok: false, error: `Daily cost limit reached for @${agent.username}` };
+    }
+    const settings = await loadAgentBudget(db, agent.server_id);
+    if (settings.mode === 'separate') {
+        const error = await agentPoolError(db, agent.server_id, settings);
+        return error ? { ok: false, error } : { ok: true };
     }
     const chat = await db.query('SELECT * FROM ai_capability_routes WHERE server_id = $1 AND capability = $2', [agent.server_id, 'chat']);
     return chat.rows[0] ? checkBudget(db, chat.rows[0]) : { ok: true };

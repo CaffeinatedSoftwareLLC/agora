@@ -3,6 +3,8 @@ import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } 
 import { internalBus } from '../../src/ai/internal-bus';
 import { openaiAdapter } from '../../src/ai/adapters/openai';
 import { ProviderHttpError, type ToolChatRequest, type ToolChatResult } from '../../src/ai/adapters';
+import { checkBudget } from '../../src/ai/routing';
+import { generateUlid } from '../../src/utils/ulid';
 
 // No provider is ever called: chatWithTools is replaced per test
 const chat = vi.spyOn(openaiAdapter, 'chatWithTools');
@@ -291,5 +293,97 @@ describe('Model agent mention loop', () => {
         await new Promise(r => setTimeout(r, 500));
         expect(chat).not.toHaveBeenCalled();
         expect(await botMessages(agent.botId)).toEqual([]);
+    });
+});
+
+describe('Model agent budget mode', () => {
+    async function chatLimit(owner: { auth: object }, serverId: string, providerId: string, dailyRequestLimit: number) {
+        const res = await ctx.request.put(`/servers/${serverId}/ai/routes/chat`).set(owner.auth).send({ providerId, model: 'chat/model', dailyRequestLimit });
+        expect(res.status).toBe(200);
+    }
+    /** One @assistant-style chat call in today's ledger. */
+    async function assistantCall(serverId: string, providerId: string) {
+        await ctx.db.query(
+            `INSERT INTO ai_usage_events (id, server_id, provider, model, input_tokens, output_tokens, latency_ms, capability, provider_id)
+             VALUES ($1, $2, 'openai', 'chat/model', 1, 1, 1, 'chat', $3)`,
+            [generateUlid(), serverId, providerId]
+        );
+    }
+    const chatBudget = async (serverId: string) => {
+        const route = (await ctx.db.query("SELECT * FROM ai_capability_routes WHERE server_id = $1 AND capability = 'chat'", [serverId])).rows[0];
+        return checkBudget(ctx.db, route);
+    };
+
+    it('is shared by default and admin-only to change; changes are audited', async () => {
+        const { owner, serverId } = await setup();
+        const get = await ctx.request.get(`/servers/${serverId}/ai/agent-budget`).set(owner.auth);
+        expect(get.status).toBe(200);
+        expect(get.body).toEqual({ mode: 'shared', dailyRequestLimit: null, dailyTokenLimit: null, dailyCostLimitMicros: null, today: { requests: 0, tokens: 0, costMicros: null } });
+
+        const member = await authedUser(ctx.request, 'budgetmember');
+        await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
+        expect((await ctx.request.patch(`/servers/${serverId}/ai/agent-budget`).set(member.auth).send({ mode: 'separate' })).status).toBe(403);
+        expect((await ctx.request.patch(`/servers/${serverId}/ai/agent-budget`).set(owner.auth).send({ mode: 'pooled' })).status).toBe(400);
+        expect((await ctx.request.patch(`/servers/${serverId}/ai/agent-budget`).set(owner.auth).send({ dailyRequestLimit: 0 })).status).toBe(400);
+
+        const patched = await ctx.request.patch(`/servers/${serverId}/ai/agent-budget`).set(owner.auth).send({ mode: 'separate', dailyTokenLimit: 5000 });
+        expect(patched.body).toMatchObject({ mode: 'separate', dailyTokenLimit: 5000 });
+        const audit = await ctx.db.query("SELECT changes FROM audit_log WHERE server_id = $1 AND action = 'ai_agent_budget_update'", [serverId]);
+        expect(audit.rows[0].changes.changed).toEqual(['mode', 'dailyTokenLimit']);
+    });
+
+    it('shared: an agent is blocked once the chat route budget is spent, also by @assistant', async () => {
+        const { owner, serverId, providerId, generalChannelId, agent } = await setup();
+        await chatLimit(owner, serverId, providerId, 1);
+        await assistantCall(serverId, providerId);
+        record(say('should not be called'));
+        await mention(owner.auth, generalChannelId);
+        await waitFor(async () => (await botMessages(agent.botId)).length > 0);
+        expect(chat).not.toHaveBeenCalled();
+        expect((await botMessages(agent.botId))[0]).toMatch(/Daily request limit reached for "chat"/);
+    });
+
+    it('separate: ignores the chat budget, keeps agent calls out of it, and enforces its own pool; switching takes effect at once', async () => {
+        const { owner, serverId, providerId, generalChannelId, agent } = await setup();
+        await chatLimit(owner, serverId, providerId, 1);
+        await assistantCall(serverId, providerId);
+        await ctx.request.patch(`/servers/${serverId}/ai/agent-budget`).set(owner.auth).send({ mode: 'separate', dailyRequestLimit: 2 });
+        const requests = record(say('answered'));
+
+        // The chat budget is spent, but agents now have their own
+        await mention(owner.auth, generalChannelId);
+        await waitFor(async () => (await botMessages(agent.botId)).length > 0);
+        expect((await botMessages(agent.botId))[0]).toBe('answered');
+
+        // Agent calls don't count toward @assistant's chat budget in separate mode
+        await ctx.db.query("DELETE FROM ai_usage_events WHERE server_id = $1 AND model_agent_id IS NULL", [serverId]);
+        expect((await chatBudget(serverId)).ok).toBe(true);
+
+        await mention(owner.auth, generalChannelId, '@Scout again');
+        await waitFor(async () => (await botMessages(agent.botId)).length > 1);
+        // Pool of 2 spent
+        await mention(owner.auth, generalChannelId, '@Scout third');
+        await waitFor(async () => (await botMessages(agent.botId)).length > 2);
+        expect(requests).toHaveLength(2);
+        expect((await botMessages(agent.botId))[2]).toMatch(/Daily request limit reached for model agents \(2\/day\)/);
+
+        // Back to shared: the two agent calls now count toward the chat limit of 1
+        await ctx.request.patch(`/servers/${serverId}/ai/agent-budget`).set(owner.auth).send({ mode: 'shared' });
+        expect((await chatBudget(serverId)).ok).toBe(false);
+        await mention(owner.auth, generalChannelId, '@Scout fourth');
+        await waitFor(async () => (await botMessages(agent.botId)).length > 3);
+        expect(requests).toHaveLength(2);
+        expect((await botMessages(agent.botId))[3]).toMatch(/Daily request limit reached for "chat"/);
+    });
+
+    it('usage shows model agents on their own row', async () => {
+        const { owner, serverId, providerId, generalChannelId, agent } = await setup();
+        await assistantCall(serverId, providerId);
+        record(say('hi'));
+        await mention(owner.auth, generalChannelId);
+        await waitFor(async () => (await botMessages(agent.botId)).length > 0);
+        const usage = await ctx.request.get(`/servers/${serverId}/ai/usage`).set(owner.auth);
+        const rows = Object.fromEntries(usage.body.capabilities.map((c: any) => [c.capability, c.requests]));
+        expect(rows).toEqual({ chat: 1, model_agents: 1 });
     });
 });

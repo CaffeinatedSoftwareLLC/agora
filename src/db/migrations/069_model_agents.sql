@@ -57,3 +57,20 @@ ALTER TABLE ai_usage_events
 
 CREATE INDEX idx_ai_usage_model_agent ON ai_usage_events(model_agent_id, created_at)
     WHERE model_agent_id IS NOT NULL;
+
+-- How model agents are budgeted on a server. `shared` (the default, also with no row):
+-- agent calls are chat usage and count toward the Chat route's daily limits, with
+-- @assistant. `separate`: agent calls count only toward the pool limits below, and the
+-- Chat route's limits count @assistant's calls only. Per-agent limits apply in both.
+CREATE TABLE ai_model_agent_settings (
+    server_id                CHAR(26) PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+    budget_mode              VARCHAR(10) NOT NULL DEFAULT 'shared' CHECK (budget_mode IN ('shared', 'separate')),
+    -- Daily limits for all of the server's model agents together, in `separate` mode (NULL = none)
+    daily_request_limit      INTEGER CHECK (daily_request_limit > 0),
+    daily_token_limit        BIGINT  CHECK (daily_token_limit > 0),
+    daily_cost_limit_micros  BIGINT  CHECK (daily_cost_limit_micros > 0),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ai_model_agent_settings TO app_user;

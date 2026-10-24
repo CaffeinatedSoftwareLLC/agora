@@ -1,7 +1,12 @@
 import type { AICapabilityUsage } from '../../../lib/api';
 import { CAPABILITY_INFO, formatMicros } from './format';
 
-export function UsageSection({ usage, days }: { usage: AICapabilityUsage[]; days: number }) {
+const label = (c: AICapabilityUsage['capability'], agentBudget: 'shared' | 'separate') =>
+  c === 'model_agents'
+    ? `Model agents${agentBudget === 'shared' ? ' (count toward Chat limits)' : ' (own budget)'}`
+    : CAPABILITY_INFO[c]?.label ?? c;
+
+export function UsageSection({ usage, days, agentBudget = 'shared' }: { usage: AICapabilityUsage[]; days: number; agentBudget?: 'shared' | 'separate' }) {
   return (
     <section>
       <h3 className="text-lg font-semibold text-text mb-3">Usage (last {days} days)</h3>
@@ -23,7 +28,7 @@ export function UsageSection({ usage, days }: { usage: AICapabilityUsage[]; days
             <tbody>
               {usage.map(u => (
                 <tr key={u.capability} className="border-t border-border text-text">
-                  <td className="py-2 pr-4">{CAPABILITY_INFO[u.capability]?.label ?? u.capability}</td>
+                  <td className="py-2 pr-4">{label(u.capability, agentBudget)}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">{u.requests.toLocaleString()}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">
                     {u.inputTokens.toLocaleString()} / {u.outputTokens.toLocaleString()}
