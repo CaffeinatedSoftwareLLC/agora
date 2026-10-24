@@ -317,11 +317,60 @@ export interface AICapabilityUsage {
 
 export type AIConnectionResult = { ok: boolean; error?: string };
 
+/** Tools a model agent can be given (src/ai/model-agent-tools.ts). */
+export const MODEL_AGENT_TOOLS = [
+  'read_history', 'post_message', 'file_search', 'file_read',
+  'task_list', 'task_create', 'task_update', 'canvas_publish', 'runtime_exec',
+] as const;
+export type ModelAgentTool = typeof MODEL_AGENT_TOOLS[number];
+
+/** A server-hosted model agent: its own bot, provider and model (docs/model-agents.md). */
+export interface ModelAgent {
+  id: string;
+  botId: string;
+  name: string;
+  providerId: string;
+  providerLabel: string;
+  adapter: string;
+  model: string;
+  systemPrompt: string | null;
+  tools: ModelAgentTool[];
+  maxSteps: number;
+  maxOutputTokens: number;
+  dailyRequestLimit: number | null;
+  dailyTokenLimit: number | null;
+  dailyCostLimitMicros: number | null;
+  inputPriceMicrosPerMtok: number | null;
+  outputPriceMicrosPerMtok: number | null;
+  enabled: boolean;
+  runtimeAccess: 'none' | 'approval' | 'auto';
+  channelCount: number;
+  today: { requests: number; tokens: number; costMicros: number | null };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelAgentInput {
+  providerId?: string;
+  model?: string;
+  systemPrompt?: string | null;
+  tools?: ModelAgentTool[];
+  maxSteps?: number;
+  maxOutputTokens?: number;
+  dailyRequestLimit?: number | null;
+  dailyTokenLimit?: number | null;
+  dailyCostLimitMicros?: number | null;
+  inputPriceMicrosPerMtok?: number | null;
+  outputPriceMicrosPerMtok?: number | null;
+  enabled?: boolean;
+}
+
 /** One audited change to the server's AI settings (providers, routes, assistant). */
 export interface AIChange {
   id: string;
   action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update' | 'ai_voice_update'
-    | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag';
+    | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag'
+    | 'ai_agent_create' | 'ai_agent_update' | 'ai_agent_delete';
   targetType: string;
   targetId: string | null;
   changes: Record<string, any>;
@@ -616,6 +665,18 @@ export const aiApi = {
 
   deleteRoute: (serverId: string, capability: AICapability) =>
     api.delete<{ deleted: true }>(`/servers/${serverId}/ai/routes/${capability}`),
+
+  listAgents: (serverId: string) =>
+    api.get<ModelAgent[]>(`/servers/${serverId}/ai/agents`),
+
+  createAgent: (serverId: string, data: ModelAgentInput & { name: string; providerId: string; model: string; channelIds?: string[] }) =>
+    api.post<ModelAgent>(`/servers/${serverId}/ai/agents`, data),
+
+  updateAgent: (serverId: string, agentId: string, data: ModelAgentInput) =>
+    api.patch<ModelAgent>(`/servers/${serverId}/ai/agents/${agentId}`, data),
+
+  deleteAgent: (serverId: string, agentId: string) =>
+    api.delete<{ deleted: true }>(`/servers/${serverId}/ai/agents/${agentId}`),
 
   listChanges: (serverId: string, limit = 20) =>
     api.get<AIChange[]>(`/servers/${serverId}/ai/changes?limit=${limit}`),
