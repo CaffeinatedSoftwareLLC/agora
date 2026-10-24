@@ -22,6 +22,7 @@ import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
 import { aiProviderRoutes } from './routes/ai-providers';
 import { aiDecisionRoutes } from './routes/ai-decisions';
+import { modelAgentRoutes } from './routes/model-agents';
 import { fileTagRoutes } from './routes/file-tags';
 import { runtimeRoutes } from './routes/runtime';
 import { roleRoutes } from './routes/roles';
@@ -39,6 +40,7 @@ import { artifactRoutes } from './routes/artifacts';
 import { browserPreviewRoutes } from './routes/browser-previews';
 import { voiceRoutes } from './routes/voice';
 import { startAssistantHandler } from './ai/assistant-handler';
+import { startModelAgentHandler } from './ai/model-agent-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
@@ -285,7 +287,7 @@ export async function buildApp(opts?: {
 
                 io.to(evt.room).emit(evt.event, evt.data);
 
-                // Dispatch built-in assistant mentions via internal bus
+                // Dispatch bot mentions (built-in assistant, model agents) via internal bus
                 if (evt.event === 'MessageMention') {
                     const botId = evt.room.replace('user:', '');
                     internalBus.emit('assistantMention', {
@@ -373,6 +375,7 @@ export async function buildApp(opts?: {
     await app.register(aiConfigRoutes);
     await app.register(aiProviderRoutes);
     await app.register(aiDecisionRoutes);
+    await app.register(modelAgentRoutes);
     await app.register(fileTagRoutes);
     await app.register(runtimeRoutes);
     await app.register(roleRoutes);
@@ -396,6 +399,8 @@ export async function buildApp(opts?: {
 
     // Start built-in AI assistant handler
     startAssistantHandler(db, io, app.log);
+    // Model agents: other bots that answer mentions with their own model and tools
+    startModelAgentHandler(app, db, app.log);
 
     // Forward events published by other services (cap-gateway) to Socket.IO clients
     const stopEventBridge = startEventBridge(io, config.redisUrl, app.log, async () => {
