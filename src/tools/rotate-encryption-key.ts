@@ -34,6 +34,7 @@ async function main() {
         }
         console.log(`Rotated ${result.files} file(s) and ${result.providerKeys} provider key(s); `
             + `${result.filesAlreadyDone} file(s) were already done; ${result.missing.length} missing from storage.`);
+        if (result.pushHandles) console.log(`Rotated ${result.pushHandles} push handle(s).`);
         for (const id of result.missing) console.log(`  missing blob for file ${id} (left as it was)`);
         console.log('Now set AGORA_ENCRYPTION_KEY to the new key and start the server. Keep the old key until you have checked that files open.');
     } finally {
