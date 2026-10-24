@@ -1,4 +1,5 @@
-import type { Adapter, Capability, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, TranscriptionRequest, TranscriptionResult } from './types';
+import type { Adapter, Capability, ChatRequest, MediaResult, ProviderCredentials, SpeechRequest, StreamCallbacks, ToolCall, ToolChatMessage, ToolChatRequest, ToolChatResult, TranscriptionRequest, TranscriptionResult } from './types';
+import { ProviderHttpError } from './types';
 import { apiError, joinUrl, networkError, redirectError, refuseRedirect, sseJson, testConnectionWithTimeout } from './sse';
 import { testOpenAISpeechConnection } from './openai-speech-test';
 
@@ -42,6 +43,57 @@ function headers(creds: ProviderCredentials): Record<string, string> {
         'Content-Type': 'application/json',
         // Local OpenAI-compatible servers (e.g. Ollama) accept requests without a key
         ...(creds.apiKey ? { Authorization: `Bearer ${creds.apiKey}` } : {}),
+    };
+}
+
+/** Chat Completions messages for a function-calling turn. */
+export function toOpenAIToolMessages(systemPrompt: string | undefined, messages: ToolChatMessage[]): object[] {
+    const out: object[] = [];
+    if (systemPrompt) out.push({ role: 'system', content: systemPrompt });
+    for (const m of messages) {
+        if (m.role === 'tool') {
+            out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
+        } else if (m.role === 'assistant' && m.toolCalls?.length) {
+            out.push({
+                role: 'assistant',
+                content: m.content,
+                tool_calls: m.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
+            });
+        } else {
+            out.push({ role: m.role, content: m.content ?? '' });
+        }
+    }
+    return out;
+}
+
+/**
+ * Read a Chat Completions response (non-streamed) into text, tool calls and usage.
+ * Compatible servers differ: some return `arguments` as an object instead of a JSON
+ * string, some omit call IDs, and older ones use the single `function_call` field.
+ */
+export function parseToolChatResponse(json: any): ToolChatResult {
+    const choice = json?.choices?.[0];
+    if (!choice || typeof choice !== 'object') throw new Error('The provider returned no choices');
+    const message = choice.message ?? {};
+    const raw: any[] = Array.isArray(message.tool_calls) ? message.tool_calls
+        : message.function_call ? [{ type: 'function', function: message.function_call }] : [];
+    const toolCalls: ToolCall[] = [];
+    raw.forEach((call, i) => {
+        const fn = call?.function;
+        if (!fn || typeof fn.name !== 'string' || !fn.name) return;
+        const args = typeof fn.arguments === 'string' ? fn.arguments
+            : fn.arguments === undefined || fn.arguments === null ? '{}' : JSON.stringify(fn.arguments);
+        toolCalls.push({ id: typeof call.id === 'string' && call.id ? call.id : `call_${i}`, name: fn.name, arguments: args });
+    });
+    const content = typeof message.content === 'string' ? message.content
+        // Some servers return content parts
+        : Array.isArray(message.content) ? message.content.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('') || null
+        : null;
+    return {
+        content,
+        toolCalls,
+        finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
+        usage: { inputTokens: json.usage?.prompt_tokens || 0, outputTokens: json.usage?.completion_tokens || 0 },
     };
 }
 
@@ -105,6 +157,39 @@ export const openaiAdapter: Adapter = {
         } catch (err) {
             await callbacks.onError(err instanceof Error ? err : new Error(String(err)));
         }
+    },
+
+    async chatWithTools(creds: ProviderCredentials, req: ToolChatRequest): Promise<ToolChatResult> {
+        const base = creds.baseUrl || DEFAULT_BASE;
+        let res: Response;
+        try {
+            res = await fetch(joinUrl(base, '/chat/completions'), {
+                signal: req.signal,
+                redirect: 'manual',
+                method: 'POST',
+                headers: headers(creds),
+                body: JSON.stringify({
+                    model: req.model,
+                    ...tokenLimit(base, req.maxTokens ?? 4096),
+                    messages: toOpenAIToolMessages(req.systemPrompt, req.messages),
+                    ...(req.tools.length > 0 ? {
+                        tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+                        tool_choice: 'auto',
+                    } : {}),
+                }),
+            });
+        } catch (err) {
+            throw new Error(networkError(err));
+        }
+        refuseRedirect(res, 'OpenAI');
+        if (!res.ok) throw new ProviderHttpError(res.status, await apiError('OpenAI', res));
+        let json: any;
+        try {
+            json = await res.json();
+        } catch (err) {
+            throw new Error(networkError(err));
+        }
+        return parseToolChatResponse(json);
     },
 
     /** WAV, so audio overviews can join lines voiced one at a time (src/ai/speech.ts). */
