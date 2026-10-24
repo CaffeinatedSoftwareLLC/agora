@@ -67,7 +67,12 @@ describe('opencode profiles', () => {
         expect(await load({})).toBe('ok');
         expect(await load({ protocol: 'cli' })).toContain('opencode is hosted only over ACP');
         expect(await load({ auth: 'subscription' })).toContain('opencode is hosted only over ACP');
-        expect(await load({ apiKeyEnv: 'ANTHROPIC_API_KEY' })).toContain('apiKeyEnv set to one of OPENROUTER_API_KEY');
+        expect(await load({ apiKeyEnv: 'ANTHROPIC_API_KEY' })).toContain('apiKeyEnv set to one of OPENROUTER_API_KEY or OPENROUTER_API_KEY_<NAME>');
+        expect(await load({ apiKeyEnv: 'OPENROUTER_API_KEYX' })).toContain('apiKeyEnv set to one of');
+        // One key per agent: its own variable, which must be set
+        expect(await load({ apiKeyEnv: 'OPENROUTER_API_KEY_QWEN' })).toContain('OPENROUTER_API_KEY_QWEN is not set');
+        vi.stubEnv('OPENROUTER_API_KEY_QWEN', 'sk-or-qwen');
+        expect(await load({ apiKeyEnv: 'OPENROUTER_API_KEY_QWEN' })).toBe('ok');
         // The cap is the key's own credit limit, not a host setting
         expect(await load({ caps: { maxBudgetUsd: 5 } })).toContain('ACP has no verified USD cap');
         // A failed load never echoes the key
@@ -98,6 +103,13 @@ describe('opencode profiles', () => {
 
         // opencode's own default would be an OpenCode Zen model
         await expect(prepare(c, delivery(null))).rejects.toThrow('opencode_model_required');
+
+        // An agent's own key variable reaches opencode as OPENROUTER_API_KEY, and no other key does
+        vi.stubEnv('OPENROUTER_API_KEY_QWEN', 'sk-or-qwen');
+        const own = await prepare(opencode(dir, { apiKeyEnv: 'OPENROUTER_API_KEY_QWEN' }), delivery()); cleanups.push(own.cleanup);
+        expect(own.env.OPENROUTER_API_KEY).toBe('sk-or-qwen');
+        expect(own.env.OPENROUTER_API_KEY_QWEN).toBeUndefined();
+        expect(JSON.parse(own.env.OPENCODE_CONFIG_CONTENT!).enabled_providers).toEqual(['openrouter']);
         expect(opencodeModel('openrouter/qwen/qwen3-coder', 'openrouter')).toBe('openrouter/qwen/qwen3-coder');
         expect(opencodeModel('anthropic/claude-sonnet-4.5', 'openrouter')).toBe('openrouter/anthropic/claude-sonnet-4.5');
     });
@@ -162,6 +174,11 @@ describe('OpenRouter credit limit at start', () => {
         expect(await creditLine('builder', p, env, reply(401, { error: { message: 'bad key sk-or-secret' } }) as unknown as typeof fetch))
             .toBe("Profile builder: could not read the OpenRouter key's credit limit (HTTP 401).");
         expect(await creditLine('builder', p, env, reply(200, { nope: true }) as unknown as typeof fetch)).toBe("Profile builder: could not read the OpenRouter key's credit limit.");
+        // An agent's own key variable is the one asked about
+        const own = reply(200, { data: { limit: 5, limit_remaining: 5, limit_reset: null } });
+        expect(await creditLine('qwen', opencode(t.dir, { apiKeyEnv: 'OPENROUTER_API_KEY_QWEN' }).profiles.builder, { OPENROUTER_API_KEY_QWEN: 'sk-or-qwen' },
+            own as unknown as typeof fetch)).toBe('Profile qwen: OpenRouter key credit limit $5.00, $5.00 left.');
+        expect((own.mock.calls[0][1]!.headers as Record<string, string>).Authorization).toBe('Bearer sk-or-qwen');
         // No key, or not an opencode profile: nothing to ask
         expect(await creditLine('builder', p, {}, reply(200, {}) as unknown as typeof fetch)).toBeNull();
         expect(await creditLine('builder', config(t.dir).profiles.builder, env, reply(200, {}) as unknown as typeof fetch)).toBeNull();

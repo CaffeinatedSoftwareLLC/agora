@@ -9,7 +9,7 @@ import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { handoffNotes } from './handoff.js';
 import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, OPENCODE_ACP_ONLY, OPENCODE_PROVIDERS, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
+import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, OPENCODE_ACP_ONLY, opencodeProvider, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
 import { accessToken, type AccessToken } from './siwc/session.js';
 import { SiwcError } from './siwc/oauth.js';
 import { DEFAULT_DIR } from './siwc/store.js';
@@ -113,7 +113,9 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     // configured name: its `openai-api-key` / `codex-api-key` methods each read their own (terms.ts).
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
         const key = source[profile.apiKeyEnv];
-        const name = profile.adapter === 'codex' && profile.protocol !== 'acp' ? 'CODEX_API_KEY' : profile.apiKeyEnv;
+        // opencode reads only OPENROUTER_API_KEY, whichever OPENROUTER_API_KEY_<NAME> holds this agent's key
+        const name = profile.adapter === 'codex' && profile.protocol !== 'acp' ? 'CODEX_API_KEY'
+            : profile.adapter === 'opencode' ? opencodeProvider(profile.apiKeyEnv)?.env ?? profile.apiKeyEnv : profile.apiKeyEnv;
         if (key) env[name] = key;
     }
     return env;
@@ -190,7 +192,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     let { model } = claim.profile;
     if (effort !== null && efforts && !efforts.includes(effort)) throw new Error('unsupported_effort');
     // opencode's own default would be an OpenCode Zen model, so an opencode profile names its model
-    const provider = local.adapter === 'opencode' ? OPENCODE_PROVIDERS[local.apiKeyEnv!] : null;
+    const provider = local.adapter === 'opencode' ? opencodeProvider(local.apiKeyEnv)?.provider ?? null : null;
     if (local.adapter === 'opencode') {
         if (!provider) throw new HostConfigError(OPENCODE_ACP_ONLY);
         if (model === null) throw new Error('opencode_model_required');

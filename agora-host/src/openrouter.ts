@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { LocalProfile } from './config.js';
-import { OPENCODE_PROVIDERS } from './terms.js';
+import { opencodeProvider } from './terms.js';
 
 /**
  * The spend cap for an opencode agent is its OpenRouter key's own credit limit: OpenRouter
@@ -19,7 +19,7 @@ const usd = (n: number) => `$${n.toFixed(2)}`;
 /** One start-up log line about the profile's OpenRouter credit limit, or null when it has no OpenRouter key. */
 export async function creditLine(name: string, profile: LocalProfile, env: NodeJS.ProcessEnv = process.env,
                                  fetcher: typeof fetch = fetch, timeoutMs = 10000): Promise<string | null> {
-    if (profile.adapter !== 'opencode' || profile.auth !== 'api_key' || OPENCODE_PROVIDERS[profile.apiKeyEnv!] !== 'openrouter') return null;
+    if (profile.adapter !== 'opencode' || profile.auth !== 'api_key' || opencodeProvider(profile.apiKeyEnv)?.provider !== 'openrouter') return null;
     const key = env[profile.apiKeyEnv!]?.trim();
     if (!key) return null;
     try {

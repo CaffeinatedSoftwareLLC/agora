@@ -27,11 +27,26 @@ export const API_KEY_ENVS: Record<Adapter, string[]> = {
     claude: ['ANTHROPIC_API_KEY'],
     codex: ['CODEX_API_KEY', 'OPENAI_API_KEY'],
     gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    // or OPENROUTER_API_KEY_<NAME>, one key per agent (apiKeyEnvAllowed)
     opencode: ['OPENROUTER_API_KEY'],
 };
 
-/** The opencode provider each key variable belongs to; the only provider an opencode run may use. */
-export const OPENCODE_PROVIDERS: Record<string, string> = { OPENROUTER_API_KEY: 'openrouter' };
+/**
+ * An opencode profile may read its key from `OPENROUTER_API_KEY_<NAME>`, so agents on one host
+ * can each have their own OpenRouter key and credit limit. opencode reads only
+ * `OPENROUTER_API_KEY`, so the host passes the key to it under that name (adapters.ts).
+ */
+const OPENROUTER_KEY_ENV = /^OPENROUTER_API_KEY(?:_[A-Z0-9][A-Z0-9_]{0,39})?$/;
+
+/** Whether `name` may hold this adapter's API key. */
+export function apiKeyEnvAllowed(adapter: Adapter, name: string): boolean {
+    return adapter === 'opencode' ? OPENROUTER_KEY_ENV.test(name) : API_KEY_ENVS[adapter].includes(name);
+}
+
+/** The opencode provider a key variable belongs to, and the only one its runs may use; null if none. */
+export function opencodeProvider(apiKeyEnv: string | undefined): { provider: string; env: string } | null {
+    return apiKeyEnv && OPENROUTER_KEY_ENV.test(apiKeyEnv) ? { provider: 'openrouter', env: 'OPENROUTER_API_KEY' } : null;
+}
 
 export const GEMINI_SUBSCRIPTION_REFUSAL =
     'a gemini profile must use auth "api_key" (GEMINI_API_KEY). Google\'s Antigravity terms, section 6: '

@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import { presetSchema } from './presets.js';
 import { VERIFY_COMMAND } from './verify.js';
-import { API_KEY_ENVS, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError, OPENCODE_ACP_ONLY } from './terms.js';
+import { API_KEY_ENVS, apiKeyEnvAllowed, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError, OPENCODE_ACP_ONLY } from './terms.js';
 
 const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
@@ -50,8 +50,8 @@ const profile = z.preprocess(opencodeDefaults, z.object({
     // Fixed local arguments for the ACP agent, e.g. ["--acp"]; Agora never supplies any
     acpArgs: z.array(z.string().min(1).max(1000).regex(/^[^\r\n\0]*$/)).max(20).default([]),
 }).strict().superRefine((p, ctx) => {
-    if (p.auth === 'api_key' && (!p.apiKeyEnv || !API_KEY_ENVS[p.adapter].includes(p.apiKeyEnv)))
-        ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')} for ${p.adapter}` });
+    if (p.auth === 'api_key' && (!p.apiKeyEnv || !apiKeyEnvAllowed(p.adapter, p.apiKeyEnv)))
+        ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')}${p.adapter === 'opencode' ? ' or OPENROUTER_API_KEY_<NAME>' : ''} for ${p.adapter}` });
     if (p.auth !== 'api_key' && p.apiKeyEnv !== undefined)
         ctx.addIssue({ code: 'custom', message: 'apiKeyEnv is only used with auth "api_key"' });
     if (p.auth === 'siwc' && p.adapter !== 'codex')

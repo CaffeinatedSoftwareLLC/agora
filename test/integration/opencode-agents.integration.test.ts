@@ -56,10 +56,11 @@ describe('opencode agents', () => {
             .send({ name: 'deepseek', adapter: 'opencode', hostId, workdirAlias: 'agora' })).status).toBe(400);
 
         const report = await ctx.request.post('/agent-hosts/@me/profiles').set(hostAuth)
-            .send({ profiles: [{ name: 'qwen', adapter: 'opencode', authMode: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY', runApproval: false }] });
+            .send({ profiles: [{ name: 'qwen', adapter: 'opencode', authMode: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY_QWEN', runApproval: false }] });
         expect(report.body).toEqual({ updated: ['qwen'], unknown: [] });
         const row = await ctx.db.query('SELECT adapter, auth_mode, api_key_env FROM agent_profiles WHERE id = $1', [profileId]);
-        expect(row.rows[0]).toEqual({ adapter: 'opencode', auth_mode: 'api_key', api_key_env: 'OPENROUTER_API_KEY' });
+        // One OpenRouter key per agent: OPENROUTER_API_KEY_<NAME> on the host
+        expect(row.rows[0]).toEqual({ adapter: 'opencode', auth_mode: 'api_key', api_key_env: 'OPENROUTER_API_KEY_QWEN' });
 
         expect((await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
             .send({ ...base, name: 'other', adapter: 'openrouter', model: 'qwen/qwen3-coder' })).status).toBe(400);
