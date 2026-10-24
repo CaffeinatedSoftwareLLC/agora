@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      backend-deps: { patterns: ["*"] }
+  - package-ecosystem: npm
+    directory: /agora-ui
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      frontend-deps: { patterns: ["*"] }
+  - package-ecosystem: npm
+    directory: /agora-mcp
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      mcp-deps: { patterns: ["*"] }
