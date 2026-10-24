@@ -6,7 +6,7 @@ import { checkChannelPermissions as checkFilePermissions, uploadPermissions } fr
 import { storage } from '../lib/storage';
 import { encryptFile, decryptFile } from '../lib/encryption';
 import { INLINE_SAFE_MIMES } from '../lib/file-validation';
-import { storeFile, uploadByteLimit, FILE_TOO_LARGE } from '../lib/file-store';
+import { storeFile, uploadByteLimit, FILE_TOO_LARGE, readUploadPart } from '../lib/file-store';
 import { searchChannelFiles, MAX_LIMIT } from '../lib/file-search';
 import { readFileText, READ_MAX_CHARS } from '../lib/file-read';
 import { readFileImage, isBotPaused } from '../lib/file-image';
@@ -113,7 +113,10 @@ export async function fileRoutes(app: FastifyInstance) {
 
         let buffer: Buffer;
         try {
-            buffer = await data.toBuffer();
+            const read = await readUploadPart(data);
+            // Cut off at the limit without an error: refuse it rather than store a partial file
+            if (!read) return reply.status(FILE_TOO_LARGE.status).send({ error: FILE_TOO_LARGE.error });
+            buffer = read;
         } catch (err) {
             // Over the setting: multipart stops reading, and the answer is storeFile's own refusal
             if (err instanceof app.multipartErrors.RequestFileTooLargeError) {

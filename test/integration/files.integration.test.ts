@@ -246,6 +246,27 @@ describe('Upload size follows the admin setting', () => {
         }
     });
 
+    // 2026-10-23: a 54 MB upload under a 25 MB setting was stored as its first 25 MB with no
+    // error, because multipart's toBuffer() can miss `truncated`. Every over-limit size must be
+    // refused, never stored cut to the limit.
+    test('over-limit uploads of several sizes are all refused, none stored truncated', async () => {
+        await setMaxSize(1 * MB);
+        try {
+            const before = await fileCount();
+            for (const bytes of [1 * MB + 1, 1 * MB + 64 * 1024, 2 * MB + 7, 3 * MB]) {
+                const res = await ctx.request.post('/files/upload').set(owner.auth)
+                    .field('channel_id', channelId)
+                    .attach('file', Buffer.alloc(bytes, 'd'), `over-${bytes}.txt`);
+                expect(res.status, `${bytes} bytes: ${JSON.stringify(res.body)}`).toBe(413);
+            }
+            expect(await fileCount()).toBe(before);
+            const cut = await ctx.db.query('SELECT COUNT(*)::int AS n FROM files WHERE size_bytes = $1', [1 * MB]);
+            expect(cut.rows[0].n, 'no file stored cut to exactly the limit').toBe(0);
+        } finally {
+            await setMaxSize(26214400);
+        }
+    });
+
     test('a file exactly at the setting is stored', async () => {
         await setMaxSize(1 * MB);
         try {

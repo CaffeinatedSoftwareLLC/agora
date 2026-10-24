@@ -4,7 +4,7 @@ import { asService } from '../lib/agent-sessions';
 import { canViewChannel } from '../lib/channel-access';
 import { stampAuthority } from '../lib/direct-agents';
 import { hashClaimToken, postNotice } from '../lib/agent-runs';
-import { storeFile, getFileSetting } from '../lib/file-store';
+import { storeFile, getFileSetting, readUploadPart } from '../lib/file-store';
 import { IMAGE_MIMES, validateFileType } from '../lib/file-validation';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { storage } from '../lib/storage';
@@ -169,8 +169,10 @@ export async function browserPreviewRoutes(app: FastifyInstance) {
         let image: Buffer | null = null;
         try {
             for await (const part of request.parts({ limits: { fileSize: maxBytes, files: 1, fields: 8, fieldSize: 64 * 1024 } })) {
-                if (part.type === 'file') image = await part.toBuffer();
-                else if (typeof part.value === 'string') fields[part.fieldname] = part.value;
+                if (part.type === 'file') {
+                    image = await readUploadPart(part);
+                    if (!image) return reply.status(413).send({ error: 'upload_too_large' });
+                } else if (typeof part.value === 'string') fields[part.fieldname] = part.value;
             }
         } catch { return reply.status(413).send({ error: 'upload_too_large' }); }
 

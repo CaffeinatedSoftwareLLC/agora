@@ -40,6 +40,19 @@ export const FILE_TOO_LARGE = { status: 413, error: 'File exceeds maximum allowe
  */
 export const MAX_FILE_SIZE_SETTING = 104857600;
 
+/**
+ * Reads a multipart file part in full, or returns null when the parser cut it off at the size limit.
+ *
+ * @fastify/multipart's toBuffer() only looks at `file.truncated` between chunks, and busboy sets it
+ * as the stream ends, so an over-limit upload can come back cut to exactly `fileSize` bytes with no
+ * error. A 54 MB video was stored as its first 25 MB this way (2026-10-23). Callers answer null with
+ * FILE_TOO_LARGE.
+ */
+export async function readUploadPart(part: { toBuffer(): Promise<Buffer>; file: { truncated?: boolean } }): Promise<Buffer | null> {
+    const buffer = await part.toBuffer();
+    return part.file.truncated ? null : buffer;
+}
+
 /** How many bytes an upload route should let multipart read: the admin setting (#157). */
 export async function uploadByteLimit(db: Queryable): Promise<number> {
     const setting = Number(await getFileSetting(db, 'files.max_size_bytes'));
