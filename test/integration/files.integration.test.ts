@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { describe, test, expect, beforeAll, afterAll } from 'vitest';
 import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
@@ -247,21 +248,27 @@ describe('Upload size follows the admin setting', () => {
     });
 
     // 2026-10-23: a 54 MB upload under a 25 MB setting was stored as its first 25 MB with no
-    // error, because multipart's toBuffer() can miss `truncated`. Every over-limit size must be
-    // refused, never stored cut to the limit.
-    test('over-limit uploads of several sizes are all refused, none stored truncated', async () => {
-        await setMaxSize(1 * MB);
+    // error. When a body chunk ends exactly at fileSize and the rest arrives later, busboy sets
+    // `truncated` with nothing left to push, so multipart's toBuffer() never sees it and returns
+    // exactly fileSize bytes. Reproduced here deterministically with a two-chunk stream.
+    test('an upload whose first chunk ends exactly at the limit is refused, not stored cut', async () => {
+        const limit = 100_000;
+        await setMaxSize(limit);
         try {
             const before = await fileCount();
-            for (const bytes of [1 * MB + 1, 1 * MB + 64 * 1024, 2 * MB + 7, 3 * MB]) {
-                const res = await ctx.request.post('/files/upload').set(owner.auth)
-                    .field('channel_id', channelId)
-                    .attach('file', Buffer.alloc(bytes, 'd'), `over-${bytes}.txt`);
-                expect(res.status, `${bytes} bytes: ${JSON.stringify(res.body)}`).toBe(413);
-            }
+            const B = 'TRUNCATIONBOUNDARY';
+            const head = `--${B}\r\nContent-Disposition: form-data; name="channel_id"\r\n\r\n${channelId}\r\n`
+                + `--${B}\r\nContent-Disposition: form-data; name="file"; filename="cut.txt"\r\nContent-Type: text/plain\r\n\r\n`;
+            const first = Buffer.concat([Buffer.from(head), Buffer.alloc(limit, 'd')]);
+            const rest = Buffer.concat([Buffer.alloc(50_000, 'd'), Buffer.from(`\r\n--${B}--\r\n`)]);
+            async function* body() { yield first; await new Promise(r => setTimeout(r, 50)); yield rest; }
+            const res = await ctx.app.inject({
+                method: 'POST', url: '/files/upload',
+                headers: { ...owner.auth, 'content-type': `multipart/form-data; boundary=${B}` },
+                payload: Readable.from(body()),
+            });
+            expect(res.statusCode, res.body).toBe(413);
             expect(await fileCount()).toBe(before);
-            const cut = await ctx.db.query('SELECT COUNT(*)::int AS n FROM files WHERE size_bytes = $1', [1 * MB]);
-            expect(cut.rows[0].n, 'no file stored cut to exactly the limit').toBe(0);
         } finally {
             await setMaxSize(26214400);
         }
