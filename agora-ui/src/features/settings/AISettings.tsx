@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { aiApi, botApi, serverApi, voiceApi, ApiError } from '../../lib/api';
-import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue, AIVoiceView, ModelAgent } from '../../lib/api';
+import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue, AIVoiceView, ModelAgent, ModelAgentBudget } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
@@ -28,6 +28,7 @@ interface AIState {
   tags: { tags: AIFileTag[]; max: number; queue: AITaggingQueue };
   voice: AIVoiceView;
   agents: ModelAgent[];
+  agentBudget: ModelAgentBudget;
 }
 
 export function AISettings() {
@@ -45,7 +46,7 @@ export function AISettings() {
     let cancelled = false;
     (async () => {
       try {
-        const [adapters, providers, routes, config, channels, usage, decisions, tags, voice, agents] = await Promise.all([
+        const [adapters, providers, routes, config, channels, usage, decisions, tags, voice, agents, agentBudget] = await Promise.all([
           aiApi.listAdapters(instanceServerId),
           aiApi.listProviders(instanceServerId),
           aiApi.listRoutes(instanceServerId),
@@ -56,6 +57,7 @@ export function AISettings() {
           aiApi.listTags(instanceServerId),
           voiceApi.getSettings(instanceServerId),
           aiApi.listAgents(instanceServerId),
+          aiApi.getAgentBudget(instanceServerId),
         ]);
         let botChannelIds = new Set<string>();
         if (config.configured && config.botId) {
@@ -77,6 +79,7 @@ export function AISettings() {
           tags,
           voice,
           agents,
+          agentBudget,
         });
         setError('');
       } catch (err) {
@@ -153,6 +156,7 @@ export function AISettings() {
             adapters={state.adapters}
             providers={state.providers}
             agents={state.agents}
+            budget={state.agentBudget}
             channels={state.channels}
             onChanged={reload}
           />
@@ -178,7 +182,7 @@ export function AISettings() {
             taggingOn={state.decisions.uses.file_tagging.enabled}
             onChanged={reload}
           />
-          <UsageSection usage={state.usage} days={USAGE_DAYS} />
+          <UsageSection usage={state.usage} days={USAGE_DAYS} agentBudget={state.agentBudget.mode} />
           <ChangesSection serverId={instanceServerId} version={version} />
         </>
       )}

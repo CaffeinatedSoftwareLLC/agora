@@ -3,6 +3,7 @@ import { decryptString } from '../lib/encryption';
 import { checkBaseUrl } from '../lib/url-guard';
 import { generateUlid } from '../utils/ulid';
 import { config } from '../config';
+import { loadAgentBudget } from './model-agent-budget';
 
 /** Anything with pg's `query` (Pool or PoolClient). */
 export interface Queryable {
@@ -106,20 +107,26 @@ export function computeCostMicros(route: RouteRow, usage: Usage): number | null 
 
 export type BudgetResult = { ok: true } | { ok: false; error: string };
 
-/** Enforce a route's daily (UTC) request / token / cost limits before calling the provider. */
+/**
+ * Enforce a route's daily (UTC) request / token / cost limits before calling the provider.
+ * Model agents' calls are chat usage; they count toward the Chat route's limits unless the
+ * server budgets its agents separately (src/ai/model-agent-budget.ts).
+ */
 export async function checkBudget(db: Queryable, route: RouteRow): Promise<BudgetResult> {
     const reqLimit = num(route.daily_request_limit);
     const tokLimit = num(route.daily_token_limit);
     const costLimit = num(route.daily_cost_limit_micros);
     if (reqLimit === null && tokLimit === null && costLimit === null) return { ok: true };
 
+    const excludeAgents = route.capability === 'chat' && (await loadAgentBudget(db, route.server_id)).mode === 'separate';
     const res = await db.query(
         `SELECT COUNT(*)::bigint AS requests,
                 COALESCE(SUM(input_tokens + output_tokens), 0)::bigint AS tokens,
                 COALESCE(SUM(cost_micros), 0)::bigint AS cost
          FROM ai_usage_events
          WHERE server_id = $1 AND capability = $2
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+           ${excludeAgents ? 'AND model_agent_id IS NULL' : ''}`,
         [route.server_id, route.capability]
     );
     const today = res.rows[0];

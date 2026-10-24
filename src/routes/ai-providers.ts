@@ -414,14 +414,15 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         return reply.send(await recentAiChanges(request.dbClient!, serverId, limit));
     });
 
-    // GET /servers/:serverId/ai/usage?days=N → per-capability totals, plus today's totals for budgets
+    // GET /servers/:serverId/ai/usage?days=N → per-capability totals, plus today's totals for budgets.
+    // Model agents' calls are their own row, `model_agents`, whatever the budget mode.
     app.get('/servers/:serverId/ai/usage', { preHandler: [requireAdmin] }, async (request, reply) => {
         const { serverId } = request.params as any;
         const db = request.dbClient!;
         const days = Math.max(1, Math.min(365, parseInt((request.query as any).days || '30', 10) || 30));
 
         const result = await db.query(
-            `SELECT capability,
+            `SELECT CASE WHEN model_agent_id IS NOT NULL THEN 'model_agents' ELSE capability END AS capability,
                     COUNT(*)::int AS requests,
                     COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
                     COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
@@ -432,8 +433,8 @@ export async function aiProviderRoutes(app: FastifyInstance) {
                     SUM(cost_micros) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')::bigint AS cost_micros_today
              FROM ai_usage_events
              WHERE server_id = $1 AND created_at >= NOW() - ($2 || ' days')::interval
-             GROUP BY capability
-             ORDER BY capability`,
+             GROUP BY 1
+             ORDER BY 1`,
             [serverId, days]
         );
         return reply.send({

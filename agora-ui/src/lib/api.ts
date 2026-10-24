@@ -306,7 +306,8 @@ export interface AIRoute extends AIRouteLimits {
 }
 
 export interface AICapabilityUsage {
-  capability: AICapability;
+  /** `model_agents`: every model agent's calls, on their own row. */
+  capability: AICapability | 'model_agents';
   requests: number;
   inputTokens: number;
   outputTokens: number;
@@ -350,6 +351,15 @@ export interface ModelAgent {
   updatedAt: string;
 }
 
+/** How model agents are budgeted: with @assistant on the Chat route (`shared`), or in their own pool. */
+export interface ModelAgentBudget {
+  mode: 'shared' | 'separate';
+  dailyRequestLimit: number | null;
+  dailyTokenLimit: number | null;
+  dailyCostLimitMicros: number | null;
+  today: { requests: number; tokens: number; costMicros: number | null };
+}
+
 export interface ModelAgentInput {
   providerId?: string;
   model?: string;
@@ -370,7 +380,7 @@ export interface AIChange {
   id: string;
   action: 'ai_provider_create' | 'ai_provider_update' | 'ai_provider_delete' | 'ai_route_update' | 'ai_route_delete' | 'ai_assistant_update' | 'ai_decision_update' | 'ai_voice_update'
     | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag'
-    | 'ai_agent_create' | 'ai_agent_update' | 'ai_agent_delete';
+    | 'ai_agent_create' | 'ai_agent_update' | 'ai_agent_delete' | 'ai_agent_budget_update';
   targetType: string;
   targetId: string | null;
   changes: Record<string, any>;
@@ -677,6 +687,12 @@ export const aiApi = {
 
   deleteAgent: (serverId: string, agentId: string) =>
     api.delete<{ deleted: true }>(`/servers/${serverId}/ai/agents/${agentId}`),
+
+  getAgentBudget: (serverId: string) =>
+    api.get<ModelAgentBudget>(`/servers/${serverId}/ai/agent-budget`),
+
+  updateAgentBudget: (serverId: string, data: Partial<Omit<ModelAgentBudget, 'today'>>) =>
+    api.patch<ModelAgentBudget>(`/servers/${serverId}/ai/agent-budget`, data),
 
   listChanges: (serverId: string, limit = 20) =>
     api.get<AIChange[]>(`/servers/${serverId}/ai/changes?limit=${limit}`),

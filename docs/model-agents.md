@@ -65,10 +65,19 @@ Tool results go back to the model labelled as data. Structured results are one-l
 | One model call | 90 s |
 | One mention, tools included | 5 minutes |
 | Mentions one agent handles at once | 2 per API process; more get a "busy" reply |
-| Agent's own daily requests, tokens, cost | Optional, per agent (UTC day) |
-| Server's chat budget | The Chat route's daily limits apply too: agent calls count as chat usage |
+| Agent's own daily requests, tokens, cost | Optional, per agent (UTC day), in both budget modes |
+| Server budget | The Chat route's daily limits (`shared`) or the agents' own pool (`separate`), see below |
 
-Over a limit, the agent posts a notice instead of calling the model. Each model call is a row in the usage ledger with `capability = 'chat'` and the agent's `model_agent_id`; with input and output prices set on the agent, rows carry a cost. Settings → AI → Model agents shows today's calls and tokens per agent.
+Over a limit, the agent posts a notice instead of calling the model. Each model call is a row in the usage ledger with `capability = 'chat'` and the agent's `model_agent_id`; with input and output prices set on the agent, rows carry a cost. Settings → AI → Model agents shows today's calls and tokens per agent and for all agents, and the Usage table shows agents on their own row (`model_agents`) in both modes.
+
+### Budget: shared or separate
+
+A server setting (Settings → AI → Model agents → Budget) decides how agents count against the server's daily limits:
+
+- **Shared** (the default): agent calls count toward the Chat capability's daily request, token and cost limits, together with @assistant's. Once the Chat budget is spent, both stop.
+- **Separate**: agent calls count only toward an optional daily pool for all of the server's agents (requests, tokens, cost), and the Chat limits count @assistant's calls only.
+
+The setting is read on every call, so switching takes effect at once; today's calls are counted under the new mode (switching back to shared adds today's agent calls to the Chat totals). Each agent's own limits apply in both modes. Changes are recorded in the AI change log (`ai_agent_budget_update`).
 
 **Out of credit.** When the provider answers HTTP 402 (OpenRouter: the key has no credit left or hit its limit), the agent posts that it is out of credit instead of a generic error.
 
@@ -95,6 +104,8 @@ All routes need **Administrator** on the server, like the rest of AI settings.
 | `POST /servers/:serverId/ai/agents` | `name`, `providerId`, `model`, and optionally `systemPrompt`, `tools`, `maxSteps`, `maxOutputTokens`, `dailyRequestLimit`, `dailyTokenLimit`, `dailyCostLimitMicros`, `inputPriceMicrosPerMtok`, `outputPriceMicrosPerMtok`, `channelIds` | 201 with the agent; 400 for a provider whose adapter can't run agents; 409 `username_taken` |
 | `PATCH /servers/:serverId/ai/agents/:agentId` | Any of the settings above, and `enabled` | The agent |
 | `DELETE /servers/:serverId/ai/agents/:agentId` | | `{ deleted: true }` |
+| `GET /servers/:serverId/ai/agent-budget` | | `{ mode, dailyRequestLimit, dailyTokenLimit, dailyCostLimitMicros, today }` |
+| `PATCH /servers/:serverId/ai/agent-budget` | Any of `mode` (`shared` or `separate`), `dailyRequestLimit`, `dailyTokenLimit`, `dailyCostLimitMicros` (null clears) | The same |
 
 `name` is the bot's username: letters, digits, `-` and `_`, up to 32 characters. Changes are recorded in the AI change log (`ai_agent_create`, `ai_agent_update`, `ai_agent_delete`); the system prompt itself is not copied into the log.
 

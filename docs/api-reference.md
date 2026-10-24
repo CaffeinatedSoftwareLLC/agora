@@ -1391,11 +1391,12 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 | GET | `/servers/:serverId/ai/routes` | Capability routes |
 | PUT | `/servers/:serverId/ai/routes/:capability` | `{ providerId, model, enabled?, dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros?, inputPriceMicrosPerMtok?, outputPriceMicrosPerMtok? }`. `enabled` defaults to `true` for `chat`, `false` otherwise. `400` if the adapter can't serve the capability |
 | DELETE | `/servers/:serverId/ai/routes/:capability` | Remove a route |
-| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals |
+| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals; model agents' calls are their own row, `model_agents` |
 | GET | `/servers/:serverId/ai/agents` | Model agents, with today's usage ([model-agents.md](model-agents.md)) |
 | POST | `/servers/:serverId/ai/agents` | `{ name, providerId, model, systemPrompt?, tools?, maxSteps?, maxOutputTokens?, daily limits?, prices?, channelIds? }` → `201`; creates the agent's bot. `400` if the provider's adapter can't run agents; `409 username_taken` |
 | PATCH | `/servers/:serverId/ai/agents/:agentId` | Any setting above, and `enabled` (false pauses the bot) |
 | DELETE | `/servers/:serverId/ai/agents/:agentId` | Deletes the agent and its bot |
+| GET, PATCH | `/servers/:serverId/ai/agent-budget` | `{ mode: 'shared' \| 'separate', dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros? }`: agents share the Chat route's limits, or have their own pool |
 
 **Budgets:** daily limits are UTC-day totals per capability. Once one is reached, calls are refused and the assistant posts a notice instead of answering. Cost is recorded only when the route has prices set, in micro-USD per 1M tokens.
 
