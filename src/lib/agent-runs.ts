@@ -10,6 +10,7 @@ import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
 import { budgetShelveNotice, type ExhaustedBudget } from './agent-budget-notice';
+import { notifySession } from './notifications';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -537,6 +538,7 @@ async function shelveForBudget(c: PoolClient, sessionId: string, channelId: stri
     await expireLiveRequests(c, { sessionIds: [sessionId] }, 'stopped', notices);
     notices.push(await sessionUpdate(c, sessionId, false));
     notices.push(await postNotice(c, channelId, budgetShelveNotice(profileName, sessionId, exhausted)));
+    await notifySession(c, sessionId, 'budget');
 }
 
 // ─── Heartbeat, complete, fail ───
@@ -712,6 +714,7 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
             await c.query(`UPDATE agent_runs SET error = 'nothing_posted' WHERE id = $1`, [runId]);
             const name = await c.query(`SELECT p.name, s.channel_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
             notices.push(await postNotice(c, name.rows[0].channel_id.trim(), `${name.rows[0].name} finished without posting a reply. The run may be blocked; check its permissions or wake it again.`));
+            await notifySession(c, run.session_id, 'blocked');
         }
         await c.query(`UPDATE agent_batches SET status = 'done', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
         await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
@@ -813,6 +816,7 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));
+    await notifySession(c, run.session_id, error === 'siwc_usage_limit' ? 'credit' : 'blocked');
 }
 
 /**
@@ -842,6 +846,7 @@ async function sleepForRateLimit(c: PoolClient, run: any, resetAt: string | null
     notices.push(await postNotice(c, session.channel_id.trim(),
         `${session.profile_name} hit its rate limit and is sleeping for about ${duration(until.getTime() - Date.now())} (until ${until.toISOString().slice(11, 16)} UTC). `
         + 'Messages for it are held and delivered together when it wakes.'));
+    await notifySession(c, run.session_id, 'credit');
     return true;
 }
 

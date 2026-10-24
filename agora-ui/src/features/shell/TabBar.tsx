@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useUIStore } from '../../stores/uiStore';
 import { useServerStore } from '../../stores/serverStore';
 import { usePalette, hexToRgb } from '../../theme';
+import { NotificationBell } from '../notifications/NotificationBell';
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ export function TabBar() {
 
         {/* ── Right controls ───────────────────────────────────────────────── */}
         <div className="flex items-center gap-1 ml-2 shrink-0">
+          <NotificationBell />
           {/* Palette toggle */}
           <button
             onClick={togglePalette}

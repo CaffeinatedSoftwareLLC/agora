@@ -79,6 +79,8 @@ export interface RotateResult {
     files: number;
     filesAlreadyDone: number;
     providerKeys: number;
+    /** Push relay handles of phones (push_devices). */
+    pushHandles: number;
     missing: string[];
 }
 
@@ -90,7 +92,7 @@ export class KeyRotationError extends Error {
 }
 
 /**
- * Re-encrypt every stored file and AI provider key from `oldKey` to `newKey`, then
+ * Re-encrypt every stored file, AI provider key and push handle from `oldKey` to `newKey`, then
  * record `newKey`'s fingerprint so the server starts with it. Files go first, one at a
  * time; provider keys and the fingerprint follow in a single transaction, so until
  * every file has been rotated the instance still belongs to the old key and a re-run
@@ -107,14 +109,14 @@ export async function rotateEncryptionKey(
 
     const stored = (await db.query('SELECT value FROM instance_config WHERE key = $1', [FINGERPRINT_KEY])).rows[0]?.value ?? null;
     if (stored === keyFingerprint(newKey)) {
-        return { status: 'already_rotated', files: 0, filesAlreadyDone: 0, providerKeys: 0, missing: [] };
+        return { status: 'already_rotated', files: 0, filesAlreadyDone: 0, providerKeys: 0, pushHandles: 0, missing: [] };
     }
     if (stored !== null && stored !== keyFingerprint(oldKey)) {
         throw new KeyRotationError('AGORA_ENCRYPTION_KEY is not the key this instance was set up with. Rotation needs the current key.');
     }
 
     const leaf = rotatedLeaf(newKey);
-    const result: RotateResult = { status: 'rotated', files: 0, filesAlreadyDone: 0, providerKeys: 0, missing: [] };
+    const result: RotateResult = { status: 'rotated', files: 0, filesAlreadyDone: 0, providerKeys: 0, pushHandles: 0, missing: [] };
 
     for (const row of await liveFiles(db)) {
         const id = row.id.trim();
@@ -141,7 +143,7 @@ export async function rotateEncryptionKey(
         result.files++;
     }
 
-    // Provider keys and the fingerprint switch together: after this the instance is on the new key.
+    // Provider keys, push handles and the fingerprint switch together: after this the instance is on the new key.
     // One connection for the whole transaction (a Pool would spread it over several).
     const tx = await db.connect();
     try {
@@ -163,6 +165,21 @@ export async function rotateEncryptionKey(
                 [next.encrypted, next.iv, next.authTag, p.id]
             );
             result.providerKeys++;
+        }
+        const devices = await tx.query('SELECT id, handle_enc, handle_iv, handle_tag FROM push_devices ORDER BY id');
+        for (const d of devices.rows) {
+            let handle: string;
+            try {
+                handle = decryptString(d.handle_enc, oldKey, d.handle_iv, d.handle_tag);
+            } catch {
+                throw new KeyRotationError(`The push handle of device ${d.id.trim()} cannot be decrypted with the current key.`);
+            }
+            const next = encryptString(handle, newKey);
+            await tx.query(
+                'UPDATE push_devices SET handle_enc = $1, handle_iv = $2, handle_tag = $3 WHERE id = $4',
+                [next.encrypted, next.iv, next.authTag, d.id]
+            );
+            result.pushHandles++;
         }
         await tx.query(
             `INSERT INTO instance_config (key, value) VALUES ($1, $2)

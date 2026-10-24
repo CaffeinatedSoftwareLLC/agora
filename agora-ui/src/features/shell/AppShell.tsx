@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -20,6 +20,7 @@ import './shell.css';
 export function AppShell() {
   const params = useParams();
   const navigate = useNavigate();
+  const [search, setSearch] = useSearchParams();
   const P = usePalette();
   const servers = useServerStore(s => s.servers);
   const instanceServerId = useServerStore(s => s.instanceServerId);
@@ -45,6 +46,15 @@ export function AppShell() {
       setActiveChannel(urlChannelId);
     }
   }, [urlChannelId, setActiveChannel]);
+
+  // A notification link, /app/{channelId}?thread={threadId}: open that thread, then drop
+  // the parameter so Back and a reload don't open it again
+  const urlThreadId = search.get('thread');
+  useEffect(() => {
+    if (!urlChannelId || !urlThreadId) return;
+    if (/^[0-9A-Z]{26}$/.test(urlThreadId)) useUIStore.getState().openThreadView(urlChannelId, urlThreadId);
+    setSearch(prev => { const next = new URLSearchParams(prev); next.delete('thread'); return next; }, { replace: true });
+  }, [urlChannelId, urlThreadId, setSearch]);
 
   // Auto-navigate to first text channel when at /app with no channel
   useEffect(() => {
