@@ -89,7 +89,10 @@ The phases depend on each other in a chain:
 - Eryk has the Apple and Google developer accounts, the signing setup, Firebase and APNs access, and a Mac for iOS builds.
 - Web push is dropped; see Phase 2.
 - Phases 1, 3 and 4 are built in parallel against the contract in section 8.
-- Account deletion (Phase 5) is still open. One decision is needed first: when an account is deleted, are its messages removed or anonymised?
+- **Account deletion (Phase 5):** each instance's owner decides what happens to a deleted account's messages, not Caffeinated Software, so it is an instance setting with two choices: remove the messages, or anonymise them. Deletion itself is always available in the account page, in the browser and in the app.
+- **Release scope:** any self-hosted instance, after thorough testing.
+- **Relay:** a separate small server at `push.agora.host`. agora.host is a Cloudflare Pages site, so it cannot run the relay.
+- **Bundle ID:** `com.caffeinatedsoftware.agora`, pending Eryk's confirmation.
 
 ## 8. Contract between the three parts
 
