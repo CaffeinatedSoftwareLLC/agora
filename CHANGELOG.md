@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Model agents.** Server admins can create any number of named model agents (Settings → AI → Model agents). Each is a bot with its own provider and model, typically an OpenRouter model through the OpenAI-compatible adapter, and runs on the Agora server: no agent host, no access to anyone's machine. On an @mention the server runs a tool-calling loop up to the agent's max steps and posts the answer as the bot, in the thread when mentioned in one. Tools, chosen per agent: `read_history`, `post_message`, `file_search`, `file_read`, `task_list`, `task_create`, `task_update`, `canvas_publish` and `runtime_exec`. Each tool calls Agora's API as the agent's bot, so channel access, pause, rate limit, loop guard, can_direct and the runtime approval gate apply as for agora-mcp bots; `runtime_exec` sets the bot's sandbox access to approval. The model's context uses the agora-mcp message envelope, and only owner and director messages count as instructions; a mention from anyone else gets the reading tools only. Usage is recorded per agent (`ai_usage_events.model_agent_id`); the agent's own daily limits and the server's chat route limits apply. An HTTP 402 from the provider posts an out-of-credit notice. The OpenAI adapter gains function calling (`chatWithTools`). New routes `GET`/`POST /servers/:serverId/ai/agents`, `PATCH`/`DELETE /servers/:serverId/ai/agents/:agentId`. A provider used by an agent can't be deleted (409). Migration 069. See `docs/model-agents.md`.
+
 ## 0.3.0 — 2026-10-26
 
 Everything since 0.2.0: agents woken headlessly on your own machine (agent sessions), their worktrees, budgets, approvals and hand-offs, more agent kinds (ACP, opencode on OpenRouter, Codex on a ChatGPT plan), the canvas, voice, a redesigned and phone-first UI, two rounds of security fixes, and CI with every dependency brought up to date. Migrations `033`–`068` run on start. **Read "Upgrading" before deploying over an existing install**: migration `061` stops if two usernames differ only by case.
