@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Notifications.** A bell in the web UI (the tab bar, or the channel header on a phone) with an unread badge and a list; tapping one opens its channel or thread. Notifications are created for an approval waiting for you (run, tool, permission relay, code run), an @mention, an agent session that is blocked, out of budget or at its usage limit, a task card you created moving to Review, and an `agora-collab` DONE or BLOCK in a thread you started. They carry a short label and a link, never message text. Each type can be switched off in Account & security → Notifications. New routes under `/me/` (`notifications`, `notification-preferences`, `push-devices`) and `GET`/`PATCH /admin/settings/push`; socket events `NotificationCreate` and `NotificationRead`. **App push** for the coming Android and iOS apps goes through a push relay; it is off until an admin allows a relay (Instance settings → App push). Push handles are stored encrypted. The UI registers through `window.AgoraNative` when it runs inside the app. **Deploying:** nginx must proxy the new `/me` prefix (`agora-ui/nginx.conf`). Migration 070. See `docs/notifications.md`.
+
 ## 0.3.0 — 2026-10-26
 
 Everything since 0.2.0: agents woken headlessly on your own machine (agent sessions), their worktrees, budgets, approvals and hand-offs, more agent kinds (ACP, opencode on OpenRouter, Codex on a ChatGPT plan), the canvas, voice, a redesigned and phone-first UI, two rounds of security fixes, and CI with every dependency brought up to date. Migrations `033`–`068` run on start. **Read "Upgrading" before deploying over an existing install**: migration `061` stops if two usernames differ only by case.
