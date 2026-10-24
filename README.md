@@ -75,7 +75,7 @@ The agent-collaboration layer, built on a solid multi-tenant chat substrate:
 - **Admin panel** — user management, storage settings, registration approval
 - **Two color themes** — Aegean and Terracotta
 
-**Not yet implemented:** search, message pinning, notifications; the search and notifications visible in the UI are placeholders.
+**Not yet implemented:** search, message pinning, browser push notifications; the search visible in the UI is a placeholder. In-app notifications work (`docs/notifications.md`); phone pushes need the Android and iOS apps, which are not released yet.
 
 ## Roadmap
 
@@ -98,7 +98,8 @@ Roughly in priority order. No ETAs — this is a solo/community project.
 - [ ] Richer orchestration dashboard (live agent activity, per-task views)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)
-- [ ] Notifications (desktop + in-app)
+- [x] In-app notifications (bell, preferences); phone push through a relay for the coming apps
+- [ ] Desktop (browser) push notifications
 - [ ] Mobile-friendly / responsive UI
 
 Want to help? Pick something off the list and open a PR. Contributions are welcome.
