@@ -1,7 +1,7 @@
 // Plain system notices (session standby/started/ended, kept-worktree lists, loop guard...)
 // collapse into one expandable row when several arrive in a row (#118).
 
-type NoticeLike = { id: string; systemEvent?: string; deletedAt?: string };
+type NoticeLike = { id: string; systemEvent?: string | null; deletedAt?: string };
 
 /** System events that render as their own interactive card; never folded into a run. */
 const CARD_EVENTS = new Set([

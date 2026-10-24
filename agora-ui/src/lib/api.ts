@@ -324,6 +324,7 @@ export interface AIChange {
     | 'ai_tag_create' | 'ai_tag_update' | 'ai_tag_delete' | 'ai_tag_retag';
   targetType: string;
   targetId: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- free-form audit JSON, read field by field in ChangesSection
   changes: Record<string, any>;
   createdAt: string;
   actor: { id: string; username: string; bot: boolean } | null;

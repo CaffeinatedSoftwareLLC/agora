@@ -1,7 +1,8 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, ApiError } from '../../lib/api';
-import { CreateAgentInviteModal, inviteCommand } from './CreateAgentInviteModal';
+import { CreateAgentInviteModal } from './CreateAgentInviteModal';
+import { inviteCommand } from './inviteCommand';
 import { BotManagement } from './BotManagement';
 import { botApi, serverApi } from '../../lib/api';
 import { useServerStore } from '../../stores/serverStore';

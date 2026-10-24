@@ -6,7 +6,8 @@ import { useMemberStore } from '../../stores/memberStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useThreadStore } from '../../stores/threadStore';
 import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
-import { Avatar, avatarColor } from './Avatar';
+import { Avatar } from './Avatar';
+import { avatarColor } from './avatarColors';
 import { ChannelAvatars } from './ChannelAvatars';
 
 afterEach(cleanup);

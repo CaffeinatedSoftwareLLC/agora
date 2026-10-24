@@ -37,7 +37,9 @@ export function ChannelAgentsControl({ channelId, serverId }: { channelId: strin
     botApi.channelAgents(channelId, { limit: 100 }).then(page => {
       if (active) {
         const ids = new Set(page.bots.map(bot => bot.id));
-        for (const [id, added] of membershipChanges.current.values) added ? ids.add(id) : ids.delete(id);
+        for (const [id, added] of membershipChanges.current.values) {
+          if (added) ids.add(id); else ids.delete(id);
+        }
         setMembership({ scope, ids: [...ids], hasMore: page.hasMore });
       }
     }).catch(() => { if (active) setMembership(null); });
