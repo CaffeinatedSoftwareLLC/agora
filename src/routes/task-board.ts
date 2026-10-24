@@ -4,7 +4,7 @@ import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { budgetExhausted, sessionUpdate, type Notice } from '../lib/agent-runs';
-import { CARD_SELECT, CARD_STATUSES, cardJson, cardUpdate, kickoffText } from '../lib/task-cards';
+import { CARD_SELECT, CARD_STATUSES, cardJson, cardUpdate, kickoffText, notifyCardReview } from '../lib/task-cards';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import {
     CommandError, SESSION_SELECT, announce, botInChannel, profileByName, requireOwnerForSubscription,
@@ -206,6 +206,7 @@ export async function taskBoardRoutes(app: FastifyInstance) {
                 [taskId, channelId, title ?? null, b.description === undefined ? null : sanitizeMessageText(b.description),
                  b.status ?? null, profileId !== undefined, profileId ?? null]
             );
+            if (b.status === 'review' && current.status !== 'review') await notifyCardReview(db, taskId, request.userId);
             const update = await cardUpdate(db, taskId);
             notices.push(update!);
             return { status: 200, body: { card: update!.event.card } };

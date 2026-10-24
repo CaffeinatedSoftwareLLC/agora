@@ -38,6 +38,8 @@ import { subtaskRoutes } from './routes/subtasks';
 import { artifactRoutes } from './routes/artifacts';
 import { browserPreviewRoutes } from './routes/browser-previews';
 import { voiceRoutes } from './routes/voice';
+import { notificationRoutes } from './routes/notifications';
+import { startNotificationListener } from './lib/notifications';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
@@ -301,6 +303,12 @@ export async function buildApp(opts?: {
             }
         }
 
+        // Work that must wait for the commit and must not delay the reply (e.g. telling a
+        // push relay to forget a removed device). Failures are the task's own business.
+        for (const task of request.afterCommit ?? []) {
+            void task().catch(err => request.log.warn({ err }, 'After-commit task failed'));
+        }
+
         // Force-disconnect suspended users only after successful commit
         // (best-effort — WS failures must not affect the committed suspension)
         const pendingDisconnects = request.pendingDisconnects;
@@ -389,6 +397,7 @@ export async function buildApp(opts?: {
     await app.register(artifactRoutes);
     await app.register(browserPreviewRoutes);
     await app.register(voiceRoutes);
+    await app.register(notificationRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);
@@ -405,6 +414,10 @@ export async function buildApp(opts?: {
         });
     });
     app.addHook('onClose', async () => { await stopEventBridge(); });
+
+    // Committed notifications reach the recipient's sockets (src/lib/notifications.ts)
+    const stopNotifications = startNotificationListener(io, opts?.dbUrl ?? process.env.DATABASE_URL, app.log);
+    app.addHook('onClose', async () => { await stopNotifications(); });
 
     return { app, db };
 }
