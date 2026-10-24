@@ -110,7 +110,7 @@ The three parts are developed in parallel, so they agree on only these shapes. A
 - Header: `Authorization: Bearer <handle>`
 - Body: `{ instance: "<https origin>", type: string, title: string, body: string, url: string }`
 - The `title` and `body` are short labels, never message text. Each is at most 120 characters.
-- The `url` is a path on the instance, for example `/channels/<id>/threads/<id>`.
+- The `url` is a UI path on the instance: `/app/<channelId>`, or `/app/<channelId>?thread=<threadId>` to open a thread. `/channels/...` is an API route and would load JSON.
 - Responses:
   - `202` when accepted.
   - `401` for an unknown handle.
