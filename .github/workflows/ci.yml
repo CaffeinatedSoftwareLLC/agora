@@ -53,18 +53,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # TEMP diagnostic: one vitest process per file, 5 min cap, to find the file that hangs in CI.
-      - name: Tests (per file)
-        run: |
-          set +e; failed=0
-          for f in $(find test/unit test/integration test/live -name '*.test.ts' | sort); do
-            echo "::group::$f"
-            timeout -k 10 300 npx vitest run "$f"; rc=$?
-            echo "::endgroup::"
-            if [ $rc -eq 124 ]; then echo "::error::HANG 5min in $f"; failed=1
-            elif [ $rc -ne 0 ]; then echo "::error::FAIL rc=$rc in $f"; failed=1; fi
-          done
-          exit $failed
+      - run: npm ci --prefix agora-mcp
+      - run: npm ci --prefix agora-host
+      # TEMP diagnostic: the instance test hangs only in CI; print each test as it finishes.
+      - name: instance test, verbose
+        run: timeout -k 10 240 npx vitest run test/integration/instance.integration.test.ts --reporter=verbose --testTimeout=20000 --hookTimeout=20000
+      - run: npm test
 
   frontend:
     name: Frontend (lint + build + tests)
