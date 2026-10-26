@@ -34,7 +34,7 @@ The Capacitor bridge is what lets page JavaScript call native code. Capacitor no
 
 The app version is `package.json`'s `version`. Android derives `versionName` and `versionCode` from it; iOS `MARKETING_VERSION` must match (checked by `npm test`). Bump it for every store upload, and bump `CURRENT_PROJECT_VERSION` (iOS build number) in Xcode for every TestFlight upload.
 
-Icons and splash screens are **Capacitor's placeholders**: there is no Agora logo in the repo yet. Before a store submission, put a 1024×1024 icon and a splash image in `agora-mobile/assets/` and run `npx @capacitor/assets generate`, or replace them in Android Studio (Image Asset) and Xcode (`Assets.xcassets`).
+Icons and splash screens are the Agora logo on Terracotta's background (`#1C1410`). The sources are in `agora-mobile/assets/` (`agora-logo-dark-transparent.png` is the mark; `agora-logo-dark.png` and `agora-logo-light.png` have the rounded tile baked in). The iOS icon is opaque, as Apple requires. On Android the adaptive foreground keeps the mark inside the 66% safe zone, and the background is the colour `ic_launcher_background`. To change them, replace the sources and regenerate every size (Android Studio Image Asset and Xcode `Assets.xcassets`, or `npx @capacitor/assets generate`).
 
 ## Credentials
 
