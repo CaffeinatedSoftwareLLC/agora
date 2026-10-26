@@ -70,7 +70,11 @@ server.
 ### Storage and handles
 
 SQLite through Node's built-in `node:sqlite` (Node 22.13+; no native build), one
-`handles` table in the `relay-data` volume, WAL mode.
+`handles` table in the `relay-data` volume, WAL mode. `node:sqlite` is still flagged
+experimental on Node 22 (the start command silences the warning), which is why the
+Dockerfile pins an exact Node release (`node:22.23.4-alpine3.24`) in both stages
+rather than following `node:22-alpine`. Move the pin on purpose and run the tests
+when you do.
 
 Every registration gets a **new random handle**: 32 random bytes, base64url, 43
 characters. Only SHA-256(handle) is stored. Registering a token and instance that are

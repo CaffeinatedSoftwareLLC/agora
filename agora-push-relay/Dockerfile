@@ -1,6 +1,8 @@
 # Agora push relay. Build from this directory: docker build -t agora-push-relay agora-push-relay
+# Node is pinned to an exact release in both stages: node:sqlite is still flagged
+# experimental on Node 22, so a minor upgrade is a deliberate change, tested first.
 # ---- Build stage ----
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine3.24 AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -11,7 +13,7 @@ COPY src/ src/
 RUN npm run build
 
 # ---- Runtime stage ----
-FROM node:22-alpine AS runtime
+FROM node:22.23.4-alpine3.24 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
