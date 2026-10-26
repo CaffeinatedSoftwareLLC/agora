@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { hashHandle, newHandle, open, seal, type Keys } from './crypto.js';
+import { hashHandle, newHandle, open, sameSecret, seal, type Keys } from './crypto.js';
 
 export type Platform = 'android' | 'ios';
 
@@ -25,6 +25,10 @@ interface Row {
  * already registered, and the existing handles stay valid. Nothing in a row links it to
  * the other handles for the same token, so the relay cannot hand an existing handle to
  * whoever registers next, and registering cannot revoke someone else's handle.
+ *
+ * The one exception is `renew`: a caller that already holds a handle can name it when it
+ * registers again, and gets the same handle back if it still matches. That tells the
+ * caller nothing it did not know, and lets the app notice when a handle it cached is gone.
  */
 export class HandleStore {
     private readonly db: DatabaseSync;
@@ -52,6 +56,20 @@ export class HandleStore {
             .prepare('INSERT INTO handles (handle_hash, platform, sealed, created_at, seen_at) VALUES (?, ?, ?, ?, ?)')
             .run(handleHash, platform, sealed, now, now);
         return handle;
+    }
+
+    /**
+     * Re-registration naming a handle the caller already holds. True, and seen_at refreshed,
+     * only if the handle's row exists, opens under the current key, and holds this platform,
+     * instance and token. Otherwise false and nothing changes: the caller gets a new handle,
+     * and a handle for another token or instance stays exactly as it was.
+     */
+    renew(handle: string, platform: Platform, instance: string, token: string, now = Date.now()): boolean {
+        const reg = this.lookup(handle);
+        if (!reg || reg.platform !== platform) return false;
+        if (!sameSecret(reg.instance, instance) || !sameSecret(reg.token, token)) return false;
+        this.touch(reg.handleHash, now);
+        return true;
     }
 
     lookup(handle: string): Registration | null {

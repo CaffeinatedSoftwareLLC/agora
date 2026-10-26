@@ -20,6 +20,7 @@ async function exercise(): Promise<string> {
     const handle = (await register(relay, { token: TOKEN, instance: INSTANCE })).json().handle as string;
     const body = pushBody({ instance: INSTANCE, title: TITLE, body: BODY, url: URL_PATH });
     expect((await push(relay, handle, body)).statusCode).toBe(202);
+    expect((await register(relay, { token: TOKEN, instance: INSTANCE, previous: handle })).statusCode).toBe(200);
     // Every failure path logs too.
     await push(relay, handle, { ...body, instance: 'https://other.example.com' });
     await push(relay, handle, { ...body, title: TITLE + 'x'.repeat(200) });
@@ -42,7 +43,7 @@ describe('privacy', () => {
         }
         const outcomes = relay.logs.map((l) => JSON.parse(l)).filter((l) => l.msg === 'request').map((l) => l.outcome);
         expect(outcomes).toEqual(
-            expect.arrayContaining(['registered_android', 'sent_android', 'instance_mismatch', 'invalid_body', 'unknown_handle', 'fcm_500_INTERNAL', 'gone_fcm_404_UNREGISTERED']),
+            expect.arrayContaining(['registered_android', 'renewed_android', 'sent_android', 'instance_mismatch', 'invalid_body', 'unknown_handle', 'fcm_500_INTERNAL', 'gone_fcm_404_UNREGISTERED']),
         );
     });
 
@@ -64,6 +65,6 @@ describe('privacy', () => {
 
     it('keeps counts per outcome', async () => {
         await exercise();
-        expect(relay.app.counters).toMatchObject({ registered_android: 1, sent_android: 1, instance_mismatch: 1 });
+        expect(relay.app.counters).toMatchObject({ registered_android: 1, renewed_android: 1, sent_android: 1, instance_mismatch: 1 });
     });
 });

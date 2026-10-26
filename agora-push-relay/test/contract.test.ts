@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HANDLE_RE } from '../src/crypto.js';
-import { FakeSender, INSTANCE, IOS_TOKEN, makeRelay, push, pushBody, register, type TestRelay } from './helpers.js';
+import { ANDROID_TOKEN, FakeSender, INSTANCE, IOS_TOKEN, makeRelay, push, pushBody, register, type TestRelay } from './helpers.js';
 
 // docs/planning/mobile-apps.md section 8, "Push relay".
 let relay: TestRelay;
@@ -52,6 +52,67 @@ describe('POST /v1/register', () => {
         expect(b).not.toBe(a);
         expect((await push(relay, a)).statusCode).toBe(401);
         expect((await push(relay, b)).statusCode).toBe(202);
+    });
+
+    describe('with `previous`, the handle the app already holds', () => {
+        it('200 with the same handle when it still holds this token and instance', async () => {
+            const a = await handleFor();
+            // The origin is normalised before comparing.
+            const res = await register(relay, { previous: a, instance: 'https://AGORA.example.com/' });
+            expect(res.statusCode).toBe(200);
+            expect(res.json()).toEqual({ handle: a });
+            expect(relay.store.count()).toBe(1);
+            expect((await push(relay, a)).statusCode).toBe(202);
+        });
+
+        it('201 with a new handle for an unknown handle (pruned, lost database, other key)', async () => {
+            const res = await register(relay, { previous: 'A'.repeat(43) });
+            expect(res.statusCode).toBe(201);
+            expect(res.json().handle).toMatch(HANDLE_RE);
+            expect(res.json().handle).not.toBe('A'.repeat(43));
+            expect(relay.store.count()).toBe(1);
+        });
+
+        it('201 with a new handle after the previous one was deleted', async () => {
+            const a = await handleFor();
+            await relay.app.inject({ method: 'DELETE', url: '/v1/handles', headers: { authorization: `Bearer ${a}` } });
+            const res = await register(relay, { previous: a });
+            expect(res.statusCode).toBe(201);
+            expect(res.json().handle).not.toBe(a);
+            expect((await push(relay, a)).statusCode).toBe(401);
+        });
+
+        it('201 with a new handle when the previous one is for the same token but another instance; that one stays as it was', async () => {
+            const other = 'https://other.example.com';
+            const a = await handleFor({ instance: other });
+            const before = relay.store.lookup(a);
+            const res = await register(relay, { previous: a });
+            expect(res.statusCode).toBe(201);
+            const b = res.json().handle as string;
+            expect(b).not.toBe(a);
+            expect(relay.store.lookup(a)).toEqual(before);
+            expect((await push(relay, a, pushBody({ instance: other }))).statusCode).toBe(202);
+            expect((await push(relay, b)).statusCode).toBe(202);
+            expect((await push(relay, b, pushBody({ instance: other }))).statusCode).toBe(403);
+        });
+
+        it('201 with a new handle when the previous one is for the same instance but another token', async () => {
+            const a = await handleFor({ token: 'old-token' });
+            const res = await register(relay, { previous: a });
+            expect(res.statusCode).toBe(201);
+            const b = res.json().handle as string;
+            expect(b).not.toBe(a);
+            expect(relay.store.lookup(a)?.token).toBe('old-token');
+            expect(relay.store.lookup(b)?.token).toBe(ANDROID_TOKEN);
+        });
+
+        it('400 for a `previous` that is not a handle', async () => {
+            for (const previous of ['short', 'A'.repeat(44), 'A'.repeat(42) + '=', 42]) {
+                const res = await register(relay, { previous });
+                expect(res.statusCode).toBe(400);
+                expect(res.json()).toEqual({ error: 'invalid_body' });
+            }
+        });
     });
 
     it('accepts an iOS hex token', async () => {
@@ -126,7 +187,7 @@ describe('POST /v1/register', () => {
 describe('a third party holding the device token', () => {
     const B = 'https://b.example.com';
 
-    it('does not receive the handle instance B holds, and cannot push as B through it or delete it', async () => {
+    it('does not receive the handle instance B holds, and cannot revoke it', async () => {
         const bHandle = await handleFor({ instance: B });
         const attacker = await register(relay, { instance: B }, '198.51.100.66');
         expect(attacker.statusCode).toBe(201);
@@ -138,13 +199,33 @@ describe('a third party holding the device token', () => {
             const del = await relay.app.inject({ method: 'DELETE', url: '/v1/handles', remoteAddress: '198.51.100.66', headers: { authorization: `Bearer ${h}` } });
             expect(del.statusCode).toBe(204);
         }
-        expect((await push(relay, attackerHandle, pushBody({ instance: B }))).statusCode).toBe(401);
 
         // B's handle survives the re-registration and the deletes, and still pushes to the token.
         const res = await push(relay, bHandle, pushBody({ instance: B }));
         expect(res.statusCode).toBe(202);
         expect(android().calls.at(-1)).toMatchObject({ token: expect.stringMatching(/^fcm-token/), message: { instance: B } });
         expect(relay.store.count()).toBe(1);
+    });
+
+    it('accepted limit: it CAN register naming B and push to the device through its own fresh handle', async () => {
+        // The relay cannot tell whether a caller speaks for the instance it names. The protection
+        // is that the app never exposes the device token to pages (only its native code
+        // registers), so a token holder has already got past that.
+        const bHandle = await handleFor({ instance: B });
+        const own = (await register(relay, { instance: B }, '198.51.100.66')).json().handle as string;
+        expect(own).not.toBe(bHandle);
+        const res = await push(relay, own, pushBody({ instance: B }));
+        expect(res.statusCode).toBe(202);
+        expect(android().calls.at(-1)).toMatchObject({ token: expect.stringMatching(/^fcm-token/), message: { instance: B } });
+        // B's own handle is untouched.
+        expect((await push(relay, bHandle, pushBody({ instance: B }))).statusCode).toBe(202);
+    });
+
+    it('cannot get B\'s handle back through `previous` without already holding it; a guess gets a new handle', async () => {
+        const bHandle = await handleFor({ instance: B });
+        const res = await register(relay, { instance: B, previous: 'A'.repeat(43) }, '198.51.100.66');
+        expect(res.statusCode).toBe(201);
+        expect(res.json().handle).not.toBe(bHandle);
     });
 
     it('registering the token for its own origin gives a handle that cannot push as B', async () => {

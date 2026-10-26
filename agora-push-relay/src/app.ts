@@ -38,6 +38,8 @@ const registerBody = {
         // FCM tokens are ~150-250 printable ASCII characters, APNs tokens 64 hex digits.
         token: { type: 'string', minLength: 1, maxLength: 4096, pattern: '^[\\x21-\\x7e]+$' },
         instance: { type: 'string', minLength: 1, maxLength: 2048 },
+        // The handle this app already holds for the token and instance, if any (HANDLE_RE).
+        previous: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' },
     },
 } as const;
 
@@ -59,6 +61,7 @@ interface RegisterBody {
     platform: Platform;
     token: string;
     instance: string;
+    previous?: string;
 }
 interface PushBody {
     instance: string;
@@ -160,11 +163,17 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
             ],
         },
         async (req, reply) => {
-            const { platform, token } = req.body;
+            const { platform, token, previous } = req.body;
             const instance = normalizeInstance(req.body.instance);
             if (!instance) return fail(req, reply, 400, 'invalid_instance');
             if (platform === 'ios' && !/^[0-9a-fA-F]{8,200}$/.test(token)) return fail(req, reply, 400, 'invalid_token');
             if (!senders[platform]) return fail(req, reply, 503, 'platform_unavailable');
+            // 200 with the same handle when `previous` still holds this platform, instance and
+            // token; otherwise 201 with a new handle, whether or not `previous` exists.
+            if (previous && store.renew(previous, platform, instance, token, now())) {
+                req.outcome = `renewed_${platform}`;
+                return reply.code(200).send({ handle: previous });
+            }
             const handle = store.register(platform, instance, token, now());
             req.outcome = `registered_${platform}`;
             return reply.code(201).send({ handle });

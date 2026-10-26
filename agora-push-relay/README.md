@@ -15,7 +15,7 @@ Plan and contract: `docs/planning/mobile-apps.md`, Phase 3 and section 8.
 
 | Call | Who calls it | Answers |
 |---|---|---|
-| `POST /v1/register` `{platform, token, instance}` | the app | `201 {handle}`, a new handle on every call; `400` bad body/origin/token; `429` per-IP limit; `503` platform not configured |
+| `POST /v1/register` `{platform, token, instance, previous?}` | the app | `201 {handle}`, a new handle; `200 {handle}`, `previous` handed back because it still holds this platform, token and instance; `400` bad body/origin/token; `429` per-IP limit; `503` platform not configured |
 | `POST /v1/push` `{instance, type, title, body, url}` + `Authorization: Bearer <handle>` | an instance | `202`; `400`; `401` unknown handle; `403` `instance` is not the origin the handle was registered with; `410` the device token is gone (handle deleted); `413`; `429` (30/min per handle, `Retry-After`); `502` provider error, retry later; `503` platform not configured |
 | `DELETE /v1/handles` + `Authorization: Bearer <handle>` | an instance or the app | `204` (also for an unknown handle); `401` no well-formed handle |
 | `GET /healthz` | monitoring | `200 {status, providers: {android, ios}}` |
@@ -92,11 +92,26 @@ token gone (`410` on a push through it), or it is pruned after
 - knowing a device token does not get you a handle someone else holds. Anyone who has
   a token can register it naming any origin (the relay cannot check that the caller
   speaks for that instance), but they only get a fresh handle of their own;
+- that fresh handle does push to the device as that origin. This is an accepted limit:
+  the protection is that the app never exposes the device token to pages, and only its
+  native code registers;
 - registering cannot revoke anyone else's handle, because nothing replaces or deletes
-  an existing row. Deleting needs the handle itself;
-- the app should register when it gets a new device token, not on every launch, and
-  give the instance the handle it got back. Handles it stops using expire after the
-  TTL.
+  an existing row. Deleting needs the handle itself.
+
+### Re-registration
+
+The app registers on every `registerPush` and names the handle it already holds for
+that instance as `previous`. The relay hands `previous` back (`200`, and refreshes its
+`seen_at`, so it counts as seen for the TTL prune) only if the row exists, decrypts
+under the current `RELAY_SECRET_KEY`, and holds the same platform, device token and
+normalised instance as the request. In every other case (unknown handle, pruned, lost
+database, changed key, another token or another instance) the relay issues a new
+handle with `201`, exactly as without `previous`, and the row `previous` names, if
+any, is left as it was. The answer only says something about `previous` to a caller
+that already sent it, and a guessed or stolen-but-mismatched handle gets nothing
+back but a fresh handle of its own. The app stores the handle it gets, and deletes the
+old one when they differ, so a dead handle is replaced on the next registration
+instead of being returned forever.
 
 The alternative, re-registration replacing the earlier handle, was rejected because
 it would let anyone holding the token revoke the instance's handle at will.

@@ -96,6 +96,46 @@ tok`).digest('base64url');
     });
 });
 
+describe('HandleStore.renew', () => {
+    it('keeps the handle and refreshes its seen_at when platform, instance and token all match', () => {
+        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
+        const h = store.register('android', I, 'tok', 1_000);
+        expect(store.renew(h, 'android', I, 'tok', 9_000)).toBe(true);
+        // seen_at is now 9000, so a prune at 2000 keeps it.
+        expect(store.pruneSeenBefore(2_000)).toBe(0);
+        expect(store.lookup(h)).not.toBeNull();
+        expect(store.count()).toBe(1);
+        store.close();
+    });
+
+    it('refuses, and changes nothing, for an unknown handle or any mismatch', () => {
+        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
+        const h = store.register('android', I, 'tok', 1_000);
+        const before = store.lookup(h);
+        expect(store.renew('A'.repeat(43), 'android', I, 'tok', 9_000)).toBe(false);
+        expect(store.renew(h, 'ios', I, 'tok', 9_000)).toBe(false);
+        expect(store.renew(h, 'android', 'https://other.example.com', 'tok', 9_000)).toBe(false);
+        expect(store.renew(h, 'android', I, 'other-token', 9_000)).toBe(false);
+        expect(store.renew(h, 'android', I, 'to', 9_000)).toBe(false);
+        expect(store.lookup(h)).toEqual(before);
+        // None of them refreshed seen_at.
+        expect(store.pruneSeenBefore(2_000)).toBe(1);
+        store.close();
+    });
+
+    it('refuses a handle sealed under another RELAY_SECRET_KEY', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
+        const path = join(dir, 'relay.db');
+        const before = new HandleStore(path, deriveKeys(randomBytes(32)));
+        const h = before.register('android', I, 'tok');
+        before.close();
+        const after = new HandleStore(path, deriveKeys(randomBytes(32)));
+        expect(after.renew(h, 'android', I, 'tok')).toBe(false);
+        after.close();
+        rmSync(dir, { recursive: true, force: true });
+    });
+});
+
 describe('seal/open', () => {
     it('round-trips and is bound to its row', () => {
         const { sealKey } = deriveKeys(randomBytes(32));

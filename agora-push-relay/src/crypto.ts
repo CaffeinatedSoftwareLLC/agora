@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /** A push handle: 32 bytes as unpadded base64url (43 characters). */
 export const HANDLE_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -30,6 +30,12 @@ export function newHandle(): string {
 /** What the relay stores and looks up by: SHA-256 of the handle, hex. */
 export function hashHandle(handle: string): string {
     return createHash('sha256').update(handle).digest('hex');
+}
+
+/** Constant-time string equality (compares SHA-256 digests, so lengths do not leak either). */
+export function sameSecret(a: string, b: string): boolean {
+    const digest = (v: string) => createHash('sha256').update(v).digest();
+    return timingSafeEqual(digest(a), digest(b));
 }
 
 /** AES-256-GCM; the result is iv (12) | tag (16) | ciphertext. `aad` binds it to its row. */
