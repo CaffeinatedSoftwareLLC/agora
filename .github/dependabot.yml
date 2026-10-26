@@ -21,3 +21,9 @@ updates:
     open-pull-requests-limit: 5
     groups:
       mcp-deps: { patterns: ["*"], update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /agora-host
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      host-deps: { patterns: ["*"], update-types: [minor, patch] }
