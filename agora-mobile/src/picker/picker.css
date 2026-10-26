@@ -1,13 +1,13 @@
 :root {
   color-scheme: dark;
-  --bg: #241623;
-  --surface: #332838;
-  --surface-hover: #3e3345;
-  --border: #3a2e3e;
-  --text: #fdfff7;
-  --muted: #a09aab;
-  --primary: #0d5eaf;
-  --on-primary: #fdfff7;
+  --bg: #1c1410;
+  --surface: #2a2018;
+  --surface-hover: #362a20;
+  --border: #352820;
+  --text: #ebf5df;
+  --muted: #9b8b7a;
+  --primary: #c2703e;
+  --on-primary: #1c1410;
   --danger: #f87171;
 }
 * { box-sizing: border-box; }

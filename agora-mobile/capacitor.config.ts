@@ -12,6 +12,8 @@ const config: CapacitorConfig = {
     appId: app.appId,
     appName: app.appName,
     webDir: 'dist',
+    // Terracotta `bg` (agora-ui/src/theme/palettes.ts), so the WebView never flashes white before the picker paints
+    backgroundColor: '#1C1410',
     // Navigation is decided by AgoraShell.shouldOverrideLoad against the saved servers.
     // Leave allowNavigation empty: anything listed here would bypass that check.
     server: { androidScheme: 'https' },

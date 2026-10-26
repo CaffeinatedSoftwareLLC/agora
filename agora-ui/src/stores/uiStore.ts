@@ -59,7 +59,7 @@ function readStoredPalette(): PaletteKey | null {
     return v === 'aegean' || v === 'terracotta' ? v : null;
   } catch { return null; } // blocked or missing storage
 }
-const storedPalette: PaletteKey = readStoredPalette() || 'aegean';
+const storedPalette: PaletteKey = readStoredPalette() || 'terracotta';
 
 const isPalette = (v: unknown): v is PaletteKey => v === 'aegean' || v === 'terracotta';
 
