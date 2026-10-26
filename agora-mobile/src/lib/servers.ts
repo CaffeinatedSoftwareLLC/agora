@@ -4,7 +4,8 @@ import { normalizeOrigin } from './origin';
  * Storage keys shared with the native code. The native AgoraShell plugins read
  * SERVERS_KEY straight from Capacitor Preferences storage (Android
  * SharedPreferences "CapacitorStorage", iOS UserDefaults "CapacitorStorage.<key>"),
- * and only let instance pages touch `HANDLE_KEY_PREFIX + <their own origin>`.
+ * and write `HANDLE_KEY_PREFIX + <origin>` there when an instance page registers
+ * for push. Instance pages cannot read Preferences; the picker can.
  * Change them in both places or not at all.
  */
 export const SERVERS_KEY = 'agora.servers';

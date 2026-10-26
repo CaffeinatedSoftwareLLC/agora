@@ -65,6 +65,9 @@ dependencies {
     // Used directly by AgoraShellPlugin (Capacitor has both as implementation dependencies).
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
     implementation "org.apache.cordova:framework:$cordovaAndroidVersion"
+    // AgoraShellPlugin gets the FCM token itself, so it never passes through page JavaScript.
+    // Same version as @capacitor/push-notifications (variables.gradle firebaseMessagingVersion).
+    implementation "com.google.firebase:firebase-messaging:$firebaseMessagingVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"

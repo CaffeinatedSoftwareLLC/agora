@@ -11,6 +11,54 @@ const app = JSON.parse(read('app.config.json'));
 const pkg = JSON.parse(read('package.json'));
 const javaDir = 'android/app/src/main/java/com/caffeinatedsoftware/agora';
 
+/** The calls window.AgoraNative needs (src/inject/agora-native.ts), as "pluginId.methodName". */
+const REMOTE_CALLS = [
+    'AgoraShell.registerPush',
+    'AgoraShell.unregisterPush',
+    'AgoraShell.hasPushHandle',
+    'PushNotifications.addListener',
+    'PushNotifications.removeListener',
+    'PushNotifications.removeAllListeners',
+    'Device.getInfo',
+    // iOS's native bridge sends every console call to the Console plugin; Android has no
+    // such plugin, so allowing it there is a no-op that keeps the two lists identical.
+    'Console.log',
+];
+const REMOTE_EVENTS = ['PushNotifications.pushNotificationActionPerformed'];
+
+const literals = (source: string) => [...source.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
+
+function block(source: string, start: RegExp, end: string): string {
+    const m = start.exec(source);
+    if (!m) throw new Error(`not found: ${start}`);
+    const from = m.index + m[0].length;
+    const to = source.indexOf(end, from);
+    if (to < 0) throw new Error(`no end for ${start}`);
+    return source.slice(from, to);
+}
+
+/** BridgePolicy.java: REMOTE_CALLS and REMOTE_EVENTS, and every string literal in the class. */
+function javaPolicy() {
+    const source = read(`${javaDir}/BridgePolicy.java`).replace(/\r\n/g, '\n');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    return {
+        calls: new Set(literals(block(code, /REMOTE_CALLS\s*=\s*setOf\(/, ');'))),
+        events: new Set(literals(block(code, /REMOTE_EVENTS\s*=\s*setOf\(/, ');'))),
+        literals: literals(code),
+    };
+}
+
+/** `enum BridgePolicy` in AgoraShellPlugin.swift, the same way. */
+function swiftPolicy() {
+    const source = read('ios/App/App/AgoraShellPlugin.swift').replace(/\r\n/g, '\n');
+    const code = block(source, /\nenum BridgePolicy \{/, '\n}\n').replace(/\/\/.*$/gm, '');
+    return {
+        calls: new Set(literals(block(code, /static let remoteCalls: Set<String> = \[/, ']'))),
+        events: new Set(literals(block(code, /static let remoteEvents: Set<String> = \[/, ']'))),
+        literals: literals(code),
+    };
+}
+
 describe('app.config.json', () => {
     it('has an https relay URL and a reverse-DNS app ID', () => {
         expect(new URL(app.relayUrl).protocol).toBe('https:');
@@ -44,16 +92,50 @@ describe('native code', () => {
         expect(swift).toContain(`handleKeyPrefix = "${HANDLE_KEY_PREFIX}"`);
     });
 
-    it('allows the same plugin calls on both platforms', () => {
-        const java = read(`${javaDir}/BridgePolicy.java`);
-        const swift = read('ios/App/App/AgoraShellPlugin.swift');
-        for (const name of ['checkPermissions', 'requestPermissions', 'register', 'addListener', 'removeListener', 'removeAllListeners',
-            'registration', 'registrationError', 'pushNotificationActionPerformed']) {
-            expect(java).toContain(`"${name}"`);
-            expect(swift).toContain(`"${name}"`);
+    it('allows exactly the same calls and events to instance pages on both platforms', () => {
+        const java = javaPolicy();
+        const swift = swiftPolicy();
+        expect(java.calls).toEqual(swift.calls);
+        expect(java.events).toEqual(swift.events);
+        // What src/inject/agora-native.ts needs, and nothing else.
+        expect(java.calls).toEqual(new Set(REMOTE_CALLS));
+        expect(java.events).toEqual(new Set(REMOTE_EVENTS));
+    });
+
+    it('decides instance pages only from those lists', () => {
+        // Every string literal in either policy is a list entry or one of these, so an
+        // extra allowance outside the lists (a `case "Preferences":`) fails here.
+        const allowed = new Set([
+            ...REMOTE_CALLS, ...REMOTE_EVENTS, HANDLE_KEY_PREFIX, 'addListener', 'eventName',
+            // How each side builds the "pluginId.name" keys it looks up.
+            '.', '\\(pluginId).\\(methodName)', '\\(pluginId).\\(eventName)',
+        ]);
+        for (const literal of [...javaPolicy().literals, ...swiftPolicy().literals]) {
+            expect(allowed, `unexpected literal "${literal}" in a BridgePolicy`).toContain(literal);
         }
-        expect(java).not.toContain('"unregister"');
-        expect(swift).not.toContain('"unregister"');
+    });
+
+    it('never lets instance pages near the device token, the relay or Preferences', () => {
+        for (const policy of [javaPolicy(), swiftPolicy()]) {
+            expect(policy.calls).not.toContain('PushNotifications.register');
+            expect(policy.calls).not.toContain('PushNotifications.unregister');
+            expect(policy.events).not.toContain('PushNotifications.registration');
+            expect(policy.events).not.toContain('PushNotifications.registrationError');
+            for (const call of policy.calls) expect(call).not.toMatch(/^(CapacitorHttp|Preferences|CapacitorCookies)\./);
+        }
+    });
+
+    it('declares the AgoraShell push methods natively on both platforms', () => {
+        const java = read(`${javaDir}/AgoraShellPlugin.java`);
+        const swift = read('ios/App/App/AgoraShellPlugin.swift');
+        for (const call of REMOTE_CALLS.filter((c) => c.startsWith('AgoraShell.'))) {
+            const method = call.slice('AgoraShell.'.length);
+            expect(java).toMatch(new RegExp(`@PluginMethod\\s+public void ${method}\\(PluginCall call\\)`));
+            expect(java).toContain(`case "${method}":`);
+            expect(swift).toContain(`CAPPluginMethod(name: "${method}", returnType: CAPPluginReturnPromise)`);
+            expect(swift).toContain(`case "${method}":`);
+        }
+        expect(java).toContain('"AgoraShell"');
     });
 
     it('sends notifications to the "agora" channel and approvals to AGORA_APPROVAL', () => {

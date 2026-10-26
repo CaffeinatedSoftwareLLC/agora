@@ -1,7 +1,7 @@
 import { deviceLabel, type DeviceInfoLike, type NativePlatform } from './label';
-import { jsonBody, type HttpClient } from './http';
-import { handleKey, type KeyValueStore } from './servers';
+import type { HttpClient } from './http';
 import { normalizeOrigin } from './origin';
+import type { AgoraShellPush } from './shell';
 
 /** `window.AgoraNative`, as fixed by docs/planning/mobile-apps.md section 8. */
 export interface AgoraNative {
@@ -18,34 +18,17 @@ export interface PushRegistration {
     label: string;
 }
 
-type PermissionState = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied';
-
-interface ListenerHandle {
-    remove(): Promise<void>;
-}
-
-/** The subset of @capacitor/push-notifications the bridge uses. */
-export interface PushPlugin {
-    checkPermissions(): Promise<{ receive: PermissionState }>;
-    requestPermissions(): Promise<{ receive: PermissionState }>;
-    register(): Promise<void>;
-    addListener(event: 'registration', cb: (token: { value: string }) => void): Promise<ListenerHandle>;
-    addListener(event: 'registrationError', cb: (error: { error: string }) => void): Promise<ListenerHandle>;
-}
-
 export interface BridgeDeps {
     platform: NativePlatform;
     version: string;
-    /** The relay's base URL from app.config.json. */
+    /** The relay's base URL from app.config.json; native must answer with the same origin. */
     relayUrl: string;
-    /** The page's own origin: the instance the handle is registered for. */
-    origin: string;
-    push: PushPlugin;
-    http: HttpClient;
-    kv: KeyValueStore;
+    /**
+     * AgoraShell's push methods. Registration happens in native code: the device token
+     * and the instance origin sent to the relay never pass through this page.
+     */
+    shell: AgoraShellPush;
     deviceInfo(): Promise<DeviceInfoLike>;
-    /** Milliseconds to wait for the FCM/APNs token. */
-    tokenTimeoutMs?: number;
 }
 
 /** 32 random bytes, base64url, no padding (section 8). */
@@ -59,29 +42,11 @@ export function relayOrigin(relayUrl: string): string {
     return origin;
 }
 
-/** Wait for the device token after `register()`. Listeners go on before the call so no event is missed. */
-async function obtainToken(push: PushPlugin, timeoutMs: number): Promise<string> {
-    let resolve!: (token: string) => void;
-    let reject!: (error: Error) => void;
-    const token = new Promise<string>((res, rej) => { resolve = res; reject = rej; });
-    const timer = setTimeout(() => reject(new BridgeError('push_token_timeout')), timeoutMs);
-    const handles = await Promise.all([
-        push.addListener('registration', (t) => {
-            if (t && typeof t.value === 'string' && t.value) resolve(t.value);
-            else reject(new BridgeError('push_token_empty'));
-        }),
-        push.addListener('registrationError', (e) => reject(new BridgeError(`push_registration_failed: ${e?.error ?? 'unknown'}`))),
-    ]);
-    try {
-        await push.register();
-        return await token;
-    } finally {
-        clearTimeout(timer);
-        await Promise.all(handles.map((h) => h.remove().catch(() => undefined)));
-    }
-}
-
-/** `DELETE /v1/handles` on the relay. A 401 means the relay no longer knows the handle, which is the goal. */
+/**
+ * `DELETE /v1/handles` on the relay, for the bundled picker when a server is removed
+ * (instance pages cannot reach the relay). A 401 means the relay no longer knows the
+ * handle, which is the goal.
+ */
 export async function deleteRelayHandle(http: HttpClient, relayUrl: string, handle: string): Promise<void> {
     if (typeof handle !== 'string' || !HANDLE_PATTERN.test(handle)) throw new BridgeError('handle_invalid');
     const res = await http.request({
@@ -96,41 +61,22 @@ export async function deleteRelayHandle(http: HttpClient, relayUrl: string, hand
 
 export function createAgoraNative(deps: BridgeDeps): AgoraNative {
     const relay = relayOrigin(deps.relayUrl);
-    const instance = normalizeOrigin(deps.origin);
     let inFlight: Promise<PushRegistration | null> | null = null;
 
     async function register(): Promise<PushRegistration | null> {
-        if (!instance || instance !== deps.origin) throw new BridgeError('instance_origin_invalid');
-
-        let perm = await deps.push.checkPermissions();
-        if (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale') {
-            perm = await deps.push.requestPermissions();
+        // No arguments: native decides the token and the instance origin.
+        const res = await deps.shell.registerPush();
+        if (!res || res.registered !== true) return null;
+        if (res.relay !== relay || res.platform !== deps.platform || typeof res.handle !== 'string' || !HANDLE_PATTERN.test(res.handle)) {
+            throw new BridgeError('native_register_invalid');
         }
-        if (perm.receive !== 'granted') return null;
-
-        const token = await obtainToken(deps.push, deps.tokenTimeoutMs ?? 20_000);
-
-        const res = await deps.http.request({
-            url: `${relay}/v1/register`,
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            data: { platform: deps.platform, token, instance },
-            connectTimeout: 10_000,
-            readTimeout: 10_000,
-        });
-        const handle = jsonBody(res.data)?.handle;
-        if (res.status !== 201 || typeof handle !== 'string' || !HANDLE_PATTERN.test(handle)) {
-            throw new BridgeError(`relay_register_failed: ${res.status}`);
-        }
-        await deps.kv.set({ key: handleKey(instance), value: handle });
-
         let info: DeviceInfoLike = {};
         try {
             info = await deps.deviceInfo();
         } catch {
             // The label is cosmetic.
         }
-        return { relay, handle, platform: deps.platform, label: deviceLabel(info, deps.platform) };
+        return { relay, handle: res.handle, platform: deps.platform, label: deviceLabel(info, deps.platform) };
     }
 
     return Object.freeze({
@@ -142,11 +88,10 @@ export function createAgoraNative(deps: BridgeDeps): AgoraNative {
             return inFlight;
         },
         async unregisterPush(handle: string): Promise<void> {
-            if (!instance) throw new BridgeError('instance_origin_invalid');
-            await deleteRelayHandle(deps.http, relay, handle);
-            const stored = (await deps.kv.get({ key: handleKey(instance) })).value;
-            if (stored === handle) await deps.kv.remove({ key: handleKey(instance) });
-            // The device token itself stays registered: other saved servers may use it.
+            if (typeof handle !== 'string' || !HANDLE_PATTERN.test(handle)) throw new BridgeError('handle_invalid');
+            // Native deletes it only if it is this origin's handle. The device token itself
+            // stays registered: other saved servers may use it.
+            await deps.shell.unregisterPush({ handle });
         },
     });
 }

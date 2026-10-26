@@ -11,64 +11,69 @@ import org.junit.Test;
 public class BridgePolicyTest {
 
     private static final String ORIGIN = "https://agora.example.com";
-    private static final String RELAY = "https://push.agora.host";
 
-    private static boolean allow(String plugin, String method, String event, String key, String url) {
-        return BridgePolicy.allowRemote(ORIGIN, RELAY, plugin, method, event, key, url);
+    private static boolean allow(String plugin, String method, String event) {
+        return BridgePolicy.allowRemote(ORIGIN, plugin, method, event);
     }
 
     @Test
-    public void pushRegistrationIsAllowed() {
-        assertTrue(allow("PushNotifications", "checkPermissions", null, null, null));
-        assertTrue(allow("PushNotifications", "requestPermissions", null, null, null));
-        assertTrue(allow("PushNotifications", "register", null, null, null));
-        assertTrue(allow("PushNotifications", "addListener", "registration", null, null));
-        assertTrue(allow("PushNotifications", "addListener", "pushNotificationActionPerformed", null, null));
+    public void pushRegistrationIsNativeOnly() {
+        assertTrue(allow("AgoraShell", "registerPush", null));
+        assertTrue(allow("AgoraShell", "unregisterPush", null));
+        assertTrue(allow("AgoraShell", "hasPushHandle", null));
+        // The page never gets the device token: no register, no token listeners.
+        assertFalse(allow("PushNotifications", "register", null));
+        assertFalse(allow("PushNotifications", "checkPermissions", null));
+        assertFalse(allow("PushNotifications", "requestPermissions", null));
+        assertFalse(allow("PushNotifications", "addListener", "registration"));
+        assertFalse(allow("PushNotifications", "addListener", "registrationError"));
+    }
+
+    @Test
+    public void tapsAreTheOnlyEvent() {
+        assertTrue(allow("PushNotifications", "addListener", "pushNotificationActionPerformed"));
+        assertTrue(allow("PushNotifications", "removeListener", null));
+        assertTrue(allow("PushNotifications", "removeAllListeners", null));
+        assertFalse(allow("PushNotifications", "addListener", "pushNotificationReceived"));
+        assertFalse(allow("PushNotifications", "addListener", null));
+        assertFalse(allow("Device", "addListener", "pushNotificationActionPerformed"));
     }
 
     @Test
     public void otherPushCallsAreRefused() {
         // Unregistering would kill the token every saved server shares.
-        assertFalse(allow("PushNotifications", "unregister", null, null, null));
-        assertFalse(allow("PushNotifications", "addListener", "pushNotificationReceived", null, null));
-        assertFalse(allow("PushNotifications", "getDeliveredNotifications", null, null, null));
-        assertFalse(allow("PushNotifications", "createChannel", null, null, null));
+        assertFalse(allow("PushNotifications", "unregister", null));
+        assertFalse(allow("PushNotifications", "getDeliveredNotifications", null));
+        assertFalse(allow("PushNotifications", "createChannel", null));
     }
 
     @Test
-    public void preferencesOnlyForOwnHandle() {
-        assertTrue(allow("Preferences", "get", null, "agora.push." + ORIGIN, null));
-        assertTrue(allow("Preferences", "set", null, "agora.push." + ORIGIN, null));
-        assertFalse(allow("Preferences", "get", null, "agora.push.https://other.example.com", null));
-        assertFalse(allow("Preferences", "set", null, "agora.servers", null));
-        assertFalse(allow("Preferences", "keys", null, null, null));
-        assertFalse(allow("Preferences", "configure", null, null, null));
-        assertFalse(allow("Preferences", "clear", null, null, null));
-    }
-
-    @Test
-    public void httpOnlyToTheRelay() {
-        assertTrue(allow("CapacitorHttp", "request", null, null, RELAY + "/v1/register"));
-        assertTrue(allow("CapacitorHttp", "request", null, null, RELAY + "/v1/handles"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, RELAY + "/v2/register"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, RELAY + "/v1/../admin"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, RELAY + "/v1/%2e%2e/admin"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, "http://push.agora.host/v1/register"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, "https://push.agora.host.evil.com/v1/register"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, "https://user@push.agora.host/v1/register"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, "http://192.168.1.1/"));
-        assertFalse(allow("CapacitorHttp", "request", null, null, null));
+    public void noPreferencesOrNativeHttp() {
+        assertFalse(allow("Preferences", "get", null));
+        assertFalse(allow("Preferences", "set", null));
+        assertFalse(allow("Preferences", "remove", null));
+        assertFalse(allow("CapacitorHttp", "request", null));
     }
 
     @Test
     public void everythingElseIsRefused() {
-        assertTrue(allow("Device", "getInfo", null, null, null));
-        assertFalse(allow("Device", "getId", null, null, null));
-        assertFalse(allow("AgoraShell", "serversChanged", null, null, null));
-        assertFalse(allow("AgoraShell", "getLaunchState", null, null, null));
-        assertFalse(allow("CapacitorCookies", "setCookie", null, null, null));
-        assertFalse(allow("WebView", "setServerBasePath", null, null, null));
-        assertFalse(allow(null, "getInfo", null, null, null));
+        assertTrue(allow("Device", "getInfo", null));
+        assertTrue(allow("Console", "log", null));
+        assertFalse(allow("Device", "getId", null));
+        assertFalse(allow("AgoraShell", "serversChanged", null));
+        assertFalse(allow("AgoraShell", "getLaunchState", null));
+        assertFalse(allow("AgoraShell", "requestPermissions", null));
+        assertFalse(allow("CapacitorCookies", "setCookie", null));
+        assertFalse(allow("WebView", "setServerBasePath", null));
+        assertFalse(allow(null, "getInfo", null));
+        assertFalse(BridgePolicy.allowRemote(null, "Device", "getInfo", null));
+    }
+
+    @Test
+    public void namesCannotBeSplicedTogether() {
+        assertFalse(allow("Device.getInfo", "", null));
+        assertFalse(allow("AgoraShell.registerPush", "x", null));
+        assertFalse(allow("AgoraShell", "registerPush.x", null));
     }
 
     @Test

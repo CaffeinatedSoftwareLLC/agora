@@ -41,7 +41,8 @@ class AgoraBridgeViewController: CAPBridgeViewController {
 }
 
 /// Forwards bridge messages to Capacitor only from the main frame of the picker or
-/// a saved server, and from a saved server only what BridgePolicy allows.
+/// a saved server, and from a saved server only what BridgePolicy allows. AgoraShell's
+/// push calls from a saved server run natively for that frame's security origin.
 final class FilteringMessageHandler: NSObject, WKScriptMessageHandler {
     private weak var target: WebViewDelegationHandler?
     private let shell: AgoraShellPlugin
@@ -71,26 +72,43 @@ final class FilteringMessageHandler: NSObject, WKScriptMessageHandler {
         let pluginId = body["pluginId"] as? String ?? ""
         let methodName = body["methodName"] as? String ?? ""
         let options = body["options"] as? [String: Any] ?? [:]
-        if BridgePolicy.allowRemote(origin: origin, relayOrigin: shell.relayOrigin, pluginId: pluginId, methodName: methodName, options: options) {
+        if BridgePolicy.allowRemote(origin: origin, pluginId: pluginId, methodName: methodName, options: options) {
+            if pluginId == "AgoraShell" {
+                // Push registration: run natively for the origin WebKit reported, never one from the page.
+                let webView = message.webView
+                shell.runPageCall(methodName: methodName, origin: origin, options: options) { result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success(let data):
+                            FilteringMessageHandler.settle(body: body, success: true, payload: data, origin: origin, in: webView)
+                        case .failure(let failure):
+                            FilteringMessageHandler.settle(body: body, success: false, payload: ["message": failure.message], origin: origin, in: webView)
+                        }
+                    }
+                }
+                return
+            }
             target.userContentController(userContentController, didReceive: message)
             return
         }
         CAPLog.print("AgoraShell: refused \(pluginId).\(methodName) from \(origin)")
-        reject(body: body, in: message.webView)
+        FilteringMessageHandler.settle(body: body, success: false, payload: ["message": "Not available to this page"], origin: origin, in: message.webView)
     }
 
-    /// Settle the page's promise instead of leaving it pending.
-    private func reject(body: [String: Any], in webView: WKWebView?) {
-        let result: [String: Any] = [
+    /// Settle the page's promise, only while the page shown is still on the origin that called
+    /// (a push handle must never reach another server's page). Main thread.
+    private static func settle(body: [String: Any], success: Bool, payload: [String: Any], origin: String, in webView: WKWebView?) {
+        guard let webView = webView, Origins.httpsOrigin(webView.url) == origin else { return }
+        var result: [String: Any] = [
             "callbackId": body["callbackId"] as? String ?? "",
             "pluginId": body["pluginId"] as? String ?? "",
             "methodName": body["methodName"] as? String ?? "",
-            "success": false,
-            "error": ["message": "Not available to this page"]
+            "success": success
         ]
+        result[success ? "data" : "error"] = payload
         guard let data = try? JSONSerialization.data(withJSONObject: result),
               let json = String(data: data, encoding: .utf8) else { return }
-        webView?.evaluateJavaScript("window.Capacitor.fromNative(\(json))")
+        webView.evaluateJavaScript("window.Capacitor.fromNative(\(json))")
     }
 }
 

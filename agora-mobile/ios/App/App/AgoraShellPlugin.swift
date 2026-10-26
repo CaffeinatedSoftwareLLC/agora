@@ -1,6 +1,8 @@
 import Foundation
 import UIKit
 import WebKit
+import CryptoKit
+import UserNotifications
 import Capacitor
 
 /// Origin helpers. Mirrors normalizeOrigin() in src/lib/origin.ts and Origins.java.
@@ -39,40 +41,102 @@ enum Origins {
     }
 }
 
-/// Which native calls a saved instance page may make. Keep in step with BridgePolicy.java.
+/// Which native calls a saved instance page may make. Push registration runs in native
+/// code (AgoraShell.registerPush), so pages never see the device token and cannot reach
+/// the relay or Preferences themselves.
+///
+/// Keep remoteCalls and remoteEvents identical to BridgePolicy.java:
+/// test/consistency.test.ts compares the two lists.
 enum BridgePolicy {
     static let handleKeyPrefix = "agora.push."
-    private static let pushMethods: Set<String> = ["checkPermissions", "requestPermissions", "register", "addListener", "removeListener", "removeAllListeners"]
-    private static let pushEvents: Set<String> = ["registration", "registrationError", "pushNotificationActionPerformed"]
-    private static let preferenceMethods: Set<String> = ["get", "set", "remove"]
 
-    static func allowRemote(origin: String, relayOrigin: String?, pluginId: String, methodName: String, options: [String: Any]) -> Bool {
-        switch pluginId {
-        case "PushNotifications":
-            guard pushMethods.contains(methodName) else { return false }
-            return methodName != "addListener" || pushEvents.contains(options["eventName"] as? String ?? "")
-        case "Device":
-            return methodName == "getInfo"
-        case "Preferences":
-            return preferenceMethods.contains(methodName) && (options["key"] as? String) == handleKeyPrefix + origin
-        case "CapacitorHttp":
-            return methodName == "request" && isRelayUrl(options["url"] as? String, relayOrigin: relayOrigin)
-        case "Console":
-            return true
-        default:
-            return false
-        }
-    }
+    /// Every call an instance page may make, as "pluginId.methodName".
+    static let remoteCalls: Set<String> = [
+        "AgoraShell.registerPush",
+        "AgoraShell.unregisterPush",
+        "AgoraShell.hasPushHandle",
+        "PushNotifications.addListener",
+        "PushNotifications.removeListener",
+        "PushNotifications.removeAllListeners",
+        "Device.getInfo",
+        "Console.log"
+    ]
 
-    static func isRelayUrl(_ string: String?, relayOrigin: String?) -> Bool {
-        guard let string = string, let relayOrigin = relayOrigin,
-              let components = URLComponents(string: string),
-              Origins.httpsOrigin(string) == relayOrigin, components.fragment == nil else { return false }
-        let path = components.percentEncodedPath
-        if !path.hasPrefix("/v1/") || path.contains("/../") || path.contains("/./") || path.hasSuffix("/..") || path.lowercased().contains("%2e") {
-            return false
+    /// The only events an instance page may listen for, as "pluginId.eventName".
+    static let remoteEvents: Set<String> = [
+        "PushNotifications.pushNotificationActionPerformed"
+    ]
+
+    static func allowRemote(origin: String, pluginId: String, methodName: String, options: [String: Any]) -> Bool {
+        guard !origin.isEmpty, !pluginId.contains("."), !methodName.contains("."),
+              remoteCalls.contains("\(pluginId).\(methodName)") else { return false }
+        if methodName == "addListener" {
+            guard let eventName = options["eventName"] as? String else { return false }
+            return remoteEvents.contains("\(pluginId).\(eventName)")
         }
         return true
+    }
+}
+
+struct PushFailure: Error {
+    let message: String
+    init(_ message: String) { self.message = message }
+}
+
+/// The relay side of push registration (docs/planning/mobile-apps.md section 8). Mirrors PushRelay.java.
+enum PushRelay {
+    private static let handleCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+
+    /// 32 random bytes, base64url, no padding.
+    static func isHandle(_ value: String?) -> Bool {
+        guard let value = value, value.unicodeScalars.count == 43 else { return false }
+        return value.unicodeScalars.allSatisfy { handleCharacters.contains($0) }
+    }
+
+    /// The relay issues a new handle on every /v1/register, and the instance keeps one device
+    /// row per handle: reuse the stored handle while the device token is unchanged.
+    static func canReuse(storedHandle: String?, storedTokenHash: String?, tokenHash: String) -> Bool {
+        guard let storedTokenHash = storedTokenHash else { return false }
+        return isHandle(storedHandle) && storedTokenHash == tokenHash
+    }
+
+    /// unregisterPush only deletes the handle registered for the calling origin.
+    static func mayUnregister(handle: String?, storedHandle: String?) -> Bool {
+        guard let handle = handle else { return false }
+        return isHandle(handle) && handle == storedHandle
+    }
+
+    /// Lower-case hex SHA-256, so the token itself is never stored by the shell.
+    static func sha256(_ value: String) -> String {
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The handle from a /v1/register answer, or nil unless it is a 201 with a well-formed handle.
+    static func handle(status: Int, data: Data) -> String? {
+        guard status == 201,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let handle = object["handle"] as? String, isHandle(handle) else { return nil }
+        return handle
+    }
+
+    /// One request to the relay. Blocking: call on AgoraShellPlugin's push queue only.
+    static func send(relay: String, method: String, path: String, bearer: String?, body: [String: Any]?) -> (status: Int, data: Data)? {
+        guard let url = URL(string: relay + path) else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        request.httpMethod = method
+        if let bearer = bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
+        if let body = body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        }
+        let done = DispatchSemaphore(value: 0)
+        var result: (status: Int, data: Data)?
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            if let http = response as? HTTPURLResponse { result = (http.statusCode, data ?? Data()) }
+            done.signal()
+        }.resume()
+        done.wait()
+        return result
     }
 }
 
@@ -80,23 +144,40 @@ extension Notification.Name {
     static let agoraShowServerList = Notification.Name("AgoraShowServerList")
 }
 
-/// The shell's native plugin: navigation lock, launch state and saved-server refresh.
-/// Instance pages cannot call it (BridgePolicy); the bundled picker can.
+/// The shell's native plugin: navigation lock, launch state, saved-server refresh, and
+/// push registration for instance pages. getLaunchState and serversChanged are for the
+/// bundled picker (BridgePolicy refuses them to instance pages). The push methods are
+/// called by the bridge filter with the origin WebKit reported for the calling page
+/// (AgoraBridgeViewController.swift); the @objc versions refuse the picker.
 @objc(AgoraShellPlugin)
 public class AgoraShellPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AgoraShellPlugin"
     public let jsName = "AgoraShell"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "getLaunchState", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "serversChanged", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "serversChanged", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "registerPush", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "unregisterPush", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hasPushHandle", returnType: CAPPluginReturnPromise)
     ]
 
     /// Set when the app was launched from the "Switch server" quick action.
     static var launchedForServerList = false
 
+    /// Capacitor Preferences keeps its keys in UserDefaults under this prefix; the picker reads handles there.
+    private static let preferencesPrefix = "CapacitorStorage."
+    /// Native-only: SHA-256 of the device token each origin's handle was registered with. No page reads it.
+    private static let tokenHashPrefix = "AgoraShell.pushTokenHash."
+    private static let pageOnly = "Only a saved server's page can use this"
+
     private let lock = NSLock()
     private var autoOpenUsed = false
     private var saved: Set<String> = Origins.saved()
+    /// Serialises relay registrations, so two calls for one origin never interleave.
+    private let pushQueue = DispatchQueue(label: "com.caffeinatedsoftware.agora.push")
+    /// Main thread only.
+    private var tokenWaiters: [(Result<String, PushFailure>) -> Void] = []
+    private var tokenTimeout: DispatchWorkItem?
 
     var savedOrigins: Set<String> {
         lock.lock(); defer { lock.unlock() }
@@ -108,6 +189,11 @@ public class AgoraShellPlugin: CAPPlugin, CAPBridgedPlugin {
     override public func load() {
         if AgoraShellPlugin.launchedForServerList { autoOpenUsed = true }
         NotificationCenter.default.addObserver(self, selector: #selector(showServerList), name: .agoraShowServerList, object: nil)
+        // AppDelegate posts the APNs token here; the push plugin sees it too but has no page listeners for it.
+        NotificationCenter.default.addObserver(self, selector: #selector(didRegisterForRemoteNotifications(_:)),
+                                               name: .capacitorDidRegisterForRemoteNotifications, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(didFailToRegisterForRemoteNotifications(_:)),
+                                               name: .capacitorDidFailToRegisterForRemoteNotifications, object: nil)
     }
 
     @objc func getLaunchState(_ call: CAPPluginCall) {
@@ -124,11 +210,173 @@ public class AgoraShellPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve()
     }
 
+    // Reached only from the picker: instance pages' calls are run by the bridge filter.
+    @objc func registerPush(_ call: CAPPluginCall) { call.reject(AgoraShellPlugin.pageOnly) }
+    @objc func unregisterPush(_ call: CAPPluginCall) { call.reject(AgoraShellPlugin.pageOnly) }
+    @objc func hasPushHandle(_ call: CAPPluginCall) { call.reject(AgoraShellPlugin.pageOnly) }
+
     @objc private func showServerList() {
         lock.lock(); autoOpenUsed = true; lock.unlock()
         DispatchQueue.main.async { [weak self] in
             guard let bridge = self?.bridge, let webView = bridge.webView else { return }
             webView.load(URLRequest(url: bridge.config.appStartServerURL))
+        }
+    }
+
+    // MARK: Push registration for instance pages
+
+    /// Run an AgoraShell push call for `origin`, the calling page's origin as WebKit reported it.
+    /// `completion` gets the result data or an error message, on any thread.
+    func runPageCall(methodName: String, origin: String, options: [String: Any],
+                     completion: @escaping (Result<[String: Any], PushFailure>) -> Void) {
+        switch methodName {
+        case "registerPush":
+            registerPush(origin: origin, completion: completion)
+        case "unregisterPush":
+            unregisterPush(origin: origin, handle: options["handle"] as? String, completion: completion)
+        case "hasPushHandle":
+            let handle = UserDefaults.standard.string(forKey: AgoraShellPlugin.handleKey(origin))
+            completion(.success(["value": PushRelay.isHandle(handle)]))
+        default:
+            completion(.failure(PushFailure("Not available to this page")))
+        }
+    }
+
+    private static func handleKey(_ origin: String) -> String {
+        return preferencesPrefix + BridgePolicy.handleKeyPrefix + origin
+    }
+
+    private func registerPush(origin: String, completion: @escaping (Result<[String: Any], PushFailure>) -> Void) {
+        guard let relay = relayOrigin else { return completion(.failure(PushFailure("relay_url_invalid"))) }
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { [weak self] settings in
+            guard let self = self else { return }
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                    if granted {
+                        self.registerWithToken(origin: origin, relay: relay, completion: completion)
+                    } else {
+                        completion(.success(["registered": false]))
+                    }
+                }
+            case .denied:
+                completion(.success(["registered": false]))
+            default:
+                self.registerWithToken(origin: origin, relay: relay, completion: completion)
+            }
+        }
+    }
+
+    private func registerWithToken(origin: String, relay: String, completion: @escaping (Result<[String: Any], PushFailure>) -> Void) {
+        deviceToken { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .failure(let failure):
+                completion(.failure(failure))
+            case .success(let token):
+                self.pushQueue.async {
+                    completion(self.registerWithRelay(origin: origin, relay: relay, token: token))
+                }
+            }
+        }
+    }
+
+    /// On pushQueue. Reuses the stored handle while the token is unchanged (the relay issues a new handle per call).
+    private func registerWithRelay(origin: String, relay: String, token: String) -> Result<[String: Any], PushFailure> {
+        let defaults = UserDefaults.standard
+        let handleKey = AgoraShellPlugin.handleKey(origin)
+        let hashKey = AgoraShellPlugin.tokenHashPrefix + origin
+        let tokenHash = PushRelay.sha256(token)
+        let oldHandle = defaults.string(forKey: handleKey)
+        if let old = oldHandle, PushRelay.canReuse(storedHandle: old, storedTokenHash: defaults.string(forKey: hashKey), tokenHash: tokenHash) {
+            return .success(registration(relay: relay, handle: old))
+        }
+        let body: [String: Any] = ["platform": "ios", "token": token, "instance": origin]
+        guard let response = PushRelay.send(relay: relay, method: "POST", path: "/v1/register", bearer: nil, body: body) else {
+            return .failure(PushFailure("relay_register_failed: network"))
+        }
+        guard let handle = PushRelay.handle(status: response.status, data: response.data) else {
+            return .failure(PushFailure("relay_register_failed: \(response.status)"))
+        }
+        defaults.set(handle, forKey: handleKey)
+        defaults.set(tokenHash, forKey: hashKey)
+        if let old = oldHandle, PushRelay.isHandle(old), old != handle {
+            // The token changed: the old handle points at a dead token. Best effort.
+            _ = PushRelay.send(relay: relay, method: "DELETE", path: "/v1/handles", bearer: old, body: nil)
+        }
+        return .success(registration(relay: relay, handle: handle))
+    }
+
+    private func unregisterPush(origin: String, handle: String?, completion: @escaping (Result<[String: Any], PushFailure>) -> Void) {
+        guard let handle = handle, PushRelay.isHandle(handle) else { return completion(.failure(PushFailure("handle_invalid"))) }
+        guard let relay = relayOrigin else { return completion(.failure(PushFailure("relay_url_invalid"))) }
+        pushQueue.async {
+            let defaults = UserDefaults.standard
+            let handleKey = AgoraShellPlugin.handleKey(origin)
+            guard PushRelay.mayUnregister(handle: handle, storedHandle: defaults.string(forKey: handleKey)) else {
+                return completion(.failure(PushFailure("handle_not_registered")))
+            }
+            guard let response = PushRelay.send(relay: relay, method: "DELETE", path: "/v1/handles", bearer: handle, body: nil) else {
+                return completion(.failure(PushFailure("relay_unregister_failed: network")))
+            }
+            guard response.status == 204 || response.status == 401 else {
+                return completion(.failure(PushFailure("relay_unregister_failed: \(response.status)")))
+            }
+            defaults.removeObject(forKey: handleKey)
+            defaults.removeObject(forKey: AgoraShellPlugin.tokenHashPrefix + origin)
+            // The device token itself stays registered: other saved servers may use it.
+            completion(.success([:]))
+        }
+    }
+
+    private func registration(relay: String, handle: String) -> [String: Any] {
+        return ["registered": true, "relay": relay, "handle": handle, "platform": "ios"]
+    }
+
+    /// The APNs token, from AppDelegate's didRegisterForRemoteNotifications. Never handed to a page.
+    private func deviceToken(_ completion: @escaping (Result<String, PushFailure>) -> Void) {
+        DispatchQueue.main.async {
+            self.tokenWaiters.append(completion)
+            guard self.tokenWaiters.count == 1 else { return }
+            let timeout = DispatchWorkItem { [weak self] in
+                self?.finishTokenWait(.failure(PushFailure("push_token_timeout")))
+            }
+            self.tokenTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    /// Main thread.
+    private func finishTokenWait(_ result: Result<String, PushFailure>) {
+        tokenTimeout?.cancel()
+        tokenTimeout = nil
+        let waiters = tokenWaiters
+        tokenWaiters = []
+        waiters.forEach { $0(result) }
+    }
+
+    @objc private func didRegisterForRemoteNotifications(_ notification: Notification) {
+        var token: String?
+        if let data = notification.object as? Data {
+            token = data.map { String(format: "%02X", $0) }.joined()
+        } else if let string = notification.object as? String {
+            token = string
+        }
+        DispatchQueue.main.async {
+            if let token = token, !token.isEmpty {
+                self.finishTokenWait(.success(token))
+            } else {
+                self.finishTokenWait(.failure(PushFailure("push_token_empty")))
+            }
+        }
+    }
+
+    @objc private func didFailToRegisterForRemoteNotifications(_ notification: Notification) {
+        let message = (notification.object as? Error)?.localizedDescription ?? "unknown"
+        DispatchQueue.main.async {
+            self.finishTokenWait(.failure(PushFailure("push_registration_failed: \(message)")))
         }
     }
 

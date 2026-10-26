@@ -1,38 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
 import { install, type InstallDeps, type InstanceWindow } from '../src/inject/install';
-import { handleKey } from '../src/lib/servers';
-import { fakeHttp, memoryKv } from './helpers';
 
 const ORIGIN = 'https://a.example.com';
-const HANDLE = 'H'.repeat(43);
 
 function fakeWindow(origin: string, localUrl = 'https://localhost'): InstanceWindow & { assign: ReturnType<typeof vi.fn> } {
     const assign = vi.fn();
     return { location: { origin, href: `${origin}/app/01Z`, assign }, WEBVIEW_SERVER_URL: localUrl, assign };
 }
 
-function deps(overrides: Partial<InstallDeps> = {}) {
+function deps(overrides: Partial<InstallDeps> = {}, hasHandle = true) {
     let tap: ((action: unknown) => Promise<void>) | undefined;
-    const kv = memoryKv({ [handleKey(ORIGIN)]: HANDLE });
+    const events: string[] = [];
+    const shell = {
+        registerPush: vi.fn(),
+        unregisterPush: vi.fn(),
+        hasPushHandle: vi.fn(async () => ({ value: hasHandle })),
+    };
     const d: InstallDeps = {
         platform: 'android',
         version: '0.1.0',
         relayUrl: 'https://push.agora.host',
+        shell,
         push: {
-            checkPermissions: vi.fn(),
-            requestPermissions: vi.fn(),
-            register: vi.fn(),
             addListener: vi.fn(async (event: string, cb: (a: unknown) => Promise<void>) => {
+                events.push(event);
                 if (event === 'pushNotificationActionPerformed') tap = cb;
                 return { remove: async () => undefined };
             }),
         } as unknown as InstallDeps['push'],
-        http: fakeHttp({}),
-        kv,
         deviceInfo: async () => ({}),
         ...overrides,
     };
-    return { d, kv, tap: (action: unknown) => tap!(action) };
+    return { d, shell, events, tap: (action: unknown) => tap!(action) };
 }
 
 describe('install', () => {
@@ -44,6 +43,12 @@ describe('install', () => {
         expect(() => { 'use strict'; (win as { AgoraNative?: unknown }).AgoraNative = {}; }).toThrow(TypeError);
         expect(win.AgoraNative).toBe(native);
         expect(install(win, deps().d)).toBe(false);
+    });
+
+    it('listens only for notification taps, never for the device token', () => {
+        const { d, events } = deps();
+        install(fakeWindow(ORIGIN), d);
+        expect(events).toEqual(['pushNotificationActionPerformed']);
     });
 
     it.each([
@@ -64,9 +69,10 @@ describe('install', () => {
 
     it('opens a tapped notification for this instance in place', async () => {
         const win = fakeWindow(ORIGIN);
-        const { d, tap } = deps();
+        const { d, tap, shell } = deps();
         install(win, d);
         await tap({ actionId: 'tap', notification: { data: { instance: ORIGIN, url: '/app/01A?thread=01B', type: 'mention' } } });
+        expect(shell.hasPushHandle).toHaveBeenCalled();
         expect(win.assign).toHaveBeenCalledWith('https://a.example.com/app/01A?thread=01B');
     });
 
@@ -82,12 +88,27 @@ describe('install', () => {
         expect(decodeURIComponent(target)).toContain('"from":"https://a.example.com/app/01Z"');
     });
 
-    it('ignores a tap with an off-origin url or no handle', async () => {
+    it('ignores a tap with an off-origin url', async () => {
         const win = fakeWindow(ORIGIN);
-        const { d, kv, tap } = deps();
+        const { d, tap } = deps();
         install(win, d);
         await tap({ notification: { data: { instance: ORIGIN, url: 'https://evil.com/' } } });
-        kv.data.clear();
+        expect(win.assign).not.toHaveBeenCalled();
+    });
+
+    it('ignores a tap for this instance when the device has no handle for it', async () => {
+        const win = fakeWindow(ORIGIN);
+        const { d, tap } = deps({}, false);
+        install(win, d);
+        await tap({ notification: { data: { instance: ORIGIN, url: '/app/01A' } } });
+        expect(win.assign).not.toHaveBeenCalled();
+    });
+
+    it('ignores a tap for this instance when the native check fails', async () => {
+        const win = fakeWindow(ORIGIN);
+        const { d, tap, shell } = deps();
+        shell.hasPushHandle.mockRejectedValueOnce(new Error('Not available to this page'));
+        install(win, d);
         await tap({ notification: { data: { instance: ORIGIN, url: '/app/01A' } } });
         expect(win.assign).not.toHaveBeenCalled();
     });

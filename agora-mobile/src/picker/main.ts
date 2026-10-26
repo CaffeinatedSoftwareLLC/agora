@@ -1,4 +1,4 @@
-import { CapacitorHttp } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { RELAY_URL } from '../config';
@@ -8,6 +8,7 @@ import { probeInstance, ProbeError } from '../lib/probe';
 import { handleKey, ServerStore, type SavedServer } from '../lib/servers';
 import { AgoraShell } from '../lib/shell';
 import { pushData, readPickerOpen, returnUrl } from '../lib/taps';
+import { nativeBridgeMissing, WEBVIEW_TOO_OLD } from '../lib/webview';
 
 const store = new ServerStore(Preferences);
 const http = { request: (o: Parameters<typeof CapacitorHttp.request>[0]) => CapacitorHttp.request(o) };
@@ -140,4 +141,17 @@ async function start(): Promise<void> {
     if (target) await open(target.origin);
 }
 
-void start();
+/** The shell could not scope the bridge (old Android WebView): say what to update, and offer nothing that needs native code. */
+function showWebViewTooOld(): void {
+    list.hidden = true;
+    empty.hidden = true;
+    form.hidden = true;
+    const lead = document.querySelector('.lead');
+    if (lead) lead.textContent = WEBVIEW_TOO_OLD;
+}
+
+if (nativeBridgeMissing(window as unknown as { WEBVIEW_SERVER_URL?: unknown }, Capacitor.isNativePlatform())) {
+    showWebViewTooOld();
+} else {
+    void start();
+}

@@ -1,76 +1,59 @@
 package com.caffeinatedsoftware.agora;
 
-import java.net.URI;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
 /**
  * Which native calls a saved instance page may make. The bundled picker page may
  * call anything; an instance page only what window.AgoraNative needs
- * (src/inject/agora-native.ts). Keep in step with BridgePolicy.swift.
+ * (src/inject/agora-native.ts). Push registration runs in native code
+ * (AgoraShell.registerPush), so pages never see the device token and cannot
+ * reach the relay or Preferences themselves.
+ *
+ * Keep REMOTE_CALLS and REMOTE_EVENTS identical to BridgePolicy in
+ * AgoraShellPlugin.swift: test/consistency.test.ts compares the two lists.
  */
 final class BridgePolicy {
 
     /** Prefix of the per-instance push handle key; see HANDLE_KEY_PREFIX in src/lib/servers.ts. */
     static final String HANDLE_KEY_PREFIX = "agora.push.";
 
-    private static final Set<String> PUSH_METHODS = new HashSet<>(
-        Arrays.asList("checkPermissions", "requestPermissions", "register", "addListener", "removeListener", "removeAllListeners")
+    /** Every call an instance page may make, as "pluginId.methodName". */
+    static final Set<String> REMOTE_CALLS = setOf(
+        "AgoraShell.registerPush",
+        "AgoraShell.unregisterPush",
+        "AgoraShell.hasPushHandle",
+        "PushNotifications.addListener",
+        "PushNotifications.removeListener",
+        "PushNotifications.removeAllListeners",
+        "Device.getInfo",
+        "Console.log"
     );
-    private static final Set<String> PUSH_EVENTS = new HashSet<>(
-        Arrays.asList("registration", "registrationError", "pushNotificationActionPerformed")
+
+    /** The only events an instance page may listen for, as "pluginId.eventName". */
+    static final Set<String> REMOTE_EVENTS = setOf(
+        "PushNotifications.pushNotificationActionPerformed"
     );
-    private static final Set<String> PREFERENCE_METHODS = new HashSet<>(Arrays.asList("get", "set", "remove"));
 
     private BridgePolicy() {}
 
     /**
-     * @param origin      the calling page's origin (a saved server)
-     * @param relayOrigin the push relay origin from the AgoraShell config
-     * @param eventName   options.eventName, for addListener
-     * @param key         options.key, for Preferences
-     * @param url         options.url, for CapacitorHttp
+     * @param origin    the calling page's origin (a saved server)
+     * @param eventName options.eventName, for addListener
      */
-    static boolean allowRemote(
-        String origin,
-        String relayOrigin,
-        String pluginId,
-        String methodName,
-        String eventName,
-        String key,
-        String url
-    ) {
+    static boolean allowRemote(String origin, String pluginId, String methodName, String eventName) {
         if (origin == null || pluginId == null || methodName == null) return false;
-        switch (pluginId) {
-            case "PushNotifications":
-                if (!PUSH_METHODS.contains(methodName)) return false;
-                return !methodName.equals("addListener") || PUSH_EVENTS.contains(eventName);
-            case "Device":
-                return methodName.equals("getInfo");
-            case "Preferences":
-                // Only this instance's own push handle.
-                return PREFERENCE_METHODS.contains(methodName) && (HANDLE_KEY_PREFIX + origin).equals(key);
-            case "CapacitorHttp":
-                return methodName.equals("request") && isRelayUrl(url, relayOrigin);
-            default:
-                return false;
+        if (pluginId.contains(".") || methodName.contains(".")) return false;
+        if (!REMOTE_CALLS.contains(pluginId + "." + methodName)) return false;
+        if (methodName.equals("addListener")) {
+            return eventName != null && REMOTE_EVENTS.contains(pluginId + "." + eventName);
         }
+        return true;
     }
 
-    /** True for an https URL on the relay origin whose path is under /v1/ with no dot segments. */
-    static boolean isRelayUrl(String url, String relayOrigin) {
-        if (url == null || relayOrigin == null) return false;
-        String origin = Origins.httpsOrigin(url);
-        if (origin == null || !origin.equals(relayOrigin)) return false;
-        try {
-            URI uri = new URI(url);
-            String path = uri.getRawPath();
-            if (path == null || !path.startsWith("/v1/")) return false;
-            if (path.contains("/../") || path.contains("/./") || path.endsWith("/..") || path.contains("%2e") || path.contains("%2E")) return false;
-            return uri.getRawFragment() == null;
-        } catch (Exception e) {
-            return false;
-        }
+    private static Set<String> setOf(String... values) {
+        return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));
     }
 }
