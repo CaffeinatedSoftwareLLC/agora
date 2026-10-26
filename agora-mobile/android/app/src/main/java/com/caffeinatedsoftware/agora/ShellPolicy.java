@@ -1,13 +1,14 @@
 package com.caffeinatedsoftware.agora;
 
+import android.webkit.PermissionRequest;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The shell's decisions that don't need a WebView: where a URL loads and whether the
- * instance bridge can be scoped. Plain Java, so the
+ * The shell's decisions that don't need a WebView: where a URL loads, whether the
+ * instance bridge can be scoped, and who gets the microphone. Plain Java, so the
  * JVM unit tests cover them.
  */
 final class ShellPolicy {
@@ -50,6 +51,21 @@ final class ShellPolicy {
         String origin = Origins.httpsOrigin(url);
         if (origin != null && saved != null && saved.contains(origin)) return remoteAllowed ? Load.WEBVIEW : Load.REFUSE;
         return Load.SYSTEM;
+    }
+
+    /**
+     * The microphone, never the camera, and only when the requesting origin is the
+     * origin of the top-level page and that is a saved server. Android does not say
+     * which frame asked, so a same-origin iframe of that page also qualifies; a
+     * sandboxed or cross-origin frame does not.
+     */
+    static boolean grantMicrophone(String requestOrigin, String topLevelUrl, String[] resources, Set<String> saved) {
+        if (resources == null || resources.length == 0 || saved == null) return false;
+        for (String resource : resources) {
+            if (!PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) return false;
+        }
+        String origin = Origins.httpsOrigin(requestOrigin);
+        return origin != null && origin.equals(Origins.httpsOrigin(topLevelUrl)) && saved.contains(origin);
     }
 
     static String scheme(String url) {

@@ -137,7 +137,10 @@ final class AgoraUIDelegate: NSObject, WKUIDelegate {
                  type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         // iOS still asks the user once for the microphone (NSMicrophoneUsageDescription).
-        if type == .microphone, frame.isMainFrame, shell.savedOrigins.contains(Origins.string(origin)) {
+        // Main frame of the saved server shown: the requesting origin must be the top-level page's.
+        let requester = Origins.string(origin)
+        if type == .microphone, frame.isMainFrame, Origins.httpsOrigin(webView.url) == requester,
+           shell.savedOrigins.contains(requester) {
             decisionHandler(.grant)
         } else {
             decisionHandler(.deny)
