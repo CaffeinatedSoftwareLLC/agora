@@ -76,6 +76,7 @@ The phases depend on each other in a chain:
 
 - The WebView only loads the configured instance origin. No remote JavaScript bridge reaches pages outside it.
 - Push payloads carry no secrets and no message text. Deep links are validated against the saved server list.
+- The device push token stays in the app's native code. Instance pages ask native code to register (section 8); the instance origin sent to the relay is the one the WebView reports for the calling page, so a saved server cannot get a handle for another one.
 - Signing keys (the Android keystore, Apple certificates, FCM and APNs credentials) stay with Eryk and the relay host. They are never committed, never sent to Agora instances, and never pasted into chat.
 
 ## 6. Not doing
@@ -100,11 +101,13 @@ The three parts are developed in parallel, so they agree on only these shapes. A
 
 ### Push relay (`agora-push-relay/`, run by Caffeinated Software)
 
-**`POST /v1/register`**, called by the app:
+**`POST /v1/register`**, called by the app's native code, never by page JavaScript:
 - Body: `{ platform: "android" | "ios", token: string, instance: "<https origin>" }`
+- `instance` is the origin of the instance page that asked, as the WebView reports it. The relay trusts it, which is why pages never see the token or choose `instance`.
 - Response: `201 { handle: string }`
 - The handle is 43 base64url characters (32 random bytes). The relay stores the device token, the platform and the instance origin under it.
-- Calling again with the same token and instance returns the same handle.
+- Every call returns a new random handle. Earlier handles stay valid until `DELETE /v1/handles`, a provider `410`, or the relay's TTL prune.
+- So the app registers once per instance and device token: it keeps each instance's handle with a SHA-256 of the token, returns the stored handle while the token is unchanged, and when the token changes registers again and deletes the old handle (best effort). The instance keeps one device row per handle, so this avoids duplicate rows and duplicate pushes.
 
 **`POST /v1/push`**, called by an instance:
 - Header: `Authorization: Bearer <handle>`
@@ -151,8 +154,11 @@ When the UI runs inside the app, the page has an object `window.AgoraNative`:
 interface AgoraNative {
   platform: 'android' | 'ios';
   version: string;
-  // Asks for notification permission if needed, registers with the relay, resolves null if denied.
+  // Native code asks for notification permission if needed and registers this page's origin
+  // with the relay (or reuses the stored handle while the device token is unchanged).
+  // Resolves null if permission is denied. The device token never reaches the page.
   registerPush(): Promise<{ relay: string; handle: string; platform: 'android' | 'ios'; label: string } | null>;
+  // Deletes the handle at the relay, only if it is the one stored for this page's origin.
   unregisterPush(handle: string): Promise<void>;
 }
 ```
