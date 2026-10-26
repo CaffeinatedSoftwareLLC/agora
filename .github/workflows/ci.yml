@@ -72,11 +72,10 @@ jobs:
           cache: npm
           cache-dependency-path: agora-ui/package-lock.json
       - run: npm ci
-      # 21 pre-existing lint errors on main; reported but not blocking until they are fixed.
       - run: npm run lint
-        continue-on-error: true
-      # Same command as agora-ui/Dockerfile. `npm run build` also runs `tsc -b`, which
-      # currently fails on test files (missing node/jest-dom types) and is not what ships.
+      # Typecheck app, test and config files (tsconfig.app, tsconfig.test, tsconfig.node).
+      - run: npx tsc -b
+      # Same command as agora-ui/Dockerfile.
       - run: npx vite build
       - run: npm test
 

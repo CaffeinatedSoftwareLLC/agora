@@ -31,8 +31,8 @@ export function RoleEditor({ role, onSave, onClose }: RoleEditorProps) {
         mentionable,
       });
       onClose();
-    } catch (e: any) {
-      setError(e.message || 'Failed to save role');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to save role');
     } finally {
       setSaving(false);
     }

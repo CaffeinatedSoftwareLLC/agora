@@ -12,13 +12,15 @@ interface CreateTokenModalProps {
 }
 
 export function CreateTokenModal({ serverId, botId, isOpen, onClose, onCreated }: CreateTokenModalProps) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [rawToken, setRawToken] = useState('');
+  // One outcome per open; "loading" is simply "open and no outcome yet", so the effect never resets state.
+  const [result, setResult] = useState<{ token: string } | { error: string } | null>(null);
+  const rawToken = result && 'token' in result ? result.token : '';
+  const error = result && 'error' in result ? result.error : '';
+  const loading = isOpen && result === null;
   const [copied, setCopied] = useState(false);
   const didFetch = useRef(false);
   const onCreatedRef = useRef(onCreated);
-  onCreatedRef.current = onCreated;
+  useEffect(() => { onCreatedRef.current = onCreated; }, [onCreated]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -28,32 +30,23 @@ export function CreateTokenModal({ serverId, botId, isOpen, onClose, onCreated }
     if (didFetch.current) return;
     didFetch.current = true;
 
-    setRawToken('');
-    setError('');
-    setCopied(false);
-    setLoading(true);
-
     let cancelled = false;
     botApi.createToken(serverId, botId)
       .then((res) => {
         if (cancelled) return;
-        setRawToken(res.token);
+        setResult({ token: res.token });
         onCreatedRef.current();
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.code : 'Failed to create token');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        setResult({ error: err instanceof ApiError ? err.code : 'Failed to create token' });
       });
 
     return () => { cancelled = true; };
   }, [isOpen, serverId, botId]);
 
   function handleClose() {
-    setRawToken('');
-    setError('');
+    setResult(null);
     setCopied(false);
     onClose();
   }

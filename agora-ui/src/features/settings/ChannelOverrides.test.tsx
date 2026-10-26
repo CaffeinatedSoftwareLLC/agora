@@ -15,7 +15,7 @@ vi.mock('../../stores/serverStore', () => ({
 describe('ChannelOverrides channel selection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(serverApi.getChannels).mockResolvedValue([{ id: 'channel-1', name: 'general' }] as any);
+    vi.mocked(serverApi.getChannels).mockResolvedValue([{ id: 'channel-1', name: 'general' }] as Awaited<ReturnType<typeof serverApi.getChannels>>);
     vi.mocked(roleApi.list).mockResolvedValue([]);
   });
 

@@ -5,24 +5,24 @@ import type { Member } from '../../lib/contracts/server';
 
 export function MemberList() {
   const instanceServerId = useServerStore(s => s.instanceServerId);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Keyed by server so a server switch shows "Loading" again without a setState inside the effect.
+  const [loaded, setLoaded] = useState<{ serverId: string; members: Member[]; error: string | null } | null>(null);
+  const current = loaded && loaded.serverId === instanceServerId ? loaded : null;
+  const members = current?.members ?? [];
+  const error = current?.error ?? null;
+  const loading = !current;
 
   useEffect(() => {
     if (!instanceServerId) return;
 
     let cancelled = false;
-    setLoading(true);
 
     serverApi.getMembers(instanceServerId).then(data => {
       if (cancelled) return;
-      setMembers(data);
-      setLoading(false);
+      setLoaded({ serverId: instanceServerId, members: data, error: null });
     }).catch(err => {
       if (cancelled) return;
-      setError(err.message || 'Failed to load members');
-      setLoading(false);
+      setLoaded({ serverId: instanceServerId, members: [], error: err.message || 'Failed to load members' });
     });
 
     return () => { cancelled = true; };

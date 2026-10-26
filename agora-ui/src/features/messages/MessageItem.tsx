@@ -136,7 +136,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
     );
   }
 
-  if (message.systemEvent === 'provider_terms') return <ProviderTermsNotice content={message.content} />;
+  if (message.systemEvent === 'provider_terms') return <ProviderTermsNotice content={message.content ?? ''} />;
 
   // Other system events (e.g. loop guard)
   if (message.systemEvent) {
@@ -196,7 +196,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <MessageContent content={message.content} />
+          <MessageContent content={message.content ?? ''} />
         )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">
@@ -259,7 +259,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <MessageContent content={message.content} />
+          <MessageContent content={message.content ?? ''} />
         )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-1">

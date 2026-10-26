@@ -142,24 +142,21 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     if (!first || !get().hasMore.get(messageId) || get().loadingReplies.get(messageId)) return Promise.resolve();
     const token = replyLoads.get(messageId);
     const generation = listGeneration;
-    let run: Promise<void> | undefined;
-    run = (async () => {
-      try {
-        const data = await api.get<MessagePayload[]>(
-          `/channels/${channelId}/messages/${messageId}/replies?limit=${REPLY_PAGE_SIZE}&order=desc&before=${first.id}`
-        );
-        if (generation !== listGeneration || replyLoads.get(messageId) !== token) return;
-        const older = [...data].reverse().map(mapReply);
-        set(state => {
-          const current = state.repliesByThread.get(messageId) ?? [];
-          const currentIds = new Set(current.map(m => m.id));
-          return { repliesByThread: new Map(state.repliesByThread).set(messageId, [...older.filter(m => !currentIds.has(m.id)), ...current]),
-            hasMore: new Map(state.hasMore).set(messageId, data.length === REPLY_PAGE_SIZE) };
-        });
-      } finally {
-        if (olderReplyLoads.get(messageId) === run) olderReplyLoads.delete(messageId);
-      }
-    })();
+    const run: Promise<void> = (async () => {
+      const data = await api.get<MessagePayload[]>(
+        `/channels/${channelId}/messages/${messageId}/replies?limit=${REPLY_PAGE_SIZE}&order=desc&before=${first.id}`
+      );
+      if (generation !== listGeneration || replyLoads.get(messageId) !== token) return;
+      const older = [...data].reverse().map(mapReply);
+      set(state => {
+        const current = state.repliesByThread.get(messageId) ?? [];
+        const currentIds = new Set(current.map(m => m.id));
+        return { repliesByThread: new Map(state.repliesByThread).set(messageId, [...older.filter(m => !currentIds.has(m.id)), ...current]),
+          hasMore: new Map(state.hasMore).set(messageId, data.length === REPLY_PAGE_SIZE) };
+      });
+    })().finally(() => {
+      if (olderReplyLoads.get(messageId) === run) olderReplyLoads.delete(messageId);
+    });
     olderReplyLoads.set(messageId, run);
     return run;
   },
