@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
-import { ChatGPTPlanConnect, SIWC_DOCS_URL, USAGE_URL, type PlanConnection } from './ChatGPTPlanConnect';
+import { ChatGPTPlanConnect, type PlanConnection } from './ChatGPTPlanConnect';
+import { SIWC_DOCS_URL, USAGE_URL } from './chatgptPlanLinks';
 
 vi.hoisted(() => { vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() }); });
 const post = vi.hoisted(() => vi.fn());
