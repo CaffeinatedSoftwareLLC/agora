@@ -4,7 +4,11 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
-- **`agora-mcp` 0.6.0** (released on its own; the app version is unchanged). Since 0.5.0:
+## 0.3.0 — 2026-10-26
+
+Everything since 0.2.0: agents woken headlessly on your own machine (agent sessions), their worktrees, budgets, approvals and hand-offs, more agent kinds (ACP, opencode on OpenRouter, Codex on a ChatGPT plan), the canvas, voice, a redesigned and phone-first UI, two rounds of security fixes, and CI with every dependency brought up to date. Migrations `033`–`068` run on start. **Read "Upgrading" before deploying over an existing install**: migration `061` stops if two usernames differ only by case.
+
+- **`agora-mcp` 0.6.0** (released on its own on 2026-10-22). Since 0.5.0:
   - **Cross-thread attention (#169, PR #194):** `chat_wait` also returns on an @mention or a protocol YIELD addressed to the agent anywhere in the channel, labelled with the source thread.
   - **Retries through API outages (#176, PR #179):** safe requests (GETs, and writes with a `client_key` or idempotency key) retry on 503 `service_unavailable` and connection resets, within 45 s.
   - `file_read` reads images, not just text and PDFs.
@@ -39,6 +43,24 @@ Notable changes to Agora. The version is the `version` field of the root `packag
   - **File search.** `GET /channels/:id/files/search`, a Files panel in the UI, a `file_search` tool in `agora-mcp`, and `searchFiles()` in `agora:std`. Returns names, tags and scores, never file text. With file ranking on, the decision model orders the results.
 - **Agents can read files.** `GET /files/:fileId/text` returns the text of a text file or PDF in pages, to members and to bots with access to the file's channel; `file_read` in `agora-mcp` and `readFileText()` in `agora:std`. It works with or without a decision model. Bots still cannot download files. A file whose text looked like it tries to instruct an AI is returned with a warning.
 - New dependency: `unpdf` (MIT), to read text from PDFs.
+- **Workspace isolation (#91).** Each hosted session works in its own git worktree on branch `agora/<profile>/<session>`, created from the workdir's HEAD, and reports its branch and head. Agents can reserve files and directories (`file_reserve`, `file_release`, `file_renew`, `file_reservations` in agora-mcp) so two sessions don't edit the same paths. After each successful run the host commits the worktree on the session branch itself, so hosted Codex can commit despite its sandbox (#121).
+- **Run visibility (#89).** A live "is working… 42s" line above the composer, the files each run changed, and per-session token budgets that shelve the session when spent.
+- **Tool presets and approvals from the phone (#92, #123).** Agent profiles get tool presets (`readonly`, `dev`, `research` or the host's own) and always-allowed rules, edited in Settings → Agents. A refused tool becomes a card the owner or a director approves or denies, from any device; on Codex app-server runs every out-of-sandbox request is answered from the profile's rules or turned into such a card. Rate-limited agents show as Sleeping with the reset time.
+- **Diff review and checkpoints (#102).** The session sheet shows the session's diff against its base, file by file, and can discard a file, commit, squash-merge or open a PR (run by agora-host). Every run that changes files is checkpointed; the owner can restore a checkpoint or fork a new session from it.
+- **Agent hand-offs (#124).** `handoff_offer`, `handoff_accept`, `handoff_decline` and `handoff_cancel` pass a thread's task, with the sender's last committed `branch@sha` and its file reservations, to another live agent, which must accept.
+- **Lurk mode (#100).** A session can listen passively (`/lurk <profile> quiet|balanced|vocal|off`, or `session_lurk`) and speak only for important corrections. Images in an agent's own channel are attached to its wake automatically.
+- **Terminal-joined agents (#114).** An agent you run in your own terminal through agora-mcp shows up as a session in its channels, with working state and reservations, and takes mentions instead of a hosted copy of itself (`/start` offers to keep the terminal or start hosted on standby).
+- **Claude Code Channel (#104).** agora-mcp can push Agora messages into a Claude Code session you opened yourself, gated to the owner and directors, with permission prompts relayed as cards.
+- **Mentions in any thread wake agents (#122)**, and mentions resolve case-insensitively. System notices collect in a drawer; consecutive agent activity and notices fold into expandable sections (#217).
+- **Single-use agent invite links (#95).** Owners and admins mint a 10-minute invite with a ready `agora-mcp` setup command instead of pasting a bot token into chat; agora-mcp swaps it for credentials on first start.
+- **agora-host autostart (#116).** `agora-host autostart enable|disable|status` installs a per-user logon task (Windows), systemd user unit (Linux) or LaunchAgent (macOS).
+- **Files for agents.** Agents read images shared in their channels (`GET /files/:id/image`, `file_read`) and download attachments in channels they were given (#119). Bots can upload files and post them, with the new `file_upload` tool in agora-mcp (#235). Thread replies take files and images, including attachment-only replies (#208). The owner can mark a file flagged for prompt injection as trusted, and undo it (#226).
+- **Threads open at the newest reply (#221)** and load older pages as you scroll up.
+- **More decision models (#233).** Cloudflare Clef / Clef Flash (Workers AI) and GreenPT Metis join TypeSafe Jev as `decide` providers.
+- **Provider terms watcher (#103).** Instance admin → Provider terms checks the policy pages Agora's guidance relies on once a day, diffs them, summarises a change with the owner's Chat route and alerts the owner.
+- **Channel agent access (#203).** An Agents control in the channel strip shows which agents can work there and lets the owner, Administrators and ManageBots holders add or remove them; `/start` explains when an agent hasn't been added.
+- **UI redesign (#69, #242).** A phone-first responsive shell (drawer and full-screen panels on phones, sheets on tablets, sidebar plus inspector on desktop), an agent console, new tokens and fonts, one account menu on the user card, and thin scrollbars. The theme is saved to the account, so it follows you across devices (#68).
+- **Phone access over Tailscale (#59).** `docker-compose.tailnet.yml` and `docs/remote-access.md`: reach your instance from your phone through `tailscale serve`, with the kill switches and an ACL that lets only the phone in.
 
 ### Upgrading
 
@@ -46,6 +68,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 - Migration `037` (agent sessions) runs on start. Nothing changes until the owner creates a host and an agent. nginx proxies the new `/agent-hosts` prefix.
 - Migrations `033` and `034` run on start. Nothing changes until an admin configures a decision model.
 - With file tagging on, file tags are stored in plain text in Postgres and file text is sent to the decision provider. See `docs/storage-and-encryption.md`.
+- **Migration `061` stops if two usernames differ only by case** (for example `Codex` and `codex`). It lists every collision with names and IDs and changes nothing; rename one of each pair, then start again. From then on usernames are unique regardless of case (#190).
+- Migrations `033`–`068` run on start. Invite codes that are expired or used up no longer let anyone join (#192).
+- Browser sessions now end after 24 hours without activity and 30 days after sign-in; passkeys can be added under Account & security (#99).
+- The image routes new API prefixes (`agent-hosts`, `agent-invites`, `terms-watch` and others) through nginx, which now matches prefixes as whole path segments, so reloading an `/admin/…` page shows the page instead of API JSON (#133). If you run your own proxy in front of the API, copy the prefix list from `agora-ui/nginx.conf`.
 
 ### Changed
 
@@ -56,6 +82,21 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 - **Login attempts are limited.** `POST /auth/login` had no limit. Now every account a login name matches is charged an attempt before the password is checked; after 10 without a success the account is refused for 15 minutes, and the instance allows 60 attempts a minute in all. A lock answers `429 too_many_attempts` with `Retry-After`; if Redis is down, logins are refused with `503`. Passwords over 1024 characters are rejected at setup, registration and login (an existing account with a longer password would need it reset by an admin). A Redis error of any kind, including a failed command inside a transaction, refuses the login rather than skipping the count. `npm run login:unlock -- <name>` lifts one account's lock. Settings: `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_MINUTES`, `LOGIN_GLOBAL_PER_MINUTE`.
 - **Log in with a username or an email.** The login form's first field is now "Username or email", and `POST /auth/login` takes a `login` field holding either one (the older `email` field still works). Case is ignored. A mistyped email at setup no longer locks you out: the username works.
 - `POST /auth/login` validates its body: a missing identifier or password is a `400` instead of a server error.
+
+### Security
+
+- **WebSocket and REST respect channel visibility (#56, #60).** Sockets no longer join hidden channels and are dropped from a channel, or disconnected, when access, tokens or the account change; message, thread and unread routes enforce ViewChannel.
+- **Row-level security for invites, membership and files (#192).** Invites can't be listed or rewritten by non-members, people can't add themselves to servers, and files can't be written or moved across channels. Migration `062`.
+- **Bot tokens follow account status (#243).** A suspended bot or bot owner can no longer act through bot tokens, run tokens, run claims or agent invites; suspension revokes them. Provider adapters never follow HTTP redirects.
+- **User search** returns only people who share a server with you, and treats `%`, `_` and `\` literally (#173). **Case-twin usernames** can no longer intercept mentions (#190).
+- **Uploads cut off at the size limit are refused (#247).** A file truncated to exactly the limit used to be stored as a partial file and reported as a success.
+- **Dependencies:** `npm audit` across the four packages went from 87 vulnerable packages (6 critical, 52 high) to 4 moderate ones, all inside `minio`'s dependency tree (the S3 storage driver).
+
+### Dependencies and CI
+
+- **CI on every pull request (#248, #259):** backend build and full test suite, UI lint (blocking), `tsc -b`, `vite build` and tests, and agora-host and agora-mcp builds and tests. Dependabot opens weekly grouped minor/patch updates per package and one PR per major update (#269); `SECURITY.md` and `CODEOWNERS` added.
+- **Upgraded:** fastify 5.12, pg 8.23, sharp 0.35, dockerode 5, argon2 0.45, socket.io 4.8.4, vitest 5 (backend, agora-host), React 19.3, Tailwind 4.3, mermaid 12, zod 4 and TypeScript 7 in agora-host, zod 4 and the MCP SDK 1.32 in agora-mcp, plus `npm audit fix` across all lockfiles (#271, #280, #287 and others). `eslint-plugin-react-hooks` stays on 7.0.x for now.
+- A Playwright end-to-end suite runs against a disposable instance (`e2e/`, #131); it is not part of CI yet.
 
 ## 0.2.0 — 2026-10-01
 
