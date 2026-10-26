@@ -102,12 +102,13 @@ The three parts are developed in parallel, so they agree on only these shapes. A
 ### Push relay (`agora-push-relay/`, run by Caffeinated Software)
 
 **`POST /v1/register`**, called by the app's native code, never by page JavaScript:
-- Body: `{ platform: "android" | "ios", token: string, instance: "<https origin>" }`
+- Body: `{ platform: "android" | "ios", token: string, instance: "<https origin>", previous?: string }`
 - `instance` is the origin of the instance page that asked, as the WebView reports it. The relay trusts it, which is why pages never see the token or choose `instance`.
-- Response: `201 { handle: string }`
+- Response: `201 { handle: string }` for a new handle, or `200 { handle: string }` when it hands back `previous`.
 - The handle is 43 base64url characters (32 random bytes). The relay stores the device token, the platform and the instance origin under it.
-- Every call returns a new random handle. Earlier handles stay valid until `DELETE /v1/handles`, a provider `410`, or the relay's TTL prune.
-- So the app registers once per instance and device token: it keeps each instance's handle with a SHA-256 of the token, returns the stored handle while the token is unchanged, and when the token changes registers again and deletes the old handle (best effort). The instance keeps one device row per handle, so this avoids duplicate rows and duplicate pushes.
+- `previous` is the handle the app already holds for this instance. The relay returns it again (`200`, and counts it as seen for the TTL prune) only if it exists, can still be decrypted, and was registered with the same platform, token and instance. Otherwise it issues a new random handle (`201`) and leaves `previous` as it was. So a handle the relay pruned, lost with its database, or can no longer decrypt after a key change is replaced on the next registration instead of being reused forever.
+- Without a matching `previous`, every call returns a new random handle. Earlier handles stay valid until `DELETE /v1/handles`, a provider `410`, or the relay's TTL prune.
+- So the app calls the relay on every `registerPush`, sending the handle it stores for that instance as `previous`. It stores the handle it gets back with a SHA-256 of the token, and when that differs from the stored one it deletes the old handle (best effort; `204` even if the relay no longer knows it). The instance keeps one device row per handle, so keeping one handle per instance avoids duplicate rows and duplicate pushes.
 
 **`POST /v1/push`**, called by an instance:
 - Header: `Authorization: Bearer <handle>`
@@ -155,7 +156,7 @@ interface AgoraNative {
   platform: 'android' | 'ios';
   version: string;
   // Native code asks for notification permission if needed and registers this page's origin
-  // with the relay (or reuses the stored handle while the device token is unchanged).
+  // with the relay, naming the handle it already holds for that origin as `previous`.
   // Resolves null if permission is denied. The device token never reaches the page.
   registerPush(): Promise<{ relay: string; handle: string; platform: 'android' | 'ios'; label: string } | null>;
   // Deletes the handle at the relay, only if it is the one stored for this page's origin.

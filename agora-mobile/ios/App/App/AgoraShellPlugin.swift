@@ -93,11 +93,12 @@ enum PushRelay {
         return value.unicodeScalars.allSatisfy { handleCharacters.contains($0) }
     }
 
-    /// The relay issues a new handle on every /v1/register, and the instance keeps one device
-    /// row per handle: reuse the stored handle while the device token is unchanged.
-    static func canReuse(storedHandle: String?, storedTokenHash: String?, tokenHash: String) -> Bool {
-        guard let storedTokenHash = storedTokenHash else { return false }
-        return isHandle(storedHandle) && storedTokenHash == tokenHash
+    /// Whether to delete `previous` at the relay after registering returned `handle`: whenever
+    /// they differ. With a new token the old handle points at a dead token; with the same token
+    /// the relay no longer knew it, and a DELETE of an unknown handle is a harmless 204.
+    static func replaces(previous: String?, handle: String) -> Bool {
+        guard let previous = previous else { return false }
+        return isHandle(previous) && previous != handle
     }
 
     /// unregisterPush only deletes the handle registered for the calling origin.
@@ -111,11 +112,13 @@ enum PushRelay {
         return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The handle from a /v1/register answer, or nil unless it is a 201 with a well-formed handle.
-    static func handle(status: Int, data: Data) -> String? {
-        guard status == 201,
+    /// The handle from a /v1/register answer: a 201 with a well-formed new handle, or a 200
+    /// handing back `previous` itself. Nil for anything else.
+    static func handle(status: Int, data: Data, previous: String?) -> String? {
+        guard status == 201 || status == 200,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let handle = object["handle"] as? String, isHandle(handle) else { return nil }
+        if status == 200 && handle != previous { return nil }
         return handle
     }
 
@@ -282,27 +285,28 @@ public class AgoraShellPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    /// On pushQueue. Reuses the stored handle while the token is unchanged (the relay issues a new handle per call).
+    /// On pushQueue. Always asks the relay, naming the stored handle as `previous`: the relay hands
+    /// it back while it still holds this token and origin, or issues a new one (pruned, lost, new token).
     private func registerWithRelay(origin: String, relay: String, token: String) -> Result<[String: Any], PushFailure> {
         let defaults = UserDefaults.standard
         let handleKey = AgoraShellPlugin.handleKey(origin)
         let hashKey = AgoraShellPlugin.tokenHashPrefix + origin
         let tokenHash = PushRelay.sha256(token)
-        let oldHandle = defaults.string(forKey: handleKey)
-        if let old = oldHandle, PushRelay.canReuse(storedHandle: old, storedTokenHash: defaults.string(forKey: hashKey), tokenHash: tokenHash) {
-            return .success(registration(relay: relay, handle: old))
-        }
-        let body: [String: Any] = ["platform": "ios", "token": token, "instance": origin]
+        let stored = defaults.string(forKey: handleKey)
+        let previous: String? = PushRelay.isHandle(stored) ? stored : nil
+        var body: [String: Any] = ["platform": "ios", "token": token, "instance": origin]
+        if let previous = previous { body["previous"] = previous }
         guard let response = PushRelay.send(relay: relay, method: "POST", path: "/v1/register", bearer: nil, body: body) else {
             return .failure(PushFailure("relay_register_failed: network"))
         }
-        guard let handle = PushRelay.handle(status: response.status, data: response.data) else {
+        guard let handle = PushRelay.handle(status: response.status, data: response.data, previous: previous) else {
             return .failure(PushFailure("relay_register_failed: \(response.status)"))
         }
         defaults.set(handle, forKey: handleKey)
         defaults.set(tokenHash, forKey: hashKey)
-        if let old = oldHandle, PushRelay.isHandle(old), old != handle {
-            // The token changed: the old handle points at a dead token. Best effort.
+        if let old = previous, PushRelay.replaces(previous: old, handle: handle) {
+            // A new token (the old handle points at a dead token), or the relay no longer knew the
+            // old handle (the DELETE is then a harmless 204). Best effort either way.
             _ = PushRelay.send(relay: relay, method: "DELETE", path: "/v1/handles", bearer: old, body: nil)
         }
         return .success(registration(relay: relay, handle: handle))

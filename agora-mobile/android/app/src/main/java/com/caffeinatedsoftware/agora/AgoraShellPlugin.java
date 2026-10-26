@@ -437,35 +437,34 @@ public class AgoraShellPlugin extends Plugin {
             });
     }
 
-    /** On pushExecutor. Reuses the stored handle while the token is unchanged (the relay issues a new handle per call). */
+    /**
+     * On pushExecutor. Always asks the relay, naming the stored handle as `previous`: the
+     * relay hands it back while it still holds this token and origin, or issues a new one
+     * (PushRelay.register).
+     */
     private void registerWithRelay(PageCall call, String token) {
         String key = BridgePolicy.HANDLE_KEY_PREFIX + call.origin;
         String tokenHash = PushRelay.sha256(token);
         SharedPreferences handles = getContext().getSharedPreferences(PREFERENCES_GROUP, Context.MODE_PRIVATE);
         SharedPreferences hashes = getContext().getSharedPreferences(PUSH_TOKEN_GROUP, Context.MODE_PRIVATE);
         String oldHandle = handles.getString(key, null);
-        if (PushRelay.canReuse(oldHandle, hashes.getString(call.origin, null), tokenHash)) {
-            reply(call, registration(oldHandle), null);
-            return;
-        }
+        String relay = relayOrigin;
         String handle;
-        PushRelay.Response res;
         try {
-            res = PushRelay.send(relayOrigin, "POST", "/v1/register", null, PushRelay.registerBody("android", token, call.origin));
-            handle = PushRelay.handleFrom(res);
+            handle = PushRelay.register((method, path, bearer, body) -> PushRelay.send(relay, method, path, bearer, body), "android", token, call.origin, oldHandle);
+        } catch (PushRelay.RegisterFailed e) {
+            reply(call, null, e.getMessage());
+            return;
         } catch (Exception e) {
             reply(call, null, "relay_register_failed: " + e.getClass().getSimpleName());
-            return;
-        }
-        if (handle == null) {
-            reply(call, null, "relay_register_failed: " + res.status);
             return;
         }
         handles.edit().putString(key, handle).commit();
         hashes.edit().putString(call.origin, tokenHash).commit();
         reply(call, registration(handle), null);
-        if (PushRelay.isHandle(oldHandle) && !oldHandle.equals(handle)) {
-            // The token changed: the old handle points at a dead token. Best effort.
+        if (PushRelay.replaces(oldHandle, handle)) {
+            // A new token (the old handle points at a dead token), or the relay no longer knew
+            // the old handle (the DELETE is then a harmless 204). Best effort either way.
             try {
                 PushRelay.send(relayOrigin, "DELETE", "/v1/handles", oldHandle, null);
             } catch (Exception e) {

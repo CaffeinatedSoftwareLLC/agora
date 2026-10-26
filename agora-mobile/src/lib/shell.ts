@@ -10,7 +10,8 @@ export interface AgoraShellPush {
     /**
      * Native code asks for notification permission, gets the FCM/APNs token itself and
      * registers it with the relay for the calling page's origin as the WebView reports
-     * it. It reuses the handle stored for that origin while the token is unchanged.
+     * it, naming the handle stored for that origin as `previous`: the relay hands it back
+     * while it still holds this token and origin, or issues a new one.
      * `registered: false` when permission is denied.
      */
     registerPush(): Promise<NativeRegistration>;

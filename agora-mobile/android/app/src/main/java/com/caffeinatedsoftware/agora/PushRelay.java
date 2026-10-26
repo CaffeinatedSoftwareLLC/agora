@@ -36,42 +36,76 @@ final class PushRelay {
         }
     }
 
+    /** How register() reaches the relay: send() in the app, a fake in the JVM tests. */
+    interface Transport {
+        Response send(String method, String path, String bearer, String jsonBody) throws IOException;
+    }
+
+    /** /v1/register answered with something other than a usable handle. */
+    static final class RegisterFailed extends Exception {
+        final int status;
+
+        RegisterFailed(int status) {
+            super("relay_register_failed: " + status);
+            this.status = status;
+        }
+    }
+
     static boolean isHandle(String value) {
         return value != null && HANDLE.matcher(value).matches();
     }
 
-    static String registerBody(String platform, String token, String instance) throws Exception {
+    /** `previous` (the handle stored for this origin) is sent only when it is a well-formed handle. */
+    static String registerBody(String platform, String token, String instance, String previous) throws Exception {
         JSONObject body = new JSONObject();
         body.put("platform", platform);
         body.put("token", token);
         body.put("instance", instance);
+        if (isHandle(previous)) body.put("previous", previous);
         return body.toString();
     }
 
-    /** The handle from a /v1/register answer, or null unless it is a 201 with a well-formed handle. */
-    static String handleFrom(Response res) {
-        if (res == null || res.status != 201 || res.body == null) return null;
+    /**
+     * The handle from a /v1/register answer: a 201 with a well-formed new handle, or a 200
+     * handing back `previous` itself. Null for anything else.
+     */
+    static String handleFrom(Response res, String previous) {
+        if (res == null || res.body == null || (res.status != 201 && res.status != 200)) return null;
         try {
             String handle = new JSONObject(res.body).optString("handle", null);
-            return isHandle(handle) ? handle : null;
+            if (!isHandle(handle)) return null;
+            if (res.status == 200 && !handle.equals(previous)) return null;
+            return handle;
         } catch (Exception e) {
             return null;
         }
     }
 
-    /** DELETE /v1/handles: 204, or 401 when the relay no longer knows the handle (already gone). */
-    static boolean unregistered(int status) {
-        return status == 204 || status == 401;
+    /**
+     * POST /v1/register, always, naming the stored handle as `previous`. The relay hands
+     * `previous` back while it still holds this token and origin, and issues a new handle
+     * when it does not (new token, or the relay pruned it, lost its database or changed
+     * its key), so a dead handle is never kept.
+     */
+    static String register(Transport relay, String platform, String token, String instance, String previous) throws Exception {
+        Response res = relay.send("POST", "/v1/register", null, registerBody(platform, token, instance, previous));
+        String handle = handleFrom(res, isHandle(previous) ? previous : null);
+        if (handle == null) throw new RegisterFailed(res == null ? 0 : res.status);
+        return handle;
     }
 
     /**
-     * The relay issues a new handle on every /v1/register, and the instance keeps one
-     * device row per handle. So registerPush reuses the handle stored for the calling
-     * origin while the device token is unchanged, and registers again only when there
-     * is no handle or the token changed.
+     * Whether to delete `previous` at the relay after register() returned `handle`: whenever
+     * they differ. With a new token the old handle points at a dead token; with the same
+     * token the relay no longer knew it, and a DELETE of an unknown handle is a harmless 204.
      */
-    static boolean canReuse(String storedHandle, String storedTokenHash, String tokenHash) {
-        return isHandle(storedHandle) && storedTokenHash != null && storedTokenHash.equals(tokenHash);
+    static boolean replaces(String previous, String handle) {
+        return isHandle(previous) && !previous.equals(handle);
+    }
+
+    /** DELETE /v1/handles: 204, or 401 when the relay no longer knows the handle (already gone). */
+    static boolean unregistered(int status) {
+        return status == 204 || status == 401;
     }
 
     /** unregisterPush only deletes the handle registered for the calling origin. */

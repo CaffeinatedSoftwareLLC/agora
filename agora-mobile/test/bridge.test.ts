@@ -8,24 +8,45 @@ const RELAY = 'https://push.agora.host';
 const HANDLE = 'A'.repeat(21) + '_' + 'b'.repeat(20) + '-';
 
 /**
- * A stand-in for the native AgoraShell push methods. Like the real ones, it keeps one
- * handle per (origin, token) and only calls the relay when the token changes.
+ * A stand-in for the native AgoraShell push methods and the relay behind them. Like the
+ * real ones, it calls the relay on every registerPush, naming the stored handle as
+ * `previous`; the relay hands it back while it holds the same token, otherwise issues a
+ * new one, and the shell then deletes the old handle.
  */
 function fakeShell(opts: { answer?: NativeRegistration | (() => NativeRegistration); fail?: string } = {}) {
-    let relayCalls = 0;
-    let stored: { handle: string; tokenHash: string } | null = null;
+    const relayHandles = new Map<string, string>(); // handle -> token
+    const sentPrevious: Array<string | undefined> = [];
+    const deleted: string[] = [];
+    let issued = 0;
+    let stored: string | null = null;
     let token = 'device-token';
+    const relayRegister = (previous: string | undefined): string => {
+        sentPrevious.push(previous);
+        if (previous && relayHandles.get(previous) === token) return previous;
+        issued += 1;
+        const handle = String.fromCharCode(64 + issued).repeat(43);
+        relayHandles.set(handle, token);
+        return handle;
+    };
     const shell = {
-        get relayCalls() { return relayCalls; },
+        get relayCalls() { return sentPrevious.length; },
+        sentPrevious,
+        deleted,
         setToken(t: string) { token = t; },
+        /** The relay pruned the handle, lost its database or changed its key. */
+        relayForgets(handle: string) { relayHandles.delete(handle); },
         registerPush: vi.fn(async (...args: unknown[]): Promise<NativeRegistration> => {
             expect(args).toEqual([]);
             if (opts.fail) throw new Error(opts.fail);
             if (opts.answer) return typeof opts.answer === 'function' ? opts.answer() : opts.answer;
-            if (stored && stored.tokenHash === `sha256(${token})`) return { registered: true, relay: RELAY, handle: stored.handle, platform: 'android' };
-            relayCalls += 1;
-            stored = { handle: String.fromCharCode(64 + relayCalls).repeat(43), tokenHash: `sha256(${token})` };
-            return { registered: true, relay: RELAY, handle: stored.handle, platform: 'android' };
+            const previous = stored ?? undefined;
+            const handle = relayRegister(previous);
+            stored = handle;
+            if (previous && previous !== handle) {
+                deleted.push(previous);
+                relayHandles.delete(previous);
+            }
+            return { registered: true, relay: RELAY, handle, platform: 'android' };
         }),
         unregisterPush: vi.fn(async (_o: { handle: string }) => undefined),
         hasPushHandle: vi.fn(async () => ({ value: stored !== null })),
@@ -71,17 +92,30 @@ describe('registerPush', () => {
         expect(shell.registerPush).toHaveBeenCalledWith();
     });
 
-    it('returns the same handle for a second call with the same token, with no new relay registration', async () => {
+    it('returns the same handle for a second call with the same token: the relay hands back `previous`', async () => {
         const { native, shell } = setup();
         const first = await native.registerPush();
         const second = await native.registerPush();
         expect(second).toEqual(first);
-        expect(shell.relayCalls).toBe(1);
-        // A new device token gets a new handle.
+        expect(shell.sentPrevious).toEqual([undefined, first?.handle]);
+        expect(shell.deleted).toEqual([]);
+        // A new device token gets a new handle, and the old one is deleted.
         shell.setToken('rotated-token');
         const third = await native.registerPush();
         expect(third?.handle).not.toBe(first?.handle);
-        expect(shell.relayCalls).toBe(2);
+        expect(shell.sentPrevious).toEqual([undefined, first?.handle, first?.handle]);
+        expect(shell.deleted).toEqual([first?.handle]);
+    });
+
+    it('replaces a stored handle the relay no longer knows instead of returning it forever', async () => {
+        const { native, shell } = setup();
+        const first = await native.registerPush();
+        shell.relayForgets(first!.handle);
+        const second = await native.registerPush();
+        expect(second?.handle).not.toBe(first?.handle);
+        expect(shell.sentPrevious.at(-1)).toBe(first?.handle);
+        const third = await native.registerPush();
+        expect(third?.handle).toBe(second?.handle);
     });
 
     it('resolves null when permission is denied', async () => {
