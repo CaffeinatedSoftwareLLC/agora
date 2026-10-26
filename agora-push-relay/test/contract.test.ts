@@ -28,14 +28,14 @@ describe('POST /v1/register', () => {
         expect(res.json().handle).toMatch(HANDLE_RE);
     });
 
-    it('returns the same handle for the same token and instance', async () => {
+    it('issues a new handle for each registration of the same token and instance; earlier ones keep working', async () => {
         const a = await handleFor();
         const b = await handleFor();
-        // The origin is normalised, so these are the same instance.
+        // The origin is normalised, so this is the same instance.
         const c = await handleFor({ instance: 'https://AGORA.example.com/' });
-        expect(b).toBe(a);
-        expect(c).toBe(a);
-        expect(relay.store.count()).toBe(1);
+        expect(new Set([a, b, c]).size).toBe(3);
+        expect(relay.store.count()).toBe(3);
+        for (const h of [a, b, c]) expect((await push(relay, h)).statusCode).toBe(202);
     });
 
     it('gives a different handle for another instance or another token', async () => {
@@ -45,10 +45,13 @@ describe('POST /v1/register', () => {
         expect(new Set([a, other, token]).size).toBe(3);
     });
 
-    it('re-registering after DELETE returns the same handle again', async () => {
+    it('re-registering after DELETE gives a new handle; the deleted one stays unknown', async () => {
         const a = await handleFor();
         await relay.app.inject({ method: 'DELETE', url: '/v1/handles', headers: { authorization: `Bearer ${a}` } });
-        expect(await handleFor()).toBe(a);
+        const b = await handleFor();
+        expect(b).not.toBe(a);
+        expect((await push(relay, a)).statusCode).toBe(401);
+        expect((await push(relay, b)).statusCode).toBe(202);
     });
 
     it('accepts an iOS hex token', async () => {
@@ -115,6 +118,41 @@ describe('POST /v1/register', () => {
         const pre = await relay.app.inject({ method: 'OPTIONS', url: '/v1/register', headers: { origin: INSTANCE, 'access-control-request-method': 'POST' } });
         expect(pre.statusCode).toBe(204);
         expect(pre.headers['access-control-allow-methods']).toContain('POST');
+    });
+});
+
+// Review finding: handles were HMAC(instance, token), so anyone holding a device token
+// could register it naming another instance and be handed that instance's handle.
+describe('a third party holding the device token', () => {
+    const B = 'https://b.example.com';
+
+    it('does not receive the handle instance B holds, and cannot push as B through it or delete it', async () => {
+        const bHandle = await handleFor({ instance: B });
+        const attacker = await register(relay, { instance: B }, '198.51.100.66');
+        expect(attacker.statusCode).toBe(201);
+        const attackerHandle = attacker.json().handle as string;
+        expect(attackerHandle).not.toBe(bHandle);
+
+        // Without B's handle the attacker can only delete handles it knows: its own, or guesses.
+        for (const h of [attackerHandle, 'A'.repeat(43)]) {
+            const del = await relay.app.inject({ method: 'DELETE', url: '/v1/handles', remoteAddress: '198.51.100.66', headers: { authorization: `Bearer ${h}` } });
+            expect(del.statusCode).toBe(204);
+        }
+        expect((await push(relay, attackerHandle, pushBody({ instance: B }))).statusCode).toBe(401);
+
+        // B's handle survives the re-registration and the deletes, and still pushes to the token.
+        const res = await push(relay, bHandle, pushBody({ instance: B }));
+        expect(res.statusCode).toBe(202);
+        expect(android().calls.at(-1)).toMatchObject({ token: expect.stringMatching(/^fcm-token/), message: { instance: B } });
+        expect(relay.store.count()).toBe(1);
+    });
+
+    it('registering the token for its own origin gives a handle that cannot push as B', async () => {
+        const bHandle = await handleFor({ instance: B });
+        const own = (await register(relay, { instance: 'https://attacker.example.com' }, '198.51.100.66')).json().handle as string;
+        expect(own).not.toBe(bHandle);
+        expect((await push(relay, own, pushBody({ instance: B }))).statusCode).toBe(403);
+        expect((await push(relay, bHandle, pushBody({ instance: B }))).statusCode).toBe(202);
     });
 });
 

@@ -1,6 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, hkdfSync, randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import { deriveKeys, hashHandle, open, seal } from '../src/crypto.js';
+import { HANDLE_RE, deriveKeys, hashHandle, open, seal } from '../src/crypto.js';
 import { normalizeInstance } from '../src/origin.js';
 import { FixedWindowLimiter } from '../src/rate-limit.js';
 import { HandleStore } from '../src/store.js';
@@ -16,13 +20,46 @@ describe('HandleStore', () => {
         store.close();
     });
 
-    it('derives the same handle across restarts with the same key, a different one with another key', () => {
-        const key = randomBytes(32);
-        const a = new HandleStore(':memory:', deriveKeys(key)).register('android', I, 'tok');
-        const b = new HandleStore(':memory:', deriveKeys(key)).register('android', I, 'tok');
-        const c = new HandleStore(':memory:', deriveKeys(randomBytes(32))).register('android', I, 'tok');
-        expect(b).toBe(a);
-        expect(c).not.toBe(a);
+    it('gives every registration a new random handle; earlier ones stay valid', () => {
+        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
+        const a = store.register('android', I, 'tok');
+        const b = store.register('android', I, 'tok');
+        expect(a).toMatch(HANDLE_RE);
+        expect(b).toMatch(HANDLE_RE);
+        expect(b).not.toBe(a);
+        expect(store.lookup(a)?.token).toBe('tok');
+        expect(store.lookup(b)?.token).toBe('tok');
+        expect(store.count()).toBe(2);
+        store.close();
+    });
+
+    it('still reads rows written by the earlier build, whose handles were HMAC-derived', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
+        const path = join(dir, 'relay.db');
+        const master = randomBytes(32);
+        // What 0.1.0 stored for a registration: same table, same seal key and associated data.
+        const handleKey = Buffer.from(hkdfSync('sha256', master, Buffer.alloc(0), 'agora-push-relay/handle/v1', 32));
+        const oldHandle = createHmac('sha256', handleKey).update(`v1
+${I}
+tok`).digest('base64url');
+        const store = new HandleStore(path, deriveKeys(master));
+        store.close();
+        const db = new DatabaseSync(path);
+        db.prepare('INSERT INTO handles (handle_hash, platform, sealed, created_at, seen_at) VALUES (?, ?, ?, ?, ?)').run(
+            hashHandle(oldHandle),
+            'android',
+            seal(deriveKeys(master).sealKey, JSON.stringify({ t: 'tok', i: I }), hashHandle(oldHandle)),
+            1,
+            1,
+        );
+        db.close();
+        const reopened = new HandleStore(path, deriveKeys(master));
+        expect(reopened.lookup(oldHandle)).toEqual({ handleHash: hashHandle(oldHandle), platform: 'android', instance: I, token: 'tok' });
+        // Registering the same pair now issues a new handle and leaves the old row alone.
+        expect(reopened.register('android', I, 'tok')).not.toBe(oldHandle);
+        expect(reopened.lookup(oldHandle)).not.toBeNull();
+        reopened.close();
+        rmSync(dir, { recursive: true, force: true });
     });
 
     it('prunes handles not seen since the cutoff; touch keeps one alive', () => {
@@ -37,12 +74,13 @@ describe('HandleStore', () => {
         expect(store.count()).toBe(2);
     });
 
-    it('re-registering refreshes seen_at', () => {
+    it('a handle lives by its own seen_at: re-registering the token does not refresh older handles', () => {
         const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const h = store.register('android', I, 'tok', 1_000);
-        store.register('android', I, 'tok', 9_000);
-        expect(store.pruneSeenBefore(2_000)).toBe(0);
-        expect(store.lookup(h)).not.toBeNull();
+        const old = store.register('android', I, 'tok', 1_000);
+        const fresh = store.register('android', I, 'tok', 9_000);
+        expect(store.pruneSeenBefore(2_000)).toBe(1);
+        expect(store.lookup(old)).toBeNull();
+        expect(store.lookup(fresh)).not.toBeNull();
     });
 });
 

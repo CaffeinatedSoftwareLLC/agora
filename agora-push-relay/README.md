@@ -15,7 +15,7 @@ Plan and contract: `docs/planning/mobile-apps.md`, Phase 3 and section 8.
 
 | Call | Who calls it | Answers |
 |---|---|---|
-| `POST /v1/register` `{platform, token, instance}` | the app | `201 {handle}`; `400` bad body/origin/token; `429` per-IP limit; `503` platform not configured |
+| `POST /v1/register` `{platform, token, instance}` | the app | `201 {handle}`, a new handle on every call; `400` bad body/origin/token; `429` per-IP limit; `503` platform not configured |
 | `POST /v1/push` `{instance, type, title, body, url}` + `Authorization: Bearer <handle>` | an instance | `202`; `400`; `401` unknown handle; `403` `instance` is not the origin the handle was registered with; `410` the device token is gone (handle deleted); `413`; `429` (30/min per handle, `Retry-After`); `502` provider error, retry later; `503` platform not configured |
 | `DELETE /v1/handles` + `Authorization: Bearer <handle>` | an instance or the app | `204` (also for an unknown handle); `401` no well-formed handle |
 | `GET /healthz` | monitoring | `200 {status, providers: {android, ios}}` |
@@ -65,26 +65,41 @@ server.
 - **A leaked handle is bound to one instance**: pushes naming another origin get 403
   and do not use up the owner's rate limit.
 - Handles neither registered nor pushed to for `RELAY_HANDLE_TTL_DAYS` (365) are
-  deleted. The app re-registers every session, which keeps active ones alive.
+  deleted. A successful push keeps a handle alive.
 
-### Storage and idempotency
+### Storage and handles
 
 SQLite through Node's built-in `node:sqlite` (Node 22.13+; no native build), one
 `handles` table in the `relay-data` volume, WAL mode.
 
-The contract says registering the same token for the same instance returns the
-same handle. The relay does this by **deriving** the handle:
-`handle = base64url(HMAC-SHA256(handleKey, "v1\n" + instance + "\n" + token))`, 32
-bytes, 43 characters. Without the key it looks like 32 random bytes. So:
+Every registration gets a **new random handle**: 32 random bytes, base64url, 43
+characters. Only SHA-256(handle) is stored. Registering a token and instance that are
+already registered issues another handle and leaves the existing ones as they are:
+each stays valid until it is deleted (`DELETE /v1/handles`), the provider reports the
+token gone (`410` on a push through it), or it is pruned after
+`RELAY_HANDLE_TTL_DAYS` without a push. So:
 
-- the relay can return the same handle without storing it, or storing it encrypted;
-- re-registering after a `DELETE /v1/handles`, a `410` or a TTL prune returns the
-  **same** handle again, so an instance that still holds it starts working again;
-- one device registered with several instances gets a different handle for each.
+- knowing a device token does not get you a handle someone else holds. Anyone who has
+  a token can register it naming any origin (the relay cannot check that the caller
+  speaks for that instance), but they only get a fresh handle of their own;
+- registering cannot revoke anyone else's handle, because nothing replaces or deletes
+  an existing row. Deleting needs the handle itself;
+- the app should register when it gets a new device token, not on every launch, and
+  give the instance the handle it got back. Handles it stops using expire after the
+  TTL.
 
-`RELAY_SECRET_KEY` is split with HKDF into the encryption key and the handle key.
-Changing it orphans every registration: old handles answer `401` and each device
-gets a new handle when the app next registers.
+The alternative, re-registration replacing the earlier handle, was rejected because
+it would let anyone holding the token revoke the instance's handle at will.
+
+Before this change (0.1.0, never in production) handles were
+`HMAC-SHA256(handleKey, instance, token)`, so registering the same pair returned the
+same handle to whoever asked. The table, the seal key and the lookup are unchanged,
+so rows written then still work and need no migration; their handles are simply
+never handed out again.
+
+`RELAY_SECRET_KEY` is expanded with HKDF into the encryption key. Changing it
+orphans every registration: old handles answer `401` and each device needs to
+register again and give its instance the new handle.
 
 ## Deploying (Caffeinated Software)
 
@@ -129,8 +144,9 @@ Needs a Linux host with Docker and a domain for the relay. The app expects it at
 5. **Check it.** `curl https://push.agora.host/healthz` →
    `{"status":"ok","providers":{"android":true,"ios":true}}`.
 
-Back up `RELAY_SECRET_KEY`. The database can be lost: devices re-register on the
-next app session, and with the same key they get the same handles back.
+Back up `RELAY_SECRET_KEY`: without it the database cannot be read. Losing the
+database loses every handle: instances get `401` and each device has to register
+again and hand its instance the new handle.
 
 Upgrading: `git pull`, then the same `up -d --build`.
 

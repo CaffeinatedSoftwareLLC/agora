@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { deriveHandle, hashHandle, open, seal, type Keys } from './crypto.js';
+import { hashHandle, newHandle, open, seal, type Keys } from './crypto.js';
 
 export type Platform = 'android' | 'ios';
 
@@ -20,6 +20,11 @@ interface Row {
  * One row per handle. The key is SHA-256(handle); the raw handle is never stored.
  * The device token and the instance origin are sealed together with AES-256-GCM, the
  * row's key as associated data. Only the platform is in the clear.
+ *
+ * Every registration gets a new random handle, even for a token and instance that are
+ * already registered, and the existing handles stay valid. Nothing in a row links it to
+ * the other handles for the same token, so the relay cannot hand an existing handle to
+ * whoever registers next, and registering cannot revoke someone else's handle.
  */
 export class HandleStore {
     private readonly db: DatabaseSync;
@@ -38,14 +43,13 @@ export class HandleStore {
         this.db.exec('CREATE INDEX IF NOT EXISTS handles_seen_at ON handles (seen_at)');
     }
 
-    /** Stores (or refreshes) the registration and returns its handle. Same token + instance -> same handle. */
+    /** Stores a new registration under a new random handle and returns the handle. */
     register(platform: Platform, instance: string, token: string, now = Date.now()): string {
-        const handle = deriveHandle(this.keys.handleKey, instance, token);
+        const handle = newHandle();
         const handleHash = hashHandle(handle);
         const sealed = seal(this.keys.sealKey, JSON.stringify({ t: token, i: instance }), handleHash);
         this.db
-            .prepare(`INSERT INTO handles (handle_hash, platform, sealed, created_at, seen_at) VALUES (?, ?, ?, ?, ?)
-                      ON CONFLICT (handle_hash) DO UPDATE SET platform = excluded.platform, sealed = excluded.sealed, seen_at = excluded.seen_at`)
+            .prepare('INSERT INTO handles (handle_hash, platform, sealed, created_at, seen_at) VALUES (?, ?, ?, ?, ?)')
             .run(handleHash, platform, sealed, now, now);
         return handle;
     }
