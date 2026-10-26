@@ -356,8 +356,9 @@ describe('listing and filtering', () => {
     test('a file that is not attached to a message, or whose message was deleted, is not listed', async () => {
         stub();
         await upload(ctx.request, owner.auth, channelId, 'unattached-protocol.md', 'never posted');
+        const attachment = await upload(ctx.request, owner.auth, channelId, 'deleted-message-protocol.md', 'posted then deleted');
         const posted = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth)
-            .send({ content: 'x', attachments: [await upload(ctx.request, owner.auth, channelId, 'deleted-message-protocol.md', 'posted then deleted')] });
+            .send({ content: 'x', attachments: [attachment] });
         await ctx.request.delete(`/channels/${channelId}/messages/${posted.body.id}`).set(owner.auth);
         const res = await search({ q: 'protocol', limit: 25 });
         expect(names(res)).not.toContain('unattached-protocol.md');
