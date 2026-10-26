@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
+import { SIWC_DOCS_URL, USAGE_URL } from './chatgptPlanLinks';
 
 /**
  * "Continue with ChatGPT" for a Codex agent (docs/codex-chatgpt-plan.md). The sign-in runs on
@@ -17,9 +18,7 @@ export interface PlanConnection {
   planOwnerId: string | null;
 }
 
-export const USAGE_URL = 'https://chatgpt.com/settings/usage';
-export const SIWC_DOCS_URL = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/codex-chatgpt-plan.md';
-export const PENDING = new Set(['requested', 'in_progress', 'disconnect_requested']);
+const PENDING = new Set(['requested', 'in_progress', 'disconnect_requested']);
 
 const ERROR_TEXT: Record<string, string> = {
   consent_declined: 'Sign-in was declined in the browser.',
