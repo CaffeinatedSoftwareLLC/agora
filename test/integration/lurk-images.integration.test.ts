@@ -9,7 +9,7 @@ let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: Awaited<ReturnType<typeof authedUser>>, member: typeof owner;
 let channel: string, server: string, hostId: string, hostAuth: Record<string, string>;
 let a: any, b: any;
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
 
 async function agent(name: string) {
     const r = await ctx.request.post(`/servers/${server}/agents`).set(owner.auth)
