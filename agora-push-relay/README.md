@@ -50,8 +50,12 @@ server.
 
 ## Privacy model
 
-- **No message text.** Instances send short labels such as "Approval waiting in
-  #general"; the app fetches details from the instance itself.
+- **The relay forwards whatever `title` and `body` an instance sends**, up to 120
+  characters each, and cannot tell a label from message text. Keeping message text
+  out is the Agora instance's behaviour, not a relay guarantee: the instance sends
+  short labels such as "Approval waiting in #general" and the app fetches details
+  from the instance itself. A modified instance could put anything in those 240
+  characters, and Google or Apple would see it.
 - **Nothing about a push is stored.** Title, body, URL and type pass through memory
   to the provider and are dropped.
 - **Logs** carry, per request, the route, status, an outcome code (for example
@@ -61,7 +65,9 @@ server.
 - **Handles** are bearer secrets. The database keys each registration by
   SHA-256(handle); the handle itself is never stored or logged.
 - **Device tokens and instance origins** are encrypted at rest with AES-256-GCM,
-  bound to their row. Only the platform is stored in the clear.
+  bound to their row. Only the platform is stored in the clear. This protects a
+  copied database file or backup, not a compromised host: the running service holds
+  `RELAY_SECRET_KEY` and decrypts every row it needs to push to.
 - **A leaked handle is bound to one instance**: pushes naming another origin get 403
   and do not use up the owner's rate limit.
 - Handles neither registered nor pushed to for `RELAY_HANDLE_TTL_DAYS` (365) are
@@ -153,6 +159,18 @@ database loses every handle: instances get `401` and each device has to register
 again and hand its instance the new handle.
 
 Upgrading: `git pull`, then the same `up -d --build`.
+
+### Operator duties
+
+- **Key backup.** Keep `RELAY_SECRET_KEY` somewhere other than the relay host. Lose it
+  and every stored registration is unreadable.
+- **Credential rotation.** Rotate the FCM service-account key and the APNs `.p8` key
+  when someone with access leaves or a host is suspected compromised, and revoke the
+  old ones in the Firebase and Apple consoles. There is no tool for rotating
+  `RELAY_SECRET_KEY`; changing it drops every handle (see above).
+- **Monitoring.** Watch `/healthz` and the hourly outcome-count log line: a run of
+  `fcm_*`/`apns_*` outcomes (the `502` reasons) means a credential or provider problem,
+  a spike of `registered_*` or `rate_limited` means someone is hammering the relay.
 
 ## Pointing an instance at the relay
 
