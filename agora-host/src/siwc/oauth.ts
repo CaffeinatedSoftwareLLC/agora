@@ -1,5 +1,7 @@
-import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify as verifySignature, type JsonWebKey } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify as verifySignature, type webcrypto } from 'node:crypto';
 import { createServer, type RequestListener } from 'node:http';
+
+type JsonWebKey = webcrypto.JsonWebKey;
 
 /**
  * Sign in with ChatGPT, open-source token sharing (docs/codex-chatgpt-plan.md), exactly as
