@@ -11,6 +11,8 @@ import { TOOL_RULE } from './types.js';
  * - Codex: the sandbox mode, workspace network access and live web search. Codex has no
  *   per-command allow list in `exec` mode, so its rules are the capability words
  *   `write`, `network` and `web_search`, plus Agora MCP tools (`mcp__agora__<tool>`).
+ * - ACP agents (Gemini, opencode and the ACP builds of Claude and Codex): the Claude rules and
+ *   the capability words, matched against each permission request (acp/permissions.ts).
  *
  * The host's config may redefine a preset or add new ones (`presets` in host.local.json).
  */

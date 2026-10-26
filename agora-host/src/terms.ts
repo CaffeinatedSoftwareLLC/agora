@@ -13,17 +13,40 @@ import type { Claim } from './types.js';
  *   to the child only. The key is never logged, stored or sent to Agora.
  * - Gemini (CLI or Antigravity) must use an API key: Google's terms call third-party access
  *   through its account login a breach. Gemini is hosted only over ACP with an API key.
+ * - opencode runs only over ACP with an API key: it has no account login of its own to host,
+ *   and its fallback (OpenCode Zen) would send the work to a provider the owner didn't pick.
  * - The host never reads, copies or relays a CLI's own login files or OAuth tokens.
  */
 
 export const TERMS_DOC = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/provider-terms.md';
 
+export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode';
+
 /** The environment variables each CLI reads its API key from. */
-export const API_KEY_ENVS: Record<'codex' | 'claude' | 'gemini', string[]> = {
+export const API_KEY_ENVS: Record<Adapter, string[]> = {
     claude: ['ANTHROPIC_API_KEY'],
     codex: ['CODEX_API_KEY', 'OPENAI_API_KEY'],
     gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    // or OPENROUTER_API_KEY_<NAME>, one key per agent (apiKeyEnvAllowed)
+    opencode: ['OPENROUTER_API_KEY'],
 };
+
+/**
+ * An opencode profile may read its key from `OPENROUTER_API_KEY_<NAME>`, so agents on one host
+ * can each have their own OpenRouter key and credit limit. opencode reads only
+ * `OPENROUTER_API_KEY`, so the host passes the key to it under that name (adapters.ts).
+ */
+const OPENROUTER_KEY_ENV = /^OPENROUTER_API_KEY(?:_[A-Z0-9][A-Z0-9_]{0,39})?$/;
+
+/** Whether `name` may hold this adapter's API key. */
+export function apiKeyEnvAllowed(adapter: Adapter, name: string): boolean {
+    return adapter === 'opencode' ? OPENROUTER_KEY_ENV.test(name) : API_KEY_ENVS[adapter].includes(name);
+}
+
+/** The opencode provider a key variable belongs to, and the only one its runs may use; null if none. */
+export function opencodeProvider(apiKeyEnv: string | undefined): { provider: string; env: string } | null {
+    return apiKeyEnv && OPENROUTER_KEY_ENV.test(apiKeyEnv) ? { provider: 'openrouter', env: 'OPENROUTER_API_KEY' } : null;
+}
 
 export const GEMINI_SUBSCRIPTION_REFUSAL =
     'a gemini profile must use auth "api_key" (GEMINI_API_KEY). Google\'s Antigravity terms, section 6: '
@@ -34,10 +57,14 @@ export const GEMINI_SUBSCRIPTION_REFUSAL =
 export const GEMINI_NOT_HOSTED =
     'Gemini is hosted only over ACP with an API key: set "protocol": "acp" and "acpArgs": ["--acp"] on the gemini profile (agora-host README, "ACP agents").';
 
+export const OPENCODE_ACP_ONLY =
+    'opencode is hosted only over ACP with an API key: set "protocol": "acp", "acpArgs": ["acp"], "auth": "api_key" and "apiKeyEnv": "OPENROUTER_API_KEY" (agora-host README, "opencode and OpenRouter").';
+
 /**
  * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An
  * api_key profile on ACP must use it, so the agent can't fall back to an account login.
- * Claude Code reads ANTHROPIC_API_KEY itself, so claude needs none.
+ * Claude Code reads ANTHROPIC_API_KEY itself, so claude needs none. opencode reads
+ * OPENROUTER_API_KEY itself and offers only a terminal login, so it needs none either.
  */
 export const ACP_API_KEY_METHODS: Record<string, string> = {
     GEMINI_API_KEY: 'gemini-api-key',

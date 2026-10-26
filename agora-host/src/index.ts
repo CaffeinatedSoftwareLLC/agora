@@ -7,6 +7,7 @@ import { Scheduler } from './scheduler.js';
 import { describeAuth, HostConfigError, profileReport } from './terms.js';
 import { siwcCommand } from './siwc/cli.js';
 import { autostartCommand } from './autostart.js';
+import { creditLine } from './openrouter.js';
 
 async function main() {
     // agora-host siwc <login|status|logout> --profile <name> --config <file> (docs/codex-chatgpt-plan.md)
@@ -20,6 +21,9 @@ async function main() {
         const via = profile.protocol === 'acp' ? ` over ACP (${version})` : '';
         console.log(`Verified ${profile.adapter}${via}; hard token cap unavailable; using lease, timeout and server session budget.`);
         console.log(describeAuth(name, profile));
+        // opencode on OpenRouter: the key's credit limit is the spend cap (openrouter.ts)
+        const credit = await creditLine(name, profile);
+        if (credit) console.log(credit);
     }
     const client = new Client(config.instance, config.hostToken);
     // Agora applies the subscription rule from this report; the host enforces it too

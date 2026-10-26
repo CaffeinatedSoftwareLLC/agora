@@ -11,7 +11,7 @@ import { AUTH_REQUIRED, Connection, METHOD_NOT_FOUND, RpcError } from './rpc.js'
 
 /**
  * One Agora turn with an Agent Client Protocol agent (agentclientprotocol.com):
- * `gemini --acp`, claude-code-acp, codex-acp or any other agent that speaks ACP v1.
+ * `gemini --acp`, claude-code-acp, codex-acp, `opencode acp` or any other agent that speaks ACP v1.
  *
  * `initialize` → (`authenticate`, API-key profiles only) → `session/new`, or
  * `session/resume` / `session/load` with the stored session ID → model and effort through
@@ -46,8 +46,19 @@ export interface AcpPlan {
     rpcTimeoutMs?: number;
 }
 
-/** Errors a retry can't fix: configuration, login or agent support. */
-export const ACP_FATAL = new Set(['acp_protocol_unsupported', 'acp_auth_required', 'acp_api_key_auth_unavailable', 'native_resume_unsupported', 'acp_model_unavailable']);
+/** Errors a retry can't fix: configuration, login, agent support or a key out of credit. */
+export const ACP_FATAL = new Set(['acp_protocol_unsupported', 'acp_auth_required', 'acp_api_key_auth_unavailable', 'native_resume_unsupported', 'acp_model_unavailable',
+    'credit_exhausted']);
+
+/**
+ * The provider refused the request because the API key has no credit left. opencode passes only
+ * the provider's message (`Internal error: <message>`, errorName "APIError"), not the HTTP status,
+ * so these are OpenRouter's texts for a 402 (no credits, key credit limit used up, a request
+ * bigger than what is left) and a 403 budget stop. A 402 for credit held by requests still in
+ * flight says "exceed available credits" and stays a plain, retryable failure.
+ */
+export const CREDIT_TEXT = /insufficient credits|requires more credits|can only afford|key limit exceeded|budget limit exceeded|credit limit (?:exceeded|reached)|out of credits?/i;
+export const CREDIT_MESSAGE = 'The provider refused the run: its API key is out of credit or has used up its credit limit.';
 
 class AcpFailure extends Error {
     constructor(public readonly code: string, public readonly rateLimit?: RateLimit, public readonly detail?: string) { super(code); }
@@ -149,6 +160,7 @@ function classify(err: unknown): AcpFailure {
         let data = '';
         try { data = typeof err.data === 'string' ? err.data : JSON.stringify(err.data ?? '') ?? ''; } catch { /* unserialisable */ }
         const text = `${err.message} ${data.slice(0, 2000)}`;
+        if (CREDIT_TEXT.test(text)) return new AcpFailure('credit_exhausted', undefined, CREDIT_MESSAGE);
         return new AcpFailure('acp_request_failed', RATE_LIMIT_TEXT.test(text) ? { resetAt: parseReset(text) } : undefined);
     }
     if (err instanceof z.ZodError) return new AcpFailure('acp_invalid_output');
@@ -177,8 +189,11 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (typeof u?.toolCallId !== 'string') return null;
         const call = calls.get(u.toolCallId) ?? {};
         for (const key of ['kind', 'title', 'name', 'status'] as const) if (typeof u[key] === 'string') call[key] = u[key];
-        if (Array.isArray(u.locations)) call.locations = u.locations.map((l: any) => l?.path).filter((x: unknown): x is string => typeof x === 'string').slice(0, 50);
-        if (u.rawInput !== undefined && u.rawInput !== null) call.rawInput = u.rawInput;
+        // opencode's permission request repeats the call with empty locations and raw input; what
+        // an earlier update of the same call said stays (and an absent path still fails closed)
+        if (Array.isArray(u.locations) && u.locations.length) call.locations = u.locations.map((l: any) => l?.path).filter((x: unknown): x is string => typeof x === 'string').slice(0, 50);
+        const emptyObject = typeof u.rawInput === 'object' && u.rawInput !== null && !Array.isArray(u.rawInput) && !Object.keys(u.rawInput).length;
+        if (u.rawInput !== undefined && u.rawInput !== null && !emptyObject) call.rawInput = u.rawInput;
         if (Array.isArray(u.content)) call.diffs = u.content.filter((c: any) => c?.type === 'diff').map((c: any) => inside(c.path)).filter(Boolean);
         if (calls.size < 5000) calls.set(u.toolCallId, call);
         if (typeof u.title === 'string') step = u.title;

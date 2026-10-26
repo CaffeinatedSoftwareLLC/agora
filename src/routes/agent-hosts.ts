@@ -64,8 +64,8 @@ const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
     botId: ID,
     hostId: ID,
-    // gemini: hosted over ACP with an API key only (agora-host src/acp/)
-    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini'] },
+    // gemini and opencode: hosted over ACP with an API key only (agora-host src/acp/)
+    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode'] },
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64 },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
     workdirAlias: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 64 },
@@ -77,6 +77,13 @@ const profileFields = {
     toolPresets: toolPresetsSchema,
     allowedTools: allowedToolsSchema,
 } as const;
+
+/**
+ * opencode's own default model is an OpenCode Zen one, so an opencode profile names its model
+ * (agora-host refuses to run one without). OpenRouter IDs work with or without `openrouter/`.
+ */
+const OPENCODE_MODEL_REQUIRED = 'An opencode profile needs a model, e.g. qwen/qwen3-coder (an OpenRouter model ID)';
+const missingModel = (adapter: string, model: string | null | undefined) => adapter === 'opencode' && !model;
 
 /** The bot belongs to this server and the host is this server's and not revoked. */
 async function checkRefs(db: any, serverId: string, botId?: string, hostId?: string): Promise<string | null> {
@@ -189,6 +196,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         if (!serverId) return reply;
         const b = request.body as any;
         const db = request.dbClient!;
+        if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
         // A duplicate name aborts the INSERT; asService rolls back to its savepoint, so catch outside it
         try {
             const result = await asService(db, async () => {
@@ -254,6 +262,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
             }
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
+            if (missingModel(b.adapter ?? p.adapter, 'model' in b ? b.model : p.model)) return { status: 400, body: { error: OPENCODE_MODEL_REQUIRED } };
 
             const incompatible = (b.adapter !== undefined && b.adapter !== p.adapter)
                 || (b.hostId !== undefined && b.hostId !== p.host_id.trim())
@@ -339,6 +348,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         if (!serverId) return reply;
         const b = request.body as any;
         const db = request.dbClient!;
+        if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
         const { tokenId, secretHash, raw } = await generateBotToken();
         try {
             const result = await asService(db, async () => {
@@ -390,7 +400,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         schema: { body: { type: 'object', required: ['profiles'], additionalProperties: false, properties: {
             profiles: { type: 'array', maxItems: 100, items: { type: 'object', required: ['name', 'adapter', 'authMode', 'runApproval'], additionalProperties: false, properties: {
                 name: profileFields.name,
-                adapter: { type: 'string', enum: ['codex', 'claude', 'gemini'] },
+                adapter: profileFields.adapter,
                 authMode: { type: 'string', enum: ['subscription', 'api_key', 'siwc'] },
                 apiKeyEnv: { type: ['string', 'null'], pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
                 runApproval: { type: 'boolean' },

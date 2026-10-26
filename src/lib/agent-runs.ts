@@ -9,7 +9,7 @@ import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
-import { budgetShelveNotice, type ExhaustedBudget } from './agent-budget-notice';
+import { budgetShelveNotice, creditShelveNotice, type ExhaustedBudget } from './agent-budget-notice';
 
 /**
  * Runs: an agent host claims a batch of inbox rows, runs the agent, and reports back
@@ -529,6 +529,23 @@ export async function budgetRemaining(c: PoolClient | any, sessionId: string): P
 export const MAX_SUBTASK_DEPTH = 2;
 
 async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[], exhausted: ExhaustedBudget) {
+    await shelveWithNotice(c, sessionId, channelId, notices, budgetShelveNotice(profileName, sessionId, exhausted));
+}
+
+/**
+ * The host stopped a run because the profile's API key is out of credit (agora-host
+ * `credit_exhausted`, e.g. an OpenRouter key whose credit limit is used up). Every further
+ * wake would fail the same way, so the session is shelved like one over its own budget.
+ */
+async function shelveForCredit(c: PoolClient, run: any, notices: Notice[]) {
+    const s = await c.query(`SELECT s.state, s.channel_id, p.name, p.api_key_env FROM agent_sessions s
+        JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
+    const session = s.rows[0];
+    if (run.cancel_requested || session?.state !== 'live') return;
+    await shelveWithNotice(c, run.session_id.trim(), session.channel_id.trim(), notices, creditShelveNotice(session.name, run.session_id.trim(), session.api_key_env ?? null));
+}
+
+async function shelveWithNotice(c: PoolClient, sessionId: string, channelId: string, notices: Notice[], text: string) {
     await c.query(
         `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW() WHERE id = $1 AND state = 'live'`,
         [sessionId]
@@ -536,7 +553,7 @@ async function shelveForBudget(c: PoolClient, sessionId: string, channelId: stri
     await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     await expireLiveRequests(c, { sessionIds: [sessionId] }, 'stopped', notices);
     notices.push(await sessionUpdate(c, sessionId, false));
-    notices.push(await postNotice(c, channelId, budgetShelveNotice(profileName, sessionId, exhausted)));
+    notices.push(await postNotice(c, channelId, text));
 }
 
 // ─── Heartbeat, complete, fail ───
@@ -764,6 +781,8 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         await expireLiveRequests(c, { runId }, 'stopped', notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
         await recordVerification(c, run, body.verification, notices);
+        // Out of credit: shelved with its own notice; settleBatch then drops the batch quietly
+        if (body.error === 'credit_exhausted') await shelveForCredit(c, run, notices);
         if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {
             notices.push(await sessionUpdate(c, run.session_id, false));
             return { status: 200, body: { ok: true, sleeping: true } };
