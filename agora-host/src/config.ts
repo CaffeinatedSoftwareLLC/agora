@@ -90,7 +90,7 @@ export const configSchema = z.object({
     approvalWaitSeconds: z.number().int().min(10).max(3600).default(300),
     // Sign in with ChatGPT (auth "siwc"): where this host keeps its host id and credentials
     // (default ~/.agora-host/siwc) and the loopback callback port (0: any free port)
-    siwc: z.object({ dir: absolute.optional(), callbackPort: z.number().int().min(0).max(65535).default(1455) }).strict().default({}),
+    siwc: z.object({ dir: absolute.optional(), callbackPort: z.number().int().min(0).max(65535).default(1455) }).strict().prefault({}),
     // Browser preview (src/preview.ts): a local Chromium/Chrome/Edge, and each session gets
     // portsPerSession ports from portBase up for the dev servers it wants screenshotted
     preview: z.object({

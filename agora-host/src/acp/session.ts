@@ -70,7 +70,7 @@ const initSchema = z.object({
     agentCapabilities: z.object({
         loadSession: z.boolean().catch(false).default(false),
         sessionCapabilities: z.object({ resume: z.unknown().optional() }).passthrough().catch({}).default({}),
-    }).passthrough().catch({ loadSession: false, sessionCapabilities: {} }).default({}),
+    }).passthrough().catch({ loadSession: false, sessionCapabilities: {} }).prefault({}),
     authMethods: z.array(z.object({ id: z.string(), type: z.string().optional() }).passthrough()).catch([]).default([]),
     agentInfo: z.object({ version: z.string().max(100).optional() }).passthrough().nullish().catch(null),
 }).passthrough();
