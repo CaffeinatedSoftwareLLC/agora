@@ -74,6 +74,18 @@ tok`).digest('base64url');
         expect(store.count()).toBe(2);
     });
 
+    it('treats a row sealed under another RELAY_SECRET_KEY as unknown', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
+        const path = join(dir, 'relay.db');
+        const before = new HandleStore(path, deriveKeys(randomBytes(32)));
+        const handle = before.register('android', I, 'tok');
+        before.close();
+        const after = new HandleStore(path, deriveKeys(randomBytes(32)));
+        expect(after.lookup(handle)).toBeNull();
+        after.close();
+        rmSync(dir, { recursive: true, force: true });
+    });
+
     it('a handle lives by its own seen_at: re-registering the token does not refresh older handles', () => {
         const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
         const old = store.register('android', I, 'tok', 1_000);

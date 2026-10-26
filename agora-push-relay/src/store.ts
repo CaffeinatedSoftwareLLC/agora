@@ -58,7 +58,14 @@ export class HandleStore {
         const handleHash = hashHandle(handle);
         const row = this.db.prepare('SELECT handle_hash, platform, sealed FROM handles WHERE handle_hash = ?').get(handleHash) as Row | undefined;
         if (!row) return null;
-        const { t, i } = JSON.parse(open(this.keys.sealKey, row.sealed, handleHash)) as { t: string; i: string };
+        let plain: string;
+        try {
+            plain = open(this.keys.sealKey, row.sealed, handleHash);
+        } catch {
+            // Sealed under another RELAY_SECRET_KEY (or damaged): the handle is unusable.
+            return null;
+        }
+        const { t, i } = JSON.parse(plain) as { t: string; i: string };
         return { handleHash, platform: row.platform, instance: i, token: t };
     }
 
