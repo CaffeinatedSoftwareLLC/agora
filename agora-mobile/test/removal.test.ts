@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { removeServer } from '../src/lib/removal';
-import { handleKey, ServerStore, type SavedServer } from '../src/lib/servers';
+import { handleKey, LAST_SERVER_KEY, ServerStore, type SavedServer } from '../src/lib/servers';
 import { memoryKv } from './helpers';
 
 const A = { origin: 'https://a.example.com', name: 'A' };
@@ -61,5 +61,34 @@ describe('removeServer', () => {
         await removeServer(A, t.deps);
         expect(t.deps.deleteRelayHandle).not.toHaveBeenCalled();
         expect(t.events).toEqual(['shown:Removed A.', 'serversChanged:0']);
+    });
+
+    // Codex review: once the saved list has changed, native must always re-read it.
+    it.each([
+        ['reading the handle fails', (t: ReturnType<typeof setup>) => { const get = t.kv.get; t.kv.get = async (o) => { if (o.key === handleKey(A.origin)) throw new Error('get failed'); return get(o); }; }],
+        ['clearing the handle fails', (t: ReturnType<typeof setup>) => { const remove = t.kv.remove; t.kv.remove = async (o) => { if (o.key === handleKey(A.origin)) throw new Error('remove failed'); return remove(o); }; }],
+    ])('still calls serversChanged when %s, and says it failed', async (_name, breakKv) => {
+        const t = setup(true);
+        await t.store.add(A);
+        await t.store.add(B);
+        breakKv(t);
+        await expect(removeServer(A, t.deps)).rejects.toThrow();
+        expect((await t.store.list()).map((s) => s.name)).toEqual(['B']);
+        expect(t.deps.serversChanged).toHaveBeenCalledOnce();
+        expect(t.status.textContent).toBe("Couldn't finish removing A. Try again.");
+    });
+
+    it('still calls serversChanged when ServerStore.remove rejects after saving the list', async () => {
+        const t = setup(false);
+        await t.store.add(A);
+        await t.store.add(B);
+        t.kv.data.set(LAST_SERVER_KEY, A.origin);
+        const remove = t.kv.remove;
+        t.kv.remove = async (o) => { if (o.key === LAST_SERVER_KEY) throw new Error('remove failed'); return remove(o); };
+        await expect(removeServer(A, t.deps)).rejects.toThrow('remove failed');
+        expect((await t.store.list()).map((s) => s.name)).toEqual(['B']);
+        expect(t.deps.serversChanged).toHaveBeenCalledOnce();
+        expect(t.list.children).toHaveLength(1);
+        expect(t.status.textContent).toBe("Couldn't finish removing A. Try again.");
     });
 });
