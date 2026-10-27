@@ -1,6 +1,9 @@
 package com.caffeinatedsoftware.agora;
 
 import android.webkit.PermissionRequest;
+import android.webkit.WebViewClient;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -92,6 +95,42 @@ final class ShellPolicy {
         if (onPicker) return Back.LEAVE;
         if (canGoBack && !isBlankPage(previousUrl)) return Back.GO_BACK;
         return Back.PICKER;
+    }
+
+    /** The picker fragment that names a saved server which could not be reached; src/lib/errors.ts reads it. */
+    static final String UNREACHABLE_PREFIX = "#unreachable=";
+
+    /**
+     * A saved server's page failed to load in the main frame for a network reason (no
+     * connection, VPN off, DNS, refused, timeout, connection dropped). The picker then
+     * says so instead of the WebView's error page. Other errors (cancelled loads,
+     * subresources, unsupported schemes) are left alone.
+     *
+     * @return the saved origin that could not be reached, or null
+     */
+    static String unreachableServer(boolean mainFrame, int errorCode, String failedUrl, Set<String> saved) {
+        if (!mainFrame || saved == null) return null;
+        switch (errorCode) {
+            case WebViewClient.ERROR_HOST_LOOKUP:
+            case WebViewClient.ERROR_CONNECT:
+            case WebViewClient.ERROR_IO:
+            case WebViewClient.ERROR_TIMEOUT:
+                break;
+            default:
+                return null;
+        }
+        String origin = Origins.anyOrigin(failedUrl);
+        return origin != null && saved.contains(origin) ? origin : null;
+    }
+
+    /** The picker URL that reports `origin` as unreachable. */
+    static String unreachablePickerUrl(String appUrl, String origin) {
+        String base = appUrl.replaceAll("/+$", "");
+        try {
+            return base + "/" + UNREACHABLE_PREFIX + URLEncoder.encode(origin, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            return base + "/";
+        }
     }
 
     /** about:blank (with or without a fragment or query) and any other about: page. */

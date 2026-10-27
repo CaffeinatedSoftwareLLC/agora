@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { errorDetail, MESSAGES, ProbeError, probeFailureMessage } from '../src/lib/errors';
+import { errorDetail, MESSAGES, ProbeError, probeFailureMessage, readUnreachable, unreachableServerMessage } from '../src/lib/errors';
 
 describe('probeFailureMessage', () => {
     it('says the server cannot be reached for network failures', () => {
@@ -27,6 +27,24 @@ describe('probeFailureMessage', () => {
 
     it('keeps the https hint', () => {
         expect(MESSAGES.notHttps).toBe('Enter an https:// address with no path, like https://agora.example.com.');
+    });
+});
+
+describe('unreachable saved server (Android shell fragment)', () => {
+    it('reads the origin the shell put in the fragment (ShellPolicy.unreachablePickerUrl)', () => {
+        expect(readUnreachable('#unreachable=https%3A%2F%2Fagora.example.com')).toBe('https://agora.example.com');
+        expect(readUnreachable('#unreachable=https%3A%2F%2Fa.example.com%3A8443')).toBe('https://a.example.com:8443');
+    });
+
+    it('ignores other fragments and malformed ones', () => {
+        expect(readUnreachable('')).toBeNull();
+        expect(readUnreachable('#open=%7B%7D')).toBeNull();
+        expect(readUnreachable('#unreachable=')).toBeNull();
+        expect(readUnreachable('#unreachable=%E0%A4%A')).toBeNull();
+    });
+
+    it('names the server', () => {
+        expect(unreachableServerMessage('Team Agora')).toBe("Can't reach Team Agora. Check your network or VPN, then try again.");
     });
 });
 

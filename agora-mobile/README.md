@@ -6,7 +6,7 @@ Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and
 
 ## How it works
 
-- **Server picker.** The app's bundled start page (`index.html`, `src/picker/`) lists saved servers and adds new ones. A new address must be `https://host[:port]` and answer like Agora: `GET /health` returns `{ "status": "ok" }` and `GET /instance/status` has Agora's shape. The list is stored with Capacitor Preferences (`agora.servers`).
+- **Server picker.** The app's bundled start page (`index.html`, `src/picker/`) lists saved servers and adds new ones. A new address must be `https://host[:port]` and answer like Agora: `GET /health` returns `{ "status": "ok" }` and `GET /instance/status` has Agora's shape. The list is stored with Capacitor Preferences (`agora.servers`). If a saved server can't be reached (no network, VPN off), Android returns to the picker, which says so instead of showing the WebView's error page; iOS still shows the WebView's own error.
 - **The instance, not a bundled UI.** Opening a server navigates the WebView to its origin, so the `SameSite=Strict` session cookie, sockets and uploads work unchanged, and the UI always matches its server.
 - **Navigation lock.** Only the picker and saved origins load in the WebView. Every other link (other sites, `mailto:`, `tel:`) opens in the system browser or app. `server.allowNavigation` stays empty on purpose: the lock is `AgoraShell.shouldOverrideLoad`, which reads the saved list.
 - **Back to the server list.** Android: Back from a server's first page, or long-press the app icon → **Switch server**. iOS: swipe back from a server's first page, or long-press the app icon → **Switch server**. The app reopens the last server on launch; it doesn't after Switch server.

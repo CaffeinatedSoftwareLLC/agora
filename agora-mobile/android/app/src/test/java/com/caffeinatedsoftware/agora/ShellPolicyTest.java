@@ -2,9 +2,11 @@ package com.caffeinatedsoftware.agora;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.webkit.PermissionRequest;
+import android.webkit.WebViewClient;
 import java.util.Collections;
 import java.util.Set;
 import org.junit.Test;
@@ -89,6 +91,28 @@ public class ShellPolicyTest {
         assertEquals(ShellPolicy.Back.LEAVE, ShellPolicy.back(true, true, ShellPolicy.BLANK));
         assertEquals(ShellPolicy.Back.LEAVE, ShellPolicy.back(true, true, SERVER + "/"));
         assertEquals(ShellPolicy.Back.LEAVE, ShellPolicy.back(true, false, null));
+    }
+
+    @Test
+    public void unreachableOnlyForANetworkFailureOfASavedServersMainFrame() {
+        String page = SERVER + "/app/01A";
+        for (int code : new int[] { WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_IO, WebViewClient.ERROR_TIMEOUT }) {
+            assertEquals(SERVER, ShellPolicy.unreachableServer(true, code, page, SAVED));
+        }
+        // Subresources and frames, other errors (cancelled loads report ERROR_UNKNOWN), other origins.
+        assertNull(ShellPolicy.unreachableServer(false, WebViewClient.ERROR_CONNECT, page, SAVED));
+        assertNull(ShellPolicy.unreachableServer(true, WebViewClient.ERROR_UNKNOWN, page, SAVED));
+        assertNull(ShellPolicy.unreachableServer(true, WebViewClient.ERROR_UNSUPPORTED_SCHEME, page, SAVED));
+        assertNull(ShellPolicy.unreachableServer(true, WebViewClient.ERROR_CONNECT, "https://other.example.com/", SAVED));
+        assertNull(ShellPolicy.unreachableServer(true, WebViewClient.ERROR_CONNECT, LOCAL + "/", SAVED));
+        assertNull(ShellPolicy.unreachableServer(true, WebViewClient.ERROR_CONNECT, null, SAVED));
+        assertNull(ShellPolicy.unreachableServer(true, WebViewClient.ERROR_CONNECT, page, null));
+    }
+
+    @Test
+    public void unreachablePickerUrlCarriesTheOriginInTheFragment() {
+        assertEquals(LOCAL + "/#unreachable=https%3A%2F%2Fagora.example.com", ShellPolicy.unreachablePickerUrl(LOCAL, SERVER));
+        assertEquals(LOCAL + "/#unreachable=https%3A%2F%2Fa.example.com%3A8443", ShellPolicy.unreachablePickerUrl(LOCAL + "/", "https://a.example.com:8443"));
     }
 
     @Test

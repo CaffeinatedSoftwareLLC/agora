@@ -4,7 +4,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { RELAY_URL } from '../config';
 import { deleteRelayHandle } from '../lib/bridge';
 import { normalizeOrigin, resolveDeepLink, type PushData } from '../lib/origin';
-import { errorDetail, MESSAGES, probeFailureMessage } from '../lib/errors';
+import { errorDetail, MESSAGES, probeFailureMessage, readUnreachable, unreachableServerMessage } from '../lib/errors';
 import { clearFlash, saveFlash, sessionStore, takeFlash } from '../lib/flash';
 import { probeInstance } from '../lib/probe';
 import { removeServer } from '../lib/removal';
@@ -153,6 +153,13 @@ async function start(): Promise<void> {
     // "Added X." / "Removed X." from before the reload that serversChanged caused.
     const carried = takeFlash(flash);
     if (carried) setStatus(carried);
+    // The shell came back here because a saved server's page could not load.
+    const unreachable = readUnreachable(window.location.hash);
+    if (unreachable) {
+        history.replaceState(null, '', window.location.pathname);
+        const server = servers.find((s) => s.origin === unreachable);
+        if (server) setStatus(unreachableServerMessage(server.name), true);
+    }
 
     // A notification tapped while an instance page was open, handed over in the fragment.
     const handedOver = readPickerOpen(window.location.hash);
@@ -178,7 +185,7 @@ async function start(): Promise<void> {
     const { autoOpen } = await AgoraShell.getLaunchState();
     // Give a retained tap event a moment to arrive before opening the last server.
     await new Promise((r) => setTimeout(r, 300));
-    if (!autoOpen || tapped || leaving) return;
+    if (!autoOpen || tapped || leaving || unreachable) return;
     const last = await store.lastUsed();
     const target = servers.find((s) => s.origin === last) ?? (servers.length === 1 ? servers[0] : undefined);
     if (target) await open(target.origin);

@@ -128,6 +128,8 @@ public class AgoraShellPlugin extends Plugin {
         localOrigin = Origins.anyOrigin(bridge.getAppUrl());
         savedOrigins = readSavedOrigins();
         bridge.getWebView().setWebChromeClient(new AgoraChromeClient(bridge, () -> savedOrigins));
+        // Capacitor's client plus a picker message when a saved server can't be reached.
+        bridge.setWebViewClient(new AgoraWebViewClient(bridge, () -> savedOrigins));
         bridge.addWebViewListener(new WebViewListener() {
             @Override
             public void onPageLoaded(WebView webView) {

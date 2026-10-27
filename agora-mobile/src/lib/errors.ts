@@ -40,3 +40,21 @@ export function errorDetail(err: unknown): string {
     if (err instanceof Error) return err.message || err.name;
     return String(err);
 }
+
+/** Set by the Android shell (ShellPolicy.unreachablePickerUrl) when a saved server's page could not load. */
+const UNREACHABLE_PREFIX = '#unreachable=';
+
+/** The origin named in the picker fragment, or null. Untrusted: only show it for a saved server. */
+export function readUnreachable(hash: string): string | null {
+    if (!hash.startsWith(UNREACHABLE_PREFIX)) return null;
+    try {
+        const origin = decodeURIComponent(hash.slice(UNREACHABLE_PREFIX.length));
+        return origin || null;
+    } catch {
+        return null;
+    }
+}
+
+export function unreachableServerMessage(name: string): string {
+    return `Can't reach ${name}. Check your network or VPN, then try again.`;
+}
