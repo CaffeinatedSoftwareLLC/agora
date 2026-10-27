@@ -89,6 +89,8 @@ public class AgoraShellPlugin extends Plugin {
     private boolean autoOpenUsed = false;
     /** Main thread. The saved servers changed and the listener still has the old rules; see serversChanged. */
     private boolean rescopePending = false;
+    /** Main thread. A re-scope reloaded the picker; clear the history once it loads (ShellPolicy.clearHistoryAfterRescope). */
+    private boolean clearHistoryOnPickerLoad = false;
     /** One thread: registrations for an origin never interleave. */
     private final ExecutorService pushExecutor = Executors.newSingleThreadExecutor();
     private final Map<String, PageCall> pendingPermission = new ConcurrentHashMap<>();
@@ -227,11 +229,13 @@ public class AgoraShellPlugin extends Plugin {
 
     /** Main thread, from the WebViewListener added in attach(). */
     private void onPageLoaded(WebView webView) {
-        switch (ShellPolicy.rescope(rescopePending, webView.getUrl())) {
+        String loaded = webView.getUrl();
+        switch (ShellPolicy.rescope(rescopePending, loaded)) {
             case NOW:
                 rescopePending = false;
                 if (!remoteAllowed) return;
                 if (exposeBridge()) {
+                    clearHistoryOnPickerLoad = true;
                     webView.loadUrl(getBridge().getAppUrl());
                 } else {
                     failClosed();
@@ -241,6 +245,10 @@ public class AgoraShellPlugin extends Plugin {
                 webView.loadUrl(ShellPolicy.BLANK);
                 break;
             default:
+                // The blank page and the earlier entries go, so Back never lands on the blank page.
+                if (ShellPolicy.clearHistoryAfterRescope(clearHistoryOnPickerLoad, loaded, localOrigin)) webView.clearHistory();
+                // Only the first page after the re-scope; MainActivity's Back skips a blank entry otherwise.
+                if (!ShellPolicy.isBlankPage(loaded)) clearHistoryOnPickerLoad = false;
                 break;
         }
     }

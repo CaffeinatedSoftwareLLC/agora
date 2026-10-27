@@ -33,6 +33,16 @@ final class ShellPolicy {
         BLANK_FIRST,
     }
 
+    /** What MainActivity does on Back. */
+    enum Back {
+        /** Go back in the WebView history. */
+        GO_BACK,
+        /** Load the server list. */
+        PICKER,
+        /** Let the system handle it: leave the app. */
+        LEAVE,
+    }
+
     /**
      * Loaded with loadUrl from native code, so shouldOverrideLoad never sees it. It has an
      * opaque origin, which no listener rule matches: it never gets an androidBridge object.
@@ -54,6 +64,39 @@ final class ShellPolicy {
     static Rescope rescope(boolean pending, String loadedUrl) {
         if (!pending) return Rescope.NONE;
         return BLANK.equals(loadedUrl) ? Rescope.NOW : Rescope.BLANK_FIRST;
+    }
+
+    /**
+     * After a re-scope the blank page and the reloaded picker are both history entries
+     * (loadUrl), so Back could land on the blank page. When the picker reload that ends a
+     * re-scope finishes, the history is cleared so it starts at the picker.
+     *
+     * @param pickerReloadPending whether a re-scope just loaded the picker again
+     * @param loadedUrl           the URL of the page that just finished loading
+     * @param localOrigin         the bundled picker's origin
+     */
+    static boolean clearHistoryAfterRescope(boolean pickerReloadPending, String loadedUrl, String localOrigin) {
+        return pickerReloadPending && localOrigin != null && localOrigin.equals(Origins.anyOrigin(loadedUrl));
+    }
+
+    /**
+     * Back walks the WebView history, except onto a blank page left by a re-scope, which
+     * counts as no history: from a server that opens the server list. Back on the server
+     * list leaves the app.
+     *
+     * @param onPicker    whether the page shown is the bundled picker
+     * @param canGoBack   WebView.canGoBack()
+     * @param previousUrl the URL of the previous history entry, or null
+     */
+    static Back back(boolean onPicker, boolean canGoBack, String previousUrl) {
+        if (onPicker) return Back.LEAVE;
+        if (canGoBack && !isBlankPage(previousUrl)) return Back.GO_BACK;
+        return Back.PICKER;
+    }
+
+    /** about:blank (with or without a fragment or query) and any other about: page. */
+    static boolean isBlankPage(String url) {
+        return url != null && scheme(url).equals("about");
     }
 
     /**

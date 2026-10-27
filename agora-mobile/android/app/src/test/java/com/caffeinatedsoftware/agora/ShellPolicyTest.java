@@ -66,6 +66,41 @@ public class ShellPolicyTest {
     }
 
     @Test
+    public void clearsHistoryOnlyWhenThePickerReloadAfterARescopeLoads() {
+        assertTrue(ShellPolicy.clearHistoryAfterRescope(true, LOCAL + "/", LOCAL));
+        assertTrue(ShellPolicy.clearHistoryAfterRescope(true, LOCAL + "/index.html#x", LOCAL));
+        assertFalse(ShellPolicy.clearHistoryAfterRescope(false, LOCAL + "/", LOCAL));
+        assertFalse(ShellPolicy.clearHistoryAfterRescope(true, ShellPolicy.BLANK, LOCAL));
+        assertFalse(ShellPolicy.clearHistoryAfterRescope(true, SERVER + "/", LOCAL));
+        assertFalse(ShellPolicy.clearHistoryAfterRescope(true, null, LOCAL));
+        assertFalse(ShellPolicy.clearHistoryAfterRescope(true, LOCAL + "/", null));
+    }
+
+    @Test
+    public void backNeverLandsOnTheBlankPage() {
+        // A server page with real history goes back.
+        assertEquals(ShellPolicy.Back.GO_BACK, ShellPolicy.back(false, true, SERVER + "/app/01A"));
+        assertEquals(ShellPolicy.Back.GO_BACK, ShellPolicy.back(false, true, LOCAL + "/"));
+        // The previous entry is the blank page a re-scope left: treat it as no history.
+        assertEquals(ShellPolicy.Back.PICKER, ShellPolicy.back(false, true, ShellPolicy.BLANK));
+        assertEquals(ShellPolicy.Back.PICKER, ShellPolicy.back(false, true, "about:blank#x"));
+        assertEquals(ShellPolicy.Back.PICKER, ShellPolicy.back(false, false, null));
+        // On the server list, Back leaves the app, whatever the history holds.
+        assertEquals(ShellPolicy.Back.LEAVE, ShellPolicy.back(true, true, ShellPolicy.BLANK));
+        assertEquals(ShellPolicy.Back.LEAVE, ShellPolicy.back(true, true, SERVER + "/"));
+        assertEquals(ShellPolicy.Back.LEAVE, ShellPolicy.back(true, false, null));
+    }
+
+    @Test
+    public void blankPages() {
+        assertTrue(ShellPolicy.isBlankPage("about:blank"));
+        assertTrue(ShellPolicy.isBlankPage("ABOUT:blank#x"));
+        assertFalse(ShellPolicy.isBlankPage(null));
+        assertFalse(ShellPolicy.isBlankPage(LOCAL + "/"));
+        assertFalse(ShellPolicy.isBlankPage("https://about.example.com/"));
+    }
+
+    @Test
     public void microphoneOnlyForTheSavedServerShown() {
         String[] mic = { MIC };
         assertTrue(ShellPolicy.grantMicrophone(SERVER + "/", SERVER + "/app/01A", mic, SAVED));

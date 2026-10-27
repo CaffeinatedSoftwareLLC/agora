@@ -1,6 +1,8 @@
 package com.caffeinatedsoftware.agora;
 
 import android.os.Bundle;
+import android.webkit.WebBackForwardList;
+import android.webkit.WebHistoryItem;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
@@ -28,16 +30,29 @@ public class MainActivity extends BridgeActivity {
                 WebView webView = bridge.getWebView();
                 String local = Origins.anyOrigin(bridge.getAppUrl());
                 boolean onPicker = local != null && local.equals(Origins.anyOrigin(webView.getUrl()));
-                if (!onPicker && webView.canGoBack()) {
-                    webView.goBack();
-                } else if (!onPicker) {
-                    webView.loadUrl(bridge.getAppUrl());
-                } else {
-                    setEnabled(false);
-                    getOnBackPressedDispatcher().onBackPressed();
-                    setEnabled(true);
+                switch (ShellPolicy.back(onPicker, webView.canGoBack(), previousUrl(webView))) {
+                    case GO_BACK:
+                        webView.goBack();
+                        break;
+                    case PICKER:
+                        webView.loadUrl(bridge.getAppUrl());
+                        break;
+                    default:
+                        setEnabled(false);
+                        getOnBackPressedDispatcher().onBackPressed();
+                        setEnabled(true);
+                        break;
                 }
             }
         });
+    }
+
+    /** The URL of the history entry Back would go to, or null. A blank page left by a re-scope is skipped (ShellPolicy.back). */
+    private static String previousUrl(WebView webView) {
+        WebBackForwardList history = webView.copyBackForwardList();
+        int index = history.getCurrentIndex();
+        if (index <= 0) return null;
+        WebHistoryItem item = history.getItemAtIndex(index - 1);
+        return item == null ? null : item.getUrl();
     }
 }
