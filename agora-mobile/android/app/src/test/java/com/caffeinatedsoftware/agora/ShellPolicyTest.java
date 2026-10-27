@@ -54,6 +54,18 @@ public class ShellPolicyTest {
     }
 
     @Test
+    public void rescopesOnlyOnTheBlankPage() {
+        assertEquals(ShellPolicy.Rescope.NONE, ShellPolicy.rescope(false, ShellPolicy.BLANK));
+        assertEquals(ShellPolicy.Rescope.NONE, ShellPolicy.rescope(false, LOCAL + "/"));
+        assertEquals(ShellPolicy.Rescope.NOW, ShellPolicy.rescope(true, "about:blank"));
+        // Any page that may hold an androidBridge object: the picker, a saved server, or unknown.
+        assertEquals(ShellPolicy.Rescope.BLANK_FIRST, ShellPolicy.rescope(true, LOCAL + "/"));
+        assertEquals(ShellPolicy.Rescope.BLANK_FIRST, ShellPolicy.rescope(true, SERVER + "/app/01A"));
+        assertEquals(ShellPolicy.Rescope.BLANK_FIRST, ShellPolicy.rescope(true, "about:blank#x"));
+        assertEquals(ShellPolicy.Rescope.BLANK_FIRST, ShellPolicy.rescope(true, null));
+    }
+
+    @Test
     public void microphoneOnlyForTheSavedServerShown() {
         String[] mic = { MIC };
         assertTrue(ShellPolicy.grantMicrophone(SERVER + "/", SERVER + "/app/01A", mic, SAVED));

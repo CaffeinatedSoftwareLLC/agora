@@ -27,6 +27,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginHandle;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.WebViewListener;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
@@ -86,6 +87,8 @@ public class AgoraShellPlugin extends Plugin {
     private ScriptHandler instanceScript;
     private String instanceScriptSource;
     private boolean autoOpenUsed = false;
+    /** Main thread. The saved servers changed and the listener still has the old rules; see serversChanged. */
+    private boolean rescopePending = false;
     /** One thread: registrations for an origin never interleave. */
     private final ExecutorService pushExecutor = Executors.newSingleThreadExecutor();
     private final Map<String, PageCall> pendingPermission = new ConcurrentHashMap<>();
@@ -123,6 +126,12 @@ public class AgoraShellPlugin extends Plugin {
         localOrigin = Origins.anyOrigin(bridge.getAppUrl());
         savedOrigins = readSavedOrigins();
         bridge.getWebView().setWebChromeClient(new AgoraChromeClient(bridge, () -> savedOrigins));
+        bridge.addWebViewListener(new WebViewListener() {
+            @Override
+            public void onPageLoaded(WebView webView) {
+                AgoraShellPlugin.this.onPageLoaded(webView);
+            }
+        });
         boolean scopable = ShellPolicy.canScopeBridge(
             WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER),
             WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
@@ -197,13 +206,43 @@ public class AgoraShellPlugin extends Plugin {
         call.resolve(result);
     }
 
+    /**
+     * The Java filter (onBridgeMessage, shouldOverrideLoad) follows the new list at once.
+     * The listener and instance script can't be re-registered under the picker that is
+     * calling: once the listener is removed and re-added, the next message from a document
+     * that still holds the old androidBridge object crashes the WebView (SIGSEGV in its
+     * native code). So the picker gives way to the blank page, which has no such object;
+     * onPageLoaded re-scopes there and loads the picker again.
+     */
     @PluginMethod
     public void serversChanged(PluginCall call) {
         getBridge().executeOnMainThread(() -> {
             savedOrigins = readSavedOrigins();
-            if (remoteAllowed && !exposeBridge()) failClosed();
             call.resolve();
+            if (!remoteAllowed) return;
+            rescopePending = true;
+            getBridge().getWebView().loadUrl(ShellPolicy.BLANK);
         });
+    }
+
+    /** Main thread, from the WebViewListener added in attach(). */
+    private void onPageLoaded(WebView webView) {
+        switch (ShellPolicy.rescope(rescopePending, webView.getUrl())) {
+            case NOW:
+                rescopePending = false;
+                if (!remoteAllowed) return;
+                if (exposeBridge()) {
+                    webView.loadUrl(getBridge().getAppUrl());
+                } else {
+                    failClosed();
+                }
+                break;
+            case BLANK_FIRST:
+                webView.loadUrl(ShellPolicy.BLANK);
+                break;
+            default:
+                break;
+        }
     }
 
     /*
@@ -244,6 +283,8 @@ public class AgoraShellPlugin extends Plugin {
     /**
      * (Re)register the bridge listener and the instance script for the current saved
      * servers. Main thread. Returns false if the scoped listener could not be installed.
+     * Only call it while no document holds an androidBridge object: before the first page
+     * (attach) or on the blank page (onPageLoaded).
      */
     private boolean exposeBridge() {
         WebView webView = getBridge().getWebView();
