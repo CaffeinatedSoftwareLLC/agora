@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MESSAGES } from '../src/lib/errors';
 import { probeInstance, ProbeError } from '../src/lib/probe';
 import { fakeHttp } from './helpers';
 
@@ -29,14 +30,26 @@ describe('probeInstance', () => {
     it('refuses a server that only has a /health', async () => {
         const http = fakeHttp({ [HEALTH]: agora[HEALTH], [STATUS]: { status: 200, data: '<html></html>' } });
         await expect(probeInstance(ORIGIN, http)).rejects.toBeInstanceOf(ProbeError);
+        await expect(probeInstance(ORIGIN, http)).rejects.toMatchObject({ kind: 'not_agora', message: MESSAGES.notAgora });
     });
 
-    it("refuses a server whose /health is not Agora's", async () => {
-        await expect(probeInstance(ORIGIN, fakeHttp({ [HEALTH]: { status: 200, data: '<html></html>' } }))).rejects.toThrow(/did not answer/);
-        await expect(probeInstance(ORIGIN, fakeHttp({}))).rejects.toThrow(/404/);
+    it("refuses a server whose /health is not Agora's, or that answers non-2xx", async () => {
+        await expect(probeInstance(ORIGIN, fakeHttp({ [HEALTH]: { status: 200, data: '<html></html>' } }))).rejects.toMatchObject({ kind: 'not_agora' });
+        await expect(probeInstance(ORIGIN, fakeHttp({}))).rejects.toMatchObject({ kind: 'not_agora', detail: expect.stringContaining('404') });
+        await expect(probeInstance(ORIGIN, fakeHttp({ [HEALTH]: agora[HEALTH], [STATUS]: { status: 502, data: '' } }))).rejects.toMatchObject({ kind: 'not_agora' });
     });
 
-    it('reports unreachable servers', async () => {
-        await expect(probeInstance(ORIGIN, fakeHttp({ [HEALTH]: new Error('ssl') }))).rejects.toThrow(/Could not reach/);
+    it('reports unreachable servers without the raw error text', async () => {
+        const raw = 'failed to connect to agora.example.com/100.64.0.1 (port 443) after 8000ms';
+        const err = await probeInstance(ORIGIN, fakeHttp({ [HEALTH]: new Error(raw) })).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(ProbeError);
+        expect(err).toMatchObject({ kind: 'unreachable', message: MESSAGES.unreachable });
+        expect((err as ProbeError).message).not.toContain('8000ms');
+        expect((err as ProbeError).detail).toContain(raw);
+    });
+
+    it('reports a failure on /instance/status as unreachable too', async () => {
+        const http = fakeHttp({ [HEALTH]: agora[HEALTH], [STATUS]: new Error('timeout') });
+        await expect(probeInstance(ORIGIN, http)).rejects.toMatchObject({ kind: 'unreachable' });
     });
 });

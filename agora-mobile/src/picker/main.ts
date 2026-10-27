@@ -4,7 +4,10 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { RELAY_URL } from '../config';
 import { deleteRelayHandle } from '../lib/bridge';
 import { normalizeOrigin, resolveDeepLink, type PushData } from '../lib/origin';
-import { probeInstance, ProbeError } from '../lib/probe';
+import { errorDetail, MESSAGES, probeFailureMessage } from '../lib/errors';
+import { clearFlash, saveFlash, sessionStore, takeFlash } from '../lib/flash';
+import { probeInstance } from '../lib/probe';
+import { removeServer } from '../lib/removal';
 import { handleKey, ServerStore, type SavedServer } from '../lib/servers';
 import { AgoraShell } from '../lib/shell';
 import { pushData, readPickerOpen, returnUrl } from '../lib/taps';
@@ -21,14 +24,28 @@ const addButton = document.getElementById('add-button') as HTMLButtonElement;
 const status = document.getElementById('status') as HTMLParagraphElement;
 
 let leaving = false;
+/**
+ * True from the moment the saved list is written until AgoraShell.serversChanged has
+ * run. Nothing navigates meanwhile, so native never keeps a list the picker changed.
+ */
+let changing = false;
+const flash = sessionStore(window);
 
 function setStatus(text: string, error = false): void {
     status.textContent = text;
     status.classList.toggle('error', error);
 }
 
+/** Show a success line now and keep it for the picker reload that serversChanged may cause. */
+function announce(text: string): void {
+    setStatus(text);
+    saveFlash(flash, text);
+}
+
 async function open(origin: string, url?: string): Promise<void> {
+    if (changing) return;
     leaving = true;
+    clearFlash(flash);
     await store.setLastUsed(origin);
     // A plain navigation: AgoraShell lets saved origins load in the WebView, and
     // Back from the instance's first page returns here.
@@ -56,15 +73,26 @@ function render(servers: SavedServer[]): void {
         remove.textContent = 'Remove';
         remove.setAttribute('aria-label', `Remove ${server.name}`);
         remove.addEventListener('click', async () => {
+            if (changing || leaving) return;
             if (!window.confirm(`Remove ${server.name} (${server.origin})? Push notifications from it stop until you add it again and sign in.`)) return;
-            const handle = (await Preferences.get({ key: handleKey(server.origin) })).value;
-            if (handle) {
-                // Best effort: stop the relay forwarding this server's pushes to the phone.
-                await deleteRelayHandle(http, RELAY_URL, handle).catch(() => undefined);
-                await Preferences.remove({ key: handleKey(server.origin) });
+            changing = true;
+            try {
+                await removeServer(server, {
+                    store,
+                    kv: Preferences,
+                    deleteRelayHandle: (handle) => deleteRelayHandle(http, RELAY_URL, handle),
+                    // On Android native then re-scopes the bridge on a blank page and reloads the picker.
+                    serversChanged: () => AgoraShell.serversChanged(),
+                    shown: (servers, text) => {
+                        render(servers);
+                        announce(text);
+                    },
+                });
+            } catch (err) {
+                console.warn('[picker] removing a server failed', errorDetail(err));
+            } finally {
+                changing = false;
             }
-            render(await store.remove(server.origin));
-            await AgoraShell.serversChanged();
         });
         li.append(openButton, remove);
         return li;
@@ -74,28 +102,40 @@ function render(servers: SavedServer[]): void {
 
 form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (changing || leaving) return;
     const origin = normalizeOrigin(input.value);
     if (!origin) {
-        setStatus('Enter an https:// address with no path, like https://agora.example.com.', true);
+        setStatus(MESSAGES.notHttps, true);
         return;
     }
     addButton.disabled = true;
     setStatus(`Checking ${origin}...`);
+    let name: string;
     try {
-        const { name } = await probeInstance(origin, http);
-        render(await store.add({ origin, name }));
-        await AgoraShell.serversChanged();
-        input.value = '';
-        setStatus(`Added ${name}.`);
+        ({ name } = await probeInstance(origin, http));
     } catch (err) {
-        setStatus(err instanceof ProbeError ? err.message : `Could not add ${origin}.`, true);
+        console.warn('[picker] probe failed', origin, errorDetail(err));
+        setStatus(probeFailureMessage(err), true);
+        addButton.disabled = false;
+        return;
+    }
+    changing = true;
+    try {
+        render(await store.add({ origin, name }));
+        input.value = '';
+        announce(`Added ${name}.`);
+        await AgoraShell.serversChanged();
+    } catch (err) {
+        console.warn('[picker] saving a server failed', origin, errorDetail(err));
+        setStatus(MESSAGES.saveFailed, true);
     } finally {
+        changing = false;
         addButton.disabled = false;
     }
 });
 
 async function openDeepLink(data: PushData | null): Promise<boolean> {
-    if (!data || leaving) return false;
+    if (!data || leaving || changing) return false;
     const servers = await store.origins();
     const withHandles = new Set<string>();
     for (const origin of servers) {
@@ -110,6 +150,9 @@ async function openDeepLink(data: PushData | null): Promise<boolean> {
 async function start(): Promise<void> {
     const servers = await store.list();
     render(servers);
+    // "Added X." / "Removed X." from before the reload that serversChanged caused.
+    const carried = takeFlash(flash);
+    if (carried) setStatus(carried);
 
     // A notification tapped while an instance page was open, handed over in the fragment.
     const handedOver = readPickerOpen(window.location.hash);

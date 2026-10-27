@@ -1,8 +1,18 @@
-import { jsonBody, type HttpClient } from './http';
+import { ProbeError, errorDetail } from './errors';
+import { jsonBody, type HttpClient, type HttpResponse } from './http';
 
-export class ProbeError extends Error {}
+export { ProbeError } from './errors';
 
 const TIMEOUTS = { connectTimeout: 8000, readTimeout: 8000 };
+
+async function get(http: HttpClient, url: string): Promise<HttpResponse> {
+    try {
+        return await http.request({ url, method: 'GET', ...TIMEOUTS });
+    } catch (err) {
+        // No HTTP answer at all: network, VPN, DNS, refused, timeout or TLS.
+        throw new ProbeError('unreachable', `GET ${url}: ${errorDetail(err)}`);
+    }
+}
 
 /**
  * Check that `origin` serves an Agora instance before saving it.
@@ -11,24 +21,16 @@ const TIMEOUTS = { connectTimeout: 8000, readTimeout: 8000 };
  * say, so `GET /instance/status` must also have Agora's shape
  * (src/routes/instance.ts): `initialized` (boolean), `registrationPolicy` and
  * `instanceName` (strings). Both are unauthenticated. Returns the instance name.
+ * Throws ProbeError: `unreachable` without an HTTP answer, `not_agora` for any
+ * answer that is not Agora's (non-200 or the wrong shape).
  */
 export async function probeInstance(origin: string, http: HttpClient): Promise<{ name: string }> {
-    let health;
-    try {
-        health = await http.request({ url: `${origin}/health`, method: 'GET', ...TIMEOUTS });
-    } catch {
-        throw new ProbeError(`Could not reach ${origin}. Check the address, your connection and the server's certificate.`);
-    }
+    const health = await get(http, `${origin}/health`);
     if (health.status !== 200 || jsonBody(health.data)?.status !== 'ok') {
-        throw new ProbeError(`${origin} did not answer like an Agora server (/health returned ${health.status}).`);
+        throw new ProbeError('not_agora', `/health returned ${health.status}`);
     }
 
-    let status;
-    try {
-        status = await http.request({ url: `${origin}/instance/status`, method: 'GET', ...TIMEOUTS });
-    } catch {
-        throw new ProbeError(`Could not reach ${origin}/instance/status.`);
-    }
+    const status = await get(http, `${origin}/instance/status`);
     const body = jsonBody(status.data);
     if (
         status.status !== 200 || !body ||
@@ -36,7 +38,7 @@ export async function probeInstance(origin: string, http: HttpClient): Promise<{
         typeof body.registrationPolicy !== 'string' ||
         typeof body.instanceName !== 'string'
     ) {
-        throw new ProbeError(`${origin} is not an Agora server.`);
+        throw new ProbeError('not_agora', `/instance/status returned ${status.status} without Agora's shape`);
     }
     return { name: body.instanceName.trim().slice(0, 80) || new URL(origin).host };
 }
