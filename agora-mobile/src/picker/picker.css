@@ -1,0 +1,34 @@
+:root {
+  color-scheme: dark;
+  --bg: #1c1410;
+  --surface: #2a2018;
+  --surface-hover: #362a20;
+  --border: #352820;
+  --text: #ebf5df;
+  --muted: #9b8b7a;
+  --primary: #c2703e;
+  --on-primary: #1c1410;
+  --danger: #f87171;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 34rem; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 1.5rem) 1rem calc(env(safe-area-inset-bottom) + 1.5rem); }
+h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+.lead { margin: 0 0 1.25rem; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+ul { list-style: none; margin: 0 0 1.5rem; padding: 0; display: grid; gap: .5rem; }
+li { display: flex; align-items: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+li button.open { flex: 1; text-align: left; background: none; border: 0; color: inherit; padding: .8rem 1rem; font: inherit; min-height: 3.25rem; }
+li button.open:active { background: var(--surface-hover); }
+li .name { display: block; font-weight: 600; }
+li .origin { display: block; color: var(--muted); font-size: .85rem; word-break: break-all; }
+li button.remove { background: none; border: 0; border-left: 1px solid var(--border); color: var(--danger); padding: 0 1rem; font: inherit; }
+label { display: block; font-weight: 600; margin-bottom: .4rem; }
+.row { display: flex; gap: .5rem; }
+input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .65rem .75rem; }
+input:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+button[type=submit] { font: inherit; font-weight: 600; color: var(--on-primary); background: var(--primary); border: 0; border-radius: 8px; padding: 0 1.1rem; }
+button:disabled { opacity: .6; }
+#status.error { color: var(--danger); }
+footer { margin-top: 2rem; }

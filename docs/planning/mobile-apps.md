@@ -76,6 +76,7 @@ The phases depend on each other in a chain:
 
 - The WebView only loads the configured instance origin. No remote JavaScript bridge reaches pages outside it.
 - Push payloads carry no secrets and no message text. Deep links are validated against the saved server list.
+- The device push token stays in the app's native code. Instance pages ask native code to register (section 8); the instance origin sent to the relay is the one the WebView reports for the calling page, so a saved server cannot get a handle for another one.
 - Signing keys (the Android keystore, Apple certificates, FCM and APNs credentials) stay with Eryk and the relay host. They are never committed, never sent to Agora instances, and never pasted into chat.
 
 ## 6. Not doing
@@ -154,8 +155,11 @@ When the UI runs inside the app, the page has an object `window.AgoraNative`:
 interface AgoraNative {
   platform: 'android' | 'ios';
   version: string;
-  // Asks for notification permission if needed, registers with the relay, resolves null if denied.
+  // Native code asks for notification permission if needed and registers this page's origin
+  // with the relay, naming the handle it already holds for that origin as `previous`.
+  // Resolves null if permission is denied. The device token never reaches the page.
   registerPush(): Promise<{ relay: string; handle: string; platform: 'android' | 'ios'; label: string } | null>;
+  // Deletes the handle at the relay, only if it is the one stored for this page's origin.
   unregisterPush(handle: string): Promise<void>;
 }
 ```
