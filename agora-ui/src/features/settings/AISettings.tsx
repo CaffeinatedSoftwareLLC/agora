@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { aiApi, botApi, serverApi, voiceApi, ApiError } from '../../lib/api';
-import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue, AIVoiceView } from '../../lib/api';
+import type { AIAdapter, AICapabilityUsage, AIConfig, AIDecisionSettings, AIFileTag, AIProvider, AIRoute, AITaggingQueue, AIVoiceView, ModelAgent, ModelAgentBudget } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
 import { AssistantSection } from './ai/AssistantSection';
+import { AgentsSection } from './ai/AgentsSection';
 import { DecisionsSection } from './ai/DecisionsSection';
 import { TagsSection } from './ai/TagsSection';
 import { VoiceSection } from './ai/VoiceSection';
@@ -26,6 +27,8 @@ interface AIState {
   decisions: AIDecisionSettings;
   tags: { tags: AIFileTag[]; max: number; queue: AITaggingQueue };
   voice: AIVoiceView;
+  agents: ModelAgent[];
+  agentBudget: ModelAgentBudget;
 }
 
 export function AISettings() {
@@ -43,7 +46,7 @@ export function AISettings() {
     let cancelled = false;
     (async () => {
       try {
-        const [adapters, providers, routes, config, channels, usage, decisions, tags, voice] = await Promise.all([
+        const [adapters, providers, routes, config, channels, usage, decisions, tags, voice, agents, agentBudget] = await Promise.all([
           aiApi.listAdapters(instanceServerId),
           aiApi.listProviders(instanceServerId),
           aiApi.listRoutes(instanceServerId),
@@ -53,6 +56,8 @@ export function AISettings() {
           aiApi.getDecisions(instanceServerId),
           aiApi.listTags(instanceServerId),
           voiceApi.getSettings(instanceServerId),
+          aiApi.listAgents(instanceServerId),
+          aiApi.getAgentBudget(instanceServerId),
         ]);
         let botChannelIds = new Set<string>();
         if (config.configured && config.botId) {
@@ -73,6 +78,8 @@ export function AISettings() {
           decisions,
           tags,
           voice,
+          agents,
+          agentBudget,
         });
         setError('');
       } catch (err) {
@@ -144,6 +151,15 @@ export function AISettings() {
             botChannelIds={state.botChannelIds}
             onChanged={reload}
           />
+          <AgentsSection
+            serverId={instanceServerId}
+            adapters={state.adapters}
+            providers={state.providers}
+            agents={state.agents}
+            budget={state.agentBudget}
+            channels={state.channels}
+            onChanged={reload}
+          />
           <VoiceSection
             // Re-seed the form whenever the saved settings or the stt/tts routes change
             key={JSON.stringify(state.voice)}
@@ -166,7 +182,7 @@ export function AISettings() {
             taggingOn={state.decisions.uses.file_tagging.enabled}
             onChanged={reload}
           />
-          <UsageSection usage={state.usage} days={USAGE_DAYS} />
+          <UsageSection usage={state.usage} days={USAGE_DAYS} agentBudget={state.agentBudget.mode} />
           <ChangesSection serverId={instanceServerId} version={version} />
         </>
       )}
