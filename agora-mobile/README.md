@@ -30,7 +30,7 @@ The Capacitor bridge is what lets page JavaScript call native code. Capacitor no
 
 | Key | Value | Notes |
 | --- | --- | --- |
-| `appId` | `com.caffeinatedsoftware.agora` | **Placeholder, confirm.** Android `applicationId` reads it at build time. The iOS bundle ID is in the Xcode project (`PRODUCT_BUNDLE_IDENTIFIER`); `npm test` fails if the two differ. Cannot change after the first store upload. |
+| `appId` | `com.caffeinatedsoftware.agora` | **Confirmed 2026-10-30.** Android `applicationId` reads it at build time. The iOS bundle ID is in the Xcode project (`PRODUCT_BUNDLE_IDENTIFIER`); `npm test` fails if the two differ. Cannot change after the first store upload. |
 | `appName` | `Agora` | Store names may need a suffix if "Agora" is taken. |
 | `relayUrl` | `https://push.agora.host` | **Placeholder, confirm.** Built into `agora-native.js` and the native bridge filter. Instances must list the same origin in their allowed relays. |
 
@@ -86,7 +86,7 @@ Never run `npx cap sync` (both platforms) or `cap sync ios` on Windows: it rewri
 Needs Xcode 16+, Node 22+, and the Apple developer account. No CocoaPods: the project uses Swift Package Manager.
 
 ```bash
-git fetch && git checkout feat/mobile-shell
+git fetch && git checkout main
 cd agora-mobile
 npm ci
 npm test
@@ -122,15 +122,17 @@ Suggested text for App Review notes and the Play "App access" section:
 - `npm test`: vitest for origin and deep-link validation, the bridge and the injected `agora-native.js` (`registerPush`/`unregisterPush` with the Capacitor plugins mocked), the instance-page installer, the server probe, the picker storage, and consistency checks between the TypeScript side and the native projects, including the full instance-page allow-lists of both platforms.
 - `npm run check`: TypeScript.
 - `cd android && ./gradlew testDebugUnitTest`: JUnit for `BridgePolicy`, `Origins`, `ShellPolicy` (navigation, failing closed, microphone) and `PushRelay` (handle checks, `previous` sent and handed back, a handle the relay no longer knows replaced).
-- The iOS Swift code has not been compiled yet (no Mac in the build loop); build it once in Xcode before relying on it. Its push registration (`PushRelay` and `runPageCall` in `AgoraShellPlugin.swift`) mirrors `PushRelay.java`, which has the unit tests.
+- The iOS Swift code has no unit tests; it was built in Xcode and tested on an iPad. Its push registration (`PushRelay` and `runPageCall` in `AgoraShellPlugin.swift`) mirrors `PushRelay.java`, which has the unit tests.
 
 ## Remaining (Phase 5 and follow-ups)
 
-- **In-app account deletion** (Apple requires it): decide whether a deleted account's messages are removed or anonymised.
-- **Privacy policy URL**, Apple privacy labels and the Play Data safety form. Data: the device push token goes to the relay only; the user's instance gets a relay handle and the model label; no tracking.
-- **Demo instance with a reviewer login**, for App Review and Play app access.
-- **Store listings** with the not-affiliated line, screenshots, real **icons and splash** (placeholders now).
+The store checklist, with the privacy policy, the Data safety and privacy label answers, the demo instance plan and the relay deploy steps, is `docs/planning/app-store-readiness.md`.
+
+- **Privacy policy URL**: drafted in `docs/privacy-policy.md`, to be published at `https://agora.host/privacy` and linked from the picker. Apple privacy manifest (`PrivacyInfo.xcprivacy`): not added yet, see the checklist.
+- **Demo instance with a reviewer login**, for App Review and Play app access: proposed in the checklist.
+- **Push relay** live at `relayUrl` before any store build reaches testers.
+- **Store listings** with the not-affiliated line, and screenshots.
 - **Android Approve/Deny actions.** The relay sends FCM *notification* messages, which Android shows itself while the app is in the background, so action buttons can't be added. That needs data-only messages and the app building the notification (a custom `FirebaseMessagingService`), which changes the relay payload. iOS has the actions now.
-- `agora-ui` must call `window.AgoraNative.registerPush()` after login and `unregisterPush` on logout (the notifications branch does this), and the instance admin must add the relay origin to the allowed relays.
+- Each instance's admin must add the relay origin to the allowed relays (Instance settings → App push); it is off by default.
 - File downloads (`Content-Disposition: attachment`) are not handled yet: Capacitor's WebView has no download handler, and the system browser doesn't have the session cookie.
-- iOS: build and run once in Xcode (the Swift code is unverified), then check push, a tap on a notification for another saved server, the Approve/Deny actions, and push-to-talk on a device.
+- iOS: built in Xcode and tested on an iPad (APNs sandbox push, approval cards, adding and removing a server). Not yet tested on an iPhone, or with a TestFlight build against the production relay.

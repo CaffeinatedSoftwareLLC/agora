@@ -1,5 +1,7 @@
+import { config } from '../config';
 import { asService } from './agent-sessions';
 import { removeArtifactVersion } from './artifacts';
+import { decryptString } from './encryption';
 import { generateUlid } from '../utils/ulid';
 
 /**
@@ -54,6 +56,10 @@ export interface DeletionResult {
     events: Array<{ event: string; room: string; data: any }>;
     /** Storage keys of the soft-deleted files; their blobs go after COMMIT. */
     blobKeys: string[];
+    /** Push relay handles of the deleted devices; the relays are told to forget them after COMMIT. */
+    relayHandles: Array<{ relay: string; handle: string }>;
+    /** Devices whose handle no longer decrypts; the relay prunes those after a year unused. */
+    relayHandlesUnreadable: number;
 }
 
 /** More than this many removed messages are not announced one by one; clients see them on reload. */
@@ -71,7 +77,7 @@ const PAUSE_REASON = 'Owner deleted their account';
  */
 export async function deleteAccount(db: any, userId: string, messages: DeletedAccountMessages): Promise<DeletionResult> {
     return asService(db, async () => {
-        const result: DeletionResult = { messages, messagesRemoved: 0, filesRemoved: 0, botsPaused: 0, events: [], blobKeys: [] };
+        const result: DeletionResult = { messages, messagesRemoved: 0, filesRemoved: 0, botsPaused: 0, events: [], blobKeys: [], relayHandles: [], relayHandlesUnreadable: 0 };
 
         // Bots the person owns are paused, not deleted or handed to someone: their history
         // stays attributed, and nobody inherits an agent (or its credentials) they didn't set
@@ -126,10 +132,19 @@ export async function deleteAccount(db: any, userId: string, messages: DeletedAc
             await db.query('UPDATE messages SET author_could_direct = false WHERE author_id = $1 AND author_could_direct', [userId]);
         }
 
-        // TODO(notifications, migration 070): push_devices rows are removed here when that
-        // table exists. Its FK should CASCADE as well; the delete keeps this explicit.
-        const pushDevices = await db.query("SELECT to_regclass('public.push_devices') IS NOT NULL AS present");
-        if (pushDevices.rows[0].present) await db.query('DELETE FROM push_devices WHERE user_id = $1', [userId]);
+        // Push devices would CASCADE with the user row; deleting them here yields the handles,
+        // so the relays can forget them as DELETE /me/push-devices/:id does.
+        const devices = await db.query(
+            'DELETE FROM push_devices WHERE user_id = $1 RETURNING relay, handle_enc, handle_iv, handle_tag',
+            [userId]
+        );
+        for (const d of devices.rows) {
+            try {
+                result.relayHandles.push({ relay: d.relay, handle: decryptString(d.handle_enc, config.encryptionKey, d.handle_iv, d.handle_tag) });
+            } catch {
+                result.relayHandlesUnreadable++;
+            }
+        }
 
         await db.query(
             `INSERT INTO audit_log (id, actor_id, action, target_type, target_id, changes)

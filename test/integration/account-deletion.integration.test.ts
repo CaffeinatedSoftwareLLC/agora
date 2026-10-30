@@ -3,6 +3,7 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { SoftPasskey } from '../webauthn-authenticator';
 import { Permissions } from '../../src/permissions';
 import { storage } from '../../src/lib/storage';
+import { setRelayFetch } from '../../src/lib/push-relay';
 import { formatMessages } from '../../agora-mcp/src/tools';
 
 // Self-service account deletion (DELETE /users/@me, docs/account-deletion.md)
@@ -315,6 +316,35 @@ describe('bots the person owns', () => {
         const list = await ctx.request.get(`/channels/${channelId}/messages`).set(owner.auth);
         expect(list.body.find((m: any) => m.id === botMsg.body.id).authorUsername).toBe('ad_alicebot');
         expect((await ctx.request.delete(`/servers/${serverId}/bots/${botId}`).set(owner.auth)).status).toBe(200);
+    });
+});
+
+describe('push devices', () => {
+    const RELAY = 'https://relay.test';
+    const HANDLES = ['A'.repeat(42) + 'b', 'C'.repeat(42) + 'd'];
+    afterEach(() => setRelayFetch());
+
+    test('are deleted, and each relay is told to forget its handle after commit', async () => {
+        const calls: Array<{ url: string; method: string; auth: string }> = [];
+        setRelayFetch(async (url, init) => {
+            calls.push({ url, method: init.method!, auth: (init.headers as Record<string, string>).Authorization });
+            return { status: 204, headers: { get: () => null } };
+        });
+        await makeAdmin(owner);
+        expect((await ctx.request.patch('/admin/settings/push').set(owner.auth).send({ allowedRelays: [RELAY] })).status).toBe(200);
+        for (const [user, handle] of [[alice, HANDLES[0]], [alice, HANDLES[1]], [owner, 'E'.repeat(42) + 'f']] as const) {
+            const res = await ctx.request.post('/me/push-devices').set(user.auth).set('Origin', 'https://agora.example.test')
+                .send({ relay: RELAY, handle, platform: 'android', label: 'Pixel 8' });
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+        }
+
+        expect((await deleteAccount(alice, { confirm: 'ad_alice', password: PASSWORD })).status).toBe(200);
+        expect((await ctx.db.query('SELECT 1 FROM push_devices WHERE user_id = $1', [alice.userId])).rows).toHaveLength(0);
+        await vi.waitFor(() => expect(calls).toHaveLength(2));
+        expect(calls.map(c => c.auth).sort()).toEqual(HANDLES.map(h => `Bearer ${h}`).sort());
+        for (const c of calls) expect(c).toMatchObject({ url: `${RELAY}/v1/handles`, method: 'DELETE' });
+        // Someone else's device stays registered
+        expect((await ctx.db.query('SELECT 1 FROM push_devices WHERE user_id = $1', [owner.userId])).rows).toHaveLength(1);
     });
 });
 

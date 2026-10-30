@@ -1,13 +1,12 @@
 # Agora Android and iOS apps
 
-> **Status:** Draft step 0, 2026-10-24. Not agreed. The questions in section 7 need Eryk's answers before work starts.
-> **Branch:** `docs/mobile-apps-plan`
+> **Status:** Agreed 2026-10-24 (section 7). Phases 1, 3 and 4 and account deletion shipped in release 0.3.5 (2026-10-30): notifications #265, push relay #261, app shells #266, account deletion #293. Tested on a Samsung S26 (FCM) and an iPad (APNs sandbox). What is left before store submission is in [app-store-readiness.md](app-store-readiness.md).
 
 ## 1. Goal
 
 Agora on the Play Store and the App Store, so that an owner can steer agents from a phone and **get told when an agent needs them**: an approval waiting, a mention, a blocked session, a card ready for review. The responsive web UI already covers steering; what is missing is notifications.
 
-Today there is no notification system at all: no service worker, no web app manifest, and no notification code in `agora-ui/src` (checked on `main` at 2c21e67). Most of this plan is about building one. The store apps sit on top of it.
+When this plan was written (2026-10-24, `main` at 2c21e67) there was no notification system at all, so most of the plan was about building one. It shipped in 0.3.5 ([docs/notifications.md](../notifications.md)), and the store apps sit on top of it.
 
 ## 2. Approach: a Capacitor shell that loads the instance
 
@@ -29,7 +28,7 @@ Use **Capacitor** to wrap the user's own Agora instance in a native WebView, wit
 
 ## 3. Phases
 
-### Phase 1: Notification events on the server (about 1–2 days)
+### Phase 1: Notification events on the server (done, #265)
 - A `notifications` table, plus a per-user preference for each type. Notifications are created inside the request transaction and emitted after commit, like every other event.
 - **Types:**
   - A run, tool or permission approval is waiting for you. This goes to the owner or directors who can approve it.
@@ -44,23 +43,23 @@ Use **Capacitor** to wrap the user's own Agora instance in a native WebView, wit
 - Eryk has the store accounts, the signing setup and a Mac, so notifications go native-only.
 - Browser push (a service worker with VAPID keys) can be added later if self-hosters ask for it.
 
-### Phase 3: Push relay (about 1 day)
+### Phase 3: Push relay (built, #261; not deployed yet)
 - Self-hosted instances cannot hold Caffeinated Software's FCM and APNs signing keys. Instead, a small relay run by Caffeinated Software holds them and forwards pushes. Mastodon and Matrix (Sygnal) work the same way.
 - **Registration:** the app registers with the relay and gets an opaque push handle. It gives the instance only that handle, never the raw FCM or APNs token.
 - **Sending:** the instance POSTs `{handle, type, label, deep link}` to the relay. A handle is bound to one instance, so a leaked handle cannot be used to spam from elsewhere. The relay is rate-limited per handle.
 - **Content-free:** the relay never sees message text, so all it can log is that some instance pinged some device.
 - **Opt-in:** relay use is a setting on each instance, off by default. Self-hosters who don't trust the relay can stay on web push.
 
-### Phase 4: Native shells (about 2–3 days, plus review time)
+### Phase 4: Native shells (done, #266)
 - A new package `agora-mobile/` (Capacitor 7), containing the server picker, the push plugin, deep links and the microphone permission.
 - **Notification actions:** Approve and Deny buttons on approval notifications. Tapping one opens the card. It never approves blind, so passkey step-up (#78) still applies.
 - **Android:** builds on Windows with Android Studio. Release goes through Play Console internal testing, then closed testing, then production.
 - **iOS:** needs Xcode, which means macOS: a Mac, or a cloud macOS runner (GitHub Actions or Codemagic). Release goes through TestFlight, then review.
 
-### Phase 5: Store requirements (about 1–2 days)
-- **In-app account deletion.** Apple requires it for apps where users can create an account. Agora has registration but no self-service deletion.
-- **Privacy policy** and data disclosures (Apple privacy labels, Play Data safety). With content-free pushes the disclosures stay small.
-- **Demo instance with a reviewer login.** Without it, Apple review can't sign in and will reject the app.
+### Phase 5: Store requirements (in progress; checklist in [app-store-readiness.md](app-store-readiness.md))
+- **In-app account deletion.** Apple requires it for apps where users can create an account. Done in #293: Settings → Account & security → Delete account ([docs/account-deletion.md](../account-deletion.md)).
+- **Privacy policy** and data disclosures (Apple privacy labels, Play Data safety). Drafted: [docs/privacy-policy.md](../privacy-policy.md), and the form answers in the readiness checklist. Not yet hosted.
+- **Demo instance with a reviewer login.** Without it, Apple review can't sign in and will reject the app. Proposed in the readiness checklist; not created.
 - **Guideline 4.2 (minimum functionality):** a website in a shell gets rejected. Native push, notification actions and the microphone are the native value. Describe them in the review notes.
 - **Not-affiliated wording** in the store listings, the same as in the README and UI.
 
@@ -93,7 +92,7 @@ The phases depend on each other in a chain:
 - **Account deletion (Phase 5):** each instance's owner decides what happens to a deleted account's messages, not Caffeinated Software, so it is an instance setting with two choices: remove the messages, or anonymise them. Deletion itself is always available in the account page, in the browser and in the app.
 - **Release scope:** any self-hosted instance, after thorough testing.
 - **Relay:** a separate small server at `push.agora.host`. agora.host is a Cloudflare Pages site, so it cannot run the relay.
-- **Bundle ID:** `com.caffeinatedsoftware.agora`, pending Eryk's confirmation.
+- **Bundle ID:** `com.caffeinatedsoftware.agora`, confirmed by Eryk on 2026-10-30. It can't change after the first store upload.
 
 ## 8. Contract between the three parts
 
