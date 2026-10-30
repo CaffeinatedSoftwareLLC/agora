@@ -38,6 +38,50 @@ export interface StreamCallbacks {
     onError(err: Error): Promise<void>;
 }
 
+/** A function the model may call (OpenAI-style function calling). `parameters` is a JSON schema. */
+export interface ToolDefinition {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+}
+
+/** One function call the model asked for. `arguments` is the raw JSON text the model wrote. */
+export interface ToolCall {
+    id: string;
+    name: string;
+    arguments: string;
+}
+
+export type ToolChatMessage =
+    | { role: 'user'; content: string }
+    | { role: 'assistant'; content: string | null; toolCalls?: ToolCall[] }
+    | { role: 'tool'; toolCallId: string; content: string };
+
+export interface ToolChatRequest {
+    signal?: AbortSignal;
+    model: string;
+    systemPrompt?: string;
+    messages: ToolChatMessage[];
+    /** Empty: the model must answer in text. */
+    tools: ToolDefinition[];
+    maxTokens?: number;
+}
+
+export interface ToolChatResult {
+    content: string | null;
+    toolCalls: ToolCall[];
+    finishReason: string | null;
+    usage: Usage;
+}
+
+/** A provider answered with an HTTP error. `status` lets callers tell "out of credit" (402) from the rest. */
+export class ProviderHttpError extends Error {
+    constructor(public status: number, message: string) {
+        super(message);
+        this.name = 'ProviderHttpError';
+    }
+}
+
 export interface ConnectionResult {
     ok: boolean;
     error?: string;
@@ -229,6 +273,12 @@ export class DecideError extends Error {
  */
 export interface Adapter extends AdapterInfo {
     streamChat?(creds: ProviderCredentials, req: ChatRequest, callbacks: StreamCallbacks): Promise<void>;
+    /**
+     * One non-streamed chat turn with function calling (model agents, src/ai/model-agent-handler.ts).
+     * Optional: only adapters that implement it can serve a model agent. Throws ProviderHttpError
+     * on an HTTP error from the provider.
+     */
+    chatWithTools?(creds: ProviderCredentials, req: ToolChatRequest): Promise<ToolChatResult>;
     search?(creds: ProviderCredentials, req: SearchRequest): Promise<SearchResult>;
     generateImage?(creds: ProviderCredentials, req: ImageRequest): Promise<MediaResult>;
     tts?(creds: ProviderCredentials, req: SpeechRequest): Promise<MediaResult>;

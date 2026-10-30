@@ -3,6 +3,7 @@ import { decryptString } from '../lib/encryption';
 import { checkBaseUrl } from '../lib/url-guard';
 import { generateUlid } from '../utils/ulid';
 import { config } from '../config';
+import { loadAgentBudget } from './model-agent-budget';
 
 /** Anything with pg's `query` (Pool or PoolClient). */
 export interface Queryable {
@@ -106,20 +107,26 @@ export function computeCostMicros(route: RouteRow, usage: Usage): number | null 
 
 export type BudgetResult = { ok: true } | { ok: false; error: string };
 
-/** Enforce a route's daily (UTC) request / token / cost limits before calling the provider. */
+/**
+ * Enforce a route's daily (UTC) request / token / cost limits before calling the provider.
+ * Model agents' calls are chat usage; they count toward the Chat route's limits unless the
+ * server budgets its agents separately (src/ai/model-agent-budget.ts).
+ */
 export async function checkBudget(db: Queryable, route: RouteRow): Promise<BudgetResult> {
     const reqLimit = num(route.daily_request_limit);
     const tokLimit = num(route.daily_token_limit);
     const costLimit = num(route.daily_cost_limit_micros);
     if (reqLimit === null && tokLimit === null && costLimit === null) return { ok: true };
 
+    const excludeAgents = route.capability === 'chat' && (await loadAgentBudget(db, route.server_id)).mode === 'separate';
     const res = await db.query(
         `SELECT COUNT(*)::bigint AS requests,
                 COALESCE(SUM(input_tokens + output_tokens), 0)::bigint AS tokens,
                 COALESCE(SUM(cost_micros), 0)::bigint AS cost
          FROM ai_usage_events
          WHERE server_id = $1 AND capability = $2
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+           ${excludeAgents ? 'AND model_agent_id IS NULL' : ''}`,
         [route.server_id, route.capability]
     );
     const today = res.rows[0];
@@ -151,6 +158,8 @@ export interface UsageRecord {
     error?: string | null;
     /** `decide` calls only: which use the call was for (per-use budgets, src/ai/decide.ts). */
     decisionUse?: string | null;
+    /** Calls made by a model agent (src/ai/model-agent-handler.ts). */
+    modelAgentId?: string | null;
 }
 
 export async function recordUsage(db: Queryable, rec: UsageRecord): Promise<void> {
@@ -158,10 +167,10 @@ export async function recordUsage(db: Queryable, rec: UsageRecord): Promise<void
     await db.query(
         `INSERT INTO ai_usage_events (id, server_id, channel_id, user_id, message_id, provider, model,
                                       input_tokens, output_tokens, latency_ms, error,
-                                      capability, provider_id, cost_micros, run_id, decision_use)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+                                      capability, provider_id, cost_micros, run_id, decision_use, model_agent_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [generateUlid(), rec.serverId, rec.channelId ?? null, rec.userId ?? null, rec.messageId ?? null,
          rec.adapter, rec.model, rec.usage.inputTokens, rec.usage.outputTokens, rec.latencyMs, rec.error ?? null,
-         rec.capability, rec.providerId, cost, rec.runId ?? null, rec.decisionUse ?? null]
+         rec.capability, rec.providerId, cost, rec.runId ?? null, rec.decisionUse ?? null, rec.modelAgentId ?? null]
     );
 }
