@@ -27,9 +27,25 @@ function fakeSocket() {
 describe('presence socket → terminal session', () => {
     it('connects as a bot with its mode, which is what makes Agora attach a terminal session', () => {
         connectSocket('http://agora.test', 'bot-token', 'mcp');
-        expect(ioMock).toHaveBeenCalledWith('http://agora.test', expect.objectContaining({
-            transports: ['websocket'], auth: { type: 'bot', token: 'bot-token', mode: 'mcp' },
-        }));
+        expect(ioMock).toHaveBeenCalledWith('http://agora.test', expect.objectContaining({ transports: ['websocket'] }));
+        const auth = (ioMock.mock.calls.at(-1) as any)[1].auth;
+        const sent = vi.fn();
+        auth(sent);
+        expect(sent).toHaveBeenCalledWith({ type: 'bot', token: 'bot-token', mode: 'mcp' });
+    });
+
+    it('names the MCP client on every (re)connect once it is known, which Agora binds the token to (#39)', () => {
+        let client: string | null = null;
+        connectSocket('http://agora.test', 'bot-token', 'mcp', () => client);
+        const auth = (ioMock.mock.calls.at(-1) as any)[1].auth;
+        const sent = vi.fn();
+        auth(sent);
+        client = 'claude-code';
+        auth(sent);
+        expect(sent.mock.calls).toEqual([
+            [{ type: 'bot', token: 'bot-token', mode: 'mcp' }],
+            [{ type: 'bot', token: 'bot-token', mode: 'mcp', client: 'claude-code' }],
+        ]);
     });
 
     it('remembers the sessions Agora attached, and repeats its state to a fresh one', () => {

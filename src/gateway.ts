@@ -3,6 +3,7 @@ import { Server } from 'socket.io';
 import { verifyToken, sessionEndsAt, sessionHardExpiry, sessionLimitError } from './auth/tokens';
 import { isTokenBlacklisted } from './auth/token-blacklist';
 import { parseBotToken, verifyBotSecret } from './auth/bot-tokens';
+import { checkTokenUse, clientName, CLIENT_HEADER, TOKEN_BINDING_COLUMNS } from './auth/token-binding';
 import { config } from './config';
 import { originAllowed, sessionTokenFromHeaders } from './auth/session-cookie';
 import { socketAccountError, visibleChannels, gatewayAccessRevision, revalidateHumanSessions } from './lib/gateway-access';
@@ -101,7 +102,9 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                 }
 
                 const tokenRow = await db.query(
-                    'SELECT id, bot_id, secret_hash FROM bot_tokens WHERE id = $1 AND revoked_at IS NULL',
+                    `SELECT t.id, t.bot_id, t.secret_hash, u.server_id, ${TOKEN_BINDING_COLUMNS}
+                     FROM bot_tokens t JOIN users u ON u.id = t.bot_id
+                     WHERE t.id = $1 AND t.revoked_at IS NULL`,
                     [parsed.tokenId]
                 );
                 if (!tokenRow.rows[0]) {
@@ -116,14 +119,24 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                 const botId = tokenRow.rows[0].bot_id.trim();
                 const error = await socketAccountError(db, botId, true);
                 if (error) return next(new Error(error));
+
+                // A token bound to another agent's client is refused (#39); records the use either way
+                const use = await checkTokenUse(db, {
+                    tokenId: parsed.tokenId,
+                    botId,
+                    serverId: tokenRow.rows[0].server_id?.trim() || null,
+                    row: tokenRow.rows[0],
+                    client: clientName(socket.handshake.auth?.client ?? socket.handshake.headers[CLIENT_HEADER]),
+                    ip: socket.handshake.address || null,
+                    userAgent: socket.handshake.headers['user-agent'] ?? null,
+                });
+                if (!use.ok) return next(new Error(use.message));
                 socket.data.userId = botId;
                 socket.data.isBot = true;
                 socket.data.botTokenId = parsed.tokenId;
                 (socket as any).userId = botId;
                 (socket as any).isBot = true;
 
-                // Record use before completing authentication
-                await db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
 
                 return next();
             } catch {
