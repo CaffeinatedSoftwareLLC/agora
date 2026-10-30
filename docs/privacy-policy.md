@@ -78,7 +78,7 @@ The instance's operator controls this data, its retention and its backups. On in
 
 ## 5. Deleting your data
 
-- **Your account:** in the app or a browser, open **Settings → Account & security → Delete account**. What happens to your messages (removed or anonymised) is the instance operator's setting, and the page shows which before you confirm. The details are in [account-deletion.md](account-deletion.md).
+- **Your account** ([how to delete it](delete-account.md)): in the app or a browser, open **Settings → Account & security → Delete account**. What happens to your messages (removed or anonymised) is the instance operator's setting, and the page shows which before you confirm. The details are in [account-deletion.md](account-deletion.md).
 - **Notifications for one server:** sign out, remove the phone under **Settings → Account & security**, or remove the server from the app. Any of these deletes the relay record at once.
 - **Everything the app keeps on your phone:** uninstall the app.
 - **The relay:** the steps above delete relay records. We can't look up a record by name or email, because the relay never holds them. Questions go to `<privacy contact address>`.
@@ -115,4 +115,5 @@ We'll post changes here and update the effective date. Material changes are also
 - **Play Console:** App content → Privacy policy, and the store listing.
 - **App Store Connect:** App Information → Privacy Policy URL.
 - **In the app:** Apple asks for the policy to be easy to reach inside the app too (guideline 5.1.1). Add a "Privacy policy" link to the server picker. It opens in the system browser, as the navigation lock already does for outside links.
+- **Account deletion page:** `https://agora.host/delete-account`, from [delete-account.md](delete-account.md). Play Console asks for this link.
 - **Repository:** this file stays the source. Copy changes to the site when the text changes.

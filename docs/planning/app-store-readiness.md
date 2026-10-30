@@ -10,7 +10,7 @@ Privacy policy draft: [docs/privacy-policy.md](../privacy-policy.md).
 |---|---|---|
 | 1 | **Create the apps** in Play Console and App Store Connect with the bundle ID `com.caffeinatedsoftware.agora` (confirmed 2026-10-30; it can't change after the first upload). | Every upload |
 | 2 | **Privacy contact address and effective date** for the policy. Use a role address, not a personal one: the policy is public. | Publishing the policy |
-| 3 | **Publish the policy** at `https://agora.host/privacy`, and add an account-deletion page (section 4.3). | Both store forms |
+| 3 | **Publish the policy** at `https://agora.host/privacy` and the account-deletion page at `https://agora.host/delete-account` (section 4.3). | Both store forms |
 | 4 | **Relay host:** pick a Linux VPS, point `push.agora.host` at it, and put the FCM service account and the APNs `.p8` key on it (section 6). | Push in store builds |
 | 5 | **Approve the demo instance plan** (section 5), then its host, `demo.agora.host`, and the reviewer passwords (kept in your password manager). | Review on both stores |
 | 6 | **Answer the Play Data safety form and the App Store privacy label** in the consoles, using sections 2 and 3. Decide the open question in 2.2. | Submission |
@@ -140,11 +140,14 @@ It is written against 0.3.5. Re-check it when the relay, the app's plugins or th
 
 ### 4.3 Account deletion page (Play requirement)
 
-Host a page, such as `https://agora.host/delete-account`, that says:
-- Your Agora account lives on the server you signed in to. Open it in a browser, go to Settings → Account & security → Delete account, and confirm.
-- If you can't sign in, ask that server's operator.
-- To remove notification records from the push relay, sign out or remove the server in the app. Otherwise they are pruned after 365 days without use.
-- For the demo server and the relay, the contact address.
+Drafted: [docs/delete-account.md](../delete-account.md). Publish it at `https://agora.host/delete-account` and give that URL in Play Console's account deletion field. It explains:
+- that the account lives on the user's server;
+- the in-app and browser path (Settings → Account & security → Delete account);
+- to ask the operator if they can't sign in;
+- how to remove relay records;
+- the contact for the demo server.
+
+Google requires the web link because the app shows the instance's sign-up page, whoever runs the instance. The page only points to deletion; Caffeinated Software deletes nothing on instances it doesn't run.
 
 ## 5. Reviewer demo instance (proposal, waiting for Eryk's go)
 
