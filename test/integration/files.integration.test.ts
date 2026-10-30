@@ -5,6 +5,8 @@ import { generateUlid } from '../../src/utils/ulid';
 import { hashPassword } from '../../src/auth/passwords';
 import { generateToken } from '../../src/auth/tokens';
 import { invalidateSettingsCache } from '../../src/lib/settings';
+import { OOXML_MIME_BY_EXTENSION } from '../../src/lib/file-validation';
+import { makeDocx, makePptx, makeXlsx, makeZip } from '../ooxml-helper';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: any, member: any, serverId: string, channelId: string, everyoneRoleId: string;
@@ -535,5 +537,71 @@ describe('File permission checks', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.deleted).toBe(true);
+    });
+});
+
+describe('Office documents and text-like files (#291)', () => {
+    const EXTRA = ['docx', 'xlsx', 'pptx', 'ipynb', 'py', 'html', 'xml', 'toml'];
+    let admin: any;
+    let before: string[];
+
+    beforeAll(async () => {
+        admin = await insertAdminUser('officeadmin');
+        before = (await ctx.request.get('/admin/settings/files').set(admin.auth)).body['files.allowed_extensions'];
+        const res = await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.allowed_extensions': [...before, ...EXTRA] });
+        expect(res.status).toBe(200);
+    });
+    afterAll(async () => {
+        await ctx.request.patch('/admin/settings/files').set(admin.auth).send({ 'files.allowed_extensions': before });
+    });
+
+    /** Upload, post in a message (only posted files can be read), and read the text back. */
+    async function shareAndRead(name: string, content: Buffer) {
+        const up = await ctx.request.post('/files/upload').set(owner.auth).field('channel_id', channelId).attach('file', content, name);
+        expect(up.status, JSON.stringify(up.body)).toBe(201);
+        const msg = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: name, attachments: [up.body.id] });
+        expect(msg.status).toBe(201);
+        const text = await ctx.request.get(`/files/${up.body.id}/text`).set(owner.auth);
+        const stored = (await ctx.db.query('SELECT mime_type FROM files WHERE id = $1', [up.body.id])).rows[0].mime_type.trim();
+        return { mime: up.body.mime as string, stored, text };
+    }
+
+    const notebook = { nbformat: 4, metadata: {}, cells: [{ cell_type: 'markdown', source: 'Decision trees' }, { cell_type: 'code', source: 'tree.fit(X, y)', outputs: [{ output_type: 'stream', text: 'OUTPUT' }] }] };
+    test.each([
+        ['essay.docx', makeDocx(['Data policy project', 'Logistic regression on churn']), OOXML_MIME_BY_EXTENSION.docx, 'Logistic regression on churn'],
+        ['export.docx', makeDocx(['From Google Docs'], { googleDocs: true }), OOXML_MIME_BY_EXTENSION.docx, 'From Google Docs'],
+        ['sales.xlsx', makeXlsx([{ name: 'Sales', rows: [['product', 'total'], ['Guava Bar', 11126.45]] }]), OOXML_MIME_BY_EXTENSION.xlsx, 'Sheet: Sales\nproduct\ttotal\nGuava Bar\t11126.45'],
+        ['deck.pptx', makePptx([['Why diversify?'], ['Final tips']]), OOXML_MIME_BY_EXTENSION.pptx, '--- Slide 2 ---\nFinal tips'],
+        ['week3.ipynb', Buffer.from(JSON.stringify(notebook)), 'application/x-ipynb+json', '```\ntree.fit(X, y)\n```'],
+        ['clean.py', Buffer.from('import pandas as pd\n'), 'text/x-python', 'import pandas as pd'],
+        ['notes.html', Buffer.from('<html><body><h1>Big data</h1><script>x()</script><p>Hadoop &amp; Spark</p></body></html>'), 'text/html', 'Big data\n\nHadoop & Spark'],
+        ['plants.xml', Buffer.from('<?xml version="1.0"?>\n<plants><plant>Monstera</plant></plants>'), 'application/xml', '<plant>Monstera</plant>'],
+        ['pyproject.toml', Buffer.from('[project]\nname = "plantbeat"\n'), 'application/toml', 'name = "plantbeat"'],
+    ])('%s is stored with its real type and its text can be read', async (name, content, mime, expected) => {
+        const res = await shareAndRead(name, content);
+        expect(res.mime).toBe(mime);
+        expect(res.stored).toBe(mime);
+        expect(res.text.status, JSON.stringify(res.text.body)).toBe(200);
+        expect(res.text.body.text).toContain(expected);
+        expect(res.text.body.text).not.toContain('OUTPUT');
+    });
+
+    test('a zip named .docx is refused even though zip uploads are allowed', async () => {
+        const res = await ctx.request.post('/files/upload').set(owner.auth).field('channel_id', channelId)
+            .attach('file', makeZip([{ name: 'readme.txt', data: 'not a document' }]), 'fake.docx');
+        expect(res.status).toBe(415);
+        expect(res.body.error).toBe('File content does not match its extension');
+    });
+
+    test('a Word document whose text cannot be read is still stored, and reading it says why', async () => {
+        const docx = makeDocx(['will be damaged']);
+        // Keep the zip directory intact but break the document part's compressed bytes
+        const at = docx.indexOf(Buffer.from('word/document.xml')) + 'word/document.xml'.length;
+        const broken = Buffer.from(docx);
+        broken.fill(0xff, at, at + 12);
+        const res = await shareAndRead('broken.docx', broken);
+        expect(res.mime).toBe(OOXML_MIME_BY_EXTENSION.docx);
+        expect(res.text.status).toBe(422);
+        expect(res.text.body.error).toMatch(/^The Word document could not be read: /);
     });
 });

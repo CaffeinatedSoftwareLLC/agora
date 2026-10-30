@@ -171,7 +171,7 @@ export async function fileRoutes(app: FastifyInstance) {
         return reply.send(result.body);
     });
 
-    // GET /files/:fileId/text?offset=&limit= → the readable text of a text file or PDF, in pages.
+    // GET /files/:fileId/text?offset=&limit= → the readable text of a text file, PDF or Office document, in pages.
     // For members who can see the file's channel, and for bots with access to it: this is how an
     // agent reads a file it found with file search.
     app.get('/files/:fileId/text', {

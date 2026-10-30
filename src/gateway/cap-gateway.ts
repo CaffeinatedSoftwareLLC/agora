@@ -464,7 +464,7 @@ export async function buildCapGateway(opts: { db: Pool; redis: Redis; logger?: b
         return reply.send(result.body);
     });
 
-    // A run can read the text of a file in its own channel (text files and PDFs), in pages.
+    // A run can read the text of a file in its own channel (text files, PDFs and Office documents), in pages.
     app.post('/v1/files/read', {
         preHandler: authenticate,
         schema: {

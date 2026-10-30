@@ -3,6 +3,7 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { configureDecisions, jevReply, jsonResponse, stubJev, type JevCall } from '../decision-helpers';
 import { has, jobOf, share, tagAnswers, taggingDeps, tagNameOf, tagsOf, upload } from '../tagging-helpers';
 import { makePdf } from '../pdf-helper';
+import { makeDocx, makePptx, makeXlsx } from '../ooxml-helper';
 import { storage } from '../../src/lib/storage';
 import { storeFile } from '../../src/lib/file-store';
 import { enqueueFileTagging, sweepFileTagging } from '../../src/lib/file-tagging-queue';
@@ -329,6 +330,29 @@ describe('worker: tagging a file (C.3)', () => {
         expect(await runTaggingOnce(deps())).toEqual(['done']);
         expect((await tagsOf(ctx.db, pdf)).plan).toBe(0.95);
         expect(Number((await jobOf(ctx.db, pdf)).injection_probability)).toBeCloseTo(0.99);
+    });
+
+    test('Word, Excel and PowerPoint files are read and tagged (#291)', async () => {
+        const setting = "SELECT value FROM instance_settings WHERE key = 'files.allowed_extensions'";
+        const allowed: string[] = (await ctx.db.query(setting)).rows[0].value;
+        await ctx.db.query("UPDATE instance_settings SET value = $1 WHERE key = 'files.allowed_extensions'", [JSON.stringify([...allowed, 'docx', 'xlsx', 'pptx'])]);
+        try {
+            const { calls } = stubJev(tagAnswers(RULES));
+            const docx = await upload(ctx.request, owner.auth, channelId, 'plan.docx', makeDocx(['Release plan', 'Milestone: feature freeze']));
+            const xlsx = await upload(ctx.request, owner.auth, channelId, 'dates.xlsx', makeXlsx([{ name: 'Milestones', rows: [['Beta', 'March']] }]));
+            const pptx = await upload(ctx.request, owner.auth, channelId, 'deck.pptx', makePptx([['Our protocol'], ['Agents take turns']]));
+            expect(await runTaggingOnce(deps())).toEqual(['done', 'done', 'done']);
+            expect((await tagsOf(ctx.db, docx)).plan).toBe(0.95);
+            expect((await tagsOf(ctx.db, xlsx)).plan).toBe(0.95);
+            expect((await tagsOf(ctx.db, pptx)).protocol).toBe(0.95);
+            // The model is sent the extracted text, not zip bytes
+            const documents = calls.map(c => String(c.state.document ?? ''));
+            expect(documents.some(d => d.includes('Milestone: feature freeze'))).toBe(true);
+            expect(documents.some(d => d.includes('--- Slide 2 ---\nAgents take turns'))).toBe(true);
+            expect(documents.some(d => d.includes('PK'))).toBe(false);
+        } finally {
+            await ctx.db.query("UPDATE instance_settings SET value = $1 WHERE key = 'files.allowed_extensions'", [JSON.stringify(allowed)]);
+        }
     });
 
     test('images and other files without text are skipped, with no decision call', async () => {
