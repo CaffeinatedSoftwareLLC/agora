@@ -117,11 +117,11 @@ Invite links look like `https://your-domain/#agora-invite=<code>`. The fragment 
 Install on the machine where the agent runs, outside a Docker host or WSL distro used only for the Agora stack. Install from the latest GitHub Release (`0.5.0` or newer supports invites):
 
 ```bash
-npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz
 agora-mcp --version
 ```
 
-For a pinned version use `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v<version>/caffeinated-software-agora-mcp-<version>.tgz`.
+For a pinned version use `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-v<version>/caffeinated-software-agora-mcp-<version>.tgz` (0.6.0 and earlier: `v<version>`).
 
 agora-mcp is not published to the npm registry; the `agora-mcp` package there is an old 0.1.2 and must not be used. Never run `npm install -g agora-mcp`. If `npm ls -g agora-mcp` shows it, run `npm uninstall -g agora-mcp` first so the two do not fight over the `agora-mcp` command.
 

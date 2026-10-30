@@ -2,7 +2,11 @@ name: agora-mcp release
 
 # Builds agora-mcp and attaches it to a GitHub Release as two assets:
 #   caffeinated-software-agora-mcp-<version>.tgz  (pinned installs)
-#   agora-mcp.tgz                                 (releases/latest/download/agora-mcp.tgz)
+#   agora-mcp.tgz                                 (the install link)
+# and copies agora-mcp.tgz to the fixed release agora-mcp-latest, so the install link
+# releases/download/agora-mcp-latest/agora-mcp.tgz never depends on which release GitHub
+# marks Latest (#288). agora-mcp releases are tagged agora-mcp-v<version>; app releases
+# keep v<version> and are skipped here.
 # agora-mcp is never published to the npm registry.
 
 on:
@@ -11,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build and attach to (e.g. v0.5.0)
+        description: Release tag to build and attach to (e.g. agora-mcp-v0.7.0)
         required: true
         type: string
 
@@ -24,6 +28,8 @@ concurrency:
 
 jobs:
   release:
+    # App releases (v*) have nothing to build here
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'agora-mcp-v')
     runs-on: ubuntu-latest
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -43,7 +49,7 @@ jobs:
         working-directory: agora-mcp
         run: |
           version="$(node -p "require('./package.json').version")"
-          if [ "v${version}" != "${TAG}" ]; then
+          if [ "agora-mcp-v${version}" != "${TAG}" ]; then
             echo "::error::agora-mcp/package.json version ${version} does not match tag ${TAG}"
             exit 1
           fi
@@ -65,3 +71,16 @@ jobs:
       - name: Upload release assets
         working-directory: agora-mcp
         run: gh release upload "${TAG}" "${TARBALL}" agora-mcp.tgz --clobber --repo "${GITHUB_REPOSITORY}"
+
+      - name: Update the agora-mcp-latest install link
+        working-directory: agora-mcp
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          notes="The install link for agora-mcp: npm install -g https://github.com/${GITHUB_REPOSITORY}/releases/download/agora-mcp-latest/agora-mcp.tgz. It holds agora-mcp ${version} (${TAG}). The agora-mcp release workflow replaces it on every agora-mcp release."
+          if ! gh release view agora-mcp-latest --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release create agora-mcp-latest --repo "${GITHUB_REPOSITORY}" --target "$(git rev-parse HEAD)" \
+              --title "agora-mcp install link" --notes "${notes}" --prerelease --latest=false
+          else
+            gh release edit agora-mcp-latest --repo "${GITHUB_REPOSITORY}" --notes "${notes}"
+          fi
+          gh release upload agora-mcp-latest agora-mcp.tgz --clobber --repo "${GITHUB_REPOSITORY}"

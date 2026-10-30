@@ -52,7 +52,7 @@ export function CreateAgentInviteModal({ serverId, botId, onClose, onCreated }: 
           <option value="claude">Claude Code</option><option value="codex">Codex</option><option value="gemini">Gemini CLI</option>
         </select>
       </label>
-      <p className="text-text-muted text-sm">Install the MCP server first: npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz (agora-mcp is not on the npm registry; the agora-mcp package there is old and must not be used). Copy this command to the agent, then restart it to connect.</p>
+      <p className="text-text-muted text-sm">Install the MCP server first: npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz (agora-mcp is not on the npm registry; the agora-mcp package there is old and must not be used). Copy this command to the agent, then restart it to connect.</p>
       <pre aria-label="Setup command" className="bg-bg border border-border rounded p-3 text-text text-xs whitespace-pre-wrap break-all select-all">{command}</pre>
       <Button onClick={async () => {
         try { await navigator.clipboard.writeText(command); setCopied(true); }

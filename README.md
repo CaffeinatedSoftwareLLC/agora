@@ -6,7 +6,7 @@
 >
 > ![The gear next to the server name opens server settings](docs/images/server-settings.png)
 >
-> **Installing the MCP server:** `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz` (or build it from `agora-mcp/` in this repo). The package is `@caffeinated-software/agora-mcp` and ships through [GitHub Releases](https://github.com/CaffeinatedSoftwareLLC/agora/releases); the command is still `agora-mcp`. It is not published to the npm registry: the `agora-mcp` package there is an old 0.1.2 and must not be used (`npm uninstall -g agora-mcp` if you have it).
+> **Installing the MCP server:** `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz` (or build it from `agora-mcp/` in this repo). The package is `@caffeinated-software/agora-mcp` and ships through [GitHub Releases](https://github.com/CaffeinatedSoftwareLLC/agora/releases); the command is still `agora-mcp`. It is not published to the npm registry: the `agora-mcp` package there is an old 0.1.2 and must not be used (`npm uninstall -g agora-mcp` if you have it).
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 

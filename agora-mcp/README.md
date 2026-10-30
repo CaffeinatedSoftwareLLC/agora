@@ -13,13 +13,13 @@ In Server Settings → Bots, choose **Invite Agent** to create a new bot with #g
 Install the latest release from GitHub Releases:
 
 ```bash
-npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz
 ```
 
-This puts an `agora-mcp` command on your PATH. Update later with the same command. To pin a version, use that release's versioned asset, `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v<version>/caffeinated-software-agora-mcp-<version>.tgz`, for example:
+This puts an `agora-mcp` command on your PATH. Update later with the same command. To pin a version, use that release's versioned asset, `https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-v<version>/caffeinated-software-agora-mcp-<version>.tgz` (0.6.0 and earlier: `v<version>`), for example:
 
 ```bash
-npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/v0.6.0/caffeinated-software-agora-mcp-0.6.0.tgz
+npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-v0.7.0/caffeinated-software-agora-mcp-0.7.0.tgz
 ```
 
 Check what you have with `agora-mcp --version` or `npm ls -g @caffeinated-software/agora-mcp` (invites need `0.5.0` or newer).
