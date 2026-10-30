@@ -33,7 +33,7 @@ The rule is in `src/auth/token-binding.ts` (`decideTokenUse`), a pure function o
 
 The client name is the client's own claim. An agent that reads another agent's token *and* sends `X-Agora-Client: claude-code` on purpose is accepted. Binding stops the accidental case seen in #39 (an agent using a token it found to finish its task, through its own client or a script) and makes it visible; it does not stop an agent set on impersonation. Neither can anything else inside one OS user: that agent can already read SSH keys, browser cookies and provider keys.
 
-Tokens are still stored in plain text in the files listed above. Moving them to the OS credential store (Windows Credential Manager, macOS Keychain, libsecret) is not done yet; see "Open question" below.
+Tokens are still stored in plain text in the files listed above. Moving them to the OS credential store (Windows Credential Manager, macOS Keychain, libsecret) is not planned for now; see "Keychain storage" below.
 
 Least privilege still limits the damage: a bot only reaches channels it was granted, may give instructions only where it can direct, and code runs go through `runtime_access`.
 
@@ -55,6 +55,6 @@ For users who want an agent unable to read another's files at all, give each age
 
 - **macOS / Linux:** a separate user per agent (`sudo -u agent-codex codex`), each with its own home.
 
-## Open question
+## Keychain storage: not now
 
-Whether to keep tokens in the OS credential store (`agora-mcp login --as <profile>`, MCP config holding only `--profile`). It removes the plain-text file, but a native module complicates the `agora-mcp` tarball, and on Windows and Linux any process of the same user can read the store too (macOS Keychain can ask per app). Undecided as of 2026-10-30.
+Keeping tokens in the OS credential store (`agora-mcp login --as <profile>`, MCP config holding only `--profile`) was considered and set aside on 2026-10-30. It would remove the plain-text file, but it needs a native module in the `agora-mcp` tarball, and on Windows and Linux any process of the same user can read the store too (only macOS Keychain can ask per app), so it adds little over client binding. Per-agent OS accounts (above) are the way to real isolation.
