@@ -59,7 +59,7 @@ The relay holds **no name, email, username, account ID or message content**. It 
 - Google or Apple tells us the token no longer works, for example after you uninstall the app. This happens on the next notification.
 - The record goes **365 days** without being registered or used.
 
-If you delete your Agora account (section 5), the instance deletes its record of your phone. The relay record then stops being used and is removed within 365 days. To remove it at once, sign out in the app or remove the server from the app before you delete the account.
+If you delete your Agora account (section 5), the instance deletes its record of your phone and tells the relay at once. If the relay can't be reached at that moment, or the instance runs Agora 0.3.5 or earlier, the relay record stops being used and is removed within 365 days.
 
 Backups of the relay database are encrypted the same way as the database. The encryption key is kept separately.
 

@@ -243,5 +243,5 @@ Do this before any store build goes to testers outside the team: store builds re
 
 ## 8. Found while writing this
 
-- **Account deletion doesn't tell the relay.** `src/lib/account-deletion.ts:129-132` deletes the person's `push_devices` rows, but it doesn't call the relay's `DELETE /v1/handles` the way `DELETE /me/push-devices/:id` does after commit (`src/routes/notifications.ts:219`). The relay rows then wait for the 365-day prune. The policy states this as it is today. Fix: decrypt the handles before the delete and forget them after commit, then shorten the policy's retention note.
+- **Account deletion didn't tell the relay** (fixed). It deleted the person's `push_devices` rows without calling the relay's `DELETE /v1/handles`, so the relay rows waited for the 365-day prune. Now `src/lib/account-deletion.ts` returns the decrypted handles and the route forgets them after commit, as `DELETE /me/push-devices/:id` does. The policy's retention note says so.
 - The privacy policy link in the picker (4.2) is a small `agora-mobile` change, made once the URL exists.
