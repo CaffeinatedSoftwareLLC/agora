@@ -7,6 +7,7 @@ import { clearSessionCookies } from '../auth/session-cookie';
 import type { LoginLimiter } from '../auth/login-limit';
 import { credentialSchema } from './passkeys';
 import { deleteAccount, deletedAccountMessages, deletionBlockers } from '../lib/account-deletion';
+import { relayForget } from '../lib/push-relay';
 
 /**
  * Self-service account deletion (docs/account-deletion.md). People only; a bot is deleted
@@ -125,6 +126,13 @@ export async function accountDeletionRoutes(app: FastifyInstance) {
         request.pendingEvents ??= [];
         request.pendingEvents.push(...result.events);
         request.pendingBlobRemovals = result.blobKeys;
+        if (result.relayHandlesUnreadable) request.log.warn({ devices: result.relayHandlesUnreadable }, 'Push handles did not decrypt; the relay was not told');
+        for (const { relay, handle } of result.relayHandles) {
+            (request.afterCommit ??= []).push(async () => {
+                const r = await relayForget(relay, handle);
+                if (r.status !== 204 && r.status !== 401) request.log.warn({ relay, status: r.status }, 'Push relay did not forget the handle');
+            });
+        }
         if (request.cookieAuth) clearSessionCookies(reply);
         request.log.info({ messages: policy, messagesRemoved: result.messagesRemoved, botsPaused: result.botsPaused }, 'account deleted');
         return reply.send({ deleted: true, deletedAccountMessages: policy });

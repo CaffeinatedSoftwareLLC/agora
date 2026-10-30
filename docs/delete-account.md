@@ -20,6 +20,7 @@ The page shows what happens to your messages before you confirm. Depending on th
 
 If you used the Agora app with notifications turned on, our push relay holds your phone's push token and the server's address, encrypted. It holds no name or email. To remove those records:
 
+- **Delete your account** on the server. A server running a release newer than Agora 0.3.5 tells the relay to delete the records for your phones at once.
 - **Sign out** in the app, or **remove the server** from the app's server list. Either deletes the relay record at once.
 - Or **uninstall the app**. The record is deleted the next time that server tries to notify you.
 
