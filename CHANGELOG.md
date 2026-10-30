@@ -8,6 +8,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 - **Provider keys kept out of chat, search and speech errors (#236).** The redaction the decision adapters got in #233 now covers every adapter: each one is wrapped at registration (`src/ai/adapters/guard.ts`), so the Anthropic, OpenAI, Gemini and Tavily adapters, and the OpenAI and Gemini speech and transcription calls, never pass an API key, account ID or a secret in a base URL (user info, `?key=`) to an error, a connection-test result, a chat message, a log or an audit row. Keys are removed as sent, JSON-escaped and URL-encoded, including a fragment left where a message was cut at 300 characters, and from Node's fetch errors and their causes. A stored key with a line break, control or non-ASCII character is refused before any request, as it already was when saved. `redact` and `secretsOf` moved to `src/ai/credentials.ts`.
 
+### Fixed
+
+- **Raising the max file size appeared to do nothing.** Admin → Storage accepted any number of MB, but `PATCH /admin/settings/files` allows at most 100 MB (`files.max_size_bytes` ≤ 104857600) and answered anything larger with a bare "Bad Request" above the Save button, so the old limit (25 MB by default) stayed in force and larger uploads kept getting 413. The field now stops at 100 MB, says so next to the field, and Save is disabled until the value is valid.
+
 ## 0.3.5 — 2026-10-30
 
 Everything since 0.3.0: the Android and iOS apps and the push relay they use, notifications with app push, model agents that run on the server, self-service account deletion, and a fix for a blank page after logging out. Migrations `069`–`071` run on start. The push relay is its own service (`docker-compose.relay.yml`): deploy it before shipping apps that register with it.
