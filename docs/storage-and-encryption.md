@@ -40,6 +40,8 @@ What Agora stores, where it lives, what is encrypted, and what is not. This page
 | Push relay handles of phones | Postgres (`push_devices`) | **Yes** |
 | Notifications (type, label, link; no message text) | Postgres (`notifications`) | No |
 | Client IP addresses | **Not stored.** Used in memory for rate limiting only | — |
+
+When someone deletes their account, their user row, password hash, email, passkeys and preferences are deleted; their messages and files are kept without an author or removed, as the instance admin chose. See [Account deletion](account-deletion.md).
 | Code submitted for sandbox runs | Postgres (`exec_runs`) | No. Pruned after the retention period (default 30 days) |
 | Queues, rate limits, loop guard counters | Redis (`redisdata` volume) | No |
 | TLS certificates | `caddy_data` volume | Managed by Caddy |

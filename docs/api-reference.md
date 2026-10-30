@@ -1205,6 +1205,56 @@ Returns up to 20 results. Matching is case-insensitive (`ILIKE`).
 
 ---
 
+### GET /users/@me/deletion
+
+What deleting the signed-in account would do, and what stops it. People only. See `docs/account-deletion.md`.
+
+**Auth:** Required (not bots)
+
+**Response** `200`
+```json
+{
+  "deletedAccountMessages": "anonymize",
+  "passkeys": 1,
+  "ownedServers": [{ "id": "01HYX...", "name": "Lab" }],
+  "lastAdmin": false,
+  "ownedBots": [{ "id": "01HYX...", "username": "codex", "serverId": "01HYX..." }]
+}
+```
+
+---
+
+### POST /users/@me/deletion/passkey-options
+
+Start a passkey assertion that `DELETE /users/@me` accepts instead of the password. Offers the caller's passkeys for the request's hostname; the challenge lasts 5 minutes and is single use.
+
+**Auth:** Required (not bots) · rate limit 10 per minute
+
+**Response** `200` `{ "flowId": "...", "options": { ... } }` · **Errors:** `400 origin_not_allowed` · `404 no_passkeys` (none on this hostname)
+
+---
+
+### DELETE /users/@me
+
+Delete the signed-in account. Messages are kept as "Deleted user" or removed, by the instance setting (`GET/PATCH /admin/settings/accounts`). Bots the person owns are paused with their tokens revoked. All sessions and sockets of the account end; a cookie session's cookies are cleared.
+
+**Auth:** Required (not bots) · rate limit 5 per 15 minutes
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `confirm` | string | yes | the account's username, exactly |
+| `password` | string | one of `password`, `passkey` | the current password; failures count against the login limit |
+| `passkey` | object | one of `password`, `passkey` | `{ "flowId", "response" }`: the flow from `passkey-options` and the browser's `PublicKeyCredential` JSON |
+
+**Response** `200`
+```json
+{ "deleted": true, "deletedAccountMessages": "anonymize" }
+```
+
+**Errors:** `400 confirmation_mismatch` · `403 reauth_failed` (wrong password or passkey) · `403 challenge_invalid` (expired, used, or another account's flow) · `403 forbidden` (bot) · `409 owns_servers` with `servers: [{ id, name }]` · `409 last_admin` · `429 too_many_attempts` · `503 login_unavailable` (the login limit's store is down)
+
+---
+
 ## Bots
 
 Bot management endpoints. Most require `ManageBots` permission on the server. Token management routes additionally require the caller to be the bot's owner or a server administrator.
@@ -1753,6 +1803,33 @@ Update instance configuration. At least one field must be provided.
   "registrationPolicy": "approval"
 }
 ```
+
+---
+
+### GET /admin/settings/accounts
+
+What happens to a person's messages when they delete their account.
+
+**Auth:** Required (instance admin)
+
+**Response** `200`
+```json
+{ "deletedAccountMessages": "anonymize" }
+```
+
+---
+
+### PATCH /admin/settings/accounts
+
+Change it. Applies to deletions made from now on. Recorded in the admin audit log.
+
+**Auth:** Required (instance admin)
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `deletedAccountMessages` | string | yes | `"anonymize"` (default): messages stay, author shown as "Deleted user" · `"remove"`: the person's messages and uploaded files are deleted |
+
+**Response** `200` `{ "deletedAccountMessages": "remove" }`
 
 ---
 

@@ -3,6 +3,7 @@ import { api, ApiError } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import type { InstanceStatus, RegistrationPolicy } from '../../lib/contracts/instance';
+import { AccountDeletionSettings } from './AccountDeletionSettings';
 import { PushRelaySettings } from './PushRelaySettings';
 
 const policyOptions: { value: RegistrationPolicy; label: string; description: string }[] = [
@@ -96,6 +97,7 @@ export function InstanceSettings() {
         </Button>
       </form>
 
+      <AccountDeletionSettings />
       <PushRelaySettings />
     </div>
   );

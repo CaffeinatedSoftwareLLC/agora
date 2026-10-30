@@ -253,7 +253,7 @@ export function ThreadPanel() {
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[13px] font-semibold" style={{ color: P.text }}>
               {/* Task card and subtask threads start from a system line (docs/task-board.md) */}
-              {parentMessage.authorUsername ?? (parentMessage.systemEvent ? 'Agora' : '')}
+              {parentMessage.authorUsername || (parentMessage.systemEvent ? 'Agora' : 'Deleted user')}
             </span>
             <span className="text-[11px]" style={{ color: P.muted }}>
               {new Date(parentMessage.createdAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}

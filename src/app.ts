@@ -39,6 +39,7 @@ import { subtaskRoutes } from './routes/subtasks';
 import { artifactRoutes } from './routes/artifacts';
 import { browserPreviewRoutes } from './routes/browser-previews';
 import { voiceRoutes } from './routes/voice';
+import { accountDeletionRoutes } from './routes/account-deletion';
 import { notificationRoutes } from './routes/notifications';
 import { startNotificationListener } from './lib/notifications';
 import { startAssistantHandler } from './ai/assistant-handler';
@@ -49,6 +50,7 @@ import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
 import { startEventBridge } from './lib/event-bridge';
 import { getRedis } from './auth/token-blacklist';
+import { storage } from './lib/storage';
 import { readGatewayAccess, writeGatewayAccess } from './lib/gateway-gate';
 import { changesGatewayAccess, refreshGatewayAccess, invalidateGatewayAccess, visibleChannels } from './lib/gateway-access';
 import { LoginLimiter, type LoginLimits } from './auth/login-limit';
@@ -328,6 +330,12 @@ export async function buildApp(opts?: {
             }
         }
 
+        // Blobs of files the request soft-deleted (account deletion). Only after COMMIT, so a
+        // rolled-back request never loses a file; a failure leaves an orphaned blob, not a broken row.
+        for (const key of request.pendingBlobRemovals ?? []) {
+            try { await storage.remove(key); } catch { /* best-effort, as in DELETE /files/:fileId */ }
+        }
+
         // Idempotency: replace in-flight marker with terminal response,
         // or delete it if the request didn't produce a cacheable body.
         if (idempotencyKey) {
@@ -374,6 +382,7 @@ export async function buildApp(opts?: {
     await app.register(adminRoutes);
     await app.register(termsWatchRoutes);
     await app.register(userRoutes);
+    await app.register(accountDeletionRoutes);
     await app.register(fileRoutes);
     await app.register(botRoutes);
     await app.register(botAttentionRoutes);

@@ -12,8 +12,9 @@ import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelo
  * can't carry a tag of its own (see envelope.ts). [OWNER] and [DIRECTOR] mark the
  * people and bots who may give agents instructions in this channel.
  */
-function authorLabel(m: { authorId: string | null; authorUsername: string | null; authorBot: boolean; authorAuthority?: Authority }): string {
-    if (!m.authorUsername) return 'System';
+function authorLabel(m: { authorId: string | null; authorUsername: string | null; authorBot: boolean; authorAuthority?: Authority; systemEvent?: string }): string {
+    // No author: a system line, or a post whose account was deleted (which never carries authority)
+    if (!m.authorUsername) return m.systemEvent ? 'System' : 'Deleted user';
     const tags = (m.authorBot ? ' [BOT]' : '')
         + (m.authorAuthority === 'owner' ? ' [OWNER]' : m.authorAuthority === 'director' ? ' [DIRECTOR]' : '');
     const id = m.authorId ? ` (user ${m.authorId.trim()})` : '';
