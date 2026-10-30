@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { collabOutcome, notifyCollab, notifyMentions } from '../lib/notifications';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { generateUlid } from '../utils/ulid';
 import { resolveMentions, mentionsEveryoneIn } from './shared';
@@ -51,7 +52,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Fetch parent message
         const parent = await db.query(
-            'SELECT id, channel_id, thread_id, thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, channel_id, thread_id, thread_closed_at, author_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
@@ -227,6 +228,12 @@ export async function threadRoutes(app: FastifyInstance) {
         );
 
         const mentionedUserIds = mentionedUsers.map(u => u.id);
+        await notifyMentions(db, { channelId, threadId: msgId, authorId: userId, userIds: mentionedUsers.filter(u => !u.bot).map(u => u.id) });
+        // An agora-collab DONE or BLOCK tells the person who started the thread
+        const outcome = collabOutcome(protocol);
+        if (outcome) {
+            await notifyCollab(db, { channelId, threadId: msgId, starterId: parent.rows[0].author_id?.trim() ?? null, authorId: userId, outcome });
+        }
 
         // Fire bot mention events
         if (serverId) {

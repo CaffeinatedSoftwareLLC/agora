@@ -7,6 +7,7 @@ import { config } from '../config';
 import { CAPABILITIES, type Capability } from '../ai/adapters';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { postSystemMessage, updateSystemMessage } from '../gateway/post-message';
+import { inOwnTransaction, notifyApproval } from '../lib/notifications';
 import { RUNTIME_QUEUE } from './runner';
 import { resolveLimits, timeProfileFor, type RunLimits } from './limits';
 import { RulesDecider, type Decider, type Decision } from './decider';
@@ -148,6 +149,7 @@ export async function submitRun(db: Pool, input: SubmitInput): Promise<SubmitRes
                 + `Approval expires in 30 minutes. ${retentionNote(expires)}`,
         });
         await publishEvents(runtimeRedis(), events);
+        await inOwnTransaction(db, c => notifyApproval(c, { kind: 'code', channelId: input.channelId, threadId: input.threadId }));
     } else if (status === 'queued') {
         await enqueue(id);
     }

@@ -8,7 +8,7 @@ const API = 'http://localhost:3000'
 // routes (e.g. /admin/users), so browser page loads (Accept: text/html) fall through
 // to the SPA and only API requests are proxied.
 const API_PREFIXES = ['auth', 'servers', 'channels', 'invites', 'admin', 'users', 'health', 'instance',
-  'unreads', 'messages', 'roles', 'files', 'bots', 'runtime', 'agent-invites']
+  'unreads', 'messages', 'roles', 'files', 'bots', 'runtime', 'agent-invites', 'me']
 
 const apiProxy: ProxyOptions = {
   target: API,

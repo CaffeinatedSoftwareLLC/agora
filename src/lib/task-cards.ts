@@ -1,4 +1,5 @@
 import type { Notice } from './agent-runs';
+import { notifyReview } from './notifications';
 
 /**
  * Task cards (docs/task-board.md): one board per channel. A card names an assignee agent;
@@ -48,6 +49,13 @@ export async function cardUpdate(c: any, cardId: string): Promise<Notice | null>
     return { channelId: card.channelId, eventName: 'TaskCardUpdate', event: { channelId: card.channelId, card } };
 }
 
+/** A card moved to Review: tell the person who created it (unless they moved it themselves). */
+export async function notifyCardReview(c: any, cardId: string, actorId: string | null): Promise<void> {
+    const card = (await c.query('SELECT channel_id, thread_id, created_by FROM task_cards WHERE id = $1', [cardId])).rows[0];
+    if (!card) return;
+    await notifyReview(c, { channelId: card.channel_id, threadId: card.thread_id, createdBy: card.created_by?.trim() ?? null, actorId });
+}
+
 /** The kickoff the agent reads first: the card itself, in the card's thread. */
 export function kickoffText(who: string, profile: string, sessionId: string, title: string, description: string): string {
     return `${who} started ${profile} on task "${title}" (session ${sessionId}).\n\n`
@@ -64,11 +72,13 @@ export async function trackWorkspaceResult(c: any, sessionId: string, action: st
     // The board renders the link: keep only an https URL, whatever the host sent
     const url = typeof result.url === 'string' && /^https:\/\/\S+$/.test(result.url) ? result.url : null;
     let card;
+    // The status before the update, to notice a move to review
+    const before = (await c.query('SELECT id, status FROM task_cards WHERE session_id = $1', [sessionId])).rows;
     if (action === 'pr' && url) {
         card = await c.query(
             `UPDATE task_cards SET pr_url = $2, pr_state = 'open', pr_checked_at = NOW(), updated_at = NOW(),
                     status = CASE WHEN status IN ('todo', 'in_progress') THEN 'review' ELSE status END
-             WHERE session_id = $1 RETURNING id`,
+             WHERE session_id = $1 RETURNING id, status`,
             [sessionId, url]
         );
     } else if (action === 'merge' && result.headSha) {
@@ -80,12 +90,14 @@ export async function trackWorkspaceResult(c: any, sessionId: string, action: st
         card = await c.query(
             `UPDATE task_cards SET pr_state = $2::text, pr_url = COALESCE($3, pr_url), pr_checked_at = NOW(), updated_at = NOW(),
                     status = CASE WHEN $2::text = 'merged' THEN 'done' WHEN $2::text IN ('open', 'draft') AND status IN ('todo', 'in_progress') THEN 'review' ELSE status END
-             WHERE session_id = $1 RETURNING id`,
+             WHERE session_id = $1 RETURNING id, status`,
             [sessionId, result.prState, url]
         );
     }
     const notices: Notice[] = [];
     for (const row of card?.rows ?? []) {
+        const was = before.find((b: any) => b.id === row.id)?.status;
+        if (row.status === 'review' && was !== 'review') await notifyCardReview(c, row.id, null);
         const update = await cardUpdate(c, row.id);
         if (update) notices.push(update);
     }

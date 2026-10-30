@@ -18,6 +18,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Threads](#threads)
 - [Files](#files)
 - [Unreads](#unreads)
+- [Notifications](#notifications)
 - [Users](#users)
 - [Bots](#bots)
 - [AI Providers](#ai-providers)
@@ -1169,6 +1170,12 @@ Get unread state for all channels the user is a member of (server channels + DM 
   }
 ]
 ```
+
+---
+
+## Notifications
+
+The signed-in person's notifications, notification preferences and push devices live under `/me/`: `GET /me/notifications`, `POST /me/notifications/:id/read`, `POST /me/notifications/read-all`, `GET`/`PUT /me/notification-preferences` and `POST`/`GET`/`DELETE /me/push-devices`. Instance admins set the allowed push relays with `GET`/`PATCH /admin/settings/push`. Socket events: `NotificationCreate` and `NotificationRead`, to the person's own sockets. Request and response shapes are in [notifications.md](notifications.md#rest-api).
 
 ---
 

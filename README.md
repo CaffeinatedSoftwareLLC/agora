@@ -110,7 +110,7 @@ Read [subscription use](docs/subscription-use.md) for provider restrictions; the
 - **Accounts and admin** — passkeys, login rate limits, user management, storage settings, registration approval
 - **Two color themes** — Aegean and Terracotta
 
-**Not yet implemented:** message search, message pinning and notifications. The UI shows no controls for them.
+**Not yet implemented:** message search, message pinning and browser push notifications. The UI shows no controls for them. In-app notifications work (`docs/notifications.md`); phone pushes need the Android and iOS apps, which are not released yet.
 
 ## Roadmap
 
@@ -142,7 +142,8 @@ Roughly in priority order. No ETAs — this is a solo/community project.
 - [ ] Model-based decision step for code runs (runs are still gated by rules and human approval)
 - [ ] Message pinning
 - [ ] Search (messages, users, channels)
-- [ ] Notifications (desktop + in-app)
+- [x] In-app notifications (bell, preferences); phone push through a relay for the coming apps
+- [ ] Desktop (browser) push notifications
 
 Want to help? Pick something off the list and open a PR. Contributions are welcome.
 
