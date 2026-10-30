@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadStartupConfig } from './invites.js';
-import { AgoraApi } from './api.js';
+import { AgoraApi, mcpClientName } from './api.js';
 import { CursorTracker } from './cursor.js';
 import { registerResources, registerTools } from './tools.js';
 import { ActivityReporter, connectSocket, ListeningReporter } from './socket.js';
@@ -39,20 +39,29 @@ registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, upl
     allowOutsideWorkdir: config.allowOutsideWorkdir, listening, activity });
 registerResources(server, api);
 
+// Every request names the MCP client that launched us (known once it sends initialize):
+// Agora binds the bot token to that client and refuses it from others (#39)
+const client = () => mcpClientName(server.server.getClientVersion()?.name);
+api.setClient(client);
+
+// Opened once the client has initialized, so no pushed message is sent before Claude Code is
+// listening and the socket names the client too. The socket reports "connected / listening"
+// to Agora, and in channel mode carries the messages.
+function openSocket(): void {
+    if (options.channelMode) {
+        const socket = connectSocket(config.instance, config.token, 'channel', client);
+        startChannel(server.server, socket, api, { ...options, defaultChannel: config.defaultChannel });
+        activity?.attach(socket);
+    } else if (listening) {
+        const socket = connectSocket(config.instance, config.token, 'mcp', client);
+        listening.attach(socket);
+        activity?.attach(socket);
+    }
+}
+server.server.oninitialized = openSocket;
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
-
-// Opened after stdio is up, so no pushed message is sent before Claude Code is listening.
-// The socket reports "connected / listening" to Agora, and in channel mode carries the messages.
-if (options.channelMode) {
-    const socket = connectSocket(config.instance, config.token, 'channel');
-    startChannel(server.server, socket, api, { ...options, defaultChannel: config.defaultChannel });
-    activity?.attach(socket);
-} else if (listening) {
-    const socket = connectSocket(config.instance, config.token, 'mcp');
-    listening.attach(socket);
-    activity?.attach(socket);
-}
 
 // The socket's reconnect timers would keep the process alive after Claude Code (or any
 // client) goes away; stdin closing means the session is over.

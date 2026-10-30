@@ -170,6 +170,14 @@ export interface BotToken {
   lastUsedAt: string | null;
   createdAt: string;
   revokedAt: string | null;
+  /** The MCP client the token is bound to (#39); any other client is refused. */
+  boundClient?: string | null;
+  boundAt?: string | null;
+  lastUsedClient?: string | null;
+  lastUsedIp?: string | null;
+  lastUsedUserAgent?: string | null;
+  /** The last refused use: another client, or none, with a bound token. */
+  lastRefused?: { at: string; client: string | null; ip: string | null } | null;
 }
 
 export interface CreateTokenResponse {
@@ -217,6 +225,9 @@ export const botApi = {
 
   revokeToken: (serverId: string, botId: string, tokenId: string) =>
     api.delete<{ revoked: true }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}`),
+
+  clearTokenBinding: (serverId: string, botId: string, tokenId: string) =>
+    api.delete<{ cleared: true }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}/binding`),
 
   grantChannel: (channelId: string, botId: string) =>
     api.post<{ botId: string; channelId: string }>(`/channels/${channelId}/bots/${botId}`),

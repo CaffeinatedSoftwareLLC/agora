@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { verifyToken, extractToken, sessionLimitError, sessionNeedsRenewal, generateSessionToken } from './tokens';
 import { isTokenBlacklisted } from './token-blacklist';
 import { parseBotToken, verifyBotSecret } from './bot-tokens';
+import { checkTokenUse, clientName, CLIENT_HEADER, TOKEN_BINDING_COLUMNS } from './token-binding';
 import { isSafeMethod, sessionTokenFromHeaders, setSessionCookies, validCsrf } from './session-cookie';
 
 /**
@@ -136,7 +137,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         // O(1) lookup by primary key
         const tokenRow = await db.query(
             `SELECT t.id, t.bot_id, t.secret_hash, u.bot_paused_at, u.bot_paused_reason,
-                    u.account_status, o.account_status AS owner_status
+                    u.account_status, u.server_id, o.account_status AS owner_status, ${TOKEN_BINDING_COLUMNS}
              FROM bot_tokens t
              JOIN users u ON u.id = t.bot_id
              LEFT JOIN users o ON o.id = u.bot_owner_id
@@ -177,11 +178,22 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
             });
         }
 
+        // A token bound to another agent's client is refused (#39); records the use either way
+        const use = await checkTokenUse(db, {
+            tokenId: parsed.tokenId,
+            botId: tokenRow.rows[0].bot_id.trim(),
+            serverId: tokenRow.rows[0].server_id?.trim() || null,
+            row: tokenRow.rows[0],
+            client: clientName(request.headers[CLIENT_HEADER]),
+            ip: request.ip,
+            userAgent: request.headers['user-agent'] ?? null,
+        });
+        if (!use.ok) {
+            return reply.status(403).send({ error: 'token_bound_to_other_client', boundClient: use.boundClient, message: use.message });
+        }
+
         request.userId = tokenRow.rows[0].bot_id;
         request.isBot = true;
-
-        // Update last_used_at (fire and forget)
-        db.query('UPDATE bot_tokens SET last_used_at = NOW() WHERE id = $1', [parsed.tokenId]);
         return;
     }
 

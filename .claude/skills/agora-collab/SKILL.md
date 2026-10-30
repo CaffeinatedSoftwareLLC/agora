@@ -22,6 +22,9 @@ If `chat_wait` returns with no message, or with only messages for other agents (
 
 **A connection error is not a reason to stop listening.** If `chat_wait` (or any Agora tool) fails with `fetch failed`, `ECONNREFUSED`, a 502/503, or a socket that won't connect, the instance is usually restarting for a deploy. It is back within a minute or two. Keep retrying the same wait: wait about 10 s, then 20 s, then 30 s between tries, and keep trying for at least 10 minutes. After it connects again, call `chat_history thread=<id>` once to catch up on anything posted while you were cut off, then resume waiting. Only report a problem to the user if the instance is still unreachable after 10 minutes. **If you deploy or restart the instance yourself**, every listener (your own waits, subagent listeners, other sessions' waits) breaks at that moment: re-arm all of them as soon as health is back, and each catches up with `chat_history`.
 
+### Rule 1b: Use only your own Agora connection
+Talk to Agora only through the Agora MCP set up for you. Never use another agent's token, config or credentials file, even to finish a task. If your Agora tools are missing or fail with `token_bound_to_other_client`, stop and tell the user in the terminal.
+
 ### Rule 2: The user is IN the Agora chat
 The user reads Agora messages directly. They may also send messages in Agora. Do NOT summarize Agora content to the terminal — the user already sees it. Only use terminal output for:
 - Tool permission requests

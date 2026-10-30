@@ -529,7 +529,8 @@ export async function botRoutes(app: FastifyInstance) {
         });
     });
 
-    // GET /servers/:serverId/bots/:id/tokens → 200 [{ id, name, lastUsedAt, createdAt, revokedAt }]
+    // GET /servers/:serverId/bots/:id/tokens → 200 [{ id, name, lastUsedAt, createdAt, revokedAt,
+    //   boundClient, boundAt, lastUsedClient, lastUsedIp, lastUsedUserAgent, lastRefused }]
     app.get('/servers/:serverId/bots/:id/tokens', {
         preHandler: [requireBotOwnerOrAdmin],
     }, async (request, reply) => {
@@ -539,7 +540,8 @@ export async function botRoutes(app: FastifyInstance) {
         // Bot existence already verified by requireBotOwnerOrAdmin preHandler
 
         const result = await db.query(
-            `SELECT id, name, last_used_at, created_at, revoked_at
+            `SELECT id, name, last_used_at, created_at, revoked_at, bound_client, bound_at,
+                    last_used_client, last_used_ip, last_used_user_agent, last_refused_at, last_refused_client, last_refused_ip
              FROM bot_tokens
              WHERE bot_id = $1
              ORDER BY created_at`,
@@ -552,9 +554,46 @@ export async function botRoutes(app: FastifyInstance) {
             lastUsedAt: r.last_used_at,
             createdAt: r.created_at,
             revokedAt: r.revoked_at,
+            // Where it is used from, and the client it is bound to (#39, src/auth/token-binding.ts)
+            boundClient: r.bound_client,
+            boundAt: r.bound_at,
+            lastUsedClient: r.last_used_client,
+            lastUsedIp: r.last_used_ip,
+            lastUsedUserAgent: r.last_used_user_agent,
+            lastRefused: r.last_refused_at
+                ? { at: r.last_refused_at, client: r.last_refused_client, ip: r.last_refused_ip }
+                : null,
         }));
 
         return reply.status(200).send(tokens);
+    });
+
+    // DELETE /servers/:serverId/bots/:id/tokens/:tokenId/binding → 200 { cleared: true }
+    // The next client that uses the token binds it again (an agent moved to another CLI).
+    app.delete('/servers/:serverId/bots/:id/tokens/:tokenId/binding', {
+        preHandler: [requireBotOwnerOrAdmin],
+    }, async (request, reply) => {
+        const { serverId, id: botId, tokenId } = request.params as any;
+        const db = request.dbClient!;
+
+        const result = await db.query(
+            `UPDATE bot_tokens t SET bound_client = NULL, bound_at = NULL, last_refused_at = NULL,
+                    last_refused_client = NULL, last_refused_ip = NULL
+             FROM bot_tokens old
+             WHERE t.id = $1 AND t.bot_id = $2 AND t.revoked_at IS NULL AND old.id = t.id
+             RETURNING old.bound_client`,
+            [tokenId, botId]
+        );
+        if (result.rows.length === 0) {
+            return reply.status(404).send({ error: 'Token not found or revoked' });
+        }
+        await db.query(
+            `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
+             VALUES ($1, $2, $3, 'bot_token_binding_clear', 'bot', $4, $5)`,
+            [generateUlid(), serverId, request.userId, botId, JSON.stringify({ tokenId, boundClient: result.rows[0].bound_client })]
+        );
+
+        return reply.status(200).send({ cleared: true });
     });
 
     // DELETE /servers/:serverId/bots/:id/tokens/:tokenId → 200 { revoked: true }

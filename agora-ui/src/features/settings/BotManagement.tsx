@@ -394,6 +394,15 @@ function BotDetailPanel({
     }
   }
 
+  async function handleClearBinding(tokenId: string) {
+    try {
+      await botApi.clearTokenBinding(serverId, botId, tokenId);
+      setTokens(prev => prev.map(t => t.id === tokenId ? { ...t, boundClient: null, boundAt: null, lastRefused: null } : t));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : 'Failed to clear the binding');
+    }
+  }
+
   async function toggleDirect(channelId: string, canDirect: boolean) {
     setChannelLoading(channelId);
     setError('');
@@ -581,15 +590,40 @@ function BotDetailPanel({
                     {t.lastUsedAt && (
                       <span className="text-text-muted text-xs ml-2">
                         Last used {new Date(t.lastUsedAt).toLocaleDateString()}
+                        {t.lastUsedClient ? ` by ${t.lastUsedClient}` : ''}
+                        {t.lastUsedIp ? ` from ${t.lastUsedIp}` : ''}
+                      </span>
+                    )}
+                    {t.boundClient && (
+                      <span className="text-text-muted text-xs ml-2" title="Requests from any other client are refused">
+                        Bound to {t.boundClient}
+                      </span>
+                    )}
+                    {t.lastRefused && (
+                      <span className="block text-danger text-xs">
+                        Refused {t.lastRefused.client ? `use by ${t.lastRefused.client}` : 'a use with no client name'}
+                        {t.lastRefused.ip ? ` from ${t.lastRefused.ip}` : ''} on {new Date(t.lastRefused.at).toLocaleString()}.
+                        If that wasn't you moving this agent, revoke the token.
                       </span>
                     )}
                   </div>
-                  <button
-                    onClick={() => handleRevokeToken(t.id)}
-                    className="min-h-11 md:min-h-8 px-2 text-danger text-xs hover:underline"
-                  >
-                    Revoke
-                  </button>
+                  <div className="flex shrink-0">
+                    {t.boundClient && (
+                      <button
+                        onClick={() => handleClearBinding(t.id)}
+                        className="min-h-11 md:min-h-8 px-2 text-text-muted text-xs hover:underline"
+                        title="The next client that uses the token binds it again"
+                      >
+                        Clear binding
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleRevokeToken(t.id)}
+                      className="min-h-11 md:min-h-8 px-2 text-danger text-xs hover:underline"
+                    >
+                      Revoke
+                    </button>
+                  </div>
                 </div>
               ))}
               {revokedTokens.map((t) => (

@@ -285,13 +285,38 @@ function retryDelay(header: string | null, attempt: number): number {
     return Math.max(250, Math.min(delay, MAX_RETRY_DELAY_MS));
 }
 
+/** Printable ASCII, 1–100 characters: what Agora accepts as a client name. */
+const CLIENT_NAME = /^[\x21-\x7E][\x20-\x7E]{0,99}$/;
+
+/** The MCP client's `clientInfo.name`, if it can be sent as a header; otherwise null. */
+export function mcpClientName(name: unknown): string | null {
+    if (typeof name !== 'string') return null;
+    const trimmed = name.trim();
+    return CLIENT_NAME.test(trimmed) ? trimmed : null;
+}
+
 export class AgoraApi {
     private baseUrl: string;
     private token: string;
+    private client: () => string | null = () => null;
 
     constructor(baseUrl: string, token: string) {
         this.baseUrl = baseUrl.replace(/\/+$/, '');
         this.token = token;
+    }
+
+    /**
+     * Where to read the name of the MCP client that launched this server (Claude Code, Codex, …).
+     * Sent as `X-Agora-Client`: Agora binds the bot token to the first client that names itself
+     * and refuses it from any other, so an agent can't pick up another agent's token by accident (#39).
+     */
+    setClient(client: () => string | null): void {
+        this.client = client;
+    }
+
+    private auth(): Record<string, string> {
+        const client = mcpClientName(this.client());
+        return { 'Authorization': `Bot ${this.token}`, ...(client ? { 'X-Agora-Client': client } : {}) };
     }
 
     private async request<T>(
@@ -306,7 +331,7 @@ export class AgoraApi {
         const init: RequestInit & { duplex?: 'half' } = {
             method,
             headers: {
-                'Authorization': `Bot ${this.token}`,
+                ...this.auth(),
                 ...(multipart ? { 'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`, 'Content-Length': String(multipart.length) }
                     : body !== undefined ? { 'Content-Type': 'application/json' } : {}),
                 ...headers,
@@ -527,7 +552,7 @@ export class AgoraApi {
         const url = `${this.baseUrl}/runtime/runs`;
         const res = await fetch(url, {
             method: 'POST',
-            headers: { 'Authorization': `Bot ${this.token}`, 'Content-Type': 'application/json' },
+            headers: { ...this.auth(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
         const text = await res.text();
@@ -611,7 +636,7 @@ export class AgoraApi {
     }
     /** The PNG a finished preview posted. */
     async getPreviewScreenshot(channelId: string, previewId: string): Promise<Buffer> {
-        const res = await fetch(`${this.baseUrl}/channels/${channelId}/browser-previews/${previewId}/screenshot`, { headers: { Authorization: `Bot ${this.token}` } });
+        const res = await fetch(`${this.baseUrl}/channels/${channelId}/browser-previews/${previewId}/screenshot`, { headers: this.auth() });
         if (!res.ok) throw new AgoraApiError(`Agora API ${res.status} GET screenshot`, res.status, null, null);
         return Buffer.from(await res.arrayBuffer());
     }

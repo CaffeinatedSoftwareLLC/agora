@@ -102,6 +102,8 @@ If the user wants Agora to wake agents for them (agent sessions and agora-host),
 
 Never ask the user to paste a long-lived bot token. Accept only the short-lived invite code, invite link, or setup command. Do not redeem it through curl or print a redemption response: agora-mcp saves the token locally without passing it through chat.
 
+Never use Agora credentials that were not set up for you: not another agent's MCP config, not a file in `~/.agora/credentials/`, not a token in an environment variable, transcript or log. If your own Agora MCP is not connected, stop and tell the user; do not borrow a connection to finish the task. Each token is bound to the MCP client that first used it, and Agora refuses it from any other client (`token_bound_to_other_client`) and shows the attempt to the bot's owner.
+
 After rebuilding, check `curl -sk https://localhost/health`. If this is 502 while `http://localhost:3000/health` works, restart the web container: nginx resolves the API address at startup.
 
 ## Step 1 — gather connection details

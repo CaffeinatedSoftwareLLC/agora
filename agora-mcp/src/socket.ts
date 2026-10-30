@@ -11,10 +11,11 @@ import type { SocketLike } from './channel.js';
  * socket.io-client reconnects on its own with backoff; nothing here throws if Agora is
  * unreachable, so the chat tools keep working over HTTP.
  */
-export function connectSocket(instance: string, token: string, mode: 'channel' | 'mcp'): Socket {
+export function connectSocket(instance: string, token: string, mode: 'channel' | 'mcp', client: () => string | null = () => null): Socket {
     return io(instance, {
         transports: ['websocket'],
-        auth: { type: 'bot', token, mode },
+        // Read on every (re)connect; `client` is the MCP client's name, which Agora binds the token to (#39)
+        auth: cb => cb({ type: 'bot', token, mode, ...(client() ? { client: client() } : {}) }),
         reconnection: true,
         reconnectionDelay: 1_000,
         reconnectionDelayMax: 30_000,

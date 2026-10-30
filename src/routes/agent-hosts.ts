@@ -295,6 +295,21 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
                 }
+                if (b.adapter !== undefined && b.adapter !== p.adapter) {
+                    // The owner moved this bot to another CLI: its tokens bind to the new client on next use (#39)
+                    const cleared = await db.query(
+                        `UPDATE bot_tokens SET bound_client = NULL, bound_at = NULL WHERE bot_id = $1 AND bound_client IS NOT NULL RETURNING id`,
+                        [row.rows[0].bot_id]
+                    );
+                    for (const t of cleared.rows) {
+                        await db.query(
+                            `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
+                             VALUES ($1, $2, $3, 'bot_token_binding_clear', 'bot', $4, $5)`,
+                            [generateUlid(), serverId, request.userId, row.rows[0].bot_id.trim(),
+                             JSON.stringify({ tokenId: t.id.trim(), via: 'profile adapter change', profileId, adapter: b.adapter })]
+                        );
+                    }
+                }
                 return { status: 200, body: profileJson(row.rows[0]) };
             }
         }); } catch (err: any) {
