@@ -30,7 +30,7 @@ The Capacitor bridge is what lets page JavaScript call native code. Capacitor no
 
 | Key | Value | Notes |
 | --- | --- | --- |
-| `appId` | `com.caffeinatedsoftware.agora` | **Placeholder, confirm.** Android `applicationId` reads it at build time. The iOS bundle ID is in the Xcode project (`PRODUCT_BUNDLE_IDENTIFIER`); `npm test` fails if the two differ. Cannot change after the first store upload. |
+| `appId` | `com.caffeinatedsoftware.agora` | **Confirmed 2026-10-30.** Android `applicationId` reads it at build time. The iOS bundle ID is in the Xcode project (`PRODUCT_BUNDLE_IDENTIFIER`); `npm test` fails if the two differ. Cannot change after the first store upload. |
 | `appName` | `Agora` | Store names may need a suffix if "Agora" is taken. |
 | `relayUrl` | `https://push.agora.host` | **Placeholder, confirm.** Built into `agora-native.js` and the native bridge filter. Instances must list the same origin in their allowed relays. |
 

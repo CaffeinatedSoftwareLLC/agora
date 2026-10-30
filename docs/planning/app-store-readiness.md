@@ -8,7 +8,7 @@ Privacy policy draft: [docs/privacy-policy.md](../privacy-policy.md).
 
 | # | What | Blocks |
 |---|---|---|
-| 1 | **Confirm the bundle ID** `com.caffeinatedsoftware.agora`, or give the real one. It can't change after the first upload, and the relay's `APNS_BUNDLE_ID` must match it. | Everything: Play app, App Store Connect app, the relay |
+| 1 | **Create the apps** in Play Console and App Store Connect with the bundle ID `com.caffeinatedsoftware.agora` (confirmed 2026-10-30; it can't change after the first upload). | Every upload |
 | 2 | **Privacy contact address and effective date** for the policy. Use a role address, not a personal one: the policy is public. | Publishing the policy |
 | 3 | **Publish the policy** at `https://agora.host/privacy`, and add an account-deletion page (section 4.3). | Both store forms |
 | 4 | **Relay host:** pick a Linux VPS, point `push.agora.host` at it, and put the FCM service account and the APNs `.p8` key on it (section 6). | Push in store builds |
@@ -16,7 +16,7 @@ Privacy policy draft: [docs/privacy-policy.md](../privacy-policy.md).
 | 6 | **Answer the Play Data safety form and the App Store privacy label** in the consoles, using sections 2 and 3. Decide the open question in 2.2. | Submission |
 | 7 | **Store listings:** screenshots, descriptions with the not-affiliated line, the content rating questionnaire, the category (Developer Tools / Productivity). | Submission |
 
-Apple signing: the certificates are ready, kept outside this repo. The App ID still waits on item 1.
+Apple signing: the certificates are ready, kept outside this repo. Register the App ID `com.caffeinatedsoftware.agora` with Push Notifications (Xcode does this with automatic signing).
 
 ## 2. Google Play: Data safety
 
@@ -189,7 +189,7 @@ Do this before any store build goes to testers outside the team: store builds re
 2. **DNS:** an `A`/`AAAA` record for `push.agora.host` pointing at the VPS. agora.host stays on Cloudflare Pages; this record is separate. If Cloudflare proxies it (orange cloud), set SSL/TLS to Full (strict). Otherwise use DNS only and let Caddy get the certificate.
 3. **FCM credentials:** in Google Cloud for project `agora-ff0ca`, create a dedicated service account with only the **Firebase Cloud Messaging API Admin** role, and make a JSON key for it. Avoid the default `firebase-adminsdk` account: it has far broader rights. The project must match the `google-services.json` built into the Android app.
 4. **APNs credentials:** an APNs auth key (`.p8`), with its Key ID and the Team ID. Set `APNS_ENVIRONMENT=production`: TestFlight and App Store builds use production. Xcode debug builds use the sandbox and will fail against this relay (`BadDeviceToken`). For debug testing, run a second relay with `sandbox`.
-5. **`APNS_BUNDLE_ID`** = the confirmed bundle ID (section 1, item 1).
+5. **`APNS_BUNDLE_ID`** = `com.caffeinatedsoftware.agora`, the default in `.env.example`.
 
 ### 6.2 Deploy
 
@@ -229,7 +229,7 @@ Do this before any store build goes to testers outside the team: store builds re
 
 ## 7. Submission order
 
-1. Bundle ID confirmed (1.1). App created in Play Console and App Store Connect.
+1. Apps created in Play Console and App Store Connect (section 1, item 1). The bundle ID is confirmed.
 2. Relay live, checks 1–4 (6.3).
 3. Privacy policy and deletion page published (4.2, 4.3). Privacy link added to the picker.
 4. iOS: privacy manifest added (3.1), first Xcode build, TestFlight internal testing. Checks 5–8.

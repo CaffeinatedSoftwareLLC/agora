@@ -92,7 +92,7 @@ The phases depend on each other in a chain:
 - **Account deletion (Phase 5):** each instance's owner decides what happens to a deleted account's messages, not Caffeinated Software, so it is an instance setting with two choices: remove the messages, or anonymise them. Deletion itself is always available in the account page, in the browser and in the app.
 - **Release scope:** any self-hosted instance, after thorough testing.
 - **Relay:** a separate small server at `push.agora.host`. agora.host is a Cloudflare Pages site, so it cannot run the relay.
-- **Bundle ID:** `com.caffeinatedsoftware.agora`, still pending Eryk's confirmation (it can't change after the first store upload).
+- **Bundle ID:** `com.caffeinatedsoftware.agora`, confirmed by Eryk on 2026-10-30. It can't change after the first store upload.
 
 ## 8. Contract between the three parts
 
