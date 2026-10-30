@@ -1,6 +1,6 @@
-import { DecideError, type ProviderCredentials } from './types';
+import { DecideError } from './types';
 import { redirectError } from './sse';
-import { CREDENTIAL_CHARS } from '../credentials';
+import { CREDENTIAL_CHARS, redact } from '../credentials';
 
 /**
  * The HTTP side shared by decision adapters: one POST with a single deadline that
@@ -19,21 +19,8 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 export const CREDENTIAL_PROBLEM = 'The stored key or account ID contains characters it cannot have (spaces, line breaks, control or non-ASCII characters)';
 
-/** The credential values to keep out of messages. Very short values would match ordinary words, and no real key is that short. */
-export function secretsOf(creds: ProviderCredentials): string[] {
-    return [creds.apiKey, creds.accountId].filter((s): s is string => typeof s === 'string' && s.length >= 4);
-}
-
-/** `text` with every credential replaced, in the forms a provider might echo it: as sent, JSON-escaped, URL-encoded. */
-export function redact(text: string, secrets: readonly string[]): string {
-    let out = text;
-    for (const secret of secrets) {
-        for (const form of new Set([secret, JSON.stringify(secret).slice(1, -1), encodeURIComponent(secret)])) {
-            out = out.split(form).join('[redacted]');
-        }
-    }
-    return out;
-}
+// Shared with every other adapter (src/ai/adapters/guard.ts)
+export { redact, secretsOf } from '../credentials';
 
 /** Whitespace collapsed and cut at 300 characters. Redact first: a cut can leave part of a key. */
 function tidy(message: string): string {

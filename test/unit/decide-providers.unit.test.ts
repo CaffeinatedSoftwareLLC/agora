@@ -82,7 +82,7 @@ describe('per-model limits and question caps', () => {
 
 describe('greenpt adapter (Metis)', () => {
     it('is registered for decide only, with the System One defaults', () => {
-        expect(getAdapter('greenpt')).toBe(greenptAdapter);
+        expect(getAdapter('greenpt')?.id).toBe(greenptAdapter.id); // registered, wrapped by guardAdapter
         expect(greenptAdapter.capabilities).toEqual(['decide']);
         expect(greenptAdapter.defaultModels).toEqual({ decide: 'metis' });
         expect(greenptAdapter.requiresApiKey).toBe(true);
@@ -190,7 +190,7 @@ describe('cloudflare adapter (Clef, Clef Flash)', () => {
     const cfError = (code: number, message: string) => ({ result: null, success: false, errors: [{ code, message }], messages: [] });
 
     it('is registered for decide only, needs an account ID, and offers exactly the two Clef models', () => {
-        expect(getAdapter('cloudflare')).toBe(cloudflareAdapter);
+        expect(getAdapter('cloudflare')?.id).toBe(cloudflareAdapter.id); // registered, wrapped by guardAdapter
         expect(adapterSupports('cloudflare', 'decide')).toBe(true);
         expect(adapterSupports('cloudflare', 'chat')).toBe(false);
         expect(cloudflareAdapter.requiresAccountId).toBe(true);
