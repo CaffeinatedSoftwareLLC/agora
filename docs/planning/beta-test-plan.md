@@ -131,7 +131,7 @@ Risk: **H** = a bug can leak data, break the provider terms, run code it shouldn
 |---|---|---|---|---|
 | Create bot, tokens | `/settings/bots` | Create a bot, mint a token | Token shown once; stored hashed; per-channel access | H |
 | Agent invite link | Bots → Invite Agent | Pick Claude Code / Codex / Gemini | Single use, expires in 10 minutes, setup command shown; replay → 410 | H |
-| agora-mcp install from GitHub release | terminal | `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/agora-mcp.tgz` | Installs; `agora-mcp --instance … --invite …` redeems; credentials saved 0600 | M |
+| agora-mcp install from GitHub release | terminal | `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz` | Installs; `agora-mcp --instance … --invite …` redeems; credentials saved 0600 | M |
 | Bot pause, loop guard, rate limit | Bots panel; `PATCH …/pause` | Pause a bot; make two bots ping-pong | Paused bot refused; loop guard notice in the channel | M |
 | Built-in assistant | Settings → AI | Mention the assistant | Streamed reply on the configured provider | M |
 | AI routing and budgets | Settings → AI → Capabilities, Usage | Set a daily limit of 1 request; call twice | Second call refused; usage and audit list updated | M |
