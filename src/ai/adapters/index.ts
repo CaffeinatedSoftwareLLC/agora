@@ -6,10 +6,13 @@ import { tavilyAdapter } from './tavily';
 import { typesafeAdapter } from './typesafe';
 import { greenptAdapter } from './greenpt';
 import { cloudflareAdapter } from './cloudflare';
+import { guardAdapter } from './guard';
 
 export * from './types';
 
-const ADAPTERS: Adapter[] = [anthropicAdapter, openaiAdapter, geminiAdapter, tavilyAdapter, typesafeAdapter, greenptAdapter, cloudflareAdapter];
+// Guarded: no credential reaches an error, result or log (guard.ts)
+const ADAPTERS: Adapter[] = [anthropicAdapter, openaiAdapter, geminiAdapter, tavilyAdapter, typesafeAdapter, greenptAdapter, cloudflareAdapter]
+    .map(guardAdapter);
 const BY_ID = new Map(ADAPTERS.map(a => [a.id, a]));
 
 /** Legacy `ai_provider_config.provider` values → adapter IDs. */

@@ -112,7 +112,7 @@ describe('typesafe adapter', () => {
     };
 
     it('is registered for decide and nothing else', () => {
-        expect(getAdapter('typesafe')).toBe(typesafeAdapter);
+        expect(getAdapter('typesafe')?.id).toBe(typesafeAdapter.id); // registered, wrapped by guardAdapter
         expect(adapterSupports('typesafe', 'decide')).toBe(true);
         expect(adapterSupports('typesafe', 'chat')).toBe(false);
         expect(adapterSupports('gemini', 'decide')).toBe(false);
