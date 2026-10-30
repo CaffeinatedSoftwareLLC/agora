@@ -1,0 +1,9 @@
+node_modules
+dist
+test
+secrets
+.env
+.env.*
+*.db
+*.db-*
+*.md
