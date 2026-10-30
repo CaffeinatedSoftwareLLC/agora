@@ -574,7 +574,7 @@ export class AgoraApi {
         return this.request('GET', `/channels/${channelId}/files/search${qs ? `?${qs}` : ''}`);
     }
 
-    /** The readable text of a file (text files and PDFs), one page at a time. */
+    /** The readable text of a file (text files, PDFs and Office documents), one page at a time. */
     async readFileText(fileId: string, opts: { offset?: number; limit?: number } = {}): Promise<FileText> {
         const params = new URLSearchParams();
         if (opts.offset) params.set('offset', String(opts.offset));

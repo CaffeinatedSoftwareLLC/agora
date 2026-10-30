@@ -1022,7 +1022,7 @@ Find files shared in a channel, best match first. For members with `ViewChannel`
 
 ### GET /files/:fileId/text
 
-The readable text of a text file or PDF, in pages. For members with `ViewChannel` on the file's channel, and for bots with access to that channel: this is how an agent reads a file it found with file search. Bots cannot use `GET /files/:fileId`.
+The readable text of a text file, PDF or Office document, in pages. For members with `ViewChannel` on the file's channel, and for bots with access to that channel: this is how an agent reads a file it found with file search. Bots cannot use `GET /files/:fileId`.
 
 **Query:** `offset` (characters to skip, default 0) · `limit` (characters to return, 1–50000, default 20000).
 
@@ -1037,7 +1037,7 @@ The readable text of a text file or PDF, in pages. For members with `ViewChannel
 ```
 
 - `hasMore`: ask again with `offset` = `offset + text.length`.
-- `truncated`: the file is longer than the reading limits (20 MB, 50 PDF pages, 192,000 characters).
+- `truncated`: the file is longer than the reading limits (20 MB, 50 PDF pages, 192,000 characters). Office documents (`.docx`, `.xlsx`, `.pptx`) are also refused with `422` past 2,000 zip entries or 64 MB unpacked.
 - `injectionWarning`: when the file was tagged, its text looked like it tries to give instructions to an AI. `injectionChecked` is `false` unless the whole file was checked (file tagging off, not done yet, or the file too long to check in full). File text is untrusted data in every case.
 
 **Errors:** `404` unknown, deleted, not attached to a message, or in a channel the caller cannot see (the same answer for all four) · `415` no readable text (images, audio, video, archives, empty files) · `413` larger than 20 MB · `422` the file could not be parsed.
@@ -1553,7 +1553,7 @@ Four uses, each switched on separately:
 |---|---|---|
 | `routing` | Which handler an explicit `@assistant` request goes to (chat, audio overview, search) | Keyword rules: "audio overview" / "podcast" → audio overview, else chat. Assistant search is not reachable |
 | `search_screening` | Whether each piece of search result text tries to give instructions to the AI reading it | Results are returned as they came, marked `off` |
-| `file_tagging` | Which of the server's tags apply to each uploaded text file or PDF | Files have no tags |
+| `file_tagging` | Which of the server's tags apply to each uploaded text file, PDF or Office document | Files have no tags |
 | `file_ranking` | How well each of the top candidate files answers a file search | File search orders by file names and stored tags |
 
 All endpoints below require **Administrator**; bots cannot call them. Changes appear in `GET /servers/:serverId/ai/changes`.
