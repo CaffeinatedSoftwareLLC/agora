@@ -12,6 +12,7 @@ import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-age
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
+import { notifyMentions } from '../lib/notifications';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact, removeArtifactVersion } from '../lib/artifacts';
 
 export async function messageRoutes(app: FastifyInstance) {
@@ -206,6 +207,8 @@ export async function messageRoutes(app: FastifyInstance) {
         );
 
         const mentionedUserIds = mentionedUsers.map(u => u.id);
+        // People named with @ hear about it in their notifications (not @everyone)
+        await notifyMentions(db, { channelId, authorId: userId, userIds: mentionedUsers.filter(u => !u.bot).map(u => u.id) });
 
         // Phase 2: Fire MessageMention events for bot mentions (post-commit via pendingEvents).
         // Placed after all validation gates so events are only queued for successful creates.

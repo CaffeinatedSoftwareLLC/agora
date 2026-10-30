@@ -34,7 +34,7 @@ export interface FileImageResponse {
     /** The type of `data`, which may differ from the stored file's (a resized GIF becomes a PNG). */
     mime: string;
     originalMime: string;
-    uploader: { id: string; username: string | null; displayName: string | null };
+    uploader: { id: string | null; username: string | null; displayName: string | null };
     width: number | null;
     height: number | null;
     originalWidth: number | null;
@@ -108,7 +108,7 @@ export async function readFileImage(deps: FileImageDeps, input: FileImageInput):
             name: file.filename,
             mime: fitted.mime,
             originalMime,
-            uploader: { id: file.uploader_id.trim(), username: file.username ?? null, displayName: file.display_name ?? null },
+            uploader: { id: file.uploader_id?.trim() ?? null, username: file.username ?? null, displayName: file.display_name ?? null },
             width: fitted.width,
             height: fitted.height,
             originalWidth: fitted.originalWidth,

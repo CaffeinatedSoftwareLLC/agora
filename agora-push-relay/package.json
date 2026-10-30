@@ -1,0 +1,25 @@
+{
+  "name": "agora-push-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Content-free push relay between self-hosted Agora instances and FCM/APNs",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --disable-warning=ExperimentalWarning dist/index.js",
+    "test": "vitest run",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "fastify": "^5.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.12"
+  },
+  "license": "MIT"
+}

@@ -28,6 +28,9 @@ import type {
 import { SocketContext } from './SocketContext';
 import { ChannelAvatars } from '../../components/ui/ChannelAvatars';
 import { useVoiceStore } from '../voice/voiceStore';
+import { useNotificationStore } from '../../stores/notificationStore';
+import type { AppNotification, NotificationReadPayload } from '../../lib/contracts/notifications';
+import { registerNativePush } from '../notifications/nativePush';
 
 /** A new message is on screen: in the open channel, or (a thread reply) in the open thread. */
 function isOnScreen(channelId: string, threadId?: string): boolean {
@@ -55,6 +58,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setSocket(s);
       // Signed in and connected: pick up the theme saved on this account (another device may have changed it)
       void useUIStore.getState().loadPreferences();
+      // The badge counts what arrived while disconnected
+      void useNotificationStore.getState().load().catch(() => {});
     });
 
     s.on('disconnect', () => {
@@ -112,6 +117,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           }
         }
       }
+    });
+
+    s.on('NotificationCreate', (data: AppNotification) => {
+      useNotificationStore.getState().add(data);
+    });
+
+    s.on('NotificationRead', (data: NotificationReadPayload) => {
+      useNotificationStore.getState().applyRead(data);
     });
 
     s.on('FileAttachmentUpdate', (data: FileAttachmentUpdatePayload) => {
@@ -198,6 +211,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setSocket(null);
     };
   }, [sessionUserId, clearSession, setServers, setChannels, setConnectionStatus]);
+
+  // Inside the Android or iOS app: register this phone for push once per login session
+  useEffect(() => {
+    if (sessionUserId) void registerNativePush(sessionUserId);
+  }, [sessionUserId]);
 
   return (
     <SocketContext.Provider value={socket}>

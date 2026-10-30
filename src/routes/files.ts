@@ -312,7 +312,8 @@ export async function fileRoutes(app: FastifyInstance) {
         }
 
         const channelId = file.channel_id.trim();
-        const isUploader = file.uploader_id.trim() === userId.trim();
+        // A deleted account's files have no uploader: only ManageMessages can delete them
+        const isUploader = file.uploader_id?.trim() === userId.trim();
 
         if (!isUploader) {
             // Non-uploader needs ManageMessages permission

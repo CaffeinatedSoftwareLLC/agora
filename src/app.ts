@@ -22,6 +22,7 @@ import { threadRoutes } from './routes/threads';
 import { aiConfigRoutes } from './routes/ai-config';
 import { aiProviderRoutes } from './routes/ai-providers';
 import { aiDecisionRoutes } from './routes/ai-decisions';
+import { modelAgentRoutes } from './routes/model-agents';
 import { fileTagRoutes } from './routes/file-tags';
 import { runtimeRoutes } from './routes/runtime';
 import { roleRoutes } from './routes/roles';
@@ -38,13 +39,18 @@ import { subtaskRoutes } from './routes/subtasks';
 import { artifactRoutes } from './routes/artifacts';
 import { browserPreviewRoutes } from './routes/browser-previews';
 import { voiceRoutes } from './routes/voice';
+import { accountDeletionRoutes } from './routes/account-deletion';
+import { notificationRoutes } from './routes/notifications';
+import { startNotificationListener } from './lib/notifications';
 import { startAssistantHandler } from './ai/assistant-handler';
+import { startModelAgentHandler } from './ai/model-agent-handler';
 import { internalBus } from './ai/internal-bus';
 import { requireAuth } from './auth/middleware';
 import { isInstanceInitialized } from './instance/check-initialized';
 import { setupGateway } from './gateway';
 import { startEventBridge } from './lib/event-bridge';
 import { getRedis } from './auth/token-blacklist';
+import { storage } from './lib/storage';
 import { readGatewayAccess, writeGatewayAccess } from './lib/gateway-gate';
 import { changesGatewayAccess, refreshGatewayAccess, invalidateGatewayAccess, visibleChannels } from './lib/gateway-access';
 import { LoginLimiter, type LoginLimits } from './auth/login-limit';
@@ -285,7 +291,7 @@ export async function buildApp(opts?: {
 
                 io.to(evt.room).emit(evt.event, evt.data);
 
-                // Dispatch built-in assistant mentions via internal bus
+                // Dispatch bot mentions (built-in assistant, model agents) via internal bus
                 if (evt.event === 'MessageMention') {
                     const botId = evt.room.replace('user:', '');
                     internalBus.emit('assistantMention', {
@@ -299,6 +305,12 @@ export async function buildApp(opts?: {
                     });
                 }
             }
+        }
+
+        // Work that must wait for the commit and must not delay the reply (e.g. telling a
+        // push relay to forget a removed device). Failures are the task's own business.
+        for (const task of request.afterCommit ?? []) {
+            void task().catch(err => request.log.warn({ err }, 'After-commit task failed'));
         }
 
         // Force-disconnect suspended users only after successful commit
@@ -316,6 +328,12 @@ export async function buildApp(opts?: {
                     }
                 } catch { /* WS disconnect is best-effort */ }
             }
+        }
+
+        // Blobs of files the request soft-deleted (account deletion). Only after COMMIT, so a
+        // rolled-back request never loses a file; a failure leaves an orphaned blob, not a broken row.
+        for (const key of request.pendingBlobRemovals ?? []) {
+            try { await storage.remove(key); } catch { /* best-effort, as in DELETE /files/:fileId */ }
         }
 
         // Idempotency: replace in-flight marker with terminal response,
@@ -364,6 +382,7 @@ export async function buildApp(opts?: {
     await app.register(adminRoutes);
     await app.register(termsWatchRoutes);
     await app.register(userRoutes);
+    await app.register(accountDeletionRoutes);
     await app.register(fileRoutes);
     await app.register(botRoutes);
     await app.register(botAttentionRoutes);
@@ -373,6 +392,7 @@ export async function buildApp(opts?: {
     await app.register(aiConfigRoutes);
     await app.register(aiProviderRoutes);
     await app.register(aiDecisionRoutes);
+    await app.register(modelAgentRoutes);
     await app.register(fileTagRoutes);
     await app.register(runtimeRoutes);
     await app.register(roleRoutes);
@@ -389,6 +409,7 @@ export async function buildApp(opts?: {
     await app.register(artifactRoutes);
     await app.register(browserPreviewRoutes);
     await app.register(voiceRoutes);
+    await app.register(notificationRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);
@@ -396,6 +417,8 @@ export async function buildApp(opts?: {
 
     // Start built-in AI assistant handler
     startAssistantHandler(db, io, app.log);
+    // Model agents: other bots that answer mentions with their own model and tools
+    startModelAgentHandler(app, db, app.log);
 
     // Forward events published by other services (cap-gateway) to Socket.IO clients
     const stopEventBridge = startEventBridge(io, config.redisUrl, app.log, async () => {
@@ -405,6 +428,10 @@ export async function buildApp(opts?: {
         });
     });
     app.addHook('onClose', async () => { await stopEventBridge(); });
+
+    // Committed notifications reach the recipient's sockets (src/lib/notifications.ts)
+    const stopNotifications = startNotificationListener(io, opts?.dbUrl ?? process.env.DATABASE_URL, app.log);
+    app.addHook('onClose', async () => { await stopNotifications(); });
 
     return { app, db };
 }

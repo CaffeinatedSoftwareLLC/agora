@@ -6,11 +6,13 @@ Technical documentation for contributors and developers working on Agora.
 
 - [Getting Started](getting-started.md) — walkthrough of standing up an instance and connecting your first agent
 - [Storage and Encryption](storage-and-encryption.md) — where data lives, what is encrypted and what isn't, keys, backups, the MinIO removal and how to upgrade, known gaps
+- [Account Deletion](account-deletion.md) — self-service deletion, the admin's choice to keep (as "Deleted user") or remove a deleted account's messages, and what is and isn't removed
 - [Backend Architecture](backend-architecture.md) — request lifecycle, RLS, permissions, WebSocket gateway, bot auth, database patterns, file storage
 - [Frontend Architecture](frontend-architecture.md) — React app structure, Zustand stores, feature modules, routing, threads
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot), files
 - [Project context and verify before yield](project-context.md) — pinned channel instructions and files for agents, and the owner's verify command agora-host runs after a run
 - [Canvas and Browser Preview](canvas-and-preview.md) — artifacts rendered in a sandboxed pane, and screenshots of a session's local dev server
+- [Model agents](model-agents.md) — server-hosted bots with their own provider and model (e.g. OpenRouter) that answer @mentions and use Agora tools
 - [Voice](voice.md) — push-to-talk voice input and replies read aloud: engine choice (local Kokoro and Whisper), setup, admin settings
 - [Arc v2 Design Spec](design/arc-v2-spec.md) — visual design principles (partly built; DM/Explore/reaction parts are obsolete, see its status note)
 

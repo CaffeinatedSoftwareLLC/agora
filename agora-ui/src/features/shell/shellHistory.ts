@@ -1,4 +1,5 @@
 import { useUIStore } from '../../stores/uiStore';
+import { useAuthStore } from '../../stores/authStore';
 
 function layers() {
   const s = useUIStore.getState();
@@ -31,6 +32,13 @@ export function installShellHistory() {
   };
   const sync = () => {
     if (popping || pending) return;
+    // Signing out closes every layer on the way to /login. Going back over their
+    // entries would land after that navigation and return the page to /app, where
+    // AuthGuard has already spent its redirect: a blank page. Leave them in place.
+    if (!useAuthStore.getState().user) {
+      stack = [];
+      return;
+    }
     if (pathname !== window.location.pathname) {
       pathname = window.location.pathname;
       stack = [];

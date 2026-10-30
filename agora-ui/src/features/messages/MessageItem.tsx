@@ -244,7 +244,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="font-semibold text-[15px] text-text">{message.authorUsername || 'Unknown'}</span>
+          <span className="font-semibold text-[15px] text-text">{message.authorUsername || (message.systemEvent ? 'Agora' : 'Deleted user')}</span>
           {message.authorBot && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold leading-none bg-primary/20 text-primary-text">BOT</span>
           )}

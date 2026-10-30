@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { collabOutcome, notifyCollab, notifyMentions } from '../lib/notifications';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { generateUlid } from '../utils/ulid';
 import { resolveMentions, mentionsEveryoneIn } from './shared';
@@ -51,7 +52,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Fetch parent message
         const parent = await db.query(
-            'SELECT id, channel_id, thread_id, thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, channel_id, thread_id, thread_closed_at, author_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
@@ -227,6 +228,12 @@ export async function threadRoutes(app: FastifyInstance) {
         );
 
         const mentionedUserIds = mentionedUsers.map(u => u.id);
+        await notifyMentions(db, { channelId, threadId: msgId, authorId: userId, userIds: mentionedUsers.filter(u => !u.bot).map(u => u.id) });
+        // An agora-collab DONE or BLOCK tells the person who started the thread
+        const outcome = collabOutcome(protocol);
+        if (outcome) {
+            await notifyCollab(db, { channelId, threadId: msgId, starterId: parent.rows[0].author_id?.trim() ?? null, authorId: userId, outcome });
+        }
 
         // Fire bot mention events
         if (serverId) {
@@ -428,7 +435,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         if (before) {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
+                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct, p.system_event,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
                             latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
@@ -465,7 +472,7 @@ export async function threadRoutes(app: FastifyInstance) {
             params = [channelId, before, limit];
         } else {
             query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct,
+                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct, p.system_event,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
                             latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
@@ -530,6 +537,8 @@ export async function threadRoutes(app: FastifyInstance) {
             editedAt: row.edited_at,
             replyCount: row.reply_count,
             lastReplyAt: row.last_reply_at,
+            // Tells a system line (task card, subtask) from a deleted account's post: both have no author
+            ...(row.system_event ? { systemEvent: row.system_event } : {}),
             canClose: hasManagePerms || (row.author_id?.trim() === userId.trim()),
             latestProtocol: row.latest_protocol ? {
                 ...row.latest_protocol, messageId: row.protocol_message_id.trim(),

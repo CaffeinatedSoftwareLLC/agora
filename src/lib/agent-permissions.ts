@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import type { Notice } from './agent-runs';
+import { notifyApproval } from './notifications';
 
 /**
  * Tool permissions for hosted agents (#73) and rate-limit sleep (#87).
@@ -76,6 +77,7 @@ export async function fileDeniedTools(c: PoolClient, run: any, tools: string[] |
             [messageId, channelId, content, JSON.stringify(data)]
         );
         await c.query(`UPDATE agent_tool_requests SET message_id = $2 WHERE id = $1`, [id, messageId]);
+        await notifyApproval(c, { kind: 'tool', channelId, sessionId: run.session_id });
         notices.push(systemMessage(messageId, channelId, content, 'agent_tool_approval', data));
     }
 }
@@ -174,6 +176,7 @@ export async function openLiveRequest(c: PoolClient, run: any, body: { tool: str
         [messageId, channelId, content, JSON.stringify(data)]
     );
     await c.query(`UPDATE agent_tool_requests SET message_id = $2 WHERE id = $1`, [id, messageId]);
+    await notifyApproval(c, { kind: 'tool', channelId, sessionId: run.session_id, live: true });
     notices.push(systemMessage(messageId, channelId, content, 'agent_tool_approval', data));
     return { id, status: 'pending' };
 }

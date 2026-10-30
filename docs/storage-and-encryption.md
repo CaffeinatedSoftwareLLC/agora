@@ -37,7 +37,11 @@ What Agora stores, where it lives, what is encrypted, and what is not. This page
 | Bot tokens | Postgres | Hashed (Argon2), shown once |
 | Sandbox run tokens | Postgres | Hashed (SHA-256), live only while the run does |
 | AI provider API keys | Postgres (`ai_providers`) | **Yes** |
+| Push relay handles of phones | Postgres (`push_devices`) | **Yes** |
+| Notifications (type, label, link; no message text) | Postgres (`notifications`) | No |
 | Client IP addresses | **Not stored.** Used in memory for rate limiting only | — |
+
+When someone deletes their account, their user row, password hash, email, passkeys and preferences are deleted; their messages and files are kept without an author or removed, as the instance admin chose. See [Account deletion](account-deletion.md).
 | Code submitted for sandbox runs | Postgres (`exec_runs`) | No. Pruned after the retention period (default 30 days) |
 | Queues, rate limits, loop guard counters | Redis (`redisdata` volume) | No |
 | TLS certificates | `caddy_data` volume | Managed by Caddy |
@@ -50,6 +54,7 @@ All application-level encryption is AES-256-GCM (`src/lib/encryption.ts`, `src/a
 |---|---|---|
 | **Files** | `AGORA_ENCRYPTION_KEY` | A fresh random 96-bit IV per file. The ciphertext goes to the storage backend; the IV and the 16-byte auth tag go to the `files` row in Postgres. Done in `storeFile()` (`src/lib/file-store.ts`), the single path used by user uploads, sandbox `postFile()`, test reports, audio overviews and generated video. There is no setting that turns it off. |
 | **AI provider API keys** | `AGORA_ENCRYPTION_KEY` | Stored as ciphertext + IV + tag. Decrypted only at the moment of a provider call. The config API never returns a key. |
+| **Push relay handles** | `AGORA_ENCRYPTION_KEY` | Stored as ciphertext + IV + tag, with a SHA-256 of the handle to recognise a re-registration. Decrypted only to send a push or to tell the relay to forget the handle. The API never returns a handle (`docs/notifications.md`). |
 
 Files are decrypted in the API process when a member with `ViewChannel` on the file's channel requests `GET /files/:fileId`, and streamed back over the request. Agora does not hand out signed or public URLs to stored objects.
 
@@ -180,7 +185,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   - The fix is to restore the original key in `.env.prod`.
   - If the original key is gone for good, start once with `AGORA_ACCEPT_NEW_ENCRYPTION_KEY=1` in `.env.prod`, then remove it. This only records the new key: files and provider keys written under the old one stay unreadable.
 - **In production the server also refuses** a missing or all-zero `AGORA_ENCRYPTION_KEY` and a placeholder `JWT_SECRET`. The Docker image runs in production mode.
-- **Rotating the key** re-encrypts every file and every stored provider key. See [Rotating the encryption key](#rotating-the-encryption-key).
+- **Rotating the key** re-encrypts every file, every stored provider key and every push relay handle. See [Rotating the encryption key](#rotating-the-encryption-key).
 - Keys live in `.env.prod` on the host and in the environment of the `api`, `runner` and `cap-gateway` containers. Sandbox containers receive no keys: only the gateway's address, a per-run token and the run's own code.
 
 ## Rotating the encryption key

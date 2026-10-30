@@ -218,6 +218,14 @@ export async function aiProviderRoutes(app: FastifyInstance) {
     app.delete('/servers/:serverId/ai/providers/:providerId', { preHandler: [requireAdmin] }, async (request, reply) => {
         const { serverId, providerId } = request.params as any;
         const db = request.dbClient!;
+        // Model agents keep their provider: delete or move them first
+        const agents = await db.query(
+            'SELECT u.username FROM model_agents a JOIN users u ON u.id = a.bot_id WHERE a.provider_id = $1 AND a.server_id = $2 ORDER BY u.username',
+            [providerId, serverId]
+        );
+        if (agents.rows.length > 0) {
+            return reply.status(409).send({ error: `This provider is used by model agents: ${agents.rows.map((r: any) => r.username).join(', ')}` });
+        }
         const routes = await db.query('SELECT capability FROM ai_capability_routes WHERE provider_id = $1 ORDER BY capability', [providerId]);
         // Routes pointing at this provider cascade away
         const result = await db.query('DELETE FROM ai_providers WHERE id = $1 AND server_id = $2 RETURNING *', [providerId, serverId]);
@@ -406,14 +414,15 @@ export async function aiProviderRoutes(app: FastifyInstance) {
         return reply.send(await recentAiChanges(request.dbClient!, serverId, limit));
     });
 
-    // GET /servers/:serverId/ai/usage?days=N → per-capability totals, plus today's totals for budgets
+    // GET /servers/:serverId/ai/usage?days=N → per-capability totals, plus today's totals for budgets.
+    // Model agents' calls are their own row, `model_agents`, whatever the budget mode.
     app.get('/servers/:serverId/ai/usage', { preHandler: [requireAdmin] }, async (request, reply) => {
         const { serverId } = request.params as any;
         const db = request.dbClient!;
         const days = Math.max(1, Math.min(365, parseInt((request.query as any).days || '30', 10) || 30));
 
         const result = await db.query(
-            `SELECT capability,
+            `SELECT CASE WHEN model_agent_id IS NOT NULL THEN 'model_agents' ELSE capability END AS capability,
                     COUNT(*)::int AS requests,
                     COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
                     COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
@@ -424,8 +433,8 @@ export async function aiProviderRoutes(app: FastifyInstance) {
                     SUM(cost_micros) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')::bigint AS cost_micros_today
              FROM ai_usage_events
              WHERE server_id = $1 AND created_at >= NOW() - ($2 || ' days')::interval
-             GROUP BY capability
-             ORDER BY capability`,
+             GROUP BY 1
+             ORDER BY 1`,
             [serverId, days]
         );
         return reply.send({

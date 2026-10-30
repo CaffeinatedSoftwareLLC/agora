@@ -3,6 +3,8 @@ import { requireInstanceAdmin } from '../auth/middleware';
 import { generateUlid } from '../utils/ulid';
 import { getFileSettings, invalidateSettingsCache } from '../lib/settings';
 import { codeRetentionDays, countRunsPrunedBy } from '../runtime/service';
+import { DELETED_ACCOUNT_MESSAGES_KEY, deletedAccountMessages } from '../lib/account-deletion';
+import { allowedRelays, isHttpsOrigin } from '../lib/notifications';
 
 async function logAdminAction(
     db: any,
@@ -494,6 +496,71 @@ export async function adminRoutes(app: FastifyInstance) {
         );
         await logAdminAction(db, request.userId, 'runtime_settings_update', 'instance_settings', null, { codeRetentionDays: days, previous: current });
         return reply.send({ codeRetentionDays: days });
+    });
+
+    // GET /admin/settings/accounts — what happens to a deleted account's messages
+    app.get('/admin/settings/accounts', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        return reply.send({ deletedAccountMessages: await deletedAccountMessages(request.dbClient!) });
+    });
+
+    // PATCH /admin/settings/accounts — applies to deletions from now on, not to accounts already deleted
+    app.patch('/admin/settings/accounts', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['deletedAccountMessages'],
+                additionalProperties: false,
+                properties: {
+                    deletedAccountMessages: { type: 'string', enum: ['anonymize', 'remove'] },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const { deletedAccountMessages: value } = request.body as { deletedAccountMessages: 'anonymize' | 'remove' };
+        const previous = await deletedAccountMessages(db);
+        await db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+            [DELETED_ACCOUNT_MESSAGES_KEY, JSON.stringify(value)]
+        );
+        await logAdminAction(db, request.userId, 'account_settings_update', 'instance_settings', null, { deletedAccountMessages: value, previous });
+        return reply.send({ deletedAccountMessages: value });
+    });
+
+    // GET /admin/settings/push — push relays phones may register with (docs/notifications.md)
+    app.get('/admin/settings/push', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        return reply.send({ allowedRelays: await allowedRelays(request.dbClient!) });
+    });
+
+    // PATCH /admin/settings/push { allowedRelays } — https origins; empty turns app push off
+    app.patch('/admin/settings/push', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object', required: ['allowedRelays'], additionalProperties: false,
+                properties: {
+                    allowedRelays: { type: 'array', maxItems: 10, uniqueItems: true, items: { type: 'string', minLength: 9, maxLength: 255 } },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const relays = [...new Set((request.body as { allowedRelays: string[] }).allowedRelays.map(r => r.trim().replace(/\/+$/, '')))];
+        const bad = relays.find(r => !isHttpsOrigin(r));
+        if (bad) return reply.status(400).send({ error: 'invalid_relay', relay: bad, message: 'Each relay must be an https origin, such as https://push.example.com' });
+        await db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ('push.allowed_relays', $1)
+             ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+            [JSON.stringify(relays)]
+        );
+        await logAdminAction(db, request.userId, 'push_settings_update', 'instance_settings', null, { allowedRelays: relays });
+        return reply.send({ allowedRelays: relays });
     });
 
     // GET /admin/storage

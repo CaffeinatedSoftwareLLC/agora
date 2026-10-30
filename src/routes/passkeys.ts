@@ -25,7 +25,7 @@ const MAX_PASSKEYS_PER_USER = 20;
 // The browser's PublicKeyCredential JSON. The library validates its contents; the
 // schema only bounds the shape and size of what reaches it.
 const b64url = { type: 'string', minLength: 1, maxLength: 4096, pattern: '^[A-Za-z0-9_-]+={0,2}$' };
-const credentialSchema = {
+export const credentialSchema = {
     type: 'object',
     required: ['id', 'rawId', 'type', 'response'],
     properties: {

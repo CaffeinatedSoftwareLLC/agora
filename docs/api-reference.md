@@ -18,6 +18,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Threads](#threads)
 - [Files](#files)
 - [Unreads](#unreads)
+- [Notifications](#notifications)
 - [Users](#users)
 - [Bots](#bots)
 - [AI Providers](#ai-providers)
@@ -1172,6 +1173,12 @@ Get unread state for all channels the user is a member of (server channels + DM 
 
 ---
 
+## Notifications
+
+The signed-in person's notifications, notification preferences and push devices live under `/me/`: `GET /me/notifications`, `POST /me/notifications/:id/read`, `POST /me/notifications/read-all`, `GET`/`PUT /me/notification-preferences` and `POST`/`GET`/`DELETE /me/push-devices`. Instance admins set the allowed push relays with `GET`/`PATCH /admin/settings/push`. Socket events: `NotificationCreate` and `NotificationRead`, to the person's own sockets. Request and response shapes are in [notifications.md](notifications.md#rest-api).
+
+---
+
 ## Users
 
 ### GET /users/search
@@ -1195,6 +1202,56 @@ Search for people who share at least one server with the authenticated user, by 
 ```
 
 Returns up to 20 results. Matching is case-insensitive (`ILIKE`).
+
+---
+
+### GET /users/@me/deletion
+
+What deleting the signed-in account would do, and what stops it. People only. See `docs/account-deletion.md`.
+
+**Auth:** Required (not bots)
+
+**Response** `200`
+```json
+{
+  "deletedAccountMessages": "anonymize",
+  "passkeys": 1,
+  "ownedServers": [{ "id": "01HYX...", "name": "Lab" }],
+  "lastAdmin": false,
+  "ownedBots": [{ "id": "01HYX...", "username": "codex", "serverId": "01HYX..." }]
+}
+```
+
+---
+
+### POST /users/@me/deletion/passkey-options
+
+Start a passkey assertion that `DELETE /users/@me` accepts instead of the password. Offers the caller's passkeys for the request's hostname; the challenge lasts 5 minutes and is single use.
+
+**Auth:** Required (not bots) · rate limit 10 per minute
+
+**Response** `200` `{ "flowId": "...", "options": { ... } }` · **Errors:** `400 origin_not_allowed` · `404 no_passkeys` (none on this hostname)
+
+---
+
+### DELETE /users/@me
+
+Delete the signed-in account. Messages are kept as "Deleted user" or removed, by the instance setting (`GET/PATCH /admin/settings/accounts`). Bots the person owns are paused with their tokens revoked. All sessions and sockets of the account end; a cookie session's cookies are cleared.
+
+**Auth:** Required (not bots) · rate limit 5 per 15 minutes
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `confirm` | string | yes | the account's username, exactly |
+| `password` | string | one of `password`, `passkey` | the current password; failures count against the login limit |
+| `passkey` | object | one of `password`, `passkey` | `{ "flowId", "response" }`: the flow from `passkey-options` and the browser's `PublicKeyCredential` JSON |
+
+**Response** `200`
+```json
+{ "deleted": true, "deletedAccountMessages": "anonymize" }
+```
+
+**Errors:** `400 confirmation_mismatch` · `403 reauth_failed` (wrong password or passkey) · `403 challenge_invalid` (expired, used, or another account's flow) · `403 forbidden` (bot) · `409 owns_servers` with `servers: [{ id, name }]` · `409 last_admin` · `429 too_many_attempts` · `503 login_unavailable` (the login limit's store is down)
 
 ---
 
@@ -1386,12 +1443,17 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 | GET | `/servers/:serverId/ai/providers` | Configured providers, with the capabilities each serves, and `accountId` (null unless the adapter takes one) |
 | POST | `/servers/:serverId/ai/providers` | `{ adapter, label?, apiKey?, baseUrl?, accountId? }` → `201`; `400` a required key or account ID missing, or an account ID for an adapter that takes none; `409` duplicate label |
 | PATCH | `/servers/:serverId/ai/providers/:providerId` | `{ label?, apiKey? (null clears), baseUrl?, accountId?, enabled? }` |
-| DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it |
+| DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it. `409` while a model agent uses the provider |
 | POST | `/servers/:serverId/ai/providers/:providerId/test` | `{ model?, capability? }` → `{ ok, error? }` using the stored key; OpenAI-compatible speech tests use model metadata, with no audio generation. Saved routes supply the default capability/model. |
 | GET | `/servers/:serverId/ai/routes` | Capability routes |
 | PUT | `/servers/:serverId/ai/routes/:capability` | `{ providerId, model, enabled?, dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros?, inputPriceMicrosPerMtok?, outputPriceMicrosPerMtok? }`. `enabled` defaults to `true` for `chat`, `false` otherwise. `400` if the adapter can't serve the capability |
 | DELETE | `/servers/:serverId/ai/routes/:capability` | Remove a route |
-| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals |
+| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals; model agents' calls are their own row, `model_agents` |
+| GET | `/servers/:serverId/ai/agents` | Model agents, with today's usage ([model-agents.md](model-agents.md)) |
+| POST | `/servers/:serverId/ai/agents` | `{ name, providerId, model, systemPrompt?, tools?, maxSteps?, maxOutputTokens?, daily limits?, prices?, channelIds? }` → `201`; creates the agent's bot. `400` if the provider's adapter can't run agents; `409 username_taken` |
+| PATCH | `/servers/:serverId/ai/agents/:agentId` | Any setting above, and `enabled` (false pauses the bot) |
+| DELETE | `/servers/:serverId/ai/agents/:agentId` | Deletes the agent and its bot |
+| GET, PATCH | `/servers/:serverId/ai/agent-budget` | `{ mode: 'shared' \| 'separate', dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros? }`: agents share the Chat route's limits, or have their own pool |
 
 **Budgets:** daily limits are UTC-day totals per capability. Once one is reached, calls are refused and the assistant posts a notice instead of answering. Cost is recorded only when the route has prices set, in micro-USD per 1M tokens.
 
@@ -1741,6 +1803,33 @@ Update instance configuration. At least one field must be provided.
   "registrationPolicy": "approval"
 }
 ```
+
+---
+
+### GET /admin/settings/accounts
+
+What happens to a person's messages when they delete their account.
+
+**Auth:** Required (instance admin)
+
+**Response** `200`
+```json
+{ "deletedAccountMessages": "anonymize" }
+```
+
+---
+
+### PATCH /admin/settings/accounts
+
+Change it. Applies to deletions made from now on. Recorded in the admin audit log.
+
+**Auth:** Required (instance admin)
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `deletedAccountMessages` | string | yes | `"anonymize"` (default): messages stay, author shown as "Deleted user" · `"remove"`: the person's messages and uploaded files are deleted |
+
+**Response** `200` `{ "deletedAccountMessages": "remove" }`
 
 ---
 

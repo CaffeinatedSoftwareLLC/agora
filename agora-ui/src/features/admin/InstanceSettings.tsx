@@ -3,6 +3,8 @@ import { api, ApiError } from '../../lib/api';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import type { InstanceStatus, RegistrationPolicy } from '../../lib/contracts/instance';
+import { AccountDeletionSettings } from './AccountDeletionSettings';
+import { PushRelaySettings } from './PushRelaySettings';
 
 const policyOptions: { value: RegistrationPolicy; label: string; description: string }[] = [
   { value: 'open', label: 'Open', description: 'Anyone can register' },
@@ -94,6 +96,9 @@ export function InstanceSettings() {
           Save Settings
         </Button>
       </form>
+
+      <AccountDeletionSettings />
+      <PushRelaySettings />
     </div>
   );
 }
