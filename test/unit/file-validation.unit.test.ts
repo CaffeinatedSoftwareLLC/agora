@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { randomBytes } from 'node:crypto';
 import { validateFileType, ooxmlKind, OOXML_MIME_BY_EXTENSION, FileValidationError } from '../../src/lib/file-validation';
 import { makeDocx, makePptx, makeXlsx, makeZip } from '../ooxml-helper';
+
+/** Fixed filler bytes (stored, not deflated, so they need not be random). */
+const filler = (n: number) => Buffer.from(Array.from({ length: n }, (_, i) => (i * 37 + 11) & 0xff));
 
 /** Office and text uploads (#291): what type a file is stored under, and what is refused. */
 
@@ -30,7 +32,7 @@ describe('Office files are stored under their own type, not application/zip', ()
         // Upload validation shows file-type the first 4 KB; a large first part keeps
         // [Content_Types].xml out of it. (Real exports with over 1 MB of parts before it
         // defeat file-type even on the whole file.)
-        const docx = makeDocx(['Exported'], { googleDocs: true, parts: [{ name: 'word/media/image1.png', data: randomBytes(8192), store: true }] });
+        const docx = makeDocx(['Exported'], { googleDocs: true, parts: [{ name: 'word/media/image1.png', data: filler(8192), store: true }] });
         const { fileTypeFromBuffer } = await import('file-type');
         expect((await fileTypeFromBuffer(docx.subarray(0, 4100)))?.mime).toBe('application/zip');
         expect(ooxmlKind(docx)).toBe('docx');
@@ -58,7 +60,7 @@ describe('a zip with the wrong type is refused', () => {
     });
 
     it('a zip that only looks like Office: Word parts but no [Content_Types].xml', async () => {
-        const zip = makeZip([{ name: 'filler.bin', data: randomBytes(8192), store: true }, { name: 'word/document.xml', data: '<w:document/>' }]);
+        const zip = makeZip([{ name: 'filler.bin', data: filler(8192), store: true }, { name: 'word/document.xml', data: '<w:document/>' }]);
         expect(ooxmlKind(zip)).toBeNull();
         expect((await refusal(validateFileType(zip, 'docx', ALL))).message).toBe('File content does not match its extension');
     });
@@ -72,7 +74,7 @@ describe('a zip with the wrong type is refused', () => {
     it('a cut-off or garbage file named .docx', async () => {
         const docx = makeDocx(['essay']);
         expect(ooxmlKind(docx.subarray(0, docx.length - 30))).toBeNull();
-        expect((await refusal(validateFileType(randomBytes(64), 'docx', ALL))).status).toBe(415);
+        expect((await refusal(validateFileType(filler(64), 'docx', ALL))).status).toBe(415);
     });
 });
 
