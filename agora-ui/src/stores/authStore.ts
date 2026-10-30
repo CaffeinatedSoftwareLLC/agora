@@ -189,8 +189,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     sessionVerified = false;
     clearPersistedUser();
     useDraftStore.getState().clearAllDrafts();
-    useUIStore.getState().onChannelSelect(null);
+    // Signed out first, so the shell closes its layers without going back in history
     set({ user: null, status: 'idle' });
+    useUIStore.getState().onChannelSelect(null);
     useServerStore.getState().clear();
     useChannelStore.getState().clear();
     useMemberStore.getState().clear();

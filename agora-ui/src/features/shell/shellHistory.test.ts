@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { installShellHistory, shellHistorySettled } from './shellHistory';
 import { useUIStore } from '../../stores/uiStore';
 import { useThreadStore } from '../../stores/threadStore';
+import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../lib/api';
 
 vi.hoisted(() => {
@@ -13,6 +14,8 @@ beforeEach(() => {
   width = 390;
   vi.stubGlobal('matchMedia', (q: string) => ({ matches: width <= (q.includes('1279') ? 1279 : 767) }));
   useUIStore.setState({ aux: null, navOpen: false, activeOverlay: null });
+  // The shell exists only while signed in
+  useAuthStore.setState({ user: { id: 'u1', username: 'Espresso' }, status: 'authenticated' });
   window.history.replaceState({}, '', '/app/channel');
   cleanup = installShellHistory();
 });
