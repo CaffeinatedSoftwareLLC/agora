@@ -13,6 +13,8 @@ import { usePresenceStore } from './presenceStore';
 import { useUnreadStore } from './unreadStore';
 import { useThreadStore } from './threadStore';
 import { passkeyApi } from '../lib/passkeys';
+import { useNotificationStore } from './notificationStore';
+import { unregisterNativePush } from '../features/notifications/nativePush';
 
 /** `checking`: no user remembered in this browser, asking the server whether the cookie is good. */
 type AuthStatus = 'idle' | 'checking' | 'loading' | 'authenticated' | 'pending';
@@ -174,12 +176,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: () => {
-    // Revoke token server-side (best-effort — don't block on failure)
-    api.post('/auth/logout', undefined).catch(() => {});
+    // Remove this phone's push device while the session still works, then revoke the
+    // session server-side (best-effort — don't block on failure)
+    void unregisterNativePush().finally(() => api.post('/auth/logout', undefined).catch(() => {}));
     get().clearSession();
   },
 
   logoutAll: async () => {
+    await unregisterNativePush();
     // Preserve the session on failure so the user can retry revoking other devices.
     await api.post('/auth/logout-all');
     get().clearSession();
@@ -189,8 +193,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     sessionVerified = false;
     clearPersistedUser();
     useDraftStore.getState().clearAllDrafts();
-    useUIStore.getState().onChannelSelect(null);
+    // Signed out first, so the shell closes its layers without going back in history
     set({ user: null, status: 'idle' });
+    useUIStore.getState().onChannelSelect(null);
     useServerStore.getState().clear();
     useChannelStore.getState().clear();
     useMemberStore.getState().clear();
@@ -200,6 +205,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     usePresenceStore.getState().clear();
     useAgentPresenceStore.getState().clear();
     useUnreadStore.getState().clear();
+    useNotificationStore.getState().clear();
     useUIStore.getState().setConnectionStatus('disconnected');
   },
 }));

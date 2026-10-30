@@ -3,6 +3,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { PasskeySettings } from './PasskeySettings';
 import { ReadAloudSettings } from '../voice/ReadAloudSettings';
 import { DeleteAccount } from './DeleteAccount';
+import { NotificationSettings } from '../notifications/NotificationSettings';
 
 /** Settings → Account & security, for the signed-in user (not a server setting). */
 export function AccountPage() {
@@ -22,6 +23,9 @@ export function AccountPage() {
         </p>
         <div className="bg-surface rounded-lg p-6 border border-border">
           <PasskeySettings />
+        </div>
+        <div className="bg-surface rounded-lg p-4 sm:p-6 border border-border">
+          <NotificationSettings />
         </div>
         <div className="bg-surface rounded-lg p-6 border border-border">
           <ReadAloudSettings />

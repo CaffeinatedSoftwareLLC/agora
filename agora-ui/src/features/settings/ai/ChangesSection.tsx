@@ -40,6 +40,14 @@ function describe(c: AIChange): string {
       return `Files queued for tagging: ${d.created ?? 0} new, ${d.requeued ?? 0} to re-tag, ${d.retried ?? 0} retried`;
     case 'ai_decision_update':
       return `Decision model settings: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
+    case 'ai_agent_create':
+      return `Model agent @${d.after?.name} added (${d.after?.model})`;
+    case 'ai_agent_update':
+      return `Model agent @${d.after?.name ?? d.before?.name} updated: ${(d.changed ?? []).join(', ')}`;
+    case 'ai_agent_budget_update':
+      return `Model agent budget: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
+    case 'ai_agent_delete':
+      return `Model agent @${d.before?.name} deleted`;
     case 'ai_voice_update':
       return `Voice settings: ${(d.changed ?? []).map((f: string) => `${f} → ${JSON.stringify(d.after?.[f])}`).join(', ')}`;
     default:

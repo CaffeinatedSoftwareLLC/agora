@@ -18,6 +18,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Threads](#threads)
 - [Files](#files)
 - [Unreads](#unreads)
+- [Notifications](#notifications)
 - [Users](#users)
 - [Bots](#bots)
 - [AI Providers](#ai-providers)
@@ -1172,6 +1173,12 @@ Get unread state for all channels the user is a member of (server channels + DM 
 
 ---
 
+## Notifications
+
+The signed-in person's notifications, notification preferences and push devices live under `/me/`: `GET /me/notifications`, `POST /me/notifications/:id/read`, `POST /me/notifications/read-all`, `GET`/`PUT /me/notification-preferences` and `POST`/`GET`/`DELETE /me/push-devices`. Instance admins set the allowed push relays with `GET`/`PATCH /admin/settings/push`. Socket events: `NotificationCreate` and `NotificationRead`, to the person's own sockets. Request and response shapes are in [notifications.md](notifications.md#rest-api).
+
+---
+
 ## Users
 
 ### GET /users/search
@@ -1436,12 +1443,17 @@ All endpoints require the **Administrator** permission in the server. Bots canno
 | GET | `/servers/:serverId/ai/providers` | Configured providers, with the capabilities each serves, and `accountId` (null unless the adapter takes one) |
 | POST | `/servers/:serverId/ai/providers` | `{ adapter, label?, apiKey?, baseUrl?, accountId? }` → `201`; `400` a required key or account ID missing, or an account ID for an adapter that takes none; `409` duplicate label |
 | PATCH | `/servers/:serverId/ai/providers/:providerId` | `{ label?, apiKey? (null clears), baseUrl?, accountId?, enabled? }` |
-| DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it |
+| DELETE | `/servers/:serverId/ai/providers/:providerId` | Also removes routes pointing at it. `409` while a model agent uses the provider |
 | POST | `/servers/:serverId/ai/providers/:providerId/test` | `{ model?, capability? }` → `{ ok, error? }` using the stored key; OpenAI-compatible speech tests use model metadata, with no audio generation. Saved routes supply the default capability/model. |
 | GET | `/servers/:serverId/ai/routes` | Capability routes |
 | PUT | `/servers/:serverId/ai/routes/:capability` | `{ providerId, model, enabled?, dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros?, inputPriceMicrosPerMtok?, outputPriceMicrosPerMtok? }`. `enabled` defaults to `true` for `chat`, `false` otherwise. `400` if the adapter can't serve the capability |
 | DELETE | `/servers/:serverId/ai/routes/:capability` | Remove a route |
-| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals |
+| GET | `/servers/:serverId/ai/usage?days=30` | Per-capability requests, tokens, cost (micro-USD), errors, and today's totals; model agents' calls are their own row, `model_agents` |
+| GET | `/servers/:serverId/ai/agents` | Model agents, with today's usage ([model-agents.md](model-agents.md)) |
+| POST | `/servers/:serverId/ai/agents` | `{ name, providerId, model, systemPrompt?, tools?, maxSteps?, maxOutputTokens?, daily limits?, prices?, channelIds? }` → `201`; creates the agent's bot. `400` if the provider's adapter can't run agents; `409 username_taken` |
+| PATCH | `/servers/:serverId/ai/agents/:agentId` | Any setting above, and `enabled` (false pauses the bot) |
+| DELETE | `/servers/:serverId/ai/agents/:agentId` | Deletes the agent and its bot |
+| GET, PATCH | `/servers/:serverId/ai/agent-budget` | `{ mode: 'shared' \| 'separate', dailyRequestLimit?, dailyTokenLimit?, dailyCostLimitMicros? }`: agents share the Chat route's limits, or have their own pool |
 
 **Budgets:** daily limits are UTC-day totals per capability. Once one is reached, calls are refused and the assistant posts a notice instead of answering. Cost is recorded only when the route has prices set, in micro-USD per 1M tokens.
 
