@@ -23,7 +23,7 @@
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",
     "@fastify/multipart": "^9.4.0",
-    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/rate-limit": "^11.2.1",
     "@simplewebauthn/server": "^13.3.3",
     "argon2": "^0.45.1",
     "bullmq": "^5.70.1",
