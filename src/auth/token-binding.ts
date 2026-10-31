@@ -33,12 +33,30 @@ export function clientName(raw: unknown): string | null {
     return CLIENT_NAME.test(name) ? name : null;
 }
 
+/**
+ * Names one product sends from different surfaces. The Claude desktop app runs Claude Code
+ * sessions that introduce themselves as `claude-code` or `Claude Desktop` (a session started
+ * remotely), all from the same user config, so a token bound to one must accept the other.
+ */
+const CLIENT_FAMILIES = new Map([
+    ['claude-code', 'claude'],
+    ['claude desktop', 'claude'],
+    ['claude-ai', 'claude'],
+]);
+
+/** Two client names that count as the same client for a binding. */
+export function sameClient(a: string, b: string): boolean {
+    if (a === b) return true;
+    const family = (name: string) => CLIENT_FAMILIES.get(name.toLowerCase()) ?? null;
+    return family(a) !== null && family(a) === family(b);
+}
+
 export type TokenUse = { action: 'allow' } | { action: 'bind'; client: string } | { action: 'deny'; boundClient: string };
 
 /** Same client, or nothing to bind: allow. First named client: bind. Bound and another (or no) client: deny. */
 export function decideTokenUse(boundClient: string | null, presented: string | null): TokenUse {
     if (boundClient === null) return presented === null ? { action: 'allow' } : { action: 'bind', client: presented };
-    return presented === boundClient ? { action: 'allow' } : { action: 'deny', boundClient };
+    return presented !== null && sameClient(presented, boundClient) ? { action: 'allow' } : { action: 'deny', boundClient };
 }
 
 export function refusalMessage(boundClient: string, presented: string | null): string {

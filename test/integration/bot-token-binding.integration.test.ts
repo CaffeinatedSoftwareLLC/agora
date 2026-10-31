@@ -69,6 +69,19 @@ describe('bot token client binding (#39)', () => {
         expect(decideTokenUse('claude-code', null)).toEqual({ action: 'deny', boundClient: 'claude-code' });
     });
 
+    it('the Claude desktop app\'s client names count as Claude Code, and other vendors stay refused', async () => {
+        expect(decideTokenUse('claude-code', 'Claude Desktop')).toEqual({ action: 'allow' });
+        expect(decideTokenUse('Claude Desktop', 'claude-code')).toEqual({ action: 'allow' });
+        expect(decideTokenUse('claude-code', 'claude-desktop-impostor')).toEqual({ action: 'deny', boundClient: 'claude-code' });
+        expect(decideTokenUse('constructor', 'Constructor')).toEqual({ action: 'deny', boundClient: 'constructor' });
+
+        const bot = await makeBot('desktopbot');
+        expect((await post(bot.token, 'claude-code', 'from a CLI session')).status).toBe(201);
+        expect((await post(bot.token, 'Claude Desktop', 'from a remote desktop session')).status).toBe(201);
+        expect((await post(bot.token, 'codex-mcp-client', 'from codex')).status).toBe(403);
+        expect((await tokens(bot.id))[0]).toMatchObject({ boundClient: 'claude-code', lastUsedClient: 'Claude Desktop' });
+    });
+
     it('Codex using Claude\'s token gets a 403 naming the owning client, and the attempt is recorded and audited', async () => {
         const bot = await makeBot('claudebot');
         expect((await post(bot.token, 'claude-code', 'hello from claude')).status).toBe(201);
