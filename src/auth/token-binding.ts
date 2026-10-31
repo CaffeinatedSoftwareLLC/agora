@@ -38,16 +38,16 @@ export function clientName(raw: unknown): string | null {
  * sessions that introduce themselves as `claude-code` or `Claude Desktop` (a session started
  * remotely), all from the same user config, so a token bound to one must accept the other.
  */
-const CLIENT_FAMILIES: Record<string, string> = {
-    'claude-code': 'claude',
-    'claude desktop': 'claude',
-    'claude-ai': 'claude',
-};
+const CLIENT_FAMILIES = new Map([
+    ['claude-code', 'claude'],
+    ['claude desktop', 'claude'],
+    ['claude-ai', 'claude'],
+]);
 
 /** Two client names that count as the same client for a binding. */
 export function sameClient(a: string, b: string): boolean {
     if (a === b) return true;
-    const family = (name: string) => CLIENT_FAMILIES[name.toLowerCase()] ?? null;
+    const family = (name: string) => CLIENT_FAMILIES.get(name.toLowerCase()) ?? null;
     return family(a) !== null && family(a) === family(b);
 }
 

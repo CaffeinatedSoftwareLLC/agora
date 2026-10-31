@@ -73,6 +73,7 @@ describe('bot token client binding (#39)', () => {
         expect(decideTokenUse('claude-code', 'Claude Desktop')).toEqual({ action: 'allow' });
         expect(decideTokenUse('Claude Desktop', 'claude-code')).toEqual({ action: 'allow' });
         expect(decideTokenUse('claude-code', 'claude-desktop-impostor')).toEqual({ action: 'deny', boundClient: 'claude-code' });
+        expect(decideTokenUse('constructor', 'Constructor')).toEqual({ action: 'deny', boundClient: 'constructor' });
 
         const bot = await makeBot('desktopbot');
         expect((await post(bot.token, 'claude-code', 'from a CLI session')).status).toBe(201);
