@@ -275,6 +275,31 @@ function connectionUnavailable(error: unknown): boolean {
     return retryable(e?.code) || retryable(e?.cause?.code) || !!e?.cause?.errors?.some(item => retryable(item.code));
 }
 
+/** Certificate errors Node's fetch reports only as a bare "fetch failed". */
+const TLS_CODES = new Set([
+    'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/**
+ * fetch(), with a refused certificate named as such (#22). The usual case is `https://localhost`,
+ * where Caddy serves a self-signed certificate that Node won't trust.
+ */
+async function agoraFetch(baseUrl: string, url: string, init: RequestInit): Promise<Response> {
+    try {
+        return await fetch(url, init);
+    } catch (error) {
+        const code = (error as { cause?: { code?: string } } | null)?.cause?.code;
+        if (!code || !TLS_CODES.has(code)) throw error;
+        let local = false;
+        try { local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(baseUrl).hostname); } catch { /* not a URL */ }
+        const fix = local
+            ? 'For a local instance, point agora-mcp at the API port instead: --instance http://localhost:3000.'
+            : 'Give the instance a certificate from a public CA, or trust its CA with NODE_EXTRA_CA_CERTS=<path to CA cert>.';
+        throw new Error(`Node does not trust the TLS certificate of ${baseUrl} (${code}). ${fix}`, { cause: error });
+    }
+}
+
 function retryDelay(header: string | null, attempt: number): number {
     let delay = Math.min(1000 * 2 ** Math.min(attempt, 4), MAX_RETRY_DELAY_MS);
     if (header?.trim()) {
@@ -349,7 +374,7 @@ export class AgoraApi {
             if (safe && Date.now() >= deadline) throw lastError ?? new Error('Agora request retry budget expired');
             let retryAfter: string | null = null;
             try {
-                const res = await fetch(url, init);
+                const res = await agoraFetch(this.baseUrl, url, init);
                 if (!res.ok) {
                     const text = await res.text();
                     if (res.status === 423) {
@@ -550,7 +575,7 @@ export class AgoraApi {
     /** Submit code to the sandboxed runtime. Denied runs come back as 403 with the run body. */
     async submitRun(body: { code: string; channelId: string; threadId?: string; capabilities?: string[] }): Promise<RuntimeRun> {
         const url = `${this.baseUrl}/runtime/runs`;
-        const res = await fetch(url, {
+        const res = await agoraFetch(this.baseUrl, url, {
             method: 'POST',
             headers: { ...this.auth(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -636,7 +661,7 @@ export class AgoraApi {
     }
     /** The PNG a finished preview posted. */
     async getPreviewScreenshot(channelId: string, previewId: string): Promise<Buffer> {
-        const res = await fetch(`${this.baseUrl}/channels/${channelId}/browser-previews/${previewId}/screenshot`, { headers: this.auth() });
+        const res = await agoraFetch(this.baseUrl, `${this.baseUrl}/channels/${channelId}/browser-previews/${previewId}/screenshot`, { headers: this.auth() });
         if (!res.ok) throw new AgoraApiError(`Agora API ${res.status} GET screenshot`, res.status, null, null);
         return Buffer.from(await res.arrayBuffer());
     }
