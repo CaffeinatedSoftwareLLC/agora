@@ -275,11 +275,14 @@ function connectionUnavailable(error: unknown): boolean {
     return retryable(e?.code) || retryable(e?.cause?.code) || !!e?.cause?.errors?.some(item => retryable(item.code));
 }
 
-/** Certificate errors Node's fetch reports only as a bare "fetch failed". */
-const TLS_CODES = new Set([
+/** Certificate errors Node's fetch reports only as a bare "fetch failed", by what fixes them. */
+const UNTRUSTED_CODES = new Set([
     'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID',
+    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_GET_ISSUER_CERT', 'CERT_UNTRUSTED', 'INVALID_CA',
+    'CERT_SIGNATURE_FAILURE', 'CERT_REVOKED',
 ]);
+const DATE_CODES = new Set(['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID']);
+const NAME_CODES = new Set(['ERR_TLS_CERT_ALTNAME_INVALID', 'HOSTNAME_MISMATCH']);
 
 /**
  * fetch(), with a refused certificate named as such (#22). The usual case is `https://localhost`,
@@ -290,12 +293,15 @@ async function agoraFetch(baseUrl: string, url: string, init: RequestInit): Prom
         return await fetch(url, init);
     } catch (error) {
         const code = (error as { cause?: { code?: string } } | null)?.cause?.code;
-        if (!code || !TLS_CODES.has(code)) throw error;
+        if (!code) throw error;
         let local = false;
         try { local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(baseUrl).hostname); } catch { /* not a URL */ }
-        const fix = local
-            ? 'For a local instance, point agora-mcp at the API port instead: --instance http://localhost:3000.'
-            : 'Give the instance a certificate from a public CA, or trust its CA with NODE_EXTRA_CA_CERTS=<path to CA cert>.';
+        let fix: string;
+        if (DATE_CODES.has(code)) fix = 'The certificate is outside its valid dates: renew it, or check this machine\'s clock.';
+        else if (NAME_CODES.has(code)) fix = 'The certificate is for a different hostname: use the hostname it was issued for in --instance.';
+        else if (!UNTRUSTED_CODES.has(code)) throw error;
+        else if (local) fix = 'For a local instance, point agora-mcp at the API port instead: --instance http://localhost:3000.';
+        else fix = 'Give the instance a certificate from a public CA, or trust its CA with NODE_EXTRA_CA_CERTS=<path to CA cert>.';
         throw new Error(`Node does not trust the TLS certificate of ${baseUrl} (${code}). ${fix}`, { cause: error });
     }
 }

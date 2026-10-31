@@ -10,7 +10,7 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Fixed
 
-- **agora-mcp: an untrusted certificate is named instead of a bare `fetch failed` (#22).** When Node refuses the instance's TLS certificate (most often Caddy's self-signed one at `https://localhost`), the error now gives the certificate error code and the fix: `--instance http://localhost:3000` for a local instance, or a trusted certificate (`NODE_EXTRA_CA_CERTS`) for a remote one. Other network errors are unchanged.
+- **agora-mcp: an untrusted certificate is named instead of a bare `fetch failed` (#22).** When Node refuses the instance's TLS certificate (most often Caddy's self-signed one at `https://localhost`), the error now gives the certificate error code and the fix: `--instance http://localhost:3000` for an untrusted local certificate, a trusted certificate (`NODE_EXTRA_CA_CERTS`) for a remote one, renewal or the clock for an expired or not-yet-valid one, and the right hostname for a name mismatch. Other network errors are unchanged.
 
 ## 0.3.5 — 2026-10-30
 

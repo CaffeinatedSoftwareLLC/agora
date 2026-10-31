@@ -20,6 +20,16 @@ it('suggests a trusted certificate for a remote instance', async () => {
     expect(error.message).toContain('NODE_EXTRA_CA_CERTS');
 });
 
+it('gives the date and hostname fixes for those errors, even on localhost', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(refused('CERT_HAS_EXPIRED')));
+    const expired = await new AgoraApi('https://localhost', 'fixture').getMe().catch(e => e);
+    expect(expired.message).toContain('renew it, or check this machine\'s clock');
+    expect(expired.message).not.toContain('localhost:3000');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(refused('ERR_TLS_CERT_ALTNAME_INVALID')));
+    const name = await new AgoraApi('https://agora.example.com', 'fixture').getMe().catch(e => e);
+    expect(name.message).toContain('use the hostname it was issued for');
+});
+
 it('leaves other network errors as they are', async () => {
     const dns = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(dns));
