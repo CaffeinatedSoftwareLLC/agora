@@ -41,7 +41,7 @@
     "unpdf": "1.9.1"
   },
   "devDependencies": {
-    "@types/dockerode": "^4.0.1",
+    "@types/dockerode": "^4.0.2",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.23.1",
