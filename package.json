@@ -43,7 +43,7 @@
   "devDependencies": {
     "@types/dockerode": "^4.0.1",
     "@types/jsonwebtoken": "^9.0.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "@types/sharp": "^0.32.0",
     "@types/supertest": "^7.2.1",
