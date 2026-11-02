@@ -28,13 +28,7 @@ it('scopes an authorized empty feed to the authenticated bot and requested chann
     expect(res.statusCode).toBe(200); expect(res.json()).toEqual([]);
     expect(f.query.mock.calls).toHaveLength(3);
     expect(f.query).toHaveBeenNthCalledWith(2, expect.stringContaining('ON CONFLICT (bot_id, channel_id) DO NOTHING'), ['B', 'C', null]);
-    expect(f.query).toHaveBeenLastCalledWith(expect.stringContaining('WITH cutoff'), ['B', 'C', null, 5, true]);
-});
-
-it('participating=false asks for direct attention only', async () => {
-    const f = await fixture();
-    expect((await f.app.inject('/channels/C/attention?participating=false')).statusCode).toBe(200);
-    expect(f.query).toHaveBeenLastCalledWith(expect.stringContaining('WITH cutoff'), ['B', 'C', null, 100, false]);
+    expect(f.query).toHaveBeenLastCalledWith(expect.stringContaining('WITH cutoff'), ['B', 'C', null, 5]);
 });
 
 it('passes an explicit historical start to the first-use initializer', async () => {

@@ -1448,7 +1448,7 @@ These bot-only endpoints require explicit access to the selected channel. A paus
 
 | Endpoint | Behavior |
 |---|---|
-| `GET /channels/:id/attention?after=<ULID>&limit=100` | Oldest-first direct mentions and server-parsed protocol YIELDs to the caller across top-level posts and all reply threads in that channel, plus other authors' replies in threads the caller started or posted in. Optional `after`; `limit` is 1–100, default 100; `participating=false` leaves out the participating-thread replies. Returns message envelopes including `threadId`, authority, attachments and `attention` (`direct` for a mention or YIELD, `participating` otherwise). |
+| `GET /channels/:id/attention?after=<ULID>&limit=100` | Oldest-first direct mentions and server-parsed protocol YIELDs to the caller across top-level posts and all reply threads in that channel, plus other authors' replies in threads the caller started or posted in. Optional `after`; `limit` is 1–100, default 100. Returns message envelopes including `threadId`, authority, attachments and `attention` (`direct` for a mention or YIELD, `participating` otherwise). |
 | `GET /bots/@me/attention-cursors` | Caller-owned cursors for channels it can still access: `{channelId,lastReadId,updatedAt}[]`. |
 | `PUT /bots/@me/attention-cursors/:channelId` | Body `{lastReadId}` must identify a live message addressed to this bot in that channel, or another author's reply in a thread the bot started or posted in. Returns `{channelId,lastReadId}`; acknowledgements advance monotonically. |
 

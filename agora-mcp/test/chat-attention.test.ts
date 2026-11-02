@@ -24,8 +24,13 @@ function fixture(attention: Message[], initialAck?: string, native: Message[] = 
             native.filter(m => !m.threadId && (!opts?.before || m.id < opts.before)).slice().reverse().slice(0, opts?.limit ?? 100)),
         getAttentionCursors: vi.fn(async () => attentionAck ? [{ channelId: 'C', lastReadId: attentionAck, updatedAt: '' }] : []),
         updateAttentionCursor: vi.fn(async (_channel: string, id: string) => { attentionAck = id; return { channelId: 'C', lastReadId: id }; }),
-        getAttention: vi.fn(async (_channel: string, opts?: { after?: string; limit?: number }) =>
-            attention.filter(m => !opts?.after || m.id > opts.after).slice(0, Math.min(opts?.limit ?? 100, 100))),
+        // Like the server: the cursor is GREATEST(after, saved ack); participating=false (sent by
+        // older clients on thread waits) would leave participating replies out.
+        getAttention: vi.fn(async (_channel: string, opts?: { after?: string; limit?: number; participating?: boolean }) => {
+            const after = [opts?.after, attentionAck].filter(Boolean).sort().pop();
+            return attention.filter(m => (!after || m.id > after) && (opts?.participating !== false || m.attention !== 'participating'))
+                .slice(0, Math.min(opts?.limit ?? 100, 100));
+        }),
     };
     function register() {
         const handlers = new Map<string, Handler>();
@@ -77,15 +82,37 @@ it('a channel wait returns a plain reply in a thread the bot participates in, la
     const text = await f.read(f.wait, {});
     expect(text).toContain('#general › thread B:\n');
     expect(text).toContain('(001)');
-    expect(f.api.getAttention).toHaveBeenCalledWith('C', expect.objectContaining({ participating: true }));
     expect(f.api.updateAttentionCursor).toHaveBeenCalledWith('C', '001');
     expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
 });
 
-it('a thread wait asks for direct attention only', async () => {
-    const f = fixture([]);
-    await f.read(f.wait);
-    expect(f.api.getAttention).toHaveBeenCalledWith('C', expect.objectContaining({ participating: false }));
+const participating = (id: string, threadId: string, content = 'Approved, go ahead') =>
+    ({ ...message(id, threadId, content), authorId: 'owner', authorUsername: 'eryk', authorBot: false, attention: 'participating' as const });
+
+it('a thread wait returns a plain reply in another thread the bot participates in', async () => {
+    const f = fixture([participating('001', 'B')]);
+    const text = await f.read(f.wait);
+    expect(text).toContain('#general › thread B:\n');
+    expect(text).toContain('(001)');
+    expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
+});
+
+it('a thread wait that acknowledges a newer mention never skips an earlier participating reply', async () => {
+    const f = fixture([participating('001', 'B'), message('002', 'B')]);
+    const first = await f.read(f.wait);
+    expect(first).toContain('(001)');
+    expect(first).toContain('(002)');
+    expect(f.api.updateAttentionCursor).toHaveBeenLastCalledWith('C', '002');
+    expect(await f.read(f.wait, {})).toContain('no new messages');
+});
+
+it('a thread wait shows its own thread\'s replies once, from the native read', async () => {
+    const own = participating('001', 'A', 'Reply in the waited thread');
+    const f = fixture([own, participating('002', 'B')], undefined, [own]);
+    const text = await f.read(f.wait);
+    expect(text.match(/\(001\)/g)).toHaveLength(1);
+    expect(text).toContain('(002)');
+    expect(f.api.updateAttentionCursor).toHaveBeenLastCalledWith('C', '002');
 });
 
 it('until=turn keeps waiting through a participating reply that yields to someone else, then returns it', async () => {
@@ -185,17 +212,14 @@ it('the API client uses the dedicated feed/cursor endpoints and serializes pagin
     const fetch = vi.fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(new Response('[]', { status: 200 }))
         .mockResolvedValueOnce(new Response('[]', { status: 200 }))
-        .mockResolvedValueOnce(new Response('[]', { status: 200 }))
         .mockResolvedValueOnce(new Response('{"channelId":"C","lastReadId":"M"}', { status: 200 }));
     vi.stubGlobal('fetch', fetch);
     const api = new AgoraApi('http://agora.test', 'test-token');
     await api.getAttention('C', { after: 'M', limit: 5 });
-    await api.getAttention('C', { limit: 5, participating: false });
     await api.getAttentionCursors();
     await api.updateAttentionCursor('C', 'M');
     expect(fetch.mock.calls.map(([url, init]) => [String(url), init?.method, init?.body])).toEqual([
         ['http://agora.test/channels/C/attention?after=M&limit=5', 'GET', undefined],
-        ['http://agora.test/channels/C/attention?limit=5&participating=false', 'GET', undefined],
         ['http://agora.test/bots/@me/attention-cursors', 'GET', undefined],
         ['http://agora.test/bots/@me/attention-cursors/C', 'PUT', '{"lastReadId":"M"}'],
     ]);

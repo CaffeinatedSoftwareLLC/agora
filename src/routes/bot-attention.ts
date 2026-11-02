@@ -58,13 +58,11 @@ export async function botAttentionRoutes(app: FastifyInstance) {
     app.get('/channels/:id/attention', {
         schema: { querystring: { type: 'object', additionalProperties: false, properties: {
             after: ulid, limit: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
-            // false: only direct attention (thread-level waits watch their own thread natively)
-            participating: { type: 'boolean', default: true },
         } } },
     }, async (request, reply) => {
         const { id: channelId } = request.params as { id: string };
         if (!await botAccess(request, reply, channelId)) return reply;
-        const { after, limit = 100, participating = true } = request.query as { after?: string; limit?: number; participating?: boolean };
+        const { after, limit = 100 } = request.query as { after?: string; limit?: number };
         const db = request.dbClient!;
         // A newly upgraded client starts watching now, rather than replaying days
         // of old mentions. An explicit `after` opts into an earlier starting point.
@@ -92,7 +90,7 @@ export async function botAttentionRoutes(app: FastifyInstance) {
             -- Plain replies in threads the bot started or posted in: an agent waiting
             -- on the channel would otherwise miss an answer that doesn't @mention it.
             SELECT m.id, false FROM messages m, cutoff
-            WHERE $5 AND m.channel_id = $2 AND m.id > cutoff.id AND ${PARTICIPATING_REPLY}
+            WHERE m.channel_id = $2 AND m.id > cutoff.id AND ${PARTICIPATING_REPLY}
         ), addressed AS (
             SELECT id, bool_or(direct) AS direct FROM candidates GROUP BY id
         )
@@ -102,7 +100,7 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         LEFT JOIN bot_thread_cursors tc ON tc.bot_id = $1 AND tc.thread_id = m.thread_id
         WHERE m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $1
           AND m.id > COALESCE(CASE WHEN m.thread_id IS NULL THEN rc.last_read_id ELSE tc.last_read_id END, ''::CHAR(26))
-        ORDER BY m.id ASC LIMIT $4`, [request.userId, channelId, after ?? null, limit, participating]);
+        ORDER BY m.id ASC LIMIT $4`, [request.userId, channelId, after ?? null, limit]);
         const sent = await envelopes(db, channelId, rows.rows);
         return reply.send(sent.map((m, i) => ({ ...m, attention: rows.rows[i].attention_direct ? 'direct' : 'participating' })));
     });

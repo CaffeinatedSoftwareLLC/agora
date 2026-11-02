@@ -133,14 +133,14 @@ describe('replies in threads the bot started or posted in', () => {
         expect(replies.body.map((m: any) => m.id)).toContain(plain.id);
     });
 
-    it('marks direct attention as direct, and participating=false keeps only direct attention', async () => {
+    it('marks direct attention as direct and accepts a participating reply as an acknowledgement', async () => {
         const started = (await post('Thread of my own', undefined, auth)).id;
         const plain = await post('Plain reply', started, otherAuth);
         const mentioned = await post('@AttCodex look here', started, otherAuth);
         const all = await feed();
         expect(all.body.map((m: any) => [m.id, m.attention])).toEqual([[plain.id, 'participating'], [mentioned.id, 'direct']]);
-        expect((await feed('?participating=false')).body.map((m: any) => m.id)).toEqual([mentioned.id]);
         expect((await ack(plain.id)).status).toBe(200);
+        expect((await feed()).body.map((m: any) => m.id)).toEqual([mentioned.id]);
     });
 
     it('skips replies already read through the thread cursor', async () => {

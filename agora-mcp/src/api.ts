@@ -506,13 +506,12 @@ export class AgoraApi {
 
     /**
      * Direct mentions/protocol YIELDs anywhere in one channel, plus replies in threads
-     * the bot started or posted in unless `participating` is false; oldest-first.
+     * the bot started or posted in; oldest-first.
      */
-    async getAttention(channelId: string, opts?: { after?: string; limit?: number; participating?: boolean }): Promise<Message[]> {
+    async getAttention(channelId: string, opts?: { after?: string; limit?: number }): Promise<Message[]> {
         const params = new URLSearchParams();
         if (opts?.after) params.set('after', opts.after);
         if (opts?.limit) params.set('limit', String(opts.limit));
-        if (opts?.participating === false) params.set('participating', 'false');
         return this.request('GET', `/channels/${channelId}/attention?${params}`);
     }
 
