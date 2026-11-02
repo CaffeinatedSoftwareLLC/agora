@@ -92,15 +92,72 @@ const pending = new Map<string, Promise<unknown>>();
  * one file can fail).
  */
 export function writeHookState(state: HookState, directory = hookStateDir()): Promise<string> {
-    const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.${state.pid}.json`);
-    const run = (pending.get(path) ?? Promise.resolve()).catch(() => {}).then(() => writeNow(state, directory, path));
+    return writePrivate(join(directory, hookStateFile(state)), directory, state);
+}
+
+/** The state file's name for this server process. */
+export function hookStateFile(state: Pick<HookState, 'projectDir' | 'server' | 'pid'>): string {
+    return `${projectKey(state.projectDir)}.${state.server}.${state.pid}.json`;
+}
+
+/** Write a token-bearing JSON file atomically and privately, one write at a time per path. */
+function writePrivate(path: string, directory: string, data: unknown): Promise<string> {
+    const run = (pending.get(path) ?? Promise.resolve()).catch(() => {}).then(() => writeNow(data, directory, path));
     pending.set(path, run);
     const done = () => { if (pending.get(path) === run) pending.delete(path); };
     run.then(done, done);
     return run;
 }
 
-async function writeNow(state: HookState, directory: string, path: string): Promise<string> {
+// ─── Session bindings ───
+
+/**
+ * Which agora-mcp a hook session belongs to. Counting state files can't prove that: a session's
+ * own file can age out while another session's stays live in the same project. So the Stop hook,
+ * which runs while the session is alive, records the session's connection under its
+ * session_id once it can tell it unambiguously, and SessionEnd acts only on that record.
+ */
+export interface SessionBinding {
+    server: string;
+    /** The agora-mcp the session was bound to, and its state file. */
+    pid: number;
+    stateFile: string;
+    instance: string;
+    token: string;
+    client: string;
+    boundAt: string;
+}
+
+export const SESSION_BINDING_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+function sessionsDir(directory: string): string {
+    return join(directory, 'sessions');
+}
+
+/** `<cli hooks folder>/sessions/<sha256(session_id)>.json` */
+export function sessionBindingPath(sessionId: string, directory: string): string {
+    return join(sessionsDir(directory), `${createHash('sha256').update(sessionId).digest('hex')}.json`);
+}
+
+export function writeSessionBinding(sessionId: string, binding: SessionBinding, directory: string): Promise<string> {
+    return writePrivate(sessionBindingPath(sessionId, directory), sessionsDir(directory), binding);
+}
+
+/** The binding recorded for this session, if any (malformed: none). */
+export function readSessionBinding(sessionId: string, directory: string): SessionBinding | undefined {
+    try {
+        const b = JSON.parse(readFileSync(sessionBindingPath(sessionId, directory), 'utf8'));
+        const ok = !!b && typeof b.instance === 'string' && typeof b.token === 'string' && b.token.startsWith('bot_')
+            && typeof b.client === 'string' && typeof b.server === 'string' && SERVER_NAME.test(b.server);
+        return ok ? b as SessionBinding : undefined;
+    } catch { return undefined; }
+}
+
+export async function removeSessionBinding(sessionId: string, directory: string): Promise<void> {
+    await unlink(sessionBindingPath(sessionId, directory)).catch(() => {});
+}
+
+async function writeNow(data: unknown, directory: string, path: string): Promise<string> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
     const temporary = `${path}.${process.pid}.tmp`;
@@ -108,7 +165,7 @@ async function writeNow(state: HookState, directory: string, path: string): Prom
     try {
         const file = await open(temporary, 'w', 0o600);
         try {
-            await file.writeFile(JSON.stringify(state));
+            await file.writeFile(JSON.stringify(data));
             await file.sync();
         } finally { await file.close(); }
         await rename(temporary, path);
@@ -125,11 +182,22 @@ const STALE_STATE_MAX_AGE_MS = 30 * 60_000;
 
 /**
  * At agora-mcp startup: remove temp files older than a minute (a crashed write) and state files
- * of servers that are gone and haven't refreshed them for 30 minutes. Both hold a token. Never throws.
+ * of servers that are gone and haven't refreshed them for 30 minutes, and session bindings older
+ * than 7 days. All hold a token. Never throws.
  */
 export async function sweepHookStates(directory = hookStateDir(), opts: { now?: number; isRunning?: (pid: number) => boolean } = {}): Promise<void> {
     const now = opts.now ?? Date.now();
     const running = opts.isRunning ?? processRunning;
+    // Bindings: a SessionEnd can come long after the session's last Stop (Codex: after 30 idle minutes)
+    try {
+        for (const name of readdirSync(sessionsDir(directory))) {
+            const path = join(sessionsDir(directory), name);
+            try {
+                const age = now - statSync(path).mtimeMs;
+                if ((name.endsWith('.tmp') && age > TEMP_MAX_AGE_MS) || (name.endsWith('.json') && age > SESSION_BINDING_MAX_AGE_MS)) await unlink(path);
+            } catch { /* gone already */ }
+        }
+    } catch { /* no bindings */ }
     let names: string[];
     try { names = readdirSync(directory); } catch { return; }
     for (const name of names) {
@@ -219,10 +287,15 @@ export function findHookStates(dirs: string[], usable: (state: HookState) => boo
             const states: HookState[] = [];
             for (const name of names) {
                 if (!name.startsWith(prefix) || !name.endsWith('.json')) continue;
-                try {
-                    const state = JSON.parse(readFileSync(join(directory, name), 'utf8'));
-                    if (valid(state) && usable(state)) states.push(state);
-                } catch { /* skip */ }
+                // A server may be replacing its file this very moment (on Windows the read can
+                // fail then): try once more before skipping it
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        const state = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+                        if (valid(state) && usable(state)) states.push(state);
+                        break;
+                    } catch { /* skip */ }
+                }
             }
             if (states.length > 0) return states;
         }

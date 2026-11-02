@@ -134,18 +134,16 @@ describe('the state file agora-mcp leaves for the hooks', () => {
     it('is found from CLAUDE_PROJECT_DIR first, then the cwd and its parents; stale or broken files are skipped', async () => {
         await writeHookState(serverState(), stateDir);
         const deps = (over: Partial<HookDeps> = {}): HookDeps => ({ env: {}, fetch, stateDir, isRunning: () => true, ...over });
-        expect(sessionStates({ cwd: join(project, 'sub') }, deps(), 'stop')).toHaveLength(1);
-        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps(), 'stop')).toEqual([]);
-        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps({ env: { CLAUDE_PROJECT_DIR: project } }), 'stop')).toHaveLength(1);
+        expect(sessionStates({ cwd: join(project, 'sub') }, deps())).toHaveLength(1);
+        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps())).toEqual([]);
+        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps({ env: { CLAUDE_PROJECT_DIR: project } }))).toHaveLength(1);
 
-        // The server is gone: Stop ignores it; SessionEnd still takes a file refreshed in the last minutes
-        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false }), 'stop')).toEqual([]);
-        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false }), 'session-end')).toHaveLength(1);
-        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false, now: () => Date.now() + 10 * 60_000 }), 'session-end')).toEqual([]);
+        // The server is gone: Stop ignores it
+        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false }))).toEqual([]);
 
         await writeFile(join(stateDir, `${projectKey(project)}.broken.json`), '{nope');
         await writeFile(join(stateDir, `${projectKey(project)}.other.json`), JSON.stringify({ ...serverState(), token: 'not-a-bot-token' }));
-        expect(sessionStates({ cwd: project }, deps(), 'stop')).toHaveLength(1);
+        expect(sessionStates({ cwd: project }, deps())).toHaveLength(1);
         expect(findHookStates([project], () => true, join(root, 'missing'))).toEqual([]);
         expect(processRunning(process.pid)).toBe(true);
         expect(processRunning(2 ** 30)).toBe(false);
@@ -347,39 +345,99 @@ describe('failing open', () => {
 });
 
 describe('SessionEnd', () => {
-    it('ends this bot\'s terminal session with the reason, as Claude Code', async () => {
-        const { deps, input, calls } = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })));
-        expect(await runHook('session-end', JSON.stringify({ ...input, hook_event_name: 'SessionEnd', reason: 'clear' }), deps)).toBeUndefined();
-        expect(calls).toHaveLength(1);
-        expect(calls[0].url).toBe('http://agora.test/bots/@me/terminal-sessions/end');
-        expect(calls[0].init).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'clear' }) });
-        expect(calls[0].init.headers).toMatchObject({ 'X-Agora-Client': 'claude-code', 'Content-Type': 'application/json' });
+    // Each test: a Stop while the session is alive (which binds it), then its SessionEnd
+    const agoraCall = (cli: 'claude' | 'codex') => cli === 'codex'
+        ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
+    const make = (cli: 'claude' | 'codex', lines = transcript(agoraCall(cli)), opts: Parameters<typeof setup>[1] = {}) =>
+        cli === 'codex' ? codexSetup(lines, opts) : setup(lines, opts);
+    const end = (ctx: Awaited<ReturnType<typeof setup>>, reason = 'other', sessionId = 's') =>
+        runHook('session-end', JSON.stringify({ session_id: sessionId, transcript_path: ctx.input.transcript_path, cwd: project, hook_event_name: 'SessionEnd', reason }), ctx.deps);
+    const bindingsOf = async (cli: 'claude' | 'codex') => (await readdir(join(hookStateDir(cli, stateDir), 'sessions')).catch(() => [] as string[])).filter(n => n.endsWith('.json'));
 
-        // An unknown reason is left out rather than refused
-        await runHook('session-end', JSON.stringify({ ...input, reason: 'weird' }), deps);
-        expect(calls[1].init.body).toBe('{}');
-    });
+    for (const cli of ['claude', 'codex'] as const) {
+        const client = cli === 'codex' ? 'codex-mcp-client' : 'claude-code';
+        it(`${cli}: ends the session the Stop hook bound, with its recorded connection and reason, then forgets the binding`, async () => {
+            const ctx = await make(cli);
+            await decideStop({ ...ctx.input, session_id: 's' }, ctx.deps);
+            expect(await bindingsOf(cli)).toHaveLength(1);
+            ctx.calls.length = 0;
+            expect(await end(ctx, 'clear')).toBeUndefined();
+            expect(ctx.calls).toHaveLength(1);
+            expect(ctx.calls[0].url).toBe('http://agora.test/bots/@me/terminal-sessions/end');
+            expect(ctx.calls[0].init).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'clear' }) });
+            expect(ctx.calls[0].init.headers).toMatchObject({ 'X-Agora-Client': client, 'Content-Type': 'application/json' });
+            expect(await bindingsOf(cli)).toEqual([]);
+            // Used once: a second SessionEnd does nothing
+            await end(ctx);
+            expect(ctx.calls).toHaveLength(1);
+        });
 
-    it('still reaches a server that has just exited, but not a long-gone one', async () => {
-        const recent = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false });
-        await runHook('session-end', JSON.stringify({ ...recent.input, reason: 'prompt_input_exit' }), recent.deps);
-        expect(recent.calls).toHaveLength(1);
-        const old = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false, state: { updatedAt: new Date(Date.now() - 60 * 60_000).toISOString() } });
-        await runHook('session-end', JSON.stringify(old.input), old.deps);
-        expect(old.calls).toEqual([]);
-    });
+        it(`${cli}: an unknown reason is left out rather than refused`, async () => {
+            const ctx = await make(cli);
+            await decideStop({ ...ctx.input, session_id: 's' }, ctx.deps);
+            ctx.calls.length = 0;
+            await end(ctx, 'weird');
+            expect(ctx.calls[0].init.body).toBe('{}');
+        });
 
-    it('leaves another session alone: not without Agora in this transcript, not with two candidate servers', async () => {
-        // This session never used Agora; the live state file is another window's in the same project
-        const other = await setup(transcript(toolUse('Bash', { command: 'ls' }, { text: '' }, 'other')));
-        await runHook('session-end', JSON.stringify({ ...other.input, reason: 'prompt_input_exit' }), other.deps);
-        expect(other.calls).toEqual([]);
+        it(`${cli}: does nothing for a session the Stop hook never bound`, async () => {
+            // A live state file for the project, this session used Agora, but no Stop ran
+            const ctx = await make(cli);
+            await end(ctx);
+            expect(ctx.calls).toEqual([]);
+            // A session that never used Agora is never bound
+            const never = await make(cli, transcript(cli === 'codex' ? codexSaid('hi') : said('hi')));
+            await decideStop({ ...never.input, session_id: 's' }, never.deps);
+            expect(await bindingsOf(cli)).toEqual([]);
+            await end(never);
+            expect(never.calls).toEqual([]);
+        });
 
-        // Two servers recorded for this project (two windows, or two registrations): can't tell which is ours
-        const two = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' }), toolUse('chat_wait', { thread: THREAD }, { text: 'm' }, 'agora-tim')));
-        await writeHookState(serverState({ server: 'agora-tim' }), stateDir);
-        await runHook('session-end', JSON.stringify({ ...two.input, reason: 'clear' }), two.deps);
-        expect(two.calls).toEqual([]);
+        it(`${cli}: a late SessionEnd for a session whose server is gone never ends another session (#review repro)`, async () => {
+            // A's file aged out (or was swept); B, another window with its own bot, is live in the same project
+            const ctx = await make(cli, undefined, { state: { pid: 1001, token: 'bot_a.secret' } });
+            await rm(hookStateDir(cli, stateDir), { recursive: true });
+            await writeHookState((cli === 'codex' ? codexState : serverState)({ pid: 1002, token: 'bot_b.secret' }), hookStateDir(cli, stateDir));
+            await end(ctx, 'other', 'session-a');
+            expect(ctx.calls).toEqual([]);
+
+            // Had A been bound while alive (B not started yet), its own connection is used, never B's
+            await rm(hookStateDir(cli, stateDir), { recursive: true });
+            const bound = await make(cli, undefined, { state: { pid: 1001, token: 'bot_a.secret' } });
+            await decideStop({ ...bound.input, session_id: 'session-a' }, bound.deps);
+            await rm(join(hookStateDir(cli, stateDir), `${projectKey(project)}.agora.1001.json`));
+            await writeHookState((cli === 'codex' ? codexState : serverState)({ pid: 1002, token: 'bot_b.secret' }), hookStateDir(cli, stateDir));
+            bound.calls.length = 0;
+            await end(bound, 'other', 'session-a');
+            expect(bound.calls).toHaveLength(1);
+            expect(bound.calls[0].init.headers).toMatchObject({ Authorization: 'Bot bot_a.secret' });
+        });
+
+        it(`${cli}: the Stop hook binds nothing when the session's server is ambiguous`, async () => {
+            // Two Agora servers used, each live: which agora-mcp is this session's for SessionEnd can't be told
+            const lines = cli === 'codex'
+                ? transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' }), codexCall('chat_wait', { thread: THREAD }, { text: 'm' }, { server: 'agora-tim' }))
+                : transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' }), toolUse('chat_wait', { thread: THREAD }, { text: 'm' }, 'agora-tim'));
+            const two = await make(cli, lines);
+            await writeHookState((cli === 'codex' ? codexState : serverState)({ server: 'agora-tim' }), hookStateDir(cli, stateDir));
+            await decideStop({ ...two.input, session_id: 's' }, two.deps);
+            expect(await bindingsOf(cli)).toEqual([]);
+            two.calls.length = 0;
+            await end(two);
+            expect(two.calls).toEqual([]);
+        });
+    }
+
+    it('sweeps bindings older than 7 days', async () => {
+        const dir = join(stateDir, 'sessions');
+        await mkdir(dir, { recursive: true });
+        for (const [name, days] of [['old.json', 8], ['new.json', 6], ['crash.json.1.tmp', 1]] as const) {
+            await writeFile(join(dir, name), '{}');
+            const when = new Date(Date.now() - days * 24 * 60 * 60_000);
+            await utimes(join(dir, name), when, when);
+        }
+        await sweepHookStates(stateDir);
+        expect(await readdir(dir)).toEqual(['new.json']);
     });
 });
 
@@ -585,7 +643,7 @@ describe('Codex CLI', () => {
         expect(claudeOnly.calls).toEqual([]);
         // A Codex file in Claude's folder (written by hand, say) is not Claude's either
         await writeHookState(codexState({ server: 'agora-x' }), stateDir);
-        expect(sessionStates({ cwd: project }, { env: {}, fetch, stateDir, isRunning: () => true }, 'stop').map(s => s.client)).toEqual(['claude-code']);
+        expect(sessionStates({ cwd: project }, { env: {}, fetch, stateDir, isRunning: () => true }).map(s => s.client)).toEqual(['claude-code']);
 
         const elsewhere = await codexSetup(lines);
         const away = { ...elsewhere.input, cwd: join(root, 'elsewhere') };
@@ -593,15 +651,20 @@ describe('Codex CLI', () => {
         expect((await decideStop(elsewhere.input, { ...elsewhere.deps, env: { CLAUDE_PROJECT_DIR: join(root, 'elsewhere') } }))?.decision).toBe('block');
     });
 
-    it('ends the terminal session at Codex SessionEnd (reason "other"), only if this rollout used the server', async () => {
-        const { deps, input, calls } = await codexSetup(transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false });
+    it('ends the terminal session at Codex SessionEnd (reason "other") after its server exited, only if this rollout used the server', async () => {
+        const { deps, input, calls } = await codexSetup(transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' })));
+        await runHook('stop', JSON.stringify(input), deps);
+        // Codex closes: agora-mcp exits first, then SessionEnd runs
+        deps.isRunning = () => false;
+        calls.length = 0;
         await runHook('session-end', JSON.stringify({ session_id: 'thr', transcript_path: input.transcript_path, cwd: project, hook_event_name: 'SessionEnd', reason: 'other' }), deps);
         expect(calls).toHaveLength(1);
         expect(calls[0].init).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'other' }) });
         expect(calls[0].init.headers).toMatchObject({ 'X-Agora-Client': 'codex-mcp-client' });
 
-        // A rollout whose scripts only name the tools (and list them) did not use the server
+        // A rollout whose scripts only name the tools (and list them) did not use the server: never bound
         const unused = await codexSetup(transcript(codexScript('text(ALL_TOOLS.filter(t => /agora/.test(t.name)))', '[{"name":"mcp__agora__chat_wait"}]')));
+        await runHook('stop', JSON.stringify(unused.input), unused.deps);
         await runHook('session-end', JSON.stringify({ ...unused.input, hook_event_name: 'SessionEnd', reason: 'other' }), unused.deps);
         expect(unused.calls).toEqual([]);
     });
