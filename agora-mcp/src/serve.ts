@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadStartupConfig } from './invites.js';
+import { startHookState } from './hook-state.js';
 import { AgoraApi, mcpClientName } from './api.js';
 import { CursorTracker } from './cursor.js';
 import { registerResources, registerTools } from './tools.js';
@@ -54,7 +55,11 @@ function openSocket(): void {
         activity?.attach(socket);
     }
 }
-server.server.oninitialized = openSocket;
+server.server.oninitialized = () => {
+    openSocket();
+    // Tell the Claude Code hooks (src/hook.ts) where this session's Agora connection is
+    startHookState(config, client);
+};
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

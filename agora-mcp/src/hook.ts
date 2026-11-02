@@ -1,20 +1,17 @@
-import { closeSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
-import type { AgoraMcpConfig } from './config.js';
-import { loadStartupConfig } from './invites.js';
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { findHookStates, processRunning, type HookState } from './hook-state.js';
 
 /**
  * Claude Code hooks (`agora-mcp hook <stop|session-end>`, docs/claude-code-hooks.md).
  *
- * - Stop: a session still engaged in an open Agora thread (or listening in a channel) is sent
- *   back to `chat_wait` instead of ending its turn, so the thread doesn't go quiet.
+ * - Stop: a session still engaged in an open Agora thread is sent back to `chat_wait` instead
+ *   of ending its turn, so the thread doesn't go quiet.
  * - SessionEnd: tells Agora the session is gone, so its terminal session ends now instead of
  *   60 s after the socket drops (and at all on /clear, where agora-mcp keeps running).
  *
- * Hooks get no MCP config, only the inherited environment, so this finds the session's Agora
- * registration the way Claude Code does (local, project, user scope) and resolves its
- * credentials with the same code agora-mcp starts with. It never redeems an invite.
+ * Hooks get no MCP config, and agora-mcp never reads the CLI's own files: the agora-mcp server
+ * the session started leaves its connection in our own folder (src/hook-state.ts), and the
+ * hooks read it from there.
  *
  * Everything fails open: any error, timeout or missing config means exit 0 with no output.
  */
@@ -47,117 +44,34 @@ export interface HookInput {
 export interface HookDeps {
     env: NodeJS.ProcessEnv;
     fetch: typeof fetch;
-    homedir: string;
-    /** Where saved invite credentials live (tests); default ~/.agora/credentials. */
-    credentialDir?: string;
+    /** Where the servers' state files are (tests); default the user's .agora/hooks. */
+    stateDir?: string;
+    isRunning?: (pid: number) => boolean;
+    now?: () => number;
     log?: (message: string) => void;
     /** Overall time limit (tests); default 8 s for Stop, 2.5 s for SessionEnd. */
     budgetMs?: number;
 }
 
-// ─── Finding the session's Agora registration ───
+// ─── Finding the session's Agora connection ───
 
-export interface McpEntry {
-    type?: string;
-    command?: string;
-    args?: unknown[];
-    env?: Record<string, unknown>;
+/** How recently a SessionEnd accepts a state file whose server has already exited. */
+const SESSION_END_FRESH_MS = 5 * 60_000;
+
+/** The project directories to look under: CLAUDE_PROJECT_DIR, then the session's cwd (each with its ancestors). */
+function projectDirs(input: HookInput, deps: HookDeps): string[] {
+    return [deps.env.CLAUDE_PROJECT_DIR?.trim(), input.cwd].filter((d): d is string => !!d);
 }
-
-/** Path for comparing against `.claude.json` project keys: forward slashes, no trailing slash, drive paths lowercased. */
-export function normalizePath(path: string): string {
-    let p = path.replace(/\\/g, '/');
-    if (p.length > 1) p = p.replace(/\/+$/, '');
-    if (/^[A-Za-z]:/.test(p)) {
-        p = p.toLowerCase();
-        if (p.length === 2) p += '/';
-    }
-    return p;
-}
-
-/** `dir` and each of its ancestors, nearest first, normalized. */
-export function ancestors(dir: string): string[] {
-    const start = normalizePath(dir);
-    const out: string[] = [];
-    const parts = start.split('/');
-    for (let i = parts.length; i > 0; i--) {
-        let candidate = parts.slice(0, i).join('/');
-        if (candidate === '') candidate = '/';
-        else if (/^[a-z]:$/.test(candidate)) candidate += '/';
-        if (!out.includes(candidate)) out.push(candidate);
-    }
-    return out;
-}
-
-function readJson(path: string): any {
-    try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; }
-}
-
-function entryOf(servers: unknown, name: string): McpEntry | undefined {
-    if (!servers || typeof servers !== 'object') return undefined;
-    const entry = (servers as Record<string, unknown>)[name];
-    return entry && typeof entry === 'object' ? entry as McpEntry : undefined;
-}
-
-const listed = (list: unknown, name: string) => Array.isArray(list) && list.includes(name);
 
 /**
- * The MCP registration named `name` that a Claude Code session in `cwd` uses, by Claude Code's
- * precedence: local scope (`~/.claude.json` projects, cwd and its ancestors), project scope
- * (`.mcp.json`, cwd up), user scope (top-level `mcpServers`). `.claude.json` lives in
- * CLAUDE_CONFIG_DIR when that is set.
- *
- * A `.mcp.json` comes with the repository, so it could point the user's token at any host: its
- * entry counts only once the user approved it, in their own files (`enabledMcpjsonServers` or
- * `enableAllProjectMcpServers` in the `~/.claude.json` project entry, or in the user
- * settings.json), and not if they disabled it. Settings inside the repository don't count.
+ * The running agora-mcp servers of this session (src/hook-state.ts). Stop wants a live one;
+ * at SessionEnd the server may already be exiting, so a recently refreshed file also counts.
  */
-export function findMcpEntry(cwd: string, name: string, deps: Pick<HookDeps, 'env' | 'homedir'>): McpEntry | undefined {
-    const configDir = deps.env.CLAUDE_CONFIG_DIR?.trim();
-    const claudeJson = readJson(configDir ? join(configDir, '.claude.json') : join(deps.homedir, '.claude.json'));
-    const settings = readJson(configDir ? join(configDir, 'settings.json') : join(deps.homedir, '.claude', 'settings.json'));
-    const dirs = ancestors(cwd);
-    const projects = new Map<string, any>();
-    if (claudeJson?.projects && typeof claudeJson.projects === 'object') {
-        for (const [key, value] of Object.entries(claudeJson.projects)) projects.set(normalizePath(key), value);
-    }
-    for (const dir of dirs) {
-        const entry = entryOf(projects.get(dir)?.mcpServers, name);
-        if (entry) return entry;
-    }
-    for (let i = 0; i < dirs.length; i++) {
-        const entry = entryOf(readJson(join(dirs[i], '.mcp.json'))?.mcpServers, name);
-        if (!entry) continue;
-        // The project entries from the session's directory up to the .mcp.json's
-        const scopes = [settings, ...dirs.slice(0, i + 1).map(dir => projects.get(dir))].filter(s => s && typeof s === 'object');
-        const disabled = scopes.some(s => listed(s.disabledMcpjsonServers, name));
-        const enabled = scopes.some(s => listed(s.enabledMcpjsonServers, name) || s.enableAllProjectMcpServers === true);
-        if (enabled && !disabled) return entry;
-        // Not approved: skip it, as Claude Code does, without reading anything from it
-        break;
-    }
-    return entryOf(claudeJson?.mcpServers, name);
-}
-
-/** Claude Code's `${VAR}` / `${VAR:-default}` expansion in .mcp.json values. */
-export function expandVars(value: string, env: NodeJS.ProcessEnv): string {
-    return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_, key: string, fallback?: string) => env[key] ?? fallback ?? '');
-}
-
-/** Instance, token and default channel of a stdio agora-mcp registration; cached invite credentials only. */
-export async function resolveEntryConfig(entry: McpEntry, cwd: string, deps: Pick<HookDeps, 'env' | 'credentialDir'>): Promise<AgoraMcpConfig> {
-    if (entry.type && entry.type !== 'stdio') throw new Error(`MCP registration is ${entry.type}, not an agora-mcp process`);
-    const env: NodeJS.ProcessEnv = { ...deps.env };
-    for (const [key, value] of Object.entries(entry.env ?? {})) {
-        if (typeof value === 'string') env[key] = expandVars(value, deps.env);
-    }
-    const args = (entry.args ?? []).filter((a): a is string => typeof a === 'string').map(a => expandVars(a, deps.env));
-    // agora-mcp runs in the session's directory, so a relative --config is relative to it
-    const configIndex = args.indexOf('--config');
-    if (configIndex !== -1 && args[configIndex + 1] && !isAbsolute(args[configIndex + 1])) {
-        args[configIndex + 1] = resolve(cwd, args[configIndex + 1]);
-    }
-    return loadStartupConfig(args, { env, cachedOnly: true, credentialDir: deps.credentialDir });
+export function sessionStates(input: HookInput, deps: HookDeps, event: 'stop' | 'session-end'): HookState[] {
+    const running = deps.isRunning ?? processRunning;
+    const now = (deps.now ?? Date.now)();
+    return findHookStates(projectDirs(input, deps), state => running(state.pid)
+        || (event === 'session-end' && now - Date.parse(state.updatedAt) < SESSION_END_FRESH_MS), deps.stateDir);
 }
 
 // ─── Reading the transcript ───
@@ -284,7 +198,7 @@ export function parseTranscript(text: string, server: string): TranscriptState {
 // ─── Talking to Agora ───
 
 class Agora {
-    constructor(private config: AgoraMcpConfig, private deps: HookDeps) {}
+    constructor(private config: HookState, private deps: HookDeps) {}
 
     async get<T>(path: string): Promise<{ status: number; body: T | undefined }> {
         return this.send<T>('GET', path, undefined, FETCH_TIMEOUT_MS);
@@ -293,8 +207,8 @@ class Agora {
     async send<T>(method: string, path: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: T | undefined }> {
         const res = await this.deps.fetch(`${this.config.instance.replace(/\/+$/, '')}${path}`, {
             method, redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
-            // The token is bound to the client that uses it (#39); a Claude Code session is `claude-code`
-            headers: { Authorization: `Bot ${this.config.token}`, 'X-Agora-Client': 'claude-code',
+            // The token is bound to the client that uses it (#39): the one that started agora-mcp
+            headers: { Authorization: `Bot ${this.config.token}`, 'X-Agora-Client': this.config.client,
                 ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
             body: body !== undefined ? JSON.stringify(body) : undefined,
         });
@@ -337,14 +251,22 @@ export function stopReason(channelName: string, thread: string, server: string):
 export async function decideStop(input: HookInput, deps: HookDeps): Promise<StopDecision | undefined> {
     const log = deps.log ?? (() => {});
     if (deps.env.AGORA_STOP_HOOK?.trim().toLowerCase() === 'off') return undefined;
-    if (!input.transcript_path || !input.cwd) return undefined;
-    const server = deps.env.AGORA_HOOK_SERVER?.trim() || 'agora';
+    if (!input.transcript_path) return undefined;
+    const servers = sessionStates(input, deps, 'stop');
+    if (servers.length === 0) { log('no running agora-mcp for this project'); return undefined; }
     let transcript: string;
     try { transcript = readTranscriptTail(input.transcript_path); } catch { log('no transcript'); return undefined; }
     // Most sessions never use Agora: skip parsing
-    if (!transcript.includes(`mcp__${server}__`)) { log('no Agora activity in this session'); return undefined; }
-    const state = parseTranscript(transcript, server);
-    if (!state.target) { log('no Agora activity in this session'); return undefined; }
+    const used = servers.filter(s => transcript.includes(`mcp__${s.server}__`));
+    if (used.length === 0) { log('no Agora activity in this session'); return undefined; }
+    // With more than one Agora server, the one the session used last
+    let config: HookState | undefined;
+    let state: TranscriptState | undefined;
+    for (const server of used) {
+        const parsed = parseTranscript(transcript, server.server);
+        if (parsed.target && (!state || parsed.targetLine > state.targetLine)) { state = parsed; config = server; }
+    }
+    if (!state?.target || !config) { log('no Agora activity in this session'); return undefined; }
     // Only an open thread holds the session: in a channel there is nothing to close, so a
     // session (or a `claude -p` run) that once posted there would never be let go
     if (!state.target.thread) { log('no thread'); return undefined; }
@@ -355,9 +277,6 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     // The agent ignored the last reminder: don't nag. If it listened, keep the loop going.
     if (input.stop_hook_active && !state.waitedSinceContinuation) { log('continuation without chat_wait'); return undefined; }
 
-    const entry = findMcpEntry(input.cwd, server, deps);
-    if (!entry) { log(`no "${server}" MCP registration for ${input.cwd}`); return undefined; }
-    const config = await resolveEntryConfig(entry, input.cwd, deps);
     const wanted = state.target.channel ?? config.defaultChannel;
     if (!wanted) { log('no channel'); return undefined; }
     const agora = new Agora(config, deps);
@@ -367,20 +286,19 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     if (!channel) { log(`channel ${wanted} not found`); return undefined; }
     const thread = state.target.thread;
     if (!await threadOpen(agora, channel.id, thread)) { log('thread closed or not found'); return undefined; }
-    return { decision: 'block', reason: stopReason(channel.name, thread, server) };
+    return { decision: 'block', reason: stopReason(channel.name, thread, config.server) };
 }
 
-/** The SessionEnd hook: end this bot's terminal session in Agora now. */
+/** The SessionEnd hook: end the terminal session of each of this session's agora-mcp servers now. */
 export async function sessionEnd(input: HookInput, deps: HookDeps): Promise<void> {
     const log = deps.log ?? (() => {});
-    if (!input.cwd) return;
-    const server = deps.env.AGORA_HOOK_SERVER?.trim() || 'agora';
-    const entry = findMcpEntry(input.cwd, server, deps);
-    if (!entry) { log(`no "${server}" MCP registration for ${input.cwd}`); return; }
-    const config = await resolveEntryConfig(entry, input.cwd, deps);
+    const servers = sessionStates(input, deps, 'session-end');
+    if (servers.length === 0) { log('no agora-mcp for this project'); return; }
     const reason = input.reason && SESSION_END_REASONS.has(input.reason) ? input.reason : undefined;
-    const res = await new Agora(config, deps).send('POST', '/bots/@me/terminal-sessions/end', reason ? { reason } : {}, SESSION_END_REQUEST_MS);
-    log(`terminal-sessions/end ${res.status}`);
+    await Promise.all(servers.map(async server => {
+        const res = await new Agora(server, deps).send('POST', '/bots/@me/terminal-sessions/end', reason ? { reason } : {}, SESSION_END_REQUEST_MS);
+        log(`${server.server}: terminal-sessions/end ${res.status}`);
+    }));
 }
 
 /** Run a hook on its stdin text; returns what to print on stdout (nothing to allow). Never throws. */
@@ -430,7 +348,7 @@ export async function hookMain(event: string | undefined): Promise<void> {
         const stop = new AbortController();
         const hookFetch = ((url: string | URL | Request, init?: RequestInit) =>
             fetch(url, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, stop.signal]) : stop.signal })) as typeof fetch;
-        const out = await runHook(event ?? '', stdin, { env: process.env, fetch: hookFetch, homedir: homedir(), log });
+        const out = await runHook(event ?? '', stdin, { env: process.env, fetch: hookFetch, log });
         stop.abort();
         if (out) await new Promise<void>(res => process.stdout.write(out + '\n', () => res()));
     } catch (error) {

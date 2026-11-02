@@ -16,23 +16,18 @@ export function parseInvite(value: string): string {
 export async function loadStartupConfig(args: string[], options: {
     credentialDir?: string;
     fetch?: typeof fetch;
-    /** The environment to read AGORA_* from (default: this process's). */
-    env?: NodeJS.ProcessEnv;
-    /** Never redeem: use saved credentials or throw (the Claude Code hooks, src/hook.ts). */
-    cachedOnly?: boolean;
 } = {}): Promise<AgoraMcpConfig> {
-    const env = options.env ?? process.env;
     const arg = (key: string) => {
         const index = args.indexOf(key);
         if (index < 0) return undefined;
         if (!args[index + 1] || args[index + 1].startsWith('--')) throw new Error(`Missing value for ${key}`);
         return args[index + 1];
     };
-    const invite = arg('--invite') ?? env.AGORA_INVITE;
-    if (!invite) return loadConfig(args, env);
+    const invite = arg('--invite') ?? process.env.AGORA_INVITE;
+    if (!invite) return loadConfig(args);
     if (args.includes('--token') || args.includes('--config')) throw new Error('Use --invite without --token or --config.');
     const code = parseInvite(invite);
-    const rawInstance = arg('--instance') ?? env.AGORA_INSTANCE;
+    const rawInstance = arg('--instance') ?? process.env.AGORA_INSTANCE;
     if (!rawInstance) throw new Error('An invite requires --instance <url> or AGORA_INSTANCE.');
     const url = new URL(rawInstance);
     if (url.username || url.password || url.search || url.hash || url.pathname !== '/') {
@@ -42,14 +37,12 @@ export async function loadStartupConfig(args: string[], options: {
         throw new Error('Use HTTPS for remote Agora instances, or HTTP on localhost.');
     }
     const instance = url.origin;
-    const defaultChannel = arg('--channel') ?? env.AGORA_DEFAULT_CHANNEL;
-    const uploadConfig = loadUploadConfig(args, undefined, env);
+    const defaultChannel = arg('--channel') ?? process.env.AGORA_DEFAULT_CHANNEL;
+    const uploadConfig = loadUploadConfig(args);
     const directory = options.credentialDir ?? join(homedir(), '.agora', 'credentials');
-    if (!options.cachedOnly) {
-        await mkdir(directory, { recursive: true, mode: 0o700 });
-        // mkdir's mode only applies when it creates the directory; tighten a pre-existing one too.
-        if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
-    }
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    // mkdir's mode only applies when it creates the directory; tighten a pre-existing one too.
+    if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
     // Include the invite in the digest so different agents on one instance stay distinct.
     const key = createHash('sha256').update(`${instance}\n${code}`).digest('hex');
     const path = join(directory, `${key}.json`);
@@ -70,7 +63,6 @@ export async function loadStartupConfig(args: string[], options: {
     };
     const existing = await cached();
     if (existing) return existing;
-    if (options.cachedOnly) throw new Error('No saved Agora credentials for this invite.');
     // Serialize simultaneous MCP starts locally before consuming the single-use invite.
     const lockPath = `${path}.lock`;
     let lock;

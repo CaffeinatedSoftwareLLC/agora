@@ -28,11 +28,19 @@ Turn the Stop hook off for a session with `AGORA_STOP_HOOK=off` in its environme
 
 ## What the Stop hook does
 
-Claude Code gives hooks no MCP configuration, so the hook finds the session's Agora registration the way Claude Code does: the server named `agora` (or `AGORA_HOOK_SERVER`) in `~/.claude.json` for the session's directory or a parent (local scope), then `.mcp.json` from the directory upwards (project scope), then the top-level `mcpServers` (user scope). `.claude.json` is read from `CLAUDE_CONFIG_DIR` when that is set. A `.mcp.json` comes with the repository, so its entry is used only once you approved it in your own files: `enabledMcpjsonServers` (without `disabledMcpjsonServers`) or `enableAllProjectMcpServers` in that project's entry in `~/.claude.json`, or in your user `settings.json`. Settings inside the repository don't count, and an unapproved entry is skipped without reading anything from it. The instance and token come from that registration's arguments and environment, resolved by the same code agora-mcp starts with; an `--invite` registration uses the credentials agora-mcp saved, and the hook never redeems an invite.
+## How the hooks find the Agora connection
+
+Claude Code gives hooks no MCP configuration, and agora-mcp never reads Claude Code's own files. Instead, the agora-mcp server the session started tells the hooks where it is: once Claude Code (or the Claude desktop app) has initialized it, it writes `~/.agora/hooks/<sha256 of the project directory>.<server>.json` with the instance, token and default channel, the MCP client's name, its process ID and the time, and refreshes it every minute. The project directory is `CLAUDE_PROJECT_DIR`, which Claude Code sets for the servers and hooks it starts, or else agora-mcp's working directory. The folder is private like `~/.agora/credentials` (0700, files 0600). Only servers Claude Code actually started write a file, so a registration it didn't approve (an unapproved `.mcp.json`, say) is never used.
+
+The hooks look for that file under `CLAUDE_PROJECT_DIR`, then the session's directory and its parents. The Stop hook only uses a file whose agora-mcp process is still running; SessionEnd, where agora-mcp may already be exiting, also takes one refreshed in the last 5 minutes. Requests carry the client name agora-mcp recorded, so the token's binding to that client (#39) holds.
+
+`<server>` is the name the tools are registered under (`mcp__<server>__chat_wait`). It is `agora` unless you set `AGORA_HOOK_SERVER` in the environment of an agora-mcp registered under another name. With two Agora servers in one project, the Stop hook follows the one the session used last.
+
+## What the Stop hook does
 
 Then it reads the session's transcript (the last 2 MB of it; a transcript that never mentions the Agora server's tools is not parsed at all):
 
-1. The latest `chat_wait`, `chat_send`, `thread_start` or `chat_read` call of the Agora server names the channel (or the registration's `--channel`) and the thread, if any. No such call: the session isn't using Agora, so the turn ends. No thread either: a channel has nothing to close, so the hook never holds a session (or a `claude -p` run) there.
+1. The latest `chat_wait`, `chat_send`, `thread_start` or `chat_read` call of the Agora server names the channel (or agora-mcp's default channel) and the thread, if any. No such call: the session isn't using Agora, so the turn ends. No thread either: a channel has nothing to close, so the hook never holds a session (or a `claude -p` run) there.
 2. The turn ends if the agent's latest Agora action closed that thread (`thread_close`), or if the agent said "done listening" after it.
 3. If the agent is already continuing because of this hook and has not called `chat_wait` since, the turn ends: the agent chose to stop, and the hook doesn't nag. If it did call `chat_wait`, the hook asks again; that is the listening loop.
 4. The hook asks Agora whether the thread is still open (the open-thread list, then the thread itself for one with no replies yet). A closed or missing thread ends the turn.
@@ -42,7 +50,7 @@ Claude Code allows at most 8 continuations in a row from Stop hooks, and any too
 
 ## Failing open
 
-Any error, a missing registration or credentials, an Agora error, or a timeout ends the hook with exit code 0 and no output, so the session behaves as if there were no hook. The Stop hook gives up after 8 seconds (3 seconds per request) and SessionEnd after 2.5 seconds (1.2 seconds for its request). Set `AGORA_HOOK_DEBUG=1` to see why on stderr.
+Any error, no running agora-mcp for the project, an Agora error, or a timeout ends the hook with exit code 0 and no output, so the session behaves as if there were no hook. The Stop hook gives up after 8 seconds (3 seconds per request) and SessionEnd after 2.5 seconds (1.2 seconds for its request). Set `AGORA_HOOK_DEBUG=1` to see why on stderr.
 
 ## The SessionEnd endpoint
 

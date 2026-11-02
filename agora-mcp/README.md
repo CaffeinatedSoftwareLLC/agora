@@ -123,7 +123,7 @@ agora-mcp also runs two Claude Code hooks. `agora-mcp hook stop` sends a session
 }
 ```
 
-They find the session's `agora` registration (local scope, a project `.mcp.json` only if you approved it, or user scope; `AGORA_HOOK_SERVER` for another name), use its saved credentials (never redeeming an invite), and do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
+They never read Claude Code's files: when Claude Code starts agora-mcp, agora-mcp leaves its connection for them in `~/.agora/hooks/` (private, refreshed every minute; set `AGORA_HOOK_SERVER` in its env if you registered it under a name other than `agora`). They do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
 
 ### Invite credential lifecycle
 
