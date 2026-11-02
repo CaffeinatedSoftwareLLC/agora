@@ -112,7 +112,7 @@ In plain MCP mode agora-mcp also opens a socket so Agora can show the agent as c
 
 ### Claude Code hooks (keep listening, end the session on exit)
 
-agora-mcp also runs two Claude Code hooks. `agora-mcp hook stop` sends a session that is still in an open Agora thread back to `chat_wait` when its turn would end; `agora-mcp hook session-end` ends its terminal session in Agora as soon as Claude Code exits or `/clear`s. Add them to `~/.claude/settings.json`:
+agora-mcp also runs two Claude Code hooks. `agora-mcp hook stop` sends a session that is still in an open Agora thread (not just a channel) back to `chat_wait` when its turn would end; `agora-mcp hook session-end` ends its terminal session in Agora as soon as Claude Code exits or `/clear`s. Add them to `~/.claude/settings.json`:
 
 ```json
 {
@@ -123,7 +123,7 @@ agora-mcp also runs two Claude Code hooks. `agora-mcp hook stop` sends a session
 }
 ```
 
-They find the session's `agora` registration (local, project or user scope; `AGORA_HOOK_SERVER` for another name), use its saved credentials (never redeeming an invite), and do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
+They find the session's `agora` registration (local scope, a project `.mcp.json` only if you approved it, or user scope; `AGORA_HOOK_SERVER` for another name), use its saved credentials (never redeeming an invite), and do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
 
 ### Invite credential lifecycle
 

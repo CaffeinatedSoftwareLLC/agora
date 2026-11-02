@@ -8,6 +8,7 @@ import { usernameTaken } from '../lib/usernames';
 import { checkChannelPermissions } from '../lib/channel-access';
 import { asService } from '../lib/agent-sessions';
 import { endTerminalSessionNow } from '../lib/terminal-sessions';
+import { agentPresence } from '../lib/agent-presence';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -827,6 +828,13 @@ export async function botRoutes(app: FastifyInstance) {
         }
         const db = request.dbClient!;
         const botId = request.userId!.trim();
+        // The bot's terminal sessions are shared by all its connected agora-mcp processes (one
+        // user-scope bot in two Claude Code windows). With another one still connected, ending
+        // them would leave it without a session it may never re-attach (it is idle, or already
+        // inside chat_wait); the disconnect grace period ends this one instead.
+        if (agentPresence.socketCount(botId) > 1) {
+            return reply.status(409).send({ error: 'other_sessions_live' });
+        }
         // agent_sessions is read-only to app_user; terminal rows are written as the table owner
         const notices = await asService(db, () => endTerminalSessionNow(db, botId));
         request.pendingEvents ??= [];

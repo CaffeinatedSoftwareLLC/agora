@@ -358,6 +358,24 @@ describe('POST /bots/@me/terminal-sessions/end (the Claude Code SessionEnd hook)
         expect(ok.body).toEqual({ ended: [sessionId] });
     });
 
+    test('with another agora-mcp of the same bot still connected, it ends nothing (409)', async () => {
+        const first = await connectTerminal(claude);
+        const second = await connectTerminal(claude);
+        expect(second.sessionId).toBe(first.sessionId);
+        const refused = await endNow(claude.auth, { reason: 'clear' });
+        expect(refused.status).toBe(409);
+        expect(refused.body).toEqual({ error: 'other_sessions_live' });
+        expect((await sessionRow(first.sessionId)).state).toBe('live');
+
+        // Once only one is left, it can end the session
+        first.socket.disconnect();
+        await until(async () => {
+            const res = await endNow(claude.auth, { reason: 'prompt_input_exit' });
+            return res.status === 200 && res.body;
+        }, 'the other socket to leave');
+        expect(await sessionRow(first.sessionId)).toMatchObject({ state: 'ended', end_reason: 'session_end' });
+    });
+
     test('a paused bot can still end its session', async () => {
         const paused = await newAgent('termhookpaused');
         const { sessionId } = await connectTerminal(paused);

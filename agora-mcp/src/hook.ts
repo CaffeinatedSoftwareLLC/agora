@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { AgoraMcpConfig } from './config.js';
@@ -29,6 +29,8 @@ const SESSION_END_BUDGET_MS = 2_500;
 const SESSION_END_REQUEST_MS = 1_200;
 const FETCH_TIMEOUT_MS = 3_000;
 const THREAD_PAGES = 5;
+/** Only the end of a long transcript is read: the latest Agora calls are what count. */
+export const TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024;
 const SESSION_END_REASONS = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'other']);
 
 export interface HookInput {
@@ -97,27 +99,42 @@ function entryOf(servers: unknown, name: string): McpEntry | undefined {
     return entry && typeof entry === 'object' ? entry as McpEntry : undefined;
 }
 
+const listed = (list: unknown, name: string) => Array.isArray(list) && list.includes(name);
+
 /**
  * The MCP registration named `name` that a Claude Code session in `cwd` uses, by Claude Code's
  * precedence: local scope (`~/.claude.json` projects, cwd and its ancestors), project scope
  * (`.mcp.json`, cwd up), user scope (top-level `mcpServers`). `.claude.json` lives in
  * CLAUDE_CONFIG_DIR when that is set.
+ *
+ * A `.mcp.json` comes with the repository, so it could point the user's token at any host: its
+ * entry counts only once the user approved it, in their own files (`enabledMcpjsonServers` or
+ * `enableAllProjectMcpServers` in the `~/.claude.json` project entry, or in the user
+ * settings.json), and not if they disabled it. Settings inside the repository don't count.
  */
 export function findMcpEntry(cwd: string, name: string, deps: Pick<HookDeps, 'env' | 'homedir'>): McpEntry | undefined {
     const configDir = deps.env.CLAUDE_CONFIG_DIR?.trim();
     const claudeJson = readJson(configDir ? join(configDir, '.claude.json') : join(deps.homedir, '.claude.json'));
+    const settings = readJson(configDir ? join(configDir, 'settings.json') : join(deps.homedir, '.claude', 'settings.json'));
     const dirs = ancestors(cwd);
+    const projects = new Map<string, any>();
     if (claudeJson?.projects && typeof claudeJson.projects === 'object') {
-        const projects = new Map<string, any>();
         for (const [key, value] of Object.entries(claudeJson.projects)) projects.set(normalizePath(key), value);
-        for (const dir of dirs) {
-            const entry = entryOf(projects.get(dir)?.mcpServers, name);
-            if (entry) return entry;
-        }
     }
     for (const dir of dirs) {
-        const entry = entryOf(readJson(join(dir, '.mcp.json'))?.mcpServers, name);
+        const entry = entryOf(projects.get(dir)?.mcpServers, name);
         if (entry) return entry;
+    }
+    for (let i = 0; i < dirs.length; i++) {
+        const entry = entryOf(readJson(join(dirs[i], '.mcp.json'))?.mcpServers, name);
+        if (!entry) continue;
+        // The project entries from the session's directory up to the .mcp.json's
+        const scopes = [settings, ...dirs.slice(0, i + 1).map(dir => projects.get(dir))].filter(s => s && typeof s === 'object');
+        const disabled = scopes.some(s => listed(s.disabledMcpjsonServers, name));
+        const enabled = scopes.some(s => listed(s.enabledMcpjsonServers, name) || s.enableAllProjectMcpServers === true);
+        if (enabled && !disabled) return entry;
+        // Not approved: skip it, as Claude Code does, without reading anything from it
+        break;
     }
     return entryOf(claudeJson?.mcpServers, name);
 }
@@ -144,6 +161,21 @@ export async function resolveEntryConfig(entry: McpEntry, cwd: string, deps: Pic
 }
 
 // ─── Reading the transcript ───
+
+/** The transcript, or its last `maxBytes` from the first whole line on. */
+export function readTranscriptTail(path: string, maxBytes = TRANSCRIPT_TAIL_BYTES): string {
+    const fd = openSync(path, 'r');
+    try {
+        const size = fstatSync(fd).size;
+        const length = Math.min(size, maxBytes);
+        const buffer = Buffer.alloc(length);
+        readSync(fd, buffer, 0, length, size - length);
+        const text = buffer.toString('utf8');
+        return length < size ? text.slice(text.indexOf('\n') + 1) : text;
+    } finally {
+        closeSync(fd);
+    }
+}
 
 export interface Target { channel?: string; thread?: string }
 
@@ -293,16 +325,11 @@ async function threadOpen(agora: Agora, channelId: string, threadId: string): Pr
 
 export interface StopDecision { decision: 'block'; reason: string }
 
-export function stopReason(channelName: string, thread: string | undefined, server: string): string {
-    const call = thread
-        ? `mcp__${server}__chat_wait(channel="${channelName}", thread="${thread}", until="turn", timeout=600)`
-        : `mcp__${server}__chat_wait(channel="${channelName}", until="turn", timeout=600)`;
-    const where = thread ? `thread ${thread} in #${channelName} is still open` : `you are working in #${channelName}`;
-    const finish = thread
-        ? `If the work in this thread is finished, close it with mcp__${server}__thread_close(channel="${channelName}", thread="${thread}") and stop. `
-        : '';
-    return `${STOP_MARKER} The Agora ${where}, so keep listening instead of ending your turn: call ${call} and answer what arrives. `
-        + `${finish}If you are done listening, say "done listening" and stop. `
+export function stopReason(channelName: string, thread: string, server: string): string {
+    return `${STOP_MARKER} The Agora thread ${thread} in #${channelName} is still open, so keep listening instead of ending your turn: `
+        + `call mcp__${server}__chat_wait(channel="${channelName}", thread="${thread}", until="turn", timeout=600) and answer what arrives. `
+        + `If the work in this thread is finished, close it with mcp__${server}__thread_close(channel="${channelName}", thread="${thread}") and stop. `
+        + 'If you are done listening, say "done listening" and stop. '
         + '(The human can turn this off with AGORA_STOP_HOOK=off.)';
 }
 
@@ -313,9 +340,14 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     if (!input.transcript_path || !input.cwd) return undefined;
     const server = deps.env.AGORA_HOOK_SERVER?.trim() || 'agora';
     let transcript: string;
-    try { transcript = readFileSync(input.transcript_path, 'utf8'); } catch { log('no transcript'); return undefined; }
+    try { transcript = readTranscriptTail(input.transcript_path); } catch { log('no transcript'); return undefined; }
+    // Most sessions never use Agora: skip parsing
+    if (!transcript.includes(`mcp__${server}__`)) { log('no Agora activity in this session'); return undefined; }
     const state = parseTranscript(transcript, server);
     if (!state.target) { log('no Agora activity in this session'); return undefined; }
+    // Only an open thread holds the session: in a channel there is nothing to close, so a
+    // session (or a `claude -p` run) that once posted there would never be let go
+    if (!state.target.thread) { log('no thread'); return undefined; }
     if (state.closedTarget) { log('the thread was closed'); return undefined; }
     if (state.doneListening || (input.last_assistant_message && DONE_LISTENING.test(input.last_assistant_message))) {
         log('the agent is done listening'); return undefined;
@@ -334,7 +366,7 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     const channel = me.body!.channels!.find(c => c.id === wanted) ?? me.body!.channels!.find(c => c.name === wanted);
     if (!channel) { log(`channel ${wanted} not found`); return undefined; }
     const thread = state.target.thread;
-    if (thread && !await threadOpen(agora, channel.id, thread)) { log('thread closed or not found'); return undefined; }
+    if (!await threadOpen(agora, channel.id, thread)) { log('thread closed or not found'); return undefined; }
     return { decision: 'block', reason: stopReason(channel.name, thread, server) };
 }
 
