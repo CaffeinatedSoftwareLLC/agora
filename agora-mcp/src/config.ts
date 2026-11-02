@@ -8,12 +8,12 @@ export interface AgoraMcpConfig extends UploadConfig {
     defaultChannel?: string;
 }
 
-export function loadUploadConfig(args: string[], parsed?: Record<string, unknown>): UploadConfig {
+export function loadUploadConfig(args: string[], parsed?: Record<string, unknown>, env: NodeJS.ProcessEnv = process.env): UploadConfig {
     const rootIndex = args.indexOf('--upload-root');
     if (rootIndex !== -1 && (!args[rootIndex + 1] || args[rootIndex + 1].startsWith('--'))) throw new Error('Missing value for --upload-root');
-    const uploadRoot = rootIndex !== -1 ? args[rootIndex + 1] : parsed?.uploadRoot ?? process.env.AGORA_UPLOAD_ROOT;
+    const uploadRoot = rootIndex !== -1 ? args[rootIndex + 1] : parsed?.uploadRoot ?? env.AGORA_UPLOAD_ROOT;
     if (uploadRoot !== undefined && (typeof uploadRoot !== 'string' || !uploadRoot.trim())) throw new Error('uploadRoot must be a non-empty folder path.');
-    const rawOutside = args.includes('--allow-outside-workdir') ? true : parsed?.allowOutsideWorkdir ?? process.env.AGORA_ALLOW_OUTSIDE_WORKDIR;
+    const rawOutside = args.includes('--allow-outside-workdir') ? true : parsed?.allowOutsideWorkdir ?? env.AGORA_ALLOW_OUTSIDE_WORKDIR;
     let allowOutsideWorkdir: boolean | undefined;
     if (rawOutside !== undefined) {
         if (typeof rawOutside === 'boolean') allowOutsideWorkdir = rawOutside;
@@ -26,7 +26,8 @@ export function loadUploadConfig(args: string[], parsed?: Record<string, unknown
         ...(allowOutsideWorkdir !== undefined ? { allowOutsideWorkdir } : {}) };
 }
 
-export function loadConfig(args: string[]): AgoraMcpConfig {
+/** `env` is the process environment, or an MCP registration's (the Claude Code hooks, src/hook.ts). */
+export function loadConfig(args: string[], env: NodeJS.ProcessEnv = process.env): AgoraMcpConfig {
     const configIdx = args.indexOf('--config');
     if (configIdx !== -1 && args[configIdx + 1]) {
         const configPath = resolve(args[configIdx + 1]);
@@ -41,7 +42,7 @@ export function loadConfig(args: string[]): AgoraMcpConfig {
             instance: parsed.instance,
             token: parsed.token,
             defaultChannel: parsed.defaultChannel,
-            ...loadUploadConfig(args, parsed),
+            ...loadUploadConfig(args, parsed, env),
         };
     }
 
@@ -55,13 +56,13 @@ export function loadConfig(args: string[]): AgoraMcpConfig {
             instance: args[instanceIdx + 1],
             token: args[tokenIdx + 1],
             defaultChannel: channelIdx !== -1 ? args[channelIdx + 1] : undefined,
-            ...loadUploadConfig(args),
+            ...loadUploadConfig(args, undefined, env),
         };
     }
 
     // Env vars
-    const instance = process.env.AGORA_INSTANCE;
-    const token = process.env.AGORA_BOT_TOKEN;
+    const instance = env.AGORA_INSTANCE;
+    const token = env.AGORA_BOT_TOKEN;
 
     if (!instance || !token) {
         throw new Error(
@@ -75,7 +76,7 @@ export function loadConfig(args: string[]): AgoraMcpConfig {
     return {
         instance,
         token,
-        defaultChannel: process.env.AGORA_DEFAULT_CHANNEL,
-        ...loadUploadConfig(args),
+        defaultChannel: env.AGORA_DEFAULT_CHANNEL,
+        ...loadUploadConfig(args, undefined, env),
     };
 }

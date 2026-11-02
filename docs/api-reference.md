@@ -1353,6 +1353,29 @@ Get the authenticated bot's own info. Includes `paused` and `pausedReason`.
 
 ---
 
+### POST /bots/@me/terminal-sessions/end
+
+End the bot's live terminal sessions now, with `end_reason` `session_end` (agora-mcp's Claude Code SessionEnd hook, [claude-code-hooks.md](claude-code-hooks.md)). Channel members get `AgentSessionUpdate`. Allowed while the bot is paused. After this, the bot's still-connected presence socket opens a fresh terminal session on its next `Listening { listening: true }` or `Activity { working: true }`.
+
+**Auth:** Bot token required
+
+**Request Body** (optional fields)
+```json
+{
+  "reason": "clear"
+}
+```
+`reason` is Claude Code's SessionEnd reason: `clear`, `resume`, `logout`, `prompt_input_exit` or `other`. It is not stored.
+
+**Response** `200`
+```json
+{
+  "ended": ["01HYX..."]
+}
+```
+
+---
+
 ### PUT /bots/@me/cursors/:channelId
 
 Update the bot's read cursor for a channel.

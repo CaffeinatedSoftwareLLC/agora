@@ -143,15 +143,38 @@ export async function heartbeatTerminals(pool: Pool, botIds: string[]): Promise<
     );
 }
 
-async function endWhere(c: PoolClient, where: string, params: unknown[]): Promise<Notice[]> {
+/** Why a terminal session ended: its socket went away, or Claude Code's SessionEnd hook said so. */
+export type TerminalEndReason = 'disconnected' | 'session_end';
+
+async function endWhere(c: PoolClient, where: string, params: unknown[], reason: TerminalEndReason = 'disconnected'): Promise<Notice[]> {
     const rows = await c.query(
-        `UPDATE agent_sessions SET state = 'ended', end_reason = 'disconnected', ended_at = NOW(), working = false
+        `UPDATE agent_sessions SET state = 'ended', end_reason = '${reason}', ended_at = NOW(), working = false
          WHERE kind = 'terminal' AND state = 'live' AND ${where} RETURNING id`,
         params
     );
     const notices: Notice[] = [];
     for (const r of rows.rows) notices.push(await sessionUpdate(c, r.id.trim(), false));
     return notices;
+}
+
+/**
+ * The agent's session is over (agora-mcp's SessionEnd hook, POST /bots/@me/terminal-sessions/end):
+ * end the bot's terminal sessions now, in the caller's transaction (as the table owner). After
+ * /clear agora-mcp keeps its socket; its next Listening or Activity attaches a fresh session
+ * (reattachTerminal).
+ */
+export function endTerminalSessionNow(c: PoolClient | any, botId: string): Promise<Notice[]> {
+    return endWhere(c, 'bot_id = $1', [botId], 'session_end');
+}
+
+/**
+ * A still-connected presence socket reported Listening or Activity: if the bot has no live
+ * terminal session (the SessionEnd hook ended it), attach one again. Null when one is live.
+ */
+export async function reattachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode): Promise<{ attached: Attached[]; notices: Notice[] } | null> {
+    const live = await pool.query(`SELECT 1 FROM agent_sessions WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' LIMIT 1`, [botId]);
+    if (live.rows.length > 0) return null;
+    return attachTerminal(pool, botId, channelIds, mode);
 }
 
 /** Presence dropped and the grace period passed: end the bot's terminal sessions. */
