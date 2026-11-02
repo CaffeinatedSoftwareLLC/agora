@@ -24,8 +24,13 @@ function fixture(attention: Message[], initialAck?: string, native: Message[] = 
             native.filter(m => !m.threadId && (!opts?.before || m.id < opts.before)).slice().reverse().slice(0, opts?.limit ?? 100)),
         getAttentionCursors: vi.fn(async () => attentionAck ? [{ channelId: 'C', lastReadId: attentionAck, updatedAt: '' }] : []),
         updateAttentionCursor: vi.fn(async (_channel: string, id: string) => { attentionAck = id; return { channelId: 'C', lastReadId: id }; }),
-        getAttention: vi.fn(async (_channel: string, opts?: { after?: string; limit?: number }) =>
-            attention.filter(m => !opts?.after || m.id > opts.after).slice(0, Math.min(opts?.limit ?? 100, 100))),
+        // Like the server: the cursor is GREATEST(after, saved ack); participating=false (sent by
+        // older clients on thread waits) would leave participating replies out.
+        getAttention: vi.fn(async (_channel: string, opts?: { after?: string; limit?: number; participating?: boolean }) => {
+            const after = [opts?.after, attentionAck].filter(Boolean).sort().pop();
+            return attention.filter(m => (!after || m.id > after) && (opts?.participating !== false || m.attention !== 'participating'))
+                .slice(0, Math.min(opts?.limit ?? 100, 100));
+        }),
     };
     function register() {
         const handlers = new Map<string, Handler>();
@@ -70,6 +75,55 @@ it('a channel wait catches attention in a reply thread', async () => {
     expect(text).toContain('(001)');
     expect(text).toContain('thread B');
     expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
+});
+
+it('a channel wait returns a plain reply in a thread the bot participates in, labelled with that thread', async () => {
+    const f = fixture([{ ...message('001', 'B', 'Done. Please yield the review turn'), attention: 'participating' }]);
+    const text = await f.read(f.wait, {});
+    expect(text).toContain('#general › thread B:\n');
+    expect(text).toContain('(001)');
+    expect(f.api.updateAttentionCursor).toHaveBeenCalledWith('C', '001');
+    expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
+});
+
+const participating = (id: string, threadId: string, content = 'Approved, go ahead') =>
+    ({ ...message(id, threadId, content), authorId: 'owner', authorUsername: 'eryk', authorBot: false, attention: 'participating' as const });
+
+it('a thread wait returns a plain reply in another thread the bot participates in', async () => {
+    const f = fixture([participating('001', 'B')]);
+    const text = await f.read(f.wait);
+    expect(text).toContain('#general › thread B:\n');
+    expect(text).toContain('(001)');
+    expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
+});
+
+it('a thread wait that acknowledges a newer mention never skips an earlier participating reply', async () => {
+    const f = fixture([participating('001', 'B'), message('002', 'B')]);
+    const first = await f.read(f.wait);
+    expect(first).toContain('(001)');
+    expect(first).toContain('(002)');
+    expect(f.api.updateAttentionCursor).toHaveBeenLastCalledWith('C', '002');
+    expect(await f.read(f.wait, {})).toContain('no new messages');
+});
+
+it('a thread wait shows its own thread\'s replies once, from the native read', async () => {
+    const own = participating('001', 'A', 'Reply in the waited thread');
+    const f = fixture([own, participating('002', 'B')], undefined, [own]);
+    const text = await f.read(f.wait);
+    expect(text.match(/\(001\)/g)).toHaveLength(1);
+    expect(text).toContain('(002)');
+    expect(f.api.updateAttentionCursor).toHaveBeenLastCalledWith('C', '002');
+});
+
+it('until=turn keeps waiting through a participating reply that yields to someone else, then returns it', async () => {
+    const f = fixture([{ ...message('001', 'B', '[AGORA/v1 MODE=plan STATE=TURN]\nOver to you\n[YIELD to=gemini]'), attention: 'participating' }]);
+    const text = await f.read(f.wait, { timeout: 5 });
+    expect(text).toContain('not your turn yet');
+    expect(text).toContain('(001)');
+    expect(f.api.getAttention.mock.calls.length).toBeGreaterThan(1);
+    // Later polls in the same wait page past what was already collected.
+    expect(f.api.getAttention).toHaveBeenLastCalledWith('C', expect.objectContaining({ after: '001' }));
+    expect(f.api.updateAttentionCursor).toHaveBeenCalledWith('C', '001');
 });
 
 it('until=turn returns an off-thread mention even when the message yields to someone else', async () => {

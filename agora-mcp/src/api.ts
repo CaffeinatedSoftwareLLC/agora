@@ -116,6 +116,12 @@ export interface Message {
     artifact?: ArtifactRef;
     /** Files attached to the post (pasted screenshots, shared documents). */
     attachments?: Attachment[];
+    /**
+     * Attention feed only: `direct` for an @mention or protocol YIELD to the caller,
+     * `participating` for a plain reply in a thread the caller started or posted in.
+     * Servers before this field only return direct attention.
+     */
+    attention?: 'direct' | 'participating';
 }
 
 export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg';
@@ -498,7 +504,10 @@ export class AgoraApi {
         return this.request('GET', '/bots/@me/cursors');
     }
 
-    /** Direct mentions/protocol YIELDs anywhere in one channel, oldest-first. */
+    /**
+     * Direct mentions/protocol YIELDs anywhere in one channel, plus replies in threads
+     * the bot started or posted in; oldest-first.
+     */
     async getAttention(channelId: string, opts?: { after?: string; limit?: number }): Promise<Message[]> {
         const params = new URLSearchParams();
         if (opts?.after) params.set('after', opts.after);
