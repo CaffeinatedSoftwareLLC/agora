@@ -23,7 +23,10 @@ beforeEach(async () => {
     project = join(root, 'work', 'proj');
     await mkdir(join(project, 'sub'), { recursive: true });
 });
-afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+// startHookState sweeps and writes in the background without being awaited, so a write can land
+// while the folder is being removed (ENOTEMPTY in CI). rm retries those errors with maxRetries.
+const RM_RETRY = { maxRetries: 10, retryDelay: 50 } as const;
+afterEach(async () => { await rm(root, { recursive: true, force: true, ...RM_RETRY }); });
 
 /** What a running agora-mcp leaves for the hooks (src/hook-state.ts). */
 const serverState = (over: Partial<HookState> = {}): HookState => ({
@@ -276,7 +279,7 @@ describe('the Stop decision', () => {
         const stale = await setup(lines, { running: false });
         expect(await decideStop(stale.input, stale.deps)).toBeUndefined();
         const missing = await setup(lines);
-        await rm(stateDir, { recursive: true });
+        await rm(stateDir, { recursive: true, ...RM_RETRY });
         expect(await decideStop(missing.input, missing.deps)).toBeUndefined();
         expect([...stale.calls, ...missing.calls]).toEqual([]);
     });
@@ -327,7 +330,7 @@ describe('failing open', () => {
         expect(await runHook('stop', 'null', ok.deps)).toBeUndefined();
 
         const noState = await setup(lines);
-        await rm(stateDir, { recursive: true });
+        await rm(stateDir, { recursive: true, ...RM_RETRY });
         expect(await runHook('stop', JSON.stringify(noState.input), noState.deps)).toBeUndefined();
         expect(await runHook('session-end', JSON.stringify(noState.input), noState.deps)).toBeUndefined();
         expect(noState.calls).toEqual([]);
@@ -564,7 +567,7 @@ describe('Codex CLI', () => {
         const lines = transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' }));
         // Only a Claude Code server runs in this project
         const claudeOnly = await codexSetup(lines);
-        await rm(hookStateDir('codex', stateDir), { recursive: true });
+        await rm(hookStateDir('codex', stateDir), { recursive: true, ...RM_RETRY });
         await writeHookState(serverState(), stateDir);
         expect(await decideStop(claudeOnly.input, claudeOnly.deps)).toBeUndefined();
         expect(claudeOnly.calls).toEqual([]);
