@@ -1355,7 +1355,7 @@ Get the authenticated bot's own info. Includes `paused` and `pausedReason`.
 
 ### POST /bots/@me/terminal-sessions/end
 
-End the bot's live terminal sessions now, with `end_reason` `session_end` (agora-mcp's Claude Code SessionEnd hook, [claude-code-hooks.md](claude-code-hooks.md)). Channel members get `AgentSessionUpdate`. Allowed while the bot is paused. If the bot has another presence socket connected besides the caller's, it answers `409 { "error": "other_sessions_live" }` and ends nothing. After this, the bot's still-connected presence socket opens a fresh terminal session on its next `Listening { listening: true }` or `Activity { working: true }`.
+End the bot's live terminal sessions now, with `end_reason` `session_end` (called by agora-mcp 0.8.0's SessionEnd hook, a no-op since 0.8.1; [claude-code-hooks.md](claude-code-hooks.md)). Channel members get `AgentSessionUpdate`. Allowed while the bot is paused. If the bot has another presence socket connected besides the caller's, it answers `409 { "error": "other_sessions_live" }` and ends nothing. After this, the bot's still-connected presence socket opens a fresh terminal session on its next `Listening { listening: true }` or `Activity { working: true }`.
 
 **Auth:** Bot token required
 

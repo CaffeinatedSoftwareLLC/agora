@@ -345,100 +345,27 @@ describe('failing open', () => {
 });
 
 describe('SessionEnd', () => {
-    // Each test: a Stop while the session is alive (which binds it), then its SessionEnd
-    const agoraCall = (cli: 'claude' | 'codex') => cli === 'codex'
-        ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
-    const make = (cli: 'claude' | 'codex', lines = transcript(agoraCall(cli)), opts: Parameters<typeof setup>[1] = {}) =>
-        cli === 'codex' ? codexSetup(lines, opts) : setup(lines, opts);
-    const end = (ctx: Awaited<ReturnType<typeof setup>>, reason = 'other', sessionId = 's') =>
-        runHook('session-end', JSON.stringify({ session_id: sessionId, transcript_path: ctx.input.transcript_path, cwd: project, hook_event_name: 'SessionEnd', reason }), ctx.deps);
-    const bindingsOf = async (cli: 'claude' | 'codex') => (await readdir(join(hookStateDir(cli, stateDir), 'sessions')).catch(() => [] as string[])).filter(n => n.endsWith('.json'));
-
+    // Since 0.8.1 a no-op: neither CLI gives a hook a positive identity for the session's agora-mcp
     for (const cli of ['claude', 'codex'] as const) {
-        const client = cli === 'codex' ? 'codex-mcp-client' : 'claude-code';
-        it(`${cli}: ends the session the Stop hook bound, with its recorded connection and reason, then forgets the binding`, async () => {
-            const ctx = await make(cli);
-            await decideStop({ ...ctx.input, session_id: 's' }, ctx.deps);
-            expect(await bindingsOf(cli)).toHaveLength(1);
+        it(`${cli}: makes no request and writes nothing, whatever it could find`, async () => {
+            const call = cli === 'codex' ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
+            const ctx = cli === 'codex' ? await codexSetup(transcript(call)) : await setup(transcript(call));
+            const before = await readdir(hookStateDir(cli, stateDir));
+            // Live server, fresh state file, a transcript that used it, a Stop that ran first, every reason
+            await runHook('stop', JSON.stringify({ ...ctx.input, session_id: 's' }), ctx.deps);
             ctx.calls.length = 0;
-            expect(await end(ctx, 'clear')).toBeUndefined();
-            expect(ctx.calls).toHaveLength(1);
-            expect(ctx.calls[0].url).toBe('http://agora.test/bots/@me/terminal-sessions/end');
-            expect(ctx.calls[0].init).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'clear' }) });
-            expect(ctx.calls[0].init.headers).toMatchObject({ 'X-Agora-Client': client, 'Content-Type': 'application/json' });
-            expect(await bindingsOf(cli)).toEqual([]);
-            // Used once: a second SessionEnd does nothing
-            await end(ctx);
-            expect(ctx.calls).toHaveLength(1);
-        });
-
-        it(`${cli}: an unknown reason is left out rather than refused`, async () => {
-            const ctx = await make(cli);
-            await decideStop({ ...ctx.input, session_id: 's' }, ctx.deps);
-            ctx.calls.length = 0;
-            await end(ctx, 'weird');
-            expect(ctx.calls[0].init.body).toBe('{}');
-        });
-
-        it(`${cli}: does nothing for a session the Stop hook never bound`, async () => {
-            // A live state file for the project, this session used Agora, but no Stop ran
-            const ctx = await make(cli);
-            await end(ctx);
+            for (const reason of ['clear', 'resume', 'logout', 'prompt_input_exit', 'other', undefined]) {
+                const input = { session_id: 's', transcript_path: ctx.input.transcript_path, cwd: project, hook_event_name: 'SessionEnd', reason };
+                expect(await runHook('session-end', JSON.stringify(input), ctx.deps)).toBeUndefined();
+                expect(await runHook('session-end', 'not json{', ctx.deps)).toBeUndefined();
+            }
+            ctx.deps.isRunning = () => false;
+            await runHook('session-end', JSON.stringify({ session_id: 's', cwd: project, hook_event_name: 'SessionEnd', reason: 'other' }), ctx.deps);
             expect(ctx.calls).toEqual([]);
-            // A session that never used Agora is never bound
-            const never = await make(cli, transcript(cli === 'codex' ? codexSaid('hi') : said('hi')));
-            await decideStop({ ...never.input, session_id: 's' }, never.deps);
-            expect(await bindingsOf(cli)).toEqual([]);
-            await end(never);
-            expect(never.calls).toEqual([]);
-        });
-
-        it(`${cli}: a late SessionEnd for a session whose server is gone never ends another session (#review repro)`, async () => {
-            // A's file aged out (or was swept); B, another window with its own bot, is live in the same project
-            const ctx = await make(cli, undefined, { state: { pid: 1001, token: 'bot_a.secret' } });
-            await rm(hookStateDir(cli, stateDir), { recursive: true });
-            await writeHookState((cli === 'codex' ? codexState : serverState)({ pid: 1002, token: 'bot_b.secret' }), hookStateDir(cli, stateDir));
-            await end(ctx, 'other', 'session-a');
-            expect(ctx.calls).toEqual([]);
-
-            // Had A been bound while alive (B not started yet), its own connection is used, never B's
-            await rm(hookStateDir(cli, stateDir), { recursive: true });
-            const bound = await make(cli, undefined, { state: { pid: 1001, token: 'bot_a.secret' } });
-            await decideStop({ ...bound.input, session_id: 'session-a' }, bound.deps);
-            await rm(join(hookStateDir(cli, stateDir), `${projectKey(project)}.agora.1001.json`));
-            await writeHookState((cli === 'codex' ? codexState : serverState)({ pid: 1002, token: 'bot_b.secret' }), hookStateDir(cli, stateDir));
-            bound.calls.length = 0;
-            await end(bound, 'other', 'session-a');
-            expect(bound.calls).toHaveLength(1);
-            expect(bound.calls[0].init.headers).toMatchObject({ Authorization: 'Bot bot_a.secret' });
-        });
-
-        it(`${cli}: the Stop hook binds nothing when the session's server is ambiguous`, async () => {
-            // Two Agora servers used, each live: which agora-mcp is this session's for SessionEnd can't be told
-            const lines = cli === 'codex'
-                ? transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' }), codexCall('chat_wait', { thread: THREAD }, { text: 'm' }, { server: 'agora-tim' }))
-                : transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' }), toolUse('chat_wait', { thread: THREAD }, { text: 'm' }, 'agora-tim'));
-            const two = await make(cli, lines);
-            await writeHookState((cli === 'codex' ? codexState : serverState)({ server: 'agora-tim' }), hookStateDir(cli, stateDir));
-            await decideStop({ ...two.input, session_id: 's' }, two.deps);
-            expect(await bindingsOf(cli)).toEqual([]);
-            two.calls.length = 0;
-            await end(two);
-            expect(two.calls).toEqual([]);
+            // The Stop hook keeps no per-session records either
+            expect(await readdir(hookStateDir(cli, stateDir))).toEqual(before);
         });
     }
-
-    it('sweeps bindings older than 7 days', async () => {
-        const dir = join(stateDir, 'sessions');
-        await mkdir(dir, { recursive: true });
-        for (const [name, days] of [['old.json', 8], ['new.json', 6], ['crash.json.1.tmp', 1]] as const) {
-            await writeFile(join(dir, name), '{}');
-            const when = new Date(Date.now() - days * 24 * 60 * 60_000);
-            await utimes(join(dir, name), when, when);
-        }
-        await sweepHookStates(stateDir);
-        expect(await readdir(dir)).toEqual(['new.json']);
-    });
 });
 
 describe('token-bearing leftovers in the hooks folder', () => {
@@ -651,24 +578,6 @@ describe('Codex CLI', () => {
         expect((await decideStop(elsewhere.input, { ...elsewhere.deps, env: { CLAUDE_PROJECT_DIR: join(root, 'elsewhere') } }))?.decision).toBe('block');
     });
 
-    it('ends the terminal session at Codex SessionEnd (reason "other") after its server exited, only if this rollout used the server', async () => {
-        const { deps, input, calls } = await codexSetup(transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' })));
-        await runHook('stop', JSON.stringify(input), deps);
-        // Codex closes: agora-mcp exits first, then SessionEnd runs
-        deps.isRunning = () => false;
-        calls.length = 0;
-        await runHook('session-end', JSON.stringify({ session_id: 'thr', transcript_path: input.transcript_path, cwd: project, hook_event_name: 'SessionEnd', reason: 'other' }), deps);
-        expect(calls).toHaveLength(1);
-        expect(calls[0].init).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'other' }) });
-        expect(calls[0].init.headers).toMatchObject({ 'X-Agora-Client': 'codex-mcp-client' });
-
-        // A rollout whose scripts only name the tools (and list them) did not use the server: never bound
-        const unused = await codexSetup(transcript(codexScript('text(ALL_TOOLS.filter(t => /agora/.test(t.name)))', '[{"name":"mcp__agora__chat_wait"}]')));
-        await runHook('stop', JSON.stringify(unused.input), unused.deps);
-        await runHook('session-end', JSON.stringify({ ...unused.input, hook_event_name: 'SessionEnd', reason: 'other' }), unused.deps);
-        expect(unused.calls).toEqual([]);
-    });
-
     it('takes the CLI from --for, and an unknown one fails open', () => {
         expect(hookCliArg([])).toBe('claude');
         expect(hookCliArg(['--for', 'codex'])).toBe('codex');
@@ -694,12 +603,10 @@ describe('two sessions in one project', () => {
     }
 
     for (const cli of ['claude', 'codex'] as const) {
-        it(`${cli}: each agora-mcp keeps its own state file, so SessionEnd never ends the other session with its token`, async () => {
-            const { deps, input, calls } = await twoSessions(cli, b, false);
+        it(`${cli}: each agora-mcp keeps its own state file`, async () => {
+            await twoSessions(cli, b, false);
             expect((await readdir(hookStateDir(cli, stateDir))).filter(n => n.endsWith('.json')).sort())
                 .toEqual([`${projectKey(project)}.agora.1001.json`, `${projectKey(project)}.agora.1002.json`]);
-            await runHook('session-end', JSON.stringify({ ...input, hook_event_name: 'SessionEnd', reason: 'other' }), deps);
-            expect(calls).toEqual([]);
         });
 
         it(`${cli}: Stop lets the turn end when two live sessions here have different bots, not when they share one`, async () => {
@@ -714,20 +621,18 @@ describe('two sessions in one project', () => {
 
 describe('AGORA_HOOKS=off', () => {
     for (const cli of ['claude', 'codex'] as const) {
-        it(`${cli}: turns off SessionEnd as well as Stop (hosted runs), while AGORA_STOP_HOOK=off leaves SessionEnd on`, async () => {
+        it(`${cli}: turns the Stop hook off (hosted runs), as AGORA_STOP_HOOK=off does`, async () => {
             const call = cli === 'codex' ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
             const make = (env: NodeJS.ProcessEnv) => cli === 'codex'
                 ? codexSetup(transcript(call), { env, stub: { threads: [[]], threadState: 'open' } })
                 : setup(transcript(call), { env, stub: { threads: [[]], threadState: 'open' } });
-            const off = await make({ AGORA_HOOKS: 'OFF' });
-            expect(await decideStop(off.input, off.deps)).toBeUndefined();
-            await runHook('session-end', JSON.stringify({ ...off.input, hook_event_name: 'SessionEnd', reason: 'other' }), off.deps);
-            expect(off.calls).toEqual([]);
-
-            const stopOnly = await make({ AGORA_STOP_HOOK: 'off' });
-            expect(await decideStop(stopOnly.input, stopOnly.deps)).toBeUndefined();
-            await runHook('session-end', JSON.stringify({ ...stopOnly.input, hook_event_name: 'SessionEnd', reason: 'other' }), stopOnly.deps);
-            expect(stopOnly.calls.map(c => c.url)).toEqual(['http://agora.test/bots/@me/terminal-sessions/end']);
+            for (const env of [{ AGORA_HOOKS: 'OFF' }, { AGORA_STOP_HOOK: 'off' }]) {
+                const off = await make(env);
+                expect(await decideStop(off.input, off.deps)).toBeUndefined();
+                expect(off.calls).toEqual([]);
+            }
+            const on = await make({});
+            expect((await decideStop(on.input, on.deps))?.decision).toBe('block');
         });
     }
 });

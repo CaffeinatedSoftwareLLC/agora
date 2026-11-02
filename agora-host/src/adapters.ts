@@ -109,9 +109,8 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     } else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
     // A profile's stateDir can be the user's own CLI folder (Codex runs often share it), so the
     // user's agora-mcp hooks may be configured there. They must never act in a hosted run: Stop
-    // would keep a headless run going, and SessionEnd would find the user's own session's
-    // connection in the same folder and end that session (docs/claude-code-hooks.md). Codex
-    // hands hooks the environment it was started with. AGORA_HOOKS turns both off (0.8.1);
+    // would keep a headless run going (docs/claude-code-hooks.md). Codex hands hooks the
+    // environment it was started with. AGORA_HOOKS turns all agora-mcp hooks off (0.8.1);
     // AGORA_STOP_HOOK is what a 0.8.0 Stop hook knows.
     env.AGORA_HOOKS = 'off';
     env.AGORA_STOP_HOOK = 'off';

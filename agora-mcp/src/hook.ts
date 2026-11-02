@@ -1,8 +1,5 @@
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
-import {
-    findHookStates, hookStateDir, hookStateFile, isClaudeClient, isCodexClient, processRunning, readSessionBinding, removeSessionBinding,
-    writeSessionBinding, type HookCli, type HookState,
-} from './hook-state.js';
+import { findHookStates, hookStateDir, isClaudeClient, isCodexClient, processRunning, type HookCli, type HookState } from './hook-state.js';
 
 /**
  * Claude Code and Codex CLI hooks (`agora-mcp hook <stop|session-end> [--for codex]`,
@@ -11,8 +8,7 @@ import {
  *
  * - Stop: a session still engaged in an open Agora thread is sent back to `chat_wait` instead
  *   of ending its turn, so the thread doesn't go quiet.
- * - SessionEnd: tells Agora the session is gone, so its terminal session ends now instead of
- *   60 s after the socket drops (and at all on /clear, where agora-mcp keeps running).
+ * - SessionEnd: a no-op since 0.8.1 (sessionEnd below), kept so existing configs don't fail.
  *
  * Hooks get no MCP config, and agora-mcp never reads the CLI's own files: the agora-mcp server
  * the session started leaves its connection in our own folder (src/hook-state.ts), and the
@@ -27,13 +23,10 @@ export const STOP_MARKER = '[agora-stop-hook]';
 /** Tools that show which channel/thread the session works in. */
 const TARGET_TOOLS = new Set(['chat_wait', 'chat_send', 'thread_start', 'chat_read']);
 const STOP_BUDGET_MS = 8_000;
-const SESSION_END_BUDGET_MS = 2_500;
-const SESSION_END_REQUEST_MS = 1_200;
 const FETCH_TIMEOUT_MS = 3_000;
 const THREAD_PAGES = 5;
 /** Only the end of a long transcript is read: the latest Agora calls are what count. */
 export const TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024;
-const SESSION_END_REASONS = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'other']);
 
 export interface HookInput {
     session_id?: string;
@@ -75,7 +68,7 @@ function projectDirs(input: HookInput, deps: HookDeps): string[] {
 
 /**
  * The running agora-mcp servers for this session's project (src/hook-state.ts), started by
- * this CLI. Only the Stop hook looks: SessionEnd uses the session's binding.
+ * this CLI.
  */
 export function sessionStates(input: HookInput, deps: HookDeps): HookState[] {
     const ours = (deps.cli ?? 'claude') === 'codex' ? isCodexClient : isClaudeClient;
@@ -335,27 +328,14 @@ export function stopReason(channelName: string, thread: string, server: string):
         + '(The human can turn this off with AGORA_STOP_HOOK=off.)';
 }
 
-/** `AGORA_HOOKS=off` turns both hooks off (agora-host sets it for hosted runs); `AGORA_STOP_HOOK=off` only Stop. */
+/** `AGORA_HOOKS=off` turns all agora-mcp hooks off (agora-host sets it for hosted runs), like `AGORA_STOP_HOOK=off`. */
 function hooksOff(env: NodeJS.ProcessEnv): boolean {
-    return env.AGORA_HOOKS?.trim().toLowerCase() === 'off';
+    return env.AGORA_HOOKS?.trim().toLowerCase() === 'off' || env.AGORA_STOP_HOOK?.trim().toLowerCase() === 'off';
 }
 
 function cliDir(deps: HookDeps): string {
     const cli = deps.cli ?? 'claude';
     return deps.stateDir !== undefined ? hookStateDir(cli, deps.stateDir) : hookStateDir(cli);
-}
-
-/**
- * Record which agora-mcp this session uses, for its SessionEnd (src/hook-state.ts, session
- * bindings): only while the session is alive and its transcript used Agora, and only when
- * exactly one live agora-mcp of this CLI for the project matches the servers it used. Anything
- * ambiguous records nothing. Never throws.
- */
-async function bindSession(input: HookInput, used: HookState[], deps: HookDeps, log: (m: string) => void): Promise<void> {
-    if (!input.session_id || used.length !== 1) { if (used.length > 1) log(`${used.length} candidate agora-mcp servers; not binding`); return; }
-    const [s] = used;
-    await writeSessionBinding(input.session_id, { server: s.server, pid: s.pid, stateFile: hookStateFile(s), instance: s.instance, token: s.token,
-        client: s.client, boundAt: new Date((deps.now ?? Date.now)()).toISOString() }, cliDir(deps)).catch(() => log('could not write the session binding'));
 }
 
 /** The Stop hook's decision: a block, or undefined to let the turn end. */
@@ -371,9 +351,6 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     // Most sessions never use Agora: skip parsing
     const used = servers.filter(s => transcript.includes(reader.mentions(s.server)));
     if (used.length === 0) { log('no Agora activity in this session'); return undefined; }
-    // SessionEnd needs this even when the Stop hook itself is off
-    await bindSession(input, used, deps, log);
-    if (deps.env.AGORA_STOP_HOOK?.trim().toLowerCase() === 'off') { log('turned off'); return undefined; }
     // With more than one Agora server, the one the session used last
     let config: HookState | undefined;
     let state: TranscriptState | undefined;
@@ -411,32 +388,14 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     return { decision: 'block', reason: stopReason(channel.name, thread, config.server) };
 }
 
-/**
- * The SessionEnd hook: end the terminal session of this session's agora-mcp now. It acts only
- * for a session the Stop hook bound (bindSession), with the connection recorded then: which
- * state files exist now proves nothing (this session's may have aged out while another
- * session's is live in the same project). No binding: nothing, and the server's disconnect
- * grace period ends the session. The binding is removed once used.
- */
-export async function sessionEnd(input: HookInput, deps: HookDeps): Promise<void> {
-    const log = deps.log ?? (() => {});
-    if (hooksOff(deps.env)) { log('turned off'); return; }
-    if (!input.session_id) { log('no session_id'); return; }
-    const binding = readSessionBinding(input.session_id, cliDir(deps));
-    if (!binding) { log('no binding for this session; leaving it to the grace period'); return; }
-    const reason = input.reason && SESSION_END_REASONS.has(input.reason) ? input.reason : undefined;
-    try {
-        const res = await new Agora(binding, deps).send('POST', '/bots/@me/terminal-sessions/end', reason ? { reason } : {}, SESSION_END_REQUEST_MS);
-        log(`${binding.server}: terminal-sessions/end ${res.status}`);
-    } finally {
-        await removeSessionBinding(input.session_id, cliDir(deps));
-    }
-}
-
 /** Run a hook on its stdin text; returns what to print on stdout (nothing to allow). Never throws. */
 export async function runHook(event: string, stdin: string, deps: HookDeps): Promise<string | undefined> {
     const log = deps.log ?? (() => {});
-    const budget = deps.budgetMs ?? (event === 'stop' ? STOP_BUDGET_MS : SESSION_END_BUDGET_MS);
+    // No-op, kept so 0.8.0 configs don't fail: neither CLI gives a hook a positive identity
+    // for the session's agora-mcp, so it could end another session's; the server's 60 s socket
+    // grace ends terminal sessions anyway.
+    if (event === 'session-end') return undefined;
+    const budget = deps.budgetMs ?? STOP_BUDGET_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
         const input = JSON.parse(stdin) as HookInput;
@@ -446,7 +405,6 @@ export async function runHook(event: string, stdin: string, deps: HookDeps): Pro
                 const decision = await decideStop(input, deps);
                 return decision ? JSON.stringify(decision) : undefined;
             }
-            if (event === 'session-end') { await sessionEnd(input, deps); return undefined; }
             log(`unknown hook ${event}`);
             return undefined;
         })();

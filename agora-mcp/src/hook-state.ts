@@ -109,54 +109,6 @@ function writePrivate(path: string, directory: string, data: unknown): Promise<s
     return run;
 }
 
-// ─── Session bindings ───
-
-/**
- * Which agora-mcp a hook session belongs to. Counting state files can't prove that: a session's
- * own file can age out while another session's stays live in the same project. So the Stop hook,
- * which runs while the session is alive, records the session's connection under its
- * session_id once it can tell it unambiguously, and SessionEnd acts only on that record.
- */
-export interface SessionBinding {
-    server: string;
-    /** The agora-mcp the session was bound to, and its state file. */
-    pid: number;
-    stateFile: string;
-    instance: string;
-    token: string;
-    client: string;
-    boundAt: string;
-}
-
-export const SESSION_BINDING_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
-
-function sessionsDir(directory: string): string {
-    return join(directory, 'sessions');
-}
-
-/** `<cli hooks folder>/sessions/<sha256(session_id)>.json` */
-export function sessionBindingPath(sessionId: string, directory: string): string {
-    return join(sessionsDir(directory), `${createHash('sha256').update(sessionId).digest('hex')}.json`);
-}
-
-export function writeSessionBinding(sessionId: string, binding: SessionBinding, directory: string): Promise<string> {
-    return writePrivate(sessionBindingPath(sessionId, directory), sessionsDir(directory), binding);
-}
-
-/** The binding recorded for this session, if any (malformed: none). */
-export function readSessionBinding(sessionId: string, directory: string): SessionBinding | undefined {
-    try {
-        const b = JSON.parse(readFileSync(sessionBindingPath(sessionId, directory), 'utf8'));
-        const ok = !!b && typeof b.instance === 'string' && typeof b.token === 'string' && b.token.startsWith('bot_')
-            && typeof b.client === 'string' && typeof b.server === 'string' && SERVER_NAME.test(b.server);
-        return ok ? b as SessionBinding : undefined;
-    } catch { return undefined; }
-}
-
-export async function removeSessionBinding(sessionId: string, directory: string): Promise<void> {
-    await unlink(sessionBindingPath(sessionId, directory)).catch(() => {});
-}
-
 async function writeNow(data: unknown, directory: string, path: string): Promise<string> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
@@ -177,27 +129,16 @@ async function writeNow(data: unknown, directory: string, path: string): Promise
 }
 
 const TEMP_MAX_AGE_MS = 60_000;
-/** A gone server's file is only used by SessionEnd, for 5 minutes; with one file per process they pile up. */
+/** A gone server's file is no use to the hooks; with one file per process they would pile up. */
 const STALE_STATE_MAX_AGE_MS = 30 * 60_000;
 
 /**
  * At agora-mcp startup: remove temp files older than a minute (a crashed write) and state files
- * of servers that are gone and haven't refreshed them for 30 minutes, and session bindings older
- * than 7 days. All hold a token. Never throws.
+ * of servers that are gone and haven't refreshed them for 30 minutes. Both hold a token. Never throws.
  */
 export async function sweepHookStates(directory = hookStateDir(), opts: { now?: number; isRunning?: (pid: number) => boolean } = {}): Promise<void> {
     const now = opts.now ?? Date.now();
     const running = opts.isRunning ?? processRunning;
-    // Bindings: a SessionEnd can come long after the session's last Stop (Codex: after 30 idle minutes)
-    try {
-        for (const name of readdirSync(sessionsDir(directory))) {
-            const path = join(sessionsDir(directory), name);
-            try {
-                const age = now - statSync(path).mtimeMs;
-                if ((name.endsWith('.tmp') && age > TEMP_MAX_AGE_MS) || (name.endsWith('.json') && age > SESSION_BINDING_MAX_AGE_MS)) await unlink(path);
-            } catch { /* gone already */ }
-        }
-    } catch { /* no bindings */ }
     let names: string[];
     try { names = readdirSync(directory); } catch { return; }
     for (const name of names) {

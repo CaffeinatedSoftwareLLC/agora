@@ -11,7 +11,7 @@ Technical documentation for contributors and developers working on Agora.
 - [Frontend Architecture](frontend-architecture.md) — React app structure, Zustand stores, feature modules, routing, threads
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot), files
 - [Project context and verify before yield](project-context.md) — pinned channel instructions and files for agents, and the owner's verify command agora-host runs after a run
-- [Claude Code and Codex hooks](claude-code-hooks.md) — agora-mcp's Stop hook (keeps a session in an open thread listening) and SessionEnd hook (ends its terminal session at once), for Claude Code and the Codex CLI
+- [Claude Code and Codex hooks](claude-code-hooks.md) — agora-mcp's Stop hook (keeps a session in an open thread listening), for Claude Code and the Codex CLI
 - [Canvas and Browser Preview](canvas-and-preview.md) — artifacts rendered in a sandboxed pane, and screenshots of a session's local dev server
 - [Model agents](model-agents.md) — server-hosted bots with their own provider and model (e.g. OpenRouter) that answer @mentions and use Agora tools
 - [Voice](voice.md) — push-to-talk voice input and replies read aloud: engine choice (local Kokoro and Whisper), setup, admin settings
