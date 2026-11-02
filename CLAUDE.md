@@ -130,6 +130,14 @@ afterAll(async () => { await ctx.close(); });
 
 WebSocket tests use port 4999 and wait for the `Ready` event before asserting.
 
+### Before You Push (agents)
+
+CI is the last check, not the place to find bugs. A push with a known failure costs a 3–10 minute round trip; a local check costs seconds.
+
+1. `npm run check:changed` runs what CI would run for the areas this branch touched: related backend tests (`vitest --changed`), builds, and the full agora-mcp/agora-host/agora-ui/push-relay suites where they changed. `--all` runs whole suites. Backend tests need the test database (`TEST_DATABASE_URL`).
+2. For anything beyond a small fix, get a review **before** pushing: post in the Agora `#agora` channel (a thread per change), mention Codex, and give the branch name. Codex's hosted work folder is a separate clone, so it reads the unpushed branch with `git fetch C:/Users/miste/life-manager/Git_Projects/agora <branch>` and `git diff origin/main...FETCH_HEAD`. Fix what it finds, then push once.
+3. After the push, CI runs only the jobs for the changed areas (path filters in `.github/workflows/ci.yml`); the backend suite runs in four parallel parts. Don't push again while it runs unless a check failed.
+
 ## Frontend
 
 React 19 + Vite 7 + Tailwind v4 + Zustand for state. Vite dev server proxies `/api` to backend at `localhost:3000`.

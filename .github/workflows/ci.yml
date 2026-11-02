@@ -3,6 +3,14 @@ name: CI
 # Runs on every PR and on pushes to main. Fork PRs need manual approval before this
 # runs (repo setting), and the workflow token is read-only. No secrets are used here,
 # so nothing in this workflow is worth stealing.
+#
+# Built for agent PRs: each job runs only when its part of the repo changed, and the
+# backend suite is split across four machines. Agents run the same checks locally
+# first (`npm run check:changed`, see CLAUDE.md), so CI is the final check, not the loop.
+#
+# The four required checks (ruleset "protect-main") are the job names Backend, Frontend,
+# agora-host and agora-mcp. A job skipped because nothing it covers changed counts as
+# passing, so keep those four names as they are.
 
 on:
   pull_request:
@@ -17,10 +25,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend:
-    name: Backend (build + tests)
+  changes:
+    name: What changed
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      cross: ${{ steps.filter.outputs.cross }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      host: ${{ steps.filter.outputs.host }}
+      mcp: ${{ steps.filter.outputs.mcp }}
+      relay: ${{ steps.filter.outputs.relay }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # A change to this workflow runs everything.
+          filters: |
+            backend:
+              - 'src/**'
+              - 'test/**'
+              - 'scripts/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig*.json'
+              - 'vitest*.ts'
+              - '.github/workflows/ci.yml'
+            cross:
+              - 'agora-mcp/**'
+              - 'agora-host/**'
+            frontend:
+              - 'agora-ui/**'
+              - '.github/workflows/ci.yml'
+            host:
+              - 'agora-host/**'
+              - '.github/workflows/ci.yml'
+            mcp:
+              - 'agora-mcp/**'
+              - '.github/workflows/ci.yml'
+            relay:
+              - 'agora-push-relay/**'
+              - '.github/workflows/ci.yml'
+
+  # The full backend suite, split into four parts that run at the same time. Tests in one
+  # part still run one file at a time against that machine's own Postgres.
+  backend-shard:
+    name: Backend part ${{ matrix.shard }}/4
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:16-alpine
@@ -52,13 +114,72 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
+      # The type-check build runs once, in part 1.
+      - if: matrix.shard == 1
+        run: npm run build
       - run: npm ci --prefix agora-mcp
       - run: npm ci --prefix agora-host
-      - run: npm test
+      - run: npm test -- --shard=${{ matrix.shard }}/4
+
+  # When only agora-mcp or agora-host changed, run just the backend tests that import them.
+  backend-cross:
+    name: Backend tests that use agora-mcp or agora-host
+    needs: changes
+    if: needs.changes.outputs.backend != 'true' && needs.changes.outputs.cross == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: accord
+          POSTGRES_PASSWORD: accord
+          POSTGRES_DB: accord_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U accord -d accord_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgres://accord:accord@localhost:5432/accord_test
+      TEST_DATABASE_URL: postgres://accord:accord@localhost:5432/accord_test
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-secret-not-for-prod
+      AGORA_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix agora-mcp
+      - run: npm ci --prefix agora-host
+      - run: npx vitest run $(grep -rlE "from '(\.\./)+agora-(mcp|host)/" test | sort)
+
+  # The required check. Passes when every backend job that ran passed.
+  backend:
+    name: Backend (build + tests)
+    needs: [changes, backend-shard, backend-cross]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the backend jobs
+        run: |
+          for r in "${{ needs.changes.result }}" "${{ needs.backend-shard.result }}" "${{ needs.backend-cross.result }}"; do
+            case "$r" in success|skipped) ;; *) echo "::error::a backend job ended with: $r"; exit 1 ;; esac
+          done
 
   frontend:
     name: Frontend (lint + build + tests)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -81,6 +202,8 @@ jobs:
 
   agora-host:
     name: agora-host (build + tests)
+    needs: changes
+    if: needs.changes.outputs.host == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -99,14 +222,16 @@ jobs:
 
   agora-push-relay:
     name: agora-push-relay (type-check + tests)
+    needs: changes
+    if: needs.changes.outputs.relay == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
         working-directory: agora-push-relay
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -117,6 +242,8 @@ jobs:
 
   agora-mcp:
     name: agora-mcp (build + tests)
+    needs: changes
+    if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -131,15 +258,4 @@ jobs:
           cache-dependency-path: agora-mcp/package-lock.json
       - run: npm ci
       - run: npm run build
-      # TEMP diagnostic: one vitest process per file, 5 min cap, to find the file that hangs in CI.
-      - name: Tests (per file)
-        run: |
-          set +e; failed=0
-          for f in $(find test/unit test/integration test/live -name '*.test.ts' | sort); do
-            echo "::group::$f"
-            timeout -k 10 300 npx vitest run "$f"; rc=$?
-            echo "::endgroup::"
-            if [ $rc -eq 124 ]; then echo "::error::HANG 5min in $f"; failed=1
-            elif [ $rc -ne 0 ]; then echo "::error::FAIL rc=$rc in $f"; failed=1; fi
-          done
-          exit $failed
+      - run: npm test
