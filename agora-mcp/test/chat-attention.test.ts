@@ -72,6 +72,33 @@ it('a channel wait catches attention in a reply thread', async () => {
     expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
 });
 
+it('a channel wait returns a plain reply in a thread the bot participates in, labelled with that thread', async () => {
+    const f = fixture([{ ...message('001', 'B', 'Done. Please yield the review turn'), attention: 'participating' }]);
+    const text = await f.read(f.wait, {});
+    expect(text).toContain('#general › thread B:\n');
+    expect(text).toContain('(001)');
+    expect(f.api.getAttention).toHaveBeenCalledWith('C', expect.objectContaining({ participating: true }));
+    expect(f.api.updateAttentionCursor).toHaveBeenCalledWith('C', '001');
+    expect(f.api.updateThreadCursor).not.toHaveBeenCalled();
+});
+
+it('a thread wait asks for direct attention only', async () => {
+    const f = fixture([]);
+    await f.read(f.wait);
+    expect(f.api.getAttention).toHaveBeenCalledWith('C', expect.objectContaining({ participating: false }));
+});
+
+it('until=turn keeps waiting through a participating reply that yields to someone else, then returns it', async () => {
+    const f = fixture([{ ...message('001', 'B', '[AGORA/v1 MODE=plan STATE=TURN]\nOver to you\n[YIELD to=gemini]'), attention: 'participating' }]);
+    const text = await f.read(f.wait, { timeout: 5 });
+    expect(text).toContain('not your turn yet');
+    expect(text).toContain('(001)');
+    expect(f.api.getAttention.mock.calls.length).toBeGreaterThan(1);
+    // Later polls in the same wait page past what was already collected.
+    expect(f.api.getAttention).toHaveBeenLastCalledWith('C', expect.objectContaining({ after: '001' }));
+    expect(f.api.updateAttentionCursor).toHaveBeenCalledWith('C', '001');
+});
+
 it('until=turn returns an off-thread mention even when the message yields to someone else', async () => {
     const f = fixture([message('001', 'B', '[AGORA/v1 MODE=plan STATE=TURN]\n@claude FYI\n[YIELD to=gemini]')]);
     expect(await f.read(f.wait)).toContain('(001)');
@@ -158,14 +185,17 @@ it('the API client uses the dedicated feed/cursor endpoints and serializes pagin
     const fetch = vi.fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(new Response('[]', { status: 200 }))
         .mockResolvedValueOnce(new Response('[]', { status: 200 }))
+        .mockResolvedValueOnce(new Response('[]', { status: 200 }))
         .mockResolvedValueOnce(new Response('{"channelId":"C","lastReadId":"M"}', { status: 200 }));
     vi.stubGlobal('fetch', fetch);
     const api = new AgoraApi('http://agora.test', 'test-token');
     await api.getAttention('C', { after: 'M', limit: 5 });
+    await api.getAttention('C', { limit: 5, participating: false });
     await api.getAttentionCursors();
     await api.updateAttentionCursor('C', 'M');
     expect(fetch.mock.calls.map(([url, init]) => [String(url), init?.method, init?.body])).toEqual([
         ['http://agora.test/channels/C/attention?after=M&limit=5', 'GET', undefined],
+        ['http://agora.test/channels/C/attention?limit=5&participating=false', 'GET', undefined],
         ['http://agora.test/bots/@me/attention-cursors', 'GET', undefined],
         ['http://agora.test/bots/@me/attention-cursors/C', 'PUT', '{"lastReadId":"M"}'],
     ]);

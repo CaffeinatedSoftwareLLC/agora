@@ -492,7 +492,7 @@ export function registerTools(
 
     server.tool(
         'chat_wait',
-        'Wait for new messages in a channel or the selected thread, plus direct @mentions and valid protocol YIELDs to you anywhere in that same channel. Cross-thread notifications identify their source and do not advance that thread\'s read cursor. Blocks until a message needs you or the timeout expires. '
+        'Wait for new messages in a channel or the selected thread, plus direct @mentions and valid protocol YIELDs to you anywhere in that same channel. A channel wait (no `thread`) also returns new replies from others in threads you started or posted in. Cross-thread notifications identify their source and do not advance that thread\'s read cursor. Blocks until a message needs you or the timeout expires. '
         + 'Use this to "listen" for incoming messages: one long wait keeps the agent idle without spending tokens. '
         + `Timeouts up to ${MAX_WAIT_SECONDS}s are allowed, but your MCP client must allow a tool call that long (see the agora-collab skill's setup notes). ` + FORMAT_NOTE,
         {
@@ -527,7 +527,11 @@ export function registerTools(
             };
 
             const collected = new Map<string, Message>();
+            // Newest attention post collected (acknowledged on return), and whether any of
+            // them addressed this bot directly. Replies in threads it participates in are
+            // attention too, but under until=turn they wake it only like any other post.
             let attentionId: string | undefined;
+            let direct = false;
             function attentionFailure(err: unknown): never {
                 if (err instanceof AgoraApiError && err.status === 404) {
                     throw new Error('Server does not support channel attention. Upgrade the Agora server before using chat_wait.');
@@ -535,7 +539,7 @@ export function registerTools(
                 throw err;
             }
             try { await cursors.loadAttention(); } catch (err) { attentionFailure(err); }
-            const done = () => !!attentionId || (until === 'turn'
+            const done = () => direct || (until === 'turn'
                 ? [...collected.values()].some(m => wakesAgent(m, self))
                 : collected.size > 0);
             const formatted = () => {
@@ -563,11 +567,16 @@ export function registerTools(
                 while (Date.now() < deadline && !extra.signal.aborted) {
                     // Read attention before native cursors advance, so matching native
                     // posts remain eligible. A separate cursor never skips thread context.
-                    const attention = await api.getAttention(ch.id, { after: cursors.getAttentionCursor(ch.id), limit: 100 }).catch(attentionFailure);
+                    // A channel wait also gets replies in threads this bot started or posted in;
+                    // a thread wait reads its own thread natively and keeps direct attention only.
+                    const attention = await api.getAttention(ch.id, {
+                        after: attentionId ?? cursors.getAttentionCursor(ch.id), limit: 100, participating: !thread,
+                    }).catch(attentionFailure);
                     for (const m of attention) {
                         if (m.authorId === botInfo!.id || m.deletedAt) continue;
                         collected.set(m.id, m);
                         attentionId = m.id;
+                        if (m.attention !== 'participating') direct = true;
                     }
                     const { messages } = await readUnread(ch.id, thread, 200);
                     for (const m of messages) collected.set(m.id, { ...m, threadId: m.threadId ?? thread ?? null });

@@ -106,6 +106,52 @@ it('excludes bare/quoted YIELDs, unrelated posts, self-authored and deleted addr
     expect((await feed()).body).toEqual([]);
 });
 
+describe('replies in threads the bot started or posted in', () => {
+    let otherAuth: Record<string, string>;
+    beforeAll(async () => {
+        const token = await ctx.request.post(`/servers/${serverId}/bots/${otherBotId}/tokens`).set(owner.auth).send({});
+        expect(token.status).toBe(201); otherAuth = { Authorization: `Bot ${token.body.token}` };
+    });
+
+    it('returns other authors\' plain replies with their thread, without advancing thread cursors', async () => {
+        const started = (await post('Please review my branch', undefined, auth)).id;
+        await post('I can help here', b, auth);
+        const plain = await post('Done. Please yield the review turn', started, otherAuth);
+        const joined = await post('Owner follow-up in a thread the bot joined', b);
+        await post('Reply in a thread the bot never posted in', a, otherAuth);
+        await post('The bot\'s own reply', started, auth);
+        await post('A top-level post', undefined, otherAuth);
+        const res = await feed(); expect(res.status).toBe(200);
+        expect(res.body.map((m: any) => m.id)).toEqual([plain.id, joined.id]);
+        expect(res.body[0]).toMatchObject({ threadId: started, authorId: otherBotId, attention: 'participating' });
+        expect(res.body[1]).toMatchObject({ threadId: b, attention: 'participating' });
+        expect((await ack(joined.id)).status).toBe(200);
+        expect((await feed()).body).toEqual([]);
+        // The thread itself is still unread: a thread-level read shows the reply.
+        expect((await ctx.request.get('/bots/@me/thread-cursors').set(auth)).body.some((c: any) => c.threadId === started)).toBe(false);
+        const replies = await ctx.request.get(`/channels/${channelId}/messages/${started}/replies`).set(auth);
+        expect(replies.body.map((m: any) => m.id)).toContain(plain.id);
+    });
+
+    it('marks direct attention as direct, and participating=false keeps only direct attention', async () => {
+        const started = (await post('Thread of my own', undefined, auth)).id;
+        const plain = await post('Plain reply', started, otherAuth);
+        const mentioned = await post('@AttCodex look here', started, otherAuth);
+        const all = await feed();
+        expect(all.body.map((m: any) => [m.id, m.attention])).toEqual([[plain.id, 'participating'], [mentioned.id, 'direct']]);
+        expect((await feed('?participating=false')).body.map((m: any) => m.id)).toEqual([mentioned.id]);
+        expect((await ack(plain.id)).status).toBe(200);
+    });
+
+    it('skips replies already read through the thread cursor', async () => {
+        const started = (await post('Another thread', undefined, auth)).id;
+        const read = await post('Read already', started, otherAuth);
+        const fresh = await post('Not read yet', started, otherAuth);
+        expect((await ctx.request.put(`/bots/@me/thread-cursors/${started}`).set(auth).send({ lastReadId: read.id })).status).toBe(200);
+        expect((await feed()).body.map((m: any) => m.id)).toEqual([fresh.id]);
+    });
+});
+
 it('one post matching both a mention and a YIELD appears once', async () => {
     const msg = await post('[AGORA/v1 MODE=fix STATE=TURN]\n@AttCodex please review\n[YIELD to=AttCodex]', b);
     expect((await feed()).body.map((m: any) => m.id)).toEqual([msg.id]);

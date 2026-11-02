@@ -46,15 +46,25 @@ async function envelopes(db: PoolClient, channelId: string, rows: any[]) {
     }));
 }
 
+/**
+ * SQL predicate: reply `m` is in a thread bot `$1` started or has posted in.
+ * Both lookups use indexed columns (primary key, `thread_id`).
+ */
+const PARTICIPATING_REPLY = `m.thread_id IS NOT NULL AND (
+    EXISTS (SELECT 1 FROM messages p WHERE p.id = m.thread_id AND p.author_id = $1)
+    OR EXISTS (SELECT 1 FROM messages r WHERE r.thread_id = m.thread_id AND r.author_id = $1))`;
+
 export async function botAttentionRoutes(app: FastifyInstance) {
     app.get('/channels/:id/attention', {
         schema: { querystring: { type: 'object', additionalProperties: false, properties: {
             after: ulid, limit: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
+            // false: only direct attention (thread-level waits watch their own thread natively)
+            participating: { type: 'boolean', default: true },
         } } },
     }, async (request, reply) => {
         const { id: channelId } = request.params as { id: string };
         if (!await botAccess(request, reply, channelId)) return reply;
-        const { after, limit = 100 } = request.query as { after?: string; limit?: number };
+        const { after, limit = 100, participating = true } = request.query as { after?: string; limit?: number; participating?: boolean };
         const db = request.dbClient!;
         // A newly upgraded client starts watching now, rather than replaying days
         // of old mentions. An explicit `after` opts into an earlier starting point.
@@ -71,22 +81,30 @@ export async function botAttentionRoutes(app: FastifyInstance) {
             SELECT GREATEST(COALESCE($3::CHAR(26), ''::CHAR(26)), COALESCE((
                 SELECT a.last_read_id FROM bot_attention_cursors a WHERE a.bot_id = $1 AND a.channel_id = $2
             ), ''::CHAR(26))) AS id
-        ), addressed AS (
-            SELECT m.id FROM message_mentions mm JOIN messages m ON m.id = mm.message_id, cutoff
+        ), candidates AS (
+            SELECT m.id, true AS direct FROM message_mentions mm JOIN messages m ON m.id = mm.message_id, cutoff
             WHERE mm.user_id = $1 AND m.channel_id = $2 AND m.id > cutoff.id
-            UNION
-            SELECT m.id FROM messages m JOIN users self ON self.id = $1, cutoff
+            UNION ALL
+            SELECT m.id, true FROM messages m JOIN users self ON self.id = $1, cutoff
             WHERE m.channel_id = $2 AND m.protocol IS NOT NULL AND m.id > cutoff.id
               AND lower(m.protocol->>'yieldTo') = lower(self.username)
+            UNION ALL
+            -- Plain replies in threads the bot started or posted in: an agent waiting
+            -- on the channel would otherwise miss an answer that doesn't @mention it.
+            SELECT m.id, false FROM messages m, cutoff
+            WHERE $5 AND m.channel_id = $2 AND m.id > cutoff.id AND ${PARTICIPATING_REPLY}
+        ), addressed AS (
+            SELECT id, bool_or(direct) AS direct FROM candidates GROUP BY id
         )
-        SELECT m.*, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url
+        SELECT m.*, a.direct AS attention_direct, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url
         FROM addressed a JOIN messages m ON m.id = a.id LEFT JOIN users u ON u.id = m.author_id
         LEFT JOIN bot_read_cursors rc ON rc.bot_id = $1 AND rc.channel_id = $2
         LEFT JOIN bot_thread_cursors tc ON tc.bot_id = $1 AND tc.thread_id = m.thread_id
         WHERE m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $1
           AND m.id > COALESCE(CASE WHEN m.thread_id IS NULL THEN rc.last_read_id ELSE tc.last_read_id END, ''::CHAR(26))
-        ORDER BY m.id ASC LIMIT $4`, [request.userId, channelId, after ?? null, limit]);
-        return reply.send(await envelopes(db, channelId, rows.rows));
+        ORDER BY m.id ASC LIMIT $4`, [request.userId, channelId, after ?? null, limit, participating]);
+        const sent = await envelopes(db, channelId, rows.rows);
+        return reply.send(sent.map((m, i) => ({ ...m, attention: rows.rows[i].attention_direct ? 'direct' : 'participating' })));
     });
 
     app.get('/bots/@me/attention-cursors', async (request, reply) => {
@@ -106,7 +124,8 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         const addressed = await db.query(`SELECT 1 FROM messages m JOIN users self ON self.id = $1
             WHERE m.id = $3 AND m.channel_id = $2 AND m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $1
               AND (EXISTS (SELECT 1 FROM message_mentions mm WHERE mm.message_id = m.id AND mm.user_id = $1)
-                OR (m.protocol IS NOT NULL AND lower(m.protocol->>'yieldTo') = lower(self.username)))`,
+                OR (m.protocol IS NOT NULL AND lower(m.protocol->>'yieldTo') = lower(self.username))
+                OR (${PARTICIPATING_REPLY}))`,
         [request.userId, channelId, lastReadId]);
         if (!addressed.rows.length) return reply.code(400).send({ error: 'Attention message not found in this channel' });
         const saved = await db.query(`INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id)
