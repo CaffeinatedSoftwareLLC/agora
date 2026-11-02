@@ -54,6 +54,8 @@ jobs:
               - 'package-lock.json'
               - 'tsconfig*.json'
               - 'vitest*.ts'
+              # test/unit/nginx-routes reads it
+              - 'agora-ui/nginx.conf'
               - '.github/workflows/ci.yml'
             cross:
               - 'agora-mcp/**'

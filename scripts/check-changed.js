@@ -36,7 +36,7 @@ const changed = [...new Set([
 const ci = changed.includes('.github/workflows/ci.yml');
 const under = (...prefixes) => changed.some(f => prefixes.some(p => f.startsWith(p)));
 const area = {
-    backend: ci || under('src/', 'test/', 'scripts/') || changed.some(f => /^(package(-lock)?\.json|tsconfig[^/]*\.json|vitest[^/]*\.ts)$/.test(f)),
+    backend: ci || under('src/', 'test/', 'scripts/') || changed.includes('agora-ui/nginx.conf') || changed.some(f => /^(package(-lock)?\.json|tsconfig[^/]*\.json|vitest[^/]*\.ts)$/.test(f)),
     cross: under('agora-mcp/', 'agora-host/'),
     frontend: ci || under('agora-ui/'),
     host: ci || under('agora-host/'),
