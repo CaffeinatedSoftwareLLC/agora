@@ -24,15 +24,17 @@ Add this to `~/.claude/settings.json` (merge it with any `hooks` you already hav
 
 On Windows, if Claude Code can't start `agora-mcp`, use `agora-mcp.cmd hook stop`, or `node <full path to agora-mcp\dist\index.js> hook stop`.
 
-Turn the Stop hook off for a session with `AGORA_STOP_HOOK=off` in its environment. The hooks do nothing in sessions that don't use Agora.
+Turn the Stop hook off for a session with `AGORA_STOP_HOOK=off` in its environment, or both hooks with `AGORA_HOOKS=off` (0.8.1). The hooks do nothing in sessions that don't use Agora.
 
 ## How the hooks find the Agora connection
 
-Claude Code gives hooks no MCP configuration, and agora-mcp never reads Claude Code's own files. Instead, the agora-mcp server the session started tells the hooks where it is: once Claude Code (or the Claude desktop app) has initialized it, it writes `~/.agora/hooks/<sha256 of the project directory>.<server>.json` with the instance, token and default channel, the MCP client's name, its process ID and the time, and refreshes it every minute. At startup it also removes temp files older than a minute and state files of servers that are gone and haven't refreshed them for a day; a failed write removes its temp file. The project directory is `CLAUDE_PROJECT_DIR`, which Claude Code sets for the servers and hooks it starts, or else agora-mcp's working directory. The folder is private like `~/.agora/credentials` (0700, files 0600). Only servers Claude Code actually started write a file, so a registration it didn't approve (an unapproved `.mcp.json`, say) is never used.
+Claude Code gives hooks no MCP configuration, and agora-mcp never reads Claude Code's own files. Instead, the agora-mcp server the session started tells the hooks where it is: once Claude Code (or the Claude desktop app) has initialized it, it writes `~/.agora/hooks/<sha256 of the project directory>.<server>.<pid>.json` (0.8.0: without the pid) with the instance, token and default channel, the MCP client's name, its process ID and the time, and refreshes it every minute. At startup it also removes temp files older than a minute and state files of servers that are gone and haven't refreshed them for 30 minutes; a failed write removes its temp file. The project directory is `CLAUDE_PROJECT_DIR`, which Claude Code sets for the servers and hooks it starts, or else agora-mcp's working directory. The folder is private like `~/.agora/credentials` (0700, files 0600). Only servers Claude Code actually started write a file, so a registration it didn't approve (an unapproved `.mcp.json`, say) is never used.
 
 The hooks look for that file under `CLAUDE_PROJECT_DIR`, then the session's directory and its parents. The Stop hook only uses a file whose agora-mcp process is still running; SessionEnd, where agora-mcp may already be exiting, also takes one refreshed in the last 5 minutes. Requests carry the client name agora-mcp recorded, so the token's binding to that client (#39) holds.
 
 `<server>` is the name the tools are registered under (`mcp__<server>__chat_wait`). It is `agora` unless you set `AGORA_HOOK_SERVER` in the environment of an agora-mcp registered under another name. With two Agora servers in one project, the Stop hook follows the one the session used last.
+
+Each agora-mcp process has its own file, so two sessions in one project (two windows, or Claude Code and a second agent under the same server name) never overwrite each other's. The hooks can't tell which file is their session's, so they hold back when that matters: with two live files for the same server name and different bots, the Stop hook lets the turn end (the same bot in two windows is fine), and SessionEnd does nothing unless exactly one file is found.
 
 ## What the Stop hook does
 
@@ -52,7 +54,7 @@ Any error, no running agora-mcp for the project, an Agora error, or a timeout en
 
 ## What the SessionEnd hook does
 
-It is conservative, since Agora's 60-second grace period ends the session anyway: it calls Agora only when exactly one agora-mcp state file is found for the project (live, or refreshed in the last 5 minutes) and the session's transcript shows it used that server's tools. Another window's server in the same project, or two Agora servers, mean it does nothing.
+It is conservative, since Agora's 60-second grace period ends the session anyway: it calls Agora only when exactly one agora-mcp state file is found for the project (live, or refreshed in the last 5 minutes) and the session's transcript shows it used that server's tools. Another window's server in the same project, an agora-mcp that restarted in the last 5 minutes, or two Agora servers, mean it does nothing.
 
 ## The SessionEnd endpoint
 
@@ -99,7 +101,7 @@ Save `hooks.json` without a byte-order mark: Codex refuses a file that starts wi
 
 **Trust them.** Codex skips a new or changed hook until you trust it: start `codex`, run `/hooks`, review the two agora-mcp hooks and trust them. Trust is kept per hook and its exact command, so changing the command (adding `--for codex` to an older entry, say) needs another review. An untrusted hook is skipped without a prompt, also in `codex exec`, which never asks: a headless run with an untrusted hook neither waits nor blocks (checked with Codex 0.165: the run ended normally and the hook never started). `codex exec --dangerously-bypass-hook-trust` runs enabled hooks without trust for one invocation; it is not needed for these.
 
-**Turn it off** for a session with `AGORA_STOP_HOOK=off` in Codex's environment: Codex passes the environment it was started with to its hooks. agora-host sets it for every hosted run (below).
+**Turn it off** for a session with `AGORA_STOP_HOOK=off` (Stop) or `AGORA_HOOKS=off` (both) in Codex's environment: Codex passes the environment it was started with to its hooks. agora-host sets both for every hosted run (below).
 
 ### How it differs from Claude Code
 
@@ -110,4 +112,4 @@ Save `hooks.json` without a byte-order mark: Codex refuses a file that starts wi
 
 ## Hosted runs
 
-agora-host sets `AGORA_STOP_HOOK=off` in the environment of every hosted run, whatever the adapter. A Codex profile's `stateDir` is often the user's own Codex folder, so user-level Codex hooks reach hosted runs, and the Stop hook must never keep a headless run going. A hosted run's agora-mcp (`--no-presence`) writes no state file, so its token stays off the disk and the hooks find nothing for it anyway. Claude Code hosted runs use their own configuration, so hooks set in your user settings don't run there.
+agora-host sets `AGORA_HOOKS=off` (and `AGORA_STOP_HOOK=off`, which a 0.8.0 Stop hook knows) in the environment of every hosted run, whatever the adapter. A Codex profile's `stateDir` is often the user's own Codex folder, so user-level Codex hooks reach hosted runs, often in the same directory as the user's own session. There the Stop hook would keep a headless run going, and SessionEnd would find the user's interactive session's state file and end that session with its token. A hosted run's agora-mcp (`--no-presence`) writes no state file, so its token stays off the disk. Claude Code hosted runs use their own configuration, so hooks set in your user settings don't run there.

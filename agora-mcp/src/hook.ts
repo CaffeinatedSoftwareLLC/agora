@@ -340,10 +340,15 @@ export function stopReason(channelName: string, thread: string, server: string):
         + '(The human can turn this off with AGORA_STOP_HOOK=off.)';
 }
 
+/** `AGORA_HOOKS=off` turns both hooks off (agora-host sets it for hosted runs); `AGORA_STOP_HOOK=off` only Stop. */
+function hooksOff(env: NodeJS.ProcessEnv): boolean {
+    return env.AGORA_HOOKS?.trim().toLowerCase() === 'off';
+}
+
 /** The Stop hook's decision: a block, or undefined to let the turn end. */
 export async function decideStop(input: HookInput, deps: HookDeps): Promise<StopDecision | undefined> {
     const log = deps.log ?? (() => {});
-    if (deps.env.AGORA_STOP_HOOK?.trim().toLowerCase() === 'off') return undefined;
+    if (hooksOff(deps.env) || deps.env.AGORA_STOP_HOOK?.trim().toLowerCase() === 'off') { log('turned off'); return undefined; }
     if (!input.transcript_path) return undefined;
     const servers = sessionStates(input, deps, 'stop');
     if (servers.length === 0) { log('no running agora-mcp for this project'); return undefined; }
@@ -356,11 +361,18 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     // With more than one Agora server, the one the session used last
     let config: HookState | undefined;
     let state: TranscriptState | undefined;
-    for (const server of used) {
-        const parsed = reader.parse(transcript, server.server);
-        if (parsed.target && (!state || parsed.targetLine > state.targetLine)) { state = parsed; config = server; }
+    for (const name of new Set(used.map(s => s.server))) {
+        const parsed = reader.parse(transcript, name);
+        if (parsed.target && (!state || parsed.targetLine > state.targetLine)) { state = parsed; config = used.find(s => s.server === name); }
     }
     if (!state?.target || !config) { log('no Agora activity in this session'); return undefined; }
+    // Each agora-mcp process has its own state file. Two live ones under this server name with
+    // different bots (two sessions in this project): which is this session's can't be told, and
+    // the wrong token would act as the other bot, so the turn ends. The same bot is fine.
+    const chosen = config.server;
+    if (new Set(used.filter(s => s.server === chosen).map(s => s.token)).size > 1) {
+        log(`more than one bot for ${chosen} in this project; leaving the turn alone`); return undefined;
+    }
     // Only an open thread holds the session: in a channel there is nothing to close, so a
     // session (or a `claude -p` run) that once posted there would never be let go
     if (!state.target.thread) { log('no thread'); return undefined; }
@@ -386,11 +398,13 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
 /**
  * The SessionEnd hook: end the terminal session of this session's agora-mcp now. Conservative,
  * since the server's disconnect grace period covers anything skipped: only with exactly one
- * candidate server for the project (another window's file could be the one found), and only
- * if this session's transcript shows it used that server.
+ * candidate state file for the project, live or just exited (each agora-mcp process has its
+ * own, so a second session there makes two), and only if this session's transcript shows it
+ * used that server.
  */
 export async function sessionEnd(input: HookInput, deps: HookDeps): Promise<void> {
     const log = deps.log ?? (() => {});
+    if (hooksOff(deps.env)) { log('turned off'); return; }
     const servers = sessionStates(input, deps, 'session-end');
     if (servers.length !== 1) { log(`${servers.length} agora-mcp state files for this project; leaving it to the grace period`); return; }
     const [server] = servers;

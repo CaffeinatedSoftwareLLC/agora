@@ -80,8 +80,8 @@ describe('child environment', () => {
         const p = { ...config().profiles.builder, auth: 'api_key' as const, apiKeyEnv: 'CODEX_API_KEY' };
         const win = process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {};
         const env = childEnv(p, { Path: '/p', CODEX_API_KEY: 'k1', OPENAI_API_KEY: 'k2', ANTHROPIC_API_KEY: 'k3' });
-        expect(env).toEqual({ Path: '/p', CODEX_HOME: p.stateDir, AGORA_STOP_HOOK: 'off', CODEX_API_KEY: 'k1', ...win });
-        expect(childEnv(config().profiles.builder, { Path: '/p', CODEX_API_KEY: 'k1' })).toEqual({ Path: '/p', CODEX_HOME: p.stateDir, AGORA_STOP_HOOK: 'off', ...win });
+        expect(env).toEqual({ Path: '/p', CODEX_HOME: p.stateDir, AGORA_HOOKS: 'off', AGORA_STOP_HOOK: 'off', CODEX_API_KEY: 'k1', ...win });
+        expect(childEnv(config().profiles.builder, { Path: '/p', CODEX_API_KEY: 'k1' })).toEqual({ Path: '/p', CODEX_HOME: p.stateDir, AGORA_HOOKS: 'off', AGORA_STOP_HOOK: 'off', ...win });
     });
 
     it('never lets a bare program name resolve in the working directory', () => {

@@ -99,10 +99,10 @@ describe('the state file agora-mcp leaves for the hooks', () => {
 
     it('is written atomically under the project key, private, and refreshed in place', async () => {
         const path = await writeHookState(serverState(), stateDir);
-        expect(path).toBe(join(stateDir, `${projectKey(project)}.agora.json`));
+        expect(path).toBe(join(stateDir, `${projectKey(project)}.agora.4242.json`));
         expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(serverState({ updatedAt: expect.any(String) }));
         await writeHookState(serverState({ token: 'bot_b.secret' }), stateDir);
-        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.json`]);
+        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.4242.json`]);
         expect(JSON.parse(await readFile(path, 'utf8')).token).toBe('bot_b.secret');
         if (process.platform !== 'win32') {
             expect((await stat(stateDir)).mode & 0o777).toBe(0o700);
@@ -389,7 +389,7 @@ describe('token-bearing leftovers in the hooks folder', () => {
         await expect(writeHookState({ ...serverState(), pid: 1n } as unknown as HookState, stateDir)).rejects.toThrow();
         expect((await readdir(stateDir)).filter(n => n.endsWith('.tmp'))).toEqual([]);
         // The rename fails: a folder sits where the state file goes
-        await mkdir(join(stateDir, `${projectKey(project)}.agora.json`, 'x'), { recursive: true });
+        await mkdir(join(stateDir, `${projectKey(project)}.agora.4242.json`, 'x'), { recursive: true });
         await expect(writeHookState(serverState(), stateDir)).rejects.toThrow();
         expect((await readdir(stateDir)).filter(n => n.endsWith('.tmp'))).toEqual([]);
     });
@@ -397,10 +397,10 @@ describe('token-bearing leftovers in the hooks folder', () => {
     it('lets overlapping writes (the first write and a refresh) both succeed', async () => {
         const results = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => writeHookState(serverState({ token: `bot_${i}.secret` }), stateDir)));
         expect(results.map(r => r.status)).toEqual(Array(8).fill('fulfilled'));
-        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.json`]);
+        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.4242.json`]);
     });
 
-    it('sweeps old temp files and day-old state files of servers that are gone', async () => {
+    it('sweeps old temp files and half-hour-old state files of servers that are gone', async () => {
         await mkdir(stateDir, { recursive: true });
         const ago = async (name: string, content: string, ms: number) => {
             await writeFile(join(stateDir, name), content);
@@ -410,8 +410,8 @@ describe('token-bearing leftovers in the hooks folder', () => {
         const state = (pid: number) => JSON.stringify({ ...serverState(), pid });
         await ago('a.agora.json.1.tmp', 'x', 5 * 60_000);
         await ago('b.agora.json.2.tmp', 'x', 1_000);
-        await ago('dead-old.agora.json', state(111), 2 * 24 * 60 * 60_000);
-        await ago('dead-new.agora.json', state(111), 60 * 60_000);
+        await ago('dead-old.agora.json', state(111), 40 * 60_000);
+        await ago('dead-new.agora.json', state(111), 10 * 60_000);
         await ago('live-old.agora.json', state(222), 2 * 24 * 60 * 60_000);
         await ago('broken-old.agora.json', '{nope', 2 * 24 * 60 * 60_000);
         await sweepHookStates(stateDir, { isRunning: pid => pid === 222 });
@@ -614,4 +614,57 @@ describe('Codex CLI', () => {
         expect(hookCliArg(['--for', 'gemini'])).toBeNull();
         expect(hookCliArg(['--for'])).toBeNull();
     });
+});
+
+describe('two sessions in one project', () => {
+    // Session A (this one) and session B, another window in the same folder with its own bot
+    const a = { pid: 1001, token: 'bot_a.secret' };
+    const b = { pid: 1002, token: 'bot_b.secret' };
+    const lines = (cli: 'claude' | 'codex') => cli === 'codex'
+        ? transcript(codexCall('chat_send', { channel: 'general', thread: THREAD, message: 'x' }, { text: 'ok' }))
+        : transcript(toolUse('chat_send', { channel: 'general', thread: THREAD, message: 'x' }, { text: 'ok' }));
+    async function twoSessions(cli: 'claude' | 'codex', second: Partial<HookState> = b, running = true) {
+        const ctx = cli === 'codex' ? await codexSetup(lines(cli), { state: a, running, stub: { threads: [[]], threadState: 'open' } })
+            : await setup(lines(cli), { state: a, running, stub: { threads: [[]], threadState: 'open' } });
+        await writeHookState((cli === 'codex' ? codexState : serverState)(second), hookStateDir(cli, stateDir));
+        return ctx;
+    }
+
+    for (const cli of ['claude', 'codex'] as const) {
+        it(`${cli}: each agora-mcp keeps its own state file, so SessionEnd never ends the other session with its token`, async () => {
+            const { deps, input, calls } = await twoSessions(cli, b, false);
+            expect((await readdir(hookStateDir(cli, stateDir))).filter(n => n.endsWith('.json')).sort())
+                .toEqual([`${projectKey(project)}.agora.1001.json`, `${projectKey(project)}.agora.1002.json`]);
+            await runHook('session-end', JSON.stringify({ ...input, hook_event_name: 'SessionEnd', reason: 'other' }), deps);
+            expect(calls).toEqual([]);
+        });
+
+        it(`${cli}: Stop lets the turn end when two live sessions here have different bots, not when they share one`, async () => {
+            const different = await twoSessions(cli);
+            expect(await decideStop(different.input, different.deps)).toBeUndefined();
+            expect(different.calls).toEqual([]);
+            const same = await twoSessions(cli, { pid: 1002, token: a.token });
+            expect((await decideStop(same.input, same.deps))?.decision).toBe('block');
+        });
+    }
+});
+
+describe('AGORA_HOOKS=off', () => {
+    for (const cli of ['claude', 'codex'] as const) {
+        it(`${cli}: turns off SessionEnd as well as Stop (hosted runs), while AGORA_STOP_HOOK=off leaves SessionEnd on`, async () => {
+            const call = cli === 'codex' ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
+            const make = (env: NodeJS.ProcessEnv) => cli === 'codex'
+                ? codexSetup(transcript(call), { env, stub: { threads: [[]], threadState: 'open' } })
+                : setup(transcript(call), { env, stub: { threads: [[]], threadState: 'open' } });
+            const off = await make({ AGORA_HOOKS: 'OFF' });
+            expect(await decideStop(off.input, off.deps)).toBeUndefined();
+            await runHook('session-end', JSON.stringify({ ...off.input, hook_event_name: 'SessionEnd', reason: 'other' }), off.deps);
+            expect(off.calls).toEqual([]);
+
+            const stopOnly = await make({ AGORA_STOP_HOOK: 'off' });
+            expect(await decideStop(stopOnly.input, stopOnly.deps)).toBeUndefined();
+            await runHook('session-end', JSON.stringify({ ...stopOnly.input, hook_event_name: 'SessionEnd', reason: 'other' }), stopOnly.deps);
+            expect(stopOnly.calls.map(c => c.url)).toEqual(['http://agora.test/bots/@me/terminal-sessions/end']);
+        });
+    }
 });

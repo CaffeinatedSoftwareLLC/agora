@@ -9,8 +9,8 @@ import { join, resolve } from 'node:path';
  *
  * Hooks get no MCP configuration, and agora-mcp never reads the CLIs' own files. So the
  * running MCP server says where it is: once it has its config it writes
- * `~/.agora/hooks/<sha256(project dir)>.<server>.json` (Claude Code) or
- * `~/.agora/hooks/codex/<sha256(project dir)>.<server>.json` (Codex CLI) with the instance,
+ * `~/.agora/hooks/<sha256(project dir)>.<server>.<pid>.json` (Claude Code) or
+ * `~/.agora/hooks/codex/<sha256(project dir)>.<server>.<pid>.json` (Codex CLI) with the instance,
  * token and default channel, its pid, and when it last refreshed the file. Only servers the
  * CLI actually started (registrations the user approved) write one. The project directory is
  * CLAUDE_PROJECT_DIR for Claude Code (it sets it for the processes it starts), else the
@@ -84,12 +84,15 @@ export function hookServerName(env: NodeJS.ProcessEnv): string | undefined {
 const pending = new Map<string, Promise<unknown>>();
 
 /**
- * Write (or refresh) the state file atomically: temp file, then rename. Writes of one file
- * from this process run one after another: the first write and a refresh can overlap, and
- * they would share the temp file (and on Windows, two renames onto one file can fail).
+ * Write (or refresh) the state file atomically: temp file, then rename. Each agora-mcp process
+ * has its own file (`<key>.<server>.<pid>.json`): two sessions in one project with the same
+ * server name must not overwrite each other's, or a hook could act with the other session's
+ * token. Writes of one file from this process run one after another: the first write and a
+ * refresh can overlap, and they would share the temp file (and on Windows, two renames onto
+ * one file can fail).
  */
 export function writeHookState(state: HookState, directory = hookStateDir()): Promise<string> {
-    const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.json`);
+    const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.${state.pid}.json`);
     const run = (pending.get(path) ?? Promise.resolve()).catch(() => {}).then(() => writeNow(state, directory, path));
     pending.set(path, run);
     const done = () => { if (pending.get(path) === run) pending.delete(path); };
@@ -117,11 +120,12 @@ async function writeNow(state: HookState, directory: string, path: string): Prom
 }
 
 const TEMP_MAX_AGE_MS = 60_000;
-const STALE_STATE_MAX_AGE_MS = 24 * 60 * 60_000;
+/** A gone server's file is only used by SessionEnd, for 5 minutes; with one file per process they pile up. */
+const STALE_STATE_MAX_AGE_MS = 30 * 60_000;
 
 /**
  * At agora-mcp startup: remove temp files older than a minute (a crashed write) and state files
- * of servers that are gone and haven't refreshed them for a day. Both hold a token. Never throws.
+ * of servers that are gone and haven't refreshed them for 30 minutes. Both hold a token. Never throws.
  */
 export async function sweepHookStates(directory = hookStateDir(), opts: { now?: number; isRunning?: (pid: number) => boolean } = {}): Promise<void> {
     const now = opts.now ?? Date.now();

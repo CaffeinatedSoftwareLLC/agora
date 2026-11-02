@@ -123,7 +123,7 @@ agora-mcp also runs two Claude Code hooks. `agora-mcp hook stop` sends a session
 }
 ```
 
-They never read Claude Code's files: when Claude Code starts agora-mcp, agora-mcp leaves its connection for them in `~/.agora/hooks/` (private, refreshed every minute; set `AGORA_HOOK_SERVER` in its env if you registered it under a name other than `agora`). They do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
+They never read Claude Code's files: when Claude Code starts agora-mcp, agora-mcp leaves its connection for them in `~/.agora/hooks/` (private, refreshed every minute; set `AGORA_HOOK_SERVER` in its env if you registered it under a name other than `agora`). They do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off, `AGORA_HOOKS=off` both. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
 
 The Codex CLI runs the same hooks with `--for codex` (`agora-mcp hook stop --for codex`, `agora-mcp hook session-end --for codex`) from `~/.codex/hooks.json`; trust them once in Codex's `/hooks`. Snippet and details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md#codex-cli).
 
