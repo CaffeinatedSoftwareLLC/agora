@@ -5,16 +5,20 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Where the Claude Code hooks (src/hook.ts) find this agent's Agora connection.
+ * Where the agent hooks (src/hook.ts) find this agent's Agora connection.
  *
  * Hooks get no MCP configuration, and agora-mcp never reads the CLIs' own files. So the
  * running MCP server says where it is: once it has its config it writes
- * `~/.agora/hooks/<sha256(project dir)>.<server>.json` with the instance, token and default
- * channel, its pid, and when it last refreshed the file. Only servers the CLI actually
- * started (registrations the user approved) write one. The project directory is
- * CLAUDE_PROJECT_DIR (Claude Code sets it for the processes it starts), else the working
- * directory; `server` is the name the tools are registered under (AGORA_HOOK_SERVER, default
- * `agora`). Same protection as saved invite credentials: folder 0700, file 0600.
+ * `~/.agora/hooks/<sha256(project dir)>.<server>.<pid>.json` (Claude Code) or
+ * `~/.agora/hooks/codex/<sha256(project dir)>.<server>.<pid>.json` (Codex CLI) with the instance,
+ * token and default channel, its pid, and when it last refreshed the file. Only servers the
+ * CLI actually started (registrations the user approved) write one. The project directory is
+ * CLAUDE_PROJECT_DIR for Claude Code (it sets it for the processes it starts), else the
+ * working directory, which Codex sets to the session's directory, the `cwd` its hooks get;
+ * `server` is the name the tools are registered under (AGORA_HOOK_SERVER, default `agora`).
+ * Each CLI has its own folder, so one CLI's server never replaces the other's file in the same
+ * project, and a 0.8.0 hook (top folder only) never picks up a Codex file. Same protection as
+ * saved invite credentials: folders 0700, files 0600.
  */
 
 export interface HookState {
@@ -32,8 +36,12 @@ export interface HookState {
 
 export const HOOK_STATE_REFRESH_MS = 60_000;
 
-export function hookStateDir(): string {
-    return join(homedir(), '.agora', 'hooks');
+/** The CLIs whose hooks agora-mcp serves (`agora-mcp hook stop --for codex`). */
+export type HookCli = 'claude' | 'codex';
+
+/** The hooks folder: Claude Code's files at the top (as in 0.8.0), Codex's in `codex/`. */
+export function hookStateDir(cli: HookCli = 'claude', root = join(homedir(), '.agora', 'hooks')): string {
+    return cli === 'claude' ? root : join(root, cli);
 }
 
 /** Path for comparing directories: forward slashes, no trailing slash, drive paths lowercased. */
@@ -72,17 +80,44 @@ export function hookServerName(env: NodeJS.ProcessEnv): string | undefined {
     return SERVER_NAME.test(name) ? name : undefined;
 }
 
-/** Write (or refresh) the state file atomically: temp file, then rename. */
-export async function writeHookState(state: HookState, directory = hookStateDir()): Promise<string> {
+/** This process's writes in progress, per state file. */
+const pending = new Map<string, Promise<unknown>>();
+
+/**
+ * Write (or refresh) the state file atomically: temp file, then rename. Each agora-mcp process
+ * has its own file (`<key>.<server>.<pid>.json`): two sessions in one project with the same
+ * server name must not overwrite each other's, or a hook could act with the other session's
+ * token. Writes of one file from this process run one after another: the first write and a
+ * refresh can overlap, and they would share the temp file (and on Windows, two renames onto
+ * one file can fail).
+ */
+export function writeHookState(state: HookState, directory = hookStateDir()): Promise<string> {
+    return writePrivate(join(directory, hookStateFile(state)), directory, state);
+}
+
+/** The state file's name for this server process. */
+export function hookStateFile(state: Pick<HookState, 'projectDir' | 'server' | 'pid'>): string {
+    return `${projectKey(state.projectDir)}.${state.server}.${state.pid}.json`;
+}
+
+/** Write a token-bearing JSON file atomically and privately, one write at a time per path. */
+function writePrivate(path: string, directory: string, data: unknown): Promise<string> {
+    const run = (pending.get(path) ?? Promise.resolve()).catch(() => {}).then(() => writeNow(data, directory, path));
+    pending.set(path, run);
+    const done = () => { if (pending.get(path) === run) pending.delete(path); };
+    run.then(done, done);
+    return run;
+}
+
+async function writeNow(data: unknown, directory: string, path: string): Promise<string> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
-    const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.json`);
     const temporary = `${path}.${process.pid}.tmp`;
     // The temp file holds the token: whatever fails, it doesn't stay behind
     try {
         const file = await open(temporary, 'w', 0o600);
         try {
-            await file.writeFile(JSON.stringify(state));
+            await file.writeFile(JSON.stringify(data));
             await file.sync();
         } finally { await file.close(); }
         await rename(temporary, path);
@@ -94,11 +129,12 @@ export async function writeHookState(state: HookState, directory = hookStateDir(
 }
 
 const TEMP_MAX_AGE_MS = 60_000;
-const STALE_STATE_MAX_AGE_MS = 24 * 60 * 60_000;
+/** A gone server's file is no use to the hooks; with one file per process they would pile up. */
+const STALE_STATE_MAX_AGE_MS = 30 * 60_000;
 
 /**
  * At agora-mcp startup: remove temp files older than a minute (a crashed write) and state files
- * of servers that are gone and haven't refreshed them for a day. Both hold a token. Never throws.
+ * of servers that are gone and haven't refreshed them for 30 minutes. Both hold a token. Never throws.
  */
 export async function sweepHookStates(directory = hookStateDir(), opts: { now?: number; isRunning?: (pid: number) => boolean } = {}): Promise<void> {
     const now = opts.now ?? Date.now();
@@ -121,36 +157,51 @@ export async function sweepHookStates(directory = hookStateDir(), opts: { now?: 
     }
 }
 
-/** Only Claude's clients run these hooks; another CLI in the same folder must not replace the file. */
+/** Claude Code and the Claude desktop app. */
 export function isClaudeClient(client: string | null | undefined): client is string {
     return !!client && /^claude([ -]|$)/i.test(client);
+}
+
+/** The Codex CLI (`codex-mcp-client`). */
+export function isCodexClient(client: string | null | undefined): client is string {
+    return !!client && /^codex([ -]|$)/i.test(client);
+}
+
+/** Which CLI's hooks serve this MCP client, if any. Other clients write no state file. */
+export function hookCli(client: string | null | undefined): HookCli | undefined {
+    return isClaudeClient(client) ? 'claude' : isCodexClient(client) ? 'codex' : undefined;
 }
 
 /**
  * Once the MCP client has initialized: write this server's state file and refresh it every
  * minute, so the hooks can tell a live server (and, at SessionEnd, one that just exited) from
- * a stale file. Only for Claude Code (and the Claude desktop app). Never throws.
+ * a stale file. Only for Claude Code (and the Claude desktop app) and the Codex CLI, each in
+ * its own folder under `root`. Never throws.
  *
  * The SDK may call `oninitialized` before the client's name is readable, so `client` is read
  * on each write, and the first write is retried briefly until the name is known.
  */
 export function startHookState(config: { instance: string; token: string; defaultChannel?: string }, client: () => string | null,
-    env: NodeJS.ProcessEnv = process.env, directory = hookStateDir()): (() => Promise<boolean>) | undefined {
+    env: NodeJS.ProcessEnv = process.env, root = hookStateDir()): (() => Promise<boolean>) | undefined {
     const server = hookServerName(env);
     if (!server) return undefined;
-    const projectDir = resolve(env.CLAUDE_PROJECT_DIR?.trim() || process.cwd());
     const write = async (): Promise<boolean> => {
         const name = client();
-        if (!isClaudeClient(name)) return false;
-        return writeHookState({ instance: config.instance, token: config.token, defaultChannel: config.defaultChannel, client: name,
-            server, projectDir, pid: process.pid, updatedAt: new Date().toISOString() }, directory).then(() => true, () => false);
+        const cli = hookCli(name);
+        if (!cli) return false;
+        // Codex starts its MCP servers in the session's directory, the `cwd` its hooks get. A
+        // CLAUDE_PROJECT_DIR that reached a Codex server (a Codex started from Claude Code, with
+        // the variable passed on) would name another project, so only Claude's counts.
+        const projectDir = resolve((cli === 'claude' ? env.CLAUDE_PROJECT_DIR?.trim() : undefined) || process.cwd());
+        return writeHookState({ instance: config.instance, token: config.token, defaultChannel: config.defaultChannel, client: name!,
+            server, projectDir, pid: process.pid, updatedAt: new Date().toISOString() }, hookStateDir(cli, root)).then(() => true, () => false);
     };
     const first = (tries: number) => {
         if (client() === null && tries > 0) { setTimeout(() => first(tries - 1), 250).unref(); return; }
         void write();
     };
     // Clear what crashed writes and long-gone servers left, then write ours
-    void sweepHookStates(directory).finally(() => first(20));
+    void Promise.all((['claude', 'codex'] as const).map(cli => sweepHookStates(hookStateDir(cli, root)))).finally(() => first(20));
     setInterval(() => { void write(); }, HOOK_STATE_REFRESH_MS).unref();
     return write;
 }
@@ -177,10 +228,15 @@ export function findHookStates(dirs: string[], usable: (state: HookState) => boo
             const states: HookState[] = [];
             for (const name of names) {
                 if (!name.startsWith(prefix) || !name.endsWith('.json')) continue;
-                try {
-                    const state = JSON.parse(readFileSync(join(directory, name), 'utf8'));
-                    if (valid(state) && usable(state)) states.push(state);
-                } catch { /* skip */ }
+                // A server may be replacing its file this very moment (on Windows the read can
+                // fail then): try once more before skipping it
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        const state = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+                        if (valid(state) && usable(state)) states.push(state);
+                        break;
+                    } catch { /* skip */ }
+                }
             }
             if (states.length > 0) return states;
         }

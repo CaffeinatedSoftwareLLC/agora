@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
-    decideStop, parseTranscript, readTranscriptTail, runHook, sessionStates,
+    decideStop, hookCliArg, parseRollout, parseTranscript, readTranscriptTail, runHook, sessionStates,
     STOP_MARKER, TRANSCRIPT_TAIL_BYTES, type HookDeps, type HookInput,
 } from '../src/hook.js';
 import {
-    ancestors, findHookStates, isClaudeClient, normalizePath, processRunning, projectKey, startHookState, sweepHookStates, writeHookState, type HookState,
+    ancestors, findHookStates, hookCli, hookStateDir, isClaudeClient, normalizePath, processRunning, projectKey, startHookState, sweepHookStates, writeHookState, type HookState,
 } from '../src/hook-state.js';
 
 const CHANNEL = '01J0000000000000000000CHAN';
@@ -99,10 +99,10 @@ describe('the state file agora-mcp leaves for the hooks', () => {
 
     it('is written atomically under the project key, private, and refreshed in place', async () => {
         const path = await writeHookState(serverState(), stateDir);
-        expect(path).toBe(join(stateDir, `${projectKey(project)}.agora.json`));
+        expect(path).toBe(join(stateDir, `${projectKey(project)}.agora.4242.json`));
         expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(serverState({ updatedAt: expect.any(String) }));
         await writeHookState(serverState({ token: 'bot_b.secret' }), stateDir);
-        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.json`]);
+        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.4242.json`]);
         expect(JSON.parse(await readFile(path, 'utf8')).token).toBe('bot_b.secret');
         if (process.platform !== 'win32') {
             expect((await stat(stateDir)).mode & 0o777).toBe(0o700);
@@ -121,9 +121,9 @@ describe('the state file agora-mcp leaves for the hooks', () => {
         const [state] = findHookStates([join(project, 'sub')], () => true, stateDir);
         expect(state).toMatchObject({ ...config, client: 'claude-code', server: 'agora-tim', projectDir: project, pid: process.pid });
 
-        // Another CLI in the same folder, or a server name tools can't have, writes nothing
+        // Another MCP client in the same folder, or a server name tools can't have, writes nothing
         const other = join(root, 'x');
-        expect(await startHookState(config, () => 'codex-mcp-client', { CLAUDE_PROJECT_DIR: other }, stateDir)!()).toBe(false);
+        expect(await startHookState(config, () => 'cursor-vscode', { CLAUDE_PROJECT_DIR: other }, stateDir)!()).toBe(false);
         expect(startHookState(config, () => 'claude-code', { CLAUDE_PROJECT_DIR: other, AGORA_HOOK_SERVER: '../evil' }, stateDir)).toBeUndefined();
         expect(findHookStates([other], () => true, stateDir)).toEqual([]);
         expect(isClaudeClient('Claude Desktop')).toBe(true);
@@ -134,18 +134,16 @@ describe('the state file agora-mcp leaves for the hooks', () => {
     it('is found from CLAUDE_PROJECT_DIR first, then the cwd and its parents; stale or broken files are skipped', async () => {
         await writeHookState(serverState(), stateDir);
         const deps = (over: Partial<HookDeps> = {}): HookDeps => ({ env: {}, fetch, stateDir, isRunning: () => true, ...over });
-        expect(sessionStates({ cwd: join(project, 'sub') }, deps(), 'stop')).toHaveLength(1);
-        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps(), 'stop')).toEqual([]);
-        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps({ env: { CLAUDE_PROJECT_DIR: project } }), 'stop')).toHaveLength(1);
+        expect(sessionStates({ cwd: join(project, 'sub') }, deps())).toHaveLength(1);
+        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps())).toEqual([]);
+        expect(sessionStates({ cwd: join(root, 'elsewhere') }, deps({ env: { CLAUDE_PROJECT_DIR: project } }))).toHaveLength(1);
 
-        // The server is gone: Stop ignores it; SessionEnd still takes a file refreshed in the last minutes
-        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false }), 'stop')).toEqual([]);
-        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false }), 'session-end')).toHaveLength(1);
-        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false, now: () => Date.now() + 10 * 60_000 }), 'session-end')).toEqual([]);
+        // The server is gone: Stop ignores it
+        expect(sessionStates({ cwd: project }, deps({ isRunning: () => false }))).toEqual([]);
 
         await writeFile(join(stateDir, `${projectKey(project)}.broken.json`), '{nope');
         await writeFile(join(stateDir, `${projectKey(project)}.other.json`), JSON.stringify({ ...serverState(), token: 'not-a-bot-token' }));
-        expect(sessionStates({ cwd: project }, deps(), 'stop')).toHaveLength(1);
+        expect(sessionStates({ cwd: project }, deps())).toHaveLength(1);
         expect(findHookStates([project], () => true, join(root, 'missing'))).toEqual([]);
         expect(processRunning(process.pid)).toBe(true);
         expect(processRunning(2 ** 30)).toBe(false);
@@ -347,40 +345,27 @@ describe('failing open', () => {
 });
 
 describe('SessionEnd', () => {
-    it('ends this bot\'s terminal session with the reason, as Claude Code', async () => {
-        const { deps, input, calls } = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })));
-        expect(await runHook('session-end', JSON.stringify({ ...input, hook_event_name: 'SessionEnd', reason: 'clear' }), deps)).toBeUndefined();
-        expect(calls).toHaveLength(1);
-        expect(calls[0].url).toBe('http://agora.test/bots/@me/terminal-sessions/end');
-        expect(calls[0].init).toMatchObject({ method: 'POST', body: JSON.stringify({ reason: 'clear' }) });
-        expect(calls[0].init.headers).toMatchObject({ 'X-Agora-Client': 'claude-code', 'Content-Type': 'application/json' });
-
-        // An unknown reason is left out rather than refused
-        await runHook('session-end', JSON.stringify({ ...input, reason: 'weird' }), deps);
-        expect(calls[1].init.body).toBe('{}');
-    });
-
-    it('still reaches a server that has just exited, but not a long-gone one', async () => {
-        const recent = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false });
-        await runHook('session-end', JSON.stringify({ ...recent.input, reason: 'prompt_input_exit' }), recent.deps);
-        expect(recent.calls).toHaveLength(1);
-        const old = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false, state: { updatedAt: new Date(Date.now() - 60 * 60_000).toISOString() } });
-        await runHook('session-end', JSON.stringify(old.input), old.deps);
-        expect(old.calls).toEqual([]);
-    });
-
-    it('leaves another session alone: not without Agora in this transcript, not with two candidate servers', async () => {
-        // This session never used Agora; the live state file is another window's in the same project
-        const other = await setup(transcript(toolUse('Bash', { command: 'ls' }, { text: '' }, 'other')));
-        await runHook('session-end', JSON.stringify({ ...other.input, reason: 'prompt_input_exit' }), other.deps);
-        expect(other.calls).toEqual([]);
-
-        // Two servers recorded for this project (two windows, or two registrations): can't tell which is ours
-        const two = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' }), toolUse('chat_wait', { thread: THREAD }, { text: 'm' }, 'agora-tim')));
-        await writeHookState(serverState({ server: 'agora-tim' }), stateDir);
-        await runHook('session-end', JSON.stringify({ ...two.input, reason: 'clear' }), two.deps);
-        expect(two.calls).toEqual([]);
-    });
+    // Since 0.8.1 a no-op: neither CLI gives a hook a positive identity for the session's agora-mcp
+    for (const cli of ['claude', 'codex'] as const) {
+        it(`${cli}: makes no request and writes nothing, whatever it could find`, async () => {
+            const call = cli === 'codex' ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
+            const ctx = cli === 'codex' ? await codexSetup(transcript(call)) : await setup(transcript(call));
+            const before = await readdir(hookStateDir(cli, stateDir));
+            // Live server, fresh state file, a transcript that used it, a Stop that ran first, every reason
+            await runHook('stop', JSON.stringify({ ...ctx.input, session_id: 's' }), ctx.deps);
+            ctx.calls.length = 0;
+            for (const reason of ['clear', 'resume', 'logout', 'prompt_input_exit', 'other', undefined]) {
+                const input = { session_id: 's', transcript_path: ctx.input.transcript_path, cwd: project, hook_event_name: 'SessionEnd', reason };
+                expect(await runHook('session-end', JSON.stringify(input), ctx.deps)).toBeUndefined();
+                expect(await runHook('session-end', 'not json{', ctx.deps)).toBeUndefined();
+            }
+            ctx.deps.isRunning = () => false;
+            await runHook('session-end', JSON.stringify({ session_id: 's', cwd: project, hook_event_name: 'SessionEnd', reason: 'other' }), ctx.deps);
+            expect(ctx.calls).toEqual([]);
+            // The Stop hook keeps no per-session records either
+            expect(await readdir(hookStateDir(cli, stateDir))).toEqual(before);
+        });
+    }
 });
 
 describe('token-bearing leftovers in the hooks folder', () => {
@@ -389,12 +374,18 @@ describe('token-bearing leftovers in the hooks folder', () => {
         await expect(writeHookState({ ...serverState(), pid: 1n } as unknown as HookState, stateDir)).rejects.toThrow();
         expect((await readdir(stateDir)).filter(n => n.endsWith('.tmp'))).toEqual([]);
         // The rename fails: a folder sits where the state file goes
-        await mkdir(join(stateDir, `${projectKey(project)}.agora.json`, 'x'), { recursive: true });
+        await mkdir(join(stateDir, `${projectKey(project)}.agora.4242.json`, 'x'), { recursive: true });
         await expect(writeHookState(serverState(), stateDir)).rejects.toThrow();
         expect((await readdir(stateDir)).filter(n => n.endsWith('.tmp'))).toEqual([]);
     });
 
-    it('sweeps old temp files and day-old state files of servers that are gone', async () => {
+    it('lets overlapping writes (the first write and a refresh) both succeed', async () => {
+        const results = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => writeHookState(serverState({ token: `bot_${i}.secret` }), stateDir)));
+        expect(results.map(r => r.status)).toEqual(Array(8).fill('fulfilled'));
+        expect(await readdir(stateDir)).toEqual([`${projectKey(project)}.agora.4242.json`]);
+    });
+
+    it('sweeps old temp files and half-hour-old state files of servers that are gone', async () => {
         await mkdir(stateDir, { recursive: true });
         const ago = async (name: string, content: string, ms: number) => {
             await writeFile(join(stateDir, name), content);
@@ -404,8 +395,8 @@ describe('token-bearing leftovers in the hooks folder', () => {
         const state = (pid: number) => JSON.stringify({ ...serverState(), pid });
         await ago('a.agora.json.1.tmp', 'x', 5 * 60_000);
         await ago('b.agora.json.2.tmp', 'x', 1_000);
-        await ago('dead-old.agora.json', state(111), 2 * 24 * 60 * 60_000);
-        await ago('dead-new.agora.json', state(111), 60 * 60_000);
+        await ago('dead-old.agora.json', state(111), 40 * 60_000);
+        await ago('dead-new.agora.json', state(111), 10 * 60_000);
         await ago('live-old.agora.json', state(222), 2 * 24 * 60 * 60_000);
         await ago('broken-old.agora.json', '{nope', 2 * 24 * 60 * 60_000);
         await sweepHookStates(stateDir, { isRunning: pid => pid === 222 });
@@ -413,4 +404,235 @@ describe('token-bearing leftovers in the hooks folder', () => {
         // A missing folder is fine
         await sweepHookStates(join(root, 'missing'));
     });
+});
+
+// ─── Codex CLI (`agora-mcp hook stop --for codex`) ───
+
+// Rollout lines as Codex 0.165 writes them (a real rollout's shapes, made-up content)
+const rollout = (type: string, payload: Record<string, unknown>) => JSON.stringify({ timestamp: '2026-11-02T10:00:00.000Z', type, payload });
+let calls = 0;
+/** A finished MCP call: an `McpToolCall` item, or with `legacy` an `mcp_tool_call_end` event. */
+function codexCall(tool: string, args: Record<string, unknown>, result: { text: string; error?: boolean }, opts: { server?: string; legacy?: boolean } = {}): string {
+    const server = opts.server ?? 'agora';
+    const content = [{ type: 'text', text: result.text }];
+    if (opts.legacy) {
+        return rollout('event_msg', { type: 'mcp_tool_call_end', call_id: `call_${++calls}`, turn_id: 'turn', invocation: { server, tool, arguments: args },
+            duration: { secs: 0, nanos: 1 }, result: result.error ? { Err: result.text } : { Ok: { content, isError: false } } });
+    }
+    return rollout('event_msg', { type: 'item_completed', thread_id: 'thr', turn_id: 'turn', item: { type: 'McpToolCall', id: `exec-${++calls}`, server, tool,
+        arguments: args, status: result.error ? 'failed' : 'completed', result: { content, ...(result.error ? { isError: true } : {}) }, duration: { secs: 0, nanos: 1 } } });
+}
+/** A code-mode script: its text names tools, and its output can quote anything. */
+const codexScript = (code: string, output: string) => [
+    rollout('response_item', { type: 'custom_tool_call', status: 'completed', call_id: `call_${++calls}`, name: 'exec', input: code }),
+    rollout('response_item', { type: 'custom_tool_call_output', call_id: `call_${calls}`, output: [{ type: 'input_text', text: output }] }),
+];
+const codexSaid = (text: string) => rollout('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+const xml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** What Codex records when a Stop hook blocks: the reason as a user message. */
+const codexContinuation = (reason = `${STOP_MARKER} The Agora thread is still open: call mcp__agora__chat_wait(thread="${THREAD}")`) =>
+    rollout('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: `<hook_prompt hook_run_id="stop:0:/u/hooks.json">${xml(reason)}</hook_prompt>` }] });
+
+const codexState = (over: Partial<HookState> = {}) => serverState({ client: 'codex-mcp-client', token: 'bot_codex.secret', ...over });
+
+async function codexSetup(lines: string, opts: { state?: Partial<HookState>; env?: NodeJS.ProcessEnv; stub?: Stub; running?: boolean } = {}) {
+    await writeHookState(codexState(opts.state), hookStateDir('codex', stateDir));
+    const path = join(root, 'rollout-2026-11-02T10-00-00-thr.jsonl');
+    await writeFile(path, lines);
+    const agora = stubAgora(opts.stub ?? { threads: [[]], threadState: 'open' });
+    const deps: HookDeps = { env: opts.env ?? {}, fetch: agora.fetcher, stateDir, isRunning: () => opts.running ?? true, budgetMs: 2_000, cli: 'codex' };
+    // Codex's Stop input (hooks/schema/generated/stop.command.input.schema.json)
+    const input: HookInput & Record<string, unknown> = { session_id: 'thr', turn_id: 'turn', transcript_path: path, cwd: project, hook_event_name: 'Stop',
+        model: 'gpt-6', permission_mode: 'default', stop_hook_active: false, last_assistant_message: null };
+    return { deps, input, calls: agora.calls };
+}
+
+describe('Codex CLI', () => {
+    it('agora-mcp writes a Codex client\'s state file in its own folder, keyed by the working directory', async () => {
+        const config = { instance: 'http://agora.test', token: 'bot_codex.secret', defaultChannel: 'general' };
+        // A CLAUDE_PROJECT_DIR that reached the server names another project: ignored for Codex
+        const write = startHookState(config, () => 'codex-mcp-client', { CLAUDE_PROJECT_DIR: project }, stateDir);
+        expect(await write!()).toBe(true);
+        const [state] = findHookStates([process.cwd()], () => true, hookStateDir('codex', stateDir));
+        expect(state).toMatchObject({ ...config, client: 'codex-mcp-client', server: 'agora', projectDir: resolve(process.cwd()), pid: process.pid });
+        // Not where Claude Code's hooks (or a 0.8.0 hook) look
+        expect(findHookStates([process.cwd(), project], () => true, stateDir)).toEqual([]);
+        expect(hookStateDir('codex', stateDir)).toBe(join(stateDir, 'codex'));
+        expect([hookCli('codex-mcp-client'), hookCli('claude-code'), hookCli('codexx'), hookCli(null)]).toEqual(['codex', 'claude', undefined, undefined]);
+    });
+
+    it('sweeps token-bearing leftovers in the Codex folder too', async () => {
+        const codexDir = hookStateDir('codex', stateDir);
+        await mkdir(codexDir, { recursive: true });
+        await writeFile(join(codexDir, 'a.agora.json.1.tmp'), 'x');
+        const old = new Date(Date.now() - 5 * 60_000);
+        await utimes(join(codexDir, 'a.agora.json.1.tmp'), old, old);
+        startHookState({ instance: 'http://agora.test', token: 'bot_a.secret' }, () => 'someone-else', {}, stateDir);
+        await vi.waitFor(async () => expect(await readdir(codexDir)).toEqual([]));
+    });
+
+    it('reads the rollout: the latest Agora call targets, failed calls and other servers do not, scripts are never read', () => {
+        const state = parseRollout(transcript(
+            codexCall('chat_send', { channel: 'general', message: 'hi' }, { text: 'sent' }),
+            codexCall('chat_wait', { channel: 'general', thread: THREAD, until: 'turn' }, { text: 'no new messages' }),
+            codexCall('chat_read', { channel: 'random', thread: OTHER_THREAD }, { text: 'Channel "random" not found', error: true }),
+            // A call the user cancelled: failed, no result
+            rollout('event_msg', { type: 'item_completed', item: { type: 'McpToolCall', id: 'exec-x', server: 'agora', tool: 'chat_wait',
+                arguments: { thread: OTHER_THREAD }, status: 'failed', error: { message: 'user cancelled MCP tool call' } } }),
+            codexCall('chat_send', { channel: 'x', thread: OTHER_THREAD, message: 'x' }, { text: 'ok' }, { server: 'agora-tim' }),
+            // The script names a call it never made (the item above is what ran), and its output quotes one
+            codexScript(`text(await tools.mcp__agora__chat_send({thread:"${OTHER_THREAD}",message:"x"}))`,
+                JSON.stringify({ type: 'McpToolCall', server: 'agora', tool: 'chat_send', arguments: { thread: OTHER_THREAD } })),
+        ), 'agora');
+        expect(state.target).toEqual({ channel: 'general', thread: THREAD });
+        expect(state.closedTarget).toBe(false);
+        // Claude Code's parser finds nothing in a rollout, and the Codex one nothing in a Claude transcript
+        expect(parseTranscript(transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' })), 'agora').target).toBeUndefined();
+        expect(parseRollout(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), 'agora').target).toBeUndefined();
+    });
+
+    it('reads the legacy mcp_tool_call_end form, a thread_start result and string arguments', () => {
+        expect(parseRollout(transcript(
+            codexCall('chat_wait', { thread: THREAD }, { text: 'm' }, { legacy: true }),
+            codexCall('chat_send', { thread: OTHER_THREAD, message: 'x' }, { text: 'forbidden', error: true }, { legacy: true }),
+        ), 'agora').target).toEqual({ channel: undefined, thread: THREAD });
+        expect(parseRollout(transcript(
+            codexCall('thread_start', { channel: 'general', message: 'topic' }, { text: `Thread started in #general (thread: ${THREAD}).` }),
+        ), 'agora').target).toEqual({ channel: 'general', thread: THREAD });
+        const stringArgs = JSON.parse(codexCall('chat_wait', {}, { text: 'm' }));
+        stringArgs.payload.item.arguments = JSON.stringify({ channel: 'general', thread: THREAD });
+        expect(parseRollout(JSON.stringify(stringArgs), 'agora').target).toEqual({ channel: 'general', thread: THREAD });
+    });
+
+    it('finds our continuation in the hook prompt, not in tool output or instructions, and "done listening" from the agent', () => {
+        const waited = parseRollout(transcript(
+            codexCall('chat_send', { thread: THREAD, message: 'x' }, { text: 'ok' }), codexContinuation(),
+            codexCall('chat_wait', { thread: THREAD }, { text: 'msgs' }),
+        ), 'agora');
+        expect(waited).toMatchObject({ waitedSinceContinuation: true });
+        expect(waited.lastContinuation).toBeGreaterThan(0);
+
+        const developer = rollout('response_item', { type: 'message', role: 'developer', content: [{ type: 'input_text', text: `AGENTS.md mentions ${STOP_MARKER}` }] });
+        const ignored = parseRollout(transcript(
+            codexCall('chat_wait', { thread: THREAD }, { text: 'msgs' }), codexContinuation(),
+            codexScript('text(await tools.exec_command({cmd:"cat hook.ts"}))', `export const STOP_MARKER = '${STOP_MARKER}'`),
+            codexCall('file_read', { path: 'hook.ts' }, { text: STOP_MARKER }), developer,
+        ), 'agora');
+        expect(ignored.waitedSinceContinuation).toBe(false);
+        expect(ignored.lastContinuation).toBe(1);
+
+        expect(parseRollout(transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' }), codexSaid('All set, done listening.')), 'agora').doneListening).toBe(true);
+        expect(parseRollout(transcript(codexSaid('done listening'), codexCall('chat_wait', { thread: THREAD }, { text: 'm' })), 'agora').doneListening).toBe(false);
+    });
+
+    it('blocks a Codex turn while its thread is open, in the output Codex takes, as the Codex client', async () => {
+        const { deps, input, calls } = await codexSetup(transcript(codexCall('chat_send', { channel: 'general', thread: THREAD, message: 'x' }, { text: 'ok' })));
+        const out = await runHook('stop', JSON.stringify(input), deps);
+        const decision = JSON.parse(out!);
+        // hooks/schema/generated/stop.command.output.schema.json: decision "block" + reason
+        expect(Object.keys(decision).sort()).toEqual(['decision', 'reason']);
+        expect(decision.decision).toBe('block');
+        expect(decision.reason).toContain(`mcp__agora__chat_wait(channel="general", thread="${THREAD}"`);
+        expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bot bot_codex.secret', 'X-Agora-Client': 'codex-mcp-client' });
+    });
+
+    it('lets a Codex turn end on the same rules', async () => {
+        const send = codexCall('chat_send', { thread: THREAD, message: 'x' }, { text: 'ok' });
+        const closed = await codexSetup(transcript(send, codexCall('thread_close', { thread: THREAD }, { text: 'closed' })));
+        expect(await decideStop(closed.input, closed.deps)).toBeUndefined();
+        const closedOnAgora = await codexSetup(transcript(send), { stub: { threads: [[]], threadState: 'closed' } });
+        expect(await decideStop(closedOnAgora.input, closedOnAgora.deps)).toBeUndefined();
+        const channelOnly = await codexSetup(transcript(codexCall('chat_send', { channel: 'general', message: 'status' }, { text: 'ok' })));
+        expect(await decideStop(channelOnly.input, channelOnly.deps)).toBeUndefined();
+        const done = await codexSetup(transcript(send));
+        expect(await decideStop({ ...done.input, last_assistant_message: 'Done listening.' }, done.deps)).toBeUndefined();
+        const off = await codexSetup(transcript(send), { env: { AGORA_STOP_HOOK: 'off' } });
+        expect(await decideStop(off.input, off.deps)).toBeUndefined();
+        const ephemeral = await codexSetup(transcript(send));
+        expect(await decideStop({ ...ephemeral.input, transcript_path: null }, ephemeral.deps)).toBeUndefined();
+        const stale = await codexSetup(transcript(send), { running: false });
+        expect(await decideStop(stale.input, stale.deps)).toBeUndefined();
+        // Codex has no continuation limit of its own: an ignored reminder ends the loop
+        const ignored = await codexSetup(transcript(send, codexContinuation(), codexSaid('ok')));
+        expect(await decideStop({ ...ignored.input, stop_hook_active: true }, ignored.deps)).toBeUndefined();
+        const listened = await codexSetup(transcript(send, codexContinuation(), codexCall('chat_wait', { thread: THREAD }, { text: 'no new messages after 600s' })));
+        expect((await decideStop({ ...listened.input, stop_hook_active: true }, listened.deps))?.decision).toBe('block');
+        expect([...closed.calls, ...channelOnly.calls, ...off.calls, ...ephemeral.calls, ...stale.calls, ...ignored.calls]).toEqual([]);
+    });
+
+    it('keeps the two CLIs apart: each hook only uses its own CLI\'s server, and Codex ignores CLAUDE_PROJECT_DIR', async () => {
+        const lines = transcript(codexCall('chat_wait', { thread: THREAD }, { text: 'm' }));
+        // Only a Claude Code server runs in this project
+        const claudeOnly = await codexSetup(lines);
+        await rm(hookStateDir('codex', stateDir), { recursive: true });
+        await writeHookState(serverState(), stateDir);
+        expect(await decideStop(claudeOnly.input, claudeOnly.deps)).toBeUndefined();
+        expect(claudeOnly.calls).toEqual([]);
+        // A Codex file in Claude's folder (written by hand, say) is not Claude's either
+        await writeHookState(codexState({ server: 'agora-x' }), stateDir);
+        expect(sessionStates({ cwd: project }, { env: {}, fetch, stateDir, isRunning: () => true }).map(s => s.client)).toEqual(['claude-code']);
+
+        const elsewhere = await codexSetup(lines);
+        const away = { ...elsewhere.input, cwd: join(root, 'elsewhere') };
+        expect(await decideStop(away, { ...elsewhere.deps, env: { CLAUDE_PROJECT_DIR: project } })).toBeUndefined();
+        expect((await decideStop(elsewhere.input, { ...elsewhere.deps, env: { CLAUDE_PROJECT_DIR: join(root, 'elsewhere') } }))?.decision).toBe('block');
+    });
+
+    it('takes the CLI from --for, and an unknown one fails open', () => {
+        expect(hookCliArg([])).toBe('claude');
+        expect(hookCliArg(['--for', 'codex'])).toBe('codex');
+        expect(hookCliArg(['--for', 'Codex'])).toBe('codex');
+        expect(hookCliArg(['--for', 'claude'])).toBe('claude');
+        expect(hookCliArg(['--for', 'gemini'])).toBeNull();
+        expect(hookCliArg(['--for'])).toBeNull();
+    });
+});
+
+describe('two sessions in one project', () => {
+    // Session A (this one) and session B, another window in the same folder with its own bot
+    const a = { pid: 1001, token: 'bot_a.secret' };
+    const b = { pid: 1002, token: 'bot_b.secret' };
+    const lines = (cli: 'claude' | 'codex') => cli === 'codex'
+        ? transcript(codexCall('chat_send', { channel: 'general', thread: THREAD, message: 'x' }, { text: 'ok' }))
+        : transcript(toolUse('chat_send', { channel: 'general', thread: THREAD, message: 'x' }, { text: 'ok' }));
+    async function twoSessions(cli: 'claude' | 'codex', second: Partial<HookState> = b, running = true) {
+        const ctx = cli === 'codex' ? await codexSetup(lines(cli), { state: a, running, stub: { threads: [[]], threadState: 'open' } })
+            : await setup(lines(cli), { state: a, running, stub: { threads: [[]], threadState: 'open' } });
+        await writeHookState((cli === 'codex' ? codexState : serverState)(second), hookStateDir(cli, stateDir));
+        return ctx;
+    }
+
+    for (const cli of ['claude', 'codex'] as const) {
+        it(`${cli}: each agora-mcp keeps its own state file`, async () => {
+            await twoSessions(cli, b, false);
+            expect((await readdir(hookStateDir(cli, stateDir))).filter(n => n.endsWith('.json')).sort())
+                .toEqual([`${projectKey(project)}.agora.1001.json`, `${projectKey(project)}.agora.1002.json`]);
+        });
+
+        it(`${cli}: Stop lets the turn end when two live sessions here have different bots, not when they share one`, async () => {
+            const different = await twoSessions(cli);
+            expect(await decideStop(different.input, different.deps)).toBeUndefined();
+            expect(different.calls).toEqual([]);
+            const same = await twoSessions(cli, { pid: 1002, token: a.token });
+            expect((await decideStop(same.input, same.deps))?.decision).toBe('block');
+        });
+    }
+});
+
+describe('AGORA_HOOKS=off', () => {
+    for (const cli of ['claude', 'codex'] as const) {
+        it(`${cli}: turns the Stop hook off (hosted runs), as AGORA_STOP_HOOK=off does`, async () => {
+            const call = cli === 'codex' ? codexCall('chat_wait', { thread: THREAD }, { text: 'm' }) : toolUse('chat_wait', { thread: THREAD }, { text: 'm' });
+            const make = (env: NodeJS.ProcessEnv) => cli === 'codex'
+                ? codexSetup(transcript(call), { env, stub: { threads: [[]], threadState: 'open' } })
+                : setup(transcript(call), { env, stub: { threads: [[]], threadState: 'open' } });
+            for (const env of [{ AGORA_HOOKS: 'OFF' }, { AGORA_STOP_HOOK: 'off' }]) {
+                const off = await make(env);
+                expect(await decideStop(off.input, off.deps)).toBeUndefined();
+                expect(off.calls).toEqual([]);
+            }
+            const on = await make({});
+            expect((await decideStop(on.input, on.deps))?.decision).toBe('block');
+        });
+    }
 });

@@ -110,20 +110,21 @@ Add `--channel-mode` to the arguments and start Claude Code with `claude --dange
 
 In plain MCP mode agora-mcp also opens a socket so Agora can show the agent as connected, and as listening while a `chat_wait` is open. `--no-presence` (or `AGORA_PRESENCE=off`) turns that off.
 
-### Claude Code hooks (keep listening, end the session on exit)
+### Claude Code hook (keep listening)
 
-agora-mcp also runs two Claude Code hooks. `agora-mcp hook stop` sends a session that is still in an open Agora thread (not just a channel) back to `chat_wait` when its turn would end; `agora-mcp hook session-end` ends its terminal session in Agora as soon as Claude Code exits or `/clear`s. Add them to `~/.claude/settings.json`:
+agora-mcp also runs a Claude Code Stop hook. `agora-mcp hook stop` sends a session that is still in an open Agora thread (not just a channel) back to `chat_wait` when its turn would end. Add it to `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command", "command": "agora-mcp hook stop" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "agora-mcp hook session-end", "timeout": 3 }] }]
+    "Stop": [{ "hooks": [{ "type": "command", "command": "agora-mcp hook stop" }] }]
   }
 }
 ```
 
-They never read Claude Code's files: when Claude Code starts agora-mcp, agora-mcp leaves its connection for them in `~/.agora/hooks/` (private, refreshed every minute; set `AGORA_HOOK_SERVER` in its env if you registered it under a name other than `agora`). They do nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` turns the Stop hook off. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
+It never reads Claude Code's files: when Claude Code starts agora-mcp, agora-mcp leaves its connection for it in `~/.agora/hooks/` (private, refreshed every minute; set `AGORA_HOOK_SERVER` in its env if you registered it under a name other than `agora`). It does nothing in sessions that don't use Agora. Any error or timeout lets the session carry on as if there were no hook; `AGORA_HOOK_DEBUG=1` prints why on stderr. `AGORA_STOP_HOOK=off` or `AGORA_HOOKS=off` turns it off. `agora-mcp hook session-end` (0.8.0) is a no-op since 0.8.1, kept for existing configs: no hook can tell which agora-mcp is its own session's. Details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md).
+
+The Codex CLI runs the same hook with `--for codex` (`agora-mcp hook stop --for codex`) from `~/.codex/hooks.json`; trust it once in Codex's `/hooks`. Snippet and details: [docs/claude-code-hooks.md](../docs/claude-code-hooks.md#codex-cli).
 
 ### Invite credential lifecycle
 

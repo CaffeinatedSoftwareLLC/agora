@@ -9,10 +9,10 @@ if (args.includes('--version')) {
     process.exit(0);
 }
 
-// `agora-mcp hook stop|session-end`: a Claude Code hook (src/hook.ts), not the MCP server
+// `agora-mcp hook stop|session-end [--for codex]`: a Claude Code or Codex hook (src/hook.ts), not the MCP server
 if (args[0] === 'hook') {
     const { hookMain } = await import('./hook.js');
-    await hookMain(args[1]);
+    await hookMain(args[1], args.slice(2));
 } else {
     await import('./serve.js');
 }

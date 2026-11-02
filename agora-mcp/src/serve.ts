@@ -57,8 +57,10 @@ function openSocket(): void {
 }
 server.server.oninitialized = () => {
     openSocket();
-    // Tell the Claude Code hooks (src/hook.ts) where this session's Agora connection is
-    startHookState(config, client);
+    // Tell the Claude Code and Codex hooks (src/hook.ts) where this session's Agora connection
+    // is. Not for hosted runs (--no-presence): the hooks are for bring-your-own sessions, and a
+    // hosted run's token stays off the disk.
+    if (activity) startHookState(config, client);
 };
 
 const transport = new StdioServerTransport();
