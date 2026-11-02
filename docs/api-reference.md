@@ -812,7 +812,7 @@ Fetch replies in a thread with cursor-based pagination. Defaults to oldest first
 | `before` | string | no       | -       | Exclusive ULID cursor (older replies); cannot combine with `after` |
 | `order`  | string | no       | `asc`   | `asc` or `desc`                |
 
-**Response** `200` — array of message objects with `threadId` field.
+**Response** `200` — array of message objects with `threadId` field. The `X-Agora-Thread-State` header says whether the thread is `open` or `closed`, also when it has no replies yet.
 
 ---
 

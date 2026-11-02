@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, open, rename, unlink } from 'node:fs/promises';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -78,14 +78,47 @@ export async function writeHookState(state: HookState, directory = hookStateDir(
     if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
     const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.json`);
     const temporary = `${path}.${process.pid}.tmp`;
-    const file = await open(temporary, 'w', 0o600);
+    // The temp file holds the token: whatever fails, it doesn't stay behind
     try {
-        await file.writeFile(JSON.stringify(state));
-        await file.sync();
-    } finally { await file.close(); }
-    try { await rename(temporary, path); }
-    catch (error) { await unlink(temporary).catch(() => {}); throw error; }
+        const file = await open(temporary, 'w', 0o600);
+        try {
+            await file.writeFile(JSON.stringify(state));
+            await file.sync();
+        } finally { await file.close(); }
+        await rename(temporary, path);
+    } catch (error) {
+        await unlink(temporary).catch(() => {});
+        throw error;
+    }
     return path;
+}
+
+const TEMP_MAX_AGE_MS = 60_000;
+const STALE_STATE_MAX_AGE_MS = 24 * 60 * 60_000;
+
+/**
+ * At agora-mcp startup: remove temp files older than a minute (a crashed write) and state files
+ * of servers that are gone and haven't refreshed them for a day. Both hold a token. Never throws.
+ */
+export async function sweepHookStates(directory = hookStateDir(), opts: { now?: number; isRunning?: (pid: number) => boolean } = {}): Promise<void> {
+    const now = opts.now ?? Date.now();
+    const running = opts.isRunning ?? processRunning;
+    let names: string[];
+    try { names = readdirSync(directory); } catch { return; }
+    for (const name of names) {
+        const path = join(directory, name);
+        try {
+            const age = now - statSync(path).mtimeMs;
+            if (name.endsWith('.tmp')) {
+                if (age > TEMP_MAX_AGE_MS) await unlink(path);
+                continue;
+            }
+            if (!name.endsWith('.json') || age <= STALE_STATE_MAX_AGE_MS) continue;
+            let pid: unknown;
+            try { pid = JSON.parse(readFileSync(path, 'utf8'))?.pid; } catch { /* unreadable: stale */ }
+            if (!Number.isSafeInteger(pid) || !running(pid as number)) await unlink(path);
+        } catch { /* gone already, or not ours to remove */ }
+    }
 }
 
 /** Only Claude's clients run these hooks; another CLI in the same folder must not replace the file. */
@@ -116,7 +149,8 @@ export function startHookState(config: { instance: string; token: string; defaul
         if (client() === null && tries > 0) { setTimeout(() => first(tries - 1), 250).unref(); return; }
         void write();
     };
-    first(20);
+    // Clear what crashed writes and long-gone servers left, then write ours
+    void sweepHookStates(directory).finally(() => first(20));
     setInterval(() => { void write(); }, HOOK_STATE_REFRESH_MS).unref();
     return write;
 }

@@ -200,11 +200,11 @@ export function parseTranscript(text: string, server: string): TranscriptState {
 class Agora {
     constructor(private config: HookState, private deps: HookDeps) {}
 
-    async get<T>(path: string): Promise<{ status: number; body: T | undefined }> {
+    async get<T>(path: string): Promise<{ status: number; body: T | undefined; headers: Headers }> {
         return this.send<T>('GET', path, undefined, FETCH_TIMEOUT_MS);
     }
 
-    async send<T>(method: string, path: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: T | undefined }> {
+    async send<T>(method: string, path: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: T | undefined; headers: Headers }> {
         const res = await this.deps.fetch(`${this.config.instance.replace(/\/+$/, '')}${path}`, {
             method, redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
             // The token is bound to the client that uses it (#39): the one that started agora-mcp
@@ -213,26 +213,33 @@ class Agora {
             body: body !== undefined ? JSON.stringify(body) : undefined,
         });
         const parsed = res.headers.get('content-type')?.includes('application/json') ? await res.json().catch(() => undefined) as T : undefined;
-        return { status: res.status, body: parsed };
+        return { status: res.status, body: parsed, headers: res.headers };
     }
 }
 
 interface BotMe { channels?: { id: string; name: string }[] }
 interface ThreadRow { id: string; lastReplyAt: string }
 
-/** Is the thread open? Pages the channel's open threads, then looks at a reply-less thread directly. */
+/**
+ * Is the thread open? Agora answers on the thread's replies (`X-Agora-Thread-State`). A server
+ * without that header is asked for its open threads instead; a thread not found there, with no
+ * replies yet or closed, can't be told apart, so it counts as not open: an unknown state lets
+ * the turn end.
+ */
 async function threadOpen(agora: Agora, channelId: string, threadId: string): Promise<boolean> {
+    const replies = await agora.get<unknown[]>(`/channels/${channelId}/messages/${encodeURIComponent(threadId)}/replies?limit=1`);
+    if (replies.status !== 200) return false;
+    const state = replies.headers.get('x-agora-thread-state');
+    if (state === 'open' || state === 'closed') return state === 'open';
     let before: string | undefined;
     for (let page = 0; page < THREAD_PAGES; page++) {
         const res = await agora.get<ThreadRow[]>(`/channels/${channelId}/threads?limit=10${before ? `&before=${encodeURIComponent(before)}` : ''}`);
-        if (res.status !== 200 || !Array.isArray(res.body)) throw new Error(`thread list ${res.status}`);
+        if (res.status !== 200 || !Array.isArray(res.body)) return false;
         if (res.body.some(t => t.id === threadId)) return true;
         if (res.body.length < 10) break;
         before = res.body[res.body.length - 1].lastReplyAt;
     }
-    // Open threads are listed once they have a reply; a thread the agent just started has none
-    const replies = await agora.get<unknown[]>(`/channels/${channelId}/messages/${encodeURIComponent(threadId)}/replies?limit=1`);
-    return replies.status === 200 && Array.isArray(replies.body) && replies.body.length === 0;
+    return false;
 }
 
 // ─── The hooks ───
@@ -289,16 +296,24 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     return { decision: 'block', reason: stopReason(channel.name, thread, config.server) };
 }
 
-/** The SessionEnd hook: end the terminal session of each of this session's agora-mcp servers now. */
+/**
+ * The SessionEnd hook: end the terminal session of this session's agora-mcp now. Conservative,
+ * since the server's disconnect grace period covers anything skipped: only with exactly one
+ * candidate server for the project (another window's file could be the one found), and only
+ * if this session's transcript shows it used that server.
+ */
 export async function sessionEnd(input: HookInput, deps: HookDeps): Promise<void> {
     const log = deps.log ?? (() => {});
     const servers = sessionStates(input, deps, 'session-end');
-    if (servers.length === 0) { log('no agora-mcp for this project'); return; }
+    if (servers.length !== 1) { log(`${servers.length} agora-mcp state files for this project; leaving it to the grace period`); return; }
+    const [server] = servers;
+    if (!input.transcript_path) return;
+    let transcript: string;
+    try { transcript = readTranscriptTail(input.transcript_path); } catch { log('no transcript'); return; }
+    if (!transcript.includes(`mcp__${server.server}__`)) { log('this session did not use Agora'); return; }
     const reason = input.reason && SESSION_END_REASONS.has(input.reason) ? input.reason : undefined;
-    await Promise.all(servers.map(async server => {
-        const res = await new Agora(server, deps).send('POST', '/bots/@me/terminal-sessions/end', reason ? { reason } : {}, SESSION_END_REQUEST_MS);
-        log(`${server.server}: terminal-sessions/end ${res.status}`);
-    }));
+    const res = await new Agora(server, deps).send('POST', '/bots/@me/terminal-sessions/end', reason ? { reason } : {}, SESSION_END_REQUEST_MS);
+    log(`${server.server}: terminal-sessions/end ${res.status}`);
 }
 
 /** Run a hook on its stdin text; returns what to print on stdout (nothing to allow). Never throws. */

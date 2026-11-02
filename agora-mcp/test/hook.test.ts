@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -7,7 +7,7 @@ import {
     STOP_MARKER, TRANSCRIPT_TAIL_BYTES, type HookDeps, type HookInput,
 } from '../src/hook.js';
 import {
-    ancestors, findHookStates, isClaudeClient, normalizePath, processRunning, projectKey, startHookState, writeHookState, type HookState,
+    ancestors, findHookStates, isClaudeClient, normalizePath, processRunning, projectKey, startHookState, sweepHookStates, writeHookState, type HookState,
 } from '../src/hook-state.js';
 
 const CHANNEL = '01J0000000000000000000CHAN';
@@ -50,10 +50,14 @@ const transcript = (...lines: (string | string[])[]) => lines.flat().join('\n') 
 
 // ─── A stub Agora ───
 
-interface Stub { threads: { id: string; lastReplyAt: string }[][]; replies?: unknown[] | null; channels?: { id: string; name: string }[]; status?: number }
+interface Stub {
+    threads: { id: string; lastReplyAt: string }[][]; replies?: unknown[] | null; channels?: { id: string; name: string }[]; status?: number;
+    /** X-Agora-Thread-State on the replies; absent like on a server without it. */
+    threadState?: 'open' | 'closed';
+}
 function stubAgora(stub: Stub) {
     const calls: { url: string; init: RequestInit }[] = [];
-    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const json = (body: unknown, status = 200, extra: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...extra } });
     const fetcher = vi.fn(async (url: string, init: RequestInit) => {
         calls.push({ url, init });
         const path = url.replace('http://agora.test', '');
@@ -64,7 +68,10 @@ function stubAgora(stub: Stub) {
             const page = before ? Number(before.replace('t', '')) : 0;
             return json(stub.threads[page] ?? []);
         }
-        if (path.startsWith(`/channels/${CHANNEL}/messages/`)) return stub.replies === null ? json({ error: 'Message not found' }, 404) : json(stub.replies ?? [{ id: 'r' }]);
+        if (path.startsWith(`/channels/${CHANNEL}/messages/`)) {
+            return stub.replies === null ? json({ error: 'Message not found' }, 404)
+                : json(stub.replies ?? [{ id: 'r' }], 200, stub.threadState ? { 'x-agora-thread-state': stub.threadState } : {});
+        }
         if (path === '/bots/@me/terminal-sessions/end') return json({ ended: ['S'] });
         return json({ error: 'not found' }, 404);
     });
@@ -219,13 +226,22 @@ describe('the Stop decision', () => {
         expect(await decideStop(gone.input, gone.deps)).toBeUndefined();
     });
 
-    it('pages through open threads, and counts a just-started thread with no replies as open', async () => {
+    it('pages through open threads on a server without the thread-state header', async () => {
         const page = (n: number) => Array.from({ length: 10 }, (_, i) => ({ id: `${n}-${i}`, lastReplyAt: `t${n + 1}` }));
         const lines = transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' }));
         const deep = await setup(lines, { stub: { threads: [page(0), page(1), [{ id: THREAD, lastReplyAt: 'x' }]] } });
         expect((await decideStop(deep.input, deep.deps))?.decision).toBe('block');
-        const fresh = await setup(lines, { stub: { threads: [[]], replies: [] } });
+        // Not listed, no replies: open or closed can't be told, so the turn ends
+        const unknown = await setup(lines, { stub: { threads: [[]], replies: [] } });
+        expect(await decideStop(unknown.input, unknown.deps)).toBeUndefined();
+    });
+
+    it('takes the thread state from Agora: a new open thread blocks, a closed one with no replies does not', async () => {
+        const lines = transcript(toolUse('thread_start', { channel: 'general', message: 'topic' }, { text: `Thread started in #general (thread: ${THREAD}).` }));
+        const fresh = await setup(lines, { stub: { threads: [[]], replies: [], threadState: 'open' } });
         expect((await decideStop(fresh.input, fresh.deps))?.decision).toBe('block');
+        const closed = await setup(lines, { stub: { threads: [[]], replies: [], threadState: 'closed' } });
+        expect(await decideStop(closed.input, closed.deps)).toBeUndefined();
     });
 
     it('allows when no thread is involved (a channel has nothing to close), without asking Agora', async () => {
@@ -332,7 +348,7 @@ describe('failing open', () => {
 
 describe('SessionEnd', () => {
     it('ends this bot\'s terminal session with the reason, as Claude Code', async () => {
-        const { deps, input, calls } = await setup('');
+        const { deps, input, calls } = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })));
         expect(await runHook('session-end', JSON.stringify({ ...input, hook_event_name: 'SessionEnd', reason: 'clear' }), deps)).toBeUndefined();
         expect(calls).toHaveLength(1);
         expect(calls[0].url).toBe('http://agora.test/bots/@me/terminal-sessions/end');
@@ -345,11 +361,56 @@ describe('SessionEnd', () => {
     });
 
     it('still reaches a server that has just exited, but not a long-gone one', async () => {
-        const recent = await setup('', { running: false });
+        const recent = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false });
         await runHook('session-end', JSON.stringify({ ...recent.input, reason: 'prompt_input_exit' }), recent.deps);
         expect(recent.calls).toHaveLength(1);
-        const old = await setup('', { running: false, state: { updatedAt: new Date(Date.now() - 60 * 60_000).toISOString() } });
+        const old = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' })), { running: false, state: { updatedAt: new Date(Date.now() - 60 * 60_000).toISOString() } });
         await runHook('session-end', JSON.stringify(old.input), old.deps);
         expect(old.calls).toEqual([]);
+    });
+
+    it('leaves another session alone: not without Agora in this transcript, not with two candidate servers', async () => {
+        // This session never used Agora; the live state file is another window's in the same project
+        const other = await setup(transcript(toolUse('Bash', { command: 'ls' }, { text: '' }, 'other')));
+        await runHook('session-end', JSON.stringify({ ...other.input, reason: 'prompt_input_exit' }), other.deps);
+        expect(other.calls).toEqual([]);
+
+        // Two servers recorded for this project (two windows, or two registrations): can't tell which is ours
+        const two = await setup(transcript(toolUse('chat_wait', { thread: THREAD }, { text: 'm' }), toolUse('chat_wait', { thread: THREAD }, { text: 'm' }, 'agora-tim')));
+        await writeHookState(serverState({ server: 'agora-tim' }), stateDir);
+        await runHook('session-end', JSON.stringify({ ...two.input, reason: 'clear' }), two.deps);
+        expect(two.calls).toEqual([]);
+    });
+});
+
+describe('token-bearing leftovers in the hooks folder', () => {
+    it('removes the temp file when a write fails, before or at the rename', async () => {
+        // Serializing fails after the temp file is open
+        await expect(writeHookState({ ...serverState(), pid: 1n } as unknown as HookState, stateDir)).rejects.toThrow();
+        expect((await readdir(stateDir)).filter(n => n.endsWith('.tmp'))).toEqual([]);
+        // The rename fails: a folder sits where the state file goes
+        await mkdir(join(stateDir, `${projectKey(project)}.agora.json`, 'x'), { recursive: true });
+        await expect(writeHookState(serverState(), stateDir)).rejects.toThrow();
+        expect((await readdir(stateDir)).filter(n => n.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('sweeps old temp files and day-old state files of servers that are gone', async () => {
+        await mkdir(stateDir, { recursive: true });
+        const ago = async (name: string, content: string, ms: number) => {
+            await writeFile(join(stateDir, name), content);
+            const when = new Date(Date.now() - ms);
+            await utimes(join(stateDir, name), when, when);
+        };
+        const state = (pid: number) => JSON.stringify({ ...serverState(), pid });
+        await ago('a.agora.json.1.tmp', 'x', 5 * 60_000);
+        await ago('b.agora.json.2.tmp', 'x', 1_000);
+        await ago('dead-old.agora.json', state(111), 2 * 24 * 60 * 60_000);
+        await ago('dead-new.agora.json', state(111), 60 * 60_000);
+        await ago('live-old.agora.json', state(222), 2 * 24 * 60 * 60_000);
+        await ago('broken-old.agora.json', '{nope', 2 * 24 * 60 * 60_000);
+        await sweepHookStates(stateDir, { isRunning: pid => pid === 222 });
+        expect((await readdir(stateDir)).sort()).toEqual(['b.agora.json.2.tmp', 'dead-new.agora.json', 'live-old.agora.json']);
+        // A missing folder is fine
+        await sweepHookStates(join(root, 'missing'));
     });
 });

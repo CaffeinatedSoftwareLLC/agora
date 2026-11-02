@@ -696,4 +696,20 @@ describe('Threads', () => {
         expect((await list()).latestProtocol).toMatchObject(expected);
         expect((await list('&before=2099-01-01T00:00:00Z')).latestProtocol).toMatchObject(expected);
     });
+
+    test('replies say whether the thread is open, also with no replies yet (X-Agora-Thread-State)', async () => {
+        const parent = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'quiet thread' });
+        const replies = () => ctx.request.get(`/channels/${channelId}/messages/${parent.body.id}/replies?limit=1`).set(owner.auth);
+        const open = await replies();
+        expect(open.status).toBe(200);
+        expect(open.body).toEqual([]);
+        expect(open.headers['x-agora-thread-state']).toBe('open');
+
+        // Closed with no replies: still an empty list, but the header says closed
+        const closed = await ctx.request.patch(`/channels/${channelId}/messages/${parent.body.id}/thread`).set(owner.auth).send({ closed: true });
+        expect(closed.status).toBe(200);
+        const after = await replies();
+        expect(after.body).toEqual([]);
+        expect(after.headers['x-agora-thread-state']).toBe('closed');
+    });
 });
