@@ -5,16 +5,20 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Where the Claude Code hooks (src/hook.ts) find this agent's Agora connection.
+ * Where the agent hooks (src/hook.ts) find this agent's Agora connection.
  *
  * Hooks get no MCP configuration, and agora-mcp never reads the CLIs' own files. So the
  * running MCP server says where it is: once it has its config it writes
- * `~/.agora/hooks/<sha256(project dir)>.<server>.json` with the instance, token and default
- * channel, its pid, and when it last refreshed the file. Only servers the CLI actually
- * started (registrations the user approved) write one. The project directory is
- * CLAUDE_PROJECT_DIR (Claude Code sets it for the processes it starts), else the working
- * directory; `server` is the name the tools are registered under (AGORA_HOOK_SERVER, default
- * `agora`). Same protection as saved invite credentials: folder 0700, file 0600.
+ * `~/.agora/hooks/<sha256(project dir)>.<server>.json` (Claude Code) or
+ * `~/.agora/hooks/codex/<sha256(project dir)>.<server>.json` (Codex CLI) with the instance,
+ * token and default channel, its pid, and when it last refreshed the file. Only servers the
+ * CLI actually started (registrations the user approved) write one. The project directory is
+ * CLAUDE_PROJECT_DIR for Claude Code (it sets it for the processes it starts), else the
+ * working directory, which Codex sets to the session's directory, the `cwd` its hooks get;
+ * `server` is the name the tools are registered under (AGORA_HOOK_SERVER, default `agora`).
+ * Each CLI has its own folder, so one CLI's server never replaces the other's file in the same
+ * project, and a 0.8.0 hook (top folder only) never picks up a Codex file. Same protection as
+ * saved invite credentials: folders 0700, files 0600.
  */
 
 export interface HookState {
@@ -32,8 +36,12 @@ export interface HookState {
 
 export const HOOK_STATE_REFRESH_MS = 60_000;
 
-export function hookStateDir(): string {
-    return join(homedir(), '.agora', 'hooks');
+/** The CLIs whose hooks agora-mcp serves (`agora-mcp hook stop --for codex`). */
+export type HookCli = 'claude' | 'codex';
+
+/** The hooks folder: Claude Code's files at the top (as in 0.8.0), Codex's in `codex/`. */
+export function hookStateDir(cli: HookCli = 'claude', root = join(homedir(), '.agora', 'hooks')): string {
+    return cli === 'claude' ? root : join(root, cli);
 }
 
 /** Path for comparing directories: forward slashes, no trailing slash, drive paths lowercased. */
@@ -72,11 +80,26 @@ export function hookServerName(env: NodeJS.ProcessEnv): string | undefined {
     return SERVER_NAME.test(name) ? name : undefined;
 }
 
-/** Write (or refresh) the state file atomically: temp file, then rename. */
-export async function writeHookState(state: HookState, directory = hookStateDir()): Promise<string> {
+/** This process's writes in progress, per state file. */
+const pending = new Map<string, Promise<unknown>>();
+
+/**
+ * Write (or refresh) the state file atomically: temp file, then rename. Writes of one file
+ * from this process run one after another: the first write and a refresh can overlap, and
+ * they would share the temp file (and on Windows, two renames onto one file can fail).
+ */
+export function writeHookState(state: HookState, directory = hookStateDir()): Promise<string> {
+    const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.json`);
+    const run = (pending.get(path) ?? Promise.resolve()).catch(() => {}).then(() => writeNow(state, directory, path));
+    pending.set(path, run);
+    const done = () => { if (pending.get(path) === run) pending.delete(path); };
+    run.then(done, done);
+    return run;
+}
+
+async function writeNow(state: HookState, directory: string, path: string): Promise<string> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== 'win32') await chmod(directory, 0o700).catch(() => {});
-    const path = join(directory, `${projectKey(state.projectDir)}.${state.server}.json`);
     const temporary = `${path}.${process.pid}.tmp`;
     // The temp file holds the token: whatever fails, it doesn't stay behind
     try {
@@ -121,36 +144,51 @@ export async function sweepHookStates(directory = hookStateDir(), opts: { now?: 
     }
 }
 
-/** Only Claude's clients run these hooks; another CLI in the same folder must not replace the file. */
+/** Claude Code and the Claude desktop app. */
 export function isClaudeClient(client: string | null | undefined): client is string {
     return !!client && /^claude([ -]|$)/i.test(client);
+}
+
+/** The Codex CLI (`codex-mcp-client`). */
+export function isCodexClient(client: string | null | undefined): client is string {
+    return !!client && /^codex([ -]|$)/i.test(client);
+}
+
+/** Which CLI's hooks serve this MCP client, if any. Other clients write no state file. */
+export function hookCli(client: string | null | undefined): HookCli | undefined {
+    return isClaudeClient(client) ? 'claude' : isCodexClient(client) ? 'codex' : undefined;
 }
 
 /**
  * Once the MCP client has initialized: write this server's state file and refresh it every
  * minute, so the hooks can tell a live server (and, at SessionEnd, one that just exited) from
- * a stale file. Only for Claude Code (and the Claude desktop app). Never throws.
+ * a stale file. Only for Claude Code (and the Claude desktop app) and the Codex CLI, each in
+ * its own folder under `root`. Never throws.
  *
  * The SDK may call `oninitialized` before the client's name is readable, so `client` is read
  * on each write, and the first write is retried briefly until the name is known.
  */
 export function startHookState(config: { instance: string; token: string; defaultChannel?: string }, client: () => string | null,
-    env: NodeJS.ProcessEnv = process.env, directory = hookStateDir()): (() => Promise<boolean>) | undefined {
+    env: NodeJS.ProcessEnv = process.env, root = hookStateDir()): (() => Promise<boolean>) | undefined {
     const server = hookServerName(env);
     if (!server) return undefined;
-    const projectDir = resolve(env.CLAUDE_PROJECT_DIR?.trim() || process.cwd());
     const write = async (): Promise<boolean> => {
         const name = client();
-        if (!isClaudeClient(name)) return false;
-        return writeHookState({ instance: config.instance, token: config.token, defaultChannel: config.defaultChannel, client: name,
-            server, projectDir, pid: process.pid, updatedAt: new Date().toISOString() }, directory).then(() => true, () => false);
+        const cli = hookCli(name);
+        if (!cli) return false;
+        // Codex starts its MCP servers in the session's directory, the `cwd` its hooks get. A
+        // CLAUDE_PROJECT_DIR that reached a Codex server (a Codex started from Claude Code, with
+        // the variable passed on) would name another project, so only Claude's counts.
+        const projectDir = resolve((cli === 'claude' ? env.CLAUDE_PROJECT_DIR?.trim() : undefined) || process.cwd());
+        return writeHookState({ instance: config.instance, token: config.token, defaultChannel: config.defaultChannel, client: name!,
+            server, projectDir, pid: process.pid, updatedAt: new Date().toISOString() }, hookStateDir(cli, root)).then(() => true, () => false);
     };
     const first = (tries: number) => {
         if (client() === null && tries > 0) { setTimeout(() => first(tries - 1), 250).unref(); return; }
         void write();
     };
     // Clear what crashed writes and long-gone servers left, then write ours
-    void sweepHookStates(directory).finally(() => first(20));
+    void Promise.all((['claude', 'codex'] as const).map(cli => sweepHookStates(hookStateDir(cli, root)))).finally(() => first(20));
     setInterval(() => { void write(); }, HOOK_STATE_REFRESH_MS).unref();
     return write;
 }

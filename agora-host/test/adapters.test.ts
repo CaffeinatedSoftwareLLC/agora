@@ -50,6 +50,8 @@ describe('argv/config isolation', () => {
         if (process.platform === 'win32') expect(launch.args).toContain('windows.sandbox="elevated"');
         expect(launch.args).not.toContain('resume'); expect(launch.args.at(-1)).toBe('-');
         expect(launch.env.AGORA_BOT_TOKEN).toBe('bot_selected.secret');
+        // Codex passes its environment on to hooks: a user-level agora-mcp Stop hook stays off
+        expect(launch.env.AGORA_STOP_HOOK).toBe('off');
         expect(JSON.stringify(launch.args)).not.toContain('.secret');
         expect(JSON.stringify(launch.env)).not.toContain(c.hostToken);
         expect(JSON.stringify(launch.env)).not.toContain('bot_sibling');
@@ -76,15 +78,27 @@ describe('argv/config isolation', () => {
         const mcp = await readFile(launch.args[launch.args.indexOf('--mcp-config') + 1], 'utf8');
         expect(Object.keys(JSON.parse(mcp).mcpServers)).toEqual(['agora']); expect(mcp).not.toContain('.secret');
         expect(launch.env.CLAUDE_CONFIG_DIR).toBe(c.profiles.builder.stateDir);
+        expect(launch.env.AGORA_STOP_HOOK).toBe('off');
     });
     it('excludes every inherited credential and automation configuration', () => {
         const env = childEnv(config().profiles.builder, { Path: '/trusted/path', SystemRoot: 'os', AGORA_HOST_TOKEN: 'host',
             AGORA_BOT_TOKEN: 'other', OPENAI_API_KEY: 'secret', NODE_OPTIONS: '--require malicious.js', CLAUDECODE: 'parent' });
-        expect(env).toEqual({ Path: '/trusted/path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir,
+        expect(env).toEqual({ Path: '/trusted/path', SystemRoot: 'os', CODEX_HOME: config().profiles.builder.stateDir, AGORA_STOP_HOOK: 'off',
             ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) });
     });
+    it('turns the agora-mcp Stop hook off in every hosted run, whatever the host inherited', () => {
+        // A profile's stateDir may be the user's own CLI folder, with the user's hooks in it
+        const source = { Path: '/trusted/path', AGORA_STOP_HOOK: 'on' };
+        const profile = (p: object) => configSchema.parse({ ...config(), profiles: { builder: { ...config().profiles.builder, ...p } } }).profiles.builder;
+        const { protocol: _p, auth: _a, acpArgs: _g, apiKeyEnv: _k, ...bare } = config().profiles.builder;
+        const profiles = [profile({}), profile({ adapter: 'claude' }), profile({ adapter: 'codex', protocol: 'acp', auth: 'api_key', apiKeyEnv: 'OPENAI_API_KEY' }),
+            profile({ adapter: 'gemini', protocol: 'acp', acpArgs: ['--acp'], auth: 'api_key', apiKeyEnv: 'GEMINI_API_KEY' }),
+            configSchema.parse({ ...config(), profiles: { builder: { ...bare, adapter: 'opencode' } } }).profiles.builder];
+        expect(profiles.map(p => [p.adapter, childEnv(p, source).AGORA_STOP_HOOK])).toEqual([
+            ['codex', 'off'], ['claude', 'off'], ['codex', 'off'], ['gemini', 'off'], ['opencode', 'off']]);
+    });
     it('passes a codex api_key profile its key as CODEX_API_KEY, the only name codex exec reads (#165)', () => {
-        const os = { Path: '/trusted/path', SystemRoot: 'os', ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) };
+        const os = { Path: '/trusted/path', SystemRoot: 'os', AGORA_STOP_HOOK: 'off', ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) };
         const source = { Path: '/trusted/path', SystemRoot: 'os', OPENAI_API_KEY: 'profile-key', CODEX_API_KEY: 'host-own', ANTHROPIC_API_KEY: 'a', GEMINI_API_KEY: 'g' };
         const profile = (p: object) => configSchema.parse({ ...config(), profiles: { builder: { ...config().profiles.builder, ...p } } }).profiles.builder;
         // OPENAI_API_KEY configured: only the profile's key, under CODEX_API_KEY; the host's own CODEX_API_KEY never reaches it

@@ -107,6 +107,10 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
         for (const [name, dir] of Object.entries(OPENCODE_DIRS)) env[name] = join(profile.stateDir, dir);
         for (const name of OPENCODE_FLAGS) env[name] = '1';
     } else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
+    // A profile's stateDir can be the user's own CLI folder (Codex runs often share it), so the
+    // user's agora-mcp Stop hook may be configured there: it must never keep a hosted run going
+    // (docs/claude-code-hooks.md). Codex hands hooks the environment it was started with.
+    env.AGORA_STOP_HOOK = 'off';
     // api_key mode: only this profile's key variable, never logged (docs/provider-terms.md).
     // The codex CLI (0.163 `exec`, no login in CODEX_HOME) reads only CODEX_API_KEY and ignores
     // OPENAI_API_KEY (#165), so it always gets the key under that name. codex-acp keeps the
