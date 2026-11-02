@@ -281,3 +281,105 @@ describe('authority is unchanged', () => {
         expect(res.body.error).toBe('cannot_direct');
     });
 });
+
+describe('POST /bots/@me/terminal-sessions/end (the Claude Code SessionEnd hook)', () => {
+    const endNow = (auth: object, body: object = {}) => ctx.request.post('/bots/@me/terminal-sessions/end').set(auth).send(body);
+    async function newAgent(name: string): Promise<Agent> {
+        const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
+            .send({ name, hostId, adapter: 'claude', workdirAlias: 'agora', channelId });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        return { id: res.body.bot.id, name, token: res.body.token, auth: { Authorization: `Bot ${res.body.token}` } };
+    }
+
+    test('ends only this bot\'s terminal session now, with the same update the UI gets', async () => {
+        const other = await newAgent('termhookother');
+        const { sessionId } = await connectTerminal(claude);
+        const { sessionId: otherId } = await connectTerminal(other);
+        const watcher = io('http://localhost:4999', { transports: ['websocket'], reconnection: false, autoConnect: false, auth: { token: owner.token } });
+        sockets.push(watcher);
+        const ready = event(watcher, 'Ready');
+        watcher.connect();
+        await ready;
+
+        const update = event(watcher, 'AgentSessionUpdate', e => e.sessionId === sessionId && e.state === 'ended');
+        const res = await endNow(claude.auth, { reason: 'prompt_input_exit' });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(res.body).toEqual({ ended: [sessionId] });
+        expect(await update).toMatchObject({ kind: 'terminal', state: 'ended', endReason: 'session_end', running: false });
+        expect(await sessionRow(sessionId)).toMatchObject({ state: 'ended', end_reason: 'session_end' });
+        expect((await sessionRow(otherId)).state).toBe('live');
+
+        // Nothing live: a repeat ends nothing
+        expect((await endNow(claude.auth)).body).toEqual({ ended: [] });
+    });
+
+    test('a still-connected socket (after /clear) opens a fresh session when it listens or works again', async () => {
+        const { socket, sessionId } = await connectTerminal(claude);
+        expect((await endNow(claude.auth, { reason: 'clear' })).body).toEqual({ ended: [sessionId] });
+
+        // Listening again: a new row, not the ended one
+        const reopened = event(socket, 'TerminalSession');
+        socket.emit('Listening', { listening: true });
+        const fresh = (await reopened).sessions.find((s: any) => s.channelId === channelId).sessionId as string;
+        expect(fresh).not.toBe(sessionId);
+        expect(await sessionRow(fresh)).toMatchObject({ state: 'live', kind: 'terminal' });
+        expect(await sessionRow(sessionId)).toMatchObject({ state: 'ended', end_reason: 'session_end' });
+
+        // Working again after another end: the Activity lands on a new live row
+        await endNow(claude.auth, { reason: 'clear' });
+        const again = event(socket, 'TerminalSession');
+        socket.emit('Activity', { working: true, toolCalls: 3 });
+        const third = (await again).sessions.find((s: any) => s.channelId === channelId).sessionId as string;
+        expect(third).not.toBe(fresh);
+        await until(async () => (await sessionRow(third)).tool_calls === 3, 'activity on the new row');
+        expect(await sessionRow(third)).toMatchObject({ state: 'live', working: true });
+        expect((await sessionRow(fresh)).state).toBe('ended');
+
+        // Going idle or no longer listening does not reopen one (the process may be exiting)
+        await endNow(claude.auth, { reason: 'other' });
+        socket.emit('Listening', { listening: false });
+        socket.emit('Activity', { working: false, toolCalls: 3 });
+        await new Promise(r => setTimeout(r, 300));
+        expect((await ctx.db.query(`SELECT 1 FROM agent_sessions WHERE kind = 'terminal' AND state = 'live'`)).rows).toEqual([]);
+    });
+
+    test('validates the reason, refuses humans, and keeps the token bound to its client', async () => {
+        expect((await endNow(claude.auth, { reason: 'bogus' })).status).toBe(400);
+        expect((await endNow(owner.auth)).status).toBe(403);
+
+        const bound = await newAgent('termhookbound');
+        const { sessionId } = await connectTerminal(bound);
+        // The first named client binds the token (#39); the Claude family shares one binding
+        expect((await ctx.request.get('/bots/@me').set(bound.auth).set('X-Agora-Client', 'claude-code')).status).toBe(200);
+        const refused = await endNow({ ...bound.auth, 'X-Agora-Client': 'codex-mcp-client' });
+        expect(refused.status).toBe(403);
+        expect((await sessionRow(sessionId)).state).toBe('live');
+        const ok = await endNow({ ...bound.auth, 'X-Agora-Client': 'Claude Desktop' });
+        expect(ok.body).toEqual({ ended: [sessionId] });
+    });
+
+    test('with another agora-mcp of the same bot still connected, it ends nothing (409)', async () => {
+        const first = await connectTerminal(claude);
+        const second = await connectTerminal(claude);
+        expect(second.sessionId).toBe(first.sessionId);
+        const refused = await endNow(claude.auth, { reason: 'clear' });
+        expect(refused.status).toBe(409);
+        expect(refused.body).toEqual({ error: 'other_sessions_live' });
+        expect((await sessionRow(first.sessionId)).state).toBe('live');
+
+        // Once only one is left, it can end the session
+        first.socket.disconnect();
+        await until(async () => {
+            const res = await endNow(claude.auth, { reason: 'prompt_input_exit' });
+            return res.status === 200 && res.body;
+        }, 'the other socket to leave');
+        expect(await sessionRow(first.sessionId)).toMatchObject({ state: 'ended', end_reason: 'session_end' });
+    });
+
+    test('a paused bot can still end its session', async () => {
+        const paused = await newAgent('termhookpaused');
+        const { sessionId } = await connectTerminal(paused);
+        await ctx.db.query('UPDATE users SET bot_paused_at = NOW() WHERE id = $1', [paused.id]);
+        expect((await endNow(paused.auth)).body).toEqual({ ended: [sessionId] });
+    });
+});

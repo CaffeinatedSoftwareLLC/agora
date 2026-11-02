@@ -6,6 +6,9 @@ import { Permissions, computePermissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { usernameTaken } from '../lib/usernames';
 import { checkChannelPermissions } from '../lib/channel-access';
+import { asService } from '../lib/agent-sessions';
+import { endTerminalSessionNow } from '../lib/terminal-sessions';
+import { agentPresence } from '../lib/agent-presence';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -802,6 +805,41 @@ export async function botRoutes(app: FastifyInstance) {
                 channelType: c.channel_type,
             })),
         });
+    });
+
+    // POST /bots/@me/terminal-sessions/end { reason? } → 200 { ended: [sessionId] }
+    // The agent's session is over (agora-mcp's Claude Code SessionEnd hook, docs/claude-code-hooks.md):
+    // end its terminal sessions now rather than after the disconnect grace period. `reason` is
+    // Claude Code's SessionEnd reason; after `clear` agora-mcp stays connected and its next
+    // chat_wait or tool call opens a fresh terminal session (src/gateway.ts).
+    app.post('/bots/@me/terminal-sessions/end', {
+        schema: {
+            body: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    reason: { type: 'string', enum: ['clear', 'resume', 'logout', 'prompt_input_exit', 'other'] },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        if (!request.isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+        const db = request.dbClient!;
+        const botId = request.userId!.trim();
+        // The bot's terminal sessions are shared by all its connected agora-mcp processes (one
+        // user-scope bot in two Claude Code windows). With another one still connected, ending
+        // them would leave it without a session it may never re-attach (it is idle, or already
+        // inside chat_wait); the disconnect grace period ends this one instead.
+        if (agentPresence.socketCount(botId) > 1) {
+            return reply.status(409).send({ error: 'other_sessions_live' });
+        }
+        // agent_sessions is read-only to app_user; terminal rows are written as the table owner
+        const notices = await asService(db, () => endTerminalSessionNow(db, botId));
+        request.pendingEvents ??= [];
+        for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
+        return reply.status(200).send({ ended: notices.map(n => n.event.sessionId) });
     });
 
     // ─── Bot Cursor Management (bot auth) ───

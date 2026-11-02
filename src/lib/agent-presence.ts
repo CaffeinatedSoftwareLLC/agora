@@ -35,6 +35,11 @@ export class AgentPresence {
         return { status: conns.some(c => c.listening) ? 'listening' : 'connected', mode };
     }
 
+    /** How many presence sockets the bot has in this process. */
+    socketCount(botId: string): number {
+        return this.sockets.get(botId)?.size ?? 0;
+    }
+
     /** Bots with at least one presence socket in this process. */
     bots(): string[] {
         return [...this.sockets.keys()];

@@ -68,6 +68,8 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /bots/@me/thread-cursors',
     'PUT /bots/@me/thread-cursors/:threadId',
     'GET /bots/@me',
+    // agora-mcp's Claude Code SessionEnd hook (src/routes/bots.ts)
+    'POST /bots/@me/terminal-sessions/end',
     'POST /runtime/runs',
     'GET /runtime/runs/:id',
     'GET /runtime/runs/:id/code',
@@ -78,6 +80,8 @@ const BOT_PAUSED_ALLOWED_WRITES = new Set([
     'PUT /bots/@me/attention-cursors/:channelId',
     'PUT /bots/@me/cursors/:channelId',
     'PUT /bots/@me/thread-cursors/:threadId',
+    // Ending its own terminal session posts nothing (the SessionEnd hook)
+    'POST /bots/@me/terminal-sessions/end',
 ]);
 
 /** Routes an agent host may call, and the only routes its token is good for. */

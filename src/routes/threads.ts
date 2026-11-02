@@ -333,12 +333,15 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Verify parent exists in channel
         const parent = await db.query(
-            'SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
             return reply.status(404).send({ error: 'Message not found' });
         }
+        // Open or closed, also for a thread with no replies yet (agora-mcp's Stop hook reads it;
+        // the body stays the reply list every caller expects)
+        reply.header('X-Agora-Thread-State', parent.rows[0].thread_closed_at ? 'closed' : 'open');
 
         let limit = rawLimit ? parseInt(rawLimit, 10) : 50;
         if (isNaN(limit) || limit < 1) limit = 50;

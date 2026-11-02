@@ -10,7 +10,7 @@ import { socketAccountError, visibleChannels, gatewayAccessRevision, revalidateH
 import { canViewChannel } from './lib/channel-access';
 import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
 import { agentPresence, type AgentPresencePayload } from './lib/agent-presence';
-import { attachTerminal, endTerminal, heartbeatTerminals, sweepStaleTerminals, terminalActivity, terminalGraceMs, HEARTBEAT_MS } from './lib/terminal-sessions';
+import { attachTerminal, endTerminal, heartbeatTerminals, reattachTerminal, sweepStaleTerminals, terminalActivity, terminalGraceMs, HEARTBEAT_MS } from './lib/terminal-sessions';
 import type { Notice } from './lib/agent-runs';
 
 /** How often open human sockets are re-checked against revocation and account state. */
@@ -255,9 +255,24 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                         for (const e of events) socket.to(`channel:${e.channelId}`).emit('AgentPresence', e);
                     };
                     broadcast(agentPresence.connect(botId, name.rows[0]?.username ?? '', socket.id, mode, channelIds));
+                    // The SessionEnd hook may have ended the terminal session while this socket
+                    // stayed up (/clear keeps agora-mcp running): listening or working again
+                    // starts a fresh one. Chained, so an Activity update lands on the new row.
+                    let terminalQueue: Promise<unknown> = Promise.resolve();
+                    const reopen = () => {
+                        terminalQueue = terminalQueue.then(async () => {
+                            if (!socket.connected) return;
+                            const reopened = await reattachTerminal(db, botId, channelIds, mode);
+                            if (!reopened) return;
+                            emitNotices(reopened.notices);
+                            if (socket.connected) socket.emit('TerminalSession', { sessions: reopened.attached });
+                        }).catch(() => {});
+                        return terminalQueue;
+                    };
                     socket.on('Listening', (data: { listening?: unknown }) => {
                         if (typeof data?.listening !== 'boolean') return;
                         broadcast(agentPresence.setListening(botId, socket.id, data.listening));
+                        if (data.listening) void reopen();
                     });
                     // Terminal session (#112): back from a short drop, or new
                     const pending = graceTimers.get(botId);
@@ -277,14 +292,16 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     socket.on('Activity', (data: { working?: unknown; toolCalls?: unknown }) => {
                         if (typeof data?.working !== 'boolean') return;
                         const calls = Number.isSafeInteger(data.toolCalls) && (data.toolCalls as number) >= 0 ? data.toolCalls as number : null;
-                        void terminalActivity(db, botId, data.working, calls).then(emitNotices).catch(() => {});
+                        const ready = data.working ? reopen() : terminalQueue;
+                        void ready.then(() => terminalActivity(db, botId, data.working as boolean, calls)).then(emitNotices).catch(() => {});
                     });
                     // Chat keeps working if this fails; the agent just shows no terminal session
-                    try {
+                    terminalQueue = terminalQueue.then(async () => {
                         const { attached, notices } = await attachTerminal(db, botId, channelIds, mode);
                         emitNotices(notices);
                         if (socket.connected) socket.emit('TerminalSession', { sessions: attached });
-                    } catch { /* presence still works */ }
+                    }).catch(() => { /* presence still works */ });
+                    await terminalQueue;
                 }
             } catch {
                 socket.disconnect();
