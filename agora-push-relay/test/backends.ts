@@ -68,7 +68,7 @@ export function sqliteBackend(): Backend {
     };
 }
 
-export function pgBackend(): Backend {
+export function pgBackend(): Backend & { url(): string } {
     const name = `agora_relay_test_${randomBytes(6).toString('hex')}`;
     let admin: pg.Client | null = null;
     let db: pg.Client | null = null;
@@ -77,6 +77,7 @@ export function pgBackend(): Backend {
     const track = (s: HandleStore) => (open.push(s), s);
     return {
         name: 'postgres',
+        url: () => url,
         async setup() {
             admin = new pg.Client({ connectionString: PG_URL });
             await admin.connect();

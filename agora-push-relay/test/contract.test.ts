@@ -347,6 +347,23 @@ describe('POST /v1/push', () => {
         expect(relay.logs.join('')).toContain('"code":"57P01"');
     });
 
+    it('answers within the write deadline when the database hangs after the provider accepted', async () => {
+        await relay.close();
+        relay = await makeRelay({ writeDeadlineMs: 50 });
+        const handle = await handleFor();
+        const hang = () => new Promise<never>(() => {});
+        relay.store.touch = hang;
+        relay.store.deleteByHash = hang;
+        let started = Date.now();
+        expect((await push(relay, handle)).statusCode).toBe(202);
+        expect(Date.now() - started).toBeLessThan(1_000);
+        android().next = { ok: false, gone: true, reason: 'fcm_404_UNREGISTERED' };
+        started = Date.now();
+        expect((await push(relay, handle)).statusCode).toBe(410);
+        expect(Date.now() - started).toBeLessThan(1_000);
+        expect(relay.logs.join('')).toContain('"code":"timeout"');
+    }, 3_000);
+
     it('429 after 30 a minute per handle, with Retry-After; other handles are unaffected', async () => {
         const handle = await handleFor();
         const other = await handleFor({ token: 'other-token' });

@@ -21,7 +21,8 @@ export interface HandleStore {
     register(platform: Platform, instance: string, token: string, now?: number): Promise<string>;
     renew(handle: string, platform: Platform, instance: string, token: string, now?: number): Promise<boolean>;
     lookup(handle: string): Promise<Registration | null>;
-    touch(handleHash: string, now?: number): Promise<void>;
+    /** Refreshes seen_at. False when the row is gone. */
+    touch(handleHash: string, now?: number): Promise<boolean>;
     deleteByHash(handleHash: string): Promise<boolean>;
     /** Removes handles neither registered nor pushed to since `cutoff` (ms). Returns how many. */
     pruneSeenBefore(cutoff: number): Promise<number>;
@@ -51,7 +52,7 @@ export abstract class SealedHandleStore implements HandleStore {
 
     protected abstract insert(handleHash: string, platform: Platform, sealed: Buffer, now: number): Promise<void>;
     protected abstract row(handleHash: string): Promise<Row | undefined>;
-    abstract touch(handleHash: string, now?: number): Promise<void>;
+    abstract touch(handleHash: string, now?: number): Promise<boolean>;
     abstract deleteByHash(handleHash: string): Promise<boolean>;
     abstract pruneSeenBefore(cutoff: number): Promise<number>;
     abstract count(): Promise<number>;
@@ -76,8 +77,9 @@ export abstract class SealedHandleStore implements HandleStore {
         const reg = await this.lookup(handle);
         if (!reg || reg.platform !== platform) return false;
         if (!sameSecret(reg.instance, instance) || !sameSecret(reg.token, token)) return false;
-        await this.touch(reg.handleHash, now);
-        return true;
+        // A TTL sweep or DELETE can remove the row between the lookup and here. Handing the
+        // handle back then would answer 200 for a handle that gets 401 on its first push.
+        return this.touch(reg.handleHash, now);
     }
 
     async lookup(handle: string): Promise<Registration | null> {
@@ -126,8 +128,8 @@ export class SqliteHandleStore extends SealedHandleStore {
         return this.db.prepare('SELECT handle_hash, platform, sealed FROM handles WHERE handle_hash = ?').get(handleHash) as Row | undefined;
     }
 
-    async touch(handleHash: string, now = Date.now()): Promise<void> {
-        this.db.prepare('UPDATE handles SET seen_at = ? WHERE handle_hash = ?').run(now, handleHash);
+    async touch(handleHash: string, now = Date.now()): Promise<boolean> {
+        return Number(this.db.prepare('UPDATE handles SET seen_at = ? WHERE handle_hash = ?').run(now, handleHash).changes) > 0;
     }
 
     async deleteByHash(handleHash: string): Promise<boolean> {

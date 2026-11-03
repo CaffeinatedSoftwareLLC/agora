@@ -19,7 +19,15 @@ export interface AppOptions {
     trustProxy?: FastifyServerOptions['trustProxy'] | number;
     logger?: FastifyServerOptions['logger'];
     now?: () => number;
+    /** How long /v1/push waits for its database write after the provider answered (ms). */
+    writeDeadlineMs?: number;
 }
+
+/**
+ * Well under Heroku's 30 s router timeout and the instance's own: past it the push has
+ * already gone out, and a caller that timed out would retry and send it twice.
+ */
+export const WRITE_DEADLINE_MS = 2_000;
 
 /** Outcome counts, the only thing the relay reports about traffic. */
 export type Counters = Record<string, number>;
@@ -97,6 +105,7 @@ function fail(req: FastifyRequest, reply: FastifyReply, status: number, error: s
 export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counters } {
     const { store, senders } = opts;
     const now = opts.now ?? Date.now;
+    const writeDeadlineMs = opts.writeDeadlineMs ?? WRITE_DEADLINE_MS;
     const pushLimiter = new FixedWindowLimiter(PUSH_PER_MINUTE, 60_000, now);
     const registerLimiter = new FixedWindowLimiter(opts.registerPerMinute ?? 10, 60_000, now);
     const counters: Counters = {};
@@ -207,9 +216,21 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
         const { type, title, body, url } = req.body;
         const result = await sender.send(reg.token, { type, title, body, url, instance: reg.instance });
         // The push has gone out (or the token is dead) whatever the database says next, so a
-        // failed write is logged, not turned into a 500 the instance would retry as a duplicate.
-        const bestEffort = (write: Promise<unknown>, what: string) =>
-            write.catch((err: { code?: string }) => req.log.warn({ code: err.code ?? 'unknown' }, `${what} failed`));
+        // failed or slow write is logged, not turned into a 500 or a hung request that the
+        // instance would retry as a duplicate. A write past the deadline carries on unawaited.
+        const bestEffort = async (write: Promise<unknown>, what: string) => {
+            let timer: NodeJS.Timeout | undefined;
+            const deadline = new Promise<'timeout'>((resolve) => {
+                timer = setTimeout(() => resolve('timeout'), writeDeadlineMs);
+            });
+            try {
+                if ((await Promise.race([write, deadline])) === 'timeout') req.log.warn({ code: 'timeout' }, `${what} timed out`);
+            } catch (err) {
+                req.log.warn({ code: (err as { code?: string }).code ?? 'unknown' }, `${what} failed`);
+            } finally {
+                clearTimeout(timer);
+            }
+        };
         if (result.ok) {
             await bestEffort(store.touch(reg.handleHash, now()), 'touch');
             req.outcome = `sent_${reg.platform}`;

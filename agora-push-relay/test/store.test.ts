@@ -7,8 +7,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { HANDLE_RE, deriveKeys, hashHandle, open, seal } from '../src/crypto.js';
 import { normalizeInstance } from '../src/origin.js';
 import { FixedWindowLimiter } from '../src/rate-limit.js';
+import pg from 'pg';
 import { SqliteHandleStore } from '../src/store.js';
-import { backends } from './backends.js';
+import { PgHandleStore } from '../src/store-pg.js';
+import { PG_URL, backends, pgBackend } from './backends.js';
 
 const I = 'https://agora.example.com';
 const keys = () => deriveKeys(randomBytes(32));
@@ -128,6 +130,29 @@ describe.each(backends())('HandleStore ($name)', (backend) => {
             expect(await store.pruneSeenBefore(2_000)).toBe(1);
         });
 
+        it('refuses when the row is deleted between its lookup and its touch (TTL sweep or DELETE)', async () => {
+            const store = await backend.fresh(keys());
+            const h = await store.register('android', I, 'tok', 1_000);
+            // Run the sweep in the gap renew awaits between reading the row and refreshing it.
+            const lookup = store.lookup.bind(store);
+            let pruned = -1;
+            store.lookup = async (handle) => {
+                const reg = await lookup(handle);
+                pruned = await store.pruneSeenBefore(2_000);
+                return reg;
+            };
+            expect(await store.renew(h, 'android', I, 'tok', 9_000)).toBe(false);
+            expect(pruned).toBe(1);
+            expect(await lookup(h)).toBeNull();
+        });
+
+        it('touch says whether a row was refreshed', async () => {
+            const store = await backend.fresh(keys());
+            const h = await store.register('android', I, 'tok', 1_000);
+            expect(await store.touch(hashHandle(h), 2_000)).toBe(true);
+            expect(await store.touch(hashHandle('A'.repeat(43)), 2_000)).toBe(false);
+        });
+
         it('refuses a handle sealed under another RELAY_SECRET_KEY', async () => {
             const before = await backend.fresh(keys());
             const h = await before.register('android', I, 'tok');
@@ -135,6 +160,33 @@ describe.each(backends())('HandleStore ($name)', (backend) => {
             expect(await after.renew(h, 'android', I, 'tok')).toBe(false);
         });
     });
+});
+
+describe.skipIf(!PG_URL)('PgHandleStore', () => {
+    const backend = pgBackend();
+    beforeAll(() => backend.setup());
+    afterEach(() => backend.closeAll());
+    afterAll(() => backend.teardown());
+
+    it('gives up on a query stuck behind a locked row instead of hanging the request', async () => {
+        const k = keys();
+        const store = await backend.fresh(k);
+        const h = await store.register('android', I, 'tok', 1_000);
+        const short = await PgHandleStore.open(backend.url(), k, { ssl: false, queryTimeoutMs: 300 });
+        const locker = new pg.Client({ connectionString: backend.url() });
+        await locker.connect();
+        try {
+            await locker.query('BEGIN');
+            await locker.query('SELECT 1 FROM handles WHERE handle_hash = $1 FOR UPDATE', [hashHandle(h)]);
+            const started = Date.now();
+            await expect(short.touch(hashHandle(h), 9_000)).rejects.toThrow();
+            expect(Date.now() - started).toBeLessThan(3_000);
+        } finally {
+            await locker.query('ROLLBACK');
+            await locker.end();
+            await short.close();
+        }
+    }, 10_000);
 });
 
 describe('SqliteHandleStore', () => {
