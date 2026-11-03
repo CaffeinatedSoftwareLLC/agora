@@ -34,7 +34,7 @@ describe('POST /v1/register', () => {
         // The origin is normalised, so this is the same instance.
         const c = await handleFor({ instance: 'https://AGORA.example.com/' });
         expect(new Set([a, b, c]).size).toBe(3);
-        expect(relay.store.count()).toBe(3);
+        expect(await relay.store.count()).toBe(3);
         for (const h of [a, b, c]) expect((await push(relay, h)).statusCode).toBe(202);
     });
 
@@ -61,7 +61,7 @@ describe('POST /v1/register', () => {
             const res = await register(relay, { previous: a, instance: 'https://AGORA.example.com/' });
             expect(res.statusCode).toBe(200);
             expect(res.json()).toEqual({ handle: a });
-            expect(relay.store.count()).toBe(1);
+            expect(await relay.store.count()).toBe(1);
             expect((await push(relay, a)).statusCode).toBe(202);
         });
 
@@ -70,7 +70,7 @@ describe('POST /v1/register', () => {
             expect(res.statusCode).toBe(201);
             expect(res.json().handle).toMatch(HANDLE_RE);
             expect(res.json().handle).not.toBe('A'.repeat(43));
-            expect(relay.store.count()).toBe(1);
+            expect(await relay.store.count()).toBe(1);
         });
 
         it('201 with a new handle after the previous one was deleted', async () => {
@@ -85,12 +85,12 @@ describe('POST /v1/register', () => {
         it('201 with a new handle when the previous one is for the same token but another instance; that one stays as it was', async () => {
             const other = 'https://other.example.com';
             const a = await handleFor({ instance: other });
-            const before = relay.store.lookup(a);
+            const before = await relay.store.lookup(a);
             const res = await register(relay, { previous: a });
             expect(res.statusCode).toBe(201);
             const b = res.json().handle as string;
             expect(b).not.toBe(a);
-            expect(relay.store.lookup(a)).toEqual(before);
+            expect(await relay.store.lookup(a)).toEqual(before);
             expect((await push(relay, a, pushBody({ instance: other }))).statusCode).toBe(202);
             expect((await push(relay, b)).statusCode).toBe(202);
             expect((await push(relay, b, pushBody({ instance: other }))).statusCode).toBe(403);
@@ -102,8 +102,8 @@ describe('POST /v1/register', () => {
             expect(res.statusCode).toBe(201);
             const b = res.json().handle as string;
             expect(b).not.toBe(a);
-            expect(relay.store.lookup(a)?.token).toBe('old-token');
-            expect(relay.store.lookup(b)?.token).toBe(ANDROID_TOKEN);
+            expect((await relay.store.lookup(a))?.token).toBe('old-token');
+            expect((await relay.store.lookup(b))?.token).toBe(ANDROID_TOKEN);
         });
 
         it('400 for a `previous` that is not a handle', async () => {
@@ -173,6 +173,36 @@ describe('POST /v1/register', () => {
         expect((await register(relay, {}, '198.51.100.7')).statusCode).toBe(201);
     });
 
+    describe('behind a router that appends the client address (Heroku), RELAY_TRUST_PROXY=1', () => {
+        const ROUTER = '10.1.2.3';
+        const viaRouter = (xff?: string) =>
+            relay.app.inject({
+                method: 'POST',
+                url: '/v1/register',
+                remoteAddress: ROUTER,
+                headers: xff === undefined ? {} : { 'x-forwarded-for': xff },
+                payload: { platform: 'android', token: ANDROID_TOKEN, instance: INSTANCE },
+            });
+
+        it('limits by the last X-Forwarded-For entry; a spoofed leftmost entry does not bypass it', async () => {
+            await relay.close();
+            relay = await makeRelay({ registerPerMinute: 3, trustProxy: 1 });
+            // The client sends its own X-Forwarded-For; the router appends the real address.
+            for (let i = 0; i < 3; i++) expect((await viaRouter(`192.0.2.${i}, 198.51.100.7`)).statusCode).toBe(201);
+            expect((await viaRouter('192.0.2.99, 198.51.100.7')).statusCode).toBe(429);
+            expect((await viaRouter('198.51.100.7')).statusCode).toBe(429);
+            // Another real client, and the router's own address, have their own windows.
+            expect((await viaRouter('198.51.100.7, 198.51.100.8')).statusCode).toBe(201);
+            expect((await viaRouter()).statusCode).toBe(201);
+        });
+
+        it('trusting every hop (true) would let that client through: why the hop count exists', async () => {
+            await relay.close();
+            relay = await makeRelay({ registerPerMinute: 3, trustProxy: true });
+            for (let i = 0; i < 4; i++) expect((await viaRouter(`192.0.2.${i}, 198.51.100.7`)).statusCode).toBe(201);
+        });
+    });
+
     it('allows cross-origin calls (CORS) and answers the preflight', async () => {
         const res = await register(relay);
         expect(res.headers['access-control-allow-origin']).toBe('*');
@@ -204,7 +234,7 @@ describe('a third party holding the device token', () => {
         const res = await push(relay, bHandle, pushBody({ instance: B }));
         expect(res.statusCode).toBe(202);
         expect(android().calls.at(-1)).toMatchObject({ token: expect.stringMatching(/^fcm-token/), message: { instance: B } });
-        expect(relay.store.count()).toBe(1);
+        expect(await relay.store.count()).toBe(1);
     });
 
     it('accepted limit: it CAN register naming B and push to the device through its own fresh handle', async () => {
@@ -290,7 +320,7 @@ describe('POST /v1/push', () => {
         const res = await push(relay, handle);
         expect(res.statusCode).toBe(410);
         expect(res.json()).toEqual({ error: 'gone' });
-        expect(relay.store.count()).toBe(0);
+        expect(await relay.store.count()).toBe(0);
         android().next = { ok: true };
         expect((await push(relay, handle)).statusCode).toBe(401);
     });
@@ -301,7 +331,20 @@ describe('POST /v1/push', () => {
         const res = await push(relay, handle);
         expect(res.statusCode).toBe(502);
         expect(res.json()).toEqual({ error: 'provider_error' });
-        expect(relay.store.count()).toBe(1);
+        expect(await relay.store.count()).toBe(1);
+    });
+
+    it('a database error after the provider answered does not turn into a 500 (no duplicate retry)', async () => {
+        const handle = await handleFor();
+        const down = async () => {
+            throw Object.assign(new Error('terminating connection'), { code: '57P01' });
+        };
+        relay.store.touch = down;
+        relay.store.deleteByHash = down;
+        expect((await push(relay, handle)).statusCode).toBe(202);
+        android().next = { ok: false, gone: true, reason: 'fcm_404_UNREGISTERED' };
+        expect((await push(relay, handle)).statusCode).toBe(410);
+        expect(relay.logs.join('')).toContain('"code":"57P01"');
     });
 
     it('429 after 30 a minute per handle, with Retry-After; other handles are unaffected', async () => {

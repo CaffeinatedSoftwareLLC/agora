@@ -1,0 +1,7 @@
+# Heroku container build for the push relay (README.md, "Deploy on Heroku").
+# Heroku reads heroku.yml from the root of the pushed tree, so push this folder on its own:
+#   git subtree push --prefix agora-push-relay heroku main
+# The web process runs the Dockerfile's CMD and listens on Heroku's PORT.
+build:
+  docker:
+    web: Dockerfile

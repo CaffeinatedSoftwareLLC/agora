@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { FcmSender, buildFcmMessage, loadServiceAccount, type ServiceAccount } from '../src/senders/fcm.js';
+import { FcmSender, buildFcmMessage, loadServiceAccount, parseServiceAccount, type ServiceAccount } from '../src/senders/fcm.js';
 import { makeRelay, push, pushBody, register } from './helpers.js';
 
 // A throwaway key generated per run. No real Google credentials are used.
@@ -163,7 +163,7 @@ describe('FCM HTTP v1 sender', () => {
             expect((await push(relay, handle)).statusCode).toBe(202);
             fcmReply = fcmError(404, 'NOT_FOUND', 'UNREGISTERED');
             expect((await push(relay, handle, pushBody())).statusCode).toBe(410);
-            expect(relay.store.count()).toBe(0);
+            expect(await relay.store.count()).toBe(0);
         } finally {
             await relay.close();
         }
@@ -196,5 +196,24 @@ describe('loadServiceAccount', () => {
 
     it('rejects a missing file', () => {
         expect(() => loadServiceAccount(join(dir, 'nope.json'))).toThrow(/cannot read/);
+    });
+});
+
+describe('parseServiceAccount (FCM_SERVICE_ACCOUNT_JSON)', () => {
+    it('reads the JSON itself', () => {
+        expect(parseServiceAccount(JSON.stringify({ type: 'service_account', ...SA }))).toEqual(SA);
+    });
+
+    it('rejects broken or other JSON, naming the variable and never quoting the value', () => {
+        for (const text of ['{"private_key":"DO-NOT-ECHO"', JSON.stringify({ type: 'authorized_user', secret: 'DO-NOT-ECHO' })]) {
+            let message = '';
+            try {
+                parseServiceAccount(text);
+            } catch (err) {
+                message = String(err);
+            }
+            expect(message).toMatch(/FCM_SERVICE_ACCOUNT_JSON/);
+            expect(message).not.toContain('DO-NOT-ECHO');
+        }
     });
 });

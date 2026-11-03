@@ -14,17 +14,31 @@ export interface ServiceAccount {
     token_uri: string;
 }
 
-/** Reads the Firebase service-account JSON. The error never echoes the file's contents. */
+/** Reads the Firebase service-account JSON from a file. The error never echoes the file's contents. */
 export function loadServiceAccount(path: string): ServiceAccount {
-    let raw: unknown;
+    let text: string;
     try {
-        raw = JSON.parse(readFileSync(path, 'utf8'));
+        text = readFileSync(path, 'utf8');
     } catch {
         throw new Error(`FCM_SERVICE_ACCOUNT_FILE: cannot read or parse ${path}`);
     }
-    const sa = raw as Partial<ServiceAccount> & { type?: string };
+    return parseServiceAccount(text, `FCM_SERVICE_ACCOUNT_FILE: ${path}`);
+}
+
+/**
+ * Parses the service-account JSON itself (FCM_SERVICE_ACCOUNT_JSON, or a file's contents).
+ * `source` names where it came from; errors never quote the JSON, whose parse errors can.
+ */
+export function parseServiceAccount(text: string, source = 'FCM_SERVICE_ACCOUNT_JSON'): ServiceAccount {
+    let raw: unknown;
+    try {
+        raw = JSON.parse(text);
+    } catch {
+        throw new Error(`${source}: cannot read or parse the JSON`);
+    }
+    const sa = (raw ?? {}) as Partial<ServiceAccount> & { type?: string };
     if (sa.type !== 'service_account' || !sa.project_id || !sa.client_email || !sa.private_key) {
-        throw new Error(`FCM_SERVICE_ACCOUNT_FILE: ${path} is not a service-account key (needs type, project_id, client_email, private_key)`);
+        throw new Error(`${source} is not a service-account key (needs type, project_id, client_email, private_key)`);
     }
     return { project_id: sa.project_id, client_email: sa.client_email, private_key: sa.private_key, token_uri: sa.token_uri || DEFAULT_TOKEN_URI };
 }

@@ -228,6 +228,21 @@ jobs:
     if: needs.changes.outputs.relay == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The store tests run against Postgres too (the Heroku deploy); they create and drop
+    # a database of their own, and fail rather than skip when CI has no TEST_DATABASE_URL.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: accord
+          POSTGRES_PASSWORD: accord
+          POSTGRES_DB: accord_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U accord -d accord_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://accord:accord@localhost:5432/accord_test
     defaults:
       run:
         working-directory: agora-push-relay

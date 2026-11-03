@@ -22,10 +22,15 @@ export function loadApnsKey(path: string): string {
     } catch {
         throw new Error(`APNS_KEY_FILE: cannot read ${path}`);
     }
+    return parseApnsKey(pem, `APNS_KEY_FILE: ${path}`);
+}
+
+/** Checks the .p8 text itself (APNS_KEY, or a file's contents). The error never quotes it. */
+export function parseApnsKey(pem: string, source = 'APNS_KEY'): string {
     try {
         createPrivateKey(pem);
     } catch {
-        throw new Error(`APNS_KEY_FILE: ${path} is not a PEM private key (.p8)`);
+        throw new Error(`${source} is not a PEM private key (.p8)`);
     }
     return pem;
 }

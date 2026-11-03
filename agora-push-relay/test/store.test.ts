@@ -3,37 +3,142 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { HANDLE_RE, deriveKeys, hashHandle, open, seal } from '../src/crypto.js';
 import { normalizeInstance } from '../src/origin.js';
 import { FixedWindowLimiter } from '../src/rate-limit.js';
-import { HandleStore } from '../src/store.js';
+import { SqliteHandleStore } from '../src/store.js';
+import { backends } from './backends.js';
 
 const I = 'https://agora.example.com';
+const keys = () => deriveKeys(randomBytes(32));
 
-describe('HandleStore', () => {
-    it('looks a handle up by its hash and decrypts the token and instance', () => {
-        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const handle = store.register('ios', I, 'ab'.repeat(32));
-        expect(store.lookup(handle)).toEqual({ handleHash: hashHandle(handle), platform: 'ios', instance: I, token: 'ab'.repeat(32) });
-        expect(store.lookup('A'.repeat(43))).toBeNull();
-        store.close();
+// Every store test runs against SQLite and, when TEST_DATABASE_URL is set (always in CI), Postgres.
+describe.each(backends())('HandleStore ($name)', (backend) => {
+    beforeAll(() => backend.setup());
+    afterEach(() => backend.closeAll());
+    afterAll(() => backend.teardown());
+
+    it('looks a handle up by its hash and decrypts the token and instance', async () => {
+        const store = await backend.fresh(keys());
+        const handle = await store.register('ios', I, 'ab'.repeat(32));
+        expect(await store.lookup(handle)).toEqual({ handleHash: hashHandle(handle), platform: 'ios', instance: I, token: 'ab'.repeat(32) });
+        expect(await store.lookup('A'.repeat(43))).toBeNull();
     });
 
-    it('gives every registration a new random handle; earlier ones stay valid', () => {
-        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const a = store.register('android', I, 'tok');
-        const b = store.register('android', I, 'tok');
+    it('gives every registration a new random handle; earlier ones stay valid', async () => {
+        const store = await backend.fresh(keys());
+        const a = await store.register('android', I, 'tok');
+        const b = await store.register('android', I, 'tok');
         expect(a).toMatch(HANDLE_RE);
         expect(b).toMatch(HANDLE_RE);
         expect(b).not.toBe(a);
-        expect(store.lookup(a)?.token).toBe('tok');
-        expect(store.lookup(b)?.token).toBe('tok');
-        expect(store.count()).toBe(2);
-        store.close();
+        expect((await store.lookup(a))?.token).toBe('tok');
+        expect((await store.lookup(b))?.token).toBe('tok');
+        expect(await store.count()).toBe(2);
     });
 
-    it('still reads rows written by the earlier build, whose handles were HMAC-derived', () => {
+    it('prunes handles not seen since the cutoff; touch keeps one alive', async () => {
+        const store = await backend.fresh(keys());
+        const old = await store.register('android', I, 'old', 1_000);
+        await store.register('android', I, 'new', 5_000);
+        const kept = await store.register('android', I, 'kept', 1_000);
+        await store.touch(hashHandle(kept), 6_000);
+        expect(await store.pruneSeenBefore(2_000)).toBe(1);
+        expect(await store.lookup(old)).toBeNull();
+        expect(await store.lookup(kept)).not.toBeNull();
+        expect(await store.count()).toBe(2);
+    });
+
+    it('keeps millisecond timestamps past 2^31 (seen_at is a 64-bit integer)', async () => {
+        const store = await backend.fresh(keys());
+        const now = Date.UTC(2026, 10, 3);
+        const h = await store.register('android', I, 'tok', now);
+        expect(await store.pruneSeenBefore(now)).toBe(0);
+        expect(await store.pruneSeenBefore(now + 1)).toBe(1);
+        expect(await store.lookup(h)).toBeNull();
+    });
+
+    it('deletes by hash, once', async () => {
+        const store = await backend.fresh(keys());
+        const h = await store.register('android', I, 'tok');
+        expect(await store.deleteByHash(hashHandle(h))).toBe(true);
+        expect(await store.deleteByHash(hashHandle(h))).toBe(false);
+        expect(await store.lookup(h)).toBeNull();
+    });
+
+    it('keeps registrations across a restart with the same key', async () => {
+        const k = keys();
+        const before = await backend.fresh(k);
+        const handle = await before.register('android', I, 'tok');
+        await before.close();
+        const after = await backend.reopen(k);
+        expect((await after.lookup(handle))?.token).toBe('tok');
+    });
+
+    it('treats a row sealed under another RELAY_SECRET_KEY as unknown', async () => {
+        const before = await backend.fresh(keys());
+        const handle = await before.register('android', I, 'tok');
+        const after = await backend.reopen(keys());
+        expect(await after.lookup(handle)).toBeNull();
+    });
+
+    it('a handle lives by its own seen_at: re-registering the token does not refresh older handles', async () => {
+        const store = await backend.fresh(keys());
+        const old = await store.register('android', I, 'tok', 1_000);
+        const fresh = await store.register('android', I, 'tok', 9_000);
+        expect(await store.pruneSeenBefore(2_000)).toBe(1);
+        expect(await store.lookup(old)).toBeNull();
+        expect(await store.lookup(fresh)).not.toBeNull();
+    });
+
+    it('stores neither the handle nor the token or instance in the clear', async () => {
+        const store = await backend.fresh(keys());
+        const token = 'TOKEN-CANARY-' + 'q'.repeat(60);
+        const handle = await store.register('android', 'https://instance-canary.example.com', token);
+        const bytes = await backend.raw();
+        expect(bytes.length).toBeGreaterThan(0);
+        for (const secret of [handle, token, 'TOKEN-CANARY', 'instance-canary']) expect(bytes.includes(Buffer.from(secret))).toBe(false);
+        // The row key is the handle's hash.
+        expect(bytes.includes(Buffer.from(hashHandle(handle)))).toBe(true);
+    });
+
+    describe('renew', () => {
+        it('keeps the handle and refreshes its seen_at when platform, instance and token all match', async () => {
+            const store = await backend.fresh(keys());
+            const h = await store.register('android', I, 'tok', 1_000);
+            expect(await store.renew(h, 'android', I, 'tok', 9_000)).toBe(true);
+            // seen_at is now 9000, so a prune at 2000 keeps it.
+            expect(await store.pruneSeenBefore(2_000)).toBe(0);
+            expect(await store.lookup(h)).not.toBeNull();
+            expect(await store.count()).toBe(1);
+        });
+
+        it('refuses, and changes nothing, for an unknown handle or any mismatch', async () => {
+            const store = await backend.fresh(keys());
+            const h = await store.register('android', I, 'tok', 1_000);
+            const before = await store.lookup(h);
+            expect(await store.renew('A'.repeat(43), 'android', I, 'tok', 9_000)).toBe(false);
+            expect(await store.renew(h, 'ios', I, 'tok', 9_000)).toBe(false);
+            expect(await store.renew(h, 'android', 'https://other.example.com', 'tok', 9_000)).toBe(false);
+            expect(await store.renew(h, 'android', I, 'other-token', 9_000)).toBe(false);
+            expect(await store.renew(h, 'android', I, 'to', 9_000)).toBe(false);
+            expect(await store.lookup(h)).toEqual(before);
+            // None of them refreshed seen_at.
+            expect(await store.pruneSeenBefore(2_000)).toBe(1);
+        });
+
+        it('refuses a handle sealed under another RELAY_SECRET_KEY', async () => {
+            const before = await backend.fresh(keys());
+            const h = await before.register('android', I, 'tok');
+            const after = await backend.reopen(keys());
+            expect(await after.renew(h, 'android', I, 'tok')).toBe(false);
+        });
+    });
+});
+
+describe('SqliteHandleStore', () => {
+    it('still reads rows written by the earlier build, whose handles were HMAC-derived', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
         const path = join(dir, 'relay.db');
         const master = randomBytes(32);
@@ -42,8 +147,8 @@ describe('HandleStore', () => {
         const oldHandle = createHmac('sha256', handleKey).update(`v1
 ${I}
 tok`).digest('base64url');
-        const store = new HandleStore(path, deriveKeys(master));
-        store.close();
+        const store = new SqliteHandleStore(path, deriveKeys(master));
+        await store.close();
         const db = new DatabaseSync(path);
         db.prepare('INSERT INTO handles (handle_hash, platform, sealed, created_at, seen_at) VALUES (?, ?, ?, ?, ?)').run(
             hashHandle(oldHandle),
@@ -53,85 +158,12 @@ tok`).digest('base64url');
             1,
         );
         db.close();
-        const reopened = new HandleStore(path, deriveKeys(master));
-        expect(reopened.lookup(oldHandle)).toEqual({ handleHash: hashHandle(oldHandle), platform: 'android', instance: I, token: 'tok' });
+        const reopened = new SqliteHandleStore(path, deriveKeys(master));
+        expect(await reopened.lookup(oldHandle)).toEqual({ handleHash: hashHandle(oldHandle), platform: 'android', instance: I, token: 'tok' });
         // Registering the same pair now issues a new handle and leaves the old row alone.
-        expect(reopened.register('android', I, 'tok')).not.toBe(oldHandle);
-        expect(reopened.lookup(oldHandle)).not.toBeNull();
-        reopened.close();
-        rmSync(dir, { recursive: true, force: true });
-    });
-
-    it('prunes handles not seen since the cutoff; touch keeps one alive', () => {
-        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const old = store.register('android', I, 'old', 1_000);
-        store.register('android', I, 'new', 5_000);
-        const kept = store.register('android', I, 'kept', 1_000);
-        store.touch(hashHandle(kept), 6_000);
-        expect(store.pruneSeenBefore(2_000)).toBe(1);
-        expect(store.lookup(old)).toBeNull();
-        expect(store.lookup(kept)).not.toBeNull();
-        expect(store.count()).toBe(2);
-    });
-
-    it('treats a row sealed under another RELAY_SECRET_KEY as unknown', () => {
-        const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
-        const path = join(dir, 'relay.db');
-        const before = new HandleStore(path, deriveKeys(randomBytes(32)));
-        const handle = before.register('android', I, 'tok');
-        before.close();
-        const after = new HandleStore(path, deriveKeys(randomBytes(32)));
-        expect(after.lookup(handle)).toBeNull();
-        after.close();
-        rmSync(dir, { recursive: true, force: true });
-    });
-
-    it('a handle lives by its own seen_at: re-registering the token does not refresh older handles', () => {
-        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const old = store.register('android', I, 'tok', 1_000);
-        const fresh = store.register('android', I, 'tok', 9_000);
-        expect(store.pruneSeenBefore(2_000)).toBe(1);
-        expect(store.lookup(old)).toBeNull();
-        expect(store.lookup(fresh)).not.toBeNull();
-    });
-});
-
-describe('HandleStore.renew', () => {
-    it('keeps the handle and refreshes its seen_at when platform, instance and token all match', () => {
-        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const h = store.register('android', I, 'tok', 1_000);
-        expect(store.renew(h, 'android', I, 'tok', 9_000)).toBe(true);
-        // seen_at is now 9000, so a prune at 2000 keeps it.
-        expect(store.pruneSeenBefore(2_000)).toBe(0);
-        expect(store.lookup(h)).not.toBeNull();
-        expect(store.count()).toBe(1);
-        store.close();
-    });
-
-    it('refuses, and changes nothing, for an unknown handle or any mismatch', () => {
-        const store = new HandleStore(':memory:', deriveKeys(randomBytes(32)));
-        const h = store.register('android', I, 'tok', 1_000);
-        const before = store.lookup(h);
-        expect(store.renew('A'.repeat(43), 'android', I, 'tok', 9_000)).toBe(false);
-        expect(store.renew(h, 'ios', I, 'tok', 9_000)).toBe(false);
-        expect(store.renew(h, 'android', 'https://other.example.com', 'tok', 9_000)).toBe(false);
-        expect(store.renew(h, 'android', I, 'other-token', 9_000)).toBe(false);
-        expect(store.renew(h, 'android', I, 'to', 9_000)).toBe(false);
-        expect(store.lookup(h)).toEqual(before);
-        // None of them refreshed seen_at.
-        expect(store.pruneSeenBefore(2_000)).toBe(1);
-        store.close();
-    });
-
-    it('refuses a handle sealed under another RELAY_SECRET_KEY', () => {
-        const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
-        const path = join(dir, 'relay.db');
-        const before = new HandleStore(path, deriveKeys(randomBytes(32)));
-        const h = before.register('android', I, 'tok');
-        before.close();
-        const after = new HandleStore(path, deriveKeys(randomBytes(32)));
-        expect(after.renew(h, 'android', I, 'tok')).toBe(false);
-        after.close();
+        expect(await reopened.register('android', I, 'tok')).not.toBe(oldHandle);
+        expect(await reopened.lookup(oldHandle)).not.toBeNull();
+        await reopened.close();
         rmSync(dir, { recursive: true, force: true });
     });
 });
