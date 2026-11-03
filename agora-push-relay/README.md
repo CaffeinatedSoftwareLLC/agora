@@ -76,7 +76,10 @@ server.
 ### Storage and handles
 
 SQLite through Node's built-in `node:sqlite` (Node 22.13+; no native build), one
-`handles` table in the `relay-data` volume, WAL mode. `node:sqlite` is still flagged
+`handles` table in the `relay-data` volume, WAL mode. With `DATABASE_URL` set the
+relay uses Postgres instead (`src/store-pg.ts`, the `pg` package), for hosts whose disk
+does not last, such as Heroku: the same `handles` table and the same rules, created on
+start if it is missing. There is no tool to copy rows between the two. `node:sqlite` is still flagged
 experimental on Node 22 (the start command silences the warning), which is why the
 Dockerfile pins an exact Node release (`node:22.23.4-alpine3.24`) in both stages
 rather than following `node:22-alpine`. Move the pin on purpose and run the tests
@@ -128,7 +131,8 @@ register again and give its instance the new handle.
 
 ## Deploying (Caffeinated Software)
 
-Needs a Linux host with Docker and a domain for the relay. The app expects it at
+Needs a Linux host with Docker and a domain for the relay (or Heroku: see
+"Deploy on Heroku" below). The app expects it at
 `relayUrl` in `agora-mobile/app.config.json` (`https://push.agora.host`).
 
 1. **Credentials, outside git.** Put them in `agora-push-relay/secrets/` on the
@@ -175,6 +179,88 @@ again and hand its instance the new handle.
 
 Upgrading: `git pull`, then the same `up -d --build`.
 
+## Deploy on Heroku
+
+The same image runs on a Heroku **Basic** dyno with **Heroku Postgres Essential-0**.
+A dyno's disk is wiped at least once a day, so the relay keeps its handles in Postgres
+(`DATABASE_URL`, set by the add-on) instead of SQLite. Not Eco: an Eco dyno sleeps
+after 30 minutes without traffic, and the next push would wait for it to start.
+Basic dynos also get Heroku's free certificates (ACM) for a custom domain.
+
+Run from `agora-push-relay/`, with the Heroku CLI logged in. `agora-push-relay` below
+is the app name; pick your own if it is taken.
+
+1. **App, stack, database.**
+
+   ```bash
+   heroku create agora-push-relay
+   heroku stack:set container -a agora-push-relay
+   heroku addons:create heroku-postgresql:essential-0 -a agora-push-relay
+   heroku ps:type web=basic -a agora-push-relay   # after the first deploy, if the dyno came up as Eco
+   ```
+
+   The add-on sets `DATABASE_URL`. The relay creates its table on first start. It
+   connects with TLS but does not verify the certificate, because Heroku Postgres
+   certificates do not chain to a public CA that `pg` trusts (Heroku's own advice).
+   `RELAY_DB_SSL=require|disable` overrides that; leave it unset on Heroku.
+2. **Settings and secrets (the owner runs these; never paste the values into chat,
+   an issue or an Agora instance).** Heroku has no secret files, so the FCM and APNs
+   keys go in as content:
+
+   ```bash
+   heroku config:set -a agora-push-relay \
+     RELAY_SECRET_KEY="$(openssl rand -hex 32)" \
+     FCM_SERVICE_ACCOUNT_JSON="$(cat fcm-service-account.json)" \
+     APNS_KEY="$(cat AuthKey_XXXXXXXXXX.p8)" \
+     APNS_KEY_ID=XXXXXXXXXX APNS_TEAM_ID=XXXXXXXXXX \
+     APNS_BUNDLE_ID=com.caffeinatedsoftware.agora APNS_ENVIRONMENT=production \
+     RELAY_TRUST_PROXY=1
+   heroku config:get RELAY_SECRET_KEY -a agora-push-relay   # copy it to your password manager now
+   ```
+
+   `APNS_KEY` takes the `.p8` with real line breaks or with literal `\n`. Setting both
+   a `*_FILE` variable and its content variable stops the relay with a config error.
+   Leave out a platform's variables to turn it off (its registers answer `503`).
+   `RELAY_TRUST_PROXY=1`: Heroku's router appends the client's address as the last
+   `X-Forwarded-For` entry after whatever the client sent, so the relay takes the last
+   one. `true` would take the first, which the client writes, and let anyone dodge the
+   per-IP register limit. Heroku sets `PORT`, which wins over `RELAY_PORT`.
+3. **Deploy.** Either build locally and push the image (needs Docker; dynos run
+   `linux/amd64`, so on an ARM Mac set `DOCKER_DEFAULT_PLATFORM=linux/amd64` first):
+
+   ```bash
+   heroku container:push web -a agora-push-relay
+   heroku container:release web -a agora-push-relay
+   ```
+
+   or let Heroku build from git with `heroku.yml`. Heroku reads `heroku.yml` from the
+   root of what is pushed, so push this folder on its own, from the repo root:
+
+   ```bash
+   heroku git:remote -a agora-push-relay
+   git subtree push --prefix agora-push-relay heroku main
+   ```
+
+   `heroku logs --tail -a agora-push-relay` should show `store` with
+   `"store":"postgres","tls":true` and `providers` with `android: true`, `ios: true`.
+4. **Domain.** The apps' built-in relay is `https://push.agora.host` (`relayUrl` in
+   `agora-mobile/app.config.json`, see `agora-mobile/README.md`):
+
+   ```bash
+   heroku domains:add push.agora.host -a agora-push-relay
+   heroku certs:auto:enable -a agora-push-relay
+   ```
+
+   Point a `CNAME` for `push.agora.host` at the DNS target `domains:add` prints, then
+   wait for `heroku certs:auto -a agora-push-relay` to show the certificate issued.
+5. **Check it.** `curl https://push.agora.host/healthz` →
+   `{"status":"ok","providers":{"android":true,"ios":true}}`. Point uptime monitoring
+   at the same URL.
+
+Back up `RELAY_SECRET_KEY` outside Heroku, as above. Postgres Essential plans have no
+point-in-time rollback; `heroku pg:backups:schedule DATABASE_URL --at '04:00 UTC'`
+keeps a daily backup. The in-memory rate limits assume one dyno: keep `web=1`.
+
 ### Operator duties
 
 - **Key backup.** Keep `RELAY_SECRET_KEY` somewhere other than the relay host. Lose it
@@ -205,6 +291,11 @@ npm test           # vitest; no network, no credentials
 npm run build
 RELAY_SECRET_KEY=$(openssl rand -hex 32) RELAY_DB_PATH=./relay.db npm start
 ```
+
+The store tests also run against Postgres when `TEST_DATABASE_URL` is set (the repo's
+test database, `.env.example` at the root; CI always sets it). They create a database
+of their own next to it and drop it afterwards. Without the variable the Postgres
+suite is skipped, except under `CI`, where it is an error.
 
 The tests generate throwaway RSA and P-256 keys and run local stand-ins for
 Google's token endpoint, FCM and APNs (HTTP/2 cleartext). They never contact Google

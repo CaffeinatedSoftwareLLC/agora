@@ -15,10 +15,19 @@ export interface AppOptions {
     senders: Partial<Record<Platform, Sender>>;
     /** Per client IP, on POST /v1/register. */
     registerPerMinute?: number;
-    trustProxy?: FastifyServerOptions['trustProxy'];
+    /** As Fastify's, plus a hop count (see `trustHops`). */
+    trustProxy?: FastifyServerOptions['trustProxy'] | number;
     logger?: FastifyServerOptions['logger'];
     now?: () => number;
+    /** How long /v1/push waits for its database write after the provider answered (ms). */
+    writeDeadlineMs?: number;
 }
+
+/**
+ * Well under Heroku's 30 s router timeout and the instance's own: past it the push has
+ * already gone out, and a caller that timed out would retry and send it twice.
+ */
+export const WRITE_DEADLINE_MS = 2_000;
 
 /** Outcome counts, the only thing the relay reports about traffic. */
 export type Counters = Record<string, number>;
@@ -77,6 +86,17 @@ function bearer(req: FastifyRequest): string | null {
     return m && HANDLE_RE.test(m[1]) ? m[1] : null;
 }
 
+/**
+ * Trust the `hops` nearest addresses: the socket peer and then X-Forwarded-For from the
+ * right. A router that appends the client's address (Heroku's does) makes hops = 1 give
+ * the client, whatever the client wrote further left. `trustProxy: true` would take the
+ * leftmost entry, which the client chooses. Fastify 5 treats a bare number as "trust
+ * nothing", hence the function. Only for a port nothing reaches except through the proxy.
+ */
+export function trustHops(hops: number): (address: string, hop: number) => boolean {
+    return (_address, hop) => hop < hops;
+}
+
 function fail(req: FastifyRequest, reply: FastifyReply, status: number, error: string, outcome = error) {
     req.outcome = outcome;
     return reply.code(status).send({ error });
@@ -85,6 +105,7 @@ function fail(req: FastifyRequest, reply: FastifyReply, status: number, error: s
 export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counters } {
     const { store, senders } = opts;
     const now = opts.now ?? Date.now;
+    const writeDeadlineMs = opts.writeDeadlineMs ?? WRITE_DEADLINE_MS;
     const pushLimiter = new FixedWindowLimiter(PUSH_PER_MINUTE, 60_000, now);
     const registerLimiter = new FixedWindowLimiter(opts.registerPerMinute ?? 10, 60_000, now);
     const counters: Counters = {};
@@ -92,7 +113,7 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
     const app = Fastify({
         logger: opts.logger ?? false,
         bodyLimit: BODY_LIMIT,
-        trustProxy: opts.trustProxy ?? false,
+        trustProxy: typeof opts.trustProxy === 'number' ? trustHops(opts.trustProxy) : (opts.trustProxy ?? false),
         // Fastify's own request lines carry the URL and client address. The relay logs one
         // line per request itself, with the route and an outcome code only.
         logController: new LogController({ disableRequestLogging: true }),
@@ -170,11 +191,11 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
             if (!senders[platform]) return fail(req, reply, 503, 'platform_unavailable');
             // 200 with the same handle when `previous` still holds this platform, instance and
             // token; otherwise 201 with a new handle, whether or not `previous` exists.
-            if (previous && store.renew(previous, platform, instance, token, now())) {
+            if (previous && (await store.renew(previous, platform, instance, token, now()))) {
                 req.outcome = `renewed_${platform}`;
                 return reply.code(200).send({ handle: previous });
             }
-            const handle = store.register(platform, instance, token, now());
+            const handle = await store.register(platform, instance, token, now());
             req.outcome = `registered_${platform}`;
             return reply.code(201).send({ handle });
         },
@@ -182,7 +203,7 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
 
     app.post<{ Body: PushBody }>('/v1/push', { schema: { body: pushBody } }, async (req, reply) => {
         const handle = bearer(req);
-        const reg = handle ? store.lookup(handle) : null;
+        const reg = handle ? await store.lookup(handle) : null;
         if (!reg) return fail(req, reply, 401, 'unknown_handle');
         if (normalizeInstance(req.body.instance) !== reg.instance) return fail(req, reply, 403, 'instance_mismatch');
         const hit = pushLimiter.take(reg.handleHash);
@@ -194,13 +215,29 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
         if (!sender) return fail(req, reply, 503, 'platform_unavailable');
         const { type, title, body, url } = req.body;
         const result = await sender.send(reg.token, { type, title, body, url, instance: reg.instance });
+        // The push has gone out (or the token is dead) whatever the database says next, so a
+        // failed or slow write is logged, not turned into a 500 or a hung request that the
+        // instance would retry as a duplicate. A write past the deadline carries on unawaited.
+        const bestEffort = async (write: Promise<unknown>, what: string) => {
+            let timer: NodeJS.Timeout | undefined;
+            const deadline = new Promise<'timeout'>((resolve) => {
+                timer = setTimeout(() => resolve('timeout'), writeDeadlineMs);
+            });
+            try {
+                if ((await Promise.race([write, deadline])) === 'timeout') req.log.warn({ code: 'timeout' }, `${what} timed out`);
+            } catch (err) {
+                req.log.warn({ code: (err as { code?: string }).code ?? 'unknown' }, `${what} failed`);
+            } finally {
+                clearTimeout(timer);
+            }
+        };
         if (result.ok) {
-            store.touch(reg.handleHash, now());
+            await bestEffort(store.touch(reg.handleHash, now()), 'touch');
             req.outcome = `sent_${reg.platform}`;
             return reply.code(202).send({});
         }
         if (result.gone) {
-            store.deleteByHash(reg.handleHash);
+            await bestEffort(store.deleteByHash(reg.handleHash), 'delete');
             return fail(req, reply, 410, 'gone', `gone_${result.reason}`);
         }
         return fail(req, reply, 502, 'provider_error', result.reason);
@@ -209,7 +246,7 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
     app.delete('/v1/handles', { onRequest: cors }, async (req, reply) => {
         const handle = bearer(req);
         if (!handle) return fail(req, reply, 401, 'unknown_handle');
-        req.outcome = store.deleteByHash(hashHandle(handle)) ? 'deleted' : 'delete_noop';
+        req.outcome = (await store.deleteByHash(hashHandle(handle))) ? 'deleted' : 'delete_noop';
         return reply.code(204).send();
     });
 

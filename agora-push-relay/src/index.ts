@@ -1,22 +1,34 @@
+import type { FastifyBaseLogger } from 'fastify';
 import { buildApp } from './app.js';
-import { loadConfig } from './config.js';
-import { deriveKeys } from './crypto.js';
-import { HandleStore, type Platform } from './store.js';
-import { ApnsSender, loadApnsKey } from './senders/apns.js';
-import { FcmSender, loadServiceAccount } from './senders/fcm.js';
+import { loadConfig, type RelayConfig } from './config.js';
+import { deriveKeys, type Keys } from './crypto.js';
+import { SqliteHandleStore, type HandleStore, type Platform } from './store.js';
+import { PgHandleStore } from './store-pg.js';
+import { ApnsSender, loadApnsKey, parseApnsKey } from './senders/apns.js';
+import { FcmSender, loadServiceAccount, parseServiceAccount } from './senders/fcm.js';
 import type { Sender } from './senders/types.js';
 
 const DAY = 86_400_000;
 
+async function openStore(config: RelayConfig['store'], keys: Keys, log: () => FastifyBaseLogger | undefined): Promise<HandleStore> {
+    if (config.kind === 'sqlite') return new SqliteHandleStore(config.path, keys);
+    // Logged as a code only: pg error messages can name the host and user.
+    return PgHandleStore.open(config.url, keys, { ssl: config.ssl, onError: (err) => log()?.warn({ code: err.code ?? 'unknown' }, 'database connection lost') });
+}
+
 async function main() {
     const config = loadConfig();
-    const store = new HandleStore(config.dbPath, deriveKeys(config.masterKey));
+    let log: FastifyBaseLogger | undefined;
+    const store = await openStore(config.store, deriveKeys(config.masterKey), () => log);
 
     const senders: Partial<Record<Platform, Sender>> = {};
-    if (config.fcm) senders.android = new FcmSender(loadServiceAccount(config.fcm.serviceAccountFile));
+    if (config.fcm) {
+        const sa = 'serviceAccountFile' in config.fcm ? loadServiceAccount(config.fcm.serviceAccountFile) : parseServiceAccount(config.fcm.serviceAccountJson);
+        senders.android = new FcmSender(sa);
+    }
     if (config.apns) {
-        const { keyFile, ...rest } = config.apns;
-        senders.ios = new ApnsSender({ keyPem: loadApnsKey(keyFile), ...rest });
+        const { key, ...rest } = config.apns;
+        senders.ios = new ApnsSender({ keyPem: 'file' in key ? loadApnsKey(key.file) : parseApnsKey(key.pem), ...rest });
     }
 
     const app = buildApp({
@@ -26,22 +38,32 @@ async function main() {
         trustProxy: config.trustProxy,
         logger: { level: config.logLevel },
     });
+    log = app.log;
     if (!senders.android && !senders.ios) app.log.warn('no provider configured: every register answers 503 platform_unavailable');
     app.log.info({ android: Boolean(senders.android), ios: Boolean(senders.ios), apnsProduction: config.apns?.production ?? null }, 'providers');
+    app.log.info({ store: config.store.kind, tls: config.store.kind === 'postgres' ? config.store.ssl : null }, 'store');
 
     // Hourly: outcome counts since the last line, then reset. Daily: drop handles unused for the TTL.
     const report = setInterval(() => {
         if (Object.keys(app.counters).length === 0) return;
-        app.log.info({ counts: { ...app.counters }, handles: store.count() }, 'hourly counts');
+        const counts = { ...app.counters };
         for (const k of Object.keys(app.counters)) delete app.counters[k];
+        store.count().then(
+            (handles) => app.log.info({ counts, handles }, 'hourly counts'),
+            () => app.log.info({ counts, handles: null }, 'hourly counts'),
+        );
     }, 3_600_000);
-    const prune = () => {
+    const prune = async () => {
         if (config.handleTtlDays === 0) return;
-        const removed = store.pruneSeenBefore(Date.now() - config.handleTtlDays * DAY);
-        if (removed > 0) app.log.info({ removed }, 'pruned unused handles');
+        try {
+            const removed = await store.pruneSeenBefore(Date.now() - config.handleTtlDays * DAY);
+            if (removed > 0) app.log.info({ removed }, 'pruned unused handles');
+        } catch (err) {
+            app.log.warn({ code: (err as { code?: string }).code ?? 'unknown' }, 'prune failed; retrying tomorrow');
+        }
     };
-    prune();
-    const pruneTimer = setInterval(prune, DAY);
+    await prune();
+    const pruneTimer = setInterval(() => void prune(), DAY);
 
     let closing = false;
     const shutdown = async (signal: string) => {
@@ -52,7 +74,7 @@ async function main() {
         clearInterval(pruneTimer);
         await app.close();
         await Promise.all(Object.values(senders).map((s) => s?.close?.()));
-        store.close();
+        await store.close();
         process.exit(0);
     };
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
@@ -62,7 +84,9 @@ async function main() {
 }
 
 main().catch((err: unknown) => {
-    // Config errors name the variable; they never contain secret values.
-    console.error(`agora-push-relay: ${err instanceof Error ? err.message : 'failed to start'}`);
+    // Config errors name the variable; they never contain secret values. A refused database
+    // connection can be an AggregateError with an empty message, so fall back to its code.
+    const e = err as { message?: string; code?: string };
+    console.error(`agora-push-relay: ${(err instanceof Error && (e.message || e.code)) || 'failed to start'}`);
     process.exit(1);
 });

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ApnsSender, buildApnsPayload, loadApnsKey } from '../src/senders/apns.js';
+import { ApnsSender, buildApnsPayload, loadApnsKey, parseApnsKey } from '../src/senders/apns.js';
 import { IOS_TOKEN, makeRelay, push, register } from './helpers.js';
 
 // A throwaway P-256 key generated per run, the same kind as an APNs .p8. No Apple credentials.
@@ -144,7 +144,7 @@ describe('APNs sender', () => {
             expect((await push(relay, handle)).statusCode).toBe(202);
             reply = { status: 410, body: { reason: 'Unregistered', timestamp: 1 } };
             expect((await push(relay, handle)).statusCode).toBe(410);
-            expect(relay.store.count()).toBe(0);
+            expect(await relay.store.count()).toBe(0);
         } finally {
             await relay.close();
         }
@@ -168,5 +168,13 @@ describe('loadApnsKey', () => {
         const p = join(dir, 'bad.p8');
         writeFileSync(p, 'not a key');
         expect(() => loadApnsKey(p)).toThrow(/not a PEM private key/);
+    });
+});
+
+describe('parseApnsKey (APNS_KEY)', () => {
+    it('accepts the .p8 text and rejects anything else without quoting it', () => {
+        expect(parseApnsKey(KEY_PEM)).toBe(KEY_PEM);
+        expect(() => parseApnsKey('DO-NOT-ECHO')).toThrow(/^APNS_KEY is not a PEM private key/);
+        expect(() => parseApnsKey('DO-NOT-ECHO')).not.toThrow(/DO-NOT-ECHO/);
     });
 });

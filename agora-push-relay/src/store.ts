@@ -10,10 +10,24 @@ export interface Registration {
     token: string;
 }
 
-interface Row {
+export interface Row {
     handle_hash: string;
     platform: Platform;
     sealed: Uint8Array;
+}
+
+/** What app.ts and index.ts use. SqliteHandleStore (here) and PgHandleStore (store-pg.ts) implement it. */
+export interface HandleStore {
+    register(platform: Platform, instance: string, token: string, now?: number): Promise<string>;
+    renew(handle: string, platform: Platform, instance: string, token: string, now?: number): Promise<boolean>;
+    lookup(handle: string): Promise<Registration | null>;
+    /** Refreshes seen_at. False when the row is gone. */
+    touch(handleHash: string, now?: number): Promise<boolean>;
+    deleteByHash(handleHash: string): Promise<boolean>;
+    /** Removes handles neither registered nor pushed to since `cutoff` (ms). Returns how many. */
+    pruneSeenBefore(cutoff: number): Promise<number>;
+    count(): Promise<number>;
+    close(): Promise<void>;
 }
 
 /**
@@ -29,11 +43,68 @@ interface Row {
  * The one exception is `renew`: a caller that already holds a handle can name it when it
  * registers again, and gets the same handle back if it still matches. That tells the
  * caller nothing it did not know, and lets the app notice when a handle it cached is gone.
+ *
+ * These rules live here, shared by both databases. A subclass only stores and fetches
+ * rows of the same table (handle_hash, platform, sealed, created_at, seen_at in ms).
  */
-export class HandleStore {
-    private readonly db: DatabaseSync;
+export abstract class SealedHandleStore implements HandleStore {
+    constructor(private readonly keys: Keys) {}
 
-    constructor(path: string, private readonly keys: Keys) {
+    protected abstract insert(handleHash: string, platform: Platform, sealed: Buffer, now: number): Promise<void>;
+    protected abstract row(handleHash: string): Promise<Row | undefined>;
+    abstract touch(handleHash: string, now?: number): Promise<boolean>;
+    abstract deleteByHash(handleHash: string): Promise<boolean>;
+    abstract pruneSeenBefore(cutoff: number): Promise<number>;
+    abstract count(): Promise<number>;
+    abstract close(): Promise<void>;
+
+    /** Stores a new registration under a new random handle and returns the handle. */
+    async register(platform: Platform, instance: string, token: string, now = Date.now()): Promise<string> {
+        const handle = newHandle();
+        const handleHash = hashHandle(handle);
+        const sealed = seal(this.keys.sealKey, JSON.stringify({ t: token, i: instance }), handleHash);
+        await this.insert(handleHash, platform, sealed, now);
+        return handle;
+    }
+
+    /**
+     * Re-registration naming a handle the caller already holds. True, and seen_at refreshed,
+     * only if the handle's row exists, opens under the current key, and holds this platform,
+     * instance and token. Otherwise false and nothing changes: the caller gets a new handle,
+     * and a handle for another token or instance stays exactly as it was.
+     */
+    async renew(handle: string, platform: Platform, instance: string, token: string, now = Date.now()): Promise<boolean> {
+        const reg = await this.lookup(handle);
+        if (!reg || reg.platform !== platform) return false;
+        if (!sameSecret(reg.instance, instance) || !sameSecret(reg.token, token)) return false;
+        // A TTL sweep or DELETE can remove the row between the lookup and here. Handing the
+        // handle back then would answer 200 for a handle that gets 401 on its first push.
+        return this.touch(reg.handleHash, now);
+    }
+
+    async lookup(handle: string): Promise<Registration | null> {
+        const handleHash = hashHandle(handle);
+        const row = await this.row(handleHash);
+        if (!row) return null;
+        let plain: string;
+        try {
+            plain = open(this.keys.sealKey, row.sealed, handleHash);
+        } catch {
+            // Sealed under another RELAY_SECRET_KEY (or damaged): the handle is unusable.
+            return null;
+        }
+        const { t, i } = JSON.parse(plain) as { t: string; i: string };
+        return { handleHash, platform: row.platform, instance: i, token: t };
+    }
+}
+
+/** SQLite through node:sqlite, the default: one file on a volume (docker-compose.relay.yml). */
+export class SqliteHandleStore extends SealedHandleStore {
+    private readonly db: DatabaseSync;
+    private closed = false;
+
+    constructor(path: string, keys: Keys) {
+        super(keys);
         this.db = new DatabaseSync(path);
         this.db.exec('PRAGMA journal_mode = WAL');
         this.db.exec('PRAGMA busy_timeout = 5000');
@@ -47,64 +118,36 @@ export class HandleStore {
         this.db.exec('CREATE INDEX IF NOT EXISTS handles_seen_at ON handles (seen_at)');
     }
 
-    /** Stores a new registration under a new random handle and returns the handle. */
-    register(platform: Platform, instance: string, token: string, now = Date.now()): string {
-        const handle = newHandle();
-        const handleHash = hashHandle(handle);
-        const sealed = seal(this.keys.sealKey, JSON.stringify({ t: token, i: instance }), handleHash);
+    protected async insert(handleHash: string, platform: Platform, sealed: Buffer, now: number): Promise<void> {
         this.db
             .prepare('INSERT INTO handles (handle_hash, platform, sealed, created_at, seen_at) VALUES (?, ?, ?, ?, ?)')
             .run(handleHash, platform, sealed, now, now);
-        return handle;
     }
 
-    /**
-     * Re-registration naming a handle the caller already holds. True, and seen_at refreshed,
-     * only if the handle's row exists, opens under the current key, and holds this platform,
-     * instance and token. Otherwise false and nothing changes: the caller gets a new handle,
-     * and a handle for another token or instance stays exactly as it was.
-     */
-    renew(handle: string, platform: Platform, instance: string, token: string, now = Date.now()): boolean {
-        const reg = this.lookup(handle);
-        if (!reg || reg.platform !== platform) return false;
-        if (!sameSecret(reg.instance, instance) || !sameSecret(reg.token, token)) return false;
-        this.touch(reg.handleHash, now);
-        return true;
+    protected async row(handleHash: string): Promise<Row | undefined> {
+        return this.db.prepare('SELECT handle_hash, platform, sealed FROM handles WHERE handle_hash = ?').get(handleHash) as Row | undefined;
     }
 
-    lookup(handle: string): Registration | null {
-        const handleHash = hashHandle(handle);
-        const row = this.db.prepare('SELECT handle_hash, platform, sealed FROM handles WHERE handle_hash = ?').get(handleHash) as Row | undefined;
-        if (!row) return null;
-        let plain: string;
-        try {
-            plain = open(this.keys.sealKey, row.sealed, handleHash);
-        } catch {
-            // Sealed under another RELAY_SECRET_KEY (or damaged): the handle is unusable.
-            return null;
-        }
-        const { t, i } = JSON.parse(plain) as { t: string; i: string };
-        return { handleHash, platform: row.platform, instance: i, token: t };
+    async touch(handleHash: string, now = Date.now()): Promise<boolean> {
+        return Number(this.db.prepare('UPDATE handles SET seen_at = ? WHERE handle_hash = ?').run(now, handleHash).changes) > 0;
     }
 
-    touch(handleHash: string, now = Date.now()): void {
-        this.db.prepare('UPDATE handles SET seen_at = ? WHERE handle_hash = ?').run(now, handleHash);
-    }
-
-    deleteByHash(handleHash: string): boolean {
+    async deleteByHash(handleHash: string): Promise<boolean> {
         return Number(this.db.prepare('DELETE FROM handles WHERE handle_hash = ?').run(handleHash).changes) > 0;
     }
 
-    /** Removes handles neither registered nor pushed to since `cutoff` (ms). Returns how many. */
-    pruneSeenBefore(cutoff: number): number {
+    async pruneSeenBefore(cutoff: number): Promise<number> {
         return Number(this.db.prepare('DELETE FROM handles WHERE seen_at < ?').run(cutoff).changes);
     }
 
-    count(): number {
+    async count(): Promise<number> {
         return Number((this.db.prepare('SELECT count(*) AS n FROM handles').get() as { n: number }).n);
     }
 
-    close(): void {
+    /** Safe to call twice. */
+    async close(): Promise<void> {
+        if (this.closed) return;
+        this.closed = true;
         this.db.close();
     }
 }

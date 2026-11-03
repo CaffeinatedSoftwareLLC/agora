@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { buildApp, type AppOptions } from '../src/app.js';
 import { deriveKeys } from '../src/crypto.js';
-import { HandleStore, type Platform } from '../src/store.js';
+import { SqliteHandleStore, type HandleStore, type Platform } from '../src/store.js';
 import type { PushMessage, Sender, SendResult } from '../src/senders/types.js';
 
 export const INSTANCE = 'https://agora.example.com';
@@ -34,7 +34,7 @@ export interface TestRelay {
 export async function makeRelay(opts: Partial<AppOptions> = {}): Promise<TestRelay> {
     const dir = mkdtempSync(join(tmpdir(), 'agora-push-relay-'));
     const dbPath = join(dir, 'relay.db');
-    const store = new HandleStore(dbPath, deriveKeys(randomBytes(32)));
+    const store = new SqliteHandleStore(dbPath, deriveKeys(randomBytes(32)));
     const logs: string[] = [];
     const clock = { now: Date.UTC(2026, 9, 24, 12) };
     const senders = opts.senders ?? { android: new FakeSender(), ios: new FakeSender() };
@@ -55,7 +55,7 @@ export async function makeRelay(opts: Partial<AppOptions> = {}): Promise<TestRel
         clock,
         async close() {
             await app.close();
-            store.close();
+            await store.close();
             rmSync(dir, { recursive: true, force: true });
         },
     };
