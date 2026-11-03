@@ -1,6 +1,22 @@
-> **Latest (2026-10-17):** phone access over Tailscale and the security work behind it. Read [`remote-access-handoff.md`](remote-access-handoff.md) first.
+# Handoff — AI Runtime Initiative
 
-# Handoff — AI Runtime Initiative (updated 2026-10-01, end of day: 0.2.0 released, instance wiped for onboarding tests)
+## Current state (2026-11-03)
+
+This section is current. Everything below "Snapshot of 2026-10-01" is history: kept for the audit findings, design decisions and test notes, but its "current state", "waiting on" and "next up" lists describe the 0.2.0 era and are superseded here.
+
+- **Releases:** Agora **0.3.5** (2026-10-30, tag `v0.3.5`). `agora-mcp` **0.8.1** (2026-11-02, tag `agora-mcp-v0.8.1`). Release tags are `v*` for the app and `agora-mcp-v*` for the MCP server.
+- **agora-mcp ships through GitHub Releases only, by design.** Install with `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz`; the fixed `agora-mcp-latest` release always holds the newest build. It is not published to the npm registry, and is not waiting to be: the `agora-mcp` package there is an old, unrelated 0.1.2.
+- **Database:** 73 migrations (`001` to `073`).
+- **Live stack:** WSL2 Ubuntu `~/agora`, on main (last deploy `d1de3d6`, 2026-11-02). A self-healing keep-alive task holds the distro open ([getting started, step 7](../getting-started.md)). agora-host runs from a detached `main` worktree.
+- **nginx follows the API (WBS 6.9, done):** it resolves `api` per request through Docker's DNS (#325), so recreating `api` no longer leaves `https://localhost` at 502.
+- **Since 0.3.5 on main:** Claude Code and Codex Stop hooks that keep an agent listening in an open thread (`agora-mcp hook stop`, #321, #323; [setup](../claude-code-hooks.md)); waits that also return replies in the agent's other threads (#324); the Claude desktop app accepted on a token bound to Claude Code (#305; token binding itself shipped in 0.3.5, #297); a TLS-specific error for `https://localhost` (#304); text extraction for Office files (#302).
+- **Push relay:** the relay the Android and iOS apps use is deployable on Heroku with Postgres (#328, [agora-push-relay README](../../agora-push-relay/README.md)) and runs at `https://push.agora.host`. The apps are not in the stores yet.
+- **CI:** jobs run only for the areas a change touched, and the backend suite runs in four parallel parts (#322). Run `npm run check:changed` before pushing (`CLAUDE.md`, "Before You Push").
+- **Open work:** see the GitHub issues. Larger ones: #299 (MCP 2026-07-28 drops `initialize`), #327 (show who a thread is waiting on), #39 (token reuse between agents; binding by client name shipped in #297), #230 (see when a terminal agent stopped).
+
+## Snapshot of 2026-10-01 (0.2.0 released, instance wiped for onboarding tests)
+
+> The phone access work of 2026-10-17 is in [`remote-access-handoff.md`](remote-access-handoff.md).
 
 Read with: `wbs.md` (task status, ☑/◐/☐), `ai-runtime-execution-plan.md` (why), `sandbox-isolation-spec.md` (approved sandbox design + threat model), `../storage-and-encryption.md` (what is stored where, what is encrypted, known gaps).
 
@@ -15,7 +31,7 @@ The Jev project was planned in Agora with Codex and Gemini and then implemented 
 - Test databases made for this work on the Docker Desktop Postgres (`agora-test-postgres-1`): `accord_test_jev` (the test suite) and `agora_jev_live` (the dev instance used for the end-to-end check, with its files in `%TEMP%\agora-jev-live-files`). Both are disposable.
 - Verified after merging (Eryk, 2026-10-17): the decision model, Tavily search through screening, code runs on gVisor and the Docker build all work. The live WSL stack runs it (`89cbcca`, 34 migrations).
 
-## Current state (read this first)
+### State on 2026-10-01 (superseded, see the top)
 
 **0.2.0 is released.** `main` is at #48. Tag `v0.2.0` sits on the merge of #45 (`49c78e5`), and there is a GitHub release with the changelog. No PRs are open.
 
@@ -33,9 +49,9 @@ The Jev project was planned in Agora with Codex and Gemini and then implemented 
 
 **Three things waiting on something outside the repo:**
 
-1. **`agora-mcp` 0.4.0 is not on npm** (npm has 0.1.2). The npm account (`misterespresso`) has a passkey as second factor that could not be found; Eryk got in with a recovery code on 2026-10-01 and npm then blocks publishing for 72 hours, so the earliest publish is about **2026-10-04**. Publishing is his to run (`npm login`, then `npm publish` in `agora-mcp/`; it needs his passkey). The package is built and tested (52 tests) and a dry-run pack is clean. He should add a new passkey on this machine first. **After it is published:** change the docs and the skill back from "install from the repo" to `npm install -g agora-mcp` (#46 lists the places) and check `npm view agora-mcp version`.
+1. ~~**`agora-mcp` 0.4.0 is not on npm**~~ **Resolved differently: agora-mcp ships through GitHub Releases and is never published to npm (see the top).** The original note: (npm has 0.1.2). The npm account (`misterespresso`) has a passkey as second factor that could not be found; Eryk got in with a recovery code on 2026-10-01 and npm then blocks publishing for 72 hours, so the earliest publish is about **2026-10-04**. Publishing is his to run (`npm login`, then `npm publish` in `agora-mcp/`; it needs his passkey). The package is built and tested (52 tests) and a dry-run pack is clean. He should add a new passkey on this machine first. **After it is published:** change the docs and the skill back from "install from the repo" to `npm install -g agora-mcp` (#46 lists the places) and check `npm view agora-mcp version`.
 2. **macOS.** The first test on a Mac failed: that Mac still had an old `agora` MCP registration and an old stack, and the agent tried the stale tools, then the old stack, then ran the generic Docker steps (#47 is the response). The second run **worked end to end, including a sandboxed code run** (Eryk, 2026-10-01). Not yet known: which route it took (a code run needs gVisor, so almost certainly the Colima VM), Apple Silicon or Intel, and whether any step needed changing. **The docs still say the Colima route is "not yet verified on a real Mac"** (`docs/getting-started.md`, the skill, `CLAUDE.md`): replace that with what happened once Eryk supplies those details. Verified separately: every image the stack pulls has an arm64 build, and the backend, sandbox and web images build and start for `linux/arm64` under emulation.
-3. **WBS 6.9**, the one item left out of 0.2.0: nginx resolves the API address only at startup, so a deploy that recreates `api` without `web` returns 502 until `web` is restarted. It happened on both deploys on 2026-10-01. A task chip with the fix and how to test it was left in the session.
+3. ~~**WBS 6.9**~~ **Done in #325 (2026-11-02).** The original note, the one item left out of 0.2.0: nginx resolves the API address only at startup, so a deploy that recreates `api` without `web` returns 502 until `web` is restarted. It happened on both deploys on 2026-10-01. A task chip with the fix and how to test it was left in the session.
 
 Merged remote branches that can be deleted (each is merged; check no open PR uses it as a base first): `release/0.2.0`, `docs/install-agora-mcp-from-repo`, `docs/agora-connect-dirty-machines`, `feat/login-email-or-username`.
 
@@ -120,11 +136,11 @@ Verified on the live stack on 2026-10-01: six blobs on `files-data`, none starti
 
 Lesson: every provider bug found live was an API contract our mocks had encoded wrongly or out of date (Tavily model field, gVisor DNS, Gemini multi-speaker). One real call per capability after any adapter change is worth more than more mocked tests.
 
-## Next up (in order)
+## Next up on 2026-10-01 (superseded, see the top)
 
-1. **WBS 6.9: make nginx re-resolve the API address**, so a deploy that recreates `api` without `web` stops returning 502.
+1. ~~**WBS 6.9: make nginx re-resolve the API address**~~ (done, #325), so a deploy that recreates `api` without `web` stops returning 502.
 2. **Write the Mac result into the docs** once Eryk gives the route, the chip and any step that needed changing (see "Current state", item 2).
-3. **Publish `agora-mcp` 0.4.0** on or after 2026-10-04 (Eryk runs it), then switch the docs and the skill back to the npm install line.
+3. ~~**Publish `agora-mcp` 0.4.0** on npm~~ (dropped: agora-mcp ships through GitHub Releases only).
 4. **Stand an instance back up** when one is needed again: `~/agora` in WSL is a checkout of `main` at `49c78e5` with its `.env.prod` in place, so `git pull` and `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build` gives a fresh, uninitialised 0.2.0+ instance (new setup token in the `api` logs). That will also be the first deploy of #48.
 5. **#40** (channel audio overviews ignore threads) and **#39** (agents can read and use each other's bot tokens from local MCP config). For #39, Eryk's idea (2026-10-01): let the **decision handler** take part of that job. Notes on what it can and can't see are in a comment on #39.
 6. **Remaining live checks:** `testReport`; certificate issuance on a real domain through `DOMAIN`; the login form with a username in a browser (#48 was tested through the API and the UI build, not looked at on screen). Also connect **Gemini CLI** and **OpenCode** to Agora and confirm a long `chat_wait` holds there (settings in the agora-collab skill's "Harness setup").
@@ -160,12 +176,12 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 - Docker needs `dockerd &` first. Create `accord_test_runner` by hand, and set `AGORA_ENCRYPTION_KEY` in `.env`. (`IP_ENCRYPTION_KEY` is no longer read.)
 
 ## Local environment (this machine)
-- **The prod stack lives in WSL2 Ubuntu** at `~/agora`, on its own Docker Engine 29.x with gVisor `runsc`. **It is currently down and empty:** wiped on 2026-10-01 with `down -v` (no containers, no data volumes, no networks). The checkout is `main` at `49c78e5` and `.env.prod` is still there (`DOCKER_GID=986`, unused `MINIO_ROOT_*` lines; the keys in it belong to no data any more, so a fresh start simply records a new fingerprint). Left behind on purpose: the old `agora_minio-data` volume, the `agora-sbxtest-npm-cache` volume from the gVisor test script, and two database dumps in `~/agora-backups` (the only copies of the old instance's data). When the stack is up, the runner starts with `runtime=runsc`, no dev flag.
+- **The prod stack lives in WSL2 Ubuntu** at `~/agora`, on its own Docker Engine 29.x with gVisor `runsc`. **On 2026-10-01 it was down and empty** (it has run continuously again since mid-October; see the top): wiped on 2026-10-01 with `down -v` (no containers, no data volumes, no networks). The checkout is `main` at `49c78e5` and `.env.prod` is still there (`DOCKER_GID=986`, unused `MINIO_ROOT_*` lines; the keys in it belong to no data any more, so a fresh start simply records a new fingerprint). Left behind on purpose: the old `agora_minio-data` volume, the `agora-sbxtest-npm-cache` volume from the gVisor test script, and two database dumps in `~/agora-backups` (the only copies of the old instance's data). When the stack is up, the runner starts with `runtime=runsc`, no dev flag.
   - Run commands in the distro via `wsl.exe -d Ubuntu -- bash -s <<'EOF' … EOF` (stdin scripts; PowerShell 5.1 and inline `bash -lc` mangle quotes).
   - Run long `compose up --build` as a background task, or it dies when the `wsl.exe` session closes.
   - **The distro stops about a minute after its last `wsl.exe` session closes**, taking the stack down (happened 2026-09-30 when a shared terminal was closed). A logon scheduled task, **"WSL Ubuntu keep-alive (Agora stack)"** (`conhost --headless wsl.exe -d Ubuntu --exec sleep infinity`), now holds it open. Docker is systemd-enabled and services are `restart: unless-stopped`, so the stack comes back on its own. If `localhost:3000` is dead, check `wsl -l -v` and that task first. Setup: `docs/getting-started.md` step 7.
   - Deploy: `git pull` in `~/agora`, then `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build <services>`.
-  - **After every deploy, check `curl -sk https://localhost/health`.** nginx in `web` resolves `api` once at startup; if `api` was recreated and `web` wasn't, the site returns 502 while `http://localhost:3000` works. Fix: `docker compose -f docker-compose.prod.yml --env-file .env.prod restart web` (WBS 6.9 removes the need).
+  - **After every deploy, check `curl -sk https://localhost/health`.** nginx in `web` resolves `api` once at startup; if `api` was recreated and `web` wasn't, the site returns 502 while `http://localhost:3000` works. Fix: `docker compose -f docker-compose.prod.yml --env-file .env.prod restart web` (no longer needed since #325, WBS 6.9).
   - The image runs with `NODE_ENV=production`. If `api` restarts in a loop after an env change, read `docker logs agora-api-1` first: it refuses a default or changed `AGORA_ENCRYPTION_KEY` and says so.
   - Browser: `https://localhost` (Caddy, local cert). Agents/MCP: `http://localhost:3000` (Node rejects Caddy's local cert).
   - Volumes when it is running: `agora_files-data` (uploads), `agora_pgdata`, `agora_redisdata`, `agora_caddy_data`. `docker compose down -v` removes those four and nothing else.
@@ -173,8 +189,8 @@ Lesson: every provider bug found live was an API contract our mocks had encoded 
 - Test infra: `docker compose -p agora-test -f docker-compose.yml up -d postgres redis`, plus `--profile sandbox up -d socket-proxy` for runtime work. No storage service: tests write blobs to a temp directory.
 - Use an **isolated test DB** so parallel agent sessions don't truncate each other: DB `accord_test_threads`, Redis DB 1. A branch with a **new migration** needs its own database (`chore/remove-ip-tracking` used `accord_test_noip`): migrations are not reversible, so running it against a shared test DB breaks every other branch's tests there. Env via the scratchpad `testenv.sh`, or set `DATABASE_URL` / `TEST_DATABASE_URL` (both!) and `REDIS_URL=redis://localhost:6379/1`.
 - Exclude agent worktrees from vitest: the default config excludes `.claude/**` and `test/sandbox/**`. **On gVisor:** `scripts/test-sandbox-gvisor.sh` from WSL (`cd /mnt/c/Users/miste/life-manager/Git_Projects/agora && bash scripts/test-sandbox-gvisor.sh`); it brings its own Postgres, Redis, socket proxy and network, runs the tests in a Node container, cleans up, and refuses to start while a real `agora-run-*` container is running (the suite removes them). Docker suite under runc: `npm run test:sandbox` (Docker Desktop, runc, needs `agora_sandbox` network + `agora/sandbox-deno:dev` image).
-- **agora-mcp:** the global `agora-mcp` command is **0.4.0, linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`). npm has only 0.1.2 until the publish described under "Current state"; **do not run `npm install -g agora-mcp`**, it would replace the link with the old version. Rebuilding that folder changes the installed MCP, but running agents keep the old code until their MCP server restarts.
-- **Agents on Agora: none registered on this machine.** On 2026-10-01 the `agora` MCP server was removed from Claude Code (`claude mcp remove agora -s local`) and from Codex's project `.codex/config.toml` (now empty; a stale `config.toml.bak-20260930` with a dead token is still next to it). Gemini CLI and OpenCode never had one. To reconnect an agent, use the `agora-connect` skill against a running instance; Codex needs `tool_timeout_sec = 3600` on its `agora` entry for long `chat_wait` calls. Codex also keeps a worktree at `~/.codex/worktrees/4acd/agora` (clean, detached at an old `main`).
+- **agora-mcp (2026-10-01; superseded: install from the `agora-mcp-latest` GitHub release, see the top):** the global `agora-mcp` command was **0.4.0, linked to `agora-mcp/`** in the Windows checkout (`npm install -g .`). npm has only 0.1.2 until the publish described under "Current state"; **do not run `npm install -g agora-mcp`**, it would replace the link with the old version. Rebuilding that folder changes the installed MCP, but running agents keep the old code until their MCP server restarts.
+- **Agents on Agora (2026-10-01; agents have been reconnected since): none registered on this machine.** On 2026-10-01 the `agora` MCP server was removed from Claude Code (`claude mcp remove agora -s local`) and from Codex's project `.codex/config.toml` (now empty; a stale `config.toml.bak-20260930` with a dead token is still next to it). Gemini CLI and OpenCode never had one. To reconnect an agent, use the `agora-connect` skill against a running instance; Codex needs `tool_timeout_sec = 3600` on its `agora` entry for long `chat_wait` calls. Codex also keeps a worktree at `~/.codex/worktrees/4acd/agora` (clean, detached at an old `main`).
 - Local Ollama is at `localhost:11434` (qwen3:14b, qwen3:32b, gpt-oss:20b, deepseek-r1:14b, …). Testing against it loads models into the 5070 Ti.
 - Windows/Git Bash: `ln -s` copies instead of linking; Python heredocs in Bash mangle `\n` and `\\`. Write scripts to files with the Write tool instead.
 
