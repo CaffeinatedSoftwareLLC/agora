@@ -329,11 +329,12 @@ Docker Desktop can't run gVisor, so on Docker Desktop the runner only works with
    ```powershell
    $action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" -Argument '--headless wsl.exe -d Ubuntu --exec sleep infinity'
    $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+   $heal = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-   Register-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)' -Action $action -Trigger $trigger -Settings $settings
+   Register-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)' -Action $action -Trigger @($trigger, $heal) -Settings $settings
    Start-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)'
    ```
-   `-ExecutionTimeLimit 0` matters: by default Task Scheduler kills tasks after 72 hours. If your distro has systemd on (`[boot] systemd=true` in `/etc/wsl.conf`) with `docker` enabled, the stack's `restart: unless-stopped` services come back by themselves when the distro starts, so Agora is up after every login. Turn it off with `Disable-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)'`.
+   `-ExecutionTimeLimit 0` matters: by default Task Scheduler kills tasks after 72 hours. If your distro has systemd on (`[boot] systemd=true` in `/etc/wsl.conf`) with `docker` enabled, the stack's `restart: unless-stopped` services come back by themselves when the distro starts, so Agora is up after every login. The second trigger repairs the keep-alive: every 5 minutes it starts the task, which `-MultipleInstances IgnoreNew` skips while it is still running, so a keep-alive that died (after a crash, a Docker Desktop restart or `wsl --shutdown`) is back within 5 minutes and brings the stack up with it. On an existing task, add it with `Set-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)' -Trigger @((Get-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)').Triggers[0], $heal)`. Turn it off with `Disable-ScheduledTask -TaskName 'WSL Ubuntu keep-alive (Agora stack)'`.
 
 **Known issues:**
 - **Upgrading an install that used MinIO:** see [Upgrading](#upgrading) above.
