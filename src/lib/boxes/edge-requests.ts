@@ -102,12 +102,25 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
         [input.boxId]
     )).rows[0];
     if (!box) throw new Error('unknown box');
+    // One box's requests are recorded one at a time: the count, the insert and the notification
+    // decision below see every earlier request of that box, committed (released at commit).
+    // Decisions lock request rows and never this, so the two can't wait on each other.
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended('box-edge-requests:' || $1, 0))`, [input.boxId]);
+    // Cards past their time are expired here as well as by the edge's minute job, so stale ones
+    // never count towards the cap or stand in for a new request
+    const stale = await db.query(
+        `UPDATE box_edge_requests SET status = 'expired', updated_at = NOW()
+         WHERE box_id = $1 AND status = 'pending' AND expires_at <= NOW() RETURNING id`,
+        [input.boxId]
+    );
+    const staleEvents: BridgedEvent[] = [];
+    for (const r of stale.rows) staleEvents.push(...await refreshCard(db, r.id));
     // A box can't flood the owner: an open card for the same subject is returned as before, but
     // past MAX_PENDING_PER_BOX waiting cards nothing new is recorded until some are decided
     const open = await db.query(`SELECT id FROM box_edge_requests WHERE box_id = $1 AND kind = $2 AND subject_hash = $3 AND status = 'pending'`, [input.boxId, input.kind, hash]);
-    if (open.rows[0]) return { id: open.rows[0].id.trim(), created: false, events: [] };
+    if (open.rows[0]) return { id: open.rows[0].id.trim(), created: false, events: staleEvents };
     const waiting = Number((await db.query(`SELECT count(*) AS n FROM box_edge_requests WHERE box_id = $1 AND status = 'pending'`, [input.boxId])).rows[0].n);
-    if (waiting >= MAX_PENDING_PER_BOX) return { id: '', created: false, limited: true, events: [] };
+    if (waiting >= MAX_PENDING_PER_BOX) return { id: '', created: false, limited: true, events: staleEvents };
     const id = generateUlid();
     const inserted = await db.query(
         `INSERT INTO box_edge_requests (id, server_id, box_id, generation, kind, subject, subject_hash, expires_at)
@@ -118,9 +131,9 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
     );
     if (inserted.rows.length === 0) {
         const open = await db.query(`SELECT id FROM box_edge_requests WHERE box_id = $1 AND kind = $2 AND subject_hash = $3 AND status = 'pending'`, [input.boxId, input.kind, hash]);
-        return { id: open.rows[0].id.trim(), created: false, events: [] };
+        return { id: open.rows[0].id.trim(), created: false, events: staleEvents };
     }
-    const events: BridgedEvent[] = [];
+    const events: BridgedEvent[] = [...staleEvents];
     if (box.home_channel_id) {
         const card = edgeCard({ id, box_id: input.boxId, kind: input.kind, subject: input.subject, status: 'pending' }, box.name);
         const posted = await postSystemMessage(db, { channelId: box.home_channel_id, threadId: null, content: card.content, systemEvent: EDGE_SYSTEM_EVENT, systemData: card.systemData });
