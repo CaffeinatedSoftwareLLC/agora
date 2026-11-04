@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } from '../helpers';
+import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite, setHostKind } from '../helpers';
 
 /** Ownership handoffs between agents (#84, src/lib/handoffs.ts). */
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
@@ -10,7 +10,7 @@ const SHA = 'a'.repeat(40), SHA2 = 'b'.repeat(40);
 
 async function makeAgent(name: string): Promise<Agent> {
     const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name, hostId, adapter: 'codex', workdirAlias: 'repo', channelId: channel });
+        .send({ hostModeAck: true, name, hostId, adapter: 'codex', workdirAlias: 'repo', channelId: channel });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     return { id: res.body.bot.id, profileId: res.body.profile.id, name, auth: { Authorization: `Bot ${res.body.token}` } };
 }
@@ -155,9 +155,16 @@ describe('offer', () => {
         const refused = await offer(a, { threadId: t, to: 'hob', summary: 'x' });
         expect(refused.status).toBe(403); expect(refused.body.error).toBe('plan_owner_only');
         expect(refused.body.message).toContain('personal subscription');
-        // An API-key recipient follows the ordinary rules
+        // An API-key recipient on a machine host is host mode, owner-only too (§10)
         await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key' WHERE id = $1`, [b.profileId]);
-        await offerOk(a, { threadId: t, to: 'hob', summary: 'x' });
+        expect((await offer(a, { threadId: t, to: 'hob', summary: 'x' })).body.error).toBe('plan_owner_only');
+        // On a box's host it follows the ordinary rules
+        await setHostKind(ctx.db, hostId, 'box');
+        try {
+            await offerOk(a, { threadId: t, to: 'hob', summary: 'x' });
+        } finally {
+            await setHostKind(ctx.db, hostId, 'machine');
+        }
     });
 });
 

@@ -84,7 +84,7 @@ beforeAll(async () => {
     const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'terminal-host' });
     hostId = host.body.host.id;
     const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name: 'termclaude', hostId, adapter: 'claude', workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name: 'termclaude', hostId, adapter: 'claude', workdirAlias: 'agora', channelId });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     claude = { id: res.body.bot.id, name: 'termclaude', token: res.body.token, auth: { Authorization: `Bot ${res.body.token}` } };
 });
@@ -199,7 +199,7 @@ describe('single responder', () => {
 
     test('an unmentioned post does not wake the only hosted agent while another agent is connected from a terminal', async () => {
         const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name: 'termcodex', hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
+            .send({ hostModeAck: true, name: 'termcodex', hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
         const codex: Agent = { id: res.body.bot.id, name: 'termcodex', token: res.body.token, auth: { Authorization: `Bot ${res.body.token}` } };
         const hostedId = await startHosted();
         const m1 = await post(owner.auth, 'anyone there?');
@@ -247,7 +247,7 @@ describe('reservations', () => {
 
         // A hosted session of another agent conflicts with it as usual
         const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name: 'termother', hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
+            .send({ hostModeAck: true, name: 'termother', hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
         const other = { Authorization: `Bot ${res.body.token}` };
         expect((await command(owner.auth, { command: 'start', profile: 'termother' })).status).toBe(201);
         const conflict = await ctx.request.post(`/channels/${channelId}/file-reservations`).set(other).send({ action: 'reserve', paths: ['src/'] });
@@ -286,7 +286,7 @@ describe('POST /bots/@me/terminal-sessions/end (the Claude Code SessionEnd hook)
     const endNow = (auth: object, body: object = {}) => ctx.request.post('/bots/@me/terminal-sessions/end').set(auth).send(body);
     async function newAgent(name: string): Promise<Agent> {
         const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name, hostId, adapter: 'claude', workdirAlias: 'agora', channelId });
+            .send({ hostModeAck: true, name, hostId, adapter: 'claude', workdirAlias: 'agora', channelId });
         expect(res.status, JSON.stringify(res.body)).toBe(201);
         return { id: res.body.bot.id, name, token: res.body.token, auth: { Authorization: `Bot ${res.body.token}` } };
     }

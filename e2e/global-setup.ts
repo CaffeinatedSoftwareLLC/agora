@@ -88,7 +88,7 @@ export default async function globalSetup(_config: FullConfig) {
     const hostToken: string = host.token;
     const mkAgent = async (name: string, adapter: 'claude' | 'codex') => {
         const r = (await owner.ok('POST', `/servers/${serverId}/agents`, {
-            name, adapter, hostId, workdirAlias: 'e2e', channelId: channels.agents,
+            name, adapter, hostId, workdirAlias: 'e2e', channelId: channels.agents, hostModeAck: true,
         }, [201])) as any;
         return { profileId: r.profile.id.trim(), botId: r.bot.id.trim(), name, token: r.token as string };
     };

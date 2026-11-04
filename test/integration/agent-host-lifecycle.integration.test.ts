@@ -39,7 +39,7 @@ async function makeAgent(name: string, hostId: string, channels: string[] = [cha
     const token = await ctx.request.post(`/servers/${serverId}/bots/${bot.body.id}/tokens`).set(owner.auth).send({});
     for (const ch of channels) expect((await ctx.request.post(`/channels/${ch}/bots/${bot.body.id}`).set(owner.auth)).status).toBe(201);
     const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-        .send({ name, botId: bot.body.id, hostId, adapter: 'codex', workdirAlias: 'agora' });
+        .send({ hostModeAck: true, name, botId: bot.body.id, hostId, adapter: 'codex', workdirAlias: 'agora' });
     expect(profile.status, JSON.stringify(profile.body)).toBe(201);
     await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'OPENAI_API_KEY' WHERE id = $1`, [profile.body.id]);
     return { botId: bot.body.id, botAuth: { Authorization: `Bot ${token.body.token}` }, profileId: profile.body.id, name };
@@ -134,10 +134,10 @@ describe('S0056 DELETE /servers/:serverId/agent-hosts/:hostId', () => {
             .send({ claimToken: first.body.run.claimToken })).status).toBe(401);
 
         // The owner moves the profile to a working host; the run still holds its lease, so nothing yet
-        expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${agent.profileId}`).set(owner.auth).send({ hostId: hostB.id })).status).toBe(200);
+        expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${agent.profileId}`).set(owner.auth).send({ hostId: hostB.id, hostModeAck: true })).status).toBe(200);
         expect((await ctx.request.get('/agent-hosts/@me/runs/next').set(hostB.auth)).status).toBe(204);
         // A revoked host can't be chosen for a profile
-        expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${agent.profileId}`).set(owner.auth).send({ hostId: hostA.id })).status).toBe(400);
+        expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${agent.profileId}`).set(owner.auth).send({ hostId: hostA.id, hostModeAck: true })).status).toBe(400);
 
         // The lease runs out (the sweeper in src/index.ts calls sweepExpiredRuns)
         await ctx.db.query(`UPDATE agent_runs SET lease_until = NOW() - interval '1 second' WHERE id = $1`, [first.body.run.id]);

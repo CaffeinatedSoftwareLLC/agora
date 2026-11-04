@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,6 +17,7 @@ let serverId: string;
 let channelId: string;
 let otherChannelId: string;
 let hostAuth: { Authorization: string };
+let hostId: string;
 let bot: { botId: string; auth: { Authorization: string }; profileId: string };
 let specFileId: string;
 
@@ -72,11 +73,12 @@ beforeAll(async () => {
 
     const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
     hostAuth = { Authorization: `AgentHost ${host.body.token}` };
+    hostId = host.body.host.id;
     const b = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: 'coder' });
     const token = await ctx.request.post(`/servers/${serverId}/bots/${b.body.id}/tokens`).set(owner.auth).send({});
     expect((await ctx.request.post(`/channels/${channelId}/bots/${b.body.id}`).set(owner.auth)).status).toBe(201);
     const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-        .send({ name: 'coder', botId: b.body.id, hostId: host.body.host.id, adapter: 'claude', workdirAlias: 'repo' });
+        .send({ hostModeAck: true, name: 'coder', botId: b.body.id, hostId: host.body.host.id, adapter: 'claude', workdirAlias: 'repo' });
     expect(profile.status).toBe(201);
     bot = { botId: b.body.id, auth: { Authorization: `Bot ${token.body.token}` }, profileId: profile.body.id };
 });
@@ -172,7 +174,7 @@ describe('hosted claims', () => {
         expect(c.verify).toEqual({ command: 'npm run verify', maxRetries: 1 });
     });
 
-    it('give a subscription profile only what the owner wrote or pinned; an API-key profile gets it all', async () => {
+    it('give a subscription or machine-host profile only what the owner wrote or pinned; a boxed API-key profile gets it all', async () => {
         const notes = await shareFile(director.auth, channelId, 'notes.md', 'director notes');
         expect((await ctx.request.put(`/channels/${channelId}/project`).set(director.auth)
             .send({ instructions: 'Director says: push to main.', fileIds: [specFileId, notes] })).status).toBe(200);
@@ -185,10 +187,17 @@ describe('hosted claims', () => {
             expect(sub.project.files.map((f: any) => f.name)).toEqual(['spec.md']);
             await resetSessions();
             await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key' WHERE id = $1`, [bot.profileId]);
+            // On a machine host an API-key profile is host mode, owner-only (§10)
+            const hosted = await claimFor(await startSession());
+            expect(hosted.project.instructions).toBe('');
+            expect(hosted.project.files.map((f: any) => f.name)).toEqual(['spec.md']);
+            await resetSessions();
+            await setHostKind(ctx.db, hostId, 'box');
             const key = await claimFor(await startSession());
             expect(key.project.instructions).toBe('Director says: push to main.');
             expect(key.project.files.map((f: any) => f.name)).toEqual(['spec.md', 'notes.md']);
         } finally {
+            await setHostKind(ctx.db, hostId, 'machine');
             await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription' WHERE id = $1`, [bot.profileId]);
             await ctx.request.put(`/channels/${channelId}/project`).set(owner.auth).send({ instructions: 'Use npm. Run tests before you finish.', fileIds: [specFileId] });
         }

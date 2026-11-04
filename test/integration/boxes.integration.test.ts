@@ -105,7 +105,7 @@ describe('create and list', () => {
     test('a box host takes no other profile, and its profile is managed through the box', async () => {
         const box = (await createBox()).body.box;
         const hostId = (await ctx.db.query(`SELECT host_id FROM agent_boxes WHERE id = $1`, [box.id])).rows[0].host_id.trim();
-        const add = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth).send({ name: 'extra', adapter: 'claude', hostId, workdirAlias: 'x' });
+        const add = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth).send({ hostModeAck: true, name: 'extra', adapter: 'claude', hostId, workdirAlias: 'x' });
         expect(add.body).toEqual({ error: 'Unknown host' });
         const profileId = (await ctx.db.query(`SELECT profile_id FROM agent_boxes WHERE id = $1`, [box.id])).rows[0].profile_id.trim();
         expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${profileId}`).set(owner.auth).send({ model: 'x' })).status).toBe(409);
@@ -173,6 +173,22 @@ describe('settings and actions', () => {
         for (const bad of [{ allowedDomains: ['*'] }, { allowedDomains: ['10.0.0.1'] }, { cpus: 0 }, { memoryMb: 100 }, { pids: 1 }, {}]) {
             expect((await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send(bad)).status, JSON.stringify(bad)).toBe(400);
         }
+    });
+
+    test('a changed repo list queues a rebuild (the box reads it at creation); same-name repos are refused', async () => {
+        const box = (await createBox()).body.box;
+        const pending = async () => (await ctx.db.query(`SELECT pending_action FROM agent_boxes WHERE id = $1`, [box.id])).rows[0].pending_action;
+        expect(await pending()).toBeNull();
+        expect((await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send({ repos: ['acme/web'] })).status).toBe(200);
+        expect(await pending()).toBe('rebuild');
+        // The same list again changes nothing; a pending reset is never weakened
+        await ctx.db.query(`UPDATE agent_boxes SET pending_action = 'reset' WHERE id = $1`, [box.id]);
+        expect((await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send({ repos: ['acme/web', 'acme/docs'] })).status).toBe(200);
+        expect(await pending()).toBe('reset');
+        // ownerA/web and ownerB/web would both clone to ~/work/web
+        const clash = await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send({ repos: ['acme/web', 'other/web'] });
+        expect([clash.status, clash.body.error]).toEqual([400, 'repo_name_collision']);
+        expect((await createBox({ name: 'clash', repos: ['a/x', 'b/X'] })).body.error).toBe('repo_name_collision');
     });
 
     test('actions set desired_state or pending_action with its timestamp; reset needs the name', async () => {
@@ -358,7 +374,7 @@ describe('host mode (§10)', () => {
     const DIRECT = (1n << 29n).toString();
     const cmd = (auth: object, body: object) => ctx.request.post(`/channels/${channelId}/agent-commands`).set(auth).send(body);
 
-    test('hostModeAck marks a machine-host profile host mode, which makes it owner-only whatever its auth', async () => {
+    test('a machine-host profile needs hostModeAck and is host mode, owner-only whatever its auth; a box profile is not', async () => {
         const role = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth).send({ name: 'Orchestrator', permissions: DIRECT });
         await ctx.request.put(`/servers/${serverId}/members/${member.userId}/roles/${role.body.id}`).set(owner.auth);
         const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
@@ -367,19 +383,22 @@ describe('host mode (§10)', () => {
             .send({ name, adapter: 'claude', hostId, workdirAlias: 'agora', channelId, ...extra });
 
         expect((await agent('nope', { hostModeAck: false })).status).toBe(400);
-        const legacy = await agent('legacy');
-        expect(legacy.status, JSON.stringify(legacy.body)).toBe(201);
-        expect(legacy.body.profile).toMatchObject({ hostMode: false, boxed: false });
+        expect((await agent('legacy')).status).toBe(400);
         const unboxed = await agent('unboxed', { hostModeAck: true });
         expect(unboxed.body.profile).toMatchObject({ hostMode: true, boxed: false });
         const ack = (await ctx.db.query(`SELECT host_mode_ack_at, host_mode_ack_by FROM agent_profiles WHERE id = $1`, [unboxed.body.profile.id])).rows[0];
         expect(ack.host_mode_ack_at).not.toBeNull();
         expect(ack.host_mode_ack_by.trim()).toBe(owner.userId);
+        // A box profile is never host mode
+        const box = await createBox();
+        expect(box.status, JSON.stringify(box.body)).toBe(201);
+        const boxProfile = (await ctx.request.get(`/servers/${serverId}/agent-profiles`).set(owner.auth)).body.find((p: any) => p.name === 'alpha');
+        expect(boxProfile).toMatchObject({ hostMode: false, boxed: true });
         // Both run on an API key: the ordinary rules would let a director start them
         await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE server_id = $1`, [serverId]);
 
-        const legacySession = await cmd(member.auth, { command: 'start', profile: 'legacy' });
-        expect(legacySession.status).toBe(201);
+        const boxSession = await cmd(member.auth, { command: 'start', profile: 'alpha' });
+        expect(boxSession.status, JSON.stringify(boxSession.body)).toBe(201);
         const refused = await cmd(member.auth, { command: 'start', profile: 'unboxed' });
         expect(refused.status).toBe(403);
         expect(refused.body.error).toBe('subscription_owner_only');
@@ -391,19 +410,18 @@ describe('host mode (§10)', () => {
         const inbox = async (id = started.body.session.id) => (await ctx.db.query(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason = 'direct'`, [id])).rows.length;
         await ctx.request.post(`/channels/${channelId}/messages`).set(member.auth).send({ content: '@unboxed deploy it' });
         expect(await inbox()).toBe(0);
-        // Control: the same mention wakes the profile without host mode
-        await ctx.request.post(`/channels/${channelId}/messages`).set(member.auth).send({ content: '@legacy deploy it' });
-        expect(await inbox(legacySession.body.session.id)).toBe(1);
+        // Control: the same mention wakes the boxed profile
+        await ctx.request.post(`/channels/${channelId}/messages`).set(member.auth).send({ content: '@alpha deploy it' });
+        expect(await inbox(boxSession.body.session.id)).toBe(1);
         await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@unboxed deploy it' });
         expect(await inbox()).toBe(1);
 
-        // An existing profile is acknowledged by PATCH; false is refused
-        const patched = await ctx.request.patch(`/servers/${serverId}/agent-profiles/${legacy.body.profile.id}`).set(owner.auth).send({ hostModeAck: true });
+        // PATCH may repeat the acknowledgement; false is refused
+        const patched = await ctx.request.patch(`/servers/${serverId}/agent-profiles/${unboxed.body.profile.id}`).set(owner.auth).send({ hostModeAck: true });
         expect(patched.body).toMatchObject({ hostMode: true, boxed: false });
-        expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${legacy.body.profile.id}`).set(owner.auth).send({ hostModeAck: false })).status).toBe(400);
+        expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${unboxed.body.profile.id}`).set(owner.auth).send({ hostModeAck: false })).status).toBe(400);
 
         // Hosts carry their kind; a box's host isn't revoked from the Hosts list
-        await createBox();
         const hosts = await ctx.request.get(`/servers/${serverId}/agent-hosts`).set(owner.auth);
         expect(hosts.body.map((h: any) => h.kind).sort()).toEqual(['box', 'machine']);
         const boxHost = hosts.body.find((h: any) => h.kind === 'box');

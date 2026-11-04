@@ -27,7 +27,7 @@ let helper: Agent;
 
 async function makeAgent(name: string, hostId: string, adapter = 'codex'): Promise<Agent> {
     const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name, adapter, hostId, workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name, adapter, hostId, workdirAlias: 'agora', channelId });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     return { botId: res.body.bot.id, profileId: res.body.profile.id, auth: { Authorization: `Bot ${res.body.token}` }, name };
 }

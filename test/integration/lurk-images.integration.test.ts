@@ -1,4 +1,4 @@
-import { setupTestApp, cleanDatabase, authedUser, createServer, joinViaInvite } from '../helpers';
+import { setupTestApp, cleanDatabase, authedUser, createServer, joinViaInvite, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { Permissions } from '../../src/permissions';
 import { decryptFile } from '../../src/lib/encryption';
@@ -13,9 +13,10 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 
 async function agent(name: string) {
     const r = await ctx.request.post(`/servers/${server}/agents`).set(owner.auth)
-        .send({ name, adapter: 'codex', hostId, workdirAlias: 'agora', channelId: channel });
+        .send({ hostModeAck: true, name, adapter: 'codex', hostId, workdirAlias: 'agora', channelId: channel });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    // Lurk routing for API-key profiles; subscription lurkers are in provider-terms.integration.test.ts
+    // Lurk routing for API-key profiles (on a box's host, see beforeAll); subscription lurkers are in
+    // provider-terms.integration.test.ts
     await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'CODEX_API_KEY' WHERE id = $1`, [r.body.profile.id]);
     return { id: r.body.bot.id, profileId: r.body.profile.id, name, auth: { Authorization: `Bot ${r.body.token}` } };
 }
@@ -57,6 +58,9 @@ beforeAll(async () => {
     const host = await ctx.request.post(`/servers/${server}/agent-hosts`).set(owner.auth).send({ name: 'lurkhost' });
     hostId = host.body.host.id; hostAuth = { Authorization: `AgentHost ${host.body.token}` };
     a = await agent('lurker'); b = await agent('peer');
+    // On a machine host every profile is host mode, owner-only (§10): only a box's API-key agent
+    // hears everyone, so these run as one
+    await setHostKind(ctx.db, hostId, 'box');
 });
 afterAll(async () => { await ctx?.close(); });
 beforeEach(async () => {

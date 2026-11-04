@@ -176,7 +176,7 @@ describe('bot token client binding (#39)', () => {
         const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'bind-host' });
         expect(host.status).toBe(201);
         const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'hosted', botId: bot.id, hostId: host.body.host.id, adapter: 'claude', workdirAlias: 'agora' });
+            .send({ hostModeAck: true, name: 'hosted', botId: bot.id, hostId: host.body.host.id, adapter: 'claude', workdirAlias: 'agora' });
         expect(profile.status, JSON.stringify(profile.body)).toBe(201);
         expect((await post(bot.token, 'claude-code', 'as claude')).status).toBe(201);
 

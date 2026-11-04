@@ -68,7 +68,7 @@ beforeAll(async () => {
     const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
     hostAuth = { Authorization: `AgentHost ${host.body.token}` };
     const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name: 'codex', adapter: 'claude', hostId: host.body.host.id, workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name: 'codex', adapter: 'claude', hostId: host.body.host.id, workdirAlias: 'agora', channelId });
     expect(agent.status, JSON.stringify(agent.body)).toBe(201);
     botId = agent.body.bot.id;
     botAuth = { Authorization: `Bot ${agent.body.token}` };

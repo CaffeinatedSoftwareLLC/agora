@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { claimNext, complete, fail, sweepExpiredRuns, type Notice } from '../../src/lib/agent-runs';
 import { existsSync } from 'node:fs';
@@ -33,12 +33,22 @@ async function makeBot(name: string): Promise<{ botId: string; auth: { Authoriza
 async function makeAgent(name: string, adapter: 'codex' | 'claude'): Promise<Agent> {
     const bot = await makeBot(name);
     const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-        .send({ name, botId: bot.botId, hostId, adapter, workdirAlias: 'agora', model: 'm', effort: 'high' });
+        .send({ hostModeAck: true, name, botId: bot.botId, hostId, adapter, workdirAlias: 'agora', model: 'm', effort: 'high' });
     expect(profile.status, JSON.stringify(profile.body)).toBe(201);
-    // These tests cover the ordinary authority rules, which apply to API-key profiles;
-    // subscription profiles (owner only) are in provider-terms.integration.test.ts
+    // These tests cover the ordinary authority rules, which apply to API-key profiles on a box
+    // host (onBoxHost); subscription and machine-host profiles (owner only) are in
+    // provider-terms.integration.test.ts and host-mode.integration.test.ts
     await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE id = $1`, [profile.body.id]);
     return { ...bot, profileId: profile.body.id, name };
+}
+
+/**
+ * Run with this file's host as a box's host: a non-owner's wakes and /start reach an API-key
+ * profile only there. On a machine host every profile is host mode, owner-only (§10).
+ */
+async function onBoxHost(fn: () => Promise<void>) {
+    await setHostKind(ctx.db, hostId, 'box');
+    try { await fn(); } finally { await setHostKind(ctx.db, hostId, 'machine'); }
 }
 
 /** Sessions are started by /start in S4; here they are inserted directly. */
@@ -134,11 +144,11 @@ describe('workspace lifecycle and branch reports', () => {
         expect((await ctx.request.post(url).set(hostAuth).send({ sessionIds: [id] })).body).toEqual([]);
         const other = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'moved-wsi-host' });
         try {
-            expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${codex.profileId}`).set(owner.auth).send({ hostId: other.body.host.id })).status).toBe(200);
+            expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${codex.profileId}`).set(owner.auth).send({ hostId: other.body.host.id, hostModeAck: true })).status).toBe(200);
             expect((await ctx.request.post(`/agent-hosts/@me/runs/${c.run.id}/fail`).set(hostAuth).send({ claimToken: c.run.claimToken, error: 'cancelled' })).status).toBe(200);
             expect((await ctx.request.post(url).set(hostAuth).send({ sessionIds: [id] })).body).toEqual([id]);
         } finally {
-            await ctx.request.patch(`/servers/${serverId}/agent-profiles/${codex.profileId}`).set(owner.auth).send({ hostId });
+            await ctx.request.patch(`/servers/${serverId}/agent-profiles/${codex.profileId}`).set(owner.auth).send({ hostId, hostModeAck: true });
         }
     });
     it('stores branch/base/head through completion and session listing; rejects partial or foreign reports', async () => {
@@ -349,7 +359,7 @@ describe('thread and case-insensitive mentions (#120)', () => {
     it('resolves mentions case-insensitively, top level and in threads', async () => {
         const mixed = await makeBot('MixCase');
         const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'mixcase', botId: mixed.botId, hostId, adapter: 'codex', workdirAlias: 'agora' });
+            .send({ hostModeAck: true, name: 'mixcase', botId: mixed.botId, hostId, adapter: 'codex', workdirAlias: 'agora' });
         expect(profile.status, JSON.stringify(profile.body)).toBe(201);
         await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'CODEX_API_KEY' WHERE id = $1`, [profile.body.id]);
         const sm = await startSession({ ...mixed, profileId: profile.body.id, name: 'mixcase' });
@@ -466,7 +476,7 @@ describe('commands (S4)', () => {
         await ctx.db.query(`UPDATE agent_sessions SET state = 'shelved', shelved_at = NOW() WHERE id = $1`, [a.body.session.id]);
         // A second profile for the same bot
         const p2 = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'codex-review', botId: codex.botId, hostId, adapter: 'codex', workdirAlias: 'agora', effort: 'high' });
+            .send({ hostModeAck: true, name: 'codex-review', botId: codex.botId, hostId, adapter: 'codex', workdirAlias: 'agora', effort: 'high' });
         expect(p2.status).toBe(201);
         try {
             const b = await cmd(owner.auth, { command: 'start', profile: 'codex-review' });
@@ -514,7 +524,7 @@ describe('commands (S4)', () => {
         const lone = await makeBot('lonebot');
         await ctx.request.delete(`/channels/${channelId}/bots/${lone.botId}`).set(owner.auth);
         const p = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'lone', botId: lone.botId, hostId, adapter: 'claude', workdirAlias: 'x' });
+            .send({ hostModeAck: true, name: 'lone', botId: lone.botId, hostId, adapter: 'claude', workdirAlias: 'x' });
         const res = await cmd(owner.auth, { command: 'start', profile: 'lone' });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe('bot_not_in_channel');
@@ -524,8 +534,14 @@ describe('commands (S4)', () => {
     it('a bot with can_direct can start sessions (orchestrator)', async () => {
         await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: true });
         try {
-            const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
-            expect(res.status).toBe(201);
+            // On a machine host the profile is owner-only (host mode, §10)
+            const refused = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+            expect(refused.status).toBe(403);
+            expect(refused.body.error).toBe('subscription_owner_only');
+            await onBoxHost(async () => {
+                const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+                expect(res.status).toBe(201);
+            });
         } finally {
             await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: false });
         }
@@ -573,9 +589,11 @@ describe('session_wake: require_direct (#75)', () => {
         const session = await startSession(codex);
         await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: true });
         try {
-            const res = await wake(claude.auth, '@codex review PR 62');
-            expect(res.status).toBe(201);
-            expect(await inbox(session)).toEqual([{ message_id: res.body.id, reason: 'direct', acked: false }]);
+            await onBoxHost(async () => {
+                const res = await wake(claude.auth, '@codex review PR 62');
+                expect(res.status).toBe(201);
+                expect(await inbox(session)).toEqual([{ message_id: res.body.id, reason: 'direct', acked: false }]);
+            });
         } finally {
             await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: false });
         }
@@ -688,7 +706,7 @@ describe('host API (S2)', () => {
         expect((await inbox(s)).every(r => r.acked) === false).toBe(true);
     });
 
-    it('acknowledges rows whose author lost authority before the claim', async () => {
+    it('acknowledges rows whose author lost authority before the claim', async () => onBoxHost(async () => {
         const s = await startSession(codex);
         const role = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth)
             .send({ name: 'Dir', permissions: (1n << 29n).toString() });
@@ -698,7 +716,7 @@ describe('host API (S2)', () => {
         await ctx.request.delete(`/servers/${serverId}/members/${member.userId}/roles/${role.body.id}`).set(owner.auth);
         expect((await claim()).status).toBe(204);
         expect((await inbox(s))[0].acked).toBe(true);
-    });
+    }));
 
     it('acknowledges work for a paused bot', async () => {
         const s = await startSession(codex);
@@ -867,7 +885,7 @@ describe('host API (S2)', () => {
 
     it('creates an agent in one step: bot, token, channel access and profile', async () => {
         const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name: 'gemma', adapter: 'claude', hostId, workdirAlias: 'agora', effort: 'medium', channelId });
+            .send({ hostModeAck: true, name: 'gemma', adapter: 'claude', hostId, workdirAlias: 'agora', effort: 'medium', channelId });
         expect(res.status, JSON.stringify(res.body)).toBe(201);
         expect(res.body.token).toMatch(/^bot_/);
         expect(res.body.profile).toMatchObject({ name: 'gemma', adapter: 'claude', effort: 'medium' });
@@ -879,10 +897,10 @@ describe('host API (S2)', () => {
         expect(start.status).toBe(201);
         // Names are unique
         const dup = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name: 'gemma', adapter: 'claude', hostId, workdirAlias: 'agora' });
+            .send({ hostModeAck: true, name: 'gemma', adapter: 'claude', hostId, workdirAlias: 'agora' });
         expect(dup.status).toBe(409);
         expect((await ctx.request.post(`/servers/${serverId}/agents`).set(member.auth)
-            .send({ name: 'x1', adapter: 'claude', hostId, workdirAlias: 'a' })).status).toBe(403);
+            .send({ hostModeAck: true, name: 'x1', adapter: 'claude', hostId, workdirAlias: 'a' })).status).toBe(403);
     });
 
     it('a CANCEL that closes the thread while a claim waits leaves nothing to claim', async () => {
@@ -1031,7 +1049,7 @@ describe('host API (S2)', () => {
     it('only the owner manages hosts and profiles', async () => {
         expect((await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(member.auth).send({ name: 'x' })).status).toBe(403);
         expect((await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(member.auth)
-            .send({ name: 'x', botId: codex.botId, hostId, adapter: 'codex', workdirAlias: 'a' })).status).toBe(403);
+            .send({ hostModeAck: true, name: 'x', botId: codex.botId, hostId, adapter: 'codex', workdirAlias: 'a' })).status).toBe(403);
         // Members can list profiles
         expect((await ctx.request.get(`/servers/${serverId}/agent-profiles`).set(member.auth)).status).toBe(200);
     });

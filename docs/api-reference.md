@@ -1564,8 +1564,8 @@ Refusals are in the audit log (`box_provenance_refused`) and posted to the box's
 
 A profile on a machine host runs unboxed. Its JSON (`GET /servers/:id/agent-profiles`, `/sessions`) carries `hostMode` (the flag below) and `boxed` (its host is a box); the UI labels a profile "unboxed" whenever `boxed` is false. Hosts carry `kind` (`machine` or `box`); box hosts are managed through their box (`DELETE /servers/:id/agent-hosts/:hostId` doesn't revoke them, and they take no other profile).
 
-- `POST /servers/:id/agents`, `POST /servers/:id/agent-profiles` and `PATCH /servers/:id/agent-profiles/:profileId` take `hostModeAck: true`, the owner's tick on "Run unboxed on this machine". It sets `hostMode`, and a host-mode profile is **owner-only whatever its auth**: only the server owner's messages, `/start`, `/resume` and approvals wake it (an `api_key` profile follows the subscription rule; a `siwc` one keeps its plan owner). `hostModeAck: false` is `400`.
-- A machine-host profile created **without** `hostModeAck` keeps the pre-box wake rules (`api_key`: owner, directors and allowed bots). Profiles that existed before boxes were migrated as host mode.
+- `POST /servers/:id/agents`, `POST /servers/:id/agent-profiles` and `PATCH /servers/:id/agent-profiles/:profileId` take `hostModeAck: true`, the owner's tick on "Run unboxed on this machine". A host-mode profile is **owner-only whatever its auth**: only the server owner's messages, `/start`, `/resume` and approvals wake it (an `api_key` profile follows the subscription rule; a `siwc` one keeps its plan owner). `hostModeAck: false` is `400`.
+- Every profile on a machine host is host mode. Creating one (both `POST` routes) without `hostModeAck: true` is `400`, and so is a `PATCH` that moves a profile to another host without it. The database also sets `hostMode` from the host's kind (true on a machine host, false on a box), so no machine-host profile keeps the pre-box wake rules. Profiles that existed before boxes were migrated as host mode.
 
 ---
 

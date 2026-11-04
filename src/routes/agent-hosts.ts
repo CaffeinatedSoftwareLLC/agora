@@ -69,10 +69,10 @@ function profileJson(r: any) {
 const PROFILE_COLS = `*, COALESCE((SELECT h.kind = 'box' FROM agent_hosts h WHERE h.id = agent_profiles.host_id), false) AS boxed`;
 
 /**
- * `hostModeAck: true` is the owner's tick on "Run unboxed on this machine" (§10): the profile is
- * marked host mode, which makes it owner-only whatever its auth. Without it a machine-host profile
- * keeps the pre-box wake rules (older clients); `false` is refused, since a profile on a machine
- * host always runs unboxed.
+ * `hostModeAck: true` is the owner's tick on "Run unboxed on this machine" (§10). A profile on a
+ * machine host always runs unboxed, so creating one, or moving one to another machine host, needs
+ * it (omitted or `false` is refused). The profile is host mode, which makes it owner-only whatever
+ * its auth; the agent_profiles trigger (migration 081) also forces host_mode from the host's kind.
  */
 const hostModeAck = { type: 'boolean' } as const;
 const HOST_MODE_ACK_REQUIRED = 'A profile on a machine host runs unboxed; send hostModeAck: true to confirm';
@@ -222,7 +222,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
-        if (b.hostModeAck === false) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
+        // checkRefs only accepts machine hosts, so every profile made here runs unboxed
+        if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         // A duplicate name aborts the INSERT; asService rolls back to its savepoint, so catch outside it
         try {
             const result = await asService(db, async () => {
@@ -294,6 +295,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
             if (missingModel(b.adapter ?? p.adapter, 'model' in b ? b.model : p.model)) return { status: 400, body: { error: OPENCODE_MODEL_REQUIRED } };
+            // Moving to another host (checkRefs: a machine one) runs it unboxed there: the owner acknowledges that
+            const moved = b.hostId !== undefined && b.hostId !== p.host_id.trim();
+            if (moved && b.hostModeAck !== true) return { status: 400, body: { error: HOST_MODE_ACK_REQUIRED } };
 
             const incompatible = (b.adapter !== undefined && b.adapter !== p.adapter)
                 || (b.hostId !== undefined && b.hostId !== p.host_id.trim())
@@ -317,14 +321,14 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
                         tool_presets = COALESCE($17, tool_presets), allowed_tools = COALESCE($18, allowed_tools),
                         host_mode = host_mode OR $19::boolean,
-                        host_mode_ack_at = CASE WHEN $19::boolean AND NOT host_mode THEN NOW() ELSE host_mode_ack_at END,
-                        host_mode_ack_by = CASE WHEN $19::boolean AND NOT host_mode THEN $20 ELSE host_mode_ack_by END,
+                        host_mode_ack_at = CASE WHEN $19::boolean AND (NOT host_mode OR $21::boolean OR host_mode_ack_at IS NULL) THEN NOW() ELSE host_mode_ack_at END,
+                        host_mode_ack_by = CASE WHEN $19::boolean AND (NOT host_mode OR $21::boolean OR host_mode_ack_at IS NULL) THEN $20 ELSE host_mode_ack_by END,
                         updated_at = NOW()
                      WHERE id = $1 AND server_id = $2 RETURNING ${PROFILE_COLS}`,
                     [profileId, serverId, b.name ?? null, b.botId ?? null, b.hostId ?? null, b.adapter ?? null,
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
                      b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null,
-                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId]
+                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId, moved]
                 );
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
@@ -402,7 +406,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
-        if (b.hostModeAck === false) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
+        // checkRefs only accepts machine hosts, so every profile made here runs unboxed
+        if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         const { tokenId, secretHash, raw } = await generateBotToken();
         try {
             const result = await asService(db, async () => {

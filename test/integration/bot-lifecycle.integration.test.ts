@@ -218,7 +218,7 @@ describe('S0123 DELETE /servers/:serverId/bots/:id', () => {
         const hostAuth = { Authorization: `AgentHost ${host.body.token}` };
         const bot = await makeBot('worker');
         const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'worker', botId: bot.id, hostId: host.body.host.id, adapter: 'codex', workdirAlias: 'agora' });
+            .send({ hostModeAck: true, name: 'worker', botId: bot.id, hostId: host.body.host.id, adapter: 'codex', workdirAlias: 'agora' });
         expect(profile.status, JSON.stringify(profile.body)).toBe(201);
         await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'OPENAI_API_KEY' WHERE id = $1`, [profile.body.id]);
         const sessionId = generateUlid();

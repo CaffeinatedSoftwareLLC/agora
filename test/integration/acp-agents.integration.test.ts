@@ -37,7 +37,7 @@ afterAll(async () => { await ctx.close(); });
 describe('ACP agents', () => {
     it('creates a gemini profile and records the host\'s API-key report for it', async () => {
         const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'gemini', botId, hostId, adapter: 'gemini', workdirAlias: 'agora', model: null, effort: null });
+            .send({ hostModeAck: true, name: 'gemini', botId, hostId, adapter: 'gemini', workdirAlias: 'agora', model: null, effort: null });
         expect(profile.status, JSON.stringify(profile.body)).toBe(201);
         expect(profile.body.adapter).toBe('gemini');
         profileId = profile.body.id;
@@ -47,7 +47,7 @@ describe('ACP agents', () => {
         const row = await ctx.db.query('SELECT auth_mode, api_key_env FROM agent_profiles WHERE id = $1', [profileId]);
         expect(row.rows[0]).toEqual({ auth_mode: 'api_key', api_key_env: 'GEMINI_API_KEY' });
         expect((await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ name: 'other', botId, hostId, adapter: 'acp', workdirAlias: 'agora' })).status).toBe(400);
+            .send({ hostModeAck: true, name: 'other', botId, hostId, adapter: 'acp', workdirAlias: 'agora' })).status).toBe(400);
     });
 
     it('relays heartbeat progress to the channel without storing it, and files ACP denials as cards', async () => {
@@ -60,7 +60,8 @@ describe('ACP agents', () => {
         expect([200, 201]).toContain(sent.status);
         const c = await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(hostAuth);
         expect(c.status, JSON.stringify(c.body)).toBe(200);
-        expect(c.body.profile).toMatchObject({ name: 'gemini', adapter: 'gemini', authMode: 'api_key' });
+        // A machine-host profile is host mode: the claim carries the owner-only rule it applies (§10)
+        expect(c.body.profile).toMatchObject({ name: 'gemini', adapter: 'gemini', authMode: 'subscription' });
         const url = `/agent-hosts/@me/runs/${c.body.run.id}`;
 
         const progress = { step: 'git status -s', toolCalls: 2, planDone: 1, planTotal: 3 };
