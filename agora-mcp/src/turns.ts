@@ -58,6 +58,30 @@ export function mentions(content: string | null | undefined, name: string): bool
     return new RegExp(`(^|[^\\w@])@${escaped}(?![\\w-])`, 'i').test(content ?? '');
 }
 
+export type TurnAction = { owes: OwedTurn['why'] } | { settles: true } | null;
+
+/**
+ * What one post does to the agent's turn in its thread, on its own: owes it (a YIELD, WAIT or
+ * START naming the agent, or an @mention inside a thread), settles it (the agent's own post,
+ * DONE / BLOCK / CANCEL, or a YIELD or WAIT to someone else, which outranks an incidental
+ * mention), or nothing. A deleted post does nothing.
+ */
+export function turnAction(m: Message, self: { id: string; username: string }): TurnAction {
+    if (m.deletedAt) return null;
+    const protocol = protocolOf(m.content);
+    const me = self.username.toLowerCase();
+    const named = (n?: string) => !!n && n.replace(/^@/, '').toLowerCase() === me;
+    if (m.authorId === self.id) return { settles: true };
+    if (protocol && FINISHED.has(protocol.state)) return { settles: true };
+    if (protocol && named(protocol.yieldTo)) return { owes: 'yield' };
+    if (protocol && named(protocol.waitingOn)) return { owes: 'wait' };
+    // A START listing the agent asks every participant for an ACK, whoever goes first
+    if (protocol?.state === 'START' && protocol.participants.some(named)) return { owes: 'start' };
+    if (protocol && (protocol.yieldTo || protocol.waitingOn)) return { settles: true };
+    if (m.threadId && mentions(m.content, self.username)) return { owes: 'mention' };
+    return null;
+}
+
 export interface OwedTurn {
     threadId: string;
     /** The message that addressed the agent. */
@@ -75,7 +99,6 @@ export class TurnTracker {
 
     /** Messages a tool showed the agent (or that it posted). `self` is the bot's id and username. */
     observe(channelId: string, messages: readonly Message[], self: { id: string; username: string }): void {
-        const me = self.username.toLowerCase();
         for (const m of [...messages].sort((a, b) => a.id.localeCompare(b.id))) {
             const protocol = m.deletedAt ? null : protocolOf(m.content);
             // A deleted top-level post has no readable protocol: find it by the turn it caused
@@ -91,22 +114,12 @@ export class TurnTracker {
             if (seen && m.id < seen.id) continue;
             if (sameSource && revision === seen.rev) continue;
 
-            const named = (n?: string) => !!n && n.replace(/^@/, '').toLowerCase() === me;
             // What this post does to the turn: owe it (why), settle it, or nothing
-            let why: OwedTurn['why'] | null = null;
-            let settles = false;
-            if (m.deletedAt) settles = sameSource;
-            else if (m.authorId === self.id) settles = true;
-            else if (protocol && FINISHED.has(protocol.state)) settles = true;
-            else if (protocol && named(protocol.yieldTo)) why = 'yield';
-            else if (protocol && named(protocol.waitingOn)) why = 'wait';
-            // A START listing the agent asks every participant for an ACK, whoever goes first
-            else if (protocol?.state === 'START' && protocol.participants.some(named)) why = 'start';
-            // An explicit handoff to someone else outranks a mention in the same post
-            else if (protocol && (protocol.yieldTo || protocol.waitingOn)) settles = true;
-            else if (m.threadId && mentions(m.content, self.username)) why = 'mention';
-            // The post that owed the turn, edited so it no longer addresses the agent
-            else if (sameSource) settles = true;
+            const action = m.deletedAt ? null : turnAction(m, self);
+            const why: OwedTurn['why'] | null = action && 'owes' in action ? action.owes : null;
+            let settles = !!action && 'settles' in action;
+            // The post that owed the turn, edited so it no longer addresses the agent, or deleted
+            if (!action && sameSource) settles = true;
             if (!why && !settles) continue;
 
             this.lastSeen.set(threadId, { id: m.id, rev: revision });
