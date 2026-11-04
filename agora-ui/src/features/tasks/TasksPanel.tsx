@@ -7,8 +7,8 @@ import type { AgentSessionUpdatePayload, TaskCardDeletePayload, TaskCardUpdatePa
 import { compactTokens, listProfiles, type AgentProfile } from '../agents/agentSessions';
 import { SessionWorkspace } from '../agents/SessionWorkspace';
 import {
-  SESSION_LABEL, STATUSES, STATUS_LABEL, cardSessionState, groupCards, safeUrl, taskApi, taskError, upsertCard,
-  type Board, type CardSessionState, type CardStatus, type TaskCard,
+  SESSION_LABEL, STATUSES, STATUS_LABEL, cardSessionState, githubApi, groupCards, safeUrl, taskApi, taskError, upsertCard,
+  type AgentHost, type Board, type CardSessionState, type CardStatus, type GithubIssue, type GithubState, type TaskCard,
 } from './taskBoard';
 
 /**
@@ -93,6 +93,7 @@ export function TasksPanel() {
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {error && <p className="text-sm text-danger">{error}</p>}
         {!data && !error && <p className="text-sm text-text-muted">Loading…</p>}
+        {data && <GithubRow key={channelId} channelId={channelId} serverId={serverId} profiles={profiles} onImported={card => replace(card)} />}
         {creating && data && (
           <NewCard channelId={channelId} profiles={profiles} onDone={card => { setCreating(false); if (card) { replace(card); setOpenId(card.id); } }} />
         )}
@@ -176,6 +177,166 @@ function AssigneeSelect({ profiles, value, onChange, disabled }: { profiles: Age
   );
 }
 
+/**
+ * The channel's linked GitHub repository (docs/github-issues.md): the owner links one and
+ * picks the host whose `gh` reads it; the owner and directors import its open issues as cards.
+ */
+function GithubRow({ channelId, serverId, profiles, onImported }: {
+  channelId: string; serverId: string | null; profiles: AgentProfile[]; onImported: (card: TaskCard) => void;
+}) {
+  const [gh, setGh] = useState<GithubState | null>(null);
+  const [mode, setMode] = useState<'none' | 'link' | 'import'>('none');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    githubApi.get(channelId).then(s => { if (!cancelled) setGh(s); }).catch(() => { /* no bridge on this server: show nothing */ });
+    return () => { cancelled = true; };
+  }, [channelId]);
+
+  if (!gh || (!gh.link && !gh.canLink)) return null;
+  const link = gh.link;
+  const unlink = async () => {
+    setBusy(true); setError('');
+    try { await githubApi.unlink(channelId); setGh({ ...gh, link: null }); setMode('none'); } catch (err) { setError(taskError(err)); } finally { setBusy(false); }
+  };
+
+  return (
+    <section aria-label="GitHub" className="space-y-2 rounded-lg border border-border bg-surface p-3 text-sm">
+      {link ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="min-w-0 flex-1">
+            <span className="block break-all font-mono text-text">{link.repo}</span>
+            <span className="block text-xs text-text-muted">
+              GitHub via {link.hostName}{link.hostRevoked ? ' (host revoked: link again with another host)' : ''}
+            </span>
+          </span>
+          {gh.canImport && mode !== 'import' && (
+            <button type="button" className={BTN} disabled={link.hostRevoked} onClick={() => setMode('import')}>Import issue</button>
+          )}
+          {gh.canLink && <button type="button" className={BTN} disabled={busy} onClick={() => void unlink()}>Unlink</button>}
+        </div>
+      ) : mode !== 'link' && (
+        <button type="button" className={BTN} onClick={() => setMode('link')}>Link GitHub repo</button>
+      )}
+      {mode === 'link' && !link && serverId && (
+        <LinkRepoForm channelId={channelId} serverId={serverId}
+          onDone={next => { setMode('none'); if (next) setGh({ ...gh, link: next }); }} />
+      )}
+      {mode === 'import' && link && (
+        <IssuePicker channelId={channelId} profiles={profiles} onImported={onImported} onClose={() => setMode('none')} />
+      )}
+      {error && <p className="text-sm text-danger">{error}</p>}
+    </section>
+  );
+}
+
+function LinkRepoForm({ channelId, serverId, onDone }: { channelId: string; serverId: string; onDone: (link?: GithubState['link']) => void }) {
+  const [repo, setRepo] = useState('');
+  const [hosts, setHosts] = useState<AgentHost[] | null>(null);
+  const [hostId, setHostId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    githubApi.hosts(serverId)
+      .then(list => { if (!cancelled) { setHosts(list); setHostId(h => h || list[0]?.id || ''); } })
+      .catch(err => { if (!cancelled) { setHosts([]); setError(taskError(err)); } });
+    return () => { cancelled = true; };
+  }, [serverId]);
+  const submit = async () => {
+    if (!repo.trim() || !hostId || busy) return;
+    setBusy(true); setError('');
+    try { onDone((await githubApi.link(channelId, repo.trim(), hostId)).link); } catch (err) { setError(taskError(err)); setBusy(false); }
+  };
+  return (
+    <form className="space-y-2" onSubmit={e => { e.preventDefault(); void submit(); }}>
+      <input className={INPUT} aria-label="Repository" placeholder="owner/name" maxLength={140} value={repo} onChange={e => setRepo(e.target.value)} autoFocus />
+      <select className={INPUT} aria-label="Host" value={hostId} onChange={e => setHostId(e.target.value)}>
+        {hosts === null && <option value="">Loading hosts…</option>}
+        {hosts?.length === 0 && <option value="">No agent hosts</option>}
+        {hosts?.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+      </select>
+      <p className="text-xs text-text-muted">The host runs gh with its own GitHub login to list issues and comment on them.</p>
+      {error && <p className="text-sm text-danger">{error}</p>}
+      <div className="flex gap-2">
+        <button type="submit" className={BTN_PRIMARY} disabled={busy || !repo.trim() || !hostId}>{busy ? 'Saving…' : 'Save'}</button>
+        <button type="button" className={BTN} onClick={() => onDone()}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+function IssuePicker({ channelId, profiles, onImported, onClose }: {
+  channelId: string; profiles: AgentProfile[]; onImported: (card: TaskCard) => void; onClose: () => void;
+}) {
+  const [list, setList] = useState<{ commandId: string; issues: GithubIssue[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [profile, setProfile] = useState('');
+  const [start, setStart] = useState(false);
+  const [importing, setImporting] = useState<number | null>(null);
+  const abort = useRef<AbortController | null>(null);
+
+  const run = useCallback((ctl: AbortController) => githubApi.listIssues(channelId, ctl.signal)
+    .then(res => { if (res && !ctl.signal.aborted) { setList(res); setLoading(false); } })
+    .catch(err => { if (!ctl.signal.aborted) { setError(taskError(err)); setLoading(false); } }), [channelId]);
+  useEffect(() => { abort.current = new AbortController(); void run(abort.current); return () => abort.current?.abort(); }, [run]);
+  const again = () => {
+    abort.current?.abort();
+    abort.current = new AbortController();
+    setLoading(true); setError('');
+    void run(abort.current);
+  };
+  const importIssue = async (issue: GithubIssue) => {
+    if (!list || importing !== null) return;
+    setImporting(issue.number); setError('');
+    try {
+      const res = await githubApi.importIssue(channelId, { commandId: list.commandId, number: issue.number, ...(profile ? { profile } : {}), start: start && !!profile });
+      onImported(res.card);
+      setList(l => l && { ...l, issues: l.issues.map(i => i.number === issue.number ? { ...i, cardId: res.card.id } : i) });
+    } catch (err) { setError(taskError(err)); } finally { setImporting(null); }
+  };
+
+  return (
+    <div className="space-y-2 border-t border-border pt-2">
+      <AssigneeSelect profiles={profiles} value={profile} onChange={setProfile} />
+      <label className="flex min-h-[44px] items-center gap-2 text-sm text-text">
+        <input type="checkbox" checked={start && !!profile} disabled={!profile} onChange={e => setStart(e.target.checked)} />
+        Start the agent now
+      </label>
+      {loading && <p aria-live="polite" className="text-text-muted">Asking the host for open issues…</p>}
+      {error && <p className="text-danger">{error}</p>}
+      {list && !loading && list.issues.length === 0 && <p className="text-text-muted">No open issues.</p>}
+      {list && !loading && list.issues.length > 0 && (
+        <ul className="space-y-1" aria-label="Open issues">
+          {list.issues.map(issue => (
+            <li key={issue.number} className="flex items-start gap-2">
+              <span className="min-w-0 flex-1 py-1">
+                <span className="block break-words text-text">
+                  {safeUrl(issue.url)
+                    ? <a className="font-mono text-primary underline" href={safeUrl(issue.url)!} target="_blank" rel="noreferrer">#{issue.number}</a>
+                    : <span className="font-mono text-text-muted">#{issue.number}</span>} {issue.title}
+                </span>
+                <span className="block text-xs text-text-muted">by {issue.author}</span>
+              </span>
+              {issue.cardId ? <span className="py-3 text-xs text-text-muted">Imported</span> : (
+                <button type="button" className={BTN} disabled={importing !== null} aria-label={`Import issue #${issue.number}`} onClick={() => void importIssue(issue)}>
+                  {importing === issue.number ? 'Importing…' : 'Import'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <button type="button" className={BTN} disabled={loading} onClick={again}>List again</button>
+        <button type="button" className={BTN} onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
 interface CardItemProps {
   card: TaskCard;
   board: Board;
@@ -198,6 +359,8 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
   const state = cardSessionState(card);
   const live = card.session?.state === 'live';
   const pr = safeUrl(card.prUrl);
+  const issueUrl = card.issue ? safeUrl(card.issue.url) : null;
+  const issueRef = card.issue ? `${card.issue.repo}#${card.issue.number}` : '';
   const act = async (fn: () => Promise<string | void>) => {
     setBusy(true); setNotice(null);
     try {
@@ -230,6 +393,14 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
           ) : card.description ? (
             <p className="whitespace-pre-wrap break-words text-text">{card.description}</p>
           ) : <p className="text-text-muted">No description.</p>}
+
+          {card.issue && (
+            <p className="text-xs">
+              <span className="text-text-muted">GitHub issue </span>
+              {issueUrl ? <a className="break-all text-primary underline" href={issueUrl} target="_blank" rel="noreferrer">{issueRef}</a>
+                : <span className="break-all font-mono">{issueRef}</span>}
+            </p>
+          )}
 
           {card.session && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
