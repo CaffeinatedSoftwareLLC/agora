@@ -76,7 +76,7 @@ docker build -q -f box/Dockerfile --target test --build-arg BOX_VERSION="$BOX_VE
 "${DC[@]}" build -q api migrate files-perms boxd box-edge
 
 echo "==> stack $INSTANCE ($BOXTEST_RUNTIME)"
-"${DC[@]}" up -d --no-build postgres redis migrate files-perms api box-socket-proxy box-edge
+"${DC[@]}" up -d --no-build postgres redis migrate files-perms box-image api box-socket-proxy box-edge
 "${DC[@]}" up -d --no-build --no-deps boxd
 for _ in $(seq 1 90); do
     curl -fsS "$BOXTEST_API/health" >/dev/null 2>&1 && break

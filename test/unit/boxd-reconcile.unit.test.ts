@@ -362,7 +362,7 @@ describe('boxd reconcile', () => {
         const other = { c: boxContainerName('agora2', ghost), v: boxVolumeName('agora2', ghost) };
         t.docker.volumes.set(g.v, { Name: g.v, Labels: { 'org.agora.instance': 'agora', 'org.agora.box': ghost } });
         t.docker.volumes.set(other.v, { Name: other.v, Labels: { 'org.agora.instance': 'agora2', 'org.agora.box': ghost } });
-        await t.docker.createNetwork({ Name: g.n, Internal: true, Labels: { 'org.agora.instance': 'agora', 'org.agora.box': ghost }, IPAM: { Config: [{ Subnet: '10.213.0.128/28' }] } });
+        await t.docker.createNetwork({ Name: g.n, Internal: true, Options: { 'com.docker.network.bridge.inhibit_ipv4': 'true' }, Labels: { 'org.agora.instance': 'agora', 'org.agora.box': ghost }, IPAM: { Config: [{ Subnet: '10.213.0.128/28' }] } });
         t.docker.containers.set(g.c, { ...t.docker.containers.get(names(kept.id).c), Name: `/${g.c}`, Mounts: [], State: { Running: false }, Config: { Labels: { 'org.agora.instance': 'agora', 'org.agora.box': ghost } } });
         t.docker.containers.set(other.c, { Name: `/${other.c}`, Mounts: [], State: { Running: false }, Config: { Labels: { 'org.agora.instance': 'agora2', 'org.agora.box': ghost } } });
         // The stack's own edge carries the instance label too, but isn't a box

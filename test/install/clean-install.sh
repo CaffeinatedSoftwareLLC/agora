@@ -87,6 +87,11 @@ kernel=$("${DOCKER[@]}" exec "$CONTAINER" uname -r 2>/dev/null || true)
 pass "box $CONTAINER under runsc (kernel ${kernel:-?})"
 
 # ─── 4. The box answers a mention ───
+# A mention wakes an agent that has a live session in the channel: start it, as the owner would
+started=$(printf '{"command":"start","profile":"claude"}' \
+    | curl -sS -o /dev/null -w '%{http_code}' "${auth[@]}" -H 'Content-Type: application/json' --data-binary @- "$API/channels/$CHANNEL/agent-commands")
+[ "$started" = 201 ] || [ "$started" = 200 ] || fail "/start claude answered $started"
+pass '/start claude'
 since=$(date +%s)
 printf '{"content":"@claude hello from the clean-install test"}' \
     | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' --data-binary @- "$API/channels/$CHANNEL/messages" >/dev/null \

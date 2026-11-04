@@ -13,9 +13,18 @@ export const USER_AGENT = 'agora-edge';
 
 export interface Upstream { req: ClientRequest; response: Promise<IncomingMessage> }
 
+/**
+ * The only origins the edge sends a request to (they get the owner's token). Production uses
+ * GitHub's two; createEdge adds the bases a test injects. Checked on every request, after the
+ * brokers' own path rules, so a URL built wrongly can never carry the token anywhere else.
+ */
+const UPSTREAM_ORIGINS = new Set([new URL(GITHUB_BASE).origin, new URL(GITHUB_API_BASE).origin]);
+export function allowUpstreamOrigin(base: string) { UPSTREAM_ORIGINS.add(new URL(base).origin); }
+
 /** Open a request; the caller writes the body and ends `req`. Idle sockets time out after `idleMs`. */
 export function openUpstream(url: string, method: string, headers: OutgoingHttpHeaders, idleMs = 60_000): Upstream {
     const target = new URL(url);
+    if (!UPSTREAM_ORIGINS.has(target.origin) || target.username || target.password) throw new Error('upstream origin not allowed');
     const mod = target.protocol === 'https:' ? https : http;
     const req = mod.request(target, { method, headers, agent: false });
     const response = new Promise<IncomingMessage>((resolve, reject) => {

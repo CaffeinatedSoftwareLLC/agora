@@ -13,6 +13,7 @@ import { expireOnce, retireOrphans } from './maintenance';
 import { brokerPrefix, matchGitPath, matchGithubPath } from './paths';
 import { createApiProxy, proxyRequest, proxyUpgrade } from './reverse-proxy';
 import type { Resolver, Subnet } from './ssrf';
+import { allowUpstreamOrigin } from './upstream';
 
 /**
  * The box edge (docs/agent-boxes.md §4, §5): the box's only way out. Two listeners:
@@ -62,6 +63,9 @@ export function createEdge(opts: EdgeOptions): Edge {
         if (!opts.redis || events.length === 0) return;
         try { await publishEvents(opts.redis, events); } catch (err) { log.warn({ err: (err as Error).message }, 'Event publish failed'); }
     });
+    // The brokers' upstreams: GitHub's constants in production (box-edge-main), a fake in tests
+    allowUpstreamOrigin(opts.githubBase);
+    allowUpstreamOrigin(opts.githubApiBase);
     const deps: EdgeDeps = {
         db: opts.db, encryptionKey: opts.encryptionKey, githubBase: opts.githubBase.replace(/\/$/, ''),
         githubApiBase: opts.githubApiBase.replace(/\/$/, ''), log,

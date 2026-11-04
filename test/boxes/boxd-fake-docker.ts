@@ -83,7 +83,7 @@ export class FakeDocker implements BoxDockerApi {
                 if (have && overlaps(want, have)) throw dockerError(403, 'invalid pool request: Pool overlaps with other one on this address space');
             }
         }
-        this.networks.set(body.Name, { Name: body.Name, Internal: body.Internal, Labels: { ...body.Labels }, IPAM: { Config: body.IPAM.Config }, Containers: {} });
+        this.networks.set(body.Name, { Name: body.Name, Internal: body.Internal, Options: { ...(body.Options ?? {}) }, Labels: { ...body.Labels }, IPAM: { Config: body.IPAM.Config }, Containers: {} });
     }
     async connectNetwork(network: string, container: string, ipv4: string) {
         this.hit(`connectNetwork ${network} ${container} ${ipv4}`);

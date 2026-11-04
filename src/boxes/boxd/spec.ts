@@ -115,9 +115,15 @@ export function networkSpec(instance: string, boxId: string, subnet: string) {
         EnableIPv6: false,
         CheckDuplicate: true,
         IPAM: { Driver: 'default', Config: [{ Subnet: subnet, Gateway: gatewayAddress(subnet) }] },
+        // An internal network keeps traffic off the outside world, but the host itself answers on
+        // the bridge's own address (its sshd, a Docker API on 2375, anything on 0.0.0.0). With
+        // no IPv4 address on the bridge the host isn't on the box network at all (found under
+        // gVisor in CI: a box reached the runner's sshd on the gateway address)
+        Options: { [INHIBIT_IPV4]: 'true' },
         Labels: boxLabels(instance, boxId),
     };
 }
+export const INHIBIT_IPV4 = 'com.docker.network.bridge.inhibit_ipv4';
 
 export function volumeSpec(instance: string, boxId: string) {
     return { Name: boxVolumeName(instance, boxId), Driver: 'local', Labels: boxLabels(instance, boxId) };
@@ -257,6 +263,7 @@ export function containerGeneration(info: any): number | null {
 export function networkDrift(info: any, instance: string, boxId: string, subnet: string): string[] {
     const out: string[] = [];
     if (info?.Internal !== true) out.push('not internal');
+    if (info?.Options?.[INHIBIT_IPV4] !== 'true') out.push('host reachable (no inhibit_ipv4)');
     const labels = info?.Labels ?? {};
     if (labels[LABEL_INSTANCE] !== instance || labels[LABEL_BOX] !== boxId.trim()) out.push('labels');
     const subnets = ((info?.IPAM?.Config ?? []) as any[]).map(c => c.Subnet).filter(Boolean);

@@ -102,6 +102,7 @@ describe('boxd container spec', () => {
     it('makes an internal /28 network with the bridge at .1, and a labelled volume', () => {
         expect(networkSpec('agora', BOX, '10.213.0.16/28')).toMatchObject({
             Name: 'agora_box_01jbxa0000000000000000000z', Internal: true, Driver: 'bridge',
+            Options: { 'com.docker.network.bridge.inhibit_ipv4': 'true' },
             IPAM: { Config: [{ Subnet: '10.213.0.16/28', Gateway: '10.213.0.17' }] },
             Labels: { 'org.agora.instance': 'agora', 'org.agora.box': BOX },
         });
@@ -157,8 +158,10 @@ describe('boxd start check (drift)', () => {
     });
 
     it('checks the box network: internal, labelled, the row subnet', () => {
-        const n = { Internal: true, Labels: { 'org.agora.instance': 'agora', 'org.agora.box': BOX }, IPAM: { Config: [{ Subnet: '10.213.0.16/28' }] } };
+        const n = { Internal: true, Options: { 'com.docker.network.bridge.inhibit_ipv4': 'true' }, Labels: { 'org.agora.instance': 'agora', 'org.agora.box': BOX }, IPAM: { Config: [{ Subnet: '10.213.0.16/28' }] } };
         expect(networkDrift(n, 'agora', BOX, '10.213.0.16/28')).toEqual([]);
+        // The host must not be on the box network (no bridge address)
+        expect(networkDrift({ ...n, Options: {} }, 'agora', BOX, '10.213.0.16/28')).toContain('host reachable (no inhibit_ipv4)');
         expect(networkDrift({ ...n, Internal: false }, 'agora', BOX, '10.213.0.16/28')).toContain('not internal');
         expect(networkDrift(n, 'agora', BOX, '10.213.0.32/28')).toContain('subnet');
         expect(networkDrift({ ...n, Labels: {} }, 'agora', BOX, '10.213.0.16/28')).toContain('labels');
