@@ -1,6 +1,6 @@
 # Agent boxes: the boundary contract
 
-Status: **design for review** (2026-11-04). Nothing here is built yet; sections marked *verify live* need a real login or a real machine that CI can't give.
+Status: **design, reviewed** (2026-11-04: Codex review in #agora, five findings and two corrections folded in). Sections marked *verify live* need a real login or a real machine that CI can't give.
 
 Each agent that writes files or runs commands gets its own **box**: a persistent gVisor container that holds the agent's CLI, its login, its home folder and its clones of the repos it works on. Inside the box the agent runs without per-command prompts. Agora asks the owner only at the box's edges:
 
@@ -106,8 +106,11 @@ Rules:
   - `X-Forwarded-For: <box address>`,
   - `X-Agora-Edge-Box: <boxId>`,
   - `X-Agora-Edge-Sig: HMAC-SHA256(AGORA_EDGE_SECRET, boxId + "\n" + timestamp)` and `X-Agora-Edge-Ts`.
-- The API checks those headers in its auth step. On a request that carries a valid edge signature, **the authenticated principal must be the box's own bot or host**; any other bot token, host token or user token is refused with `403 token_not_for_this_box`, written to the bot's audit trail and posted to the owner once per hour per box. This is what makes a stolen token useless from another box, and it covers the WebSocket handshake, which the edge can't parse.
-- A request without edge headers is an ordinary request (a host-mode agent, the browser). A request with headers that don't verify is refused (`403 bad_edge_signature`).
+- The signature covers `boxId`, the box's **generation** (bumped on every rebuild, reset and restore) and the timestamp (accepted for 60 seconds). The API checks it in its auth step, in both directions:
+  - **A box credential is valid only through its own box's edge.** Every bot token and host token boxd mints is recorded with `box_id` and `generation`. A request that authenticates with one must carry a valid edge signature for that same box and generation; without one (straight to the published API port, through Caddy, from another machine, through an allowed domain that loops back) it is refused with `403 box_token_outside_box`. So a token copied out of box B is useless everywhere except inside box B.
+  - **Inside a box only that box's credentials work.** A request with a valid edge signature must authenticate as the box's own bot or host; any other bot token, host token or user token is refused with `403 token_not_for_this_box`.
+  - Both refusals are written to the bot's audit trail and posted to the owner (at most once per hour per box). They cover REST and the WebSocket handshake (the headers are on the upgrade request), which the edge can't parse.
+- A request without edge headers and without a box credential is ordinary (a host-mode agent, the browser). Edge headers that don't verify, or name an old generation, are refused (`403 bad_edge_signature`).
 
 ### 4.2 The internet: domain allowlist
 
@@ -117,7 +120,8 @@ Rules:
   - the adapter's provider: Claude `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `statsig.anthropic.com`; Codex `api.openai.com`, `chatgpt.com`, `auth.openai.com`,
   - package registries: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`.
 - `github.com` is **not** on it: git goes through the git broker (§5.1), which is the only path with credentials.
-- **SSRF guard:** after resolving `host`, the edge refuses private, loopback, link-local and Docker-internal addresses (the existing `src/lib/url-guard.ts` rules), so an allowed name that resolves to `postgres` or another box can't be used to reach it.
+- **SSRF guard, pinned:** the edge resolves `host` once, refuses the request if **any** answer is private, loopback, link-local, multicast, reserved, CGNAT, an IPv4-mapped or NAT64 IPv6 address, or inside one of the engine's Docker networks (the existing `src/lib/url-guard.ts` rules plus those), and then dials **the validated address itself**, never the name again. A retry repeats the whole check. So a name that answers differently between check and connect (DNS rebinding) can't reach `postgres` or another box.
+- **What the allowlist controls:** the CONNECT authority (host and port). TLS stays end to end and the edge doesn't see inside it, so on shared infrastructure (a CDN that serves many sites) the name the client sends inside TLS can differ from the allowed one. The allowlist is a reach limit, not proof of which site the box talked to. Allowed domains (the provider, the registries) also remain outbound data paths; the allowlist narrows exfiltration, it doesn't prevent it.
 - **Unknown domain:** the edge answers `403` with `X-Agora-Edge-Request: <requestId>` and a one-line body (`domain example.com needs the owner's approval; request <id> was sent`). It records a pending `domain` edge request (deduplicated per box and domain while pending) and posts the card. **Allow** adds the domain to that box's allowlist; **Deny** keeps it out and suppresses new cards for that domain for 24 hours. The agent retries after approval; nothing is held open.
 - Search: boxes get no open web. An agent searches through Agora (the assistant's search route, screened by the decision model where it's on) using its Agora tools, as today.
 
@@ -131,6 +135,8 @@ Rules:
 
 Repos are attached to a box when it's created or later in its settings (`owner/repo` on github.com in v1). boxd's first start of the box clones each one into `~/work/<repo>` through the git broker. GitHub stays the remote.
 
+**Fixed upstreams, for both brokers.** The edge builds every upstream URL itself from constants and the attached repo's stored `owner` and `repo` (`^[A-Za-z0-9-]{1,39}$`, `^[A-Za-z0-9._-]{1,100}$`, not `.` or `..`). A request path is matched against a short list of exact forms after one decode; `..`, encoded separators (`%2f`, `%5c`), double encoding, a different host or anything else is `404` before a credential is added. Upstream redirects are never followed with credentials attached (the reply is `502`).
+
 ### 5.1 Fetch and clone
 
 - The box's `origin` is `http://edge:8080/git/github.com/<owner>/<repo>.git`.
@@ -140,17 +146,23 @@ Repos are attached to a box when it's created or later in its settings (`owner/r
 ### 5.2 Push
 
 - `GET …/info/refs?service=git-receive-pack` is forwarded with the token (git needs the remote's refs before it pushes).
-- `POST …/git-receive-pack`: the edge reads the command pkt-lines at the start of the body (`<old> <new> <ref>`), then:
-  - **Allowed** if the home channel's policy auto-allows pushes for this box, or there's an `allowed` push request for exactly this box, repo, ref and new SHA. The body (the buffered head plus the rest of the stream) is forwarded upstream with the token, and the reply streamed back.
-  - **Otherwise** the edge drains the body, records a pending `push` request and answers with a valid receive-pack report: `ng <ref> push needs the owner's approval (request <id>); push again after it's approved`. git prints that as `! [remote rejected]`.
-- An approval is for **one ref at one SHA**. New commits need a new approval: approval resets when the head changes.
-- Deleting a ref (`new` is all zeros) and force-updates of the repo's default branch always need approval, even with auto-allow.
+- `POST …/git-receive-pack`: the edge parses the command list at the start of the body: pkt-lines of `<old> <new> <ref>` (the first with its capability list), up to the flush packet. **Anything it doesn't understand is refused**: a malformed or oversized pkt-line, more than 50 commands, a ref outside `refs/heads/` and `refs/tags/`, a symbolic or `HEAD` ref, `push-options`, `push-cert`, the v2 protocol for pushes, a duplicate ref.
+- **Every command in the push must be authorized**, or none of it goes upstream. A command is authorized by:
+  - **auto-allow**, if the home channel's policy auto-allows pushes from this box, and the command creates or updates a branch that is **not** the repo's default branch (read from GitHub when the repo is attached, refreshed hourly). Deleting a ref, any tag, and any update to the default branch are never auto-allowed;
+  - otherwise **an approval for the exact push**: the same box and generation, the same repo, and the same complete set of `(old, new, ref)` commands (stored as a sorted list and its hash).
+- **Approvals are used once.** Forwarding a push first moves its approval from `allowed` to `in_flight` under a row lock, so two concurrent pushes can't both use it. When GitHub's report says every ref was updated it becomes `used`; if the upstream request fails or a ref is rejected, it goes back to `allowed` so the agent can retry the same push, until it expires (30 minutes after approval).
+- **The old SHA is part of the approval, and GitHub enforces it**: receive-pack updates a ref only if it still points at `old`. So an approved push can't be replayed after the remote has moved, and can't rewind a branch that someone else updated. A pkt-line says nothing about ancestry, so the edge doesn't claim to know whether an update is a fast-forward; that is why default-branch updates always go to the owner, with the old and new SHA on the card.
+- **Not authorized:** the edge drains the body, records a pending `push` request for that exact command set and answers with a valid receive-pack report, `ng <ref> push needs the owner's approval (request <id>); push again after it's approved` for each ref. git prints it as `! [remote rejected]`. New commits mean a new command set and a new approval: approval resets when the head changes.
 - Push auto-allow is per channel and per box, set by the owner on the card (**Always allow pushes from this box here**) or in the box settings.
+- Tests: mixed authorized and unauthorized refs in one push (none forwarded), deletes, tags, a stale `old` (GitHub refuses), replay of a used approval, two concurrent pushes on one approval, malformed and v2 bodies.
 
 ### 5.3 Pull requests and GitHub reads
 
-- `GET http://edge:8080/github/repos/<owner>/<repo>/…`: forwarded to `api.github.com` with the token, for attached repos and `GET` only (status checks, runs, PR state).
-- `POST http://edge:8080/github/repos/<owner>/<repo>/pulls` with `{ title, body, head, base, draft }`: a `pr` edge request, decided like a push (auto-allowed when the channel auto-allows PRs for this box). When allowed, the edge creates the PR with the token and returns GitHub's reply. When not yet allowed, `403` with the request ID; the agent asks again after approval.
+- **Reads:** `GET` only, attached repos only, and only these paths under `http://edge:8080/github/repos/<owner>/<repo>/`: `pulls`, `pulls/<n>`, `pulls/<n>/reviews`, `pulls/<n>/comments`, `pulls/<n>/files`, `commits/<sha>/check-runs`, `commits/<sha>/status`, `actions/runs`, `actions/runs/<id>`, `issues/<n>`, `issues/<n>/comments` (`<n>`, `<id>` digits; `<sha>` 40 or 64 hex). Query strings are limited to `state`, `head`, `base`, `per_page`, `page`, `branch`, `event`. Forwarded to `api.github.com` with the token.
+- **Creating a PR:** `POST http://edge:8080/github/repos/<owner>/<repo>/pulls` with `{ title, body, head, base, draft }` (`head` a branch of the same repo; no cross-fork PRs in v1). The edge resolves `head` and `base` to SHAs on GitHub and binds the request to the box and generation, the repo, `head`, **the head SHA**, `base` and **the hash of the title, body and draft flag**. The card shows all of them.
+  - Allowed (approved, or auto-allowed when the channel auto-allows PRs from this box): the edge resolves `head` again and creates the PR only if the head SHA and the payload hash still match; otherwise the request is refused as changed and a new one is made. An approval is used once.
+  - Retries are idempotent: before creating, the edge looks for an open PR from `head` to `base`; if one exists that this request already created, it returns it instead of creating another.
+  - Not yet allowed: `403` with the request ID; the agent sends the same request again after approval.
 - The image ships `agora-pr` (`agora-pr create --title … --body-file … --base main`, `agora-pr status <n>`) so agents don't need `gh` or a token.
 - Nothing else on GitHub's API is reachable from a box.
 
@@ -181,7 +193,7 @@ runtime        runsc (runc only with AGORA_BOX_INSECURE_DEV=1: dev and CI withou
 user           1000:1000
 network        <instance>_box_<boxId>, ip .3
 extra hosts    edge:<.2>
-read-only      true;  tmpfs /tmp size=1g
+read-only      true;  tmpfs /tmp size=1g; tmpfs /run/agora size=1m,mode=0700,uid=1000
 volume         <instance>-box-<boxId>-home → /home/agent
 cap-drop       ALL;   no-new-privileges
 limits         cpus 2, memory 4g, pids 1024 (per box, owner-editable up to instance ceilings)
@@ -201,6 +213,8 @@ boxd reaches Docker only through its own `box-socket-proxy` (the same `wollomati
 - `images/<name>/json`.
 
 No exec, no attach, no bind mounts (`-allowbindmountfrom` points nowhere), no image pulls or builds, nothing outside those names. The names include the instance, so one install's boxd can't touch another's boxes.
+
+The proxy filters paths, not request bodies: it can't stop a create request that asks for privileges, another network or another box's volume. That is boxd's job, and the residual risk is the same as the runner's (sandbox spec T9): a compromised boxd could create a privileged container. So boxd stays small, builds every body from the constants above, and before each start inspects the container and refuses to start it (and alerts) unless its image, user, runtime, capabilities, read-only flag, tmpfs, its single volume (its own `-home`), its single network (its own) with address `.3`, and its labels are exactly what the row says. It also checks that its own volume is mounted by no other container.
 
 ## 8. agora-host inside a box
 
@@ -222,7 +236,7 @@ The owner presses **Log in** on the box in Settings → Agents (or on the box's 
 | Claude Code | `claude auth login --claudeai` | the sign-in URL, in Agora, and a box to paste the code Anthropic shows | the host writes the pasted code to the command's input; the login is saved in the box's `CLAUDE_CONFIG_DIR` |
 
 - The URL, the device code and the pasted code pass through Agora only for the length of the login (10 minutes), are never logged and are deleted when it ends.
-- The login is stored **only in the box's home volume**. It is never on the host, never in Agora's database, never in a backup that leaves the machine unencrypted (§9.4).
+- The login is stored **only in the box's home volume**. It is never on the host and never in Agora's database; backups carry it only inside the encrypted bundle (§9.4).
 - `auth: "subscription"` boxes stay owner-only, as today: only the owner's messages wake them, only the owner can press Log in.
 - *Verify live:* both commands in a box with a real account. CI checks the relay with fake CLIs that print the same prompts.
 
@@ -257,14 +271,19 @@ Recreates the container from the image and the row, rotates both tokens. The fix
 
 ### 9.4 Backup (includes every box)
 
-`install/backup.sh [dir]` writes a dated folder:
-- `postgres.sql.gz` (`pg_dump`),
-- `files-data.tar.gz`,
-- `boxes/<boxId>-home.tar.gz` for **every** box volume of the instance (found by label, so none is missed),
-- `env.prod` (it holds `AGORA_ENCRYPTION_KEY`; the folder is created mode 0700, and the script says to keep it as private as the key),
-- `manifest.json`: instance, version, box IDs and image versions, SHA-256 of every file.
+**A coherent restore point.** `install/backup.sh` first quiesces everything that changes box state:
+1. stops `boxd` (no provisioning, reconciliation or token rotation can run) and `edge` (no approvals are decided or used, no git traffic), after waiting for an in-progress boxd operation to finish;
+2. stops every box (their CLIs stop writing logins and repos), then the `api`, `runner` and `cap-gateway` writers;
+3. dumps the database, then archives `files-data` and **every** box home volume of the instance (found by label, so none is missed), while nothing is running that could change them;
+4. starts everything again.
 
-Boxes are stopped one at a time while their volume is archived (a few seconds each), so a CLI isn't writing its login mid-copy. `install/restore.sh <dir>` checks the manifest, restores the database, files and every box volume, then starts the stack; boxd rebuilds the boxes (new tokens), and their logins and repos are back.
+Everything is one bundle, **encrypted before it leaves the machine's Docker volumes**: the archive is streamed through AES-256-GCM (`dist/src/tools/backup-crypt.js` in the backend image) with a key derived (scrypt) from a backup passphrase the owner chooses at first backup; nothing is written in plain text. The bundle holds `postgres.sql`, `files-data.tar`, `boxes/<boxId>-home.tar` (CLI logins and repos), `env.prod` (it holds `AGORA_ENCRYPTION_KEY`) and `manifest.json` (instance, version, box IDs, generations and image versions, SHA-256 of every part). Without the passphrase it can't be restored; that is the point.
+
+`install/restore.sh <bundle>` asks for the passphrase, checks the manifest, restores the database, files and every box volume, then, before anything starts:
+- bumps every box's **generation** and revokes all box host and bot tokens (boxd mints fresh ones when it rebuilds the boxes, so a token from the old install or a copy of the backup is dead),
+- expires every pending or allowed edge request (approvals made before the backup don't carry over).
+
+Then it starts the stack; boxd rebuilds the boxes, and their logins and repos are back. A test runs a backup while a rebuild and a delete are in progress and checks the restored state is one of "before" or "after" for each box, never a mix.
 
 ### 9.5 Uninstall
 
@@ -357,11 +376,11 @@ At install the installer asks once, default **no**:
 | B1 | Box A reads B's token from a mount | no shared or host mounts; per-box volume | in A: B's volume and any `/home` but its own absent; no `docker.sock`; `find / -name '*token*'` finds only A's |
 | B2 | Box A reads B's token from the environment | per-container env; gVisor process isolation | in A: every `/proc/*/environ` holds only A's tokens; B's token string appears nowhere in A's readable files |
 | B3 | Box A reaches B over the network | per-box internal networks; edge refuses private addresses and forwards nothing between box networks | from A: B's `.3` unreachable on any port; CONNECT to B's address and to `postgres`, `redis`, the Docker host refused |
-| B4 | Box A uses B's token (copied somehow) through the edge | edge signature + API box binding (§4.1) | from A with B's real token: every REST call and the WebSocket handshake get `403 token_not_for_this_box`, and the bot's audit trail records it |
+| B4 | Box A uses B's token (copied somehow) | edge signature + box binding in the API, both directions (§4.1) | from A with B's real token: every REST call and the WebSocket handshake get `403 token_not_for_this_box`; B's token used directly against the published API port (no edge) gets `403 box_token_outside_box`; both are in the bot's audit trail |
 | B5 | Box A gets B's token from the Agora API | tokens are hashes at rest and never returned; bots can't list other bots' tokens or boxes | with A's token: box, bot and host endpoints for B are 403; no response contains token material |
 | B6 | Old tokens after rebuild | rotation in the rebuild transaction | A's pre-rebuild bot and host tokens are 401 after rebuild; B1–B5 repeated after `docker restart` of both boxes and after rebuild |
-| B7 | Exfiltration to the internet | allowlist; SSRF guard; no DNS | CONNECT to an unlisted domain → 403 and a pending request; to an IP literal → 403; direct connection to a public IP (no proxy) fails |
-| B8 | Push or PR without approval | git and PR brokers; token only at the edge | push without approval → `remote rejected` + pending request; after approval for that SHA it passes; a new commit needs a new approval; no GitHub token inside the box |
+| B7 | Reaching what it shouldn't, outside or inside | allowlist; pinned SSRF guard; no DNS. Narrows, doesn't prevent, exfiltration: allowed domains are data paths (§4.2) | CONNECT to an unlisted domain → 403 and a pending request; to an IP literal → 403; an allowed name whose DNS answer changes to a private address between lookups → refused; direct connection to a public IP (no proxy) fails |
+| B8 | Push or PR without approval, or replayed | git and PR brokers; token only at the edge; exact, single-use approvals (§5.2, §5.3) | the push tests in §5.2; a PR whose head moved or whose title changed after approval is refused; a retried PR returns the same PR; traversal and encoded-separator paths are 404; no GitHub token inside the box |
 | B9 | Box escapes to the host | gVisor, read-only root, no capabilities | the box reports a `-gvisor` kernel; `mount`, raw sockets, `ptrace` of PID 1 fail |
 | B10 | boxd touches another install's boxes | instance-named proxy allowlist | boxd of instance `agora` gets 403 creating/inspecting `agora2-box-*` |
 | B11 | A box exhausts the machine | per-box CPU, memory and PID limits | a fork bomb in A is contained; B keeps answering |
