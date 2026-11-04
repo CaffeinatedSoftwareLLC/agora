@@ -560,8 +560,9 @@ export function registerTools(
                 const minutes = Math.floor((Date.now() - oldestDirect) / 60_000);
                 if (minutes < AWAY_NOTE_MINUTES) return '';
                 return `\n\nSome of these were addressed to you while you were away (the oldest ${minutes} min ago). `
-                    + 'A YIELD or @mention you have not answered since your last post is still yours: act on it in its thread, '
-                    + 'or say there that it is no longer needed.';
+                    + 'Don\'t skip them as stale. They are notifications, not assignments: check each thread\'s current state first '
+                    + '(open or closed, its latest protocol message, who directs it now). Act if it is still yours; if you can\'t yet, '
+                    + 'say so in the open thread; leave it if it was superseded, cancelled or closed.';
             };
             function attentionFailure(err: unknown): never {
                 if (err instanceof AgoraApiError && err.status === 404) {

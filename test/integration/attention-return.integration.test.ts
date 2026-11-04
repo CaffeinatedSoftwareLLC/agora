@@ -84,31 +84,42 @@ describe('an agent that comes back', () => {
         expect(out).toContain(y.id);
     });
 
-    it('on first use, skips what it answered (before its last post here) and what is older than 24 h', async () => {
-        const fresh = await channel('fresh');
-        const bot = await makeBot('RetGemini', [fresh]);
+    /** A channel the bot has access to but never waited in, with Claude in it too. */
+    async function freshChannel(botName: string) {
+        const fresh = await channel(`fresh-${botName.toLowerCase()}`);
+        const bot = await makeBot(botName, [fresh]);
         expect((await ctx.request.post(`/channels/${fresh}/bots/${claude.id}`).set(owner.auth)).status).toBe(201);
+        const feed = async () => ((await ctx.request.get(`/channels/${fresh}/attention`).set(bot.auth)).body as { id: string }[]).map(m => m.id);
+        return { fresh, bot, feed };
+    }
+
+    it('on first use, delivers a YIELD from up to 24 h back even if the bot posted in another thread since', async () => {
+        const { fresh, bot, feed } = await freshChannel('RetGemini');
         const ancient = await post(owner.auth, fresh, '@RetGemini an old request');
         await ctx.db.query("UPDATE messages SET created_at = NOW() - INTERVAL '25 hours' WHERE id = $1", [ancient.id]);
-        const answeredThread = await post(owner.auth, fresh, 'Earlier job');
-        const answered = await post(claude.auth, fresh, turn('RetGemini'), answeredThread.id);
-        await post(bot.auth, fresh, 'Done with the earlier job.', answeredThread.id);
-        const pendingThread = await post(owner.auth, fresh, 'New job');
-        const pending = await post(claude.auth, fresh, turn('RetGemini'), pendingThread.id);
-        const mention = await post(owner.auth, fresh, '@RetGemini and this one, please', pendingThread.id);
+        const a = await post(owner.auth, fresh, 'Job A');
+        const pending = await post(claude.auth, fresh, turn('RetGemini'), a.id);
+        // The bot posts a status in thread B without ever reading attention: not an acknowledgement of A
+        const b = await post(owner.auth, fresh, 'Job B');
+        await post(bot.auth, fresh, 'Status on B: still building.', b.id);
+        const mention = await post(owner.auth, fresh, '@RetGemini and this one, please', a.id);
 
-        // The first attention read starts after the bot's own last post, within 24 h
-        const feed = await ctx.request.get(`/channels/${fresh}/attention`).set(bot.auth);
-        expect(feed.body.map((m: { id: string }) => m.id)).toEqual([pending.id, mention.id]);
-        expect(feed.body.map((m: { id: string }) => m.id)).not.toContain(answered.id);
-        expect(feed.body.map((m: { id: string }) => m.id)).not.toContain(ancient.id);
-        // and chat_wait hands both to the agent
-        const out = await session(bot.token)('chat_wait', { channel: 'fresh', timeout: 2 });
+        expect(await feed()).toEqual([pending.id, mention.id]);
+        const out = await session(bot.token)('chat_wait', { channel: fresh, timeout: 2 });
         expect(out).toContain(pending.id);
         expect(out).toContain(mention.id);
     });
 
-    it('says that what arrived while it was away is still its to answer', async () => {
+    it('judges age per message: an imported row with a new id and an old date neither arrives nor hides a newer YIELD', async () => {
+        const { fresh, bot, feed } = await freshChannel('RetMistral');
+        const a = await post(owner.auth, fresh, 'Job A');
+        const pending = await post(claude.auth, fresh, turn('RetMistral'), a.id);
+        const imported = await post(owner.auth, fresh, '@RetMistral imported from the old instance');
+        await ctx.db.query("UPDATE messages SET created_at = NOW() - INTERVAL '25 hours' WHERE id = $1", [imported.id]);
+        expect(await feed()).toEqual([pending.id]);
+    });
+
+    it('says that what arrived while it was away is a notification to check, not to skip', async () => {
         const first = session(codex.token);
         await first('chat_wait', { channel: 'general', timeout: 1 });
         const thread = await post(claude.auth, general, 'Relay on Heroku');
