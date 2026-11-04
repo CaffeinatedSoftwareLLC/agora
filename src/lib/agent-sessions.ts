@@ -2,7 +2,7 @@ import { generateUlid } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
 import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { expireLiveRequests } from './agent-permissions';
-import { planNotice, PLAN_OWNER_SQL } from './provider-terms';
+import { planNotice, PLAN_OWNER_SQL, WAKE_AUTH_SQL } from './provider-terms';
 import { noticeStandby } from './terminal-sessions';
 
 /**
@@ -113,7 +113,7 @@ export async function asService<T>(client: any, fn: () => Promise<T>): Promise<T
  */
 async function liveSessions(db: any, channelId: string, threadId: string | null = null): Promise<LiveSession[]> {
     const rows = await db.query(
-        `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, u.username, p.name AS profile_name, p.auth_mode,
+        `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, u.username, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode,
                 ${PLAN_OWNER_SQL} AS plan_owner_id,
                 (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner
          FROM agent_sessions s

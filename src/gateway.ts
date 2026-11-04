@@ -12,6 +12,7 @@ import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
 import { agentPresence, type AgentPresencePayload } from './lib/agent-presence';
 import { attachTerminal, endTerminal, heartbeatTerminals, reattachTerminal, sweepStaleTerminals, terminalActivity, terminalGraceMs, HEARTBEAT_MS } from './lib/terminal-sessions';
 import type { Notice } from './lib/agent-runs';
+import { checkProvenance, recordRefusal, type ProvenanceCredential } from './lib/boxes/provenance';
 
 /** How often open human sockets are re-checked against revocation and account state. */
 const SESSION_SWEEP_MS = 5 * 60 * 1000;
@@ -71,6 +72,28 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         }
     });
 
+    // The box provenance rule (docs/agent-boxes.md §4.1) on the handshake: the edge's headers are
+    // on the upgrade request. Returns the refusal code, after recording it (audit, owner notice).
+    const provenanceRefused = async (headers: Record<string, string | string[] | undefined>, cred: ProvenanceCredential): Promise<string | null> => {
+        const verdict = checkProvenance(headers, cred);
+        if (!verdict) return null;
+        const client = await db.connect();
+        let notices: Notice[] = [];
+        try {
+            await client.query('BEGIN');
+            notices = await recordRefusal(client, cred, verdict, { method: 'GET', route: 'socket.io' });
+            await client.query('COMMIT');
+        } catch {
+            await client.query('ROLLBACK').catch(() => {});
+            notices = [];
+        } finally {
+            client.release();
+        }
+        emitNotices(notices);
+        return verdict.code;
+    };
+    const intOrNull = (v: unknown) => v === null || v === undefined ? null : Number(v);
+
     // Auth middleware — verify JWT or bot token from handshake
     io.use(async (socket, next) => {
         socket.data.accessRevision = gatewayAccessRevision(io);
@@ -102,8 +125,10 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                 }
 
                 const tokenRow = await db.query(
-                    `SELECT t.id, t.bot_id, t.secret_hash, u.server_id, ${TOKEN_BINDING_COLUMNS}
+                    `SELECT t.id, t.bot_id, t.secret_hash, u.server_id, ${TOKEN_BINDING_COLUMNS},
+                            t.box_id, t.box_generation, xb.generation AS box_current_generation
                      FROM bot_tokens t JOIN users u ON u.id = t.bot_id
+                     LEFT JOIN agent_boxes xb ON xb.id = t.box_id
                      WHERE t.id = $1 AND t.revoked_at IS NULL`,
                     [parsed.tokenId]
                 );
@@ -117,6 +142,12 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                 }
 
                 const botId = tokenRow.rows[0].bot_id.trim();
+                const t = tokenRow.rows[0];
+                const refused = await provenanceRefused(socket.handshake.headers, {
+                    kind: 'bot', id: botId, serverId: t.server_id?.trim() || null, boxId: t.box_id?.trim() || null,
+                    generation: intOrNull(t.box_generation), currentGeneration: intOrNull(t.box_current_generation),
+                });
+                if (refused) return next(new Error(refused));
                 const error = await socketAccountError(db, botId, true);
                 if (error) return next(new Error(error));
 
@@ -166,6 +197,12 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             if (payload.jti && await isTokenBlacklisted(payload.jti)) {
                 return next(new Error('Token revoked'));
             }
+
+            // A person's login never works through a box's edge
+            const refused = await provenanceRefused(socket.handshake.headers, {
+                kind: 'user', id: payload.userId, serverId: null, boxId: null, generation: null, currentGeneration: null,
+            });
+            if (refused) return next(new Error(refused));
 
             // Check account_status using pool directly (no per-request transaction in WS)
             const result = await db.query(

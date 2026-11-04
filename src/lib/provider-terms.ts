@@ -38,7 +38,19 @@ export function subscriptionNotice(agent: string): string {
  *
  * SQL for a profile's plan owner, given `p` (agent_profiles) and `srv` (servers) in scope.
  */
-export const PLAN_OWNER_SQL = `(CASE p.auth_mode WHEN 'subscription' THEN srv.owner_id WHEN 'siwc' THEN p.plan_owner_id END)`;
+export const PLAN_OWNER_SQL = `(CASE WHEN p.auth_mode = 'siwc' THEN p.plan_owner_id WHEN p.auth_mode = 'subscription' OR p.host_mode THEN srv.owner_id END)`;
+
+/**
+ * Host mode (docs/agent-boxes.md §10): a profile run unboxed on a machine host is owner-only,
+ * whatever its auth. An api_key profile in host mode follows the subscription rule (the server
+ * owner wakes it); a siwc profile keeps its plan owner (the server owner or the person who
+ * registered that machine's host). The auth mode the wake rules apply, given `p` in scope:
+ */
+export const WAKE_AUTH_SQL = `(CASE WHEN p.host_mode AND p.auth_mode = 'api_key' THEN 'subscription' ELSE p.auth_mode END)`;
+/** The same for a profile row already read (needs auth_mode and host_mode). */
+export function wakeAuthMode(row: { auth_mode?: string | null; host_mode?: boolean | null }): string | null {
+    return row.host_mode && row.auth_mode === 'api_key' ? 'subscription' : row.auth_mode ?? null;
+}
 
 /** The channel notice for a wake the plan-owner rule refused. */
 export function planNotice(agent: string, authMode: string | null | undefined, connected = true): string {

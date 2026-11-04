@@ -11,7 +11,7 @@ import { storage } from '../lib/storage';
 import { decryptFile } from '../lib/encryption';
 import { config } from '../config';
 import { generateUlid } from '../utils/ulid';
-import { PLAN_OWNER_ONLY, PLAN_OWNER_SQL, SUBSCRIPTION_OWNER_ONLY } from '../lib/provider-terms';
+import { PLAN_OWNER_ONLY, PLAN_OWNER_SQL, SUBSCRIPTION_OWNER_ONLY, WAKE_AUTH_SQL } from '../lib/provider-terms';
 
 const ID = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' } as const;
 /** Seconds the host has to screenshot and upload before the claim expires. */
@@ -75,7 +75,7 @@ export async function browserPreviewRoutes(app: FastifyInstance) {
             return reply.status(b.sessionId ? 403 : 400).send({ error: b.sessionId ? 'cannot_direct' : 'session_required' });
         }
         const r = await asService(db, async () => {
-            const s = (await db.query(`SELECT s.id, s.bot_id, s.state, p.host_id, p.generation, p.auth_mode,
+            const s = (await db.query(`SELECT s.id, s.bot_id, s.state, p.host_id, p.generation, ${WAKE_AUTH_SQL} AS auth_mode,
                 (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner
                 FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN servers srv ON srv.id = s.server_id
                 WHERE s.channel_id = $1 AND s.state = 'live' AND ${request.isBot ? 's.bot_id = $2' : 's.id = $2'}

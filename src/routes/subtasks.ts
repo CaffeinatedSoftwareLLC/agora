@@ -6,7 +6,7 @@ import { asService } from '../lib/agent-sessions';
 import { budgetRemaining, MAX_SUBTASK_DEPTH, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { insertBotMessage, MAX_LIVE_SUBTASKS } from '../lib/agent-subtasks';
 import { sanitizeMessageText } from '../lib/sanitize-text';
-import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE } from '../lib/provider-terms';
+import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
 import { CommandError, SESSION_SELECT, botInChannel, profileByName, sessionJson } from './agent-commands';
 
 /**
@@ -91,7 +91,7 @@ export async function subtaskRoutes(app: FastifyInstance) {
                 if (childProfile.auth_mode === 'siwc') {
                     if (!parent.started_by || !childProfile.plan_owner_id || parent.started_by.trim() !== childProfile.plan_owner_id.trim())
                         throw new CommandError(403, { error: PLAN_OWNER_ONLY, message: PLAN_OWNER_ONLY_MESSAGE });
-                } else if (childProfile.auth_mode !== 'api_key' && !(parent.started_by && await isServerOwner(db, parent.server_id.trim(), parent.started_by.trim())))
+                } else if (wakeAuthMode(childProfile) !== 'api_key' && !(parent.started_by && await isServerOwner(db, parent.server_id.trim(), parent.started_by.trim())))
                     throw new CommandError(403, { error: SUBSCRIPTION_OWNER_ONLY, message: SUBSCRIPTION_OWNER_ONLY_MESSAGE });
                 const childBot = childProfile.bot_id.trim();
                 await botInChannel(db, childBot, channelId);

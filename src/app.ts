@@ -41,6 +41,8 @@ import { browserPreviewRoutes } from './routes/browser-previews';
 import { voiceRoutes } from './routes/voice';
 import { accountDeletionRoutes } from './routes/account-deletion';
 import { notificationRoutes } from './routes/notifications';
+import { boxRoutes } from './routes/boxes';
+import { boxHostRoutes } from './routes/box-hosts';
 import { startNotificationListener } from './lib/notifications';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { startModelAgentHandler } from './ai/model-agent-handler';
@@ -131,6 +133,9 @@ export async function buildApp(opts?: {
             return;
         }
         await requireAuth(request, reply);
+        // A refusal was sent: end the chain here. An async hook that sent a reply must return
+        // it, or Fastify runs the next hooks and the handler, whose own reply can replace it.
+        if (reply.sent) return reply;
         // Enrich request logger with authenticated user context
         if (request.userId) {
             request.log = request.log.child({ userId: request.userId, requestId: request.id });
@@ -410,6 +415,9 @@ export async function buildApp(opts?: {
     await app.register(browserPreviewRoutes);
     await app.register(voiceRoutes);
     await app.register(notificationRoutes);
+    // Agent boxes (docs/agent-boxes.md): owner API and the box host's login routes
+    await app.register(boxRoutes);
+    await app.register(boxHostRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

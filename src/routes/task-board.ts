@@ -3,6 +3,7 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
+import { wakeAuthMode } from '../lib/provider-terms';
 import { budgetExhausted, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { CARD_SELECT, CARD_STATUSES, cardJson, cardUpdate, kickoffText, notifyCardReview } from '../lib/task-cards';
 import { sanitizeMessageText } from '../lib/sanitize-text';
@@ -57,7 +58,7 @@ async function startCard(db: any, channelId: string, taskId: string, userId: str
     const card = (await db.query('SELECT * FROM task_cards WHERE id = $1 FOR UPDATE', [taskId])).rows[0];
     if (!card || card.profile_id !== peek.profile_id || card.session_id !== peek.session_id) throw new CommandError(409, { error: 'card_changed' });
 
-    await requireOwnerForSubscription(db, profile.auth_mode, profile.server_id, userId, profile.plan_owner_id);
+    await requireOwnerForSubscription(db, wakeAuthMode(profile), profile.server_id, userId, profile.plan_owner_id);
     const botId = profile.bot_id.trim();
     await botInChannel(db, botId, channelId);
 
