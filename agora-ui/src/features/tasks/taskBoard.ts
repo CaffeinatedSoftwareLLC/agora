@@ -145,6 +145,7 @@ const GITHUB_ERRORS: Record<string, string> = {
   gh_failed: 'gh failed on the host. Check the host log.',
   host_timeout: 'The host took the request but never answered. Try again.',
   binding_or_authority_changed: 'The link or your permissions changed before the host ran the list. Try again.',
+  binding_changed: 'The channel was linked to another repository or host before the host ran this. Try again.',
   no_repo_linked: 'No repository is linked to this channel, or its host was revoked.',
   issue_already_imported: 'That issue is already a card in this channel.',
   issue_list_stale: 'The issue list is out of date. List the issues again.',

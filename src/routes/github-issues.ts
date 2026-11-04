@@ -53,10 +53,16 @@ async function listedIssues(db: any, channelId: string, repo: string, issues: Li
     return issues.map(i => ({ ...i, cardId: byNumber.get(i.number) ?? null }));
 }
 
-/** Queued GitHub work of a channel whose link changed. A comment it cancels is retried by the next Check PR. */
-async function cancelQueued(db: any, channelId: string) {
-    await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"binding_changed"}', finished_at = NOW()
-        WHERE channel_id = $1 AND status = 'queued'`, [channelId]);
+/**
+ * Queued GitHub work of a channel whose link changed: it never runs on the new repository or
+ * host. A cancelled comment is said in its card's thread and retried by the next Check PR.
+ */
+async function cancelQueued(db: any, channelId: string): Promise<Notice[]> {
+    const cancelled = (await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"binding_changed"}', finished_at = NOW()
+        WHERE channel_id = $1 AND status = 'queued' RETURNING *`, [channelId])).rows;
+    const notices: Notice[] = [];
+    for (const c of cancelled) if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, 'binding_changed'));
+    return notices;
 }
 
 export async function githubIssueRoutes(app: FastifyInstance) {
@@ -96,6 +102,7 @@ export async function githubIssueRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any, b = request.body as { repo: string; hostId: string }, db = request.dbClient!;
+        const notices: Notice[] = [];
         const no = await denied(request, channelId, false);
         if (no) return reply.status(no.status).send(no.body);
         if (!validRepo(b.repo)) return reply.status(400).send({ error: 'invalid_repo' });
@@ -105,8 +112,8 @@ export async function githubIssueRoutes(app: FastifyInstance) {
         const link = await asService(db, async () => {
             const host = (await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL', [b.hostId, serverId])).rows[0];
             if (!host) return null;
-            // Queued work was for the old repository or host: it never runs on the new one
-            await cancelQueued(db, channelId);
+            const before = (await db.query('SELECT repo, host_id FROM channel_github_repos WHERE channel_id = $1 FOR UPDATE', [channelId])).rows[0];
+            if (before && (before.repo !== b.repo || before.host_id.trim() !== b.hostId)) notices.push(...await cancelQueued(db, channelId));
             await db.query(
                 `INSERT INTO channel_github_repos (channel_id, server_id, repo, host_id, linked_by) VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (channel_id) DO UPDATE SET repo = EXCLUDED.repo, host_id = EXCLUDED.host_id, linked_by = EXCLUDED.linked_by, updated_at = NOW()`,
@@ -114,6 +121,7 @@ export async function githubIssueRoutes(app: FastifyInstance) {
             return readLink(db, channelId);
         });
         if (!link) return reply.status(400).send({ error: 'host_not_found' });
+        emit(request, notices);
         return reply.send({ link });
     });
 
@@ -125,10 +133,12 @@ export async function githubIssueRoutes(app: FastifyInstance) {
         const serverId = await channelServer(db, channelId);
         if (!serverId) return reply.status(404).send({ error: 'channel_not_found' });
         if (!await isServerOwner(db, serverId, request.userId!)) return reply.status(403).send({ error: 'owner_only' });
-        await asService(db, async () => {
-            await cancelQueued(db, channelId);
+        const notices = await asService(db, async () => {
+            const cancelled = await cancelQueued(db, channelId);
             await db.query('DELETE FROM channel_github_repos WHERE channel_id = $1', [channelId]);
+            return cancelled;
         });
+        emit(request, notices);
         return reply.status(204).send();
     });
 
@@ -201,6 +211,9 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                     [b.commandId, channelId, LIST_FRESH_MINUTES])).rows[0];
                 if (!list) throw new CommandError(404, { error: 'issue_list_not_found' });
                 if (!list.fresh) throw new CommandError(409, { error: 'issue_list_stale' });
+                // Listed before the channel was linked to another repository: list again
+                const linked = (await db.query('SELECT repo FROM channel_github_repos WHERE channel_id = $1', [channelId])).rows[0];
+                if (!linked || linked.repo.toLowerCase() !== list.repo.toLowerCase()) throw new CommandError(409, { error: 'issue_list_stale' });
                 const issue = (list.result?.issues ?? []).find((i: ListedIssue) => i.number === b.number) as ListedIssue | undefined;
                 if (!issue) throw new CommandError(404, { error: 'issue_not_in_list' });
                 const profileId = b.profile ? (await profileByName(db, channelId, b.profile)).id.trim() : null;
@@ -245,8 +258,9 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                 return { status: 401, body: { error: 'host_revoked' } };
             // A claim the host never answered: a list is asked again by the person; a comment may
             // have posted, so it is said in the card's thread and not retried
+            // Any host of the server expires them, so a dead host's claims don't wait for it to return
             const expired = (await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"host_timeout"}', finished_at = NOW()
-                WHERE host_id = $1 AND status = 'claimed' AND lease_until < NOW() RETURNING *`, [host.id])).rows;
+                WHERE server_id = $1 AND status = 'claimed' AND lease_until < NOW() RETURNING *`, [host.serverId])).rows;
             for (const c of expired) if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, 'host_timeout'));
             const candidates = (await db.query(
                 `SELECT * FROM github_commands WHERE host_id = $1 AND server_id = $2 AND status = 'queued' ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED`,

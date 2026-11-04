@@ -319,4 +319,56 @@ describe('reporting the pull request on the issue', () => {
         expect((await ctx.request.post(`/agent-hosts/@me/github-commands/${c.id}/result`).set(otherAuth)
             .send({ claimToken: c.claimToken, success: true, result: {} })).status).toBe(404);
     });
+    it('a dead host\'s claim expires on any host\'s poll, and a late answer never moves the reported state backwards', async () => {
+        const card = await startedCard();
+        await prOpened(card.session.id, 21);
+        const open = (await nextGithub()).body;
+        // The PR merges before the host answers the "opened" comment; the merged one queues behind it
+        await checkPr(card.session.id, 'merged');
+        const merged = (await nextGithub()).body;
+        expect(merged.payload.state).toBe('merged');
+        expect((await githubResult(merged, true, {})).status).toBe(200);
+        // The late "opened" answer is recorded as done but leaves the issue at merged
+        expect((await githubResult(open, true, {})).status).toBe(200);
+        expect((await ctx.db.query('SELECT issue_reported FROM task_cards WHERE id = $1', [card.id])).rows[0].issue_reported).toBe('merged');
+        await checkPr(card.session.id, 'merged');
+        expect((await nextGithub()).status).toBe(204);
+    });
+
+    it('a claim on a host that went away is settled by another host of the server', async () => {
+        const card = await startedCard();
+        await prOpened(card.session.id, 22);
+        const c = (await nextGithub()).body;
+        await ctx.db.query(`UPDATE github_commands SET lease_until = NOW() - INTERVAL '1 second' WHERE id = $1`, [c.id]);
+        const spare = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'spare-host' });
+        expect((await ctx.request.get('/agent-hosts/@me/github-commands/next').set({ Authorization: `AgentHost ${spare.body.token}` })).status).toBe(204);
+        expect((await ctx.db.query('SELECT status, result FROM github_commands WHERE id = $1', [c.id])).rows[0])
+            .toMatchObject({ status: 'failed', result: { error: 'host_timeout' } });
+        expect((await threadNotices(card.threadId)).at(-1)).toContain('may have failed (host_timeout)');
+        await ctx.db.query('UPDATE agent_hosts SET revoked_at = NOW() WHERE id = $1', [spare.body.host.id]);
+    });
+
+    it('a revoked linked host gets no comment, and its queued comments are settled', async () => {
+        const card = await startedCard();
+        const spare = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'soon-revoked' });
+        expect((await link({ repo: REPO, hostId: spare.body.host.id })).status).toBe(200);
+        await prOpened(card.session.id, 23);
+        await ctx.request.delete(`/servers/${serverId}/agent-hosts/${spare.body.host.id}`).set(owner.auth);
+        await checkPr(card.session.id, 'open');
+        const notices = await threadNotices(card.threadId);
+        expect(notices.some(n => n.includes("Couldn't comment on GitHub issue acme/widgets#7: binding_changed"))).toBe(true);
+        expect(notices.at(-1)).toContain('was revoked');
+        expect((await ctx.db.query(`SELECT count(*)::int AS n FROM github_commands WHERE action = 'issue_comment' AND status = 'queued'`)).rows[0].n).toBe(0);
+    });
+
+    it('saving the same link keeps queued work; a list from before a relink cannot be imported', async () => {
+        const card = await startedCard();
+        await prOpened(card.session.id, 24);
+        expect((await link({ repo: REPO, hostId })).status).toBe(200);
+        expect((await nextGithub()).body).toMatchObject({ action: 'issue_comment' });
+
+        const listId = await listed([issue(30)]);
+        await link({ repo: 'acme/other', hostId });
+        expect((await importIssue({ commandId: listId, number: 30 })).body.error).toBe('issue_list_stale');
+    });
 });

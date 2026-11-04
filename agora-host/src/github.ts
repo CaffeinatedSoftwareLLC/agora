@@ -67,6 +67,6 @@ function ghError(err: any): string {
     if (err?.code === 'ENOENT') return 'gh_not_installed';
     const text = String(err?.stderr ?? err?.message ?? '');
     if (/auth login|not logged in|authentication/i.test(text)) return 'gh_not_signed_in';
-    if (/could not resolve to a repository|not found/i.test(text)) return 'repo_not_found';
+    if (/could not resolve to a repository|HTTP 404/i.test(text)) return 'repo_not_found';
     return 'gh_failed';
 }
