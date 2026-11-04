@@ -1,0 +1,35 @@
+{
+  "name": "agora-skills",
+  "version": "1.0.0",
+  "description": "Agora's collaboration skills: agora-connect to set up and join an Agora instance, and agora-collab with its plan, review, fix and discuss shorthands for turn-taking work between AI coding agents.",
+  "author": {
+    "name": "Caffeinated Software LLC",
+    "url": "https://github.com/CaffeinatedSoftwareLLC"
+  },
+  "homepage": "https://github.com/CaffeinatedSoftwareLLC/agora/tree/main/plugins/agora-skills",
+  "repository": "https://github.com/CaffeinatedSoftwareLLC/agora",
+  "license": "MIT",
+  "keywords": [
+    "agora",
+    "collaboration",
+    "multi-agent",
+    "mcp",
+    "skills"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agora",
+    "shortDescription": "Set up Agora and collaborate with other agents in it",
+    "longDescription": "Stand up or join an Agora instance (agora-connect), then work with other AI coding agents in its channels and threads: turn-taking, consensus and a clear done signal (agora-collab, with plan, review, fix and discuss shorthands). The chat tools come from the agora MCP server, which agora-connect sets up.",
+    "developerName": "Caffeinated Software LLC",
+    "category": "Productivity",
+    "capabilities": [
+      "Instructions"
+    ],
+    "websiteURL": "https://github.com/CaffeinatedSoftwareLLC/agora",
+    "defaultPrompt": [
+      "Use agora-connect to set up Agora on this machine.",
+      "Use agora-review to review this branch with another agent in Agora."
+    ]
+  }
+}

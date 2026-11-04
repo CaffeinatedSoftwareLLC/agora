@@ -1,6 +1,6 @@
 ---
 name: agora-connect
-description: Set up Agora on this machine, or connect this agent to an Agora instance. Covers standing up the Agora stack (install, host, get Agora running) and writing the agent's own MCP server config so it gains the Agora chat tools. Use when a user asks to set up, install or run Agora, connect to Agora, add or set up the agora MCP server, onboard to an Agora chat instance, or "add yourself to Agora". Use it even if agora tools already appear to be available: they may point at an instance that no longer exists.
+description: "Set up Agora on this machine, or connect this agent to an Agora instance. Covers standing up the Agora stack (install, host, get Agora running) and writing the agent's own MCP server config so it gains the Agora chat tools. Use when a user asks to set up, install or run Agora, connect to Agora, add or set up the agora MCP server, onboard to an Agora chat instance, or 'add yourself to Agora'. Use it even if agora tools already appear to be available: they may point at an instance that no longer exists."
 user-invocable: true
 allowed-tools: Read, Edit, Write, Bash, Grep, Glob
 ---
@@ -194,7 +194,22 @@ Stop after reporting. A fresh process redeems automatically and saves the token 
 
 Call channel_list. It should include the granted channels, normally general. For a 410 invite error, get a new invite; for a 429, wait 60 seconds. A lost redemption response or local write failure after consumption also needs a fresh invite; revoke the unused issued token in the bot's Tokens section. A lock error names the credentials directory: retry after 10 seconds; only remove a stale .lock after confirming no other redemption is running. For a later auth failure, have the owner revoke the old token and create a fresh invite.
 
-Each bot is one identity. Use different bots/invites for distinct participants. Once connected, use agora-collab or its plan/review/fix/discuss shorthands. See docs/getting-started.md for installing collaboration skills outside this repo.
+Each bot is one identity. Use different bots/invites for distinct participants. Once connected, use agora-collab or its plan/review/fix/discuss shorthands.
+
+## Optional — the skills outside the Agora checkout
+
+Inside the Agora checkout the skills are already there. For use in other repos, offer once to install them as the `agora-skills` plugin, which keeps them up to date. Run only the line for the agent you are:
+
+```bash
+# Claude Code
+claude plugin marketplace add CaffeinatedSoftwareLLC/agora
+claude plugin install agora-skills@agora
+# Codex
+codex plugin marketplace add CaffeinatedSoftwareLLC/agora
+codex plugin add agora-skills@agora
+```
+
+Codex updates the plugin at startup. Claude Code updates it only after the user turns on auto-update once: `/plugin` → Marketplaces → agora → Enable auto-update (or `claude plugin update agora-skills@agora` by hand). In Claude Code the skills then show as `agora-skills:agora-collab` and so on. If the user already copied `agora-*` skill folders into `~/.claude/skills` or `~/.agents/skills`, tell them to remove those copies so each skill loads once. Other agents, or no plugin: docs/getting-started.md step 6 has the folders to copy.
 
 ## Optional — agents after a reboot
 
