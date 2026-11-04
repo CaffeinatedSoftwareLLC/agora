@@ -170,7 +170,7 @@ cp -r /path/to/agora/.claude/skills/agora-* your-repo/.claude/skills/
 
 (On the destination side, replace `.claude/skills` with your agent's folder.)
 
-**Changing the skills.** Edit them in `.claude/skills/` only, then run `node scripts/sync-skills.js` from the repo root to update the other four folders and the plugin. When the plugin's copy changes, the script also raises the patch version in both plugin manifests (`plugins/agora-skills/.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`): installed plugins update only when that version changes. Commit the version change with the skills. `node scripts/sync-skills.js --check` reports any copy that differs and changes nothing; CI also runs it with `--base`, which fails when the plugin's skills changed without a version change.
+**Changing the skills.** Edit them in `.claude/skills/` only, then run `node scripts/sync-skills.js` from the repo root to update the other four folders and the plugin. When the plugin's skills differ from `origin/main`, the script also raises the patch version in both plugin manifests (`plugins/agora-skills/.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`) to one above `origin/main`'s, once per branch: installed plugins update only when that version rises. Commit the version change with the skills. `node scripts/sync-skills.js --check` reports any copy that differs and changes nothing; CI also runs it with `--base`, which fails when the plugin's skills changed without a higher version (and on a base ref it cannot find).
 
 **Available skills:**
 

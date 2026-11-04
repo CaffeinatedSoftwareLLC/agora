@@ -5,16 +5,18 @@
  *
  * .claude/skills/agora-* is the source. Edit the skills there, then run this.
  *
- * When the plugin's copy changes, this also raises the patch version in both plugin
- * manifests. Installed plugins update only when that version changes, so every change
- * to the skills reaches users.
+ * When the plugin's skills differ from the base ref (origin/main by default), this also
+ * raises the patch version in both plugin manifests, once, to one above the base's.
+ * Installed plugins update only when that version rises, so every change to the skills
+ * reaches users.
  *
  * Usage:
  *   node scripts/sync-skills.js                  # Overwrite the copies with the source
+ *   node scripts/sync-skills.js --base <ref>     # Same, raising the version against <ref>
  *   node scripts/sync-skills.js --check          # Change nothing; exit 1 if a copy differs
  *   node scripts/sync-skills.js --check --base origin/main
  *                                                # Also fail if the plugin's skills changed
- *                                                # since that ref without a version change
+ *                                                # since that ref without a higher version
  */
 
 const fs = require('node:fs');
@@ -91,7 +93,7 @@ for (const mirror of MIRRORS) {
 
         if (mirror === PLUGIN_SKILLS) pluginChanged = true;
         if (check) {
-            problems.push(...differences);
+            problems.push(...differences.map((d) => `${d}. Run: node scripts/sync-skills.js`));
         } else {
             fs.rmSync(to, { recursive: true, force: true });
             fs.cpSync(from, to, { recursive: true });
@@ -114,30 +116,64 @@ for (const rel of MARKETPLACES) {
     else if (entry.version) problems.push(`${rel}: "${names[0]}" sets a version; keep it in the plugin manifests only`);
 }
 
-if (!check && pluginChanged && problems.length === 0) {
-    const [major, minor, patch] = versions[0].split('.').map(Number);
-    const next = `${major}.${minor}.${patch + 1}`;
-    for (const m of manifests) writeJson(m.rel, { ...m.json, version: next });
-    console.log(`Plugin skills changed: agora-skills version ${versions[0]} -> ${next}.`);
+// The version installed plugins compare. It must rise whenever the plugin's skills change.
+const git = (...a) => spawnSync('git', a, { cwd: ROOT, encoding: 'utf8' });
+const parse = (v) => v.split('.').map(Number);
+const greater = (a, b) => {
+    const [x, y] = [parse(a), parse(b)];
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+    return false;
+};
+const bumpPatch = (v) => { const [major, minor, patch] = parse(v); return `${major}.${minor}.${patch + 1}`; };
+
+// What the base ref says, or why there is nothing to compare against.
+function readBase(ref, { required }) {
+    if (/^0+$/.test(ref)) return { skip: `no base commit (${ref}): first push of a branch` };
+    const resolved = git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+    if (resolved.status !== 0) {
+        if (required) { problems.push(`Base ref "${ref}" is not a commit in this clone (fetch it, or check the name)`); return { failed: true }; }
+        return { skip: `base ref ${ref} not found` };
+    }
+    const sha = resolved.stdout.trim();
+    const shown = git('show', `${sha}:${MANIFESTS[0]}`);
+    if (shown.status !== 0) return { skip: `the plugin is not in ${ref} yet` };
+    const diff = git('diff', '--quiet', sha, '--', PLUGIN_SKILLS);
+    if (diff.status > 1) {
+        problems.push(`git diff against ${ref} failed: ${diff.stderr.trim()}`);
+        return { failed: true };
+    }
+    return { version: JSON.parse(shown.stdout).version, changed: diff.status === 1 };
 }
 
-// With --base: the plugin's skills changed since that ref, so its version must too.
+const versionOk = problems.length === 0;
 if (check && base) {
-    const git = (...a) => spawnSync('git', a, { cwd: ROOT, encoding: 'utf8' });
-    const before = git('show', `${base}:${MANIFESTS[0]}`);
-    if (before.status === 0) {
-        const diff = git('diff', '--quiet', base, '--', PLUGIN_SKILLS);
-        if (diff.status === 1 && JSON.parse(before.stdout).version === versions[0]) {
-            problems.push(`${PLUGIN_SKILLS} changed since ${base} but the plugin version is still ${versions[0]}. Run: node scripts/sync-skills.js`);
-        } else if (diff.status > 1) {
-            problems.push(`git diff against ${base} failed: ${diff.stderr.trim()}`);
-        }
+    const b = readBase(base, { required: true });
+    if (b.failed) { /* already reported */ } else if (b.skip) console.log(`Plugin version check skipped: ${b.skip}.`);
+    else if (b.changed && !greater(versions[0], b.version)) {
+        problems.push(`${PLUGIN_SKILLS} changed since ${base} but the plugin version ${versions[0]} is not above ${base}'s ${b.version}. Run: node scripts/sync-skills.js --base ${base}`);
+    }
+} else if (!check && versionOk) {
+    // Raise the version once per change against the base (default origin/main, when this
+    // clone has it), so repeated runs on one branch don't keep bumping. Without a base,
+    // raise it whenever this run changed the plugin's copy.
+    const b = readBase(base || 'origin/main', { required: Boolean(base) });
+    let next = null;
+    if (b.failed) {
+        // already reported
+    } else if (!b.skip) {
+        if (b.changed && !greater(versions[0], b.version)) next = bumpPatch(b.version);
+    } else if (pluginChanged) {
+        next = bumpPatch(versions[0]);
+    }
+    if (next) {
+        for (const m of manifests) writeJson(m.rel, { ...m.json, version: next });
+        console.log(`Plugin skills changed: agora-skills version ${versions[0]} -> ${next}.`);
     }
 }
 
 if (problems.length > 0) {
     console.error(problems.join('\n'));
-    console.error(`\n${problems.length} problem(s).${check ? ' Run: node scripts/sync-skills.js' : ''}`);
+    console.error(`\n${problems.length} problem(s).`);
     process.exit(1);
 }
 
