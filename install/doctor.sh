@@ -47,7 +47,7 @@ head_() { printf '\n## %s\n' "$1"; }
 ENV="$DIR/$ENV_FILE_NAME"
 INSTANCE=agora HTTP=80 HTTPS=443 APIP=3000
 if [ -f "$ENV" ]; then
-    INSTANCE=$(env_get "$ENV" AGORA_INSTANCE); INSTANCE=${INSTANCE:-agora}
+    INSTANCE=$(install_instance "$DIR" 2>/dev/null) || INSTANCE=agora
     HTTP=$(env_get "$ENV" AGORA_HTTP_PORT); HTTP=${HTTP:-80}
     HTTPS=$(env_get "$ENV" AGORA_HTTPS_PORT); HTTPS=${HTTPS:-443}
     APIP=$(env_get "$ENV" AGORA_API_PORT); APIP=${APIP:-3000}

@@ -39,8 +39,8 @@ DIR=$(cd "$DIR" && pwd)
 ENV="$DIR/$ENV_FILE_NAME"
 [ -f "$ENV" ] || die "no $ENV_FILE_NAME in $DIR"
 pick_docker || die "Docker isn't reachable"
-INSTANCE=$(env_get "$ENV" AGORA_INSTANCE); INSTANCE=${INSTANCE:-agora}
-PROJECT=$(env_get "$ENV" COMPOSE_PROJECT_NAME); PROJECT=${PROJECT:-$INSTANCE}
+PROJECT=$(install_project "$DIR") || die "can't tell the Compose project name of the install in $DIR"
+INSTANCE=$(install_instance "$DIR")
 VERSION=$(agora_version "$DIR"); VERSION=${VERSION:-unknown}
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 [ -n "$OUT" ] || { mkdir -p "$DIR/backups"; chmod 700 "$DIR/backups"; OUT="$DIR/backups/agora-$INSTANCE-$STAMP.agorabk"; }

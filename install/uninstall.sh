@@ -32,7 +32,7 @@ DIR=$(cd "$DIR" && pwd)
 ENV="$DIR/$ENV_FILE_NAME"
 [ -f "$ENV" ] || die "no $ENV_FILE_NAME in $DIR"
 pick_docker || die "Docker isn't reachable"
-INSTANCE=$(env_get "$ENV" AGORA_INSTANCE); INSTANCE=${INSTANCE:-agora}
+INSTANCE=$(install_instance "$DIR" 2>/dev/null) || INSTANCE=agora
 trap 'on_exit $?' EXIT
 
 if [ "$PURGE" = 1 ]; then

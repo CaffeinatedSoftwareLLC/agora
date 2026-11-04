@@ -85,6 +85,38 @@ compose_in() {
     (cd "$dir" && "${DOCKER[@]}" compose -f "$COMPOSE_FILE_NAME" --env-file "$ENV_FILE_NAME" "$@")
 }
 
+# An install's name: the Compose project and AGORA_INSTANCE are one name (#209). Installs made
+# before #209 have neither in .env.prod, so Compose named their project after the install folder.
+INSTANCE_NAME_RE='^[a-z0-9][a-z0-9_-]{0,62}$'
+# install_project <dir>: the Compose project as Compose itself resolves it for that folder
+install_project() {
+    local dir=$1 p
+    p=$(env_get "$dir/$ENV_FILE_NAME" COMPOSE_PROJECT_NAME)
+    if [ -z "$p" ]; then
+        p=$(compose_in "$dir" config 2>/dev/null | sed -n 's/^name: *//p' | head -n 1) || p=''
+    fi
+    [ -n "$p" ] || return 1
+    printf '%s' "$p"
+}
+# install_instance <dir>: AGORA_INSTANCE, else the Compose project
+install_instance() {
+    local i
+    i=$(env_get "$1/$ENV_FILE_NAME" AGORA_INSTANCE)
+    if [ -n "$i" ]; then printf '%s' "$i"; else install_project "$1"; fi
+}
+# pin_identity <dir>: write COMPOSE_PROJECT_NAME and AGORA_INSTANCE into .env.prod when missing,
+# from the project Compose uses now; refuse when they disagree. Run before the release changes.
+pin_identity() {
+    local dir=$1 env project inst
+    env="$1/$ENV_FILE_NAME"
+    project=$(install_project "$dir") || die "can't tell the Compose project name of the install in $dir"
+    inst=$(env_get "$env" AGORA_INSTANCE)
+    [ -z "$inst" ] || [ "$inst" = "$project" ] || die "AGORA_INSTANCE ($inst) and the Compose project ($project) differ in $env; make them the same, then upgrade"
+    printf '%s' "$project" | grep -Eq "$INSTANCE_NAME_RE" || die "the Compose project name $project can't be used as an install name"
+    [ -n "$(env_get "$env" COMPOSE_PROJECT_NAME)" ] || env_set "$env" COMPOSE_PROJECT_NAME "$project"
+    [ -n "$inst" ] || env_set "$env" AGORA_INSTANCE "$project"
+}
+
 compose_cmd_text() { printf 'cd %s && docker compose -f %s --env-file %s %s' "$1" "$COMPOSE_FILE_NAME" "$ENV_FILE_NAME" "$2"; }
 
 # env_get <file> <KEY>: a value from .env.prod, for the installer's own use. Never printed.

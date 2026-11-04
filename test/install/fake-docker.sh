@@ -15,6 +15,7 @@
 # The fake backup-crypt keeps parts readable: "SEG <name>\n<base64>\n" per part.
 set -u
 F=${FAKE:?FAKE is not set}
+ORIG_ARGS="$*"
 args="$*"
 printf '%s\n' "docker $args" >> "$F/log"
 
@@ -117,6 +118,12 @@ case "$1" in
                 else cp "$F/services" "$F/running"; fi
                 exit 0 ;;
             build) printf 'build in %s: %s\n' "$PWD" "$(ls "$PWD/src/db/migrations" 2>/dev/null | tr '\n' ' ')" >> "$F/log"; exit 0 ;;
+            # Compose's own project name: COMPOSE_PROJECT_NAME from the env file, else the folder's name
+            config)
+                envf=$(printf '%s\n' "$ORIG_ARGS" | sed -n 's/.*--env-file \([^ ]*\).*/\1/p')
+                p=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$envf" 2>/dev/null | tail -n 1)
+                [ -n "$p" ] || p=$(basename "$PWD" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-')
+                printf 'name: %s\nservices: {}\n' "$p"; exit 0 ;;
             logs) exit 0 ;;
             exec)
                 # exec -T postgres <cmd...>

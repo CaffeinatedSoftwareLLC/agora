@@ -105,5 +105,36 @@ check 'rollback: no box-restore-prep for a release without boxes' 0 "$(grep -c '
 check 'rollback: the newer release is kept aside' yes "$(yes_if 'ls -d "$OLD"/.releases/0.9.0-rolled-back-*/src/db/migrations/080_agent_boxes.sql >/dev/null 2>&1')"
 check 'rollback: .git is left alone' yes "$(yes_if '[ -f "$OLD/.git/HEAD" ]')"
 
+# ─── A legacy install in a custom folder, with neither COMPOSE_PROJECT_NAME nor AGORA_INSTANCE ───
+# Compose named its project after the folder (agora-prod); the upgrade must keep that name, or
+# the new stack's containers and boxd's edge name would no longer match (Codex review #4).
+LEG="$T/agora-prod"
+mkdir -p "$LEG/src/db/migrations" "$LEG/.git"
+cp "$T/agora/.releases"/0.3.0-*/package.json "$LEG/package.json" 2>/dev/null || printf '{\n  "name": "agora",\n  "version": "0.3.0"\n}\n' > "$LEG/package.json"
+printf 'services: {old: {}}\n' > "$LEG/docker-compose.prod.yml"
+printf 'FROM node:22-alpine\n' > "$LEG/Dockerfile"
+printf -- '-- core\n' > "$LEG/src/db/migrations/001_core.sql"
+printf 'DB_PASSWORD=%s\nJWT_SECRET=j\nAGORA_ENCRYPTION_KEY=k\nDOCKER_GID=999\n' "$DBPW" > "$LEG/.env.prod"
+chmod 600 "$LEG/.env.prod"
+printf '%s\n' postgres redis api runner cap-gateway web caddy socket-proxy migrate > "$FAKE/services"
+printf '%s\n' postgres redis api runner cap-gateway web caddy socket-proxy > "$FAKE/running"
+: > "$FAKE/log"
+if bash "$NEW/install/upgrade.sh" --dir "$LEG" --passphrase-file "$T/pass" --non-interactive > "$T/leg.log" 2>&1; then code=0; else code=$?; fi
+check 'legacy folder: exit 0' 0 "$code"
+[ "$code" = 0 ] || tail -n 30 "$T/leg.log"
+check 'legacy folder: COMPOSE_PROJECT_NAME pinned to the folder project' 1 "$(grep -c '^COMPOSE_PROJECT_NAME=agora-prod$' "$LEG/.env.prod")"
+check 'legacy folder: AGORA_INSTANCE pinned to the same name' 1 "$(grep -c '^AGORA_INSTANCE=agora-prod$' "$LEG/.env.prod")"
+
+# A disagreement is refused before anything changes
+CON="$T/agora-x"
+mkdir -p "$CON"
+cp "$LEG/docker-compose.prod.yml" "$LEG/Dockerfile" "$CON/"
+printf '{\n  "name": "agora",\n  "version": "0.3.0"\n}\n' > "$CON/package.json"
+printf 'COMPOSE_PROJECT_NAME=agora-x\nAGORA_INSTANCE=other\nDB_PASSWORD=x\n' > "$CON/.env.prod"
+: > "$FAKE/log"
+if bash "$NEW/install/upgrade.sh" --dir "$CON" --passphrase-file "$T/pass" --non-interactive > "$T/con.log" 2>&1; then code=0; else code=$?; fi
+check 'conflicting names: refused' 1 "$code"
+check 'conflicting names: nothing stopped' 0 "$(grep -c 'compose .* stop' "$FAKE/log" || true)"
+
 printf '\n%d checks, %d failed\n' "$n" "$failed"
 [ "$failed" = 0 ]

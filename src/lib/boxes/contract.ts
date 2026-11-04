@@ -8,7 +8,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 /** The install's name (AGORA_INSTANCE, #209); prefixes every container, network and volume. */
 export function instanceName(env: NodeJS.ProcessEnv = process.env): string {
     const name = env.AGORA_INSTANCE || 'agora';
-    if (!/^[a-z][a-z0-9-]{0,30}$/.test(name)) throw new Error('AGORA_INSTANCE must be lowercase letters, digits and dashes');
+    // New installs are named by setup-env (letters, digits, dashes); an install from before #209
+    // keeps its Compose project name, which may also hold underscores or start with a digit
+    if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(name)) throw new Error('AGORA_INSTANCE must be a Compose project name: lowercase letters, digits, dashes and underscores');
     return name;
 }
 

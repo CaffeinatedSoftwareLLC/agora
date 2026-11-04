@@ -53,7 +53,7 @@ crypt extract --name manifest.json < "$BUNDLE" > "$WORK/manifest.json"
 mf() { tr -d '\n' < "$WORK/manifest.json" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -n 1; }
 B_INSTANCE=$(mf instance)
 B_VERSION=$(mf version)
-printf '%s' "$B_INSTANCE" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || die "the manifest has no valid instance name"
+printf '%s' "$B_INSTANCE" | grep -Eq "$INSTANCE_NAME_RE" || die "the manifest has no valid instance name"
 # Every part the manifest names is in the bundle with the same checksum
 tr -d '\n' < "$WORK/manifest.json" | grep -Eo '"name":"[^"]+","sha256":"[0-9a-f]{64}"' \
     | sed 's/"name":"\([^"]*\)","sha256":"\([^"]*\)"/\1 \2/' > "$WORK/expected"

@@ -12,9 +12,7 @@ CRYPT_IMAGE=${CRYPT_IMAGE:-}
 # The backend image of this install (compose names a built service's image <project>-<service>)
 backend_image() {
     local dir=$1 project img
-    project=$(env_get "$dir/$ENV_FILE_NAME" COMPOSE_PROJECT_NAME)
-    project=${project:-$(env_get "$dir/$ENV_FILE_NAME" AGORA_INSTANCE)}
-    project=${project:-agora}
+    project=$(install_project "$dir") || project=agora
     img="$project-api"
     dk image inspect "$img" >/dev/null 2>&1 || compose_in "$dir" build api >/dev/null
     printf '%s' "$img"

@@ -93,6 +93,10 @@ if [ "$ROLLBACK" = 1 ]; then
 fi
 
 AGORA_VERSION=$OLD_VERSION
+# Before anything changes: an install from before #209 gets its Compose project name written
+# down as COMPOSE_PROJECT_NAME and AGORA_INSTANCE, so the new release keeps the same containers,
+# volumes and networks and boxd finds the edge under that name
+pin_identity "$DIR"
 say "${BOLD}Upgrading $(env_get "$ENV" AGORA_INSTANCE) from $OLD_VERSION${RESET}"
 
 step upgrade.fetch 'Getting the new release'
