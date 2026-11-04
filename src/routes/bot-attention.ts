@@ -3,8 +3,12 @@ import type { PoolClient } from 'pg';
 import { readAuthorities } from '../lib/direct-agents';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { artifactsForMessages } from '../lib/artifacts';
+import { ulidFloor } from '../utils/ulid';
 
 const ulid = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };
+
+/** How far back a bot's first attention read in a channel reaches for what it hasn't answered. */
+export const REPLAY_HOURS = 24;
 
 async function botAccess(request: FastifyRequest, reply: FastifyReply, channelId?: string): Promise<boolean> {
     if (!request.isBot) { reply.code(403).send({ error: 'This endpoint is for bots only' }); return false; }
@@ -67,17 +71,26 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         if (!await botAccess(request, reply, channelId)) return reply;
         const { after, limit = 100 } = request.query as { after?: string; limit?: number };
         const db = request.dbClient!;
-        // A newly upgraded client starts watching now, rather than replaying days
-        // of old mentions. An explicit `after` opts into an earlier starting point.
-        // Persist even for an empty channel so the next post can be delivered.
-        // Separate statements give a concurrent initializer's committed cursor a
+        // First use in this channel: start after the bot's own last post here, so a YIELD or
+        // @mention it hasn't answered since is still delivered when it comes back (an agent
+        // that stopped, or a channel it never waited in). Never more than REPLAY_HOURS back,
+        // so a new client doesn't replay days of old mentions. An explicit `after` opts into
+        // another starting point. Persisted even for an empty channel so the next post is
+        // delivered. Separate statements give a concurrent initializer's committed cursor a
         // fresh READ COMMITTED snapshot before the feed query below.
+        const floor = ulidFloor(Date.now() - REPLAY_HOURS * 3600_000);
         await db.query(`INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id)
-            SELECT $1, $2, COALESCE($3::CHAR(26), (
-                SELECT id FROM messages WHERE channel_id = $2 ORDER BY id DESC LIMIT 1
-            ), '00000000000000000000000000'::CHAR(26))
+            SELECT $1, $2, COALESCE($3::CHAR(26), GREATEST(
+                $4::CHAR(26),
+                -- the newest post here older than the cap (created_at, for imported or moved rows)
+                (SELECT id FROM messages WHERE channel_id = $2 AND id >= $4
+                   AND created_at < NOW() - make_interval(hours => $5) ORDER BY id DESC LIMIT 1),
+                -- what the bot has said here since: anything before it counts as answered
+                (SELECT id FROM messages WHERE channel_id = $2 AND id >= $4 AND author_id = $1
+                   ORDER BY id DESC LIMIT 1)
+            ))
             WHERE NOT EXISTS (SELECT 1 FROM bot_attention_cursors WHERE bot_id = $1 AND channel_id = $2)
-            ON CONFLICT (bot_id, channel_id) DO NOTHING`, [request.userId, channelId, after ?? null]);
+            ON CONFLICT (bot_id, channel_id) DO NOTHING`, [request.userId, channelId, after ?? null, floor, REPLAY_HOURS]);
         const rows = await db.query(`WITH cutoff AS (
             SELECT GREATEST(COALESCE($3::CHAR(26), ''::CHAR(26)), COALESCE((
                 SELECT a.last_read_id FROM bot_attention_cursors a WHERE a.bot_id = $1 AND a.channel_id = $2
