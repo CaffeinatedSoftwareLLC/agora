@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdir, readFile, symlink, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, symlink, utimes, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -121,6 +121,31 @@ it('a workspace command refuses a human lock before spawning a new owned Git ope
     expect(await readFile(lock, 'utf8')).toBe('human');
     expect(await readFile(join(s.w.cwd, 'keep.txt'), 'utf8')).toBe('uncommitted');
     await expect(stat(s.record)).rejects.toThrow();
+});
+
+// A power cut left a 134-byte zero-filled record (2026-11-02); every later Git call in that worktree failed.
+const torn = '\0'.repeat(134), beforeBoot = new Date('2000-01-01T00:00:00Z');
+
+it('replaces a torn ownership record written before this boot instead of blocking the worktree forever', async () => {
+    const s = await fixture();
+    await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
+    expect((await git(s.w.cwd, ['rev-parse', 'HEAD'])).trim()).toMatch(/^[0-9a-f]{40}$/);
+    await expect(stat(s.record)).rejects.toThrow();
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^git_owner_record_replaced .*written before this boot$/));
+});
+
+it('keeps blocking on a torn ownership record written since this boot', async () => {
+    const s = await fixture();
+    await writeFile(s.record, torn);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('invalid') });
+    expect(await readFile(s.record, 'utf8')).toBe(torn);
+});
+
+it('a torn record from before this boot never lets lock recovery clear a lock', async () => {
+    const s = await fixture(), lock = join(s.gitDir, 'index.lock');
+    await writeFile(lock, 'unknown'); await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toThrow('stale_git_lock');
+    expect(await readFile(lock, 'utf8')).toBe('unknown');
 });
 
 it('records a live owner durably before Git can run a clean filter', async () => {

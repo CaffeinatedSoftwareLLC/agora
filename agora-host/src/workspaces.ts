@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { lstat, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join, resolve, win32, relative, isAbsolute, sep } from 'node:path';
-import { executeGit, recoverGitLocks, registerGitWorkspace } from './git-owner.js';
+import { executeGit, recoverGitLocks, registerGitWorkspace, writeSynced } from './git-owner.js';
 import type { Config, LocalProfile } from './config.js';
 import type { Claim, HostApi } from './types.js';
 
@@ -74,7 +75,7 @@ export async function ensureWorkspace(local: LocalProfile, claim: { session: Pic
         if (await exists(w.cwd)) throw new Error('untracked_workspace_path');
         if (await hasBranch(local.workdir, w.branch)) throw new Error('workspace_branch_without_metadata');
         // Write the original base before creation; a restart must never replace it with a newer HEAD.
-        await writeFile(file, JSON.stringify(w), { flag: 'wx', mode: 0o600 });
+        await writeSynced(file, JSON.stringify(w), 'wx');
     }
     if (!await exists(w.cwd)) {
         const branchExists = await hasBranch(local.workdir, w.branch);
@@ -86,19 +87,62 @@ export async function ensureWorkspace(local: LocalProfile, claim: { session: Pic
     await registerWorkspaceGit(w, local);
     return w;
 }
+// Workspace records only: wt-<10>.json, never the wt-<10>.git-process.json ownership record beside it.
+export const WORKSPACE_RECORD = /^wt-[0-9A-HJKMNP-TV-Z]{10}\.json$/;
+const invalidRecords = new Map<string, string>(), loggedFailures = new Map<string, string>();
+/** A record that is not a JSON object is skipped, with one warning until the file changes. Its worktree is kept. */
+async function readRecord(path: string, file: string, log: (code: string) => void): Promise<Workspace | null> {
+    const text = await readFile(path, 'utf8');
+    try {
+        const w = JSON.parse(text);
+        if (w && typeof w === 'object' && !Array.isArray(w)) { invalidRecords.delete(path); return w; }
+    } catch { /* reported below */ }
+    const stat = await lstat(path), mark = `${stat.mtimeMs}:${stat.size}`;
+    if (invalidRecords.get(path) !== mark) {
+        invalidRecords.set(path, mark);
+        log(`workspace_record_invalid ${file}: not a JSON object; skipped until the file changes, worktree kept`);
+    }
+    return null;
+}
+// Long opaque runs (tokens) are hidden; lowercase hex (SHAs) and paths stay readable.
+const opaque = (run: string) => /^[0-9a-f]+$/.test(run) || run.split(/[\\/]/).every(part => part.length < 32) ? run : '[redacted]';
+export const redact = (text: string) => text.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\b(AgentHost|Bearer|Basic|token|secret|password|api[_-]?key|authorization)(["'\s:=]+)[^\s"',;]+/gi, '$1$2[redacted]')
+    .replace(/\/\/[^/\s:@]+:[^/\s@]+@/g, '//[redacted]@')
+    .replace(/[A-Za-z0-9_\-.~+/\\]{32,}={0,2}/g, opaque);
+/** Code, first message line, lock detail and first stderr line, without tokens or control characters. */
+export function describeError(err: unknown): string {
+    const e = err as { code?: unknown; status?: unknown; detail?: unknown; stderr?: unknown } | null | undefined;
+    const parts: string[] = [];
+    const code = e?.code ?? e?.status;
+    if (code !== undefined) parts.push(`code=${String(code)}`);
+    parts.push(`message=${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    if (typeof e?.detail === 'string') parts.push(`detail=${e.detail}`);
+    const stderr = typeof e?.stderr === 'string' ? e.stderr.trim().split('\n')[0] : '';
+    if (stderr) parts.push(`stderr=${stderr}`);
+    return redact(parts.join(' ')).slice(0, 600);
+}
+/** The same failure for the same record is logged once, until it changes or that record next succeeds. */
+function logFailure(log: (code: string) => void, key: string, line: string) {
+    if (loggedFailures.get(key) === line) return;
+    loggedFailures.set(key, line); log(line);
+}
 /** Startup recovery never changes unknown locks, metadata mappings or common repository refs. */
 export async function recoverWorkspaceGitLocks(config: Config, log: (code: string) => void) {
     for (const [profile, local] of Object.entries(config.profiles)) {
         const files = await readdir(local.stateDir).catch((e: any) => { if (e.code === 'ENOENT') return []; throw e; });
-        for (const file of files.filter(f => /^wt-[0-9A-HJKMNP-TV-Z]{10}\.json$/.test(f))) {
+        for (const file of files.filter(f => WORKSPACE_RECORD.test(f))) {
             try {
-                const w: Workspace = JSON.parse(await readFile(join(local.stateDir, file), 'utf8'));
+                const w = await readRecord(join(local.stateDir, file), file, log);
+                if (!w) continue;
                 checkRecord(w, local, profile, w.sessionId);
                 if (!await exists(w.cwd)) continue;
                 if (!samePath(await common(local.workdir), w.commonDir)) throw new Error('workspace_repository_changed');
                 await validateWorkspace(w);
                 await registerWorkspaceGit(w, local, log);
-            } catch (err) { log(err instanceof Error && err.message === 'stale_git_lock' ? 'stale_git_lock' : 'workspace_git_recovery_failed'); }
+            } catch (err) {
+                log(err instanceof Error && err.message === 'stale_git_lock' ? 'stale_git_lock' : `workspace_git_recovery_failed ${file} ${describeError(err)}`);
+            }
         }
     }
 }
@@ -110,17 +154,25 @@ export async function reconcileWorkspaces(config: Config, api: HostApi, active: 
     if (!api.workspaceStates || !api.workspaceWarning) return;
     for (const [profile, local] of Object.entries(config.profiles)) {
         const files = await readdir(local.stateDir).catch((e: any) => { if (e.code === 'ENOENT') return []; throw e; });
-        for (const file of files.filter(f => /^wt-[0-9A-HJKMNP-TV-Z]{10}\.json$/.test(f))) {
+        for (const file of files.filter(f => WORKSPACE_RECORD.test(f))) {
+            const path = join(local.stateDir, file);
+            let step = 'read';
             try {
-                const w: Workspace = JSON.parse(await readFile(join(local.stateDir, file), 'utf8'));
+                const w = await readRecord(path, file, log);
+                if (!w) continue;
                 if (w.profile !== profile) continue; // another profile sharing this stateDir
-                checkRecord(w, local, profile, w.sessionId);
+                step = 'check_record'; checkRecord(w, local, profile, w.sessionId);
                 if (active.has(w.sessionId)) continue;
+                step = 'workspace_states';
                 const states = await api.workspaceStates([w.sessionId]);
-                if (!states.includes(w.sessionId)) continue; // server confirms ended, host ownership and no claimed run
-                if (!await exists(w.cwd)) { await unlink(join(local.stateDir, file)); continue; }
+                // The server confirms ended, host ownership and no claimed run.
+                if (!states.includes(w.sessionId)) { loggedFailures.delete(path); continue; }
+                step = 'remove_record';
+                if (!await exists(w.cwd)) { await unlink(path); loggedFailures.delete(path); continue; }
+                step = 'common_dir';
                 if (!samePath(await common(local.workdir), w.commonDir)) throw new Error('workspace_repository_changed');
-                await validateWorkspace(w);
+                step = 'validate'; await validateWorkspace(w);
+                step = 'status';
                 const status = await git(w.cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
                 if (status) {
                     const paths: string[] = [], entries = status.split('\0').filter(Boolean);
@@ -129,16 +181,24 @@ export async function reconcileWorkspaces(config: Config, api: HostApi, active: 
                         if (/[RC]/.test(entries[i].slice(0, 2)) && entries[i + 1]) paths.push(entries[++i]);
                     }
                     if (w.warning !== status) {
-                        await api.workspaceWarning(w.sessionId, paths);
-                        w.warning = status; await writeFile(join(local.stateDir, file), JSON.stringify(w), { mode: 0o600 });
+                        step = 'warning'; await api.workspaceWarning(w.sessionId, paths);
+                        // Replace, never rewrite in place: a torn write would lose the session's mapping.
+                        w.warning = status; step = 'save_record';
+                        const temp = `${path}.${randomUUID()}.tmp`;
+                        await writeSynced(temp, JSON.stringify(w), 'wx'); await rename(temp, path);
                     }
+                    loggedFailures.delete(path);
                     log('dirty_workspace_kept'); continue;
                 }
                 // Never force removal; retain branch refs, including commits ahead of the saved base.
-                if ((await git(w.cwd, ['for-each-ref', '--format=%(refname)', `refs/agora/checkpoints/${w.sessionId}/`])).trim()) continue;
-                await git(local.workdir, ['worktree', 'remove', w.cwd]);
-                await unlink(join(local.stateDir, file));
-            } catch { log('workspace_reconcile_failed'); }
+                step = 'checkpoints';
+                if ((await git(w.cwd, ['for-each-ref', '--format=%(refname)', `refs/agora/checkpoints/${w.sessionId}/`])).trim()) {
+                    loggedFailures.delete(path); continue;
+                }
+                step = 'worktree_remove'; await git(local.workdir, ['worktree', 'remove', w.cwd]);
+                step = 'remove_record'; await unlink(path); loggedFailures.delete(path);
+                log(`workspace_removed ${file}`);
+            } catch (err) { logFailure(log, path, `workspace_reconcile_failed ${file} step=${step} ${describeError(err)}`); }
         }
     }
 }

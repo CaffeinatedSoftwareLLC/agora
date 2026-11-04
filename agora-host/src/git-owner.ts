@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
+import { uptime } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -14,6 +15,16 @@ const key = (cwd: string) => process.platform === 'win32' ? resolve(cwd).toLower
 export class GitLockError extends Error {
     constructor(public readonly detail: string) { super('stale_git_lock'); }
 }
+
+/** fsync before close: a power cut after an unsynced write can leave the file zero-filled (seen 2026-11-02). */
+export async function writeSynced(path: string, data: string, flag = 'w') {
+    const file = await open(path, flag, 0o600);
+    try { await file.writeFile(data); await file.sync(); } finally { await file.close(); }
+}
+// Margin for clock adjustments between the record's write and this boot.
+const BOOT_MARGIN_MS = 5 * 60 * 1000;
+const writtenBeforeBoot = (mtimeMs: number) => mtimeMs < Date.now() - uptime() * 1000 - BOOT_MARGIN_MS;
+const INVALID_RECORD = 'Git ownership record is invalid; locks retained.';
 
 /** Only recovery needs an OS probe. A reused PID cannot accidentally have this random nonce. */
 export async function gitOwnerAlive(owner: GitOwner): Promise<boolean> {
@@ -59,11 +70,25 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192n) throw new GitLockError('Git ownership record is not a small regular file; locks retained.');
     let o: GitOwner;
     try { o = JSON.parse(await readFile(w.record, 'utf8')); }
-    catch { throw new GitLockError('Git ownership record is invalid; locks retained.'); }
+    catch { throw new GitLockError(INVALID_RECORD); }
     if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.pid) || o.pid <= 0 || typeof o.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(o.nonce)
         || o.argv0 !== process.execPath || typeof o.at !== 'string' || !Number.isFinite(Date.parse(o.at)))
-        throw new GitLockError('Git ownership record is invalid; locks retained.');
+        throw new GitLockError(INVALID_RECORD);
     return o;
+}
+/**
+ * The gate before a new owned Git run. A torn record (zero bytes after a power cut) would otherwise block every
+ * run in the worktree forever. It is set aside only when last written before this boot: no process it could name
+ * still runs. Lock recovery still treats it as unknown, so a lock beside it stays for its owner to check.
+ */
+async function previousOwner(w: GitWorkspace): Promise<GitOwner | null> {
+    try { return await ownerOf(w); } catch (e) {
+        if (!(e instanceof GitLockError) || e.detail !== INVALID_RECORD) throw e;
+        const stat = await statOrNull(w.record);
+        if (!stat || !writtenBeforeBoot(Number(stat.mtimeMs))) throw e;
+        w.log(`git_owner_record_replaced ${w.record}: invalid and written before this boot`);
+        return null;
+    }
 }
 
 /** Only the linked worktree's private index/HEAD locks, never common refs or a human's lock. */
@@ -167,7 +192,7 @@ async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExec
     let onAbort = () => {};
     try {
         await recoverGitLocks(cwd);
-        const previous = await ownerOf(w);
+        const previous = await previousOwner(w);
         if (previous && await gitOwnerAlive(previous))
             throw new GitLockError('Recorded Git process is still running in this worktree.');
         if (options.signal?.aborted) throw new Error('Git operation aborted');
@@ -214,7 +239,7 @@ async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExec
         if (closed || options.signal?.aborted) throw new Error('Git operation aborted');
         owner = { pid: child.pid, nonce, argv0: process.execPath, at: new Date().toISOString() };
         const temp = `${w.record}.${randomUUID()}.tmp`;
-        await writeFile(temp, JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
+        await writeSynced(temp, JSON.stringify(owner), 'wx');
         await rename(temp, w.record);
         if (closed || options.signal?.aborted || failure) throw new Error('Git operation aborted');
         started = true;
