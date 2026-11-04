@@ -3,6 +3,7 @@ import { openLocalUpload, type UploadConfig } from './local-upload.js';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgoraApiError } from './api.js';
+import { owedReason, protocolOf, TurnTracker, ulidPredecessor, ulidSuccessor, type OwedTurn } from './turns.js';
 import type { AgentSession, AgoraApi, ArtifactInfo, ArtifactVersion, Attachment, Authority, BotInfo, BrowserPreview, Director, FileImage, FileSearchResult, FileText, HandoffOffer, Message, ProjectContext, RuntimeRun, TaskCard, ThreadSummary, ThreadWaiting } from './api.js';
 import type { CursorTracker } from './cursor.js';
 import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelope.js';
@@ -129,6 +130,9 @@ export function wakesAgent(m: Message, self: string): boolean {
     const match = YIELD_LINE_RE.exec(last) ?? WAIT_LINE_RE.exec(last);
     return !match || match[1].toLowerCase() === me;
 }
+
+/** Protocol states that end a session: no wait after them. */
+const FINISHED_STATES = new Set(['DONE', 'BLOCK', 'CANCEL']);
 
 /** Direct attention older than this, when a wait returns it, gets a "still yours" note. */
 const AWAY_NOTE_MINUTES = 10;
@@ -332,6 +336,74 @@ export function registerTools(
 ) {
     if (config.activity) server = withActivity(server, config.activity);
     let botInfo: BotInfo | null = null;
+    // Threads this agent owes a reply in, from what the tools showed it (src/turns.ts)
+    const turns = new TurnTracker();
+    async function getBotInfo(): Promise<BotInfo> {
+        if (!botInfo) botInfo = await api.getMe();
+        return botInfo;
+    }
+    /**
+     * A thread's replies don't include its parent, which is often what addresses the agent (a
+     * START or TURN that YIELDs to it): show the tracker the parent once, before any reply.
+     */
+    /**
+     * The owed turn, rechecked on the server first: the thread may have been closed, or the turn
+     * handed on, since the agent last read it. A recheck that fails keeps the turn owed.
+     */
+    async function stillOwed(channelId: string): Promise<(OwedTurn & { unsure?: boolean }) | undefined> {
+        const me = await getBotInfo();
+        const checked = new Set<string>();
+        for (let owed = turns.pending(channelId); owed && !checked.has(owed.threadId); owed = turns.pending(channelId)) {
+            checked.add(owed.threadId);
+            const threadId = owed.threadId;
+            let unsure = false;
+            try {
+                // From the post that owed the turn, itself included: it may since have been edited or deleted
+                const root = owed.messageId === threadId;
+                const now = await api.getThreadNow(channelId, threadId, root ? threadId : ulidPredecessor(owed.messageId));
+                if (now.open === false) { turns.settle(channelId, threadId); continue; }
+                if (root) {
+                    const [parent] = await api.getMessages(channelId, { limit: 1, before: ulidSuccessor(threadId) });
+                    if (parent?.id === threadId) turns.observe(channelId, [parent], me);
+                }
+                turns.observe(channelId, now.replies.map(m => ({ ...m, threadId: m.threadId ?? threadId })), me);
+                unsure = now.truncated;
+            } catch { return { ...owed, unsure: true }; }
+            const after = turns.pending(channelId);
+            if (after?.threadId === threadId) return { ...after, unsure };
+        }
+        return undefined;
+    }
+    const parentsSeen = new Set<string>();
+    /** Best effort: the guard is bookkeeping, and must never turn a successful read or post into an error. */
+    async function observeThread(channelId: string, thread: string | undefined, replies: Message[]): Promise<void> {
+        try {
+            const me = await getBotInfo();
+            if (thread && !parentsSeen.has(thread)) {
+                try {
+                    const [parent] = await api.getMessages(channelId, { limit: 1, before: ulidSuccessor(thread) });
+                    // Remembered only once the lookup answered; a failed one is tried again next read
+                    parentsSeen.add(thread);
+                    if (parent?.id === thread) turns.observe(channelId, [parent], me);
+                } catch { /* retried on the next read of this thread */ }
+            }
+            turns.observe(channelId, replies.map(m => ({ ...m, threadId: m.threadId ?? thread ?? null })), me);
+        } catch (err) {
+            process.stderr.write(`[agora-mcp] reply guard: ${err}\n`);
+        }
+    }
+    /**
+     * After a post in a live agora-collab thread: the call that keeps the session going, so an
+     * agent doesn't end its turn without listening. Nothing after DONE, BLOCK or CANCEL.
+     */
+    function nextWait(channelName: string, thread: string | undefined, message: string): string {
+        if (!thread) return '';
+        const protocol = protocolOf(message);
+        if (protocol && FINISHED_STATES.has(protocol.state)) return '';
+        if (!protocol && !turns.isProtocolThread(thread)) return '';
+        return '\nNext: keep listening. If a chat_wait is already running for this channel, keep it and don\'t start a second one; '
+            + `otherwise call chat_wait(channel="${oneLine(channelName)}", thread="${thread}", timeout=1500, until="turn") and answer what arrives.`;
+    }
 
     async function getBotId(): Promise<string> {
         if (!botInfo) botInfo = await api.getMe();
@@ -404,26 +476,43 @@ export function registerTools(
             message: z.string().describe('Message content to send'),
             thread: threadParam,
             client_key: clientKeyParam,
+            top_level: z.boolean().optional().describe(
+                'Post at the channel\'s top level although you owe a reply in one of its threads (a YIELD, WAIT, START or @mention '
+                + 'there). Without it such a post is refused with the thread to use. Protocol replies always go in their thread.'),
         },
-        async ({ channel, message, thread, client_key }) => {
+        async ({ channel, message, thread, client_key, top_level }) => {
             // A lurk run's [pass] means silence; it must never reach the channel
             if (message.trim().toLowerCase() === '[pass]') {
                 return { content: [{ type: 'text' as const, text: 'Not posted: [pass] means stay silent. Finish the turn without posting.' }] };
             }
             const ch = await resolveChannel(channel);
+            // Who we are, before anything is posted: a failure after the post would invite a duplicate retry
+            const me = await getBotInfo();
+            // An answer to a thread's turn posted at the top level never reaches the peer waiting
+            // in that thread: refuse it, saying where it goes (top_level: true posts it anyway)
+            const owed = !thread && !top_level ? await stillOwed(ch.id) : undefined;
+            if (owed) {
+                return {
+                    isError: true,
+                    content: [{ type: 'text' as const, text: `Not posted: you have a pending turn in thread ${owed.threadId} `
+                        + `(${owedReason(owed)}, message ${owed.messageId}). Replies to it go in that thread: `
+                        + `chat_send(channel="${oneLine(ch.name)}", thread="${owed.threadId}", message=...). `
+                        + (owed.unsure ? 'Agora could not read that thread to its newest reply, so the turn may have moved on. ' : '')
+                        + 'If this really is a separate top-level post, send it again with top_level: true.' }],
+                };
+            }
             const idempotencyKey = randomUUID();
             const msg = thread
                 ? await api.sendReply(ch.id, thread, message, idempotencyKey, client_key)
                 : await api.sendMessage(ch.id, message, idempotencyKey, client_key);
+            try {
+                turns.observe(ch.id, [{ ...msg, content: msg.content ?? message, authorId: me.id, threadId: thread ?? msg.threadId ?? null }], me);
+            } catch { /* bookkeeping only */ }
 
-            return {
-                content: [{
-                    type: 'text' as const,
-                    text: msg.replayed
-                        ? `Already sent to ${label(ch.name, thread)} with this client_key (id: ${msg.id}); not posted again`
-                        : `Message sent to ${label(ch.name, thread)} (id: ${msg.id})`,
-                }],
-            };
+            const sent = msg.replayed
+                ? `Already sent to ${label(ch.name, thread)} with this client_key (id: ${msg.id}); not posted again`
+                : `Message sent to ${label(ch.name, thread)} (id: ${msg.id})`;
+            return { content: [{ type: 'text' as const, text: sent + nextWait(ch.name, thread ?? (protocolOf(message) ? msg.id : undefined), message) }] };
         },
     );
 
@@ -438,6 +527,7 @@ export function registerTools(
         async ({ channel, limit, thread }) => {
             const ch = await resolveChannel(channel);
             const { messages, skipped } = await readUnread(ch.id, thread, limit || 200);
+            await observeThread(ch.id, thread, messages);
 
             let text: string;
             if (messages.length === 0) {
@@ -620,6 +710,7 @@ export function registerTools(
                     const { messages } = await readUnread(ch.id, thread, 200);
                     for (const m of messages) collected.set(m.id, { ...m, threadId: m.threadId ?? thread ?? null });
                     if (done()) {
+                        await observeThread(ch.id, thread, [...collected.values()]);
                         return {
                             content: [{
                                 type: 'text' as const,
@@ -640,6 +731,7 @@ export function registerTools(
 
             const waited = Math.round((Date.now() - start) / 1000);
             // Messages consumed while waiting for a turn are still returned, or they'd be lost.
+            await observeThread(ch.id, thread, [...collected.values()]);
             const text = collected.size > 0
                 ? `${label(ch.name, thread)} — not your turn yet after ${waited}s; ${collected.size} message(s) for other agents:\n\n${formatted()}${await saveAttention()}`
                 : `${label(ch.name, thread)} — no new messages after ${waited}s`;
@@ -663,6 +755,7 @@ export function registerTools(
             const chronological = thread
                 ? await api.getReplies(ch.id, thread, { limit: limit || 50, after })
                 : (await api.getMessages(ch.id, { limit: limit || 50, before })).reverse();
+            await observeThread(ch.id, thread, chronological);
 
             return {
                 content: [{
@@ -685,12 +778,15 @@ export function registerTools(
         },
         async ({ channel, message, client_key }) => {
             const ch = await resolveChannel(channel);
+            const me = await getBotInfo();
             const msg = await api.sendMessage(ch.id, message, randomUUID(), client_key);
+            try { turns.observe(ch.id, [{ ...msg, content: msg.content ?? message, authorId: me.id, threadId: null }], me); } catch { /* bookkeeping only */ }
 
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `Thread started in #${oneLine(ch.name)} (thread: ${msg.id}). Reply with chat_send thread="${msg.id}".`,
+                    text: `Thread started in #${oneLine(ch.name)} (thread: ${msg.id}). Reply with chat_send thread="${msg.id}".`
+                        + nextWait(ch.name, protocolOf(message) ? msg.id : undefined, message),
                 }],
             };
         },
@@ -727,6 +823,7 @@ export function registerTools(
         async ({ channel, thread, reopen }) => {
             const ch = await resolveChannel(channel);
             await api.setThreadClosed(ch.id, thread, !reopen);
+            if (!reopen) turns.settle(ch.id, thread);
 
             return {
                 content: [{
