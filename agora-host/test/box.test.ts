@@ -3,7 +3,7 @@ import { copyFile, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promi
 import { join, posix } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { childEnv, prepare, verifyProfile } from '../src/adapters.js';
-import { boxConfig, boxConfigCommand, boxMode, inBox, proxyVars, readBoxProfile } from '../src/box.js';
+import { boxConfig, boxConfigCommand, boxMode, inBox, originMatches, proxyVars, readBoxProfile, repoDir } from '../src/box.js';
 import { configSchema, type Config } from '../src/config.js';
 import { ProcessRunner } from '../src/process.js';
 import { git } from '../src/workspaces.js';
@@ -137,18 +137,35 @@ describe('box config from the environment', () => {
     const profile = (p: object = {}) => JSON.stringify({ name: 'box-one', adapter: 'codex', auth: 'subscription', apiKeyEnv: null, workdirAlias: 'work', repos: ['acme/widgets', 'acme/docs'], ...p });
     const env = (p: object = {}) => ({ AGORA_INSTANCE_URL: 'http://edge:8080', AGORA_HOST_TOKEN: HOST_TOKEN, AGORA_BOT_ID: id(5),
         AGORA_BOT_TOKEN: BOX_BOT_TOKEN, AGORA_BOX_PROFILE: profile(p) });
-    it('builds one profile on the first repo once it is cloned, else ~/work/scratch', () => {
-        const cloned = boxConfig(env(), { home: '/home/agent', exists: p => p === '/home/agent/work/widgets/.git' });
-        expect(cloned).toEqual({
+    const ORIGIN_OK = '[core]\n\tbare = false\n[remote "origin"]\n\turl = http://edge:8080/git/github.com/acme/widgets.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n';
+    const cloned = (gitConfig: string | null) => ({ home: '/home/agent', exists: (p: string) => p === '/home/agent/work/acme/widgets/.git',
+        readFile: (p: string) => (p === '/home/agent/work/acme/widgets/.git/config' ? gitConfig : null) });
+    it('builds one profile on the first repo once it is cloned, else ~/scratch', () => {
+        const c = boxConfig(env(), cloned(ORIGIN_OK));
+        expect(c).toEqual({
             instance: 'http://edge:8080/', hostToken: HOST_TOKEN,
             mcp: { executable: process.execPath, entrypoint: '/opt/agora/agora-mcp/dist/index.js' },
-            profiles: { 'box-one': { adapter: 'codex', executable: '/opt/agora/bin/codex', workdir: '/home/agent/work/widgets', workdirAlias: 'work',
+            profiles: { 'box-one': { adapter: 'codex', executable: '/opt/agora/bin/codex', workdir: '/home/agent/work/acme/widgets', workdirAlias: 'work',
                 stateDir: '/home/agent/.agora/state/box-one', auth: 'subscription', proxyEnv: true } },
             botTokens: { [id(5)]: BOX_BOT_TOKEN },
         });
-        expect(configSchema.safeParse(cloned).success).toBe(true);
-        expect(boxConfig(env(), { home: '/home/agent', exists: () => false }).profiles['box-one'].workdir).toBe('/home/agent/work/scratch');
-        expect(boxConfig(env({ repos: [] }), { home: '/home/agent', exists: () => true }).profiles['box-one'].workdir).toBe('/home/agent/work/scratch');
+        expect(configSchema.safeParse(c).success).toBe(true);
+        expect(boxConfig(env(), { home: '/home/agent', exists: () => false }).profiles['box-one'].workdir).toBe('/home/agent/scratch');
+        expect(boxConfig(env({ repos: [] }), { home: '/home/agent', exists: () => true }).profiles['box-one'].workdir).toBe('/home/agent/scratch');
+    });
+    // Codex review #7: a home kept across a repo change must not pass one repo's clone off as another's
+    it('uses a kept clone only when its origin is that repo through the edge', () => {
+        const workdir = (gitConfig: string | null, repos = ['acme/widgets']) => boxConfig(env({ repos }), cloned(gitConfig)).profiles['box-one'].workdir;
+        expect(workdir(ORIGIN_OK)).toBe('/home/agent/work/acme/widgets');
+        // other/widgets after acme/widgets: a different folder, so the old clone is never it
+        expect(workdir(ORIGIN_OK, ['other/widgets'])).toBe('/home/agent/scratch');
+        expect(workdir(ORIGIN_OK.replace('acme/widgets', 'other/widgets'))).toBe('/home/agent/scratch');
+        expect(workdir(ORIGIN_OK.replace('http://edge:8080/git/', 'https://'))).toBe('/home/agent/scratch');
+        expect(workdir(ORIGIN_OK + '[remote "origin"]\n\turl = http://evil.example/x.git\n')).toBe('/home/agent/scratch');
+        expect(workdir(null)).toBe('/home/agent/scratch');
+        // An attached repo named scratch lives under its owner, never in the fallback
+        expect(repoDir('/home/agent', 'acme/scratch')).toBe('/home/agent/work/acme/scratch');
+        expect(originMatches(ORIGIN_OK, 'http://edge:8080/', 'acme/widgets')).toBe(true);
     });
     it('carries an api_key profile and the Claude CLI path', () => {
         const c = boxConfig(env({ adapter: 'claude', auth: 'api_key', apiKeyEnv: 'ANTHROPIC_API_KEY' }), { home: '/home/agent', exists: () => false });
@@ -174,7 +191,7 @@ describe('box config from the environment', () => {
         const out = join(t.dir, 'host.json');
         expect(await boxConfigCommand(['--out', out, '--home', t.dir], env())).toBe(0);
         const written = JSON.parse(await readFile(out, 'utf8')) as Config;
-        expect(written.profiles['box-one'].workdir).toBe(posix.join(t.dir, 'work', 'scratch'));
+        expect(written.profiles['box-one'].workdir).toBe(posix.join(t.dir, 'scratch'));
         if (unix) expect((await stat(out)).mode & 0o777).toBe(0o600);
         expect(await boxConfigCommand(['--out', 'relative.json'], env())).toBe(2);
         expect(await boxConfigCommand(['--repos'], { ...env(), AGORA_BOT_TOKEN: '' })).toBe(2);

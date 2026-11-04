@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { chmod, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, posix } from 'node:path';
 import { z } from 'zod';
@@ -68,15 +68,30 @@ export function readBoxProfile(env: NodeJS.ProcessEnv): BoxProfile {
     return p;
 }
 
-export interface BoxPaths { home: string; exists?(path: string): boolean }
+export interface BoxPaths { home: string; exists?(path: string): boolean; readFile?(path: string): string | null }
 
-/** The repository folder for `owner/repo`: ~/work/<repo>. */
-export const repoDir = (home: string, ownerRepo: string) => posix.join(home, 'work', ownerRepo.split('/')[1]);
+/** The repository folder for `owner/repo`: ~/work/<owner>/<repo>, so two owners' repos never share one. */
+export const repoDir = (home: string, ownerRepo: string) => posix.join(home, 'work', ...ownerRepo.split('/'));
+/** The fallback workdir, outside ~/work so it can't be any owner/repo's folder. */
+export const scratchDir = (home: string) => posix.join(home, 'scratch');
+
+/** The clone's origin is `owner/repo` through the edge (its .git/config says so). */
+export function originMatches(gitConfig: string | null, instanceUrl: string, ownerRepo: string): boolean {
+    if (!gitConfig) return false;
+    const want = `${instanceUrl.trim().replace(/\/+$/, '')}/git/github.com/${ownerRepo}.git`;
+    // git merges repeated [remote "origin"] sections, so every one of them counts; exactly one
+    // url, the expected one, and no pushurl that would send pushes elsewhere
+    const sections = [...gitConfig.matchAll(/^\s*\[remote "origin"\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)].map(m => m[1]).join('\n');
+    const urls = [...sections.matchAll(/^\s*url\s*=\s*(.+?)\s*$/gm)].map(m => m[1]);
+    const pushUrls = [...sections.matchAll(/^\s*pushurl\s*=/gm)];
+    return urls.length === 1 && urls[0] === want && pushUrls.length === 0;
+}
 
 /**
  * agora-host's config for this box, from the environment boxd sets (docs/agent-boxes.md
- * §8.1). The workdir is the first attached repo when its clone exists, else ~/work/scratch
- * (the entrypoint makes it): a failed clone never stops the box.
+ * §8.1). The workdir is the first attached repo when its clone exists and its origin is that
+ * repo, else ~/scratch (the entrypoint makes it): a failed clone never stops the box, and a
+ * kept home never passes one repo's clone off as another's.
  */
 export function boxConfig(env: NodeJS.ProcessEnv, paths: BoxPaths = { home: BOX_HOME }) {
     const missing = ['AGORA_INSTANCE_URL', 'AGORA_HOST_TOKEN', 'AGORA_BOT_ID', 'AGORA_BOT_TOKEN', 'AGORA_BOX_PROFILE'].filter(n => !env[n]?.trim());
@@ -85,8 +100,12 @@ export function boxConfig(env: NodeJS.ProcessEnv, paths: BoxPaths = { home: BOX_
     if (!ULID.test(env.AGORA_BOT_ID!)) throw new HostConfigError('AGORA_BOT_ID is not an ID');
     const profile = readBoxProfile(env);
     const exists = paths.exists ?? existsSync;
+    const read = paths.readFile ?? ((p: string) => { try { return readFileSync(p, 'utf8'); } catch { return null; } });
     const first = profile.repos[0];
-    const workdir = first && exists(posix.join(repoDir(paths.home, first), '.git')) ? repoDir(paths.home, first) : posix.join(paths.home, 'work', 'scratch');
+    const firstDir = first ? repoDir(paths.home, first) : null;
+    const workdir = first && firstDir && exists(posix.join(firstDir, '.git'))
+        && originMatches(read(posix.join(firstDir, '.git', 'config')), env.AGORA_INSTANCE_URL!, first)
+        ? firstDir : scratchDir(paths.home);
     const config = {
         instance: env.AGORA_INSTANCE_URL!.trim().replace(/\/?$/, '/'),
         hostToken: env.AGORA_HOST_TOKEN!.trim(),

@@ -12,7 +12,7 @@ without asking. Its edges are fixed, and the owner approves anything that crosse
   - npm: `npm install -g <pkg>` (the prefix is `~/.npm-global`, already on `PATH`)
   - Python: `python3 -m venv ~/.venvs/<name>`, then use that venv's `pip`
   - other binaries: `~/.local/bin` (on `PATH`)
-- Your repos are in `~/work/<repo>`. With no repo attached, `~/work/scratch` is a fresh
+- Your repos are in `~/work/<owner>/<repo>`. With no repo attached, `~/scratch` is a fresh
   git repo for your work.
 
 ## Network

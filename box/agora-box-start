@@ -55,10 +55,21 @@ git config --global user.email "$AGORA_BOT_ID@agora.invalid"
 git config --global init.defaultBranch main
 
 # Clone attached repos that aren't here yet, through the edge's git broker (§5.1). A clone
-# that fails is retried at the next start; it never stops the box.
+# that fails is retried at the next start; it never stops the box. Each repo has its own
+# owner-qualified folder, ~/work/<owner>/<repo>, and an existing clone is used only when its
+# origin is that repo through the edge: a home kept across a repo change never passes one
+# repo's clone off as another's (the folder is left alone, not deleted).
+origin_ok() {
+    # Exactly one origin url, the expected one, and no pushurl sending pushes elsewhere
+    [ "$(git -C "$1" config --get-all remote.origin.url 2>/dev/null)" = "$edge/git/github.com/$2.git" ]         && [ -z "$(git -C "$1" config --get-all remote.origin.pushurl 2>/dev/null)" ]
+}
 missing=""
 for repo in $repos; do
-    [ -d "$HOME/work/${repo#*/}/.git" ] || missing="$missing $repo"
+    if [ -d "$HOME/work/$repo/.git" ]; then
+        origin_ok "$HOME/work/$repo" "$repo" || log "not using ~/work/$repo: its origin is not $repo through the edge"
+    else
+        missing="$missing $repo"
+    fi
 done
 if [ -n "$missing" ]; then
     # Wait for the edge (any HTTP answer), backing off up to about two minutes
@@ -69,9 +80,10 @@ if [ -n "$missing" ]; then
     done
     [ -n "$up" ] || log "the edge is not answering; cloning anyway"
     for repo in $missing; do
-        dir="$HOME/work/${repo#*/}"
-        if [ -e "$dir" ] || [ -L "$dir" ]; then log "not cloning $repo: ~/work/${repo#*/} exists and is not a git repository"; continue; fi
-        partial="$HOME/work/.clone-${repo#*/}"
+        dir="$HOME/work/$repo"
+        if [ -e "$dir" ] || [ -L "$dir" ]; then log "not cloning $repo: ~/work/$repo exists and is not a git repository"; continue; fi
+        mkdir -p "$HOME/work/${repo%%/*}"
+        partial="$HOME/work/.clone-${repo%%/*}-${repo#*/}"
         done_=""
         for delay in 2 5 10; do
             rm -rf "$partial"
@@ -85,12 +97,13 @@ if [ -n "$missing" ]; then
     done
 fi
 
-# With no repo (or the first one not cloned yet) the agent works in ~/work/scratch
+# With no repo (or the first one not cloned, or not the right one) the agent works in
+# ~/scratch, outside ~/work so no owner/repo can ever be the same folder
 first=$(printf '%s\n' "$repos" | sed -n '1p')
-if [ -z "$first" ] || [ ! -d "$HOME/work/${first#*/}/.git" ]; then
-    if [ ! -d "$HOME/work/scratch/.git" ]; then
-        git init --quiet "$HOME/work/scratch"
-        git -C "$HOME/work/scratch" commit --quiet --allow-empty -m "Empty scratch repository"
+if [ -z "$first" ] || [ ! -d "$HOME/work/$first/.git" ] || ! origin_ok "$HOME/work/$first" "$first"; then
+    if [ ! -d "$HOME/scratch/.git" ]; then
+        git init --quiet "$HOME/scratch"
+        git -C "$HOME/scratch" commit --quiet --allow-empty -m "Empty scratch repository"
     fi
 fi
 

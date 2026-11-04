@@ -61,7 +61,7 @@ boxd and edge are separate services on purpose: the component that talks to Dock
 | `/tmp` | tmpfs, 1 GB | yes | nothing |
 | everything else (image) | read-only root filesystem | no | replaced on upgrade |
 
-- The home folder holds the CLI state (`~/.agora/state/<profile>`: `CODEX_HOME`, `CLAUDE_CONFIG_DIR`), the repos (`~/work/<repo>`), session worktrees (as agora-host makes them today), and anything the agent installs for itself (`~/.local`, `~/.npm-global`, `~/.cache`).
+- The home folder holds the CLI state (`~/.agora/state/<profile>`: `CODEX_HOME`, `CLAUDE_CONFIG_DIR`), the repos (`~/work/<owner>/<repo>`; with none, `~/scratch`), session worktrees (as agora-host makes them today), and anything the agent installs for itself (`~/.local`, `~/.npm-global`, `~/.cache`).
 - **No bind mounts, ever.** boxd's socket proxy rejects them (§7.2). No host path, no Docker socket, no other box's volume is visible in a box.
 - Nothing is shared between boxes: no common cache volume. Two boxes that both need a package download it twice; that is the price of not having a channel between them.
 - Tools an agent installs system-wide don't exist: the root filesystem is read-only and there's no `sudo`. The box's `AGENTS.md`/`CLAUDE.md` says to install under the home folder.
@@ -135,7 +135,7 @@ Rules:
 
 ## 5. Git and pull requests: the brokers
 
-Repos are attached to a box when it's created or later in its settings (`owner/repo` on github.com in v1). boxd's first start of the box clones each one into `~/work/<repo>` through the git broker. GitHub stays the remote.
+Repos are attached to a box when it's created or later in its settings (`owner/repo` on github.com in v1). boxd's first start of the box clones each one into `~/work/<owner>/<repo>` through the git broker; a clone kept in the home folder is used only while its origin is that repo through the edge. A change to the attached repos rebuilds the box (home kept). GitHub stays the remote.
 
 **Fixed upstreams, for both brokers.** The edge builds every upstream URL itself from constants and the attached repo's stored `owner` and `repo` (`^[A-Za-z0-9-]{1,39}$`, `^[A-Za-z0-9._-]{1,100}$`, not `.` or `..`). A request path is matched against a short list of exact forms after one decode; `..`, encoded separators (`%2f`, `%5c`), double encoding, a different host or anything else is `404` before a credential is added. Upstream redirects are never followed with credentials attached (the reply is `502`).
 
@@ -228,7 +228,7 @@ The proxy filters paths, not request bodies: it can't stop a create request that
 
 ### 8.1 Starting agents
 
-- The box's entrypoint (tini → `agora-box-start`) writes agora-host's config from the env into `/run/agora/host.json` (tmpfs): `instance` = `http://edge:8080`, the host token, one profile (`workdir` = `~/work/<repo>`, `stateDir` = `~/.agora/state/<profile>`, the pinned CLI executables), the bot token. Then it runs agora-host, unchanged in how it claims, wakes and reports.
+- The box's entrypoint (tini → `agora-box-start`) writes agora-host's config from the env into `/run/agora/host.json` (tmpfs): `instance` = `http://edge:8080`, the host token, one profile (`workdir` = `~/work/<owner>/<repo>`, `stateDir` = `~/.agora/state/<profile>`, the pinned CLI executables), the bot token. Then it runs agora-host, unchanged in how it claims, wakes and reports.
 - So **each box is an agent host in Agora**, of kind `box`, with exactly one profile. Settings → Agents shows it with the box's state instead of "last seen on machine X".
 - The child process gets the proxy variables in addition to agora-host's OS allowlist (new profile option `proxyEnv`, set only by the box config).
 - **Yeet mode:** in a box, agora-host starts the CLI with its sandbox off and no permission prompts: Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`. That is allowed **only** when agora-host runs with `AGORA_HOST_IN_BOX=1` and the box marker file the image ships is present; on a machine, agora-host keeps refusing bypass flags as today. The box is the sandbox.
