@@ -5,7 +5,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadStartupConfig } from './invites.js';
 import { startHookState } from './hook-state.js';
-import { AgoraApi, mcpClientName } from './api.js';
+import { AgoraApi } from './api.js';
+import { ClientSession, configuredClientName, observeTransport } from './client-session.js';
 import { CursorTracker } from './cursor.js';
 import { registerResources, registerTools } from './tools.js';
 import { ActivityReporter, connectSocket, ListeningReporter } from './socket.js';
@@ -36,14 +37,26 @@ registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, upl
     allowOutsideWorkdir: config.allowOutsideWorkdir, listening, activity });
 registerResources(server, api);
 
-// Every request names the MCP client that launched us (known once it sends initialize):
-// Agora binds the bot token to that client and refuses it from others (#39)
-const client = () => mcpClientName(server.server.getClientVersion()?.name);
+// Every request names the MCP client that launched us: Agora binds the bot token to that client
+// and refuses it from others (#39). The name comes from each request's _meta (MCP 2026-07-28),
+// else initialize, else --client / AGORA_CLIENT (src/client-session.ts, #299).
+const session = new ClientSession({
+    initializeName: () => server.server.getClientVersion()?.name,
+    configured: configuredClientName(args, process.env),
+    onStart: () => {
+        openSocket();
+        // Tell the Claude Code and Codex hooks (src/hook.ts) where this session's Agora connection
+        // is. Not for hosted runs (--no-presence): the hooks are for bring-your-own sessions, and a
+        // hosted run's token stays off the disk.
+        if (activity) startHookState(config, client);
+    },
+});
+const client = () => session.name();
 api.setClient(client);
 
-// Opened once the client has initialized, so no pushed message is sent before Claude Code is
-// listening and the socket names the client too. The socket reports "connected / listening"
-// to Agora, and in channel mode carries the messages.
+// Opened once the session has started (initialized, or a stateless client's first request), so
+// no pushed message is sent before Claude Code is listening and the socket names the client too.
+// The socket reports "connected / listening" to Agora, and in channel mode carries the messages.
 function openSocket(): void {
     if (options.channelMode) {
         const socket = connectSocket(config.instance, config.token, 'channel', client);
@@ -55,16 +68,9 @@ function openSocket(): void {
         activity?.attach(socket);
     }
 }
-server.server.oninitialized = () => {
-    openSocket();
-    // Tell the Claude Code and Codex hooks (src/hook.ts) where this session's Agora connection
-    // is. Not for hosted runs (--no-presence): the hooks are for bring-your-own sessions, and a
-    // hosted run's token stays off the disk.
-    if (activity) startHookState(config, client);
-};
-
 const transport = new StdioServerTransport();
 await server.connect(transport);
+observeTransport(transport, session);
 
 // The socket's reconnect timers would keep the process alive after Claude Code (or any
 // client) goes away; stdin closing means the session is over.
