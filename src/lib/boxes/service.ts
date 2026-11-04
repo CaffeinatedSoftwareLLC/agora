@@ -39,6 +39,13 @@ function uniqueRepos(repos: string[] | undefined): { owner: string; repo: string
         const parsed = parseRepo(r);
         seen.set(`${parsed.owner}/${parsed.repo}`.toLowerCase(), parsed);
     }
+    // Each repo is cloned to ~/work/<repo>: two owners' repos of the same name would share it
+    const names = new Set<string>();
+    for (const r of seen.values()) {
+        const name = r.repo.toLowerCase();
+        if (names.has(name)) throw new BoxError(400, 'repo_name_collision');
+        names.add(name);
+    }
     return [...seen.values()];
 }
 
@@ -138,15 +145,27 @@ export async function patchBox(db: any, box: { id: string; server_id: string; bo
         [box.id, domains, patch.cpus ?? null, patch.memoryMb ?? null, patch.pids ?? null, patch.homeChannelId ?? null]
     );
     if (patch.repos) {
-        // Keep rows that stay (their default branch is cached); boxd clones new ones on its next pass
+        // Keep rows that stay (their default branch is cached)
         const repos = uniqueRepos(patch.repos);
         const keep = repos.map(r => `${r.owner}/${r.repo}`.toLowerCase());
+        const before = (await db.query(`SELECT lower(owner || '/' || repo) AS name FROM box_repos WHERE box_id = $1`, [box.id])).rows.map((r: any) => r.name).sort();
+        const changed = before.join(' ') !== [...keep].sort().join(' ');
         await db.query(`DELETE FROM box_repos WHERE box_id = $1 AND NOT (lower(owner || '/' || repo) = ANY($2))`, [box.id, keep]);
         for (const r of repos) {
             await db.query(
                 `INSERT INTO box_repos (box_id, owner, repo) SELECT $1, $2::varchar, $3::varchar
                  WHERE NOT EXISTS (SELECT 1 FROM box_repos WHERE box_id = $1 AND lower(owner) = lower($2::varchar) AND lower(repo) = lower($3::varchar))`,
                 [box.id, r.owner, r.repo]
+            );
+        }
+        // The repo list and the workdir are part of the box's config, read when its container
+        // is created: a change takes a rebuild (home kept; the box clones what's new at start).
+        // A reset already asked for is stronger and stays.
+        if (changed) {
+            await db.query(
+                `UPDATE agent_boxes SET pending_action = 'rebuild', action_requested_at = NOW(), updated_at = NOW()
+                 WHERE id = $1 AND desired_state <> 'deleted' AND pending_action IS DISTINCT FROM 'reset'`,
+                [box.id]
             );
         }
     }
