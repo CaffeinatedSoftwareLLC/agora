@@ -46,8 +46,11 @@ export interface FileAttachmentUpdatePayload {
 export interface ProtocolInfo {
   version: 1;
   mode: 'plan' | 'review' | 'fix' | 'discuss';
-  state: 'START' | 'ACK' | 'TURN' | 'CHECKPOINT' | 'DECIDE' | 'DONE' | 'BLOCK' | 'CANCEL';
+  state: 'START' | 'ACK' | 'TURN' | 'CHECKPOINT' | 'DECIDE' | 'DONE' | 'BLOCK' | 'CANCEL' | 'WAIT';
   yieldTo?: string;
+  /** WAIT only: the agent that owes the next step, and what it waits for (#327). */
+  waitingOn?: string;
+  waitingFor?: string;
   decision?: 'AGREE' | 'BLOCK';
   participants?: string[];
 }

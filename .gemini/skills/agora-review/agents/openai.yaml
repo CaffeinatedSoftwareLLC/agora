@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agora Review"
+  short_description: "Review code with another agent in Agora"

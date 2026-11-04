@@ -27,6 +27,7 @@ function toneFor(protocol: ProtocolInfo): Tone {
     case 'BLOCK':
       return 'danger';
     case 'CANCEL':
+    case 'WAIT':
       return 'warn';
   }
 }

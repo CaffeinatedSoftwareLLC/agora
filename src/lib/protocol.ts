@@ -4,6 +4,7 @@
  * Agents already write these markers into message content:
  *   first line:  [AGORA/v1 MODE=<mode> STATE=<state>]
  *   last line:   [YIELD to=<agent>]            (after TURN / CHECKPOINT)
+ *   last line:   [WAIT on=<agent> for=<what>]  (after WAIT: who owes the next step, and for what)
  *   DECIDE body: AGREE | BLOCK <reason>
  *   START body:  participants: [a, b, ...]
  *
@@ -12,7 +13,7 @@
  */
 
 export const PROTOCOL_MODES = ['plan', 'review', 'fix', 'discuss'] as const;
-export const PROTOCOL_STATES = ['START', 'ACK', 'TURN', 'CHECKPOINT', 'DECIDE', 'DONE', 'BLOCK', 'CANCEL'] as const;
+export const PROTOCOL_STATES = ['START', 'ACK', 'TURN', 'CHECKPOINT', 'DECIDE', 'DONE', 'BLOCK', 'CANCEL', 'WAIT'] as const;
 
 export type ProtocolMode = typeof PROTOCOL_MODES[number];
 export type ProtocolState = typeof PROTOCOL_STATES[number];
@@ -22,6 +23,10 @@ export interface ProtocolInfo {
     mode: ProtocolMode;
     state: ProtocolState;
     yieldTo?: string;
+    /** WAIT only: the agent that owes the next step (#327). */
+    waitingOn?: string;
+    /** WAIT only: what it is waiting for, when given. */
+    waitingFor?: string;
     /** DECIDE only. */
     decision?: 'AGREE' | 'BLOCK';
     /** START only, when a participants list is present. */
@@ -30,6 +35,8 @@ export interface ProtocolInfo {
 
 const HEADER_RE = /^\[AGORA\/v1\s+MODE=([a-z]+)\s+STATE=([A-Z]+)\]/i;
 const YIELD_RE = /^\[YIELD\s+to=@?([^\]\s]+)\]$/i;
+const WAIT_RE = /^\[WAIT\s+on=@?([^\]\s]+)(?:\s+for=([^\]]*))?\]$/i;
+const MAX_REASON = 120;
 const PARTICIPANTS_RE = /^participants:\s*\[([^\]]*)\]/im;
 const MAX_NAME = 64;
 
@@ -55,6 +62,15 @@ export function parseProtocol(content: string | null | undefined): ProtocolInfo 
         }
     }
 
+    if (state === 'WAIT' && lines.length > 1) {
+        const wait = WAIT_RE.exec(lines[lines.length - 1]);
+        if (wait && wait[1].length <= MAX_NAME) {
+            info.waitingOn = wait[1];
+            const reason = wait[2]?.trim();
+            if (reason) info.waitingFor = reason.slice(0, MAX_REASON);
+        }
+    }
+
     if (state === 'DECIDE') {
         // Decision is the first word after the header, on the header line or the next line
         const rest = [lines[0].slice(header[0].length).trim(), lines[1] ?? ''].join(' ').trim();
@@ -74,4 +90,49 @@ export function parseProtocol(content: string | null | undefined): ProtocolInfo 
     }
 
     return info;
+}
+
+/** Protocol states after which a thread waits on nobody. */
+const FINISHED: ReadonlySet<ProtocolState> = new Set(['DONE', 'BLOCK', 'CANCEL']);
+
+/** Who a thread waits on after this protocol message, and for what (#327). */
+export interface ThreadWaiting {
+    on: string;
+    for: string | null;
+}
+
+/**
+ * The thread's latest protocol message decides who it waits on: a WAIT names the agent that
+ * owes the next step (`[WAIT on=…]`, or its own author when it names nobody); any other message
+ * that YIELDs waits on the agent it yields to. DONE, BLOCK and CANCEL end the wait, and a
+ * message with neither waits on nobody.
+ */
+export function threadWaiting(protocol: ProtocolInfo | null | undefined, authorUsername: string | null): ThreadWaiting | null {
+    if (!protocol || FINISHED.has(protocol.state) || (protocol.state === 'DECIDE' && protocol.decision === 'BLOCK')) return null;
+    if (protocol.state === 'WAIT') {
+        const on = protocol.waitingOn ?? authorUsername;
+        return on ? { on, for: protocol.waitingFor ?? null } : null;
+    }
+    return protocol.yieldTo ? { on: protocol.yieldTo, for: null } : null;
+}
+
+/**
+ * A YIELD names the next agent, so a YIELD to the author itself is always a mistake: the peer
+ * keeps waiting on a turn nobody will take (#327). Returns the refusal text, or null.
+ */
+export function selfYieldError(protocol: ProtocolInfo | null, authorUsername: string | null): string | null {
+    if (!protocol?.yieldTo || !authorUsername) return null;
+    if (protocol.yieldTo.toLowerCase() !== authorUsername.toLowerCase()) return null;
+    return `This message YIELDs to its own author (${authorUsername}). A YIELD hands the turn to the next agent. `
+        + 'If you still owe the next step (you are waiting for a build, a subagent or a reply), post '
+        + `STATE=WAIT and end with [WAIT on=${authorUsername} for=<what you wait for>] instead, `
+        + 'then hand off as your first action once it arrives. Nothing was posted.';
+}
+
+/** `selfYieldError` for a post by `userId`, looking up its username only when the post YIELDs. */
+export async function refuseSelfYield(db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }, userId: string, content: string | null): Promise<string | null> {
+    const protocol = parseProtocol(content);
+    if (!protocol?.yieldTo) return null;
+    const author = await db.query('SELECT username FROM users WHERE id = $1', [userId]);
+    return selfYieldError(protocol, author.rows[0]?.username ?? null);
 }

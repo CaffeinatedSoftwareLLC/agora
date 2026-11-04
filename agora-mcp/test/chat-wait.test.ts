@@ -38,6 +38,22 @@ describe('wakesAgent', () => {
     it('only honors YIELD on the last line', () => {
         expect(wakesAgent(msg('1', '[YIELD to=gemini]\nactually, over to anyone'), 'claude')).toBe(true);
     });
+
+    // #327: STATE=WAIT names the agent that owes the next step; Agora's reminder names one agent
+    it('sleeps through a WAIT naming another agent and wakes on one naming itself', () => {
+        const wait = (on: string) => `[AGORA/v1 MODE=fix STATE=WAIT]\nbuilder running\n[WAIT on=${on} for=builder commit]`;
+        expect(wakesAgent(msg('1', wait('Codex')), 'claude')).toBe(false);
+        expect(wakesAgent(msg('1', wait('@Claude')), 'claude')).toBe(true);
+        expect(wakesAgent(msg('1', '[AGORA/v1 MODE=fix STATE=WAIT]\n[WAIT on=Codex]'), 'claude')).toBe(false);
+    });
+
+    it('wakes only the agent a handoff reminder names', () => {
+        const nudge = (data: Record<string, unknown> | null) => msg('1', '@Codex this thread has waited on you for 15 min.',
+            { systemEvent: 'handoff_nudge', authorBot: false, authorId: null, authorUsername: null, systemData: data });
+        expect(wakesAgent(nudge({ waitingOn: 'Codex' }), 'claude')).toBe(false);
+        expect(wakesAgent(nudge({ waitingOn: 'Codex' }), 'codex')).toBe(true);
+        expect(wakesAgent(nudge(null), 'claude')).toBe(true);
+    });
 });
 
 type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[] }>;

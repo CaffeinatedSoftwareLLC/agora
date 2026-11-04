@@ -42,7 +42,7 @@ it('keeps an api_key profile\'s CLI key inside the child env only (canary)', asy
         let text = ''; for await (const part of req) text += part;
         urls.push(req.url!); if (text) bodies.push(text);
         res.setHeader('Content-Type', 'application/json');
-        if (req.url!.includes('/workspace-commands/next') || req.url!.includes('/browser-previews/next') || req.url!.includes('/plan-requests/next')) {
+        if (req.url!.includes('/workspace-commands/next') || req.url!.includes('/browser-previews/next') || req.url!.includes('/github-commands/next') || req.url!.includes('/plan-requests/next')) {
             res.writeHead(204); res.end();
         } else if (req.url!.includes('/next')) {
             if (!claimed) { claimed = true; res.end(JSON.stringify(delivery)); }
@@ -111,7 +111,7 @@ it('drives one complete delivery through the HTTP client and scheduler with a fa
         let text = ''; for await (const part of req) text += part;
         expect(req.headers.authorization).toBe('AgentHost ah_test');
         res.setHeader('Content-Type', 'application/json');
-        if (req.url!.includes('/workspace-commands/next') || req.url!.includes('/browser-previews/next')) {
+        if (req.url!.includes('/workspace-commands/next') || req.url!.includes('/browser-previews/next') || req.url!.includes('/github-commands/next')) {
             res.writeHead(204); res.end();
         } else if (req.url!.includes('/next')) {
             if (!claimed) { claimed = true; res.end(JSON.stringify(claim())); }
@@ -135,12 +135,12 @@ it('drives one complete delivery through the HTTP client and scheduler with a fa
     } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });
 
-it('keeps delivering runs against an older server without the workspace command or preview queues', async () => {
+it('keeps delivering runs against an older server without the workspace command, preview or GitHub queues', async () => {
     let claimed = false, commandPolls = 0; const logs: string[] = [];
     const server = createServer(async (req, res) => {
         for await (const _ of req) { /* drain */ }
         res.setHeader('Content-Type', 'application/json');
-        if (req.url!.includes('/workspace-commands/next') || req.url!.includes('/browser-previews/next')) { commandPolls++; res.writeHead(404); res.end('{}'); }
+        if (req.url!.includes('/workspace-commands/next') || req.url!.includes('/browser-previews/next') || req.url!.includes('/github-commands/next')) { commandPolls++; res.writeHead(404); res.end('{}'); }
         else if (req.url!.includes('/next')) {
             if (!claimed) { claimed = true; res.end(JSON.stringify(claim())); }
             else { res.writeHead(401); res.end('{}'); }
@@ -157,8 +157,9 @@ it('keeps delivering runs against an older server without the workspace command 
             prepare: async () => ({ executable: 'fake.exe', args: [], cwd: '', env: {}, stdin: '', adapter: 'codex', cleanup: async () => {} }),
         });
         await scheduler.run();
-        expect(start).toHaveBeenCalledOnce(); expect(commandPolls).toBe(2);
+        expect(start).toHaveBeenCalledOnce(); expect(commandPolls).toBe(3);
         expect(logs).toContain('workspace_commands_unsupported');
         expect(logs).toContain('previews_unsupported');
+        expect(logs).toContain('github_commands_unsupported');
     } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });

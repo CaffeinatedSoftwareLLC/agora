@@ -3,7 +3,7 @@ import { openLocalUpload, type UploadConfig } from './local-upload.js';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgoraApiError } from './api.js';
-import type { AgentSession, AgoraApi, ArtifactInfo, ArtifactVersion, Attachment, Authority, BotInfo, BrowserPreview, Director, FileImage, FileSearchResult, FileText, HandoffOffer, Message, ProjectContext, RuntimeRun, TaskCard, ThreadSummary } from './api.js';
+import type { AgentSession, AgoraApi, ArtifactInfo, ArtifactVersion, Attachment, Authority, BotInfo, BrowserPreview, Director, FileImage, FileSearchResult, FileText, HandoffOffer, Message, ProjectContext, RuntimeRun, TaskCard, ThreadSummary, ThreadWaiting } from './api.js';
 import type { CursorTracker } from './cursor.js';
 import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelope.js';
 
@@ -95,23 +95,43 @@ export function formatThreads(threads: ThreadSummary[]): string {
     if (threads.length === 0) return 'No open threads.';
     return threads.map(t => {
         const preview = oneLine(t.content || '').slice(0, 120);
-        return `(${t.id}) ${authorLabel(t)}: ${preview} — ${t.replyCount} replies, last ${t.lastReplyAt}`;
+        return `(${t.id}) ${authorLabel(t)}: ${preview} — ${t.replyCount} replies, last ${t.lastReplyAt}${formatWaiting(t.waiting)}`;
     }).join('\n');
+}
+
+/** " — waiting on Claude for: builder commit, 52 min" (#327). */
+export function formatWaiting(w: ThreadWaiting | null | undefined, now = Date.now()): string {
+    if (!w) return '';
+    const minutes = Math.max(0, Math.floor((now - Date.parse(w.since)) / 60_000));
+    return ` — waiting on ${oneLine(w.on)}${w.for ? ` for: ${oneLine(w.for)}` : ''}, ${minutes} min`;
 }
 
 const YIELD_LINE_RE = /^\[YIELD\s+to=@?([^\]\s]+)\]$/i;
 
+const WAIT_LINE_RE = /^\[WAIT\s+on=@?([^\]\s]+)(?:\s+for=[^\]]*)?\]$/i;
+
 /**
  * For `chat_wait until="turn"`: should this message wake the agent named `self`?
- * Everything wakes except a bot message whose last line YIELDs to a different
- * agent. That is another participant's turn, so the waiter keeps sleeping.
+ * Everything wakes except:
+ * - a bot message whose last line YIELDs to a different agent, or says (`[WAIT on=…]`) that a
+ *   different agent owes the next step: that is another participant's turn;
+ * - Agora's reminder to a different agent that a thread waits on it (`handoff_nudge`, #327).
  */
 export function wakesAgent(m: Message, self: string): boolean {
+    const me = self.toLowerCase();
+    if (m.systemEvent === 'handoff_nudge') {
+        const on = m.systemData?.waitingOn;
+        return typeof on !== 'string' || on.toLowerCase() === me;
+    }
     if (m.systemEvent || !m.authorBot) return true;
     const lines = (m.content ?? '').split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-    const match = lines.length > 0 ? YIELD_LINE_RE.exec(lines[lines.length - 1]) : null;
-    return !match || match[1].toLowerCase() === self.toLowerCase();
+    const last = lines.length > 0 ? lines[lines.length - 1] : '';
+    const match = YIELD_LINE_RE.exec(last) ?? WAIT_LINE_RE.exec(last);
+    return !match || match[1].toLowerCase() === me;
 }
+
+/** Direct attention older than this, when a wait returns it, gets a "still yours" note. */
+const AWAY_NOTE_MINUTES = 10;
 
 /** Longest `chat_wait` allowed, in seconds. Harness MCP tool timeouts must be raised to match. */
 export const MAX_WAIT_SECONDS = 3600;
@@ -501,7 +521,8 @@ export function registerTools(
             thread: threadParam.describe('Thread whose replies to read in full. Direct attention anywhere in the same channel is still watched.'),
             until: z.enum(['any', 'turn']).optional().describe(
                 '"any" (default): return on any new message. "turn": keep waiting through bot messages that '
-                + '[YIELD to=] a different agent; return on a YIELD to you, a human or system message, or any other '
+                + '[YIELD to=] a different agent or say [WAIT on=] a different agent, and through Agora\'s reminders to other agents; '
+                + 'return on a YIELD or WAIT naming you, a human or other system message, or any other '
                 + 'protocol message. Direct attention anywhere in the channel returns in either mode, even if that post YIELDs to someone else. A mention is notification, not permission to take their turn. Everything read while waiting is returned together.',
             ),
         },
@@ -532,6 +553,17 @@ export function registerTools(
             // attention too, but under until=turn they wake it only like any other post.
             let attentionId: string | undefined;
             let direct = false;
+            // When the oldest direct attention was posted: a returning agent must not take it as stale
+            let oldestDirect: number | undefined;
+            const awayNote = () => {
+                if (oldestDirect === undefined) return '';
+                const minutes = Math.floor((Date.now() - oldestDirect) / 60_000);
+                if (minutes < AWAY_NOTE_MINUTES) return '';
+                return `\n\nSome of these were addressed to you while you were away (the oldest ${minutes} min ago). `
+                    + 'Don\'t skip them as stale. They are notifications, not assignments: check each thread\'s current state first '
+                    + '(open or closed, its latest protocol message, who directs it now). Act if it is still yours; if you can\'t yet, '
+                    + 'say so in the open thread; leave it if it was superseded, cancelled or closed.';
+            };
             function attentionFailure(err: unknown): never {
                 if (err instanceof AgoraApiError && err.status === 404) {
                     throw new Error('Server does not support channel attention. Upgrade the Agora server before using chat_wait.');
@@ -579,7 +611,11 @@ export function registerTools(
                         // The waited thread's own replies come from its native read below.
                         if (m.attention === 'participating' && thread && m.threadId === thread) continue;
                         collected.set(m.id, m);
-                        if (m.attention !== 'participating') direct = true;
+                        if (m.attention !== 'participating') {
+                            direct = true;
+                            const at = Date.parse(m.createdAt);
+                            if (Number.isFinite(at) && (oldestDirect === undefined || at < oldestDirect)) oldestDirect = at;
+                        }
                     }
                     const { messages } = await readUnread(ch.id, thread, 200);
                     for (const m of messages) collected.set(m.id, { ...m, threadId: m.threadId ?? thread ?? null });
@@ -587,7 +623,7 @@ export function registerTools(
                         return {
                             content: [{
                                 type: 'text' as const,
-                                text: `${label(ch.name, thread)} — ${collected.size} new message(s):\n\n${formatted()}${await saveAttention()}`,
+                                text: `${label(ch.name, thread)} — ${collected.size} new message(s):\n\n${formatted()}${awayNote()}${await saveAttention()}`,
                             }],
                         };
                     }

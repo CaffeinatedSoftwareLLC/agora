@@ -1,5 +1,6 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
+import { runHandoffNudges } from '../../src/workers/handoff-nudge';
 import { claimNext, complete, fail, sweepExpiredRuns, type Notice } from '../../src/lib/agent-runs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -261,6 +262,77 @@ describe('wake routing (S1)', () => {
 
         const decide = await reply(codex.auth, start.id, '[AGORA/v1 MODE=plan STATE=DECIDE]\nAGREE');
         expect((await inbox(sc)).map(r => r.message_id)).toContain(decide.id);
+    });
+
+    it('a WAIT wakes the agent it names, and a WAIT on oneself wakes nobody (#327)', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const start = await post(claude.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [claude, codex]\ntask: x');
+        const own = await reply(claude.auth, start.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=claude for=builder commit]');
+        expect((await inbox(sx)).map(r => r.message_id)).not.toContain(own.id);
+        const peer = await reply(codex.auth, start.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nwaiting\n[WAIT on=claude for=builder commit]');
+        expect((await inbox(sc)).map(r => [r.message_id, r.reason])).toContainEqual([peer.id, 'handoff']);
+        expect((await inbox(sx)).map(r => r.message_id)).not.toContain(peer.id);
+    });
+
+    it('a handoff reminder wakes an api_key session; a subscription session is never woken, its owner is told (#327)', async () => {
+        await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
+        const sx = await startSession(codex);
+        const nudgeIn = async (threadId: string) => (await ctx.db.query(
+            `SELECT id, content FROM messages WHERE thread_id = $1 AND system_event = 'handoff_nudge'`, [threadId])).rows[0];
+        const thread = await post(owner.auth, 'Relay on Heroku');
+        await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=builder commit]');
+        await runHandoffNudges({ db: ctx.db }, Date.now() + 16 * 60_000);
+        const nudge = await nudgeIn(thread.id);
+        expect(await inbox(sx)).toContainEqual({ message_id: nudge.id.trim(), reason: 'direct', acked: false });
+        expect(nudge.content).not.toMatch(/owner/);
+
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription', api_key_env = NULL WHERE id = $1`, [codex.profileId]);
+        try {
+            const other = await post(owner.auth, 'Second job');
+            await reply(codex.auth, other.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=tests]');
+            // Past the one-reminder-per-bot gap
+            await runHandoffNudges({ db: ctx.db }, Date.now() + 32 * 60_000);
+            const second = await nudgeIn(other.id);
+            expect((await inbox(sx)).map(r => r.message_id)).not.toContain(second.id.trim());
+            expect(second.content).toMatch(/its owner was told/);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE id = $1`, [codex.profileId]);
+        }
+    });
+
+    it('a handoff reminder skips a hosted standby while a terminal answers, and goes to a thread-bound worker over the channel session (#327)', async () => {
+        // No recent reminder for codex from other tests (one per bot per nudge time)
+        await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
+        const nudges = async (threadId: string) => (await ctx.db.query(
+            `SELECT id FROM messages WHERE thread_id = $1 AND system_event = 'handoff_nudge' ORDER BY id`, [threadId])).rows.map(r => r.id.trim());
+        const channelSession = await startSession(codex);
+        const terminal = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, kind, terminal_mode) VALUES ($1, $2, $3, $4, 'terminal', 'mcp')`,
+            [terminal, serverId, channelId, codex.botId]);
+        try {
+            // Terminal + hosted channel standby: the terminal answers, nothing is queued
+            const thread = await post(owner.auth, 'Relay on Heroku');
+            await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=builder commit]');
+            await runHandoffNudges({ db: ctx.db }, Date.now() + 16 * 60_000);
+            const [first] = await nudges(thread.id);
+            expect(first).toBeDefined();
+            expect((await inbox(channelSession)).map(r => r.message_id)).not.toContain(first);
+
+            // A worker session bound to the thread (task or subtask) still gets it, as in routeThreadReply
+            const bound = generateUlid();
+            await ctx.db.query(
+                `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, thread_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [bound, serverId, channelId, codex.botId, codex.profileId, owner.userId, thread.id]);
+            await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nstill building\n[WAIT on=codex for=builder commit]');
+            await runHandoffNudges({ db: ctx.db }, Date.now() + 32 * 60_000);
+            const next = (await nudges(thread.id))[1];
+            expect((await inbox(bound)).map(r => r.message_id)).toContain(next);
+            expect((await inbox(channelSession)).map(r => r.message_id)).not.toContain(next);
+        } finally {
+            await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [terminal]);
+        }
     });
 
     it('binds nothing for a START from a bot without a session or naming no live agent', async () => {

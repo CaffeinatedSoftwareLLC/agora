@@ -41,6 +41,7 @@ jobs:
       relay: ${{ steps.filter.outputs.relay }}
       boxes: ${{ steps.filter.outputs.boxes }}
       install: ${{ steps.filter.outputs.install }}
+      skills: ${{ steps.filter.outputs.skills }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -102,6 +103,16 @@ jobs:
               - 'docker-compose.prod.yml'
               - 'Dockerfile'
               - 'vitest.box.config.ts'
+              - '.github/workflows/ci.yml'
+            skills:
+              - '.claude/skills/**'
+              - '.agents/**'
+              - '.codex/skills/**'
+              - '.gemini/skills/**'
+              - '.opencode/skills/**'
+              - '.claude-plugin/**'
+              - 'plugins/**'
+              - 'scripts/sync-skills.js'
               - '.github/workflows/ci.yml'
 
   # The full backend suite, split into four parts that run at the same time. Tests in one
@@ -366,3 +377,20 @@ jobs:
         run: |
           Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
           Invoke-Pester install/windows/tests -CI
+
+  # The skill copies and the agora-skills plugin must match .claude/skills, and a change to
+  # the plugin's skills must come with a new plugin version, or installed plugins never update.
+  skills:
+    name: Skills (copies + plugin version)
+    needs: changes
+    if: needs.changes.outputs.skills == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node scripts/sync-skills.js --check --base "${{ github.event.pull_request.base.sha || github.event.before }}"

@@ -7,7 +7,7 @@ import { canPostInChannel, canViewChannel } from '../lib/channel-access';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
-import { parseProtocol } from '../lib/protocol';
+import { parseProtocol, refuseSelfYield } from '../lib/protocol';
 import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
@@ -55,6 +55,10 @@ export async function messageRoutes(app: FastifyInstance) {
         }
         // Nothing left after cleaning (only escape codes)
         if (!content && !attachmentIds?.length && !artifact) return reply.status(400).send({ error: 'empty_content' });
+
+        // A YIELD to oneself leaves the peer waiting on a turn nobody takes (#327)
+        const selfYield = await refuseSelfYield(db, userId, content);
+        if (selfYield) return reply.status(400).send({ error: 'yield_to_self', message: selfYield });
         // Before the insert: a request that fails later still commits what it wrote
         if (artifact) {
             const bad = await checkArtifact(db, channelId, artifact);
@@ -398,6 +402,10 @@ export async function messageRoutes(app: FastifyInstance) {
         }
         // Nothing left after cleaning (only escape codes)
         if (!content) return reply.status(400).send({ error: 'empty_content' });
+
+        // A YIELD to oneself leaves the peer waiting on a turn nobody takes (#327)
+        const selfYield = await refuseSelfYield(db, userId, content);
+        if (selfYield) return reply.status(400).send({ error: 'yield_to_self', message: selfYield });
 
         // Find the message
         const msg = await db.query(

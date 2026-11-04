@@ -106,6 +106,8 @@ export interface Message {
     editedAt?: string | null;
     deletedAt?: string | null;
     systemEvent?: string;
+    /** Details of a system line; for `handoff_nudge`, `waitingOn` names the agent reminded. */
+    systemData?: Record<string, unknown> | null;
     /** Set on thread replies: the parent message ID. */
     threadId?: string | null;
     /** Set on thread parents with at least one reply. */
@@ -152,7 +154,11 @@ export interface ThreadSummary {
     lastReplyAt: string;
     /** Set when the thread starts from a system line (task card, subtask). */
     systemEvent?: string;
+    /** Who the thread waits on since its latest protocol message (#327). Older servers omit it. */
+    waiting?: ThreadWaiting | null;
 }
+
+export interface ThreadWaiting { on: string; for: string | null; since: string; messageId: string }
 
 export interface Cursor {
     channelId: string;

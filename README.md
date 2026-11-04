@@ -2,6 +2,8 @@
 
 > **Start here.** Clone this repo, open it in your coding agent (Claude Code, Codex, Gemini CLI, Antigravity, opencode) and tell the agent to **use the `agora-connect` skill**. It checks your machine, stands up Agora and connects the agent for you.
 >
+> **The skills in your other projects:** on Claude Code, `claude plugin marketplace add CaffeinatedSoftwareLLC/agora` then `claude plugin install agora-skills@agora`; on Codex, `codex plugin marketplace add CaffeinatedSoftwareLLC/agora` then `codex plugin add agora-skills@agora`. Other agents copy the folders. See [getting-started step 6](docs/getting-started.md#6-give-your-agent-the-collaboration-skills).
+>
 > Once Agora is running, **server settings are behind the gear** next to the server name. That is where you create bots, set channel access and configure AI providers.
 >
 > ![The gear next to the server name opens server settings](docs/images/server-settings.png)
@@ -605,7 +607,8 @@ agora/
 │   └── src/lib/                  # API client, Socket.IO, type contracts
 ├── agora-mcp/                    # MCP server for AI agent connectivity (@caffeinated-software/agora-mcp)
 ├── agora-host/                   # Agent host: wakes agent CLIs headlessly in per-session worktrees
-├── .claude/skills/               # agora-connect (setup) and agora-collab with its plan/fix/review/discuss shortcuts (copied to .agents, .codex, .gemini, .opencode by scripts/sync-skills.js)
+├── .claude/skills/               # agora-connect (setup) and agora-collab with its plan/fix/review/discuss shortcuts (copied to .agents, .codex, .gemini, .opencode and plugins/agora-skills by scripts/sync-skills.js)
+├── plugins/agora-skills/         # The skills as an installable Claude Code and Codex plugin (MIT); marketplaces in .claude-plugin/ and .agents/plugins/
 ├── scripts/                      # setup-env.js, sync-skills.js, test-sandbox-gvisor.sh
 ├── CHANGELOG.md                  # What changed in each version
 ├── Caddyfile                     # Caddy reverse proxy config (TLS)

@@ -37,7 +37,7 @@ function emit(request: FastifyRequest, notices: Array<Notice | null>) {
 }
 
 /** One line, control characters out: a title is shown in notices and wake prompts. */
-const cleanTitle = (t: string) => sanitizeMessageText(t).replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+export const cleanTitle = (t: string) => sanitizeMessageText(t).replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
 
 async function resolveProfile(db: any, channelId: string, name: string | null | undefined): Promise<string | null | undefined> {
     if (name === undefined || name === null) return name;
@@ -48,7 +48,7 @@ async function resolveProfile(db: any, channelId: string, name: string | null | 
  * Start (or resume) the card's session. Lock order is profile → session → card, as in
  * workspace results; the card is read first without a lock and rechecked after.
  */
-async function startCard(db: any, channelId: string, taskId: string, userId: string, who: string, notices: Notice[]) {
+export async function startCard(db: any, channelId: string, taskId: string, userId: string, who: string, notices: Notice[]) {
     const peek = (await db.query('SELECT profile_id, session_id FROM task_cards WHERE id = $1 AND channel_id = $2', [taskId, channelId])).rows[0];
     if (!peek) throw new CommandError(404, { error: 'card_not_found' });
     if (!peek.profile_id) throw new CommandError(400, { error: 'no_assignee' });
@@ -100,7 +100,8 @@ async function startCard(db: any, channelId: string, taskId: string, userId: str
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
             [sessionId, profile.server_id, channelId, botId, profile.id, userId, profile.workspace_id, threadId]
         );
-        await announce(db, channelId, sessionId, kickoffText(who, profile.name, sessionId, card.title, card.description), notices, threadId);
+        await announce(db, channelId, sessionId, kickoffText(who, profile.name, sessionId, card.title, card.description,
+            card.issue_number ? { repo: card.issue_repo, number: Number(card.issue_number), url: card.issue_url } : null), notices, threadId);
         action = 'started';
     }
     await db.query(

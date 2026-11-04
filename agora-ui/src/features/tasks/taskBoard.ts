@@ -40,6 +40,8 @@ export interface TaskCard {
   prState: PrState | null;
   prCheckedAt: string | null;
   mergedSha: string | null;
+  /** The GitHub issue this card was imported from (docs/github-issues.md). */
+  issue: { repo: string; number: number; url: string | null } | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -94,11 +96,73 @@ const PR_ERRORS: Record<string, string> = {
   session_busy: 'Wait for the current run or workspace command to finish.',
 };
 
+// ─── GitHub issues bridge (src/routes/github-issues.ts) ───
+
+export interface GithubLink { repo: string; hostId: string; hostName: string; hostRevoked: boolean; updatedAt: string }
+export interface GithubState {
+  link: GithubLink | null;
+  /** May link and unlink a repository (the server owner). */
+  canLink: boolean;
+  /** May list and import issues (owner, directors). */
+  canImport: boolean;
+}
+export interface GithubIssue { number: number; title: string; url: string; author: string; updatedAt: string; body: string; cardId: string | null }
+export interface AgentHost { id: string; name: string; revokedAt: string | null }
+
+interface GithubCommand { id: string; status: string; result?: { error?: string; issues?: GithubIssue[] } | null }
+
+export const githubApi = {
+  get: (channelId: string) => inBackground(() => api.get<GithubState>(`/channels/${channelId}/github`)),
+  /** Hosts the owner can pick for the link; revoked ones are left out. */
+  hosts: async (serverId: string) => (await api.get<AgentHost[]>(`/servers/${serverId}/agent-hosts`)).filter(h => !h.revokedAt),
+  link: (channelId: string, repo: string, hostId: string) =>
+    api.put<{ link: GithubLink }>(`/channels/${channelId}/github`, { repo, hostId }),
+  unlink: (channelId: string) => api.delete<void>(`/channels/${channelId}/github`),
+  /** Ask the linked host for the repository's open issues; resolves with them once it answers (null if aborted). */
+  async listIssues(channelId: string, signal?: AbortSignal): Promise<{ commandId: string; issues: GithubIssue[] } | null> {
+    let command = await api.post<GithubCommand>(`/channels/${channelId}/github/issues`);
+    const deadline = Date.now() + 120_000;
+    while (command.status === 'queued' || command.status === 'claimed') {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (signal?.aborted) return null;
+      if (Date.now() >= deadline) throw new Error('The host has not answered yet (is agora-host running and up to date?).');
+      command = await inBackground(() => api.get<GithubCommand>(`/channels/${channelId}/github/commands/${command.id}`));
+    }
+    if (command.status !== 'succeeded') {
+      const code = command.result?.error ?? '';
+      throw new Error(GITHUB_ERRORS[code] ?? (code ? `The host could not list the issues (${code}).` : 'The host could not list the issues.'));
+    }
+    return { commandId: command.id, issues: command.result?.issues ?? [] };
+  },
+  importIssue: (channelId: string, body: { commandId: string; number: number; profile?: string | null; start?: boolean }) =>
+    api.post<{ action: string; card: TaskCard }>(`/channels/${channelId}/github/issues/import`, body),
+};
+
+const GITHUB_ERRORS: Record<string, string> = {
+  gh_not_installed: 'The GitHub CLI (gh) is not installed on the host.',
+  gh_not_signed_in: 'gh is not signed in on the host. Run gh auth login there.',
+  repo_not_found: "The host's gh can't find that repository. Check the name and that its login can see it.",
+  gh_failed: 'gh failed on the host. Check the host log.',
+  host_timeout: 'The host took the request but never answered. Try again.',
+  binding_or_authority_changed: 'The link or your permissions changed before the host ran the list. Try again.',
+  binding_changed: 'The channel was linked to another repository or host before the host ran this. Try again.',
+  no_repo_linked: 'No repository is linked to this channel, or its host was revoked.',
+  issue_already_imported: 'That issue is already a card in this channel.',
+  issue_list_stale: 'The issue list is out of date. List the issues again.',
+  issue_list_not_found: 'That issue list is gone. List the issues again.',
+  issue_not_in_list: 'That issue is not in the list. List the issues again.',
+  no_assignee: 'Pick an assignee to start the agent now.',
+  invalid_repo: 'Use the owner/name form, for example octocat/hello-world.',
+  host_not_found: 'That host is gone or revoked. Pick another.',
+  owner_only: 'Only the server owner can link or unlink a repository.',
+};
+
 /** A failed board call as a sentence. */
 export function taskError(err: unknown): string {
   if (!(err instanceof ApiError)) return err instanceof Error ? err.message : 'Request failed';
   if (ERRORS[err.code]) return ERRORS[err.code];
   if (PR_ERRORS[err.code]) return PR_ERRORS[err.code];
+  if (GITHUB_ERRORS[err.code]) return GITHUB_ERRORS[err.code];
   if (err.status === 403) return err.code === 'subscription_owner_only' ? ERRORS.subscription_owner_only : NO_AUTHORITY;
   return `Request failed (${err.code}).`;
 }

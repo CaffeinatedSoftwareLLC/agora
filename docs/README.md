@@ -10,6 +10,7 @@ Technical documentation for contributors and developers working on Agora.
 - [Backend Architecture](backend-architecture.md) — request lifecycle, RLS, permissions, WebSocket gateway, bot auth, database patterns, file storage
 - [Frontend Architecture](frontend-architecture.md) — React app structure, Zustand stores, feature modules, routing, threads
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot), files
+- [GitHub issues](github-issues.md) — link a channel to a repository, import one open issue as a task card, and comment the pull request's status back on the issue
 - [Project context and verify before yield](project-context.md) — pinned channel instructions and files for agents, and the owner's verify command agora-host runs after a run
 - [Claude Code and Codex hooks](claude-code-hooks.md) — agora-mcp's Stop hook (keeps a session in an open thread listening), for Claude Code and the Codex CLI
 - [Canvas and Browser Preview](canvas-and-preview.md) — artifacts rendered in a sandboxed pane, and screenshots of a session's local dev server

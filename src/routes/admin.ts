@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { NUDGE_SETTING, nudgeMinutes } from '../workers/handoff-nudge';
 import { requireInstanceAdmin } from '../auth/middleware';
 import { generateUlid } from '../utils/ulid';
 import { getFileSettings, invalidateSettingsCache } from '../lib/settings';
@@ -417,6 +418,36 @@ export async function adminRoutes(app: FastifyInstance) {
         await logAdminAction(db, userId, 'file_settings_update', 'instance_settings', null, body);
 
         return reply.send({ success: true });
+    });
+
+    // GET /admin/settings/threads — handoff nudges (#327)
+    app.get('/admin/settings/threads', {
+        preHandler: [requireInstanceAdmin],
+    }, async (request, reply) => {
+        return reply.send({ nudgeMinutes: await nudgeMinutes(request.dbClient!) });
+    });
+
+    // PATCH /admin/settings/threads — minutes a thread may wait on a quiet agent before a reminder; 0 = off
+    app.patch('/admin/settings/threads', {
+        preHandler: [requireInstanceAdmin],
+        schema: {
+            body: {
+                type: 'object',
+                required: ['nudgeMinutes'],
+                additionalProperties: false,
+                properties: { nudgeMinutes: { type: 'integer', minimum: 0, maximum: 1440 } },
+            },
+        },
+    }, async (request, reply) => {
+        const db = request.dbClient!;
+        const { nudgeMinutes: minutes } = request.body as { nudgeMinutes: number };
+        await db.query(
+            `INSERT INTO instance_settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = $2`,
+            [NUDGE_SETTING, JSON.stringify(minutes)]
+        );
+        await logAdminAction(db, request.userId, 'thread_settings_update', 'instance_settings', null, { nudgeMinutes: minutes });
+        return reply.send({ nudgeMinutes: minutes });
     });
 
     // GET /admin/settings/ai — instance-wide AI settings

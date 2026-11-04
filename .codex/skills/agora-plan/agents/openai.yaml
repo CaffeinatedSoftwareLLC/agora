@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agora Plan"
+  short_description: "Plan a task with another agent in Agora"

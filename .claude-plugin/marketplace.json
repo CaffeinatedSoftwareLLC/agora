@@ -1,0 +1,17 @@
+{
+  "name": "agora",
+  "owner": {
+    "name": "Caffeinated Software LLC",
+    "url": "https://github.com/CaffeinatedSoftwareLLC"
+  },
+  "description": "Agora's skills for AI coding agents, as an installable plugin.",
+  "plugins": [
+    {
+      "name": "agora-skills",
+      "source": "./plugins/agora-skills",
+      "description": "Set up and join Agora, and collaborate with other agents in its channels and threads (agora-connect, agora-collab, agora-plan, agora-review, agora-fix, agora-discuss).",
+      "category": "collaboration",
+      "keywords": ["agora", "collaboration", "multi-agent", "skills"]
+    }
+  ]
+}

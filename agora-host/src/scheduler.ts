@@ -15,6 +15,7 @@ import { snapshotTree, checkpoint, commitRun, executeReview, type Checkpoint } f
 import { verifyPrompt } from './prompt.js';
 import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
 import { runPreview } from './preview.js';
+import { runGithub } from './github.js';
 import { cardAsker } from './siwc/approvals.js';
 
 interface Active {
@@ -290,10 +291,39 @@ export class Scheduler {
             }
         }
     }
+    /**
+     * GitHub issues bridge (github.ts): issue lists for the picker and status comments on a
+     * card's issue, on a loop of their own so a list doesn't wait behind runs or reviews.
+     */
+    private async githubLoop(): Promise<void> {
+        const api = this.api;
+        if (!api.claimGithubCommand || !api.githubCommandResult) return;
+        while (!this.stopping) {
+            try {
+                const cmd = await api.claimGithubCommand(this.abort.signal);
+                if (!cmd) { await this.pause(this.options.commandPollMs ?? 2000); continue; }
+                let success = false, result;
+                try { result = await runGithub(cmd, undefined, AbortSignal.any([this.abort.signal, AbortSignal.timeout(70000)])); success = true; }
+                catch (err) {
+                    const code = err instanceof Error ? err.message : '';
+                    result = { error: /^[a-z][a-z_]{0,100}$/.test(code) ? code : 'github_command_failed' };
+                    this.log(`github_${result.error}`);
+                }
+                // A command gone from the server (its channel deleted) is no reason to stop polling
+                try { await api.githubCommandResult(cmd, success, result, this.abort.signal); }
+                catch (err) { if (!(err instanceof HttpError && (err.status === 404 || err.status === 409))) throw err; this.log('github_result_rejected'); }
+            } catch (err) {
+                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                // An older server without the bridge: stop polling for it
+                else if (err instanceof HttpError && err.status === 404) { this.log('github_commands_unsupported'); return; }
+                else if (!this.stopping) { this.log('github_command_failed'); await this.pause(2000); }
+            }
+        }
+    }
     async run(): Promise<void> {
         let nextReconcile = 0;
         await recoverWorkspaceGitLocks(this.config, this.log);
-        const commands = this.commandLoop(), previews = this.previewLoop();
+        const commands = this.commandLoop(), previews = this.previewLoop(), github = this.githubLoop();
         // Settings → Agents "Continue with ChatGPT": sign-ins run on this machine (siwc/requests.ts)
         const plans = planLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });
         // Agent boxes: Log in runs the CLI's own login inside the box (box-login.ts); box mode only
@@ -321,7 +351,7 @@ export class Scheduler {
                 }
             }
         }
-        await commands; await previews;
+        await commands; await previews; await github;
         await plans; await logins;
         await this.drain();
     }
