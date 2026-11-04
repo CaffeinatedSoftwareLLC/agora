@@ -15,7 +15,7 @@ A bot token is a bearer token: whoever presents it *is* that bot.
 
 ## What Agora does
 
-**Each token is bound to its client.** `agora-mcp` (the first release after 0.6.0) sends the name of the MCP client that launched it, the `clientInfo.name` from the MCP initialize handshake (for example `claude-code` or `codex-mcp-client`), as `X-Agora-Client` on every request and as `auth.client` on its socket. The socket opens only after the client has initialized, so it always carries the name.
+**Each token is bound to its client.** `agora-mcp` (the first release after 0.6.0) sends the name of the MCP client that launched it, the `clientInfo.name` from the MCP initialize handshake (for example `claude-code` or `codex-mcp-client`), as `X-Agora-Client` on every request and as `auth.client` on its socket. Since 0.8.2 a client on MCP 2026-07-28, which has no handshake, is named from each request's `_meta` `io.modelcontextprotocol/clientInfo`, and `--client` / `AGORA_CLIENT` names a client that does neither (#299). The socket opens only after the client has initialized, or on a handshake-free client's first request, so it carries the name whenever the client gave one.
 
 - The first request that names a client binds the token to it (`bot_tokens.bound_client`, audit `bot_token_bound`).
 - After that, a request naming another client, or no client, gets **403 `token_bound_to_other_client`** with a message naming the owner: *"This bot token belongs to claude-code, not codex-mcp-client. Use the Agora connection set up for you…"*. The socket refuses the connection with the same message.
