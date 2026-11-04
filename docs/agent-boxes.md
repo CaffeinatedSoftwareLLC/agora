@@ -104,9 +104,9 @@ Rules:
 - The edge forwards `http://edge:8080/*` (except `/git/` and `/github/`) to `api:3000`, WebSocket upgrades included.
 - It **removes** any incoming `X-Agora-Edge-*` and `X-Forwarded-*` headers and adds:
   - `X-Forwarded-For: <box address>`,
-  - `X-Agora-Edge-Box: <boxId>`,
-  - `X-Agora-Edge-Sig: HMAC-SHA256(AGORA_EDGE_SECRET, boxId + "\n" + timestamp)` and `X-Agora-Edge-Ts`.
-- The signature covers `boxId`, the box's **generation** (bumped on every rebuild, reset and restore) and the timestamp (accepted for 60 seconds). The API checks it in its auth step, in both directions:
+  - `X-Agora-Edge-Box: <boxId>`, `X-Agora-Edge-Gen: <generation>`, `X-Agora-Edge-Ts: <unix seconds>`,
+  - `X-Agora-Edge-Sig: hex(HMAC-SHA256(AGORA_EDGE_SECRET, "agora-edge/v1\n" + boxId + "\n" + generation + "\n" + ts))`.
+- That signature is the only definition. The generation is bumped on every rebuild, reset and restore; the timestamp is accepted for 60 seconds either way. The API checks it in its auth step, in both directions:
   - **A box credential is valid only through its own box's edge.** Every bot token and host token boxd mints is recorded with `box_id` and `generation`. A request that authenticates with one must carry a valid edge signature for that same box and generation; without one (straight to the published API port, through Caddy, from another machine, through an allowed domain that loops back) it is refused with `403 box_token_outside_box`. So a token copied out of box B is useless everywhere except inside box B.
   - **Inside a box only that box's credentials work.** A request with a valid edge signature must authenticate as the box's own bot or host; any other bot token, host token or user token is refused with `403 token_not_for_this_box`.
   - Both refusals are written to the bot's audit trail and posted to the owner (at most once per hour per box). They cover REST and the WebSocket handshake (the headers are on the upgrade request), which the edge can't parse.
@@ -127,7 +127,9 @@ Rules:
 
 ### 4.3 Edge requests and approvals
 
-- Table `box_edge_requests`: `kind` (`domain`, `push`, `pr`), `box_id`, `subject` (domain; `repo ref old..new`; `repo head→base`), `status` (`pending`, `allowed`, `denied`, `expired`), `decided_by`, timestamps.
+- Table `box_edge_requests`: `kind` (`domain`, `push`, `pr`), `box_id`, `generation`, `subject` (domain; the push's sorted command set and its hash; the PR's repo, head, head SHA, base and payload hash), `status`, `decided_by`, timestamps. Statuses:
+  - `pending` → `allowed` or `denied` (the owner), or `expired`;
+  - `allowed` → `in_flight` (the edge, under a row lock, while it forwards) → `used` (verified done), `allowed` (verified that nothing was written), `unknown` (the outcome couldn't be established; never reusable), or `changed` (a PR whose head moved; never reusable).
 - The card goes to the box's **home channel** (chosen when the box is created; the channel its agent works in) and as a notification to the owner's phone. Only the **server owner** decides edge requests. Pending requests expire after 24 hours.
 - Every decision is in the audit log (`box_edge_allow`, `box_edge_deny`).
 
@@ -150,7 +152,11 @@ Repos are attached to a box when it's created or later in its settings (`owner/r
 - **Every command in the push must be authorized**, or none of it goes upstream. A command is authorized by:
   - **auto-allow**, if the home channel's policy auto-allows pushes from this box, and the command creates or updates a branch that is **not** the repo's default branch (read from GitHub when the repo is attached, refreshed hourly). Deleting a ref, any tag, and any update to the default branch are never auto-allowed;
   - otherwise **an approval for the exact push**: the same box and generation, the same repo, and the same complete set of `(old, new, ref)` commands (stored as a sorted list and its hash).
-- **Approvals are used once.** Forwarding a push first moves its approval from `allowed` to `in_flight` under a row lock, so two concurrent pushes can't both use it. When GitHub's report says every ref was updated it becomes `used`; if the upstream request fails or a ref is rejected, it goes back to `allowed` so the agent can retry the same push, until it expires (30 minutes after approval).
+- **Approvals are used once.** Forwarding a push first moves its approval from `allowed` to `in_flight` under a row lock, so two concurrent pushes can't both use it. Then:
+  - GitHub's report says every ref was updated → `used`.
+  - The outcome is unclear (the connection dropped, a timeout, a report that didn't arrive or didn't parse): the edge **reads every ref in the command set back from GitHub** (`info/refs`). All still at `old` → nothing was written, back to `allowed` for a retry. All at `new` → `used`. Anything else → `unknown`, which can never be reused.
+  - A partial result (some refs updated, some rejected or still at `old`) → `used` for what it did; the remaining commands become a **new pending request** with their current `old` values, never a reuse of the original approval.
+  - Allowed approvals expire 30 minutes after approval.
 - **The old SHA is part of the approval, and GitHub enforces it**: receive-pack updates a ref only if it still points at `old`. So an approved push can't be replayed after the remote has moved, and can't rewind a branch that someone else updated. A pkt-line says nothing about ancestry, so the edge doesn't claim to know whether an update is a fast-forward; that is why default-branch updates always go to the owner, with the old and new SHA on the card.
 - **Not authorized:** the edge drains the body, records a pending `push` request for that exact command set and answers with a valid receive-pack report, `ng <ref> push needs the owner's approval (request <id>); push again after it's approved` for each ref. git prints it as `! [remote rejected]`. New commits mean a new command set and a new approval: approval resets when the head changes.
 - Push auto-allow is per channel and per box, set by the owner on the card (**Always allow pushes from this box here**) or in the box settings.
@@ -160,9 +166,11 @@ Repos are attached to a box when it's created or later in its settings (`owner/r
 
 - **Reads:** `GET` only, attached repos only, and only these paths under `http://edge:8080/github/repos/<owner>/<repo>/`: `pulls`, `pulls/<n>`, `pulls/<n>/reviews`, `pulls/<n>/comments`, `pulls/<n>/files`, `commits/<sha>/check-runs`, `commits/<sha>/status`, `actions/runs`, `actions/runs/<id>`, `issues/<n>`, `issues/<n>/comments` (`<n>`, `<id>` digits; `<sha>` 40 or 64 hex). Query strings are limited to `state`, `head`, `base`, `per_page`, `page`, `branch`, `event`. Forwarded to `api.github.com` with the token.
 - **Creating a PR:** `POST http://edge:8080/github/repos/<owner>/<repo>/pulls` with `{ title, body, head, base, draft }` (`head` a branch of the same repo; no cross-fork PRs in v1). The edge resolves `head` and `base` to SHAs on GitHub and binds the request to the box and generation, the repo, `head`, **the head SHA**, `base` and **the hash of the title, body and draft flag**. The card shows all of them.
-  - Allowed (approved, or auto-allowed when the channel auto-allows PRs from this box): the edge resolves `head` again and creates the PR only if the head SHA and the payload hash still match; otherwise the request is refused as changed and a new one is made. An approval is used once.
+  - **Broker writes to one repo and ref are serialized**: the edge holds a per-`(repo, head)` lock (a Postgres advisory lock) across the whole PR operation, and pushes to that ref wait for it. So no push through the broker can move `head` between the check and the create.
+  - Allowed (approved, or auto-allowed when the channel auto-allows PRs from this box): under the lock, the edge resolves `head` again; it creates the PR only if the head SHA and the payload hash still match. After GitHub answers, it **checks the head SHA GitHub reports for the new PR**. A match → `used`. A mismatch (someone outside Agora pushed to that branch meanwhile) → `changed`: the PR exists, the card says it was opened on a different commit than the one approved, and the evidence for it is unverified until a new approval.
   - Retries are idempotent: before creating, the edge looks for an open PR from `head` to `base`; if one exists that this request already created, it returns it instead of creating another.
   - Not yet allowed: `403` with the request ID; the agent sends the same request again after approval.
+  - **A PR is a branch, and branches move.** The approval covers opening the PR at that SHA, nothing later. Every later commit on the branch makes any review, check or acceptance recorded for an earlier SHA stale; the evidence contract must bind them to the SHA they were made on.
 - The image ships `agora-pr` (`agora-pr create --title … --body-file … --base main`, `agora-pr status <n>`) so agents don't need `gh` or a token.
 - Nothing else on GitHub's API is reachable from a box.
 
