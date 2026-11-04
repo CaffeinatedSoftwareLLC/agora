@@ -18,13 +18,21 @@ export interface Upstream { req: ClientRequest; response: Promise<IncomingMessag
  * GitHub's two; createEdge adds the bases a test injects. Checked on every request, after the
  * brokers' own path rules, so a URL built wrongly can never carry the token anywhere else.
  */
-const UPSTREAM_ORIGINS = new Set([new URL(GITHUB_BASE).origin, new URL(GITHUB_API_BASE).origin]);
-export function allowUpstreamOrigin(base: string) { UPSTREAM_ORIGINS.add(new URL(base).origin); }
+const UPSTREAM_ORIGINS: string[] = [new URL(GITHUB_BASE).origin, new URL(GITHUB_API_BASE).origin];
+export function allowUpstreamOrigin(base: string) {
+    const origin = new URL(base).origin;
+    if (!UPSTREAM_ORIGINS.includes(origin)) UPSTREAM_ORIGINS.push(origin);
+}
 
 /** Open a request; the caller writes the body and ends `req`. Idle sockets time out after `idleMs`. */
 export function openUpstream(url: string, method: string, headers: OutgoingHttpHeaders, idleMs = 60_000): Upstream {
-    const target = new URL(url);
-    if (!UPSTREAM_ORIGINS.has(target.origin) || target.username || target.password) throw new Error('upstream origin not allowed');
+    const asked = new URL(url);
+    // The origin comes from the list, never from the URL handed in: only its path and query do
+    const origin = UPSTREAM_ORIGINS.find(o => o === asked.origin);
+    if (!origin || asked.username || asked.password) throw new Error('upstream origin not allowed');
+    // Concatenated, not resolved: a path like //other.host must stay a path on this origin
+    const target = new URL(`${origin}${asked.pathname}${asked.search}`);
+    if (target.origin !== origin) throw new Error('upstream origin not allowed');
     const mod = target.protocol === 'https:' ? https : http;
     const req = mod.request(target, { method, headers, agent: false });
     const response = new Promise<IncomingMessage>((resolve, reject) => {

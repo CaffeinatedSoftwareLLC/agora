@@ -1,5 +1,4 @@
 import { Pool } from 'pg';
-import { config } from '../config';
 import { prepareBoxRestore } from '../lib/boxes/tokens';
 
 /**
@@ -11,7 +10,11 @@ import { prepareBoxRestore } from '../lib/boxes/tokens';
  *   node dist/src/tools/box-restore-prep.js
  */
 async function main() {
-    const db = new Pool({ connectionString: config.dbUrl, max: 1 });
+    // Only the database: restore runs this in the migrate container, before the stack's secrets
+    // are in any service's environment, so it doesn't load the app's config
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error('DATABASE_URL is not set');
+    const db = new Pool({ connectionString: url, max: 1 });
     try {
         const r = await prepareBoxRestore(db);
         console.log(`Box restore prep: ${r.boxes} box(es) moved to a new generation, ${r.hosts} box host secret(s) and `
