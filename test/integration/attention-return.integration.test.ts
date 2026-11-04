@@ -119,6 +119,32 @@ describe('an agent that comes back', () => {
         expect(await feed()).toEqual([pending.id]);
     });
 
+    it('keeps old pending attention across pages: acknowledging page one never hides page two', async () => {
+        const { fresh, bot, feed } = await freshChannel('RetLlama');
+        expect(await feed()).toEqual([]);
+        // The cursor was made ten days ago; 110 mentions came in over the days the agent was away
+        await ctx.db.query(`UPDATE bot_attention_cursors SET replay_from = NOW() - INTERVAL '11 days', updated_at = NOW() - INTERVAL '10 days'
+            WHERE bot_id = $1 AND channel_id = $2`, [bot.id, fresh]);
+        const ids: string[] = [];
+        for (let i = 0; i < 110; i++) ids.push((await post(owner.auth, fresh, `@RetLlama job ${i}`)).id);
+        await ctx.db.query("UPDATE messages SET created_at = NOW() - INTERVAL '9 days' WHERE id = ANY($1)", [ids]);
+
+        const page = async () => ((await ctx.request.get(`/channels/${fresh}/attention?limit=100`).set(bot.auth)).body as { id: string }[]).map(m => m.id);
+        const one = await page();
+        expect(one).toEqual(ids.slice(0, 100));
+        expect((await ctx.request.put(`/bots/@me/attention-cursors/${fresh}`).set(bot.auth).send({ lastReadId: one[99] })).status).toBe(200);
+        expect(await page()).toEqual(ids.slice(100));
+    });
+
+    it('an explicit first-use after replays older than 24 h, and keeps doing so until acknowledged', async () => {
+        const { fresh, bot } = await freshChannel('RetPhi');
+        const old = await post(owner.auth, fresh, '@RetPhi from three days ago');
+        await ctx.db.query("UPDATE messages SET created_at = NOW() - INTERVAL '3 days' WHERE id = $1", [old.id]);
+        const read = async (q = '') => ((await ctx.request.get(`/channels/${fresh}/attention${q}`).set(bot.auth)).body as { id: string }[]).map(m => m.id);
+        expect(await read('?after=00000000000000000000000000')).toEqual([old.id]);
+        expect(await read()).toEqual([old.id]);
+    });
+
     it('says that what arrived while it was away is a notification to check, not to skip', async () => {
         const first = session(codex.token);
         await first('chat_wait', { channel: 'general', timeout: 1 });
