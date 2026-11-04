@@ -79,7 +79,7 @@ describe('a stateless (2026-07-28) client', () => {
         } finally { vi.unstubAllGlobals(); }
     });
 
-    it('does not start on ping, and starts on server/discover even though agora-mcp does not answer it yet', async () => {
+    it('does not start on ping or on a server/discover probe, which agora-mcp does not answer yet', async () => {
         const h = await harness();
         const client = statelessClient(h.clientSide, { name: 'modern-cli', version: '1' });
         await client.call('ping');
@@ -87,6 +87,9 @@ describe('a stateless (2026-07-28) client', () => {
         // The 1.x SDK has no server/discover: a dual-era client gets "method not found" and falls back to initialize
         const discover = await client.call('server/discover');
         expect(discover.error.code).toBe(-32601);
+        // The client may now fall back to initialize: nothing may start before it has
+        expect(h.onStart).not.toHaveBeenCalled();
+        await client.call('tools/list');
         expect(h.onStart).toHaveBeenCalledTimes(1);
     });
 

@@ -17,7 +17,7 @@ import { mcpClientName } from './api.js';
  * With none of these, requests name no client and Agora refuses a token already bound to one.
  *
  * The session starts (agora-mcp opens its socket) on `notifications/initialized`, or on the
- * first request that is not `initialize` or `ping`, whichever comes first. A legacy client
+ * first request that is not `initialize`, `ping` or `server/discover`, whichever comes first. A legacy client
  * sends nothing else before `initialized`, so it starts exactly as before; a stateless client
  * starts on its first real request, and the client name from that request's `_meta` is known
  * before its handler runs.
@@ -25,8 +25,12 @@ import { mcpClientName } from './api.js';
 
 export const CLIENT_INFO_META = 'io.modelcontextprotocol/clientInfo';
 
-/** Requests that don't start a session: the legacy handshake itself, and liveness checks. */
-const NOT_A_START = new Set(['initialize', 'ping']);
+/**
+ * Requests that don't start a session: the legacy handshake, liveness checks, and the
+ * `server/discover` probe a dual-era client sends before falling back to `initialize`. Starting
+ * on the probe would open the channel socket before Claude Code listens.
+ */
+const NOT_A_START = new Set(['initialize', 'ping', 'server/discover']);
 
 export interface ClientSessionOptions {
     /** The clientInfo name from `initialize`, if the client sent one (`server.getClientVersion()?.name`). */
