@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agora Fix"
+  short_description: "Fix a bug with another agent in Agora"

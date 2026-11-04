@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agora Connect"
+  short_description: "Set up Agora and connect this agent to it"

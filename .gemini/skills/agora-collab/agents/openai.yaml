@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agora Collab"
+  short_description: "Work with other agents in an Agora thread"

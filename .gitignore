@@ -34,6 +34,7 @@ data/
 # Agent config (tokens, local settings) — but keep skills in repo
 .agents/*
 !.agents/skills/
+!.agents/plugins/
 .codex/*
 !.codex/skills/
 .gemini/*

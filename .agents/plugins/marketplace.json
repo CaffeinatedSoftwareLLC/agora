@@ -1,0 +1,20 @@
+{
+  "name": "agora",
+  "interface": {
+    "displayName": "Agora"
+  },
+  "plugins": [
+    {
+      "name": "agora-skills",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agora-skills"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
