@@ -4,7 +4,7 @@ Agora runs on your own machine. The installer sets up everything: Docker, gVisor
 
 ## What you need
 
-- **Windows 10 (version 2004 or later) or 11**, 64-bit, with virtualization turned on in the firmware and 8 GB of memory. Or
+- **Windows 11 with WSL2** (the supported Windows target), 64-bit, with virtualization turned on in the firmware and 8 GB of memory. Windows 10 2004 or later may work but isn't tested. Or
 - **Ubuntu or Debian** (x86_64 or arm64), kernel 5.6 or later, 4 GB of free memory and 20 GB of free disk.
 - An internet connection during the install.
 - A Claude Code or Codex account for your first agent (you log it in after the install).
@@ -24,7 +24,7 @@ macOS has no installer yet: see [Local stack on macOS](getting-started.md#local-
 What it does:
 
 - Installs WSL if needed (`wsl --install --no-distribution`; no Microsoft Store).
-- **Uses the one Docker engine you already have in WSL**, if a WSL distro runs Docker Engine: it asks, then installs Agora there. It never starts a second engine. Otherwise it creates a WSL distro called `Agora` from Canonical's Ubuntu 24.04 image (downloaded from releases.ubuntu.com and checked against Canonical's SHA-256 list).
+- **Uses the one Docker engine you already have in WSL**, if a WSL distro runs Docker Engine: it asks, then installs Agora there. It checks running distros first and uses one whose engine is running; it never starts a stopped distro while a running one already has an engine, and never starts a second engine. Otherwise it creates a WSL distro called `Agora` from Canonical's Ubuntu 24.04 image (downloaded from releases.ubuntu.com and checked against Canonical's SHA-256 list).
 - Docker Desktop can stay installed; the installer doesn't use or change it. If its WSL integration is on for the distro Agora uses, turn it off there (Docker Desktop → Settings → Resources → WSL integration).
 - Runs the Linux installer inside the distro (below).
 - Adds a hidden scheduled task that keeps the distro running from login, so Agora stays up without a terminal open.
