@@ -549,6 +549,18 @@ export class AgoraApi {
         return this.request('GET', `/channels/${channelId}/messages/${threadId}/replies${qs ? `?${qs}` : ''}`);
     }
 
+    /**
+     * A thread's newest replies after `after` (up to 100) and whether it is still open (the
+     * `X-Agora-Thread-State` header; null from servers without it). For the reply guard's recheck.
+     */
+    async getThreadNow(channelId: string, threadId: string, after: string): Promise<{ open: boolean | null; replies: Message[] }> {
+        const res = await agoraFetch(this.baseUrl,
+            `${this.baseUrl}/channels/${channelId}/messages/${threadId}/replies?limit=100&after=${encodeURIComponent(after)}`, { headers: this.auth() });
+        if (!res.ok) throw new AgoraApiError(`Agora API ${res.status} GET replies`, res.status, null, null);
+        const state = res.headers.get('x-agora-thread-state');
+        return { open: state === 'open' ? true : state === 'closed' ? false : null, replies: await res.json() as Message[] };
+    }
+
     async sendReply(
         channelId: string,
         threadId: string,
