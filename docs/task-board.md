@@ -25,6 +25,8 @@ Open it with the board button in the channel header (Tasks). Cards are grouped b
 
 **Branch and PR.** Each card session has its own branch, `agora/<profile>/<session>`, and the card shows `branch @ head`, the tokens used and the files the last run changed. Opening a pull request from the card's review moves the card to **Review** and keeps the link. A squash merge moves it to **Done**. **Check PR** asks the host to run `gh pr view <branch>` and records whether the PR is open, a draft, merged or closed. A merged PR moves the card to **Done**. Only `https` links are shown.
 
+**From a GitHub issue.** A channel linked to a GitHub repository can import one of its open issues as a card, and Agora comments on the issue when the card's pull request opens, merges or closes. See [github-issues.md](github-issues.md).
+
 Deleting a card leaves its thread and session in place. End the session first if the agent should stop.
 
 ## Subtasks

@@ -13,16 +13,17 @@ vi.hoisted(() => {
 
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
 vi.mock('../../hooks/useSocket', () => ({ useSocket: () => socket }));
-const get = vi.fn(), post = vi.fn(), patch = vi.fn();
+const get = vi.fn(), post = vi.fn(), patch = vi.fn(), put = vi.fn(), del = vi.fn();
 vi.mock('../../lib/api', async (orig) => {
   const actual = await orig<typeof import('../../lib/api')>();
-  return { ...actual, api: { ...actual.api, get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a) } };
+  return { ...actual, api: { ...actual.api, get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a),
+    put: (...a: unknown[]) => put(...a), delete: (...a: unknown[]) => del(...a) } };
 });
 
 const CH = 'C'.repeat(26);
 const card = (over: Partial<TaskCard> = {}): TaskCard => ({
   id: 'T1', channelId: CH, title: 'Fix login', description: 'Steps', status: 'todo', profile: { id: 'P1', name: 'codex' },
-  threadId: null, session: null, prUrl: null, prState: null, prCheckedAt: null, mergedSha: null,
+  threadId: null, session: null, prUrl: null, prState: null, prCheckedAt: null, mergedSha: null, issue: null,
   createdBy: null, createdAt: '', updatedAt: '', ...over,
 });
 const session = { id: 'S'.repeat(26), profile: 'codex', state: 'live' as const, endReason: null, running: true, sleepingUntil: null,
@@ -31,16 +32,21 @@ const session = { id: 'S'.repeat(26), profile: 'codex', state: 'live' as const, 
 function board(cards: TaskCard[], canManage = true): Board {
   return { cards, canManage, isOwner: canManage };
 }
-function serve(b: Board) {
+function serve(b: Board, extra: Record<string, unknown> = {}) {
   get.mockImplementation(async (path: string) => {
     if (path.endsWith('/tasks')) return b;
     if (path.endsWith('/agent-profiles')) return [{ id: 'P1', name: 'codex', botId: 'B1', adapter: 'codex' }];
-    return {};
+    const key = Object.keys(extra).find(k => path.endsWith(k));
+    return key ? extra[key] : {};
   });
 }
+const LINK = { repo: 'o/r', hostId: 'H1', hostName: 'desk', hostRevoked: false, updatedAt: '' };
+const issue = (number: number, cardId: string | null = null) => ({
+  number, title: `Bug ${number}`, url: `https://github.com/o/r/issues/${number}`, author: 'octo', updatedAt: '', body: 'Steps', cardId,
+});
 
 beforeEach(() => {
-  get.mockReset(); post.mockReset(); patch.mockReset(); socket.on.mockReset(); socket.off.mockReset();
+  get.mockReset(); post.mockReset(); patch.mockReset(); put.mockReset(); del.mockReset(); socket.on.mockReset(); socket.off.mockReset();
   useChannelStore.setState({ activeChannelId: CH, channels: new Map([[CH, { id: CH, name: 'general', channelType: 3, serverId: 'SRV' }]]) } as never);
   useUIStore.setState({ aux: 'tasks' });
 });
@@ -121,5 +127,80 @@ describe('TasksPanel', () => {
     const onDelete = socket.on.mock.calls.find(c => c[0] === 'TaskCardDelete')![1];
     act(() => onDelete({ channelId: CH, id: 'T5' }));
     expect(screen.queryByText('From an agent')).toBeNull();
+  });
+
+  it('links a card to its GitHub issue, https links only', async () => {
+    serve(board([
+      card({ issue: { repo: 'o/r', number: 7, url: 'https://github.com/o/r/issues/7' } }),
+      card({ id: 'T2', title: 'Odd link', issue: { repo: 'o/r', number: 8, url: 'javascript:alert(1)' } }),
+    ], false));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    expect(screen.getByText('o/r#7').getAttribute('href')).toBe('https://github.com/o/r/issues/7');
+    fireEvent.click(screen.getByText('Odd link'));
+    expect(screen.getByText('o/r#8').tagName).not.toBe('A');
+  });
+
+  it('lets the owner link a repository to a live host', async () => {
+    serve(board([]), {
+      '/github': { link: null, canLink: true, canImport: true },
+      '/agent-hosts': [{ id: 'H1', name: 'desk', revokedAt: null }, { id: 'H2', name: 'old', revokedAt: '2026-01-01' }],
+    });
+    put.mockResolvedValue({ link: LINK });
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Link GitHub repo'));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: ' o/r ' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'desk' })).toBeTruthy());
+    expect(screen.queryByRole('option', { name: 'old' })).toBeNull();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith(`/channels/${CH}/github`, { repo: 'o/r', hostId: 'H1' }));
+    expect(await screen.findByText('Unlink')).toBeTruthy();
+    expect(screen.getByText('GitHub via desk')).toBeTruthy();
+  });
+
+  it('shows nothing GitHub-related to people who cannot link when no repo is linked', async () => {
+    serve(board([], false), { '/github': { link: null, canLink: false, canImport: false } });
+    render(<TasksPanel />);
+    await screen.findByText(/No cards yet/);
+    expect(screen.queryByText('Link GitHub repo')).toBeNull();
+  });
+
+  it('lists issues through the host and imports one as a card', async () => {
+    serve(board([]), {
+      '/github': { link: LINK, canLink: false, canImport: true },
+      '/github/commands/CMD': { id: 'CMD', action: 'issue_list', status: 'succeeded', repo: 'o/r', result: { issues: [issue(3), issue(4, 'T9')] } },
+    });
+    post.mockImplementation(async (path: string) => {
+      if (path.endsWith('/github/issues')) return { id: 'CMD', status: 'queued' };
+      return { action: 'started', card: card({ id: 'T7', title: 'Bug 3', status: 'in_progress', session, issue: { repo: 'o/r', number: 3, url: null } }) };
+    });
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Import issue'));
+    expect(screen.getByText(/Asking the host for open issues/)).toBeTruthy();
+    // No body on the list request, so no JSON Content-Type either
+    expect(post).toHaveBeenCalledWith(`/channels/${CH}/github/issues`);
+    const list = await screen.findByRole('list', { name: 'Open issues' }, { timeout: 3000 });
+    expect(list.textContent).toContain('Bug 4');
+    expect(screen.getAllByText('Imported')).toHaveLength(1);
+    expect(screen.queryByLabelText('Import issue #4')).toBeNull();
+
+    await waitFor(() => expect(screen.getAllByRole('option', { name: 'codex (codex)' }).length).toBeGreaterThan(0));
+    fireEvent.change(screen.getByLabelText('Assignee agent'), { target: { value: 'codex' } });
+    fireEvent.click(screen.getByLabelText('Start the agent now'));
+    fireEvent.click(screen.getByLabelText('Import issue #3'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${CH}/github/issues/import`, { commandId: 'CMD', number: 3, profile: 'codex', start: true }));
+    await waitFor(() => expect(screen.getAllByText('Imported')).toHaveLength(2));
+    expect(screen.getByRole('region', { name: 'In progress' }).textContent).toContain('Bug 3');
+  });
+
+  it('says why the host could not list the issues', async () => {
+    serve(board([]), {
+      '/github': { link: LINK, canLink: true, canImport: true },
+      '/github/commands/CMD': { id: 'CMD', action: 'issue_list', status: 'failed', repo: 'o/r', result: { error: 'gh_not_signed_in' } },
+    });
+    post.mockResolvedValue({ id: 'CMD', status: 'queued' });
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Import issue'));
+    expect(await screen.findByText(/gh is not signed in on the host/, undefined, { timeout: 3000 })).toBeTruthy();
   });
 });
