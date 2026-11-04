@@ -39,6 +39,9 @@ async function envelopes(db: PoolClient, channelId: string, rows: any[]) {
         channelId: r.channel_id.trim(), threadId: r.thread_id?.trim() ?? null,
         createdAt: r.created_at, editedAt: r.edited_at, deletedAt: r.deleted_at,
         attachments: attachments.get(r.id.trim()) ?? [],
+        // A handoff reminder names its agent in system_data; others' waits skip it (#327)
+        ...(r.system_event ? { systemEvent: r.system_event } : {}),
+        ...(r.system_data ? { systemData: r.system_data } : {}),
         ...(r.protocol ? { protocol: r.protocol } : {}),
         ...(r.reply_count > 0 ? { replyCount: r.reply_count, lastReplyAt: r.last_reply_at,
             ...(r.thread_closed_at ? { threadClosedAt: r.thread_closed_at } : {}) } : {}),
@@ -85,7 +88,9 @@ export async function botAttentionRoutes(app: FastifyInstance) {
             UNION ALL
             SELECT m.id, true FROM messages m JOIN users self ON self.id = $1, cutoff
             WHERE m.channel_id = $2 AND m.protocol IS NOT NULL AND m.id > cutoff.id
-              AND lower(m.protocol->>'yieldTo') = lower(self.username)
+              AND (lower(m.protocol->>'yieldTo') = lower(self.username)
+                -- A WAIT naming this bot: it owes the thread's next step (#327)
+                OR lower(m.protocol->>'waitingOn') = lower(self.username))
             UNION ALL
             -- Plain replies in threads the bot started or posted in: an agent waiting
             -- on the channel would otherwise miss an answer that doesn't @mention it.
@@ -122,7 +127,8 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         const addressed = await db.query(`SELECT 1 FROM messages m JOIN users self ON self.id = $1
             WHERE m.id = $3 AND m.channel_id = $2 AND m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $1
               AND (EXISTS (SELECT 1 FROM message_mentions mm WHERE mm.message_id = m.id AND mm.user_id = $1)
-                OR (m.protocol IS NOT NULL AND lower(m.protocol->>'yieldTo') = lower(self.username))
+                OR (m.protocol IS NOT NULL AND (lower(m.protocol->>'yieldTo') = lower(self.username)
+                    OR lower(m.protocol->>'waitingOn') = lower(self.username)))
                 OR (${PARTICIPATING_REPLY}))`,
         [request.userId, channelId, lastReadId]);
         if (!addressed.rows.length) return reply.code(400).send({ error: 'Attention message not found in this channel' });

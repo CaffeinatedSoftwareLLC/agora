@@ -179,6 +179,24 @@ async function addInbox(db: any, sessionIds: string[], messageId: string, thread
 }
 
 /**
+ * A handoff reminder (#327, src/workers/handoff-nudge.ts) for a bot: queue it for that bot's
+ * live hosted sessions in the channel or the thread. Only api_key sessions: the reminder is
+ * Agora's automation, which the subscription rule (provider-terms.ts) never lets wake a
+ * subscription session. `reminderSessions` finds them (before the reminder is written, so
+ * its text can say whether the agent was reached); `queueReminder` queues the written one.
+ */
+export async function reminderSessions(db: any, input: { channelId: string; threadId: string; botId: string }): Promise<string[]> {
+    return asService(db, async () =>
+        [...await liveSessions(db, input.channelId), ...await liveSessions(db, input.channelId, input.threadId)]
+            .filter(s => s.botId === input.botId && !s.subscription).map(s => s.id));
+}
+
+export async function queueReminder(db: any, sessionIds: string[], messageId: string, threadId: string): Promise<void> {
+    if (sessionIds.length === 0) return;
+    await asService(db, () => addInbox(db, sessionIds, messageId, threadId, 'direct'));
+}
+
+/**
  * Close a bound thread: its unclaimed directed/protocol rows are acknowledged without
  * work; passive observations survive. With `cancel`, participants' runs are asked to stop.
  */
@@ -396,6 +414,14 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
             case 'TURN':
             case 'CHECKPOINT': {
                 const target = msg.protocol.yieldTo ? byName(participants, msg.protocol.yieldTo) : undefined;
+                if (target && target.id !== author.id) {
+                    await addInbox(db, permitted([target], 'handoff', ctx), msg.messageId, threadId, 'handoff');
+                }
+                return;
+            }
+            case 'WAIT': {
+                // The agent that owes the next step (#327); a WAIT on oneself wakes nobody
+                const target = msg.protocol.waitingOn ? byName(participants, msg.protocol.waitingOn) : undefined;
                 if (target && target.id !== author.id) {
                     await addInbox(db, permitted([target], 'handoff', ctx), msg.messageId, threadId, 'handoff');
                 }

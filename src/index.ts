@@ -8,6 +8,8 @@ import { startFileCleanupWorker } from './workers/file-cleanup';
 import { startFileTaggingWorker } from './workers/file-tagging';
 import { startTermsWatchWorker } from './workers/terms-watch';
 import { startPushSender } from './workers/push-sender';
+import { startHandoffNudgeWorker } from './workers/handoff-nudge';
+import { agentPresence } from './lib/agent-presence';
 import { sweepExpiredRuns, type Notice } from './lib/agent-runs';
 
 async function main() {
@@ -48,6 +50,11 @@ async function main() {
     // App push: send queued notifications to push relays (idle while no relay is allowed)
     const stopPush = startPushSender({ db, log: app.log });
 
+    // A thread waiting on an agent that has gone quiet gets a reminder in the thread (#327)
+    const stopNudges = startHandoffNudgeWorker({ db, log: app.log,
+        isConnected: botId => agentPresence.status(botId).status !== 'offline',
+        emit: e => app.io.to(e.room).emit(e.event, e.data) });
+
     // Agent runs: expire claims whose host stopped heartbeating, then retry or drop their work
     const runSweeper = setInterval(() => {
         const notices: Notice[] = [];
@@ -68,6 +75,7 @@ async function main() {
         clearInterval(runSweeper);
         await stopTermsWatch();
         await stopPush();
+        await stopNudges();
         // Let a tagging job in flight finish its write before the pool goes away
         await stopTagging().catch(() => {});
         await app.close();

@@ -7,6 +7,8 @@ import type { MessagePayload, MessageUpdatePayload, MessageDeletePayload, Thread
 
 export interface ThreadSummary {
   latestProtocol?: ProtocolInfo & { messageId: string; authorUsername: string | null } | null;
+  /** Who the thread waits on since its latest protocol message (server: threadWaiting, #327). */
+  waiting?: { on: string; for: string | null; since: string; messageId: string } | null;
   id: string;
   content: string | null;
   authorId: string | null;

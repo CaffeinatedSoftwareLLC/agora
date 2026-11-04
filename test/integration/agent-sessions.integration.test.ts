@@ -1,5 +1,6 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
+import { runHandoffNudges } from '../../src/workers/handoff-nudge';
 import { claimNext, complete, fail, sweepExpiredRuns, type Notice } from '../../src/lib/agent-runs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -251,6 +252,41 @@ describe('wake routing (S1)', () => {
 
         const decide = await reply(codex.auth, start.id, '[AGORA/v1 MODE=plan STATE=DECIDE]\nAGREE');
         expect((await inbox(sc)).map(r => r.message_id)).toContain(decide.id);
+    });
+
+    it('a WAIT wakes the agent it names, and a WAIT on oneself wakes nobody (#327)', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const start = await post(claude.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [claude, codex]\ntask: x');
+        const own = await reply(claude.auth, start.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=claude for=builder commit]');
+        expect((await inbox(sx)).map(r => r.message_id)).not.toContain(own.id);
+        const peer = await reply(codex.auth, start.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nwaiting\n[WAIT on=claude for=builder commit]');
+        expect((await inbox(sc)).map(r => [r.message_id, r.reason])).toContainEqual([peer.id, 'handoff']);
+        expect((await inbox(sx)).map(r => r.message_id)).not.toContain(peer.id);
+    });
+
+    it('a handoff reminder wakes an api_key session; a subscription session is never woken, its owner is told (#327)', async () => {
+        const sx = await startSession(codex);
+        const nudgeIn = async (threadId: string) => (await ctx.db.query(
+            `SELECT id, content FROM messages WHERE thread_id = $1 AND system_event = 'handoff_nudge'`, [threadId])).rows[0];
+        const thread = await post(owner.auth, 'Relay on Heroku');
+        await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=builder commit]');
+        await runHandoffNudges({ db: ctx.db }, Date.now() + 16 * 60_000);
+        const nudge = await nudgeIn(thread.id);
+        expect(await inbox(sx)).toContainEqual({ message_id: nudge.id.trim(), reason: 'direct', acked: false });
+        expect(nudge.content).not.toMatch(/owner/);
+
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'subscription', api_key_env = NULL WHERE id = $1`, [codex.profileId]);
+        try {
+            const other = await post(owner.auth, 'Second job');
+            await reply(codex.auth, other.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=tests]');
+            await runHandoffNudges({ db: ctx.db }, Date.now() + 16 * 60_000);
+            const second = await nudgeIn(other.id);
+            expect((await inbox(sx)).map(r => r.message_id)).not.toContain(second.id.trim());
+            expect(second.content).toMatch(/its owner was told/);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE id = $1`, [codex.profileId]);
+        }
     });
 
     it('binds nothing for a START from a bot without a session or naming no live agent', async () => {
