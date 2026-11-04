@@ -129,7 +129,15 @@ export interface HostApi {
     toolRequest?(claim: Claim, requestId: string, close?: 'timeout' | 'resolved' | 'stopped', signal?: AbortSignal): Promise<{ status: string }>;
     claimPlanRequest?(signal?: AbortSignal): Promise<PlanRequest | null>;
     reportPlan?(profile: string, body: { status: PlanStatus; error?: string | null; accountLabel?: string | null }, signal?: AbortSignal): Promise<{ planOwnerId: string | null }>;
+    /** Agent boxes: the owner pressed Log in (box-login.ts, docs/agent-boxes.md §8.2). */
+    claimBoxLogin?(signal?: AbortSignal): Promise<BoxLoginRequest | null>;
+    reportBoxLogin?(id: string, body: BoxLoginReport, signal?: AbortSignal): Promise<void>;
+    /** The code the owner pasted for a Claude login, once; null until there is one. */
+    boxLoginCode?(id: string, signal?: AbortSignal): Promise<string | null>;
 }
+export interface BoxLoginRequest { id: string; adapter: 'claude' | 'codex'; profile: string }
+export type BoxLoginStatus = 'awaiting_user' | 'awaiting_code' | 'succeeded' | 'failed';
+export interface BoxLoginReport { status: BoxLoginStatus; verificationUrl?: string; userCode?: string; error?: string }
 export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv: string | null; runApproval: boolean }
 /** A Settings → Agents request for this host to connect or disconnect a ChatGPT plan. */
 export interface PlanRequest { profile: string; action: 'connect' | 'disconnect'; requestedBy: string | null }

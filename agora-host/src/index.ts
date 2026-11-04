@@ -8,12 +8,15 @@ import { describeAuth, HostConfigError, profileReport } from './terms.js';
 import { siwcCommand } from './siwc/cli.js';
 import { autostartCommand } from './autostart.js';
 import { creditLine } from './openrouter.js';
+import { boxConfigCommand, inBox } from './box.js';
 
 async function main() {
     // agora-host siwc <login|status|logout> --profile <name> --config <file> (docs/codex-chatgpt-plan.md)
     if (process.argv[2] === 'siwc') { process.exitCode = await siwcCommand(process.argv.slice(3)); return; }
     // agora-host autostart <enable|disable|status> --config <file>: start the host at login (README: Start automatically)
     if (process.argv[2] === 'autostart') { process.exitCode = await autostartCommand(process.argv.slice(3)); return; }
+    // agora-host box-config --repos | --out <file>: the agent box entrypoint's config (box.ts)
+    if (process.argv[2] === 'box-config') { process.exitCode = await boxConfigCommand(process.argv.slice(3)); return; }
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
     const config = await loadConfig(process.argv[3]);
     for (const [name, profile] of Object.entries(config.profiles)) {
@@ -25,6 +28,7 @@ async function main() {
         const credit = await creditLine(name, profile);
         if (credit) console.log(credit);
     }
+    if (inBox()) console.log('Agent box: the CLI runs without its own sandbox or permission prompts; the box and its edge are the boundary.');
     const client = new Client(config.instance, config.hostToken);
     // Agora applies the subscription rule from this report; the host enforces it too
     try { await client.reportProfiles(profileReport(config.profiles)); } catch { console.error('profile_report_failed'); }

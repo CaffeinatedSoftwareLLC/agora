@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
-import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type Progress, type ProfileReport } from './types.js';
+import { claimSchema, type BoxLoginReport, type BoxLoginRequest, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type Progress, type ProfileReport } from './types.js';
 import type { ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 
@@ -162,6 +162,24 @@ export class Client implements HostApi {
     /** The sign-in state of one profile. Never a token: a status, a fixed error code, the account's email. */
     async reportPlan(profile: string, body: { status: PlanStatus; error?: string | null; accountLabel?: string | null }, signal?: AbortSignal) {
         return z.object({ planOwnerId: z.string().nullable() }).parse(await this.request('POST', `plans/${encodeURIComponent(profile)}`, body, signal));
+    }
+    /** Agent boxes: claim the oldest Log in request for this box (docs/agent-boxes.md §8.2). */
+    async claimBoxLogin(signal?: AbortSignal): Promise<BoxLoginRequest | null> {
+        const data = await this.request('GET', 'box-login', undefined, signal);
+        if (data === null) return null;
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), adapter: z.enum(['claude', 'codex']),
+            profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/) }).parse(data);
+    }
+    /** A login's state. The URL and code are the owner's to see; the host never logs them. */
+    async reportBoxLogin(id: string, body: BoxLoginReport, signal?: AbortSignal): Promise<void> {
+        for (let attempt = 0; ; attempt++) {
+            try { await this.request('POST', `box-login/${encodeURIComponent(id)}`, body, signal); return; }
+            catch (e) { if (attempt >= 2 || signal?.aborted || e instanceof HttpError && e.status < 500) throw e; await sleep(this.retryDelayMs * 2 ** attempt, signal); }
+        }
+    }
+    async boxLoginCode(id: string, signal?: AbortSignal): Promise<string | null> {
+        const data = await this.request('GET', `box-login/${encodeURIComponent(id)}/code`, undefined, signal);
+        return data === null ? null : z.object({ code: z.string().min(1).max(512) }).parse(data).code;
     }
     complete(claim: Claim, body: Completion, signal?: AbortSignal) { return this.report(claim, 'complete', body, signal); }
     fail(claim: Claim, body: Failure, signal?: AbortSignal) { return this.report(claim, 'fail', body, signal); }

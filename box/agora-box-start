@@ -1,0 +1,101 @@
+#!/bin/sh
+# Agent box entrypoint (docs/agent-boxes.md §8.1), run by tini as uid 1000.
+# Checks the environment boxd set, prepares the home folder (repos, scratch repo, git
+# identity, box rules), writes agora-host's config to /run/agora/host.json and runs
+# agora-host in box mode. Values of AGORA_* variables are never printed.
+set -eu
+umask 077
+
+HOME=/home/agent
+export HOME
+HOST=/opt/agora/agora-host/dist/index.js
+CONFIG=/run/agora/host.json
+GIT_TERMINAL_PROMPT=0
+export GIT_TERMINAL_PROMPT
+
+log() { printf 'agora-box: %s\n' "$*" >&2; }
+
+for name in AGORA_INSTANCE_URL AGORA_HOST_TOKEN AGORA_BOT_ID AGORA_BOT_TOKEN AGORA_BOX_PROFILE; do
+    eval "value=\${$name:-}"
+    if [ -z "$value" ]; then log "$name is not set; boxd sets it when it creates the box"; exit 64; fi
+done
+unset value
+[ -d /run/agora ] && [ -w /run/agora ] || { log "/run/agora is not a writable directory (boxd mounts a tmpfs there)"; exit 64; }
+
+# Checks the whole environment and prints the attached repos, already validated
+repos=$(node "$HOST" box-config --repos) || { log "the box environment is invalid"; exit 64; }
+profile=$(printf '%s' "$AGORA_BOX_PROFILE" | jq -r '.name')
+adapter=$(printf '%s' "$AGORA_BOX_PROFILE" | jq -r '.adapter')
+state="$HOME/.agora/state/$profile"
+edge="${AGORA_INSTANCE_URL%/}"
+
+mkdir -p "$HOME/work" "$state" "$HOME/.local/bin" "$HOME/.npm-global" "$HOME/.venvs"
+chmod 700 "$HOME/.agora" "$state"
+
+# Box rules for the agent: ~/AGENTS.md and ~/CLAUDE.md (Claude reads parent folders of its
+# worktree), and the CLI's own global instructions file in its state directory
+link() { [ -e "$2" ] || [ -L "$2" ] || ln -s "$1" "$2"; }
+link /opt/agora/AGENTS.md "$HOME/AGENTS.md"
+link /opt/agora/AGENTS.md "$HOME/CLAUDE.md"
+case "$adapter" in
+    codex) link /opt/agora/AGENTS.md "$state/AGENTS.md" ;;
+    claude)
+        link /opt/agora/AGENTS.md "$state/CLAUDE.md"
+        # The CLI is pinned in the image; it must not try to update itself (§6)
+        [ -e "$state/settings.json" ] || printf '{\n  "env": { "DISABLE_AUTOUPDATER": "1" }\n}\n' > "$state/settings.json"
+        ;;
+esac
+
+# Installs go under the home folder: the root filesystem is read-only
+[ -e "$HOME/.npmrc" ] || printf 'prefix=%s/.npm-global\n' "$HOME" > "$HOME/.npmrc"
+
+# Commits made in the box carry the box's name and its bot (as agora-host's own commits do)
+git config --global user.name "$profile"
+git config --global user.email "$AGORA_BOT_ID@agora.invalid"
+git config --global init.defaultBranch main
+
+# Clone attached repos that aren't here yet, through the edge's git broker (§5.1). A clone
+# that fails is retried at the next start; it never stops the box.
+missing=""
+for repo in $repos; do
+    [ -d "$HOME/work/${repo#*/}/.git" ] || missing="$missing $repo"
+done
+if [ -n "$missing" ]; then
+    # Wait for the edge (any HTTP answer), backing off up to about two minutes
+    up=""
+    for delay in 1 2 4 8 15 15 15 15 15 15; do
+        if curl --noproxy '*' -s -o /dev/null --max-time 5 "$edge/health"; then up=1; break; fi
+        sleep "$delay"
+    done
+    [ -n "$up" ] || log "the edge is not answering; cloning anyway"
+    for repo in $missing; do
+        dir="$HOME/work/${repo#*/}"
+        if [ -e "$dir" ] || [ -L "$dir" ]; then log "not cloning $repo: ~/work/${repo#*/} exists and is not a git repository"; continue; fi
+        partial="$HOME/work/.clone-${repo#*/}"
+        done_=""
+        for delay in 2 5 10; do
+            rm -rf "$partial"
+            if git -c http.proxy= clone --quiet "$edge/git/github.com/$repo.git" "$partial" 2>/dev/null; then
+                mv "$partial" "$dir"; done_=1; break
+            fi
+            sleep "$delay"
+        done
+        rm -rf "$partial"
+        if [ -n "$done_" ]; then log "cloned $repo"; else log "could not clone $repo; will retry at the next start"; fi
+    done
+fi
+
+# With no repo (or the first one not cloned yet) the agent works in ~/work/scratch
+first=$(printf '%s\n' "$repos" | sed -n '1p')
+if [ -z "$first" ] || [ ! -d "$HOME/work/${first#*/}/.git" ]; then
+    if [ ! -d "$HOME/work/scratch/.git" ]; then
+        git init --quiet "$HOME/work/scratch"
+        git -C "$HOME/work/scratch" commit --quiet --allow-empty -m "Empty scratch repository"
+    fi
+fi
+
+node "$HOST" box-config --out "$CONFIG" || { log "could not write the agora-host config"; exit 64; }
+
+# agora-host reads its tokens from the config file; they leave the environment here, and
+# agora-host builds every child's environment from an allowlist (adapters.ts childEnv)
+exec env -u AGORA_HOST_TOKEN -u AGORA_BOT_TOKEN AGORA_HOST_IN_BOX=1 node "$HOST" --config "$CONFIG"

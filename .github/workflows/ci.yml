@@ -39,6 +39,7 @@ jobs:
       host: ${{ steps.filter.outputs.host }}
       mcp: ${{ steps.filter.outputs.mcp }}
       relay: ${{ steps.filter.outputs.relay }}
+      boxes: ${{ steps.filter.outputs.boxes }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -65,12 +66,34 @@ jobs:
               - '.github/workflows/ci.yml'
             host:
               - 'agora-host/**'
+              - 'box/**'
               - '.github/workflows/ci.yml'
             mcp:
               - 'agora-mcp/**'
               - '.github/workflows/ci.yml'
             relay:
               - 'agora-push-relay/**'
+              - '.github/workflows/ci.yml'
+            # The box stack end to end (docs/agent-boxes.md §14): anything a box, boxd, the edge,
+            # their auth or the installer is made of
+            boxes:
+              - 'box/**'
+              - 'install/**'
+              - 'src/boxes/**'
+              - 'src/lib/boxes/**'
+              - 'src/box*-main.ts'
+              - 'src/auth/**'
+              - 'src/gateway.ts'
+              - 'src/routes/box*.ts'
+              - 'src/db/migrations/**'
+              - 'agora-host/**'
+              - 'agora-mcp/**'
+              - 'test/boxes/**'
+              - 'test/install/**'
+              - 'scripts/test-boxes.sh'
+              - 'docker-compose.prod.yml'
+              - 'Dockerfile'
+              - 'vitest.box.config.ts'
               - '.github/workflows/ci.yml'
 
   # The full backend suite, split into four parts that run at the same time. Tests in one
@@ -276,3 +299,28 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  # Isolation (#39), recovery and reboot tests on a real stack with boxes under gVisor.
+  boxes:
+    name: Boxes (isolation, recovery, reboot under gVisor)
+    needs: changes
+    if: needs.changes.outputs.boxes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -q && sudo apt-get install -yq runsc
+          sudo runsc install && sudo systemctl restart docker
+          docker run --rm --runtime=runsc alpine uname -r
+      - run: npm ci
+      - run: bash scripts/test-boxes.sh
+        env:
+          BOXTEST_ALLOW_DAEMON_RESTART: '1'

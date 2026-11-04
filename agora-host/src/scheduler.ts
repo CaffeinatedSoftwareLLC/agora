@@ -9,6 +9,7 @@ import { GitLockError } from './git-owner.js';
 import { attachRunImages } from './images.js';
 import { NON_RETRYABLE, TermsRefusal } from './terms.js';
 import { planLoop } from './siwc/requests.js';
+import { boxLoginLoop } from './box-login.js';
 import { ACP_FATAL } from './acp/session.js';
 import { snapshotTree, checkpoint, commitRun, executeReview, type Checkpoint } from './review.js';
 import { verifyPrompt } from './prompt.js';
@@ -295,6 +296,8 @@ export class Scheduler {
         const commands = this.commandLoop(), previews = this.previewLoop();
         // Settings → Agents "Continue with ChatGPT": sign-ins run on this machine (siwc/requests.ts)
         const plans = planLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });
+        // Agent boxes: Log in runs the CLI's own login inside the box (box-login.ts); box mode only
+        const logins = boxLoginLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });
         while (!this.stopping) {
             try {
                 if (this.now() >= nextReconcile) {
@@ -319,7 +322,7 @@ export class Scheduler {
             }
         }
         await commands; await previews;
-        await plans;
+        await plans; await logins;
         await this.drain();
     }
 }

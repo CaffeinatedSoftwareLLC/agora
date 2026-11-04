@@ -1,0 +1,111 @@
+#!/bin/sh
+# agora-pr: open and check pull requests from an agent box through the edge's PR broker
+# (docs/agent-boxes.md §5.3). The box holds no GitHub token; the edge adds the owner's.
+#
+#   agora-pr create --title T (--body B | --body-file F) [--base B] [--head H] [--draft]
+#   agora-pr status <number>
+#
+# Exit codes: 0 done, 1 refused or failed, 2 usage, 3 needs the owner's approval,
+#             4 not in a box repository, 5 the edge didn't answer.
+set -eu
+
+die() { code=$1; shift; printf 'agora-pr: %s\n' "$*" >&2; exit "$code"; }
+usage() { die 2 "usage: agora-pr create --title T (--body B | --body-file F) [--base B] [--head H] [--draft] | agora-pr status <number>"; }
+
+command -v jq >/dev/null 2>&1 || die 1 "jq is missing"
+origin=$(git remote get-url origin 2>/dev/null) || die 4 "no git remote 'origin' here; run agora-pr inside a repo under ~/work"
+# origin is <edge>/git/github.com/<owner>/<repo>.git
+case "$origin" in
+    http://*/git/github.com/*/*.git) ;;
+    *) die 4 "origin is not the box's edge remote (http://edge:8080/git/github.com/<owner>/<repo>.git)" ;;
+esac
+edge=${origin%%/git/github.com/*}
+path=${origin#*/git/github.com/}
+path=${path%.git}
+owner=${path%%/*}
+repo=${path#*/}
+printf '%s' "$owner" | grep -Eq '^[A-Za-z0-9-]{1,39}$' || die 4 "origin has an unexpected owner"
+printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]{1,100}$' || die 4 "origin has an unexpected repository name"
+api="$edge/github/repos/$owner/$repo"
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/agora-pr.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+# call METHOD URL [BODY-FILE] -> sets $status; reply body in $tmp/out, headers in $tmp/headers
+call() {
+    set -- "$1" "$2" "${3:-}"
+    if [ -n "$3" ]; then
+        status=$(curl --noproxy '*' -sS --max-time 60 -o "$tmp/out" -D "$tmp/headers" -w '%{http_code}' -X "$1" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' --data-binary "@$3" "$2") || die 5 "the edge didn't answer ($edge)"
+    else
+        status=$(curl --noproxy '*' -sS --max-time 60 -o "$tmp/out" -D "$tmp/headers" -w '%{http_code}' -X "$1" \
+            -H 'Accept: application/json' "$2") || die 5 "the edge didn't answer ($edge)"
+    fi
+}
+
+# A refusal from the edge or GitHub: one short line, no headers or bodies echoed raw
+refused() {
+    request=$(sed -n 's/^[Xx]-[Aa]gora-[Ee]dge-[Rr]equest: *\([A-Za-z0-9]*\).*/\1/p' "$tmp/headers" | tail -n 1)
+    [ -n "$request" ] || request=$(jq -r '.requestId // empty' "$tmp/out" 2>/dev/null || true)
+    message=$(jq -r '(.message // .error // empty) | tostring' "$tmp/out" 2>/dev/null | head -c 300 || true)
+    if [ "$status" = 403 ] && [ -n "$request" ]; then
+        die 3 "$1 needs the owner's approval (request $request); run the same command again after it's approved"
+    fi
+    die 1 "$1 was refused (HTTP $status)${message:+: $message}"
+}
+
+[ $# -ge 1 ] || usage
+cmd=$1; shift
+case "$cmd" in
+    create)
+        title="" body="" bodyfile="" base="" head="" draft=false hasbody=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --title) [ $# -ge 2 ] || usage; title=$2; shift 2 ;;
+                --body) [ $# -ge 2 ] || usage; body=$2; hasbody=1; shift 2 ;;
+                --body-file) [ $# -ge 2 ] || usage; bodyfile=$2; hasbody=1; shift 2 ;;
+                --base) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
+                --head) [ $# -ge 2 ] || usage; head=$2; shift 2 ;;
+                --draft) draft=true; shift ;;
+                *) usage ;;
+            esac
+        done
+        [ -n "$title" ] && [ -n "$hasbody" ] || usage
+        [ -z "$body" ] || [ -z "$bodyfile" ] || die 2 "give --body or --body-file, not both"
+        if [ -n "$bodyfile" ]; then
+            [ -f "$bodyfile" ] || die 2 "no such file: $bodyfile"
+            body=$(cat "$bodyfile")
+        fi
+        [ -n "$head" ] || head=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || die 2 "not on a branch; pass --head <branch>"
+        if [ -z "$base" ]; then
+            base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+            base=${base#origin/}
+            [ -n "$base" ] || base=main
+        fi
+        [ "$head" != "$base" ] || die 2 "head and base are the same branch ($head)"
+        jq -n --arg title "$title" --arg body "$body" --arg head "$head" --arg base "$base" --argjson draft "$draft" \
+            '{ title: $title, body: $body, head: $head, base: $base, draft: $draft }' > "$tmp/request.json"
+        call POST "$api/pulls" "$tmp/request.json"
+        case "$status" in
+            200|201)
+                url=$(jq -r '.html_url // empty' "$tmp/out" 2>/dev/null || true)
+                [ -n "$url" ] || die 1 "the edge answered without a pull request URL"
+                # The PR exists but GitHub opened it on another commit than the approved one
+                if grep -qi '^x-agora-edge-pr-status: *changed' "$tmp/headers"; then
+                    printf 'agora-pr: warning: the pull request was opened on a different commit than the one approved (the branch moved); it needs a new approval before its checks count\n' >&2
+                fi
+                printf '%s\n' "$url" ;;
+            *) refused "the pull request" ;;
+        esac
+        ;;
+    status)
+        [ $# -eq 1 ] || usage
+        printf '%s' "$1" | grep -Eq '^[0-9]{1,9}$' || usage
+        call GET "$api/pulls/$1"
+        [ "$status" = 200 ] || refused "reading pull request #$1"
+        jq -r '"#\(.number) \(if .merged then "merged" else .state end)\(if .draft then " (draft)" else "" end): \(.title)\n\(.html_url)\nhead \(.head.ref) \(.head.sha)\nbase \(.base.ref)"' "$tmp/out" \
+            || die 1 "the edge answered with something that isn't a pull request"
+        ;;
+    -h|--help|help) usage ;;
+    *) usage ;;
+esac
