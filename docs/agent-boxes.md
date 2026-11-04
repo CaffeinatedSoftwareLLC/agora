@@ -372,8 +372,8 @@ At install the installer asks once, default **no**:
 
 ## 13. Second install on one engine (#209)
 
-- `setup-env.js --prod` **no longer starts the stack**: it writes `.env.prod` and prints the start command. `--start` starts it; a failed start runs `compose down` for what it just created and says so.
-- `AGORA_INSTANCE` (default `agora`, so existing installs keep their names) sets `COMPOSE_PROJECT_NAME`, the code-run network (`<instance>_sandbox`, also in `AGORA_SANDBOX_NETWORK` and the runner's socket-proxy allowlist), and every box name (§7).
+- `setup-env.js --prod` **no longer starts the stack**: it writes `.env.prod` and prints the start command. `--start` starts it. It refuses an install name the engine already has, starts nothing when Docker can't be asked what exists, and after a failed start removes nothing: it prints the exact `down --remove-orphans -v` command and what that deletes (two setups of one name can race, so an earlier empty inventory proves nothing).
+- `AGORA_INSTANCE` (default `agora`; an install from before #209 keeps the Compose project name it already has, which upgrade writes into `.env.prod`) sets `COMPOSE_PROJECT_NAME`, the code-run network (`<instance>_sandbox`, also in `AGORA_SANDBOX_NETWORK` and the runner's socket-proxy allowlist), and every box name (§7).
 - Ports come from `AGORA_HTTP_PORT` (80), `AGORA_HTTPS_PORT` (443) and `AGORA_API_PORT` (3000). setup-env picks free ones for a second install and sets `CORS_ORIGIN` to match.
 - [getting-started.md](getting-started.md) gets a "second install on the same machine" section.
 

@@ -122,8 +122,14 @@ export class Reconciler {
 
     private async reconcileOne(box: BoxRow, ctx: PassContext) {
         const t = this.trackOf(box.id);
-        // Backing off after errors; deletes and new owner actions don't wait
-        if (box.desiredState !== 'deleted' && !box.pendingAction && this.now() < t.nextAt) return;
+        // Backing off after errors (or held as failed); deletes and new owner actions don't wait.
+        // The edge is re-attached even then: a recreated edge loses its box networks, and a box
+        // that recovers on its own (Docker restarts it) must not wait out the backoff for a way out
+        const waiting = box.desiredState !== 'deleted' && !box.pendingAction && (this.now() < t.nextAt || box.state === 'failed');
+        if (waiting) {
+            await this.reattachEdge(box).catch(err => this.d.log.warn(`box ${box.id}: edge re-attach failed: ${errText(err)}`));
+            if (this.now() < t.nextAt) return;
+        }
         try {
             const outcome = await this.reconcileBox(box, ctx, t);
             if (outcome === 'ok') await this.succeeded(box, t);
@@ -353,6 +359,14 @@ export class Reconciler {
      * so this re-attaches it; the pinned address keeps the box's /etc/hosts right (§9.3).
      * Anything else on the network is disconnected.
      */
+    /** Put the edge back on an existing, matching box network; creates nothing else. */
+    private async reattachEdge(box: BoxRow) {
+        if (!box.subnet) return;
+        const info = await this.d.docker.inspectNetwork(this.names(box.id).network);
+        if (!info || networkDrift(info, this.cfg.instance, box.id, box.subnet).length) return;
+        await this.ensureEdge(box, box.subnet, info);
+    }
+
     private async ensureEdge(box: BoxRow, subnet: string, known: NetworkInfo | null) {
         const n = this.names(box.id);
         const want = edgeAddress(subnet);

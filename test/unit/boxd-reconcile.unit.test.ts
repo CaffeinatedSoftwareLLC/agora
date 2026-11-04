@@ -75,6 +75,24 @@ describe('boxd reconcile', () => {
         expect(t.store.minted).toHaveLength(1);
     });
 
+    it('re-attaches the edge to a box that is backing off or failed, without waiting out the backoff', async () => {
+        const box = t.store.add();
+        await t.r.pass();
+        const n = names(box.id);
+        // The box hits an error and backs off; then the edge is recreated
+        t.docker.failNext.set('startContainer', Object.assign(new Error('OCI runtime create failed'), { statusCode: 500 }));
+        await t.docker.stopContainer(n.c);
+        await t.r.pass();
+        await t.docker.disconnectNetwork(n.n, EDGE);
+        await t.r.pass();
+        expect(Object.values(t.docker.networks.get(n.n)!.Containers)).toContainEqual({ Name: EDGE, IPv4Address: '10.213.0.2/28' });
+        // Held as failed: still re-attached
+        t.store.get(box.id).state = 'failed';
+        await t.docker.disconnectNetwork(n.n, EDGE);
+        await t.r.pass();
+        expect(Object.values(t.docker.networks.get(n.n)!.Containers)).toContainEqual({ Name: EDGE, IPv4Address: '10.213.0.2/28' });
+    });
+
     it('disconnects anything but the edge and the box from a box network', async () => {
         const box = t.store.add();
         await t.r.pass();
