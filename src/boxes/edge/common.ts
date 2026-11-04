@@ -1,4 +1,4 @@
-import type { ServerResponse } from 'node:http';
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
 import { decryptString } from '../../lib/encryption';
 import type { BridgedEvent } from '../../lib/event-bridge';
@@ -130,4 +130,31 @@ export async function settleRequest(deps: EdgeDeps, requestId: string, status: s
         client.release();
     }
     await deps.publish(events);
+}
+
+/**
+ * Frame a forwarded request's body the way it arrived. The proxies drop Transfer-Encoding as a
+ * hop-by-hop header, and Node's client sends a GET (or HEAD, DELETE, OPTIONS) body without any
+ * framing unless told to: the bytes after the head would reach the upstream as a second
+ * request of the box's own making, unsigned (request smuggling). So a chunked request is
+ * forwarded chunked, whatever its method, and a request with both framings is refused.
+ * Returns false when the request must be refused (400).
+ */
+export function frameBody(req: IncomingMessage, headers: OutgoingHttpHeaders): boolean {
+    const te = req.headers['transfer-encoding'];
+    const cl = req.headers['content-length'];
+    if (te !== undefined && cl !== undefined) return false;
+    if (te !== undefined) {
+        // Node's server has already de-chunked anything it accepted; only chunked reaches here
+        if (!/^\s*chunked\s*$/i.test(String(te))) return false;
+        delete headers['content-length'];
+        headers['transfer-encoding'] = 'chunked';
+    } else if (cl !== undefined) {
+        if (!/^\d{1,15}$/.test(String(cl))) return false;
+        headers['content-length'] = cl;
+    } else {
+        delete headers['content-length'];
+        delete headers['transfer-encoding'];
+    }
+    return true;
 }

@@ -132,6 +132,19 @@ function ghHandler(req: http.IncomingMessage, res: http.ServerResponse) {
 let apiServer: http.Server;
 let apiSeen: http.IncomingHttpHeaders[] = [];
 let upgradeSeen: http.IncomingHttpHeaders | null = null;
+const afterRefusal: string[] = [];
+
+/** Send raw bytes to the edge's :8080 and collect everything until it closes the connection. */
+function rawToEdge(bytes: string, onData?: (buf: string, s: net.Socket) => void): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const s = net.connect(edgePort, '127.0.0.1', () => s.write(bytes));
+        let buf = '';
+        const timer = setTimeout(() => { s.destroy(); reject(new Error('the edge left the connection open')); }, 5000);
+        s.on('data', d => { buf += d.toString('latin1'); onData?.(buf, s); });
+        s.on('close', () => { clearTimeout(timer); resolve(buf); });
+        s.on('error', () => {});
+    });
+}
 
 // ─── Helpers ───
 async function inTx<T>(fn: (c: any) => Promise<T>): Promise<T> {
@@ -207,6 +220,12 @@ beforeAll(async () => {
     apiServer = http.createServer((req, res) => { apiSeen.push(req.headers); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ path: req.url })); });
     apiServer.on('upgrade', (req, socket) => {
         upgradeSeen = req.headers;
+        if (req.url === '/refuse') {
+            // Refuse but keep the connection: whatever the edge still sends would arrive here
+            socket.write('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n');
+            socket.on('data', d => { afterRefusal.push(d.toString('latin1')); });
+            return;
+        }
         socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
         socket.on('data', d => socket.write(Buffer.concat([Buffer.from('echo:'), d])));
     });
@@ -572,6 +591,39 @@ describe('Agora reverse proxy', () => {
         expect(out).toMatch(/^HTTP\/1.1 101/);
         expect(upgradeSeen!['sec-websocket-key']).toBe('dGhlIHNhbXBsZSBub25jZQ==');
         expect(verifyEdge(upgradeSeen as any, SECRET)).toEqual({ boxId, generation: 4 });
+    });
+
+    // Request smuggling: bytes after a request's head must never reach the API as a request of their own
+    it('forwards a chunked GET body framed, so it can never become a second, unsigned request', async () => {
+        apiSeen = [];
+        const smuggled = 'GET /smuggled HTTP/1.1\r\nHost: api\r\nAuthorization: Bearer stolen\r\nContent-Length: 0\r\n\r\n';
+        const out = await rawToEdge('GET /health HTTP/1.1\r\nHost: edge:8080\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n'
+            + `${Buffer.byteLength(smuggled).toString(16)}\r\n${smuggled}\r\n0\r\n\r\n`);
+        expect(out).toMatch(/^HTTP\/1\.1 200/);
+        await new Promise(r => setTimeout(r, 300));
+        expect(apiSeen).toHaveLength(1);
+        expect(apiSeen[0]['transfer-encoding']).toBe('chunked');
+        expect(verifyEdge(apiSeen[0] as any, SECRET)).toEqual({ boxId, generation: 4 });
+    });
+
+    it('refuses a request with both Content-Length and Transfer-Encoding', async () => {
+        apiSeen = [];
+        const out = await rawToEdge('POST /x HTTP/1.1\r\nHost: edge:8080\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\n');
+        expect(out).toMatch(/^HTTP\/1\.1 400/);
+        expect(apiSeen).toHaveLength(0);
+    });
+
+    it('sends nothing more after a refused upgrade, and closes the connection', async () => {
+        afterRefusal.length = 0;
+        let sentLater = false;
+        const out = await rawToEdge('GET /refuse HTTP/1.1\r\nHost: edge:8080\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+            + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+            + 'GET /smuggled HTTP/1.1\r\nHost: api\r\nAuthorization: Bearer stolen\r\n\r\n', (buf, s) => {
+            if (!sentLater && buf.includes('\r\n\r\n')) { sentLater = true; s.write('GET /smuggled-later HTTP/1.1\r\nHost: api\r\n\r\n'); }
+        });
+        expect(out).toMatch(/^HTTP\/1\.1 400/);
+        await new Promise(r => setTimeout(r, 300));
+        expect(afterRefusal.join('')).toBe('');
     });
 
     it('answers /healthz from loopback without touching the API', async () => {

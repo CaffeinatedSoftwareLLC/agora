@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import type { Duplex } from 'node:stream';
 import { signEdge } from '../../lib/boxes/contract';
 import type { EdgeBox } from './identity';
-import { sendText } from './common';
+import { frameBody, sendText } from './common';
 
 /**
  * The Agora half of :8080 (docs/agent-boxes.md §4.1): everything but /git and /github goes to
@@ -61,6 +61,7 @@ const upstreamPort = (u: URL) => Number(u.port || (u.protocol === 'https:' ? 443
 
 export function proxyRequest(proxy: ApiProxy, box: EdgeBox, boxAddress: string, req: IncomingMessage, res: ServerResponse) {
     const headers = apiRequestHeaders(req.headers, box, boxAddress, proxy.secret);
+    if (!frameBody(req, headers)) { req.resume(); return sendText(res, 400, 'ambiguous request body framing'); }
     const mod = proxy.upstream.protocol === 'https:' ? https : http;
     const upReq = mod.request({
         protocol: proxy.upstream.protocol, hostname: proxy.upstream.hostname, port: upstreamPort(proxy.upstream),
@@ -94,11 +95,33 @@ export function proxyUpgrade(proxy: ApiProxy, box: EdgeBox, boxAddress: string, 
     const fail = () => { socket.destroy(); upstream.destroy(); };
     upstream.setTimeout(10_000, () => fail());
     upstream.once(proxy.upstream.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
-        upstream.setTimeout(0);
         upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head.length > 0) upstream.write(head);
-        upstream.pipe(socket);
-        socket.pipe(upstream);
+        // Nothing more from the box reaches the API until the API has switched protocols: a
+        // refused upgrade on a kept-alive connection would otherwise let the box write further
+        // requests of its own on it, unsigned (smuggling past the edge headers)
+        let buffered = Buffer.alloc(0);
+        const onData = (chunk: Buffer) => {
+            buffered = Buffer.concat([buffered, chunk]);
+            const end = buffered.indexOf('\r\n\r\n');
+            if (end === -1) {
+                if (buffered.length > 16 * 1024) fail();
+                return;
+            }
+            upstream.off('data', onData);
+            upstream.setTimeout(0);
+            const statusLine = buffered.subarray(0, buffered.indexOf('\r\n')).toString('latin1');
+            if (!/^HTTP\/1\.1 101 /.test(statusLine)) {
+                // Relay the refusal and close both sides; the connection is never reused
+                socket.end(buffered);
+                upstream.destroy();
+                return;
+            }
+            socket.write(buffered);
+            if (head.length > 0) upstream.write(head);
+            upstream.pipe(socket);
+            socket.pipe(upstream);
+        };
+        upstream.on('data', onData);
     });
     upstream.on('error', () => {
         if (socket.writable) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');

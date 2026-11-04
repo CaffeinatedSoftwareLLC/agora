@@ -3,7 +3,7 @@ import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { DOMAIN_ENTRY, domainAllowed } from '../../lib/boxes/contract';
 import { domainRecentlyDenied } from '../../lib/boxes/edge-requests';
-import { requestApproval, sendText, type EdgeDeps } from './common';
+import { frameBody, requestApproval, sendText, type EdgeDeps } from './common';
 import type { EdgeBox, Identify } from './identity';
 import { looksLikeIpLiteral, pinAddress, type Resolver, type Subnet } from './ssrf';
 
@@ -152,6 +152,7 @@ async function plainHttp(opts: ForwardProxyOptions, dial: Dial, req: IncomingMes
         headers[name] = value;
     }
     headers.host = url.host;
+    if (!frameBody(req, headers)) { req.resume(); return sendText(res, 400, 'ambiguous request body framing'); }
     const address = verdict.address;
     const upReq = http.request({
         host: address, port: 80, method: req.method, path: `${url.pathname}${url.search}`, headers, setHost: false,
