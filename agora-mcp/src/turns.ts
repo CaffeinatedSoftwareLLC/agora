@@ -20,6 +20,10 @@ const YIELD_RE = /^\[YIELD\s+to=@?([^\]\s]+)\]$/i;
 const WAIT_RE = /^\[WAIT\s+on=@?([^\]\s]+)(?:\s+for=[^\]]*)?\]$/i;
 const PARTICIPANTS_RE = /^participants:\s*\[([^\]]*)\]/im;
 const FINISHED = new Set(['DONE', 'BLOCK', 'CANCEL']);
+// The server's limits (src/lib/protocol.ts): anything else is not a protocol post
+const MODES = new Set(['plan', 'review', 'fix', 'discuss']);
+const STATES = new Set(['START', 'ACK', 'TURN', 'CHECKPOINT', 'DECIDE', 'DONE', 'BLOCK', 'CANCEL', 'WAIT']);
+const MAX_NAME = 64;
 
 export interface ProtocolLine {
     state: string;
@@ -33,13 +37,17 @@ export function protocolOf(content: string | null | undefined): ProtocolLine | n
     const lines = (content ?? '').split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
     const header = lines.length > 0 ? HEADER_RE.exec(lines[0]) : null;
     if (!header) return null;
+    const state = header[2].toUpperCase();
+    if (!MODES.has(header[1].toLowerCase()) || !STATES.has(state)) return null;
     const last = lines.length > 1 ? lines[lines.length - 1] : '';
-    const participants = PARTICIPANTS_RE.exec(content ?? '')?.[1]
-        .split(',').map(n => n.trim().replace(/^@/, '').replace(/^["'`]|["'`]$/g, '')).filter(Boolean) ?? [];
+    const name = (n: string | undefined) => (n && n.length <= MAX_NAME ? n : undefined);
+    const participants = state !== 'START' ? [] : (PARTICIPANTS_RE.exec(content ?? '')?.[1]
+        .split(',').map(n => n.trim().replace(/^@/, '').replace(/^["'`]|["'`]$/g, '')).filter(n => n.length > 0 && n.length <= MAX_NAME)
+        .slice(0, 32) ?? []);
     return {
-        state: header[2].toUpperCase(),
-        yieldTo: YIELD_RE.exec(last)?.[1],
-        waitingOn: header[2].toUpperCase() === 'WAIT' ? WAIT_RE.exec(last)?.[1] : undefined,
+        state,
+        yieldTo: name(YIELD_RE.exec(last)?.[1]),
+        waitingOn: state === 'WAIT' ? name(WAIT_RE.exec(last)?.[1]) : undefined,
         participants,
     };
 }
@@ -62,6 +70,8 @@ export class TurnTracker {
     private owed = new Map<string, Map<string, OwedTurn>>();
     /** Threads where an agora-collab protocol post was seen or sent. */
     private protocolThreads = new Set<string>();
+    /** threadId → the newest observed post that owed or settled the turn there. */
+    private lastSeen = new Map<string, string>();
 
     /** Messages a tool showed the agent (or that it posted). `self` is the bot's id and username. */
     observe(channelId: string, messages: readonly Message[], self: { id: string; username: string }): void {
@@ -72,19 +82,28 @@ export class TurnTracker {
             const threadId = m.threadId ?? (protocol ? m.id : null);
             if (!threadId) continue;
             if (protocol) this.protocolThreads.add(threadId);
-            if (m.authorId === self.id) { this.settle(channelId, threadId); continue; }
-            if (protocol && FINISHED.has(protocol.state)) { this.settle(channelId, threadId); continue; }
-
             const named = (n?: string) => !!n && n.replace(/^@/, '').toLowerCase() === me;
+            // What this post does to the turn: owe it (why), settle it, or nothing
             let why: OwedTurn['why'] | null = null;
-            if (protocol && named(protocol.yieldTo)) why = 'yield';
+            let settles = false;
+            if (m.authorId === self.id) settles = true;
+            else if (protocol && FINISHED.has(protocol.state)) settles = true;
+            else if (protocol && named(protocol.yieldTo)) why = 'yield';
             else if (protocol && named(protocol.waitingOn)) why = 'wait';
+            // A START listing the agent asks every participant for an ACK, whoever goes first
             else if (protocol?.state === 'START' && protocol.participants.some(named)) why = 'start';
+            // An explicit handoff to someone else outranks a mention in the same post
+            else if (protocol && (protocol.yieldTo || protocol.waitingOn)) settles = true;
             else if (m.threadId && mentions(m.content, self.username)) why = 'mention';
+            if (!why && !settles) continue;
 
-            if (why) this.channel(channelId).set(threadId, { threadId, messageId: m.id, why });
-            // The turn moved on to someone else
-            else if (protocol && (protocol.yieldTo || protocol.waitingOn)) this.settle(channelId, threadId);
+            // Only the newest post that moved the turn counts: an older page read later (or a
+            // parent fetched late) never rolls the state back
+            const seen = this.lastSeen.get(threadId);
+            if (seen && m.id <= seen) continue;
+            this.lastSeen.set(threadId, m.id);
+            if (settles) this.settle(channelId, threadId);
+            else this.channel(channelId).set(threadId, { threadId, messageId: m.id, why: why! });
         }
     }
 

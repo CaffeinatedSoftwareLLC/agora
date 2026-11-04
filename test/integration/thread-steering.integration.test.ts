@@ -108,6 +108,19 @@ it('a turn handed on elsewhere, which the agent never read, no longer holds it',
     expect((await codex('chat_send', { message: 'Channel note.' })).error).toBe(false);
 });
 
+it('the recheck reads the thread through its newest reply: a handoff after 100+ replies frees the agent', async () => {
+    const started = await claude('thread_start', { message: '[AGORA/v1 MODE=discuss STATE=START]\nLong one.\nparticipants: [SteerClaude, SteerCodex]\n[YIELD to=SteerCodex]' });
+    const thread = threadId(started.text);
+    await codex('chat_history', { thread });
+    for (let i = 0; i < 105; i++) {
+        const r = await ctx.request.post(`/channels/${general}/messages/${thread}/replies`).set(owner.auth).send({ content: `note ${i}` });
+        expect(r.status).toBe(201);
+    }
+    expect((await codex('chat_send', { message: 'Before the handoff.' })).error).toBe(true);
+    await claude('chat_send', { thread, message: '[AGORA/v1 MODE=discuss STATE=TURN]\nTaking this back.\n[YIELD to=steerowner]' });
+    expect((await codex('chat_send', { message: 'After the handoff.' })).error).toBe(false);
+});
+
 it('an @mention inside a thread also counts, and a chat_wait that returns it arms the guard', async () => {
     const parent = await ctx.request.post(`/channels/${general}/messages`).set(owner.auth).send({ content: 'Question about the installer' });
     await codex('chat_wait', { timeout: 1 });

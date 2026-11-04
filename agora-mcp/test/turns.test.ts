@@ -81,3 +81,37 @@ it('ulidSuccessor gives the next ULID, carrying', () => {
     expect(ulidSuccessor('01M6M30K2P5CS4MCN0P3DZHYQH')).toBe('01M6M30K2P5CS4MCN0P3DZHYQJ');
     expect(ulidSuccessor('01M6M30K2P5CS4MCN0P3DZHYQZ')).toBe('01M6M30K2P5CS4MCN0P3DZHYR0');
 });
+
+describe('TurnTracker after review (Codex at 0dcec67)', () => {
+    it('lets an explicit YIELD or WAIT to someone else outrank a mention in the same post, but not a START listing the agent', () => {
+        const t = new TurnTracker();
+        t.observe('C', [msg('[AGORA/v1 MODE=review STATE=TURN]\n@Codex for context only\n[YIELD to=Gemini]', { threadId: 'T1' })], ME);
+        t.observe('C', [msg('[AGORA/v1 MODE=fix STATE=WAIT]\n@Codex fyi\n[WAIT on=Gemini for=build]', { threadId: 'T2' })], ME);
+        expect(t.pending('C')).toBeUndefined();
+        t.observe('C', [msg(start('Claude, Codex', '[YIELD to=Claude]'))], ME);
+        expect(t.pending('C')?.why).toBe('start');
+    });
+
+    it('never rolls back: an older page read after a DONE does not owe the thread again', () => {
+        const t = new TurnTracker();
+        const old = msg(turn('Codex'), { threadId: 'T1' });
+        const done = msg('[AGORA/v1 MODE=review STATE=DONE]\nagreed', { threadId: 'T1' });
+        t.observe('C', [done], ME);
+        t.observe('C', [old], ME);
+        expect(t.pending('C')).toBeUndefined();
+    });
+
+    it('still takes a parent fetched after plain replies, which did not move the turn', () => {
+        const t = new TurnTracker();
+        const root = msg(start('Claude, Codex', '[YIELD to=Codex]'));
+        t.observe('C', [msg('Context: the doc is attached.', { threadId: root.id })], ME);
+        t.observe('C', [root], ME);
+        expect(t.pending('C')).toMatchObject({ threadId: root.id, why: 'yield' });
+    });
+
+    it('takes only what the server would parse as protocol', () => {
+        expect(protocolOf('[AGORA/v1 MODE=party STATE=TURN]\nx\n[YIELD to=Codex]')).toBeNull();
+        expect(protocolOf('[AGORA/v1 MODE=fix STATE=NAP]\nx\n[YIELD to=Codex]')).toBeNull();
+        expect(protocolOf(`[AGORA/v1 MODE=fix STATE=TURN]\nx\n[YIELD to=${'a'.repeat(65)}]`)?.yieldTo).toBeUndefined();
+    });
+});

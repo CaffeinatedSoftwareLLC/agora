@@ -367,16 +367,22 @@ export function registerTools(
         return undefined;
     }
     const parentsSeen = new Set<string>();
+    /** Best effort: the guard is bookkeeping, and must never turn a successful read or post into an error. */
     async function observeThread(channelId: string, thread: string | undefined, replies: Message[]): Promise<void> {
-        const me = await getBotInfo();
-        if (thread && !parentsSeen.has(thread)) {
-            parentsSeen.add(thread);
-            try {
-                const [parent] = await api.getMessages(channelId, { limit: 1, before: ulidSuccessor(thread) });
-                if (parent?.id === thread) turns.observe(channelId, [parent], me);
-            } catch { /* only a guard: the read itself already succeeded */ }
+        try {
+            const me = await getBotInfo();
+            if (thread && !parentsSeen.has(thread)) {
+                try {
+                    const [parent] = await api.getMessages(channelId, { limit: 1, before: ulidSuccessor(thread) });
+                    // Remembered only once the lookup answered; a failed one is tried again next read
+                    parentsSeen.add(thread);
+                    if (parent?.id === thread) turns.observe(channelId, [parent], me);
+                } catch { /* retried on the next read of this thread */ }
+            }
+            turns.observe(channelId, replies.map(m => ({ ...m, threadId: m.threadId ?? thread ?? null })), me);
+        } catch (err) {
+            process.stderr.write(`[agora-mcp] reply guard: ${err}\n`);
         }
-        turns.observe(channelId, replies.map(m => ({ ...m, threadId: m.threadId ?? thread ?? null })), me);
     }
     /**
      * After a post in a live agora-collab thread: the call that keeps the session going, so an
@@ -471,6 +477,8 @@ export function registerTools(
                 return { content: [{ type: 'text' as const, text: 'Not posted: [pass] means stay silent. Finish the turn without posting.' }] };
             }
             const ch = await resolveChannel(channel);
+            // Who we are, before anything is posted: a failure after the post would invite a duplicate retry
+            const me = await getBotInfo();
             // An answer to a thread's turn posted at the top level never reaches the peer waiting
             // in that thread: refuse it, saying where it goes (top_level: true posts it anyway)
             const owed = !thread && !top_level ? await stillOwed(ch.id) : undefined;
@@ -487,8 +495,9 @@ export function registerTools(
             const msg = thread
                 ? await api.sendReply(ch.id, thread, message, idempotencyKey, client_key)
                 : await api.sendMessage(ch.id, message, idempotencyKey, client_key);
-            const me = await getBotInfo();
-            turns.observe(ch.id, [{ ...msg, content: msg.content ?? message, authorId: me.id, threadId: thread ?? msg.threadId ?? null }], me);
+            try {
+                turns.observe(ch.id, [{ ...msg, content: msg.content ?? message, authorId: me.id, threadId: thread ?? msg.threadId ?? null }], me);
+            } catch { /* bookkeeping only */ }
 
             const sent = msg.replayed
                 ? `Already sent to ${label(ch.name, thread)} with this client_key (id: ${msg.id}); not posted again`
@@ -759,9 +768,9 @@ export function registerTools(
         },
         async ({ channel, message, client_key }) => {
             const ch = await resolveChannel(channel);
-            const msg = await api.sendMessage(ch.id, message, randomUUID(), client_key);
             const me = await getBotInfo();
-            turns.observe(ch.id, [{ ...msg, content: msg.content ?? message, authorId: me.id, threadId: null }], me);
+            const msg = await api.sendMessage(ch.id, message, randomUUID(), client_key);
+            try { turns.observe(ch.id, [{ ...msg, content: msg.content ?? message, authorId: me.id, threadId: null }], me); } catch { /* bookkeeping only */ }
 
             return {
                 content: [{
