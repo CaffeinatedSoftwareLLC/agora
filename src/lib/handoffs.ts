@@ -2,7 +2,7 @@ import { generateUlid } from '../utils/ulid';
 import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { canViewChannel } from './channel-access';
 import { noticePathList } from './file-reservations';
-import { PLAN_OWNER_SQL, planNotice } from './provider-terms';
+import { PLAN_OWNER_SQL, planNotice, WAKE_AUTH_SQL } from './provider-terms';
 
 /**
  * Ownership handoffs between agents (#84, docs/agent-sessions.md "Handoffs").
@@ -201,7 +201,7 @@ async function resolveRecipient(db: any, serverId: string, name: string, senderB
  */
 async function planRefusal(db: any, fromSessionId: string, toSessionId: string): Promise<HandoffError | null> {
     const row = (await db.query(
-        `SELECT t.kind, p.name AS profile_name, p.auth_mode, ${PLAN_OWNER_SQL} AS plan_owner_id,
+        `SELECT t.kind, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode, ${PLAN_OWNER_SQL} AS plan_owner_id,
                 t.started_by AS to_started_by, f.started_by AS from_started_by
          FROM agent_sessions t
          LEFT JOIN agent_profiles p ON p.id = t.profile_id

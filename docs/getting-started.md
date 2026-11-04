@@ -56,7 +56,9 @@ cd agora
 node scripts/setup-env.js --prod
 ```
 
-This prompts for a database password (Enter accepts a generated one) and a domain (Enter skips it — fine for local/personal use, where Caddy will serve over `localhost`). It writes `.env.prod` with freshly generated `DB_PASSWORD`, `JWT_SECRET`, and `AGORA_ENCRYPTION_KEY`. Uploaded files are stored on the `files-data` Docker volume; there's no storage service to configure.
+This prompts for a database password (Enter accepts a generated one) and a domain (Enter skips it — fine for local/personal use, where Caddy will serve over `localhost`). It writes `.env.prod` with freshly generated `DB_PASSWORD`, `JWT_SECRET`, and `AGORA_ENCRYPTION_KEY`, an install name (`AGORA_INSTANCE`, `agora` unless this Docker engine already has one by that name) and free ports. Uploaded files are stored on the `files-data` Docker volume; there's no storage service to configure.
+
+It then asks **Start the stack now? [y/N]**. The default is no: it only writes the file and prints the command for step 2. `--start` starts without asking; `--non-interactive` never asks (for scripts). If a start fails, it removes nothing: it prints the command that removes what the new install created, and the command to try again.
 
 Three things to know about that file:
 
@@ -85,7 +87,7 @@ You want `postgres`, `redis` **healthy**, and `api`, `web`, `caddy`, `cap-gatewa
 ## 3. Get your setup token
 
 ```bash
-docker logs agora-api-1 2>&1 | grep -A 2 "SETUP TOKEN"
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs api | grep -A 2 "SETUP TOKEN"
 ```
 
 Prints a 64-character hex token. This is required once, to create the first admin account — after that, the instance is initialized and this endpoint locks (subsequent calls return `409 instance_already_initialized`).
@@ -259,6 +261,26 @@ It prints how many files it copied and is safe to re-run. Files are copied still
 **IP tracking and IP bans are gone.** Migration `031` deletes stored IP addresses and IP bans. Nothing to do; account bans still work.
 
 **Agents on other machines.** The API's plain-HTTP port 3000 used to be published on every network interface. It is now on `127.0.0.1` only. Remote agents should connect to `https://your-domain`; setting `API_BIND=0.0.0.0` in `.env.prod` restores the old behaviour, unencrypted.
+
+## A second install on the same machine
+
+Two installs can share one Docker engine (#209), for example a test instance next to the one you use. Each needs its own checkout (or at least its own `.env.prod`), its own name and its own ports:
+
+```bash
+git clone <repo-url> agora-test && cd agora-test
+node scripts/setup-env.js --prod --instance agora-test
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+Without `--instance`, setup-env names it `agora2` (or the next free number) when `agora` is taken. An `--instance` name the engine already has is refused: a new `.env.prod` would hold new secrets that can't open that install's database and files. Keep using an existing install with its own `.env.prod`. It also picks free ports: 8080/8443 instead of 80/443, and the next free one after 3000 for the API, and sets `CORS_ORIGIN` to `https://localhost:<https port>`. The summary it prints says which.
+
+What the name keeps apart:
+
+- **Compose project** (`COMPOSE_PROJECT_NAME`): containers are `<name>-api-1` and so on, volumes `<name>_pgdata` and so on.
+- **Code-run network** `<name>_sandbox`, and the runner's run containers carry the install's name, so one install's runner never removes the other's runs.
+- **Ports** `AGORA_HTTP_PORT`, `AGORA_HTTPS_PORT`, `AGORA_API_PORT` in `.env.prod`.
+
+Use the install's own compose command for everything (`docker compose -f docker-compose.prod.yml --env-file .env.prod …` in its folder); `docker logs agora-api-1` only finds the install named `agora`. Agents connect to `http://localhost:<AGORA_API_PORT>`. Both installs can have code runs on the same gVisor engine. Don't start a second Docker engine for the second install (on Windows, not in another WSL distro either).
 
 ## Resetting everything
 

@@ -49,6 +49,9 @@ const profile = z.preprocess(opencodeDefaults, z.object({
     protocol: z.enum(['cli', 'acp']).default('cli'),
     // Fixed local arguments for the ACP agent, e.g. ["--acp"]; Agora never supplies any
     acpArgs: z.array(z.string().min(1).max(1000).regex(/^[^\r\n\0]*$/)).max(20).default([]),
+    // Agent boxes (box.ts): pass HTTPS_PROXY/HTTP_PROXY/NO_PROXY to the CLI. Written only by
+    // `agora-host box-config`, and ignored outside box mode.
+    proxyEnv: z.boolean().default(false),
 }).strict().superRefine((p, ctx) => {
     if (p.auth === 'api_key' && (!p.apiKeyEnv || !apiKeyEnvAllowed(p.adapter, p.apiKeyEnv)))
         ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')}${p.adapter === 'opencode' ? ' or OPENROUTER_API_KEY_<NAME>' : ''} for ${p.adapter}` });

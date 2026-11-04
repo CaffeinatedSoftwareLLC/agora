@@ -39,6 +39,8 @@ jobs:
       host: ${{ steps.filter.outputs.host }}
       mcp: ${{ steps.filter.outputs.mcp }}
       relay: ${{ steps.filter.outputs.relay }}
+      boxes: ${{ steps.filter.outputs.boxes }}
+      install: ${{ steps.filter.outputs.install }}
       skills: ${{ steps.filter.outputs.skills }}
     steps:
       - uses: actions/checkout@v7
@@ -66,12 +68,41 @@ jobs:
               - '.github/workflows/ci.yml'
             host:
               - 'agora-host/**'
+              - 'box/**'
               - '.github/workflows/ci.yml'
             mcp:
               - 'agora-mcp/**'
               - '.github/workflows/ci.yml'
             relay:
               - 'agora-push-relay/**'
+              - '.github/workflows/ci.yml'
+            # The box stack end to end (docs/agent-boxes.md §14): anything a box, boxd, the edge,
+            # their auth or the installer is made of
+            install:
+              - 'install/**'
+              - 'test/install/**'
+              - 'box/**'
+              - 'scripts/setup-env.js'
+              - 'docker-compose.prod.yml'
+              - '.github/workflows/ci.yml'
+            boxes:
+              - 'box/**'
+              - 'install/**'
+              - 'src/boxes/**'
+              - 'src/lib/boxes/**'
+              - 'src/box*-main.ts'
+              - 'src/auth/**'
+              - 'src/gateway.ts'
+              - 'src/routes/box*.ts'
+              - 'src/db/migrations/**'
+              - 'agora-host/**'
+              - 'agora-mcp/**'
+              - 'test/boxes/**'
+              - 'test/install/**'
+              - 'scripts/test-boxes.sh'
+              - 'docker-compose.prod.yml'
+              - 'Dockerfile'
+              - 'vitest.box.config.ts'
               - '.github/workflows/ci.yml'
             skills:
               - '.claude/skills/**'
@@ -287,6 +318,65 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  # Isolation (#39), recovery and reboot tests on a real stack with boxes under gVisor.
+  boxes:
+    name: Boxes (isolation, recovery, reboot under gVisor)
+    needs: changes
+    if: needs.changes.outputs.boxes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -q && sudo apt-get install -yq runsc
+          sudo runsc install && sudo systemctl restart docker
+          docker run --rm --runtime=runsc alpine uname -r
+      - run: npm ci
+      - run: bash scripts/test-boxes.sh
+        env:
+          BOXTEST_ALLOW_DAEMON_RESTART: '1'
+
+  # The Linux installer on a fresh runner: installs gVisor, builds, starts, makes the admin and a
+  # boxed agent (test image), checks it answers a mention and that the doctor is happy.
+  install-linux:
+    name: Installer (Linux, clean machine)
+    needs: changes
+    if: needs.changes.outputs.install == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash test/install/lib.test.sh
+      - run: bash test/install/backup.test.sh
+      - run: bash test/install/upgrade.test.sh
+      - run: bash test/install/db-password.test.sh
+      - run: bash test/install/uninstall.test.sh
+      # Adds a docker group to check the installer's group handling, so it needs root
+      - run: sudo bash test/install/install.test.sh
+      - run: bash test/install/clean-install.sh
+
+  # The Windows installer's decisions (WSL missing, an existing engine distro, Docker Desktop,
+  # reboot resume, telemetry off), with wsl.exe and docker mocked. CI runners have no WSL2.
+  install-windows:
+    name: Installer (Windows decisions, Pester)
+    needs: changes
+    if: needs.changes.outputs.install == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - shell: pwsh
+        run: |
+          Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
+          Invoke-Pester install/windows/tests -CI
 
   # The skill copies and the agora-skills plugin must match .claude/skills, and a change to
   # the plugin's skills must come with a new plugin version, or installed plugins never update.

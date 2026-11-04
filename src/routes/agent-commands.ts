@@ -6,7 +6,7 @@ import { asService } from '../lib/agent-sessions';
 import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
-import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE } from '../lib/provider-terms';
+import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
 
 /**
  * Session commands (docs/planning/agent-sessions-wbs.md, "Commands"): /start, /end,
@@ -39,6 +39,8 @@ export function sessionJson(r: any) {
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
         lurkMode: r.lurk_mode ?? null,
         authMode: r.auth_mode ?? 'subscription', runApproval: !!r.run_approval,
+        // As in the profile JSON (docs/agent-boxes.md §10): hostMode drives the owner-only rule, boxed the label
+        hostMode: !!r.host_mode, boxed: !!r.boxed,
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
         workspaceId: r.workspace_id,
         threadId: r.thread_id?.trim() ?? null, parentSessionId: r.parent_session_id?.trim() ?? null, title: r.title ?? null,
@@ -55,7 +57,8 @@ export function sessionJson(r: any) {
 // running: a host has claimed a run for this session and is working on it now
 // A terminal session has no profile: it is named after its bot
 export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profile_name, u.username AS bot_username, COALESCE(s.token_budget, p.token_budget) AS effective_token_budget, p.wake_budget,
-        p.auth_mode, p.run_approval, p.plan_owner_id,
+        p.auth_mode, p.host_mode, p.run_approval, p.plan_owner_id,
+        COALESCE((SELECT h.kind = 'box' FROM agent_hosts h WHERE h.id = p.host_id), false) AS boxed,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
             'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
          FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS run,
@@ -82,7 +85,8 @@ export async function profileByName(db: any, channelId: string, name: string) {
 
 /**
  * A subscription profile runs on the owner's own CLI login: only the owner starts or resumes it.
- * A siwc profile runs on its plan owner's ChatGPT plan: only that person does.
+ * A siwc profile runs on its plan owner's ChatGPT plan: only that person does. Callers pass
+ * wakeAuthMode(profile), so a host-mode api_key profile is owner-only too (§10).
  */
 export async function requireOwnerForSubscription(db: any, authMode: string | null, serverId: string, userId: string, planOwnerId: string | null = null) {
     if (authMode === 'api_key') return;
@@ -262,7 +266,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
 async function startSession(db: any, channelId: string, profileName: string, onLive: string, fresh: boolean,
                             userId: string, who: string, notices: Notice[]) {
     const profile = await profileByName(db, channelId, profileName);
-    await requireOwnerForSubscription(db, profile.auth_mode, profile.server_id, userId, profile.plan_owner_id);
+    await requireOwnerForSubscription(db, wakeAuthMode(profile), profile.server_id, userId, profile.plan_owner_id);
     const botId = profile.bot_id.trim();
     await botInChannel(db, botId, channelId);
 
@@ -361,7 +365,7 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
     if (!t || t.kind !== 'hosted' || t.channel_id.trim() !== channelId.trim() || t.state !== 'shelved') {
         throw new CommandError(400, { error: 'not_resumable' });
     }
-    await requireOwnerForSubscription(db, t.auth_mode, t.server_id, userId, t.plan_owner_id);
+    await requireOwnerForSubscription(db, wakeAuthMode(t), t.server_id, userId, t.plan_owner_id);
     if (tokenBudget !== undefined) {
         await db.query('UPDATE agent_sessions SET token_budget = $2 WHERE id = $1', [sessionId, tokenBudget]);
         t.effective_token_budget = tokenBudget;

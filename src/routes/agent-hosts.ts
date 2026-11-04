@@ -41,6 +41,8 @@ async function requireOwner(request: FastifyRequest, reply: FastifyReply): Promi
 function hostJson(r: any) {
     return {
         id: r.id.trim(), name: r.name, createdAt: r.created_at,
+        // 'box' hosts belong to boxes (docs/agent-boxes.md); the Hosts list and host pickers show 'machine' ones
+        kind: r.kind ?? 'machine', boxId: r.box_id?.trim() ?? null,
         lastSeenAt: r.last_seen_at ?? null, revokedAt: r.revoked_at ?? null,
     };
 }
@@ -57,8 +59,23 @@ function profileJson(r: any) {
         runApproval: !!r.run_approval, authReportedAt: r.auth_reported_at ?? null,
         // 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md)
         planOwnerId: r.plan_owner_id?.trim() ?? null,
+        // Host mode (docs/agent-boxes.md §10): the flag drives the owner-only wake rule; `boxed`
+        // (the host is a box) is what the UI labels, so a profile is "unboxed" whenever it isn't boxed
+        hostMode: !!r.host_mode, boxed: !!r.boxed,
     };
 }
+
+/** Profile columns plus `boxed`, for SELECT ... FROM agent_profiles and RETURNING (table owner only). */
+const PROFILE_COLS = `*, COALESCE((SELECT h.kind = 'box' FROM agent_hosts h WHERE h.id = agent_profiles.host_id), false) AS boxed`;
+
+/**
+ * `hostModeAck: true` is the owner's tick on "Run unboxed on this machine" (§10). A profile on a
+ * machine host always runs unboxed, so creating one, or moving one to another machine host, needs
+ * it (omitted or `false` is refused). The profile is host mode, which makes it owner-only whatever
+ * its auth; the agent_profiles trigger (migration 081) also forces host_mode from the host's kind.
+ */
+const hostModeAck = { type: 'boolean' } as const;
+const HOST_MODE_ACK_REQUIRED = 'A profile on a machine host runs unboxed; send hostModeAck: true to confirm';
 
 const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
@@ -76,6 +93,7 @@ const profileFields = {
     // Tool presets and always-allowed rules (#73); the host reads them at every claim
     toolPresets: toolPresetsSchema,
     allowedTools: allowedToolsSchema,
+    hostModeAck,
 } as const;
 
 /**
@@ -92,10 +110,16 @@ async function checkRefs(db: any, serverId: string, botId?: string, hostId?: str
         if (bot.rows.length === 0) return 'Unknown bot';
     }
     if (hostId) {
-        const host = await db.query(`SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL`, [hostId, serverId]);
+        // A box's host has exactly its box's profile (docs/agent-boxes.md §3.2)
+        const host = await db.query(`SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL AND kind = 'machine'`, [hostId, serverId]);
         if (host.rows.length === 0) return 'Unknown host';
     }
     return null;
+}
+
+const BOX_PROFILE = 'This profile belongs to a box; change it in the box settings';
+async function isBoxProfile(db: any, profileId: string): Promise<boolean> {
+    return (await db.query(`SELECT 1 FROM agent_boxes WHERE profile_id = $1`, [profileId])).rows.length > 0;
 }
 
 /** Queue system notices written by a host call for broadcast after the response. */
@@ -172,7 +196,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const { hostId } = request.params as any;
         const db = request.dbClient!;
         const row = await asService(db, () => db.query(
-            `UPDATE agent_hosts SET revoked_at = NOW() WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL RETURNING id`,
+            // A box's host is revoked with its box (DELETE /boxes/:boxId), not here
+            `UPDATE agent_hosts SET revoked_at = NOW() WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL AND kind = 'machine' RETURNING id`,
             [hostId, serverId]
         ));
         if (row.rows.length === 0) return reply.status(404).send({ error: 'Host not found' });
@@ -197,6 +222,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
+        // checkRefs only accepts machine hosts, so every profile made here runs unboxed
+        if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         // A duplicate name aborts the INSERT; asService rolls back to its savepoint, so catch outside it
         try {
             const result = await asService(db, async () => {
@@ -204,13 +231,15 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 if (bad) return { status: 400, body: { error: bad } };
                 const row = await db.query(
                     `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias,
-                                                 wake_budget, token_budget, run_timeout_sec, created_by, workspace_id, tool_presets, allowed_tools)
+                                                 wake_budget, token_budget, run_timeout_sec, created_by, workspace_id, tool_presets, allowed_tools,
+                                                 host_mode, host_mode_ack_at, host_mode_ack_by)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 2000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'),
-                             COALESCE($15, '{}'::text[]), COALESCE($16, '{}'::text[]))
-                     RETURNING *`,
+                             COALESCE($15, '{}'::text[]), COALESCE($16, '{}'::text[]),
+                             $17, CASE WHEN $17 THEN NOW() END, CASE WHEN $17 THEN $13::char(26) END)
+                     RETURNING ${PROFILE_COLS}`,
                     [generateUlid(), serverId, b.name, b.botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null,
                      b.workdirAlias, b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, request.userId, b.workspaceId ?? null,
-                     b.toolPresets ?? null, b.allowedTools ?? null]
+                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true]
                 );
                 return { status: 201, body: profileJson(row.rows[0]) };
             });
@@ -227,7 +256,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
         const member = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [serverId, request.userId]);
         if (member.rows.length === 0) return reply.status(403).send({ error: 'forbidden' });
-        const rows = await db.query(`SELECT * FROM agent_profiles WHERE server_id = $1 ORDER BY name`, [serverId]);
+        // As the table owner: `boxed` reads agent_hosts, which members can't
+        const rows = await asService(db, () => db.query(`SELECT ${PROFILE_COLS} FROM agent_profiles WHERE server_id = $1 ORDER BY name`, [serverId]));
         return reply.send(rows.rows.map(profileJson));
     });
 
@@ -249,6 +279,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const { profileId } = request.params as any;
         const b = request.body as any;
         const db = request.dbClient!;
+        if (b.hostModeAck === false) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         let result: { status: number; body: any };
         try { result = await asService(db, async () => {
             const cur = await db.query(
@@ -256,6 +287,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
             );
             const p = cur.rows[0];
             if (!p) return { status: 404, body: { error: 'Profile not found' } };
+            if (await isBoxProfile(db, profileId)) return { status: 409, body: { error: BOX_PROFILE } };
             if (b.workspaceId !== undefined && b.workspaceId !== p.workspace_id) {
                 const used = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state <> 'ended' LIMIT 1`, [profileId]);
                 if (used.rows.length) return { status: 409, body: { error: 'End this profile\'s sessions before changing its workspace' } };
@@ -263,6 +295,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
             if (missingModel(b.adapter ?? p.adapter, 'model' in b ? b.model : p.model)) return { status: 400, body: { error: OPENCODE_MODEL_REQUIRED } };
+            // Moving to another host (checkRefs: a machine one) runs it unboxed there: the owner acknowledges that
+            const moved = b.hostId !== undefined && b.hostId !== p.host_id.trim();
+            if (moved && b.hostModeAck !== true) return { status: 400, body: { error: HOST_MODE_ACK_REQUIRED } };
 
             const incompatible = (b.adapter !== undefined && b.adapter !== p.adapter)
                 || (b.hostId !== undefined && b.hostId !== p.host_id.trim())
@@ -285,12 +320,15 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         run_timeout_sec = COALESCE($14, run_timeout_sec),
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
                         tool_presets = COALESCE($17, tool_presets), allowed_tools = COALESCE($18, allowed_tools),
+                        host_mode = host_mode OR $19::boolean,
+                        host_mode_ack_at = CASE WHEN $19::boolean AND (NOT host_mode OR $21::boolean OR host_mode_ack_at IS NULL) THEN NOW() ELSE host_mode_ack_at END,
+                        host_mode_ack_by = CASE WHEN $19::boolean AND (NOT host_mode OR $21::boolean OR host_mode_ack_at IS NULL) THEN $20 ELSE host_mode_ack_by END,
                         updated_at = NOW()
-                     WHERE id = $1 AND server_id = $2 RETURNING *`,
+                     WHERE id = $1 AND server_id = $2 RETURNING ${PROFILE_COLS}`,
                     [profileId, serverId, b.name ?? null, b.botId ?? null, b.hostId ?? null, b.adapter ?? null,
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
                      b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null,
-                     b.toolPresets ?? null, b.allowedTools ?? null]
+                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId, moved]
                 );
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
@@ -326,11 +364,14 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const { profileId } = request.params as any;
         const db = request.dbClient!;
         const result = await asService(db, async () => {
+            // Deleting a box's profile would delete the box with it: that is DELETE /boxes/:boxId
+            if (await isBoxProfile(db, profileId)) return 'box';
             const open = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state <> 'ended' LIMIT 1`, [profileId]);
             if (open.rows.length > 0) return 409;
             const del = await db.query(`DELETE FROM agent_profiles WHERE id = $1 AND server_id = $2 RETURNING id`, [profileId, serverId]);
             return del.rows.length > 0 ? 204 : 404;
         });
+        if (result === 'box') return reply.status(409).send({ error: BOX_PROFILE });
         if (result === 409) return reply.status(409).send({ error: 'End this profile\'s sessions first' });
         if (result === 404) return reply.status(404).send({ error: 'Profile not found' });
         return reply.status(204).send();
@@ -355,6 +396,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     model: profileFields.model,
                     effort: profileFields.effort,
                     channelId: ID,
+                    hostModeAck,
                 },
             },
         },
@@ -364,6 +406,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
+        // checkRefs only accepts machine hosts, so every profile made here runs unboxed
+        if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         const { tokenId, secretHash, raw } = await generateBotToken();
         try {
             const result = await asService(db, async () => {
@@ -389,9 +433,12 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     );
                 }
                 const profile = await db.query(
-                    `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias, created_by, workspace_id)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, 'primary')) RETURNING *`,
-                    [generateUlid(), serverId, b.name, botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null, b.workdirAlias, request.userId, b.workspaceId ?? null]
+                    `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias, created_by, workspace_id,
+                                                 host_mode, host_mode_ack_at, host_mode_ack_by)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, 'primary'), $12, CASE WHEN $12 THEN NOW() END, CASE WHEN $12 THEN $10::char(26) END)
+                     RETURNING ${PROFILE_COLS}`,
+                    [generateUlid(), serverId, b.name, botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null, b.workdirAlias, request.userId, b.workspaceId ?? null,
+                     b.hostModeAck === true]
                 );
                 return {
                     status: 201,
@@ -424,6 +471,24 @@ export async function agentHostRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const host = request.agentHost!, db = request.dbClient!;
         const updated: string[] = []; const unknown: string[] = [];
+        // A box's host token is readable by the agent in that box (docs/agent-boxes.md §3.2), so
+        // a box never sets its own auth: the owner chose it when creating the box. A report that
+        // differs is refused; a matching one only records that the host checked in.
+        const kind = (await db.query(`SELECT kind FROM agent_hosts WHERE id = $1`, [host.id])).rows[0]?.kind;
+        if (kind === 'box') {
+            for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
+                const row = (await db.query(
+                    `SELECT id, auth_mode, api_key_env, run_approval FROM agent_profiles WHERE host_id = $1 AND server_id = $2 AND name = $3 AND adapter = $4`,
+                    [host.id, host.serverId, p.name, p.adapter]
+                )).rows[0];
+                if (!row) { unknown.push(p.name); continue; }
+                const same = row.auth_mode === p.authMode && (row.api_key_env ?? null) === (p.authMode === 'api_key' ? p.apiKeyEnv ?? null : null) && row.run_approval === p.runApproval;
+                if (!same) return reply.status(409).send({ error: 'box_auth_is_owner_set' });
+                await db.query(`UPDATE agent_profiles SET auth_reported_at = NOW() WHERE id = $1`, [row.id]);
+                updated.push(p.name);
+            }
+            return reply.send({ updated, unknown });
+        }
         for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
             if (p.authMode === 'api_key' && !p.apiKeyEnv) return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
             // Sign in with ChatGPT drives Codex app-server (docs/codex-chatgpt-plan.md)

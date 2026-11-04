@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { Permissions } from '../../src/permissions';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ const hostDepsInstalled = existsSync(join(__dirname, '../../agora-host/node_modu
 
 async function makeAgent(name: string): Promise<Agent> {
     const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name, hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name, hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
     expect(agent.status, JSON.stringify(agent.body)).toBe(201);
     return { botId: agent.body.bot.id, auth: { Authorization: `Bot ${agent.body.token}` }, profileId: agent.body.profile.id, name };
 }
@@ -71,6 +71,11 @@ beforeAll(async () => {
     hostId = host.body.host.id; hostAuth = { Authorization: `AgentHost ${host.body.token}` };
     builder = await makeAgent('builder');
     helper = await makeAgent('helper');
+});
+beforeEach(async () => {
+    // The ordinary authority rules apply to an API-key agent on a box's host; on a machine host
+    // every profile is host mode, owner-only (§10, its own test below)
+    await setHostKind(ctx.db, hostId, 'box');
 });
 afterAll(async () => { await ctx.close(); });
 beforeEach(async () => {
@@ -206,6 +211,15 @@ describe('task board', () => {
         expect((await start(other.id, member.auth)).status).toBe(403);
         const unassigned = (await create({ title: 'Nobody' })).body.card;
         expect((await start(unassigned.id)).body.error).toBe('no_assignee');
+    });
+
+    it('a director cannot start an API-key agent on a machine host (host mode)', async () => {
+        await setHostKind(ctx.db, hostId, 'machine');
+        const card = (await create({ title: 'Unboxed', profile: 'builder' }, director.auth)).body.card;
+        const refused = await start(card.id, director.auth);
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('subscription_owner_only');
+        expect((await start(card.id, owner.auth)).status).toBe(201);
     });
 
     it('follows the pull request: opened → review, merged → done', async () => {

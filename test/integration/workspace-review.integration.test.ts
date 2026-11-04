@@ -30,7 +30,7 @@ beforeAll(async()=>{
     second=(await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({name:'other',channelType:3})).body.id;
     const host=await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({name:'review-host'});hostId=host.body.host.id;hostAuth={Authorization:`AgentHost ${host.body.token}`};
     const other=await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({name:'other-host'});otherHostAuth={Authorization:`AgentHost ${other.body.token}`};
-    const agent=await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth).send({name:'builder',hostId,adapter:'codex',workdirAlias:'agora',channelId:channel});
+    const agent=await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth).send({hostModeAck:true,name:'builder',hostId,adapter:'codex',workdirAlias:'agora',channelId:channel});
     expect(agent.status).toBe(201);profileId=agent.body.profile.id;botId=agent.body.bot.id;botAuth={Authorization:`Bot ${agent.body.token}`};
 });
 afterAll(async()=>{await ctx.close();});

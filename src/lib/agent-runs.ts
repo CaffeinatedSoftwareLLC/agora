@@ -5,7 +5,7 @@ import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS } from './provider-terms';
+import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, WAKE_AUTH_SQL } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
@@ -194,7 +194,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
                 COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
                 p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep,
-                p.auth_mode, p.run_approval, ${PLAN_OWNER_SQL} AS plan_owner_id,
+                ${WAKE_AUTH_SQL} AS auth_mode, p.run_approval, ${PLAN_OWNER_SQL} AS plan_owner_id,
                 (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner,
                 (SELECT t.title FROM task_cards t WHERE t.session_id = s.id) AS task_title
          FROM agent_sessions s

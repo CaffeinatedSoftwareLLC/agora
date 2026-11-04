@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 
 /**
@@ -7,7 +7,8 @@ import { generateUlid } from '../../src/utils/ulid';
  * - The host reports each profile's auth mode; a profile counts as 'subscription' until then.
  * - A subscription profile runs only for the server owner: owner messages, owner /start and
  *   /resume, hand-offs between owner-started sessions, lurk on owner messages. Everyone
- *   else is refused with a notice. API-key profiles keep the ordinary authority rules.
+ *   else is refused with a notice. API-key profiles keep the ordinary authority rules on a
+ *   box's host; on a machine host (host mode, docs/agent-boxes.md §10) they are owner-only too.
  * - A profile with run approval waits for the owner to approve each wake on a card.
  */
 
@@ -21,6 +22,7 @@ let member: Awaited<ReturnType<typeof authedUser>>;
 let serverId: string;
 let channelId: string;
 let hostAuth: { Authorization: string };
+let hostId: string;
 let otherHostAuth: { Authorization: string };
 type Agent = { botId: string; profileId: string; auth: { Authorization: string }; name: string };
 let alpha: Agent;
@@ -28,7 +30,7 @@ let beta: Agent;
 
 async function makeAgent(name: string, hostId: string): Promise<Agent> {
     const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name, adapter: 'claude', hostId, workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name, adapter: 'claude', hostId, workdirAlias: 'agora', channelId });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     return { botId: res.body.bot.id, profileId: res.body.profile.id, auth: { Authorization: `Bot ${res.body.token}` }, name };
 }
@@ -94,6 +96,7 @@ beforeAll(async () => {
 
     const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
     hostAuth = { Authorization: `AgentHost ${host.body.token}` };
+    hostId = host.body.host.id;
     const other = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'laptop' });
     otherHostAuth = { Authorization: `AgentHost ${other.body.token}` };
     alpha = await makeAgent('alpha', host.body.host.id);
@@ -106,6 +109,7 @@ beforeEach(async () => {
     await ctx.db.query('TRUNCATE agent_run_approvals, agent_tool_requests, agent_runs, agent_inbox, agent_batches, agent_session_threads, agent_sessions CASCADE');
     await setMode(alpha, 'subscription');
     await setMode(beta, 'subscription');
+    await setHostKind(ctx.db, hostId, 'machine');
 });
 
 describe('host reports auth modes', () => {
@@ -184,7 +188,8 @@ describe('subscription profiles: direct messages', () => {
         expect(await notices(since)).toEqual([NOTICE('alpha'), NOTICE('alpha'), NOTICE('beta')]);
     });
 
-    it('keeps the ordinary rules for an API-key profile', async () => {
+    it('keeps the ordinary rules for an API-key profile on a box host', async () => {
+        await setHostKind(ctx.db, hostId, 'box');
         await setMode(alpha, 'api_key');
         const s = await startSession(alpha, director.userId);
         const since = mark();
@@ -198,6 +203,7 @@ describe('subscription profiles: direct messages', () => {
     });
 
     it('drops a director\'s pending wake at claim when the profile became subscription', async () => {
+        await setHostKind(ctx.db, hostId, 'box');
         await setMode(alpha, 'api_key');
         const s = await startSession(alpha);
         await post(director.auth, '@alpha deploy it');
@@ -269,8 +275,12 @@ describe('subscription profiles: commands', () => {
         expect(c.body.session.startedByOwner).toBe(true);
     });
 
-    it('a director can still /start an API-key profile', async () => {
+    it('a director can still /start an API-key profile on a box host, not on a machine host', async () => {
         await setMode(alpha, 'api_key');
+        const refused = await cmd(director.auth, { command: 'start', profile: 'alpha' });
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('subscription_owner_only');
+        await setHostKind(ctx.db, hostId, 'box');
         expect((await cmd(director.auth, { command: 'start', profile: 'alpha' })).status).toBe(201);
     });
 });
@@ -397,8 +407,8 @@ describe('run approval', () => {
 
     it('a denial drops the waiting work', async () => {
         await setMode(alpha, 'api_key', true);
-        const s = await startSession(alpha, director.userId);
-        await post(director.auth, '@alpha do the thing');
+        const s = await startSession(alpha);
+        await post(owner.auth, '@alpha do the thing');
         expect((await claim()).status).toBe(204);
         const [card] = await cards();
         const res = await decide(card.system_data.approvalId, 'deny');

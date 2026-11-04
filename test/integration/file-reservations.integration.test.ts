@@ -10,7 +10,7 @@ const post = (auth: object, body: object, ch = channel) => ctx.request.post(`/ch
 const list = (auth: object, ch = channel) => ctx.request.get(`/channels/${ch}/file-reservations`).set(auth);
 async function makeAgent(name: string, alias: string): Promise<Agent> {
     const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name, hostId, adapter: 'codex', workdirAlias: alias, channelId: channel });
+        .send({ hostModeAck: true, name, hostId, adapter: 'codex', workdirAlias: alias, channelId: channel });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.profile.workspaceId).toBe('primary');
     return { id: res.body.bot.id, profileId: res.body.profile.id, name, auth: { Authorization: `Bot ${res.body.token}` } };
@@ -132,7 +132,7 @@ it('authorizes channel, session and thread access and rejects an unbound bot', a
 it('uses owner-assigned workspace identity across hosts, independent of aliases, and snapshots it on start', async () => {
     const otherHost = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'second-wsi-host' });
     expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${b.profileId}`).set(owner.auth)
-        .send({ hostId: otherHost.body.host.id, workdirAlias: 'local-folder', workspaceId: 'other-repository' })).status).toBe(200);
+        .send({ hostId: otherHost.body.host.id, workdirAlias: 'local-folder', workspaceId: 'other-repository', hostModeAck: true })).status).toBe(200);
     await start(a); await start(b);
     await reserve(a, ['same.ts']); const r = await reserve(b, ['same.ts']); expect(r.workspaceId).toBe('other-repository');
     expect((await list(a.auth)).body.reservations).toHaveLength(1);
@@ -152,7 +152,7 @@ it('isolates identical workspace IDs and paths between servers and hides inacces
     await start(a); await reserve(a, ['same.ts']);
     const other = await createServer(ctx.request, owner.auth, 'Other repository server');
     const host = await ctx.request.post(`/servers/${other.serverId}/agent-hosts`).set(owner.auth).send({ name: 'other-host' });
-    const agent = await ctx.request.post(`/servers/${other.serverId}/agents`).set(owner.auth).send({ name: 'wsiforeign', adapter: 'codex', workdirAlias: 'local-folder', hostId: host.body.host.id, channelId: other.generalChannelId });
+    const agent = await ctx.request.post(`/servers/${other.serverId}/agents`).set(owner.auth).send({ hostModeAck: true, name: 'wsiforeign', adapter: 'codex', workdirAlias: 'local-folder', hostId: host.body.host.id, channelId: other.generalChannelId });
     expect(agent.status).toBe(201);
     const auth = { Authorization: `Bot ${agent.body.token}` };
     expect((await ctx.request.post(`/channels/${other.generalChannelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: 'wsiforeign' })).status).toBe(201);

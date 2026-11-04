@@ -19,7 +19,10 @@
     "storage:strip-filenames": "tsx src/tools/strip-storage-filenames.ts",
     "key:rotate": "tsx src/tools/rotate-encryption-key.ts",
     "login:unlock": "tsx src/tools/unlock-login.ts",
-    "test:sandbox": "vitest run --config vitest.sandbox.config.ts"
+    "test:sandbox": "vitest run --config vitest.sandbox.config.ts",
+    "test:boxes": "bash scripts/test-boxes.sh",
+    "boxd": "tsx src/boxd-main.ts",
+    "box-edge": "tsx src/box-edge-main.ts"
   },
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",

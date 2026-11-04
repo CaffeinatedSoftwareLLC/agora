@@ -5,7 +5,7 @@ import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agent
 import { asService } from '../lib/agent-sessions';
 import { cancelReason, postNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { cardText, liveCardText, REQUEST_TTL_HOURS } from '../lib/agent-permissions';
-import { runCardText, RUN_APPROVAL_TTL_HOURS } from '../lib/provider-terms';
+import { runCardText, RUN_APPROVAL_TTL_HOURS, wakeAuthMode } from '../lib/provider-terms';
 
 /**
  * Approve or deny a tool a hosted agent was denied (#73), from the card in the channel.
@@ -71,7 +71,7 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                 // Lock order, as everywhere: profile → session → request
                 await db.query(`SELECT 1 FROM agent_profiles WHERE id = $1 ${decision === 'always' ? 'FOR UPDATE' : 'FOR SHARE'}`, [ref.profile_id]);
                 const s = await db.query(
-                    `SELECT s.state, p.name, p.auth_mode, p.plan_owner_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
+                    `SELECT s.state, p.name, p.auth_mode, p.host_mode, p.plan_owner_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1 FOR UPDATE OF s`,
                     [ref.session_id]
                 );
                 const r = await db.query(
@@ -95,7 +95,7 @@ export async function agentToolRequestRoutes(app: FastifyInstance) {
                 // An approval wakes a live agent to retry, or lets a waiting step run. A subscription
                 // agent runs only when the owner triggers it (a siwc agent: its plan owner), so
                 // anyone else's approval waits, and can't release a step held on the plan.
-                const mode = s.rows[0].auth_mode;
+                const mode = wakeAuthMode(s.rows[0]);
                 const mayWake = mode === 'api_key'
                     || (mode === 'siwc' ? s.rows[0].plan_owner_id?.trim() === userId : await isServerOwner(db, ref.server_id.trim(), userId));
                 if (req.live && decision !== 'deny' && !mayWake) {

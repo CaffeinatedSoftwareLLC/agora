@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { Permissions } from '../../src/permissions';
 import { notifySession, notifyApproval, inOwnTransaction } from '../../src/lib/notifications';
@@ -19,6 +19,12 @@ let blind: Awaited<ReturnType<typeof authedUser>>;
 let serverId: string;
 let channelId: string;
 let hostAuth: { Authorization: string };
+let hostId: string;
+/** A box's API-key agent can be woken by anyone who can direct; a machine host's is owner-only (§10). */
+async function onBoxHost(fn: () => Promise<void>) {
+    await setHostKind(ctx.db, hostId, 'box');
+    try { await fn(); } finally { await setHostKind(ctx.db, hostId, 'machine'); }
+}
 let botId: string;
 let botAuth: { Authorization: string };
 let profileId: string;
@@ -68,13 +74,15 @@ beforeAll(async () => {
 
     const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
     hostAuth = { Authorization: `AgentHost ${host.body.token}` };
+    hostId = host.body.host.id;
     const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name: 'codex', adapter: 'claude', hostId: host.body.host.id, workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name: 'codex', adapter: 'claude', hostId: host.body.host.id, workdirAlias: 'agora', channelId });
     expect(agent.status, JSON.stringify(agent.body)).toBe(201);
     botId = agent.body.bot.id;
     botAuth = { Authorization: `Bot ${agent.body.token}` };
     profileId = agent.body.profile.id;
-    // API key profile: anyone who can direct may wake it
+    // API key profile: anyone who can direct may wake it on a box's host (onBoxHost); on this
+    // machine host it is host mode, owner-only (§10)
     await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE id = $1`, [profileId]);
 });
 
@@ -153,7 +161,7 @@ describe('approvals', () => {
     test('a run approval card notifies only the server owner', async () => {
         await ctx.db.query(`UPDATE agent_profiles SET run_approval = true WHERE id = $1`, [profileId]);
         await startSession(owner.userId);
-        await post(director.auth, '@codex summarise');
+        await post(owner.auth, '@codex summarise');
         expect((await claim()).status).toBe(204);
         expect((await ctx.db.query(`SELECT 1 FROM agent_run_approvals`)).rows).toHaveLength(1);
         expect(await notificationsOf(owner.userId, 'approval')).toHaveLength(1);
@@ -188,7 +196,7 @@ describe('approvals', () => {
 });
 
 describe('agent sessions', () => {
-    test('a run that posts nothing tells the person who started the session', async () => {
+    test('a run that posts nothing tells the person who started the session', async () => onBoxHost(async () => {
         await startSession(director.userId);
         await post(director.auth, '@codex do the thing');
         const c = await claim();
@@ -200,7 +208,7 @@ describe('agent sessions', () => {
         expect(got).toHaveLength(1);
         expect(got[0].label).toBe('codex is blocked in #general');
         expect(await notificationsOf(owner.userId, 'session')).toHaveLength(0);
-    });
+    }));
 
     test('a session nobody started goes to the owner', async () => {
         const s = await startSession(null);

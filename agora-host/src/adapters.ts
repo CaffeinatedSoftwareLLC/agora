@@ -17,6 +17,7 @@ import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
 import { sessionPorts } from './preview.js';
 import { probeAcp, SESSION_ID, type AcpPlan } from './acp/session.js';
 import { geminiPolicy } from './acp/permissions.js';
+import { inBox, proxyVars } from './box.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -125,6 +126,8 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
             : profile.adapter === 'opencode' ? opencodeProvider(profile.apiKeyEnv)?.env ?? profile.apiKeyEnv : profile.apiKeyEnv;
         if (key) env[name] = key;
     }
+    // In an agent box the CLI reaches allowed domains only through the edge's proxy (box.ts)
+    if (profile.proxyEnv && inBox(source)) Object.assign(env, proxyVars(source));
     return env;
 }
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
@@ -250,6 +253,8 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
         }
         if (local.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
+        // Bypass flags need both the box flag and the image's marker file (box.ts)
+        const yeet = inBox();
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];
@@ -279,28 +284,36 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: 'codex', stdin: '', cleanup, lurk: isLurkRun(claim),
                     sandbox: perms.codex.sandbox, unknownPresets: perms.unknownPresets, appServer };
             }
-            args = ['exec', '--ignore-user-config', '-s', perms.codex.sandbox,
-                '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
-                ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
-                ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
-                ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : []),
+            // Box mode (box.ts, docs/agent-boxes.md §8.1): the box is the sandbox, so Codex runs
+            // with its own sandbox and approvals off. Presets don't apply inside a box; web search
+            // stays off because a box has no open web (§4.2). Never on a machine.
+            const policy = yeet ? ['--dangerously-bypass-approvals-and-sandbox', '-c', `mcp_servers=${mcp}`, '-c', 'web_search="disabled"']
+                : ['-s', perms.codex.sandbox, '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
+                    ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
+                    ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
+                    ...(process.platform === 'win32' ? ['-c', `windows.sandbox=${JSON.stringify(local.windowsSandbox)}`] : [])];
+            args = ['exec', '--ignore-user-config', ...policy,
                 ...(model !== null ? ['-m', model] : []),
                 ...(effort !== null ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
                 ...(claim.session.nativeSessionId ? ['resume', claim.session.nativeSessionId] : []),
                 '--json', ...(!isLurkRun(claim) ? ['--output-schema', paths[2]] : []), '-'];
         } else {
             const allowed = [...new Set([...local.approvedTools.map(t => `mcp__agora__${t}`), ...perms.claude])];
-            args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'manual', '--permission-prompts', 'none',
+            // Box mode: no permission prompts and every tool but WebSearch, which would reach the
+            // open web around the edge (docs/agent-boxes.md §4.2, §8.1). Never on a machine.
+            const policy = yeet ? ['--dangerously-skip-permissions', '--disallowedTools', 'WebSearch']
+                : ['--permission-mode', 'manual', '--permission-prompts', 'none'];
+            args = ['-p', '--output-format', 'stream-json', '--verbose', ...policy,
                 '--strict-mcp-config', '--mcp-config', paths[0],
                 ...(model !== null ? ['--model', model] : []),
                 ...(effort !== null ? ['--effort', effort] : []),
                 ...(!isLurkRun(claim) ? ['--json-schema', JSON.stringify(resultSchema)] : []),
-                ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
+                ...(!yeet && allowed.length ? ['--allowedTools', allowed.join(',')] : []),
                 ...(local.caps.maxBudgetUsd !== undefined ? ['--max-budget-usd', String(local.caps.maxBudgetUsd)] : []),
                 ...(claim.session.nativeSessionId ? ['--resume', claim.session.nativeSessionId] : [])];
         }
         return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: prompt ?? wakePrompt(claim, ports, workspace.branch, handoffs), cleanup, lurk: isLurkRun(claim),
-            ...(local.adapter === 'codex' ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
+            ...(local.adapter === 'codex' && !yeet ? { sandbox: perms.codex.sandbox } : {}), unknownPresets: perms.unknownPresets };
     } catch (err) { await cleanup(); throw err; }
 }
 

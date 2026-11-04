@@ -9,6 +9,7 @@ const CARD_EVENTS = new Set([
   'agent_run_approval',
   'agent_handoff',
   'agent_permission_relay',
+  'box_edge_request',
   'task_card',
   'subtask',
   'provider_terms',

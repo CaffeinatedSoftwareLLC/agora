@@ -4,9 +4,17 @@
  *
  * Usage:
  *   node scripts/setup-env.js            # Dev: creates .env (no prompts)
- *   node scripts/setup-env.js --prod     # Prod: creates .env.prod (interactive)
+ *   node scripts/setup-env.js --prod     # Prod: creates .env.prod (interactive; asks before starting)
  *   node scripts/setup-env.js --force    # Overwrite existing files
- *   node scripts/setup-env.js --prod --no-start   # Write .env.prod only, don't start Docker
+ *   node scripts/setup-env.js --prod --start      # Write .env.prod, then build and start the stack
+ *   node scripts/setup-env.js --prod --non-interactive [--instance agora2] [--domain x]
+ *        [--http-port 8080] [--https-port 8443] [--api-port 3001] [--telemetry on|off]
+ *        [--box-target test]   # box image with fake CLIs (test/install/clean-install.sh only)
+ *        [--docker-gid 998]    # the host's docker group, when this runs in a container (the installer)
+ *
+ * Prod never starts Docker unless asked (--start, or "y" at the prompt; #209). It picks an
+ * instance name (AGORA_INSTANCE, also COMPOSE_PROJECT_NAME) and ports that no other Agora
+ * install on this Docker engine uses, so a second install doesn't collide with the first.
  *
  * Dev mode generates random values for:
  *   - POSTGRES_PASSWORD, JWT_SECRET, AGORA_ENCRYPTION_KEY
@@ -143,12 +151,81 @@ function setupDev() {
 }
 
 // ---------------------------------------------------------------------------
-// Prod mode — interactive prompts for user-specific values
+// Prod mode — prompts for user-specific values, picks a free instance name and ports
 // ---------------------------------------------------------------------------
+
+/** A flag's value: `--name value` or `--name=value`. */
+function flag(name) {
+    const args = process.argv;
+    const i = args.indexOf(`--${name}`);
+    if (i !== -1 && args[i + 1] && !args[i + 1].startsWith('--')) return args[i + 1];
+    const eq = args.find(a => a.startsWith(`--${name}=`));
+    return eq ? eq.slice(name.length + 3) : undefined;
+}
+
+const INSTANCE_RE = /^[a-z][a-z0-9-]{0,30}$/;
+
+/** Run a command and return its stdout, or null when it fails or isn't installed. */
+function capture(cmd, args) {
+    const { spawnSync } = require('node:child_process');
+    const r = spawnSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return r.status === 0 ? r.stdout : null;
+}
+
+/**
+ * Does this Docker engine already have anything of install `name` (#209)? true or false, or
+ * null when Docker couldn't be asked (not installed, not running, no permission): unknown is
+ * never taken to mean "free".
+ */
+function instanceInUse(name) {
+    const outs = [
+        capture('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${name}`]),
+        capture('docker', ['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${name}`]),
+        capture('docker', ['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${name}`]),
+        capture('docker', ['network', 'ls', '-q', '--filter', `name=^${name}_sandbox$`]),
+    ];
+    if (outs.some(out => out !== null && out.trim() !== '')) return true;
+    if (outs.some(out => out === null)) return null;
+    return false;
+}
+
+/** Can this machine accept connections on `port`? Checked on every interface, as Docker publishes. */
+function portFree(port) {
+    const net = require('node:net');
+    return new Promise((resolve) => {
+        const server = net.createServer();
+        server.once('error', () => resolve(false));
+        server.listen({ port, host: '0.0.0.0' }, () => server.close(() => resolve(true)));
+    });
+}
+
+/** The first free port from `start`, stepping by `step`, skipping `taken`. */
+async function freePort(start, step, taken) {
+    for (let port = start, i = 0; i < 50; port += step, i++) {
+        if (!taken.has(port) && await portFree(port)) { taken.add(port); return port; }
+    }
+    throw new Error(`No free port found from ${start}`);
+}
+
+/** Host ports published by any container on this engine, running or not (empty without Docker). */
+function publishedPorts() {
+    const ids = (capture('docker', ['ps', '-aq']) ?? '').split(/\s+/).filter(Boolean);
+    if (ids.length === 0) return [];
+    const out = capture('docker', ['inspect', '-f', '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}} {{end}}{{end}}', ...ids]) ?? '';
+    return out.split(/\s+/).filter(p => /^\d+$/.test(p)).map(Number);
+}
+
+function dockerGid() {
+    if (process.platform !== 'linux') return undefined;
+    const line = capture('getent', ['group', 'docker']);
+    const gid = line && line.split(':')[2];
+    return gid && /^\d+$/.test(gid.trim()) ? gid.trim() : undefined;
+}
 
 async function setupProd() {
     const EXAMPLE = path.join(ROOT, '.env.prod.example');
     const OUT = path.join(ROOT, '.env.prod');
+    const interactive = process.stdin.isTTY && !process.argv.includes('--non-interactive');
 
     if (fs.existsSync(OUT) && !force) {
         console.error('.env.prod already exists. Use --force to overwrite.');
@@ -171,44 +248,137 @@ async function setupProd() {
     const PASSWORD_PROMPT = '  Database password — press Enter to auto-generate a strong one, or type your own (hidden): ';
     const DOMAIN_PROMPT = '  Domain — hit Enter to skip for local setup or enter your own (e.g., chat.example.com): ';
     const defaultDbPassword = strongPassword();
-    let typedDbPassword;
-    let typedDomain;
+    let typedDbPassword = '';
+    let typedDomain = flag('domain') ?? '';
+    let rl;
 
-    if (process.stdin.isTTY) {
+    if (interactive) {
         typedDbPassword = (await hiddenQuestion(PASSWORD_PROMPT)).trim();
-
         // Domain is not secret — a normal echoing prompt is fine.
         const { createInterface } = require('node:readline/promises');
-        const rl = createInterface({ input: process.stdin, output: process.stdout });
-        typedDomain = (await rl.question(DOMAIN_PROMPT)).trim();
-        rl.close();
-    } else {
+        rl = createInterface({ input: process.stdin, output: process.stdout });
+        if (flag('domain') === undefined) typedDomain = (await rl.question(DOMAIN_PROMPT)).trim();
+    } else if (!process.stdin.isTTY) {
         // Piped input (scripts, CI): one answer per line, read up front. Two separate
         // readers on a pipe would lose the second answer to the first reader's buffer.
         let lines = [];
         try { lines = fs.readFileSync(0, 'utf8').split(/\r?\n/); } catch { /* no input: take the defaults */ }
         typedDbPassword = (lines[0] ?? '').trim();
-        typedDomain = (lines[1] ?? '').trim();
+        if (flag('domain') === undefined) typedDomain = (lines[1] ?? '').trim();
     }
     const dbPassword = typedDbPassword || defaultDbPassword;
     // Bare host name: Caddy and the compose file both build https://<DOMAIN> from it
     const domain = typedDomain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 
+    // --- Instance name and ports (#209): a second install on this engine gets its own ---
+
+    let instance = flag('instance');
+    if (instance !== undefined && !INSTANCE_RE.test(instance)) {
+        console.error('  --instance must be lowercase letters, digits and dashes, starting with a letter.');
+        process.exit(1);
+    }
+    const wantsStart = process.argv.includes('--start');
+    const occupied = (name) => {
+        // A new config holds new secrets: it would lock an existing install out of its own
+        // database and encrypted files. Reusing an install is install/upgrade.sh's job.
+        console.error(`  This Docker engine already has containers, volumes or networks of an install named "${name}".`);
+        console.error('  A new .env.prod would hold new secrets that don\'t open its data. To keep using it, use its');
+        console.error('  existing .env.prod (or install/upgrade.sh); for a separate install, pick another --instance.');
+        process.exit(1);
+    };
+    if (instance === undefined) {
+        instance = 'agora';
+        let state = instanceInUse(instance);
+        for (let n = 2; state === true; n++) { instance = `agora${n}`; state = instanceInUse(instance); }
+        if (state === null && wantsStart) { console.error('  Docker could not be asked which install names are taken; not starting anything. Is Docker running?'); process.exit(1); }
+        if (state === null) console.log(`  Docker could not be asked which install names are taken; using "${instance}". Check before starting.`);
+        else if (instance !== 'agora') console.log(`  This Docker engine already has an Agora install named "agora"; this one is "${instance}".`);
+    } else {
+        const state = instanceInUse(instance);
+        if (state === true) occupied(instance);
+        if (state === null && wantsStart) { console.error('  Docker could not be asked whether this install name is taken; not starting anything. Is Docker running?'); process.exit(1); }
+    }
+    // Ports any container on this engine publishes, running or stopped: a stopped install keeps
+    // its ports and gets them back when it starts, so a new install must not take them
+    const taken = new Set(publishedPorts());
+    const pickPort = async (name, def, step) => {
+        const given = flag(name);
+        if (given !== undefined) {
+            if (!/^\d+$/.test(given) || Number(given) < 1 || Number(given) > 65535) { console.error(`  --${name} must be a port number.`); process.exit(1); }
+            taken.add(Number(given));
+            return Number(given);
+        }
+        return freePort(def, step, taken);
+    };
+    const httpPort = await pickPort('http-port', 80, 8000);
+    const httpsPort = await pickPort('https-port', 443, 8000);
+    const apiPort = await pickPort('api-port', 3000, 1);
+
     // --- Auto-generated secrets ---
 
+    const host = domain || 'localhost';
+    // The box image tag follows box/VERSION (docs/agent-boxes.md §6); install/upgrade.sh keeps it in step
+    let boxVersion = '1';
+    try {
+        const v = fs.readFileSync(path.join(ROOT, 'box', 'VERSION'), 'utf8').trim();
+        if (/^\d+$/.test(v)) boxVersion = v;
+    } catch { /* no box/ in this checkout: the compose default */ }
+    const boxTarget = flag('box-target');
+    if (boxTarget !== undefined && boxTarget !== 'test' && boxTarget !== 'box') {
+        console.error('  --box-target must be box or test.');
+        process.exit(1);
+    }
     const generated = {
+        COMPOSE_PROJECT_NAME: instance,
+        AGORA_INSTANCE: instance,
         DB_PASSWORD: dbPassword,
         JWT_SECRET: hexSecret(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
+        // Signs what the box edge forwards to the API (§4.1)
+        AGORA_EDGE_SECRET: hexSecret(),
+        AGORA_BOX_VERSION: boxVersion,
         DOMAIN: domain,
+        AGORA_HTTP_PORT: String(httpPort),
+        AGORA_HTTPS_PORT: String(httpsPort),
+        AGORA_API_PORT: String(apiPort),
     };
+    // In a container (install/linux/install.sh) getent sees the container's groups, not the host's
+    const givenGid = flag('docker-gid');
+    if (givenGid !== undefined && !/^\d+$/.test(givenGid)) {
+        console.error('  --docker-gid must be a number.');
+        process.exit(1);
+    }
+    const gid = givenGid ?? dockerGid();
+    if (gid) generated.DOCKER_GID = gid;
+    const telemetry = flag('telemetry');
+    if (telemetry !== undefined && telemetry !== 'on' && telemetry !== 'off') {
+        console.error('  --telemetry must be on or off.');
+        process.exit(1);
+    }
+    // Off unless the installer's question was answered yes (docs/telemetry.md)
+    generated.AGORA_TELEMETRY = telemetry ?? 'off';
+    // The browser's origin includes the port when it isn't 443
+    const extra = {};
+    if (boxTarget === 'test') {
+        extra.AGORA_BOX_TARGET = 'test';
+        extra.AGORA_BOX_TAG_SUFFIX = '-test';
+    }
+    if (httpsPort !== 443) extra.CORS_ORIGIN = `https://${host}:${httpsPort}`;
 
     // --- Write .env.prod ---
 
     const lines = fs.readFileSync(EXAMPLE, 'utf8').split(/\r?\n/);
     const output = [];
+    const written = new Set();
 
     for (const line of lines) {
+        // A commented default (`# CORS_ORIGIN=...`) becomes a real line when we set it
+        const commented = /^#\s?([A-Z][A-Z0-9_]*)=/.exec(line);
+        if (commented && extra[commented[1]] !== undefined && !written.has(commented[1])) {
+            output.push(`${commented[1]}=${extra[commented[1]]}`);
+            written.add(commented[1]);
+            continue;
+        }
         if (line.startsWith('#') || line.trim() === '') {
             output.push(line);
             continue;
@@ -217,44 +387,77 @@ async function setupProd() {
         if (eqIdx === -1) { output.push(line); continue; }
 
         const key = line.slice(0, eqIdx);
-
-        if (generated[key] !== undefined) {
-            output.push(`${key}=${generated[key]}`);
+        const value = generated[key] ?? extra[key];
+        if (value !== undefined) {
+            output.push(`${key}=${value}`);
+            written.add(key);
         } else {
             output.push(line);
         }
     }
+    for (const [key, value] of Object.entries({ ...generated, ...extra })) {
+        if (!written.has(key)) output.push(`${key}=${value}`);
+    }
 
-    fs.writeFileSync(OUT, output.join('\n'), 'utf8');
+    fs.writeFileSync(OUT, output.join('\n'), { encoding: 'utf8', mode: 0o600 });
     console.log(`\n  Created .env.prod`);
 
     // --- Summary ---
 
+    const url = `https://${host}${httpsPort === 443 ? '' : `:${httpsPort}`}`;
+    const compose = ['compose', '-f', 'docker-compose.prod.yml', '--env-file', '.env.prod'];
+    const upCommand = `docker ${compose.join(' ')} up -d --build`;
     console.log('\n  =====================================');
     console.log('  Config complete! Summary:\n');
-    console.log(`  Domain:          ${domain || '(none — local mode, https://localhost)'}`);
+    console.log(`  Instance:        ${instance}`);
+    console.log(`  Domain:          ${domain || '(none — local mode)'}`);
+    console.log(`  Browser:         ${url}`);
+    console.log(`  Agents (local):  http://localhost:${apiPort}`);
+    if (!gid && process.platform === 'linux') console.log('  DOCKER_GID:      not found; set it to `getent group docker | cut -d: -f3` before starting');
     console.log(`\n  All secrets have been auto-generated and saved to .env.prod.`);
 
-    if (noStart) {
-        console.log('\n  --no-start: not starting Docker. Start it with:');
-        console.log('  docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build\n');
+    // --- Start? Only when asked (#209: writing the config used to start the stack too) ---
+
+    let start = process.argv.includes('--start');
+    if (!start && !noStart && interactive) {
+        const answer = (await rl.question('\n  Start the stack now? [y/N] ')).trim().toLowerCase();
+        start = answer === 'y' || answer === 'yes';
+    }
+    if (rl) rl.close();
+
+    if (!start) {
+        console.log('\n  Not starting Docker. Start it with:');
+        console.log(`  ${upCommand}\n`);
         return;
     }
 
     // --- Build and start Docker ---
 
-    const { spawnSync, execSync } = require('node:child_process');
+    const { spawnSync } = require('node:child_process');
+    // Check again right before starting: a cleanup after a failed start removes the whole
+    // project, so it may only run when this start is the first thing that project ever had
+    const before = instanceInUse(instance);
+    if (before !== false) {
+        console.error(before === null
+            ? '\n  Docker could not be asked what already exists for this install; not starting anything.'
+            : `\n  Something of an install named "${instance}" appeared meanwhile; not starting anything.`);
+        console.error(`  Start it yourself with:\n  ${upCommand}`);
+        process.exit(1);
+    }
 
     console.log('\n  Building and starting Docker containers...');
     console.log('  This may take a few minutes on first run.\n');
 
-    const compose = spawnSync(
-        'docker', ['compose', '-f', 'docker-compose.prod.yml', '--env-file', '.env.prod', 'up', '-d', '--build'],
-        { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] }
-    );
+    const up = spawnSync('docker', [...compose, 'up', '-d', '--build'], { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] });
 
-    if (compose.status !== 0) {
+    if (up.status !== 0) {
+        // No automatic cleanup: an empty inventory a moment ago doesn't prove that everything
+        // of this project now is this attempt's (another setup can start the same name at the
+        // same time), and `down -v` would delete its data. Say exactly what to run instead.
         console.error('\n  Docker Compose failed. Check the output above.');
+        console.error('  Nothing was removed. If this install is new and you want to start over, remove what it created with:');
+        console.error(`  docker ${[...compose, 'down', '--remove-orphans', '-v'].join(' ')}`);
+        console.error(`  (this deletes the "${instance}" install's containers, networks and volumes). Then run:\n  ${upCommand}`);
         process.exit(1);
     }
 
@@ -266,17 +469,13 @@ async function setupProd() {
     let token = '';
     for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        try {
-            const logs = execSync('docker logs agora-api-1 2>&1', { cwd: ROOT, encoding: 'utf8' });
-            const match = logs.match(/AGORA SETUP TOKEN[^]*?\n\s+([a-f0-9]{64})/);
-            if (match) {
-                token = match[1];
-                break;
-            }
-        } catch { /* container not ready yet */ }
+        const logs = capture('docker', [...compose, 'logs', 'api']);
+        const match = logs && logs.match(/AGORA SETUP TOKEN[^]*?\n[^\n]*?([a-f0-9]{64})/);
+        if (match) {
+            token = match[1];
+            break;
+        }
     }
-
-    const url = domain ? `https://${domain}` : 'https://localhost';
 
     console.log('\n  =====================================');
     if (token) {
@@ -285,13 +484,10 @@ async function setupProd() {
         console.log(`  Open ${url} and paste the token to complete setup.`);
     } else {
         console.log('  Agora is starting but the setup token was not found yet.');
-        console.log('  Check manually with: docker logs agora-api-1 2>&1 | grep -A 2 "SETUP TOKEN"');
+        console.log(`  Check manually with: docker ${compose.join(' ')} logs api | grep -A 2 "SETUP TOKEN"`);
     }
     console.log('  =====================================\n');
-
-    // --- Done — user opens browser themselves ---
 }
-
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------

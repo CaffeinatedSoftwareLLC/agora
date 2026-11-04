@@ -4,6 +4,7 @@ import { isTokenBlacklisted } from './token-blacklist';
 import { parseBotToken, verifyBotSecret } from './bot-tokens';
 import { checkTokenUse, clientName, CLIENT_HEADER, TOKEN_BINDING_COLUMNS } from './token-binding';
 import { isSafeMethod, sessionTokenFromHeaders, setSessionCookies, validCsrf } from './session-cookie';
+import { checkProvenance, noticeEvents, recordRefusal, type ProvenanceCredential } from '../lib/boxes/provenance';
 
 /**
  * Sent by the UI on its own timers (polling). Such requests are not user activity,
@@ -100,6 +101,32 @@ function parseAgentHostToken(raw: string): { hostId: string; secret: string } | 
     return { hostId, secret };
 }
 
+/**
+ * The box provenance rule (docs/agent-boxes.md §4.1, src/lib/boxes/provenance.ts). Returns true
+ * when it refused the request (the reply is sent: 403 { error: code }).
+ */
+async function refusedByProvenance(request: FastifyRequest, reply: FastifyReply, cred: ProvenanceCredential): Promise<boolean> {
+    const verdict = checkProvenance(request.headers, cred);
+    if (!verdict) return false;
+    const notices = await recordRefusal(request.dbClient!, cred, verdict, { method: request.method, route: request.routeOptions.url ?? request.url.split('?')[0] });
+    if (notices.length) (request.pendingEvents ??= []).push(...noticeEvents(notices));
+    reply.status(403).send({ error: verdict.code });
+    // The async onSend (COMMIT) is still running: until the reply has ended, Fastify would go on
+    // to the next preHandler and the route handler, whose own reply could replace this one
+    await replyFinished(reply);
+    return true;
+}
+
+function replyFinished(reply: FastifyReply): Promise<void> {
+    if (reply.sent) return Promise.resolve();
+    return new Promise(resolve => {
+        reply.raw.once('finish', () => resolve());
+        reply.raw.once('close', () => resolve());
+    });
+}
+
+const intOrNull = (v: unknown) => v === null || v === undefined ? null : Number(v);
+
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
     const authHeader = request.headers.authorization;
 
@@ -111,12 +138,19 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         if (!parsed) return reply.status(401).send({ error: 'Malformed host token' });
         const db = request.dbClient!;
         const row = await db.query(
-            `SELECT id, server_id, secret_hash FROM agent_hosts WHERE id = $1 AND revoked_at IS NULL`,
+            `SELECT h.id, h.server_id, h.secret_hash, h.box_id, h.box_generation, b.generation AS box_current_generation
+             FROM agent_hosts h LEFT JOIN agent_boxes b ON b.id = h.box_id
+             WHERE h.id = $1 AND h.revoked_at IS NULL`,
             [parsed.hostId]
         );
         if (!row.rows[0] || !await verifyBotSecret(parsed.secret, row.rows[0].secret_hash)) {
             return reply.status(401).send({ error: 'Invalid host token' });
         }
+        const h = row.rows[0];
+        if (await refusedByProvenance(request, reply, {
+            kind: 'host', id: h.id.trim(), serverId: h.server_id.trim(), boxId: h.box_id?.trim() || null,
+            generation: intOrNull(h.box_generation), currentGeneration: intOrNull(h.box_current_generation),
+        })) return;
         if (!isAgentHostRoute(request)) {
             return reply.status(403).send({ error: 'Host tokens cannot access this endpoint' });
         }
@@ -141,10 +175,12 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         // O(1) lookup by primary key
         const tokenRow = await db.query(
             `SELECT t.id, t.bot_id, t.secret_hash, u.bot_paused_at, u.bot_paused_reason,
-                    u.account_status, u.server_id, o.account_status AS owner_status, ${TOKEN_BINDING_COLUMNS}
+                    u.account_status, u.server_id, o.account_status AS owner_status, ${TOKEN_BINDING_COLUMNS},
+                    t.box_id, t.box_generation, xb.generation AS box_current_generation
              FROM bot_tokens t
              JOIN users u ON u.id = t.bot_id
              LEFT JOIN users o ON o.id = u.bot_owner_id
+             LEFT JOIN agent_boxes xb ON xb.id = t.box_id
              WHERE t.id = $1 AND t.revoked_at IS NULL`,
             [parsed.tokenId]
         );
@@ -156,6 +192,12 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
         if (!valid) {
             return reply.status(401).send({ error: 'Invalid bot token' });
         }
+
+        const t = tokenRow.rows[0];
+        if (await refusedByProvenance(request, reply, {
+            kind: 'bot', id: t.bot_id.trim(), serverId: t.server_id?.trim() || null, boxId: t.box_id?.trim() || null,
+            generation: intOrNull(t.box_generation), currentGeneration: intOrNull(t.box_current_generation),
+        })) return;
 
         // Same account rules as the gateway (socketAccountError): the bot and its owner
         // must both be active, and a missing owner fails closed
@@ -217,6 +259,11 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     } catch {
         return reply.status(401).send({ error: 'Invalid token' });
     }
+
+    // A person's login never works through a box's edge (no binding, so only edge headers matter)
+    if (await refusedByProvenance(request, reply, {
+        kind: 'user', id: payload.userId, serverId: null, boxId: null, generation: null, currentGeneration: null,
+    })) return;
 
     // Check token blacklist (logout revocation)
     if (payload.jti && await isTokenBlacklisted(payload.jti)) {

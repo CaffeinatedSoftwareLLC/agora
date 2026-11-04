@@ -137,3 +137,16 @@ export async function setupInstance(
         auth: { Authorization: `Bearer ${res.body.accessToken}` },
     };
 }
+
+/**
+ * Make an agent host a box's host, or a machine again (docs/agent-boxes.md §10). A profile on a
+ * machine host is host mode: owner-only to wake or start, whatever its auth. On a box host an
+ * api_key profile keeps the ordinary rules (owner, directors, allowed bots, lurk on everyone), so
+ * tests of that routing run their profiles on a box host. The host's token keeps working; with no
+ * agent_boxes row nothing box-specific runs. Create profiles first: the routes refuse a box host.
+ * The agent_profiles trigger (migration 081) sets host_mode from the host's kind.
+ */
+export async function setHostKind(db: any, hostId: string, kind: 'box' | 'machine') {
+    await db.query(`UPDATE agent_hosts SET kind = $2 WHERE id = $1`, [hostId, kind]);
+    await db.query(`UPDATE agent_profiles SET host_mode = $2 WHERE host_id = $1`, [hostId, kind === 'machine']);
+}

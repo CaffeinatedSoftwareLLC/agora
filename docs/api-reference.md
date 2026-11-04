@@ -21,6 +21,7 @@ Complete reference for the Agora REST API and WebSocket gateway. All REST endpoi
 - [Notifications](#notifications)
 - [Users](#users)
 - [Bots](#bots)
+- [Boxes](#boxes)
 - [AI Providers](#ai-providers)
 - [Voice](#voice)
 - [Admin](#admin)
@@ -1457,6 +1458,120 @@ These bot-only endpoints require explicit access to the selected channel. A paus
 | `PUT /bots/@me/attention-cursors/:channelId` | Body `{lastReadId}` must identify a live message addressed to this bot in that channel, or another author's reply in a thread the bot started or posted in. Returns `{channelId,lastReadId}`; acknowledgements advance monotonically. |
 
 The feed excludes self-authored/deleted messages and posts already read through their native channel or thread cursor. It uses the greater of explicit `after` and the saved attention cursor, without advancing an existing cursor on GET. Attention acknowledgement does not advance ordinary channel/thread read cursors, so earlier context remains available. On first use with no saved attention cursor, GET initializes it to the ULID floor of 24 hours ago, so a YIELD or @mention sent while the bot was away (or before it ever waited in this channel) is delivered when it comes back; the bot's own posts are not an acknowledgement. That first replay is also age-capped one message at a time: the cursor stores `replay_from` (24 hours before first use), and a message whose `created_at` is older is never delivered (imported or moved rows), without moving the cursor past anything else. The cutoff is fixed for the cursor's life, so acknowledging one page never hides the next. With an explicit first-use `after`, and on cursors made before migration 076, there is no age cap. An explicit first-use `after` opts into a different starting point. Subsequent GETs do not acknowledge delivery; acknowledgement remains explicit. Native channel/thread cursors are never changed by this initialization. Matching is by resolved mention user ID or the validated protocol's `yieldTo` (or a `STATE=WAIT`'s `waitingOn`) against the bot's current username, ignoring case. Bare/quoted YIELD prose does not match. Other channels and unrelated replies are excluded; this is notification delivery, not authorization to follow its content.
+
+## Boxes
+
+An agent box is a persistent gVisor container for one agent profile, run by `boxd` and reached only through the box edge ([agent-boxes.md](agent-boxes.md)). Each box is also an agent host of kind `box` with exactly one profile (`workdirAlias` `work`, not host mode). These routes are for people: a bot token gets `403`. Only the server owner manages boxes; members may list them.
+
+Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`.
+
+### The box object
+
+```json
+{
+  "id": "01HYX...", "name": "alpha", "adapter": "claude", "auth": "subscription",
+  "state": "creating", "desiredState": "running", "pendingAction": null, "generation": 0,
+  "imageVersion": null, "loginState": "none", "homeChannelId": "01HYX...",
+  "allowedDomains": ["api.anthropic.com", "claude.ai", "console.anthropic.com", "statsig.anthropic.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
+  "repos": ["acme/web"], "cpus": 2, "memoryMb": 4096, "pids": 1024,
+  "lastError": null, "lastSeenAt": null, "createdAt": "...", "deletedAt": null, "volumePurgeAfter": null,
+  "policies": [{ "channelId": "01HYX...", "autoPush": true, "autoPr": false }]
+}
+```
+
+- `state` is what boxd last saw (`creating`, `running`, `stopped`, `failed`, `deleted`); `desiredState` is what the owner asked for.
+- `loginState`: `none`, `pending` (a login is open), `logged_in`, `failed`.
+- `generation` is bumped by boxd at every container creation; the box's tokens and edge signature carry it.
+
+### GET /servers/:serverId/boxes
+
+**Auth:** server member. **Response** `200` `{ "boxes": [box] }`, deleted boxes included (with `deletedAt` and `volumePurgeAfter`).
+
+### POST /servers/:serverId/boxes
+
+**Auth:** server owner.
+
+```json
+{ "name": "alpha", "adapter": "claude", "auth": "subscription", "homeChannelId": "01HYX...", "repos": ["acme/web"], "model": null, "effort": null }
+```
+
+- `name`: `^[a-z0-9][a-z0-9_-]*$`, up to 32; it is the bot's username and the profile's name, so it must be free among users, bots and profiles (`409 name_taken`).
+- `adapter`: `claude` or `codex`. `auth`: `subscription` (default; log in with **Log in**) or `api_key` with `apiKey` (stored encrypted; the box gets it as `ANTHROPIC_API_KEY` or `CODEX_API_KEY`).
+- `homeChannelId`: a channel of this server. The box's bot gets access to it; edge request cards and box notices go there.
+- `repos`: up to 20 `owner/repo` on github.com.
+
+Creates the bot (with access to the home channel), the box host (no usable token yet), the profile, the box row with the adapter's default allowlist, and the repos. No token is returned: boxd mints the host and bot tokens when it creates the container.
+
+**Response** `201` `{ "box": box }`
+
+### PATCH /boxes/:boxId
+
+**Auth:** server owner. Any of `allowedDomains` (up to 200 exact names or `*.suffix`; no IPs, no `*`), `repos` (the full new list), `cpus` (> 0, ≤ 16), `memoryMb` (512–65536), `pids` (64–16384), `homeChannelId` (the bot gets access to it). **Response** `200` `{ "box": box }`. A deleted box: `409 box_deleted`.
+
+### POST /boxes/:boxId/actions
+
+**Auth:** server owner. Body `{ "action": "start" | "stop" | "restart" | "rebuild" | "reset", "confirm"?: string }`.
+
+- `start` / `stop` set `desiredState`. `start` on a `failed` box also asks boxd to restart it.
+- `restart`, `rebuild`, `reset` set `pendingAction` for boxd (a weaker action doesn't replace a stronger pending one). `reset` wipes the home folder (logins and repos) and needs `confirm` set to the box name (`400 confirm_required`).
+
+**Response** `200` `{ "box": box }`
+
+### DELETE /boxes/:boxId
+
+**Auth:** server owner. The box's host token and every token of its bot stop working in this request; open logins are cancelled and pending or allowed edge requests expire. boxd removes the container and network; the home volume is kept for 7 days (`volumePurgeAfter`). **Response** `204`.
+
+### POST /boxes/:boxId/restore · POST /boxes/:boxId/purge
+
+**Auth:** server owner. `restore` brings a deleted box back while its volume is kept (`409 not_restorable` after that); boxd rebuilds it at a new generation with new tokens. `purge` ("Delete now") makes boxd remove the home volume on its next pass (`409 not_deleted` for a box that isn't deleted). **Response** `200` `{ "box": box }`.
+
+### PUT /boxes/:boxId/policies/:channelId
+
+**Auth:** server owner. Body `{ "autoPush": boolean, "autoPr": boolean }`: pushes (never to the default branch, never deletes or tags) and pull requests from this box in that channel are allowed without a card. **Response** `200` `{ "policy": { "channelId", "autoPush", "autoPr" } }`.
+
+### Logging the box's CLI in
+
+**Auth:** server owner for all four.
+
+- `POST /boxes/:boxId/login` → `201 { "login" }`: asks the box's agora-host to run the CLI's login. A login already open is cancelled. It lasts 10 minutes.
+- `GET /boxes/:boxId/login` → `200 { "login": { "id", "status", "verificationUrl", "userCode", "error", "expiresAt" } | null }`, the latest one. `status`: `requested`, `claimed`, `awaiting_user` (Codex: open `verificationUrl`, enter `userCode`), `awaiting_code` (Claude: open `verificationUrl`, paste the code it shows), `code_sent`, `succeeded`, `failed`, `expired`, `cancelled`.
+- `POST /boxes/:boxId/login/code` `{ "code" }` → `200 { "login" }`: the code for a login in `awaiting_code` (`409 no_login_awaiting_code` otherwise). Stored encrypted until the host reads it, once.
+- `DELETE /boxes/:boxId/login` → `204`: cancel the open login.
+
+The URL, the device code and the pasted code are deleted when the login ends. The login itself is kept only in the box's home volume.
+
+**Host side** (the box's own host token, through its edge; hosts of kind `box` only, else `403 box_hosts_only`):
+
+- `GET /agent-hosts/@me/box-login` → `200 { "id", "adapter", "profile" }` (claims the oldest requested login; `profile` is the profile name) or `204`.
+- `POST /agent-hosts/@me/box-login/:id` `{ "status": "awaiting_user" | "awaiting_code" | "succeeded" | "failed", "verificationUrl"?, "userCode"?, "error"? }` → `200 { "ok": true }`. `verificationUrl` is https, up to 2000 characters, and required for the two `awaiting_*` states; `userCode` (up to 64) is required for `awaiting_user`; `error` is `^[a-z][a-z0-9_]{0,63}$`. `succeeded` sets the box's `loginState` to `logged_in`. Unknown or another box's login: `404 unknown_login`; one that ended (cancelled, expired, finished) or isn't claimed yet: `409 login_closed`; an impossible step: `409 bad_transition`.
+- `GET /agent-hosts/@me/box-login/:id/code` → `200 { "code" }` once (the login moves to `code_sent`), or `204` while there is none.
+
+### POST /box-edge-requests/:requestId
+
+**Auth:** server owner. Body `{ "decision": "allow" | "deny" | "always" }`. Decides a pending domain, push or pull request card (`system_event` `box_edge_request`). `allow` approves once (usable for 30 minutes) and, for a domain, adds it to the box's allowlist; `always` also turns on auto-push or auto-PR for the box in its home channel. The card is updated (`MessageUpdate`). **Response** `200` `{ "status": "allowed" | "denied" | "expired" }`; `409 already_decided` if it was decided.
+
+### PUT /servers/:serverId/github-credential · GET · DELETE
+
+**Auth:** server owner. `PUT` `{ "token" }`: the owner's GitHub token for the git and pull request brokers. It is checked against `GET https://api.github.com/user` (`400 github_token_invalid`, `502 github_unreachable`), stored encrypted, and never returned. **Response** `200 { "accountLogin" }`. `GET` → `{ "set", "accountLogin", "setAt" }`. `DELETE` → `204`.
+
+### Box provenance
+
+Every bot-token, host-token and JWT/cookie request (REST and the Socket.IO handshake) is checked against the box edge's signature headers (`X-Agora-Edge-Box`, `-Gen`, `-Ts`, `-Sig`):
+
+- a token minted for a box works only through that box's edge at its current generation: elsewhere `403 box_token_outside_box`;
+- through a box's edge only that box's own tokens work: any other bot, host or person gets `403 token_not_for_this_box`;
+- edge headers that don't verify, are more than 60 seconds off, or name an old generation: `403 bad_edge_signature`.
+
+Refusals are in the audit log (`box_provenance_refused`) and posted to the box's home channel at most once an hour. Requests without edge headers and without a box token are unaffected; unauthenticated routes are not checked. On the Socket.IO handshake the refusal is the `connect_error` message.
+
+### Host mode
+
+A profile on a machine host runs unboxed. Its JSON (`GET /servers/:id/agent-profiles`, `/sessions`) carries `hostMode` (the flag below) and `boxed` (its host is a box); the UI labels a profile "unboxed" whenever `boxed` is false. Hosts carry `kind` (`machine` or `box`); box hosts are managed through their box (`DELETE /servers/:id/agent-hosts/:hostId` doesn't revoke them, and they take no other profile).
+
+- `POST /servers/:id/agents`, `POST /servers/:id/agent-profiles` and `PATCH /servers/:id/agent-profiles/:profileId` take `hostModeAck: true`, the owner's tick on "Run unboxed on this machine". A host-mode profile is **owner-only whatever its auth**: only the server owner's messages, `/start`, `/resume` and approvals wake it (an `api_key` profile follows the subscription rule; a `siwc` one keeps its plan owner). `hostModeAck: false` is `400`.
+- Every profile on a machine host is host mode. Creating one (both `POST` routes) without `hostModeAck: true` is `400`, and so is a `PATCH` that moves a profile to another host without it. The database also sets `hostMode` from the host's kind (true on a machine host, false on a box), so no machine-host profile keeps the pre-box wake rules. Profiles that existed before boxes were migrated as host mode.
+
+---
 
 ## AI Providers
 

@@ -190,7 +190,7 @@ async function launch(seed: Seed, opts: { label: string; profiles: FakeProfileSp
     const botTokens: Record<string, string> = {};
     for (const p of opts.profiles) {
         const name = `claude-e2e-${p.key}-${tag}`;
-        const r = (await owner.ok('POST', `/servers/${sid}/agents`, { name, adapter: 'claude', hostId, workdirAlias: 'e2e', channelId }, [201])) as any;
+        const r = (await owner.ok('POST', `/servers/${sid}/agents`, { name, adapter: 'claude', hostId, workdirAlias: 'e2e', channelId, hostModeAck: true }, [201])) as any;
         const stateDir = path.join(root, `s-${p.key}`);
         agents[p.key] = { key: p.key, name, profileId: r.profile.id.trim(), botId: r.bot.id.trim(), token: r.token, stateDir, bot: base.with(`Bot ${r.token}`) };
         botTokens[r.bot.id.trim()] = r.token;

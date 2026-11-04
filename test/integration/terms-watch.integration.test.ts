@@ -148,7 +148,7 @@ describe('terms checks', () => {
         const host=await ctx.request.post(`/servers/${server.serverId}/agent-hosts`).set(admin.auth).send({name:'pc'});
         expect(host.status).toBe(201);
         const agent=await ctx.request.post(`/servers/${server.serverId}/agents`).set(admin.auth)
-            .send({name:'claude',adapter:'claude',hostId:host.body.host.id,workdirAlias:'agora',channelId:server.generalChannelId});
+            .send({hostModeAck:true,name:'claude',adapter:'claude',hostId:host.body.host.id,workdirAlias:'agora',channelId:server.generalChannelId});
         expect(agent.status,JSON.stringify(agent.body)).toBe(201);
         expect(agent.body.profile.authMode ?? 'subscription').toBe('subscription');
         const streams=['openai','anthropic','gemini'].map(id=>vi.spyOn(getAdapter(id)!,'streamChat'));

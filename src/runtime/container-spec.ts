@@ -29,6 +29,8 @@ export interface ContainerSpecInput {
     runToken: string;
     capUrl: string;
     limits: RunLimits;
+    /** The install this run belongs to (AGORA_INSTANCE), so another install's runner leaves it alone (#209). */
+    instance?: string;
     /**
      * The gateway's IP on the sandbox network, pinned in /etc/hosts. gVisor's netstack
      * doesn't apply Docker's DNS NAT rules, so `cap-gateway` doesn't resolve under runsc
@@ -48,6 +50,9 @@ export function gatewayHostEntry(capUrl: string, gatewayIp: string | undefined):
     if (IPV4.test(host) || host.startsWith('[')) return [];
     return [`${host}:${gatewayIp}`];
 }
+
+/** The install name when AGORA_INSTANCE isn't set; existing installs keep it. */
+export const DEFAULT_INSTANCE = 'agora';
 
 export function containerName(runId: string): string {
     return `agora-run-${runId.trim().toLowerCase()}`;
@@ -121,6 +126,7 @@ export function buildContainerSpec(input: ContainerSpecInput): ContainerCreateOp
             'agora.run': input.runId.trim(),
             'agora.server': input.serverId.trim(),
             'agora.managed': 'runtime',
+            'agora.instance': input.instance ?? DEFAULT_INSTANCE,
         },
         HostConfig: {
             Runtime: input.runtime,

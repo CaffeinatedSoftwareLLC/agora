@@ -257,7 +257,9 @@ export async function notifyApproval(c: any, input: { kind: 'run' | 'relay' | 't
             recipients = await serverMembers(c, input.channelId);
         } else {
             const p = input.sessionId ? (await c.query(
-                `SELECT p.auth_mode, p.plan_owner_id FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
+                // Host mode makes an api_key profile owner-only (WAKE_AUTH_SQL in provider-terms.ts, which imports this module)
+                `SELECT (CASE WHEN p.host_mode AND p.auth_mode = 'api_key' THEN 'subscription' ELSE p.auth_mode END) AS auth_mode, p.plan_owner_id
+                 FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
                 [input.sessionId]
             )).rows[0] : null;
             if (input.live && p?.auth_mode === 'subscription') recipients = await channelOwner(c, input.channelId);

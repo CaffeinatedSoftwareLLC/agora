@@ -19,6 +19,9 @@ Plan and contract: `docs/planning/mobile-apps.md`, Phase 3 and section 8.
 | `POST /v1/push` `{instance, type, title, body, url}` + `Authorization: Bearer <handle>` | an instance | `202`; `400`; `401` unknown handle; `403` `instance` is not the origin the handle was registered with; `410` the device token is gone (handle deleted); `413`; `429` (30/min per handle, `Retry-After`); `502` provider error, retry later; `503` platform not configured |
 | `DELETE /v1/handles` + `Authorization: Bearer <handle>` | an instance or the app | `204` (also for an unknown handle); `401` no well-formed handle |
 | `GET /healthz` | monitoring | `200 {status, providers: {android, ios}}` |
+| `POST /telemetry/v1/install` `{result, step, version, os, osVersion}` | the Agora installer, only when its telemetry question was answered yes | `204`; `400` any other key, a missing key or a bad value; `429` (120/min, all callers together) |
+| `POST /telemetry/v1/problem` `{report, version?, os?}` | the installer or an instance, only when a person pressed **Send** | `201 {reportId}`; `400`; `413` report over 256 KB; `429` (10/min, all callers together); `503` storage cap reached |
+| `GET /telemetry/v1/problems[?limit=]`, `GET /telemetry/v1/problems/:id`, `GET /telemetry/v1/installs[?days=]` + `Authorization: Bearer <RELAY_ADMIN_TOKEN>` | Caffeinated Software | `200`; `404` without the token, or when `RELAY_ADMIN_TOKEN` is unset |
 
 Errors are `{ "error": "<code>" }`. `title` and `body` are at most 120 characters,
 `type` at most 64, `url` must be a path on the instance (`/channels/...`), bodies at
@@ -72,6 +75,36 @@ server.
   and do not use up the owner's rate limit.
 - Handles neither registered nor pushed to for `RELAY_HANDLE_TTL_DAYS` (365) are
   deleted. A successful push keeps a handle alive.
+
+### Telemetry
+
+The relay also collects Agora's opt-in install reports and the setup problem reports people
+choose to send (what is sent and when: `docs/telemetry.md` at the repo root). The rules:
+
+- **Exactly the listed keys.** Fastify would silently drop unknown keys; these two routes
+  check the keys first and answer `400` for anything extra.
+- **Stored:** an install report's five fields and the UTC date (no time of day), in
+  `telemetry_installs`; a problem report's text, `version`, `os`, the date and a random id
+  (`pr_` + 16 characters, the only thing that names it), in `telemetry_problems`.
+- **Never stored or logged:** the client address, the user agent, any other header. The
+  limits on these routes are global, not per address, so not even the in-memory limiter
+  holds an IP. The request log line has the route, status and an outcome code, as for the
+  push routes; validation errors are logged as codes, never with the body. A test checks
+  this.
+- **Kept:** problem reports for `RELAY_PROBLEM_DAYS` (90), pruned daily; at most 200 MB of
+  them in total (then `503 storage_full`). Install reports have no personal data and are kept.
+- **Read** with `RELAY_ADMIN_TOKEN` (unset: the read routes answer `404`):
+
+  ```bash
+  curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" https://push.agora.host/telemetry/v1/problems
+  curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" https://push.agora.host/telemetry/v1/problems/pr_XXXXXXXXXXXXXXXX
+  curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" 'https://push.agora.host/telemetry/v1/installs?days=30'
+  ```
+
+  On Heroku: `heroku config:set RELAY_ADMIN_TOKEN="$(openssl rand -hex 32)" -a agora-push-relay`.
+
+Both tables live next to `handles` (the SQLite file, or Postgres with `DATABASE_URL`) and
+are created on start.
 
 ### Storage and handles
 

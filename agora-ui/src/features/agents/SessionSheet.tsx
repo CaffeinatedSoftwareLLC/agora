@@ -4,6 +4,7 @@ import { SessionBudget } from './SessionBudget';
 import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
+import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
   ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState,
   terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
@@ -190,6 +191,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                   >
                     <StateDot state={c ? c.state : 'none'} />
                     <span className="flex-1 truncate font-medium">{p.name}</span>
+                    <BoxModeBadge profile={p} />
                     <span className="text-xs text-text-muted">{c ? STATE_LABEL[c.state] : p.adapter}</span>
                   </button>
                 </li>
@@ -217,6 +219,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text">
           <StateDot state={state ?? 'none'} />
           <span className="font-medium">{state ? STATE_LABEL[state] : 'No session in this channel'}</span>
+          <BoxModeBadge profile={current ?? profiles?.find(p => p.name === selected)} />
           {current && current.state !== 'ended' && (
             <span className="font-mono text-xs text-text-muted">
               {current.wakesUsed} {current.wakesUsed === 1 ? 'wake' : 'wakes'} · {compactTokens(current.tokensUsed)} tokens

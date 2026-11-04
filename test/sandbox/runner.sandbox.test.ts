@@ -257,4 +257,17 @@ describe('orphan cleanup', () => {
         const left = await docker.listContainers({ all: true, filters: { name: [name] } });
         expect(left).toHaveLength(0);
     });
+
+    test("leaves another install's runs alone (#209)", async () => {
+        const docker = dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375');
+        const name = `agora-run-${generateUlid().toLowerCase()}`;
+        await docker.createContainer({ name, Image: IMAGE, Cmd: ['--version'], Labels: { 'agora.managed': 'runtime', 'agora.instance': 'agora-other' }, HostConfig: { NetworkMode: NETWORK } });
+        try {
+            await sandbox.removeOrphans('agora');
+            expect(await docker.listContainers({ all: true, filters: { name: [name] } })).toHaveLength(1);
+            expect(await sandbox.removeOrphans('agora-other')).toBe(1);
+        } finally {
+            await docker.getContainer(name).remove({ force: true }).catch(() => {});
+        }
+    });
 });

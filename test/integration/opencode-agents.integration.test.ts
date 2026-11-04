@@ -36,11 +36,11 @@ afterAll(async () => { await ctx.close(); });
 describe('opencode agents', () => {
     it('creates an opencode profile only with a model, and still rejects an unknown adapter', async () => {
         const base = { name: 'qwen', botId, hostId, adapter: 'opencode', workdirAlias: 'agora', effort: null };
-        const noModel = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth).send({ ...base, model: null });
+        const noModel = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth).send({ hostModeAck: true, ...base, model: null });
         expect(noModel.status).toBe(400);
         expect(noModel.body.error).toContain('needs a model');
 
-        const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth).send({ ...base, model: 'qwen/qwen3-coder' });
+        const profile = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth).send({ hostModeAck: true, ...base, model: 'qwen/qwen3-coder' });
         expect(profile.status, JSON.stringify(profile.body)).toBe(201);
         expect(profile.body).toMatchObject({ adapter: 'opencode', model: 'qwen/qwen3-coder', authMode: 'subscription' });
         profileId = profile.body.id;
@@ -53,7 +53,7 @@ describe('opencode agents', () => {
 
         // The one-step create applies the same rule
         expect((await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name: 'deepseek', adapter: 'opencode', hostId, workdirAlias: 'agora' })).status).toBe(400);
+            .send({ hostModeAck: true, name: 'deepseek', adapter: 'opencode', hostId, workdirAlias: 'agora' })).status).toBe(400);
 
         const report = await ctx.request.post('/agent-hosts/@me/profiles').set(hostAuth)
             .send({ profiles: [{ name: 'qwen', adapter: 'opencode', authMode: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY_QWEN', runApproval: false }] });
@@ -63,7 +63,7 @@ describe('opencode agents', () => {
         expect(row.rows[0]).toEqual({ adapter: 'opencode', auth_mode: 'api_key', api_key_env: 'OPENROUTER_API_KEY_QWEN' });
 
         expect((await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
-            .send({ ...base, name: 'other', adapter: 'openrouter', model: 'qwen/qwen3-coder' })).status).toBe(400);
+            .send({ hostModeAck: true, ...base, name: 'other', adapter: 'openrouter', model: 'qwen/qwen3-coder' })).status).toBe(400);
         expect((await ctx.request.post('/agent-hosts/@me/profiles').set(hostAuth)
             .send({ profiles: [{ name: 'qwen', adapter: 'openrouter', authMode: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY', runApproval: false }] })).status).toBe(400);
         // The database refuses one too, whatever the route allows
@@ -80,7 +80,8 @@ describe('opencode agents', () => {
         expect([200, 201]).toContain(sent.status);
         const c = await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(hostAuth);
         expect(c.status, JSON.stringify(c.body)).toBe(200);
-        expect(c.body.profile).toMatchObject({ name: 'qwen', adapter: 'opencode', model: 'openrouter/qwen/qwen3-coder', authMode: 'api_key' });
+        // A machine-host profile is host mode: the claim carries the owner-only rule it applies (§10)
+        expect(c.body.profile).toMatchObject({ name: 'qwen', adapter: 'opencode', model: 'openrouter/qwen/qwen3-coder', authMode: 'subscription' });
 
         const failed = await ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/fail`).set(hostAuth).send({
             claimToken: c.body.run.claimToken, error: 'credit_exhausted', retryable: false, tokensUsed: null,

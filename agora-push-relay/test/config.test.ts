@@ -128,4 +128,11 @@ describe('loadConfig: database', () => {
             expect(message).not.toContain('PASSWORD-CANARY');
         }
     });
+
+    it('reads the telemetry admin token and problem retention', () => {
+        expect(loadConfig({ RELAY_SECRET_KEY: KEY })).toMatchObject({ adminToken: undefined, problemDays: 90 });
+        const token = 'c'.repeat(64);
+        expect(loadConfig({ RELAY_SECRET_KEY: KEY, RELAY_ADMIN_TOKEN: token, RELAY_PROBLEM_DAYS: '30' })).toMatchObject({ adminToken: token, problemDays: 30 });
+        expect(() => loadConfig({ RELAY_SECRET_KEY: KEY, RELAY_ADMIN_TOKEN: 'short' })).toThrow(/RELAY_ADMIN_TOKEN/);
+    });
 });

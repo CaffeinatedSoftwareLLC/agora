@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { Permissions } from '../../src/permissions';
 import { previewMessage, previewUrl } from '../../src/routes/browser-previews';
 
@@ -23,7 +23,7 @@ beforeAll(async () => {
     hostId = host.body.host.id; hostAuth = { Authorization: `AgentHost ${host.body.token}` };
     const other = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'other-host' });
     otherHostAuth = { Authorization: `AgentHost ${other.body.token}` };
-    const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth).send({ name: 'builder', hostId, adapter: 'claude', workdirAlias: 'agora', channelId: channel });
+    const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth).send({ hostModeAck: true, name: 'builder', hostId, adapter: 'claude', workdirAlias: 'agora', channelId: channel });
     expect(agent.status, JSON.stringify(agent.body)).toBe(201);
     botId = agent.body.bot.id; botAuth = { Authorization: `Bot ${agent.body.token}` };
     png = await sharp({ create: { width: 4, height: 3, channels: 3, background: '#336699' } }).png().toBuffer();
@@ -190,7 +190,14 @@ describe('browser previews', () => {
         await ctx.db.query(`UPDATE browser_previews SET status = 'failed'`);
         await ctx.db.query(`UPDATE agent_sessions SET started_by = $1`, [member.userId]);
         await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY'`);
-        expect((await queue({ url: 'http://localhost:5173/' })).status).toBe(202);
+        // On a machine host an API-key agent is host mode, owner-only too (§10); on a box's host it isn't
+        expect((await queue({ url: 'http://localhost:5173/' })).body.error).toBe('subscription_owner_only');
+        await setHostKind(ctx.db, hostId, 'box');
+        try {
+            expect((await queue({ url: 'http://localhost:5173/' })).status).toBe(202);
+        } finally {
+            await setHostKind(ctx.db, hostId, 'machine');
+        }
     });
 
     it('lets a siwc agent preview a session its plan owner started, even when that is not the server owner', async () => {
