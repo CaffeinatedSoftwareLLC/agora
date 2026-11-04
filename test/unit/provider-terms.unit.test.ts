@@ -38,7 +38,10 @@ describe('provider terms', () => {
         const hits = DIRS.flatMap(d => files(join(ROOT, d)))
             .filter(f => SIWC_FLOW.test(readFileSync(f, 'utf8')))
             .map(f => f.slice(ROOT.length + 1).replace(/\\/g, '/'))
-            .filter(f => !f.startsWith('agora-host/src/siwc/'));
+            .filter(f => !f.startsWith('agora-host/src/siwc/'))
+            // A box's default allowlist names the domain so the box's own codex CLI can sign
+            // itself in (docs/agent-boxes.md §4.2, §8.2); Agora runs no OAuth flow there
+            .filter(f => f !== 'src/lib/boxes/contract.ts');
         expect(hits).toEqual([]);
     });
 
