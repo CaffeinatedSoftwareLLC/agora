@@ -3,8 +3,12 @@ import type { PoolClient } from 'pg';
 import { readAuthorities } from '../lib/direct-agents';
 import { addTaggingToAttachments } from '../lib/file-tags';
 import { artifactsForMessages } from '../lib/artifacts';
+import { ulidFloor } from '../utils/ulid';
 
 const ulid = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };
+
+/** How far back a bot's first attention read in a channel reaches for what it hasn't answered. */
+export const REPLAY_HOURS = 24;
 
 async function botAccess(request: FastifyRequest, reply: FastifyReply, channelId?: string): Promise<boolean> {
     if (!request.isBot) { reply.code(403).send({ error: 'This endpoint is for bots only' }); return false; }
@@ -67,17 +71,21 @@ export async function botAttentionRoutes(app: FastifyInstance) {
         if (!await botAccess(request, reply, channelId)) return reply;
         const { after, limit = 100 } = request.query as { after?: string; limit?: number };
         const db = request.dbClient!;
-        // A newly upgraded client starts watching now, rather than replaying days
-        // of old mentions. An explicit `after` opts into an earlier starting point.
-        // Persist even for an empty channel so the next post can be delivered.
-        // Separate statements give a concurrent initializer's committed cursor a
-        // fresh READ COMMITTED snapshot before the feed query below.
-        await db.query(`INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id)
-            SELECT $1, $2, COALESCE($3::CHAR(26), (
-                SELECT id FROM messages WHERE channel_id = $2 ORDER BY id DESC LIMIT 1
-            ), '00000000000000000000000000'::CHAR(26))
+        // First use in this channel: start REPLAY_HOURS back, so a YIELD or @mention sent while
+        // the agent was away (stopped, restarted, or never waited in this channel) is still
+        // delivered, without a new client replaying days of old mentions. The bot's own posts
+        // don't count as acknowledgement: only the attention cursor does. An explicit `after`
+        // opts into another starting point. Persisted even for an empty channel so the next
+        // post is delivered. Separate statements give a concurrent initializer's committed
+        // cursor a fresh READ COMMITTED snapshot before the feed query below.
+        // replay_from caps that first replay by each message's own created_at (imported rows
+        // with new ids and old dates), fixed for the cursor's life so paging never loses items.
+        await db.query(`INSERT INTO bot_attention_cursors (bot_id, channel_id, last_read_id, replay_from)
+            SELECT $1, $2, COALESCE($3::CHAR(26), $4::CHAR(26)),
+                   CASE WHEN $3::CHAR(26) IS NULL THEN NOW() - make_interval(hours => $5) END
             WHERE NOT EXISTS (SELECT 1 FROM bot_attention_cursors WHERE bot_id = $1 AND channel_id = $2)
-            ON CONFLICT (bot_id, channel_id) DO NOTHING`, [request.userId, channelId, after ?? null]);
+            ON CONFLICT (bot_id, channel_id) DO NOTHING`,
+        [request.userId, channelId, after ?? null, ulidFloor(Date.now() - REPLAY_HOURS * 3600_000), REPLAY_HOURS]);
         const rows = await db.query(`WITH cutoff AS (
             SELECT GREATEST(COALESCE($3::CHAR(26), ''::CHAR(26)), COALESCE((
                 SELECT a.last_read_id FROM bot_attention_cursors a WHERE a.bot_id = $1 AND a.channel_id = $2
@@ -98,12 +106,20 @@ export async function botAttentionRoutes(app: FastifyInstance) {
             WHERE m.channel_id = $2 AND m.id > cutoff.id AND ${PARTICIPATING_REPLY}
         ), addressed AS (
             SELECT id, bool_or(direct) AS direct FROM candidates GROUP BY id
+        ), since AS (
+            -- Age is judged per message, by created_at, against the cutoff fixed at first use:
+            -- an imported row with a new id but an old date is never delivered as fresh and never
+            -- moves the cursor past anything else. NULL (explicit after, older cursors): no cap.
+            SELECT a.replay_from AS at FROM bot_attention_cursors a
+            WHERE a.bot_id = $1 AND a.channel_id = $2
         )
         SELECT m.*, a.direct AS attention_direct, u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url
         FROM addressed a JOIN messages m ON m.id = a.id LEFT JOIN users u ON u.id = m.author_id
+        LEFT JOIN since ON true
         LEFT JOIN bot_read_cursors rc ON rc.bot_id = $1 AND rc.channel_id = $2
         LEFT JOIN bot_thread_cursors tc ON tc.bot_id = $1 AND tc.thread_id = m.thread_id
         WHERE m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $1
+          AND (since.at IS NULL OR m.created_at >= since.at)
           AND m.id > COALESCE(CASE WHEN m.thread_id IS NULL THEN rc.last_read_id ELSE tc.last_read_id END, ''::CHAR(26))
         ORDER BY m.id ASC LIMIT $4`, [request.userId, channelId, after ?? null, limit]);
         const sent = await envelopes(db, channelId, rows.rows);

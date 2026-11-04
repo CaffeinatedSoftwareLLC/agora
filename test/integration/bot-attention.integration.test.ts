@@ -1,5 +1,6 @@
 import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
+import { decodeTime } from 'ulid';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: Awaited<ReturnType<typeof authedUser>>;
@@ -45,15 +46,18 @@ async function unwatchedChannel() {
     return ch.body.id as string;
 }
 
-it('first use skips historical mentions, persists the baseline, and delivers later attention', async () => {
+it('first use skips mentions older than 24 hours, persists the baseline, and delivers later attention', async () => {
     const fresh = await unwatchedChannel();
     const old = await ctx.request.post(`/channels/${fresh}/messages`).set(owner.auth).send({ content: '@AttCodex already handled' });
     expect(old.status).toBe(201);
     await ctx.db.query("UPDATE messages SET created_at = NOW() - INTERVAL '4 days' WHERE id = $1", [old.body.id]);
     const read = () => ctx.request.get(`/channels/${fresh}/attention`).set(auth);
     expect((await read()).body).toEqual([]);
+    // The baseline is the ULID floor of 24 hours ago (#327 follow-up: what came while away is delivered)
     const saved = await ctx.request.get('/bots/@me/attention-cursors').set(auth);
-    expect(saved.body).toContainEqual(expect.objectContaining({ channelId: fresh, lastReadId: old.body.id }));
+    const cursor = saved.body.find((c: any) => c.channelId === fresh);
+    expect(cursor.lastReadId < old.body.id).toBe(true);
+    expect(decodeTime(cursor.lastReadId)).toBeLessThan(Date.now() - 23 * 3600_000);
     const next = await ctx.request.post(`/channels/${fresh}/messages`).set(owner.auth).send({ content: '@AttCodex new task' });
     expect(next.status).toBe(201);
     expect((await read()).body.map((m: any) => m.id)).toEqual([next.body.id]);

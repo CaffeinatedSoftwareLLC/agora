@@ -130,6 +130,9 @@ export function wakesAgent(m: Message, self: string): boolean {
     return !match || match[1].toLowerCase() === me;
 }
 
+/** Direct attention older than this, when a wait returns it, gets a "still yours" note. */
+const AWAY_NOTE_MINUTES = 10;
+
 /** Longest `chat_wait` allowed, in seconds. Harness MCP tool timeouts must be raised to match. */
 export const MAX_WAIT_SECONDS = 3600;
 
@@ -550,6 +553,17 @@ export function registerTools(
             // attention too, but under until=turn they wake it only like any other post.
             let attentionId: string | undefined;
             let direct = false;
+            // When the oldest direct attention was posted: a returning agent must not take it as stale
+            let oldestDirect: number | undefined;
+            const awayNote = () => {
+                if (oldestDirect === undefined) return '';
+                const minutes = Math.floor((Date.now() - oldestDirect) / 60_000);
+                if (minutes < AWAY_NOTE_MINUTES) return '';
+                return `\n\nSome of these were addressed to you while you were away (the oldest ${minutes} min ago). `
+                    + 'Don\'t skip them as stale. They are notifications, not assignments: check each thread\'s current state first '
+                    + '(open or closed, its latest protocol message, who directs it now). Act if it is still yours; if you can\'t yet, '
+                    + 'say so in the open thread; leave it if it was superseded, cancelled or closed.';
+            };
             function attentionFailure(err: unknown): never {
                 if (err instanceof AgoraApiError && err.status === 404) {
                     throw new Error('Server does not support channel attention. Upgrade the Agora server before using chat_wait.');
@@ -597,7 +611,11 @@ export function registerTools(
                         // The waited thread's own replies come from its native read below.
                         if (m.attention === 'participating' && thread && m.threadId === thread) continue;
                         collected.set(m.id, m);
-                        if (m.attention !== 'participating') direct = true;
+                        if (m.attention !== 'participating') {
+                            direct = true;
+                            const at = Date.parse(m.createdAt);
+                            if (Number.isFinite(at) && (oldestDirect === undefined || at < oldestDirect)) oldestDirect = at;
+                        }
                     }
                     const { messages } = await readUnread(ch.id, thread, 200);
                     for (const m of messages) collected.set(m.id, { ...m, threadId: m.threadId ?? thread ?? null });
@@ -605,7 +623,7 @@ export function registerTools(
                         return {
                             content: [{
                                 type: 'text' as const,
-                                text: `${label(ch.name, thread)} — ${collected.size} new message(s):\n\n${formatted()}${await saveAttention()}`,
+                                text: `${label(ch.name, thread)} — ${collected.size} new message(s):\n\n${formatted()}${awayNote()}${await saveAttention()}`,
                             }],
                         };
                     }
