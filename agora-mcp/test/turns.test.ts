@@ -115,3 +115,39 @@ describe('TurnTracker after review (Codex at 0dcec67)', () => {
         expect(protocolOf(`[AGORA/v1 MODE=fix STATE=TURN]\nx\n[YIELD to=${'a'.repeat(65)}]`)?.yieldTo).toBeUndefined();
     });
 });
+
+describe('TurnTracker: the post that owed the turn changes (Codex at 586d4f0)', () => {
+    it('settles when that post is edited away or deleted, owes when a post is edited to name the agent', () => {
+        const t = new TurnTracker();
+        const y = msg(turn('Codex'), { threadId: 'T1' });
+        t.observe('C', [y], ME);
+        expect(t.pending('C')?.messageId).toBe(y.id);
+        // The same post again, unchanged: nothing moves
+        t.observe('C', [y], ME);
+        expect(t.pending('C')?.messageId).toBe(y.id);
+        t.observe('C', [{ ...y, content: turn('Gemini'), editedAt: '2026-11-04T20:05:00Z' }], ME);
+        expect(t.pending('C')).toBeUndefined();
+
+        const plain = msg('Looking into it', { threadId: 'T2' });
+        t.observe('C', [plain], ME);
+        t.observe('C', [{ ...plain, content: turn('Codex'), editedAt: '2026-11-04T20:06:00Z' }], ME);
+        expect(t.pending('C')?.threadId).toBe('T2');
+
+        t.observe('C', [{ ...plain, content: turn('Codex'), editedAt: '2026-11-04T20:06:00Z', deletedAt: '2026-11-04T20:07:00Z' }], ME);
+        expect(t.pending('C')).toBeUndefined();
+    });
+
+    it('settles when a top-level root that owed the turn is deleted, and an older post never overrides a newer one', () => {
+        const t = new TurnTracker();
+        const root = msg(start('Claude, Codex', '[YIELD to=Codex]'));
+        t.observe('C', [root], ME);
+        t.observe('C', [{ ...root, content: null, deletedAt: '2026-11-04T20:08:00Z' }], ME);
+        expect(t.pending('C')).toBeUndefined();
+
+        const newer = msg(turn('Codex'), { threadId: 'T3' });
+        const older = { ...newer, id: '01M6M2' + '0'.repeat(20) };
+        t.observe('C', [newer], ME);
+        t.observe('C', [{ ...older, content: turn('Gemini'), editedAt: '2026-11-04T20:09:00Z' }], ME);
+        expect(t.pending('C')?.messageId).toBe(newer.id);
+    });
+});

@@ -70,23 +70,33 @@ export class TurnTracker {
     private owed = new Map<string, Map<string, OwedTurn>>();
     /** Threads where an agora-collab protocol post was seen or sent. */
     private protocolThreads = new Set<string>();
-    /** threadId → the newest observed post that owed or settled the turn there. */
-    private lastSeen = new Map<string, string>();
+    /** threadId → the newest observed post that owed or settled the turn there, and its revision. */
+    private lastSeen = new Map<string, { id: string; rev: string }>();
 
     /** Messages a tool showed the agent (or that it posted). `self` is the bot's id and username. */
     observe(channelId: string, messages: readonly Message[], self: { id: string; username: string }): void {
         const me = self.username.toLowerCase();
         for (const m of [...messages].sort((a, b) => a.id.localeCompare(b.id))) {
-            if (m.deletedAt) continue;
-            const protocol = protocolOf(m.content);
-            const threadId = m.threadId ?? (protocol ? m.id : null);
+            const protocol = m.deletedAt ? null : protocolOf(m.content);
+            // A deleted top-level post has no readable protocol: find it by the turn it caused
+            const threadId = m.threadId ?? (protocol ? m.id : this.threadOwedBy(channelId, m.id));
             if (!threadId) continue;
             if (protocol) this.protocolThreads.add(threadId);
+            // Only the newest post that moved the turn counts: an older page read later (or a
+            // parent fetched late) never rolls the state back. The same post again counts only
+            // when it changed (edited or deleted) since.
+            const seen = this.lastSeen.get(threadId);
+            const revision = m.deletedAt ? `deleted ${m.deletedAt}` : `edited ${m.editedAt ?? ''}`;
+            const sameSource = seen?.id === m.id;
+            if (seen && m.id < seen.id) continue;
+            if (sameSource && revision === seen.rev) continue;
+
             const named = (n?: string) => !!n && n.replace(/^@/, '').toLowerCase() === me;
             // What this post does to the turn: owe it (why), settle it, or nothing
             let why: OwedTurn['why'] | null = null;
             let settles = false;
-            if (m.authorId === self.id) settles = true;
+            if (m.deletedAt) settles = sameSource;
+            else if (m.authorId === self.id) settles = true;
             else if (protocol && FINISHED.has(protocol.state)) settles = true;
             else if (protocol && named(protocol.yieldTo)) why = 'yield';
             else if (protocol && named(protocol.waitingOn)) why = 'wait';
@@ -95,16 +105,19 @@ export class TurnTracker {
             // An explicit handoff to someone else outranks a mention in the same post
             else if (protocol && (protocol.yieldTo || protocol.waitingOn)) settles = true;
             else if (m.threadId && mentions(m.content, self.username)) why = 'mention';
+            // The post that owed the turn, edited so it no longer addresses the agent
+            else if (sameSource) settles = true;
             if (!why && !settles) continue;
 
-            // Only the newest post that moved the turn counts: an older page read later (or a
-            // parent fetched late) never rolls the state back
-            const seen = this.lastSeen.get(threadId);
-            if (seen && m.id <= seen) continue;
-            this.lastSeen.set(threadId, m.id);
+            this.lastSeen.set(threadId, { id: m.id, rev: revision });
             if (settles) this.settle(channelId, threadId);
             else this.channel(channelId).set(threadId, { threadId, messageId: m.id, why: why! });
         }
+    }
+
+    private threadOwedBy(channelId: string, messageId: string): string | null {
+        for (const o of this.owed.get(channelId)?.values() ?? []) if (o.messageId === messageId) return o.threadId;
+        return null;
     }
 
     /** The agent posted in `threadId` (or closed it): nothing owed there any more. */
@@ -145,6 +158,17 @@ export function owedReason(o: OwedTurn): string {
 }
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** The ULID right before `id`, for an `after=` read that returns `id` itself. */
+export function ulidPredecessor(id: string): string {
+    const chars = id.trim().toUpperCase().split('');
+    for (let i = chars.length - 1; i >= 0; i--) {
+        const at = CROCKFORD.indexOf(chars[i]);
+        if (at > 0) { chars[i] = CROCKFORD[at - 1]; return chars.join(''); }
+        chars[i] = 'Z';
+    }
+    return chars.join('');
+}
 
 /** The ULID right after `id`, for a `before=` read that returns `id` itself. */
 export function ulidSuccessor(id: string): string {

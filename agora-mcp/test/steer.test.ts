@@ -46,7 +46,8 @@ describe('identity first, tracking best effort', () => {
         const refused = await call('chat_send', { message: 'two' });
         expect(refused.isError).toBe(true);
         expect(refused.content[0].text).toContain(`pending turn in thread ${START.id}`);
-        expect(getMessages).toHaveBeenCalledTimes(2);
+        // Read twice (the first failed) and once more by the recheck before refusing
+        expect(getMessages).toHaveBeenCalledTimes(3);
         expect(sendMessage).toHaveBeenCalledTimes(1);
     });
 });

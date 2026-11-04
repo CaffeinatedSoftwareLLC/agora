@@ -3,7 +3,7 @@ import { openLocalUpload, type UploadConfig } from './local-upload.js';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgoraApiError } from './api.js';
-import { owedReason, protocolOf, TurnTracker, ulidSuccessor, type OwedTurn } from './turns.js';
+import { owedReason, protocolOf, TurnTracker, ulidPredecessor, ulidSuccessor, type OwedTurn } from './turns.js';
 import type { AgentSession, AgoraApi, ArtifactInfo, ArtifactVersion, Attachment, Authority, BotInfo, BrowserPreview, Director, FileImage, FileSearchResult, FileText, HandoffOffer, Message, ProjectContext, RuntimeRun, TaskCard, ThreadSummary, ThreadWaiting } from './api.js';
 import type { CursorTracker } from './cursor.js';
 import { block, CONTINUATION, displayName, FORMAT_NOTE, oneLine } from './envelope.js';
@@ -350,19 +350,27 @@ export function registerTools(
      * The owed turn, rechecked on the server first: the thread may have been closed, or the turn
      * handed on, since the agent last read it. A recheck that fails keeps the turn owed.
      */
-    async function stillOwed(channelId: string): Promise<OwedTurn | undefined> {
+    async function stillOwed(channelId: string): Promise<(OwedTurn & { unsure?: boolean }) | undefined> {
         const me = await getBotInfo();
         const checked = new Set<string>();
         for (let owed = turns.pending(channelId); owed && !checked.has(owed.threadId); owed = turns.pending(channelId)) {
             checked.add(owed.threadId);
+            const threadId = owed.threadId;
+            let unsure = false;
             try {
-                const now = await api.getThreadNow(channelId, owed.threadId, owed.messageId);
-                if (now.open === false) { turns.settle(channelId, owed.threadId); continue; }
-                const threadId = owed.threadId;
+                // From the post that owed the turn, itself included: it may since have been edited or deleted
+                const root = owed.messageId === threadId;
+                const now = await api.getThreadNow(channelId, threadId, root ? threadId : ulidPredecessor(owed.messageId));
+                if (now.open === false) { turns.settle(channelId, threadId); continue; }
+                if (root) {
+                    const [parent] = await api.getMessages(channelId, { limit: 1, before: ulidSuccessor(threadId) });
+                    if (parent?.id === threadId) turns.observe(channelId, [parent], me);
+                }
                 turns.observe(channelId, now.replies.map(m => ({ ...m, threadId: m.threadId ?? threadId })), me);
-            } catch { return owed; }
+                unsure = now.truncated;
+            } catch { return { ...owed, unsure: true }; }
             const after = turns.pending(channelId);
-            if (after?.threadId === owed.threadId) return after;
+            if (after?.threadId === threadId) return { ...after, unsure };
         }
         return undefined;
     }
@@ -393,7 +401,8 @@ export function registerTools(
         const protocol = protocolOf(message);
         if (protocol && FINISHED_STATES.has(protocol.state)) return '';
         if (!protocol && !turns.isProtocolThread(thread)) return '';
-        return `\nNext: call chat_wait(channel="${oneLine(channelName)}", thread="${thread}", timeout=1500, until="turn") and answer what arrives.`;
+        return '\nNext: keep listening. If a chat_wait is already running for this channel, keep it and don\'t start a second one; '
+            + `otherwise call chat_wait(channel="${oneLine(channelName)}", thread="${thread}", timeout=1500, until="turn") and answer what arrives.`;
     }
 
     async function getBotId(): Promise<string> {
@@ -488,6 +497,7 @@ export function registerTools(
                     content: [{ type: 'text' as const, text: `Not posted: you have a pending turn in thread ${owed.threadId} `
                         + `(${owedReason(owed)}, message ${owed.messageId}). Replies to it go in that thread: `
                         + `chat_send(channel="${oneLine(ch.name)}", thread="${owed.threadId}", message=...). `
+                        + (owed.unsure ? 'Agora could not read that thread to its newest reply, so the turn may have moved on. ' : '')
                         + 'If this really is a separate top-level post, send it again with top_level: true.' }],
                 };
             }
