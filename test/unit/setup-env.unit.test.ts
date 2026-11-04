@@ -132,11 +132,13 @@ describe.skipIf(process.platform === 'win32')('setup-env --prod (#209)', () => {
         expect(r.stdout).toContain('a'.repeat(64));
     });
 
-    it('cleans up what a failed start created, volumes included when there were none before', () => {
+    // Codex review #9: two setups of one name can race; a failed start never deletes anything itself
+    it('removes nothing after a failed start and prints the exact cleanup command', () => {
         fakeDocker([], true);
         const r = run([...PORTS, '--start']);
         expect(r.status).toBe(1);
-        expect(calls()).toMatch(/down --remove-orphans -v/);
+        expect(calls()).not.toMatch(/down/);
+        expect(r.stderr).toContain('docker compose -f docker-compose.prod.yml --env-file .env.prod down --remove-orphans -v');
     });
 
     // Codex review #8: new secrets over an existing install would lock it out of its own data

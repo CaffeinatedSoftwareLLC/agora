@@ -58,7 +58,7 @@ node scripts/setup-env.js --prod
 
 This prompts for a database password (Enter accepts a generated one) and a domain (Enter skips it — fine for local/personal use, where Caddy will serve over `localhost`). It writes `.env.prod` with freshly generated `DB_PASSWORD`, `JWT_SECRET`, and `AGORA_ENCRYPTION_KEY`, an install name (`AGORA_INSTANCE`, `agora` unless this Docker engine already has one by that name) and free ports. Uploaded files are stored on the `files-data` Docker volume; there's no storage service to configure.
 
-It then asks **Start the stack now? [y/N]**. The default is no: it only writes the file and prints the command for step 2. `--start` starts without asking; `--non-interactive` never asks (for scripts). If a start fails, it removes the containers it just created (and their volumes, unless they existed before) and prints the command to try again.
+It then asks **Start the stack now? [y/N]**. The default is no: it only writes the file and prints the command for step 2. `--start` starts without asking; `--non-interactive` never asks (for scripts). If a start fails, it removes nothing: it prints the command that removes what the new install created, and the command to try again.
 
 Three things to know about that file:
 

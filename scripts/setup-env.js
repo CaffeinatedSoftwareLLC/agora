@@ -441,12 +441,13 @@ async function setupProd() {
     const up = spawnSync('docker', [...compose, 'up', '-d', '--build'], { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] });
 
     if (up.status !== 0) {
+        // No automatic cleanup: an empty inventory a moment ago doesn't prove that everything
+        // of this project now is this attempt's (another setup can start the same name at the
+        // same time), and `down -v` would delete its data. Say exactly what to run instead.
         console.error('\n  Docker Compose failed. Check the output above.');
-        console.error('  Removing what this start created (the project had nothing before it)...');
-        const downArgs = [...compose, 'down', '--remove-orphans', '-v'];
-        const down = spawnSync('docker', downArgs, { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] });
-        if (down.status === 0) console.error(`  Removed its containers, networks and volumes. Fix the problem above, then run:\n  ${upCommand}`);
-        else console.error(`  Cleanup failed too. Remove it by hand with:\n  docker ${downArgs.join(' ')}`);
+        console.error('  Nothing was removed. If this install is new and you want to start over, remove what it created with:');
+        console.error(`  docker ${[...compose, 'down', '--remove-orphans', '-v'].join(' ')}`);
+        console.error(`  (this deletes the "${instance}" install's containers, networks and volumes). Then run:\n  ${upCommand}`);
         process.exit(1);
     }
 
