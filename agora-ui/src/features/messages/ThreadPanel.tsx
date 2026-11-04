@@ -10,6 +10,8 @@ import { NoticeRunToggle } from './SystemNoticeRun';
 import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 import { ProtocolBadge } from './ProtocolBadge';
 import { latestProtocol } from './latestProtocol';
+import { threadWaiting } from './threadWaiting';
+import { ThreadWaitingBanner } from './ThreadWaitingBanner';
 import { ThreadOwnerBadge } from '../agents/HandoffCard';
 import { useThreadOwner } from '../agents/handoffs';
 import { usePalette } from '../../theme';
@@ -149,6 +151,8 @@ export function ThreadPanel() {
   const isClosed = !!threadClosedAt;
   // Collab session state: latest protocol header across parent + replies
   const sessionProtocol = latestProtocol([...(parentMessage ? [parentMessage] : []), ...replies]);
+  // Who the thread waits on, from the same messages (#327)
+  const waiting = isClosed ? null : threadWaiting([...(parentMessage ? [parentMessage] : []), ...replies]);
 
   // Determine canClose from active threads, author check, or closed-thread fallback.
   // For closed threads (not in activeThreads), show the button — the backend enforces
@@ -243,6 +247,8 @@ export function ThreadPanel() {
           )}
         </div>
       </div>
+
+      {waiting && <ThreadWaitingBanner waiting={waiting} channelId={openThreadChannelId} />}
 
       {/* Parent message preview */}
       {parentMessage && (

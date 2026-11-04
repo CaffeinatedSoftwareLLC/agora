@@ -65,3 +65,18 @@ describe.each(['desktop', 'phone'] as const)('thread reply actions: %s', mode =>
     expect(api.delete).not.toHaveBeenCalled();
   });
 });
+
+describe('who the thread waits on (#327)', () => {
+  const wait: Message = { ...reply, id: 'wait', authorUsername: 'Claude', content: 'Builder running',
+    protocol: { version: 1, mode: 'fix', state: 'WAIT', waitingOn: 'Claude', waitingFor: 'builder commit' } };
+
+  it('shows the wait under the header, and not once the thread is closed', () => {
+    useThreadStore.setState({ repliesByThread: new Map([['parent', [reply, wait]]]) });
+    const { unmount } = render(<ThreadPanel />);
+    expect(screen.getByRole('status', { name: 'Thread is waiting on Claude' }).textContent).toContain('for: builder commit');
+    unmount();
+    useMessageStore.setState({ byChannel: new Map([['channel', [{ ...reply, id: 'parent', content: 'Parent', threadClosedAt: '2026-10-21T13:00:00Z' }]]]) });
+    render(<ThreadPanel />);
+    expect(screen.queryByRole('status', { name: /waiting on/ })).toBeNull();
+  });
+});

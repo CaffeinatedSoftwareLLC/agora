@@ -1,4 +1,4 @@
-import { parseProtocol } from '../../src/lib/protocol';
+import { parseProtocol, selfYieldError, threadWaiting } from '../../src/lib/protocol';
 
 describe('parseProtocol', () => {
     test('returns null for ordinary messages', () => {
@@ -50,5 +50,39 @@ describe('parseProtocol', () => {
 
     test('header-only message has no yield', () => {
         expect(parseProtocol('[AGORA/v1 MODE=discuss STATE=ACK]')).toEqual({ version: 1, mode: 'discuss', state: 'ACK' });
+    });
+});
+
+describe('WAIT, waiting and self-yields (#327)', () => {
+    test('parses STATE=WAIT with who owes the next step and for what', () => {
+        expect(parseProtocol('[AGORA/v1 MODE=fix STATE=WAIT]\nThe builder is still running.\n[WAIT on=Claude for=builder commit]'))
+            .toEqual({ version: 1, mode: 'fix', state: 'WAIT', waitingOn: 'Claude', waitingFor: 'builder commit' });
+        expect(parseProtocol('[AGORA/v1 MODE=fix STATE=WAIT]\nwait\n[WAIT on=@Codex]'))
+            .toEqual({ version: 1, mode: 'fix', state: 'WAIT', waitingOn: 'Codex' });
+        // The WAIT line counts only last, and only under STATE=WAIT
+        expect(parseProtocol('[AGORA/v1 MODE=fix STATE=WAIT]\n[WAIT on=Claude for=x]\nmore text')?.waitingOn).toBeUndefined();
+        expect(parseProtocol('[AGORA/v1 MODE=fix STATE=TURN]\nx\n[WAIT on=Claude for=x]')?.waitingOn).toBeUndefined();
+        expect(parseProtocol(`[AGORA/v1 MODE=fix STATE=WAIT]\nx\n[WAIT on=Claude for=${'r'.repeat(300)}]`)?.waitingFor).toHaveLength(120);
+    });
+
+    test('threadWaiting: a WAIT names the agent that owes the step, a YIELD the next agent, an outcome nobody', () => {
+        const p = (text: string) => parseProtocol(text);
+        expect(threadWaiting(p('[AGORA/v1 MODE=fix STATE=WAIT]\nx\n[WAIT on=Claude for=builder commit]'), 'Codex'))
+            .toEqual({ on: 'Claude', for: 'builder commit' });
+        expect(threadWaiting(p('[AGORA/v1 MODE=fix STATE=WAIT]\nstill building'), 'Claude')).toEqual({ on: 'Claude', for: null });
+        expect(threadWaiting(p('[AGORA/v1 MODE=fix STATE=TURN]\nx\n[YIELD to=Codex]'), 'Claude')).toEqual({ on: 'Codex', for: null });
+        expect(threadWaiting(p('[AGORA/v1 MODE=fix STATE=CHECKPOINT]\nsummary'), 'Claude')).toBeNull();
+        for (const outcome of ['DONE]\nall good\n[YIELD to=Codex]', 'BLOCK]\nno', 'CANCEL]\nstop', 'DECIDE]\nBLOCK too risky\n[YIELD to=Codex]']) {
+            expect(threadWaiting(p(`[AGORA/v1 MODE=fix STATE=${outcome}`), 'Claude')).toBeNull();
+        }
+        expect(threadWaiting(null, 'Claude')).toBeNull();
+    });
+
+    test('selfYieldError refuses a YIELD to the author, in any case, and allows others', () => {
+        const turn = (to: string) => parseProtocol(`[AGORA/v1 MODE=fix STATE=TURN]\nx\n[YIELD to=${to}]`);
+        expect(selfYieldError(turn('claude'), 'Claude')).toMatch(/YIELDs to its own author \(Claude\).*\[WAIT on=Claude for=/s);
+        expect(selfYieldError(turn('Codex'), 'Claude')).toBeNull();
+        expect(selfYieldError(parseProtocol('[AGORA/v1 MODE=fix STATE=WAIT]\nx\n[WAIT on=Claude]'), 'Claude')).toBeNull();
+        expect(selfYieldError(turn('Claude'), null)).toBeNull();
     });
 });

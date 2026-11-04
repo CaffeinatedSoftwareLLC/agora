@@ -179,6 +179,37 @@ async function addInbox(db: any, sessionIds: string[], messageId: string, thread
 }
 
 /**
+ * A handoff reminder (#327, src/workers/handoff-nudge.ts) for a bot: the one hosted session
+ * that should get it, as routeMessage would pick: the bot's session scoped to this thread (a
+ * task or subtask worker) when there is one, as in routeThreadReply; otherwise none while the
+ * bot has a live terminal session in the channel (single responder: it answers there), else
+ * its channel session. Only api_key sessions: the reminder is Agora's automation, which the
+ * subscription rule (provider-terms.ts) never lets wake a subscription session.
+ * `reminderSessions` finds it before the reminder is written (so its text can say whether the
+ * agent was reached); `queueReminder` queues the written one.
+ */
+export async function reminderSessions(db: any, input: { channelId: string; threadId: string; botId: string }): Promise<string[]> {
+    return asService(db, async () => {
+        const mine = (sessions: LiveSession[]) => sessions.filter(s => s.botId === input.botId);
+        let target = mine(await liveSessions(db, input.channelId, input.threadId))[0];
+        if (!target) {
+            const terminal = await db.query(
+                `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND bot_id = $2 AND state = 'live' AND kind = 'terminal' LIMIT 1`,
+                [input.channelId, input.botId]
+            );
+            if (terminal.rows.length > 0) return [];
+            target = mine(await liveSessions(db, input.channelId))[0];
+        }
+        return target && !target.subscription ? [target.id] : [];
+    });
+}
+
+export async function queueReminder(db: any, sessionIds: string[], messageId: string, threadId: string): Promise<void> {
+    if (sessionIds.length === 0) return;
+    await asService(db, () => addInbox(db, sessionIds, messageId, threadId, 'direct'));
+}
+
+/**
  * Close a bound thread: its unclaimed directed/protocol rows are acknowledged without
  * work; passive observations survive. With `cancel`, participants' runs are asked to stop.
  */
@@ -396,6 +427,14 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
             case 'TURN':
             case 'CHECKPOINT': {
                 const target = msg.protocol.yieldTo ? byName(participants, msg.protocol.yieldTo) : undefined;
+                if (target && target.id !== author.id) {
+                    await addInbox(db, permitted([target], 'handoff', ctx), msg.messageId, threadId, 'handoff');
+                }
+                return;
+            }
+            case 'WAIT': {
+                // The agent that owes the next step (#327); a WAIT on oneself wakes nobody
+                const target = msg.protocol.waitingOn ? byName(participants, msg.protocol.waitingOn) : undefined;
                 if (target && target.id !== author.id) {
                     await addInbox(db, permitted([target], 'handoff', ctx), msg.messageId, threadId, 'handoff');
                 }

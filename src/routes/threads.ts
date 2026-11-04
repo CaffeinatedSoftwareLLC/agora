@@ -7,13 +7,20 @@ import { canPostInChannel, canViewChannel } from '../lib/channel-access';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
-import { parseProtocol } from '../lib/protocol';
+import { parseProtocol, refuseSelfYield, threadWaiting } from '../lib/protocol';
+import { ulidTime } from '../utils/ulid';
 import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact } from '../lib/artifacts';
 import { messageAttachmentsSchema, prepareMessageAttachments, bindMessageAttachments } from '../lib/message-attachments';
+
+/** The thread list's `waiting` field: null, or who the thread waits on, for what, since when. */
+function waitingJson(protocol: any, messageId: string | null, authorUsername: string | null) {
+    const waiting = messageId ? threadWaiting(protocol, authorUsername ?? null) : null;
+    return waiting && messageId ? { ...waiting, since: ulidTime(messageId), messageId: messageId.trim() } : null;
+}
 
 export async function threadRoutes(app: FastifyInstance) {
 
@@ -49,6 +56,10 @@ export async function threadRoutes(app: FastifyInstance) {
         }
         // Nothing left after cleaning (only escape codes)
         if (!content && !artifact && !attachmentIds?.length) return reply.status(400).send({ error: 'empty_content' });
+
+        // A YIELD to oneself leaves the peer waiting on a turn nobody takes (#327)
+        const selfYield = await refuseSelfYield(db, userId, content);
+        if (selfYield) return reply.status(400).send({ error: 'yield_to_self', message: selfYield });
 
         // Fetch parent message
         const parent = await db.query(
@@ -547,6 +558,8 @@ export async function threadRoutes(app: FastifyInstance) {
                 ...row.latest_protocol, messageId: row.protocol_message_id.trim(),
                 authorUsername: row.protocol_author_username ?? null,
             } : null,
+            // Who the thread waits on since its latest protocol message, and for what (#327)
+            waiting: waitingJson(row.latest_protocol, row.protocol_message_id, row.protocol_author_username),
             previewReplies: (row.preview_replies || []).map((r: any) => ({
                 id: r.id?.trim(),
                 content: r.content,

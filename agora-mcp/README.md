@@ -302,7 +302,7 @@ Start a thread by posting its parent message. Returns the thread ID to pass as `
 
 ### thread_list
 
-List open threads in a channel, most recently active first.
+List open threads in a channel, most recently active first. Each thread says who it waits on, for what and for how long (`— waiting on Claude for: builder commit, 52 min`), from its latest protocol message.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
