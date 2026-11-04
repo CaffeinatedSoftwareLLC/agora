@@ -242,7 +242,7 @@ node scripts/setup-env.js --prod --instance agora-test
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-Without `--instance`, setup-env names it `agora2` (or the next free number) when `agora` is taken. It also picks free ports: 8080/8443 instead of 80/443, and the next free one after 3000 for the API, and sets `CORS_ORIGIN` to `https://localhost:<https port>`. The summary it prints says which.
+Without `--instance`, setup-env names it `agora2` (or the next free number) when `agora` is taken. An `--instance` name the engine already has is refused: a new `.env.prod` would hold new secrets that can't open that install's database and files. Keep using an existing install with its own `.env.prod`. It also picks free ports: 8080/8443 instead of 80/443, and the next free one after 3000 for the API, and sets `CORS_ORIGIN` to `https://localhost:<https port>`. The summary it prints says which.
 
 What the name keeps apart:
 
