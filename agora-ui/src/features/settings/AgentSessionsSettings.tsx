@@ -6,6 +6,9 @@ import { Button } from '../../components/ui/Button';
 import { NotAffiliated } from '../../components/ui/NotAffiliated';
 import { authLabel } from '../agents/agentSessions';
 import { ChatGPTPlanConnect, type PlanConnection } from './ChatGPTPlanConnect';
+import { useAuthStore } from '../../stores/authStore';
+import { BoxesSection } from '../boxes/BoxesSection';
+import { BoxModeBadge } from '../boxes/BoxModeBadge';
 
 /**
  * Agent hosts and agents (docs/planning/agent-sessions-wbs.md, S6). The owner registers the
@@ -13,7 +16,8 @@ import { ChatGPTPlanConnect, type PlanConnection } from './ChatGPTPlanConnect';
  * channel. Tokens are shown once and go into the host's config file, never into a channel.
  */
 
-interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null }
+/** kind 'box': the agora-host inside a box (docs/agent-boxes.md §8.1); listed under Boxes, not here. */
+interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null; kind?: 'machine' | 'box' }
 interface Profile {
   id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
@@ -23,6 +27,8 @@ interface Profile {
   authMode?: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
   /** 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md). */
   planOwnerId?: string | null;
+  /** Its host is a box (docs/agent-boxes.md §10); otherwise it runs unboxed on a machine. */
+  boxed?: boolean; hostMode?: boolean;
 }
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh'];
@@ -57,6 +63,8 @@ function OnceToken({ label, token, onDone }: { label: string; token: string; onD
 
 export function AgentSessionsSettings() {
   const serverId = useServerStore(s => s.instanceServerId);
+  const ownerId = useServerStore(s => (serverId ? s.servers.get(serverId)?.ownerId : undefined));
+  const userId = useAuthStore(s => s.user?.id);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -87,7 +95,10 @@ export function AgentSessionsSettings() {
   }, [serverId, reloadKey]);
 
   if (!serverId) return null;
-  const activeHosts = hosts.filter(h => !h.revokedAt);
+  // Box hosts are managed with their box; agents are created on machine hosts here
+  const machineHosts = hosts.filter(h => h.kind !== 'box');
+  const activeHosts = machineHosts.filter(h => !h.revokedAt);
+  const isOwner = !!userId && !!ownerId && userId.trim() === ownerId.trim();
 
   return (
     <div className="max-w-3xl">
@@ -106,8 +117,9 @@ export function AgentSessionsSettings() {
         person who connected their plan can wake it. See docs/provider-terms.md and docs/codex-chatgpt-plan.md.
       </p>
 
-      <HostsSection serverId={serverId} hosts={hosts} onChange={load} onToken={setSecret} onError={setError} />
-      <AgentsSection serverId={serverId} hosts={activeHosts} profiles={profiles} channels={channels} plans={plans}
+      <BoxesSection serverId={serverId} channels={channels} isOwner={isOwner} />
+      <HostsSection serverId={serverId} hosts={machineHosts} onChange={load} onToken={setSecret} onError={setError} />
+      <AgentsSection serverId={serverId} hosts={activeHosts} allHosts={hosts} profiles={profiles} channels={channels} plans={plans}
         onChange={load} onToken={setSecret} onError={setError} />
       <NotAffiliated className="mt-8" />
     </div>
@@ -156,11 +168,13 @@ function HostsSection({ serverId, hosts, onChange, onToken, onError }: {
   );
 }
 
-function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, onToken, onError }: {
-  serverId: string; hosts: Host[]; profiles: Profile[]; channels: Channel[]; plans: PlanConnection[]; onChange: () => void;
+function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, onChange, onToken, onError }: {
+  serverId: string; hosts: Host[]; allHosts: Host[]; profiles: Profile[]; channels: Channel[]; plans: PlanConnection[]; onChange: () => void;
   onToken: (s: { label: string; token: string }) => void; onError: (e: string) => void;
 }) {
   const [form, setForm] = useState({ name: '', adapter: 'codex', hostId: '', workdirAlias: 'agora', workspaceId: 'primary', model: '', effort: 'high', channelId: '' });
+  // A profile on a machine host runs unboxed; the owner confirms that (docs/agent-boxes.md §10)
+  const [unboxedAck, setUnboxedAck] = useState(false);
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm(f => ({ ...f, [k]: e.target.value }));
   const hostId = form.hostId || hosts[0]?.id || '';
   const opencode = form.adapter === 'opencode';
@@ -169,12 +183,13 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
     try {
       const res = await api.post<{ bot: { username: string }; token: string }>(`/servers/${serverId}/agents`, {
         name: form.name.trim().toLowerCase(), adapter: form.adapter, hostId, workdirAlias: form.workdirAlias.trim(),
-        workspaceId: form.workspaceId.trim().toLowerCase(),
+        workspaceId: form.workspaceId.trim().toLowerCase(), hostModeAck: true,
         ...(form.model.trim() ? { model: form.model.trim() } : {}),
         ...(form.effort ? { effort: form.effort } : {}),
         ...(form.channelId ? { channelId: form.channelId } : {}),
       });
       setForm(f => ({ ...f, name: '' }));
+      setUnboxedAck(false);
       onToken({ label: `Bot token for agent "${res.bot.username}".`, token: res.token });
       onChange();
     } catch (err) { onError(errorText(err)); }
@@ -186,7 +201,7 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
       <ul className="mb-4 flex flex-col gap-2">
         {profiles.length === 0 && <li className="text-text-muted text-sm">No agents yet.</li>}
         {profiles.map(p => (
-          <ProfileRow key={p.id} serverId={serverId} profile={p} host={hosts.find(h => h.id === p.hostId)} plan={plans.find(x => x.profileId === p.id)}
+          <ProfileRow key={p.id} serverId={serverId} profile={p} host={allHosts.find(h => h.id === p.hostId && !h.revokedAt)} plan={plans.find(x => x.profileId === p.id)}
             onChange={onChange} onError={onError} />
         ))}
       </ul>
@@ -236,8 +251,12 @@ function AgentsSection({ serverId, hosts, profiles, channels, plans, onChange, o
               </select>
             </label>
           </div>
+          <label className="mt-3 flex min-h-11 md:min-h-8 items-start gap-2 text-sm text-text">
+            <input type="checkbox" className="mt-1" checked={unboxedAck} onChange={e => setUnboxedAck(e.target.checked)} />
+            <span>Run unboxed on this machine (it can read and change your files). <span className="text-text-muted">Only you can wake an unboxed agent. For anything that doesn&apos;t need this machine, create a box instead.</span></span>
+          </label>
           <div className="mt-3">
-            <Button onClick={() => void create()} disabled={!/^[a-z0-9][a-z0-9_-]*$/i.test(form.name.trim()) || !form.workdirAlias.trim() || (opencode && !form.model.trim())}>
+            <Button onClick={() => void create()} disabled={!unboxedAck || !/^[a-z0-9][a-z0-9_-]*$/i.test(form.name.trim()) || !form.workdirAlias.trim() || (opencode && !form.model.trim())}>
               Create agent
             </Button>
           </div>
@@ -277,6 +296,7 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
       <div className="flex items-center justify-between">
         <span className="text-text">
           <span className="font-medium">{profile.name}</span>
+          <BoxModeBadge profile={profile} className="ml-2" />
           <span className="ml-2 text-xs text-text-muted">
             {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {profile.wakeBudget} wakes · {profile.tokenBudget.toLocaleString()} tokens per session
           </span>
@@ -299,7 +319,8 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
         </label>
         {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validModel} onClick={() => void save()}>Save</Button>}
       </div>
-      {profile.adapter === 'codex' && host && (
+      {/* A box logs its CLI in from its Boxes entry instead */}
+      {profile.adapter === 'codex' && host && host.kind !== 'box' && !profile.boxed && (
         <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}
           siwcMode={profile.authMode === 'siwc'} onChange={onChange} />
       )}

@@ -17,6 +17,7 @@ const RESOLVED_CARDS: Record<string, readonly string[]> = {
   agent_run_approval: ['approved', 'denied', 'expired'],
   agent_handoff: ['accepted', 'declined', 'expired', 'cancelled'],
   agent_permission_relay: ['allow', 'deny'],
+  box_edge_request: ['allowed', 'in_flight', 'used', 'denied', 'expired', 'unknown', 'changed'],
   runtime_approval: ['approved', 'denied'],
   runtime_result: ['succeeded', 'failed', 'timeout', 'killed', 'error'],
 };

@@ -41,9 +41,12 @@ it('creates an opencode agent only with an OpenRouter model ID', async () => {
   const create = screen.getByRole('button', { name: 'Create agent' });
   expect(create).toHaveProperty('disabled', true);
   fireEvent.change(screen.getByLabelText('OpenRouter model ID (required)'), { target: { value: 'qwen/qwen3-coder' } });
+  // Not before the owner confirms it runs unboxed (docs/agent-boxes.md §10)
+  expect(create).toHaveProperty('disabled', true);
+  fireEvent.click(screen.getByLabelText(/^Run unboxed on this machine/));
   expect(create).toHaveProperty('disabled', false);
   fireEvent.click(create);
-  await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/agents', expect.objectContaining({ adapter: 'opencode', model: 'qwen/qwen3-coder', name: 'qwen' })));
+  await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/agents', expect.objectContaining({ adapter: 'opencode', model: 'qwen/qwen3-coder', name: 'qwen', hostModeAck: true })));
 });
 
 it('does not save an opencode agent without a model', async () => {

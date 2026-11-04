@@ -1,4 +1,5 @@
 import { api, ApiError, inBackground } from '../../lib/api';
+import { boxModeLabel } from '../boxes/boxRules';
 
 /**
  * Agent session data and the /channels/:id/agent-commands call, shared by the message-box
@@ -34,6 +35,9 @@ export interface AgentSession {
   authMode?: 'subscription' | 'api_key' | 'siwc';
   /** Every run waits for the owner's approval on a card. */
   runApproval?: boolean;
+  /** The profile's host is a box; otherwise it runs unboxed on a machine (docs/agent-boxes.md §10). */
+  boxed?: boolean;
+  hostMode?: boolean;
   branch?: string | null;
   baseSha?: string | null;
   headSha?: string | null;
@@ -66,6 +70,9 @@ export interface AgentProfile {
   name: string;
   botId: string;
   adapter: string;
+  /** See AgentSession.boxed. */
+  boxed?: boolean;
+  hostMode?: boolean;
 }
 
 export type CommandBody =
@@ -236,7 +243,8 @@ export function describeSession(s: AgentSession): string {
     return `${s.profile} · terminal · ${s.state}${s.state === 'live' ? (s.running ? ' (working)' : ' (idle)') : ''} · ${terminalUsage(s)} · no budget (own CLI)`;
   }
   const reason = s.endReason ? ` (${s.endReason})` : '';
-  return `${s.profile} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`
+  const mode = boxModeLabel(s);
+  return `${s.profile}${mode ? ` (${mode})` : ''} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`
     + (s.authMode ? ` · ${authLabel(s.authMode, s.runApproval)}` : '')
     + (s.branch && s.headSha ? ` · ${s.branch} @ ${s.headSha.slice(0, 12)}` : '');
 }

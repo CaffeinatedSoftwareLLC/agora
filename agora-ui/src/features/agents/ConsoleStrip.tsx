@@ -13,6 +13,8 @@ import {
 } from './agentSessions';
 import { SessionSheet, StateDot, type SheetMode } from './SessionSheet';
 import { ChannelAgentsControl } from './ChannelAgents';
+import { BoxModeBadge } from '../boxes/BoxModeBadge';
+import { boxModeLabel } from '../boxes/boxRules';
 
 /**
  * Console Strip (docs/planning/ui-redesign.md 6.2): one horizontally scrolling row under the
@@ -164,12 +166,13 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
             type="button"
             className={CHIP_TARGET}
             aria-haspopup="dialog"
-            aria-label={`${chip.profile}: ${STATE_LABEL[chip.state].toLowerCase()}${resets ? `, resets ${resets}` : ''}${tokens ? `, ${tokens} tokens` : ''}. Open session controls`}
+            aria-label={`${chip.profile}${boxModeLabel(chip.session) ? ` (${boxModeLabel(chip.session)})` : ''}: ${STATE_LABEL[chip.state].toLowerCase()}${resets ? `, resets ${resets}` : ''}${tokens ? `, ${tokens} tokens` : ''}. Open session controls`}
             onClick={() => setSheet({ mode: { kind: 'profile', profile: chip.profile }, key: Date.now(), channelId })}
           >
             <span className={CHIP_PILL}>
               <StateDot state={chip.state} />
               <span className="font-medium">{chip.profile}</span>
+              <BoxModeBadge profile={chip.session} />
               {resets && <span className="text-xs text-text-muted">Sleeping · <span className="hidden sm:inline">resets </span>{resets}</span>}
               {tokens && <span className="font-mono text-xs text-text-muted">{tokens}</span>}
             </span>
