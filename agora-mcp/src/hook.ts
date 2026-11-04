@@ -1,5 +1,7 @@
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { findHookStates, hookStateDir, isClaudeClient, isCodexClient, processRunning, type HookCli, type HookState } from './hook-state.js';
+import type { Message } from './api.js';
+import { owedReason, turnAction, ulidSuccessor, type OwedTurn } from './turns.js';
 
 /**
  * Claude Code and Codex CLI hooks (`agora-mcp hook <stop|session-end> [--for codex]`,
@@ -22,6 +24,12 @@ export const STOP_MARKER = '[agora-stop-hook]';
 
 /** Tools that show which channel/thread the session works in. */
 const TARGET_TOOLS = new Set(['chat_wait', 'chat_send', 'thread_start', 'chat_read']);
+/** Codex: reading a thread's history is working in it too (#DM Experiment, 2026-11-04). */
+const CODEX_TARGET_TOOLS = new Set([...TARGET_TOOLS, 'chat_history']);
+/** Threads the session touched, newest first, checked for a turn the agent owes (Codex). */
+const OWED_CANDIDATES = 5;
+/** Pages of 100 replies read back through one thread for the post that controls the turn. */
+const OWED_PAGES = 10;
 const STOP_BUDGET_MS = 8_000;
 const FETCH_TIMEOUT_MS = 3_000;
 const THREAD_PAGES = 5;
@@ -115,6 +123,12 @@ export interface TranscriptState {
     waitedSinceContinuation: boolean;
     /** The agent said it is done listening after its latest target action. */
     doneListening: boolean;
+    /**
+     * Every thread the session touched (by a call's `thread`, a started thread, or a thread a
+     * result quoted, e.g. "#general › thread 01J…"), newest first, minus those it closed after
+     * last touching them.
+     */
+    threads: Target[];
 }
 
 const DONE_LISTENING = /\bdone listening\b/i;
@@ -235,20 +249,38 @@ export function parseRollout(text: string, server: string): TranscriptState {
         if (payload.role === 'assistant') { if (said) assistantText.push({ line: i, text: said }); }
         else if (payload.role === 'user' && said.includes(STOP_MARKER)) lastContinuation = i;
     }
-    return summarize({ calls, assistantText, lastContinuation });
+    return summarize({ calls, assistantText, lastContinuation }, CODEX_TARGET_TOOLS);
 }
 
+/** Threads a tool result names: "#general › thread 01J…" labels. */
+// The channel label runs to the separator: names can have spaces ("#DM Experiment › thread …")
+const QUOTED_THREAD = /#([^\n›]+?) › thread ([0-9A-HJKMNP-TV-Z]{26})/g;
+
 /** The decision rules' view of a transcript (both CLIs). */
-function summarize({ calls, assistantText, lastContinuation }: Collected): TranscriptState {
-    const state: TranscriptState = { closedTarget: false, targetLine: -1, lastContinuation, waitedSinceContinuation: false, doneListening: false };
+function summarize({ calls, assistantText, lastContinuation }: Collected, targetTools: ReadonlySet<string> = TARGET_TOOLS): TranscriptState {
+    const state: TranscriptState = { closedTarget: false, targetLine: -1, lastContinuation, waitedSinceContinuation: false, doneListening: false, threads: [] };
     let lastAction: { tool: string; target: Target } | undefined;
+    // thread → where it was last touched, and whether the agent closed it since
+    const touched = new Map<string, { channel?: string; line: number; closed: boolean }>();
+    const touch = (thread: string | undefined, channel: string | undefined, line: number) => {
+        if (!thread) return;
+        const before = touched.get(thread);
+        touched.set(thread, { channel: channel ?? before?.channel, line, closed: false });
+    };
     for (const use of calls) {
         const result = use.result;
         // A failed call didn't happen
         if (result?.error) continue;
         if (use.tool === 'chat_wait' && use.line > lastContinuation && lastContinuation >= 0) state.waitedSinceContinuation = true;
         const channel = str(use.input.channel);
-        if (TARGET_TOOLS.has(use.tool)) {
+        if (use.tool !== 'thread_close') touch(str(use.input.thread), channel, use.line);
+        if (use.tool === 'thread_start' && result) touch(startedThread(result.text), channel, use.line);
+        for (const quoted of (result?.text ?? '').matchAll(QUOTED_THREAD)) touch(quoted[2], quoted[1].trim(), use.line);
+        if (use.tool === 'thread_close' && use.input.reopen !== true && str(use.input.thread)) {
+            const t = touched.get(str(use.input.thread)!);
+            if (t) t.closed = true;
+        }
+        if (targetTools.has(use.tool) && (use.tool !== 'chat_history' || str(use.input.thread))) {
             const thread = use.tool === 'thread_start' ? (result ? startedThread(result.text) : undefined) : str(use.input.thread);
             state.target = { channel, thread };
             state.targetLine = use.line;
@@ -265,6 +297,8 @@ function summarize({ calls, assistantText, lastContinuation }: Collected): Trans
         }
     }
     state.closedTarget = lastAction?.tool === 'thread_close' && !!state.target?.thread && lastAction.target.thread === state.target.thread;
+    state.threads = [...touched].filter(([, t]) => !t.closed).sort((a, b) => b[1].line - a[1].line)
+        .map(([thread, t]) => ({ thread, channel: t.channel }));
     state.doneListening = assistantText.some(a => a.line > state.targetLine && DONE_LISTENING.test(a.text));
     return state;
 }
@@ -274,8 +308,8 @@ function summarize({ calls, assistantText, lastContinuation }: Collected): Trans
 class Agora {
     constructor(private config: Pick<HookState, 'instance' | 'token' | 'client'>, private deps: HookDeps) {}
 
-    async get<T>(path: string): Promise<{ status: number; body: T | undefined; headers: Headers }> {
-        return this.send<T>('GET', path, undefined, FETCH_TIMEOUT_MS);
+    async get<T>(path: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<{ status: number; body: T | undefined; headers: Headers }> {
+        return this.send<T>('GET', path, undefined, Math.max(1, timeoutMs));
     }
 
     async send<T>(method: string, path: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: T | undefined; headers: Headers }> {
@@ -291,7 +325,7 @@ class Agora {
     }
 }
 
-interface BotMe { channels?: { id: string; name: string }[] }
+interface BotMe { id?: string; username?: string; channels?: { id: string; name: string }[] }
 interface ThreadRow { id: string; lastReplyAt: string }
 
 /**
@@ -328,6 +362,18 @@ export function stopReason(channelName: string, thread: string, server: string):
         + '(The human can turn this off with AGORA_STOP_HOOK=off.)';
 }
 
+/** Codex: the agent still owes a turn in a thread it touched. */
+export function owedStopReason(channelName: string, owed: OwedTurn, server: string): string {
+    const thread = owed.threadId;
+    return `${STOP_MARKER} You still owe a turn in Agora thread ${thread} in #${channelName} (${owedReason(owed)}, message ${owed.messageId}), `
+        + 'so keep working there instead of ending your turn: '
+        + `reply in that thread with mcp__${server}__chat_send(channel="${channelName}", thread="${thread}", message=...), `
+        + 'then go back to listening the way you were: your channel-level chat_wait if you listen on the channel (don\'t start a second wait), '
+        + `otherwise mcp__${server}__chat_wait(channel="${channelName}", thread="${thread}", until="turn", timeout=600). `
+        + 'If it no longer needs you, say so in that thread. '
+        + '(The human can turn this off with AGORA_STOP_HOOK=off.)';
+}
+
 /** `AGORA_HOOKS=off` turns all agora-mcp hooks off (agora-host sets it for hosted runs), like `AGORA_STOP_HOOK=off`. */
 function hooksOff(env: NodeJS.ProcessEnv): boolean {
     return env.AGORA_HOOKS?.trim().toLowerCase() === 'off' || env.AGORA_STOP_HOOK?.trim().toLowerCase() === 'off';
@@ -340,6 +386,7 @@ function cliDir(deps: HookDeps): string {
 
 /** The Stop hook's decision: a block, or undefined to let the turn end. */
 export async function decideStop(input: HookInput, deps: HookDeps): Promise<StopDecision | undefined> {
+    const started = Date.now();
     const log = deps.log ?? (() => {});
     if (hooksOff(deps.env)) { log('turned off'); return undefined; }
     if (!input.transcript_path) return undefined;
@@ -366,26 +413,110 @@ export async function decideStop(input: HookInput, deps: HookDeps): Promise<Stop
     if (new Set(used.filter(s => s.server === chosen).map(s => s.token)).size > 1) {
         log(`more than one bot for ${chosen} in this project; leaving the turn alone`); return undefined;
     }
-    // Only an open thread holds the session: in a channel there is nothing to close, so a
-    // session (or a `claude -p` run) that once posted there would never be let go
-    if (!state.target.thread) { log('no thread'); return undefined; }
-    if (state.closedTarget) { log('the thread was closed'); return undefined; }
     if (state.doneListening || (input.last_assistant_message && DONE_LISTENING.test(input.last_assistant_message))) {
         log('the agent is done listening'); return undefined;
     }
     // The agent ignored the last reminder: don't nag. If it listened, keep the loop going.
     if (input.stop_hook_active && !state.waitedSinceContinuation) { log('continuation without chat_wait'); return undefined; }
 
+    const agora = new Agora(config, deps);
+    let me: { status: number; body: BotMe | undefined } | undefined;
+    const bot = async () => (me ??= await agora.get<BotMe>('/bots/@me'));
+    const held = await openTarget(state, config, bot, agora, log);
+    if (held) return held;
+    // Codex: a turn it owes in a thread it touched holds it too, however it last posted
+    // (the 2026-11-04 #DM Experiment run answered at the top level and stopped)
+    if ((deps.cli ?? 'claude') !== 'codex') return undefined;
+    // Leave room for the answer inside runHook's budget
+    return owedTurnHold(state, config, bot, agora, started + (deps.budgetMs ?? STOP_BUDGET_MS) - 250, log);
+}
+
+type BotLookup = () => Promise<{ status: number; body: BotMe | undefined }>;
+
+function channelIn(me: BotMe, wanted: string): { id: string; name: string } | undefined {
+    return me.channels!.find(c => c.id === wanted) ?? me.channels!.find(c => c.name === wanted);
+}
+
+/** The session's latest target thread, while it is open. */
+async function openTarget(state: TranscriptState, config: HookState, bot: BotLookup, agora: Agora, log: (m: string) => void): Promise<StopDecision | undefined> {
+    // Only an open thread holds the session: in a channel there is nothing to close, so a
+    // session (or a `claude -p` run) that once posted there would never be let go
+    if (!state.target?.thread) { log('no thread'); return undefined; }
+    if (state.closedTarget) { log('the thread was closed'); return undefined; }
     const wanted = state.target.channel ?? config.defaultChannel;
     if (!wanted) { log('no channel'); return undefined; }
-    const agora = new Agora(config, deps);
-    const me = await agora.get<BotMe>('/bots/@me');
+    const me = await bot();
     if (me.status !== 200 || !Array.isArray(me.body?.channels)) { log(`/bots/@me ${me.status}`); return undefined; }
-    const channel = me.body!.channels!.find(c => c.id === wanted) ?? me.body!.channels!.find(c => c.name === wanted);
+    const channel = channelIn(me.body!, wanted);
     if (!channel) { log(`channel ${wanted} not found`); return undefined; }
     const thread = state.target.thread;
     if (!await threadOpen(agora, channel.id, thread)) { log('thread closed or not found'); return undefined; }
     return { decision: 'block', reason: stopReason(channel.name, thread, config.server) };
+}
+
+/**
+ * Codex: the newest open thread the session touched in which it still owes a turn (a YIELD,
+ * WAIT or START naming it, or an @mention in the thread), with the reply guard's rules
+ * (src/turns.ts). Each thread is read newest first, page by page, back to the newest post that
+ * owes or settles the turn (the thread's parent last), so a long thread is judged by what
+ * controls it now, not by a window. A thread whose controlling post can't be reached before the
+ * deadline is left undecided, which lets the turn end (fail open). Nothing is fetched after the
+ * deadline.
+ */
+async function owedTurnHold(state: TranscriptState, config: HookState, bot: BotLookup, agora: Agora, deadline: number, log: (m: string) => void): Promise<StopDecision | undefined> {
+    const candidates = state.threads.slice(0, OWED_CANDIDATES);
+    if (candidates.length === 0) { log('no thread touched'); return undefined; }
+    const left = () => deadline - Date.now();
+    const me = await bot();
+    if (me.status !== 200 || !Array.isArray(me.body?.channels) || !me.body?.id || !me.body.username) { log(`/bots/@me ${me.status}`); return undefined; }
+    const self = { id: me.body.id, username: me.body.username };
+    for (const candidate of candidates) {
+        if (left() <= 0) { log('out of time'); return undefined; }
+        const wanted = candidate.channel ?? config.defaultChannel;
+        const channel = wanted ? channelIn(me.body, wanted) : undefined;
+        if (!channel || !candidate.thread) continue;
+        const thread = candidate.thread;
+        try {
+            const verdict = await controllingTurn(agora, channel.id, thread, self, left);
+            if (verdict === 'undecided') { log(`thread ${thread}: history not reached in time`); continue; }
+            if (verdict) {
+                log(`owes a turn in ${thread}`);
+                return { decision: 'block', reason: owedStopReason(channel.name, verdict, config.server) };
+            }
+        } catch (error) {
+            // A slow or failing thread is skipped; the deadline still bounds the rest
+            log(`thread ${thread}: ${(error as Error)?.message ?? error}`);
+        }
+    }
+    log('no turn owed');
+    return undefined;
+}
+
+/** The owed turn in this open thread, null when nothing is owed (or it is closed), or 'undecided'. */
+async function controllingTurn(agora: Agora, channelId: string, thread: string, self: { id: string; username: string }, left: () => number): Promise<OwedTurn | null | 'undecided'> {
+    const at = (path: string) => agora.get<Message[]>(path, Math.min(FETCH_TIMEOUT_MS, left()));
+    let before: string | undefined;
+    for (let page = 0; page < OWED_PAGES; page++) {
+        if (left() <= 0) return 'undecided';
+        const res = await at(`/channels/${channelId}/messages/${encodeURIComponent(thread)}/replies?limit=100&order=desc${before ? `&before=${before}` : ''}`);
+        if (res.status !== 200 || !Array.isArray(res.body)) return 'undecided';
+        if (page === 0 && res.headers.get('x-agora-thread-state') !== 'open') return null;
+        for (const reply of res.body) {
+            const action = turnAction({ ...reply, threadId: reply.threadId ?? thread }, self);
+            if (action) return 'owes' in action ? { threadId: thread, messageId: reply.id, why: action.owes } : null;
+        }
+        if (res.body.length < 100) {
+            // Back at the start: the parent decides
+            if (left() <= 0) return 'undecided';
+            const parent = await at(`/channels/${channelId}/messages?limit=1&before=${ulidSuccessor(thread)}`);
+            const root = Array.isArray(parent.body) ? parent.body.find(m => m.id === thread) : undefined;
+            if (!root) return parent.status === 200 ? null : 'undecided';
+            const action = turnAction(root, self);
+            return action && 'owes' in action ? { threadId: thread, messageId: root.id, why: action.owes } : null;
+        }
+        before = res.body[res.body.length - 1].id;
+    }
+    return 'undecided';
 }
 
 /** Run a hook on its stdin text; returns what to print on stdout (nothing to allow). Never throws. */

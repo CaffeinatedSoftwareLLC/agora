@@ -639,3 +639,190 @@ describe('AGORA_HOOKS=off', () => {
         });
     }
 });
+
+// ─── Codex: a turn it owes holds the stop (Eryk, 2026-11-04) ───
+
+describe('Codex owes a turn', () => {
+    /** An Agora with one thread: its parent and replies, the bot named Codex. */
+    function owedAgora(thread: { parent?: Record<string, unknown>; replies?: Record<string, unknown>[]; state?: 'open' | 'closed' }) {
+        const calls: string[] = [];
+        const json = (body: unknown, extra: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...extra } });
+        const fetcher = vi.fn(async (url: string) => {
+            const path = url.replace('http://agora.test', '');
+            calls.push(path);
+            if (path === '/bots/@me') return json({ id: 'BOT', username: 'Codex', channels: [{ id: CHANNEL, name: 'general' }] });
+            if (path.startsWith(`/channels/${CHANNEL}/messages/${THREAD}/replies`)) {
+                return json([...(thread.replies ?? [])].reverse(), { 'x-agora-thread-state': thread.state ?? 'open' });
+            }
+            if (path.startsWith(`/channels/${CHANNEL}/messages?`)) return json(thread.parent ? [thread.parent] : []);
+            return json([]);
+        });
+        return { fetcher: fetcher as unknown as typeof fetch, calls };
+    }
+    const msg = (id: string, content: string, extra: Record<string, unknown> = {}) => ({ id, content, authorId: 'CLAUDE', authorUsername: 'Claude', authorBot: true, channelId: CHANNEL, createdAt: 'x', ...extra });
+    const start = msg(THREAD, '[AGORA/v1 MODE=review STATE=START]\nDesign review\nparticipants: [Claude, Codex]\nDone when: AGREE on the design.\n[YIELD to=Codex]');
+    const context = msg('01J000000000000000000VREP1', 'Context: the doc is attached.', { threadId: THREAD });
+
+    async function codexOwed(lines: string, server: Parameters<typeof owedAgora>[0], opts: { env?: NodeJS.ProcessEnv; active?: boolean } = {}) {
+        const { deps, input } = await codexSetup(lines, { env: opts.env });
+        const agora = owedAgora(server);
+        return { deps: { ...deps, fetch: agora.fetcher }, input: { ...input, stop_hook_active: opts.active ?? false }, calls: agora.calls };
+    }
+    // The #DM Experiment run: read the thread's history, answer at the top level, stop
+    const history = codexCall('chat_history', { channel: 'general', thread: THREAD }, { text: `#general › thread ${THREAD} — 1 message(s):\n\n[x] (REPL1) Claude: Context` });
+    const topLevel = codexCall('chat_send', { channel: 'general', message: 'ACK, reviewing.' }, { text: 'Message sent to #general (id: M1)' });
+
+    it('holds the #DM Experiment stop: a START YIELDing to Codex, answered at the top level', async () => {
+        const run = await codexOwed(transcript(history, topLevel), { parent: start, replies: [context] });
+        const decision = await decideStop(run.input, run.deps);
+        expect(decision?.decision).toBe('block');
+        expect(decision!.reason).toContain(`You still owe a turn in Agora thread ${THREAD} in #general (a YIELD to you`);
+        expect(decision!.reason).toContain(`mcp__agora__chat_send(channel="general", thread="${THREAD}"`);
+        expect(decision!.reason).toContain('AGORA_STOP_HOOK=off');
+    });
+
+    it('counts chat_history thread=X as the session\'s thread: open, it holds like any target', async () => {
+        const run = await codexOwed(transcript(history), { parent: msg(THREAD, 'Plain topic'), replies: [context] });
+        const decision = await decideStop(run.input, run.deps);
+        expect(decision?.reason).toContain(`mcp__agora__chat_wait(channel="general", thread="${THREAD}"`);
+    });
+
+    it('finds a thread a wait\'s result quoted, and an in-thread @mention', async () => {
+        const wait = codexCall('chat_wait', { channel: 'general' }, { text: `#general — 1 new message(s):\n\n#general › thread ${THREAD}:\n[x] (REPL2) Eryk: @Codex your view?` });
+        const mention = msg('01J000000000000000000VREP2', '@Codex your view?', { threadId: THREAD, authorId: 'ERYK', authorUsername: 'Eryk', authorBot: false });
+        const run = await codexOwed(transcript(wait, topLevel), { parent: msg(THREAD, 'Plain topic'), replies: [mention] });
+        expect((await decideStop(run.input, run.deps))?.reason).toContain('(an @mention of you');
+    });
+
+    it('lets the turn end when nothing is owed: already answered, handed to someone else, or closed', async () => {
+        const answered = await codexOwed(transcript(history, topLevel), { parent: start, replies: [context, msg('01J000000000000000000VREP3', 'ACK', { threadId: THREAD, authorId: 'BOT' })] });
+        expect(await decideStop(answered.input, answered.deps)).toBeUndefined();
+        const handed = await codexOwed(transcript(history, topLevel), { parent: start,
+            replies: [msg('01J000000000000000000VREP3', '[AGORA/v1 MODE=review STATE=TURN]\n@Codex fyi\n[YIELD to=Gemini]', { threadId: THREAD })] });
+        expect(await decideStop(handed.input, handed.deps)).toBeUndefined();
+        const closed = await codexOwed(transcript(history, topLevel), { parent: start, replies: [context], state: 'closed' });
+        expect(await decideStop(closed.input, closed.deps)).toBeUndefined();
+        // Closed by the agent itself: not even asked
+        const closedHere = await codexOwed(transcript(history, codexCall('thread_close', { channel: 'general', thread: THREAD }, { text: 'closed' }), topLevel), { parent: start });
+        expect(await decideStop(closedHere.input, closedHere.deps)).toBeUndefined();
+        expect(closedHere.calls).toEqual([]);
+    });
+
+    it('still lets Eryk stop Codex on purpose: AGORA_STOP_HOOK=off and AGORA_HOOKS=off, without asking Agora', async () => {
+        for (const env of [{ AGORA_STOP_HOOK: 'off' }, { AGORA_HOOKS: 'off' }]) {
+            const run = await codexOwed(transcript(history, topLevel), { parent: start, replies: [context] }, { env });
+            expect(await decideStop(run.input, run.deps)).toBeUndefined();
+            expect(run.calls).toEqual([]);
+        }
+    });
+
+    it('keeps the loop guard: an ignored reminder lets the turn end', async () => {
+        const run = await codexOwed(transcript(history, topLevel, codexContinuation(), codexSaid('ok')), { parent: start, replies: [context] }, { active: true });
+        expect(await decideStop(run.input, run.deps)).toBeUndefined();
+    });
+
+    it('leaves Claude Code\'s hook as it was: no owed-turn hold', async () => {
+        const lines = transcript(toolUse('chat_history', { channel: 'general', thread: THREAD }, { text: `#general › thread ${THREAD} — 1 message(s)` }),
+            toolUse('chat_send', { channel: 'general', message: 'ACK' }, { text: 'Message sent to #general (id: M1)' }));
+        const { deps, input } = await setup(lines);
+        const agora = owedAgora({ parent: start, replies: [context] });
+        expect(await decideStop(input, { ...deps, fetch: agora.fetcher })).toBeUndefined();
+        expect(agora.calls).toEqual([]);
+    });
+});
+
+describe('Codex owes a turn: long threads, spaced channel names, the deadline (Codex at a26af6a)', () => {
+    const T = (n: number) => `01J00000000000000000T${String(n).padStart(5, '0')}`;
+    const R = (t: number, n: number) => `01J00000000000000000V${String(t)}${String(n).padStart(4, '0')}`;
+    interface FakeThread { parent: Record<string, unknown>; replies: Record<string, unknown>[]; state?: 'open' | 'closed'; delayMs?: number; hang?: boolean }
+    const post = (id: string, content: string, extra: Record<string, unknown> = {}) =>
+        ({ id, content, authorId: 'CLAUDE', authorUsername: 'Claude', authorBot: true, channelId: CHANNEL, createdAt: 'x', ...extra });
+
+    /** Agora with several threads; replies paged newest first with `before`, as the server does. */
+    function pagedAgora(threads: Record<string, FakeThread>, channelName = 'general') {
+        const calls: string[] = [];
+        const json = (body: unknown, extra: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...extra } });
+        const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+            const u = new URL(url);
+            calls.push(u.pathname + u.search);
+            if (u.pathname === '/bots/@me') return json({ id: 'BOT', username: 'Codex', channels: [{ id: CHANNEL, name: channelName }] });
+            const reply = /^\/channels\/[^/]+\/messages\/([^/]+)\/replies$/.exec(u.pathname);
+            if (reply) {
+                const t = threads[reply[1]];
+                if (!t) return json([], {});
+                if (t.hang) await new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+                if (t.delayMs) await new Promise(r => setTimeout(r, t.delayMs));
+                const before = u.searchParams.get('before');
+                const limit = Number(u.searchParams.get('limit') ?? 50);
+                const page = [...t.replies].reverse().filter(m => !before || (m.id as string) < before).slice(0, limit);
+                return json(page, { 'x-agora-thread-state': t.state ?? 'open' });
+            }
+            if (u.pathname === `/channels/${CHANNEL}/messages`) {
+                const before = u.searchParams.get('before')!;
+                const found = Object.values(threads).map(t => t.parent).filter(p => (p.id as string) < before).sort((a, b) => (b.id as string).localeCompare(a.id as string));
+                return json(found.slice(0, 1));
+            }
+            return json([]);
+        });
+        return { fetcher: fetcher as unknown as typeof fetch, calls };
+    }
+    async function run(lines: string, threads: Record<string, FakeThread>, opts: { channelName?: string; budgetMs?: number } = {}) {
+        const { deps, input } = await codexSetup(lines);
+        const agora = pagedAgora(threads, opts.channelName);
+        return { deps: { ...deps, fetch: agora.fetcher, budgetMs: opts.budgetMs ?? deps.budgetMs }, input, calls: agora.calls };
+    }
+    const historyOf = (thread: string, channel = 'general') => codexCall('chat_history', { channel, thread }, { text: `#${channel} › thread ${thread} — 1 message(s)` });
+    const topLevel = (channel = 'general') => codexCall('chat_send', { channel, message: 'status' }, { text: `Message sent to #${channel} (id: M1)` });
+    const startFor = (id: string) => post(id, '[AGORA/v1 MODE=review STATE=START]\nReview\nparticipants: [Claude, Codex]\n[YIELD to=Codex]');
+    const progress = (t: number, from: number, count: number) => Array.from({ length: count }, (_, i) => post(R(t, from + i), `progress ${from + i}`, { threadId: T(t), authorId: 'ERYK', authorBot: false }));
+
+    it('captures a thread quoted under a channel name with spaces (#DM Experiment)', async () => {
+        const wait = codexCall('chat_wait', { channel: 'DM Experiment' },
+            { text: `#DM Experiment — 1 new message(s):\n\n#DM Experiment › thread ${T(1)}:\n[x] (r) Claude: [AGORA/v1 MODE=review STATE=START]` });
+        const r = await run(transcript(wait, topLevel('DM Experiment')), { [T(1)]: { parent: startFor(T(1)), replies: [] } }, { channelName: 'DM Experiment' });
+        const decision = await decideStop(r.input, r.deps);
+        expect(decision?.reason).toContain(`thread ${T(1)} in #DM Experiment (a YIELD to you`);
+    });
+
+    it('a turn Codex answered before 100+ later replies stays answered', async () => {
+        const replies = [post(R(2, 0), 'ACK, on it.', { threadId: T(2), authorId: 'BOT' }), ...progress(2, 1, 120)];
+        const r = await run(transcript(historyOf(T(2)), topLevel()), { [T(2)]: { parent: startFor(T(2)), replies } });
+        expect(await decideStop(r.input, r.deps)).toBeUndefined();
+        // It read back through the pages to Codex's own post
+        expect(r.calls.filter(c => c.includes('/replies')).length).toBe(2);
+    });
+
+    it('a YIELD to Codex older than the newest 100 replies, with no addressing START, still holds', async () => {
+        const replies = [post(R(3, 0), '[AGORA/v1 MODE=fix STATE=TURN]\nYours.\n[YIELD to=Codex]', { threadId: T(3) }), ...progress(3, 1, 120)];
+        const r = await run(transcript(historyOf(T(3)), topLevel()), { [T(3)]: { parent: post(T(3), 'Plain topic'), replies } });
+        expect((await decideStop(r.input, r.deps))?.reason).toContain(`(a YIELD to you, message ${R(3, 0)})`);
+    });
+
+    it('a slow earlier candidate doesn\'t hide a later owed thread', async () => {
+        const lines = transcript(historyOf(T(4)), historyOf(T(5)), topLevel());
+        const r = await run(lines, {
+            [T(5)]: { parent: post(T(5), 'Plain topic'), replies: [], delayMs: 50 },
+            [T(4)]: { parent: startFor(T(4)), replies: [] },
+        });
+        expect((await decideStop(r.input, r.deps))?.reason).toContain(`thread ${T(4)}`);
+    });
+
+    it('stops at the deadline: a hanging thread ends the scan, and nothing is fetched after it', async () => {
+        const lines = transcript(historyOf(T(6)), historyOf(T(7)), topLevel());
+        const r = await run(lines, {
+            [T(7)]: { parent: post(T(7), 'Plain topic'), replies: [], hang: true },
+            [T(6)]: { parent: startFor(T(6)), replies: [] },
+        }, { budgetMs: 400 });
+        const began = Date.now();
+        const out = await runHook('stop', JSON.stringify(r.input), r.deps);
+        expect(out).toBeUndefined();
+        expect(Date.now() - began).toBeLessThan(1_000);
+        await new Promise(res => setTimeout(res, 400));
+        expect(r.calls.some(c => c.includes(T(6)))).toBe(false);
+    });
+
+    it('says to keep a running channel listener rather than start a second wait', async () => {
+        const r = await run(transcript(historyOf(T(8)), topLevel()), { [T(8)]: { parent: startFor(T(8)), replies: [] } });
+        expect((await decideStop(r.input, r.deps))?.reason).toContain('your channel-level chat_wait if you listen on the channel (don\'t start a second wait)');
+    });
+});
