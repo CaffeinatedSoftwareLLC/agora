@@ -10,7 +10,8 @@ import { DOMAIN_ENTRY } from './contract';
  * owner. The edge records them; the API's decision route decides them. Both render the same
  * card (system_event 'box_edge_request') in the box's home channel.
  *
- * `db` is a pool or a client with table-owner rights (boxd, the edge, or asService in the API).
+ * `db` is a client inside a transaction (BEGIN … COMMIT), with table-owner rights: boxd, the
+ * edge, or asService in the API. notify() opens a SAVEPOINT, which a bare pool can't.
  */
 
 export type EdgeKind = 'domain' | 'push' | 'pr';
@@ -155,8 +156,8 @@ export async function decideEdgeRequest(db: any, requestId: string, decision: Ed
     }
     const status: EdgeStatus = decision === 'deny' ? 'denied' : 'allowed';
     await db.query(
-        `UPDATE box_edge_requests SET status = $2, decided_by = $3, decided_at = NOW(), updated_at = NOW(),
-                expires_at = CASE WHEN $2 = 'allowed' THEN NOW() + ($4 || ' minutes')::interval ELSE expires_at END
+        `UPDATE box_edge_requests SET status = $2::varchar, decided_by = $3, decided_at = NOW(), updated_at = NOW(),
+                expires_at = CASE WHEN $2::varchar = 'allowed' THEN NOW() + ($4 || ' minutes')::interval ELSE expires_at END
          WHERE id = $1`,
         [requestId, status, userId, String(ALLOWED_TTL_MINUTES)]
     );
