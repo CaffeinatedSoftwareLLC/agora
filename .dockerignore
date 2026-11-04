@@ -10,3 +10,8 @@ initial-docs
 nul
 agora-ui/node_modules
 agora-ui/dist
+.env.prod.*
+.env.boxtest
+# install/upgrade.sh: the release kept for --rollback, and encrypted backups
+.releases
+backups

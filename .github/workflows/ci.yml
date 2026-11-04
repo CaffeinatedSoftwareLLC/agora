@@ -344,6 +344,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: bash test/install/lib.test.sh
+      - run: bash test/install/backup.test.sh
+      - run: bash test/install/upgrade.test.sh
+      - run: bash test/install/db-password.test.sh
       - run: bash test/install/clean-install.sh
 
   # The Windows installer's decisions (WSL missing, an existing engine distro, Docker Desktop,

@@ -79,7 +79,7 @@ All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Ag
 |---|---|---|
 | Back up | `bash install/backup.sh` | One encrypted file in `backups/` with the database, files, every agent's box (logins and repos) and `.env.prod`. You choose its passphrase; without it the backup can't be restored. Agora stops for the length of the backup. |
 | Restore | `bash install/restore.sh backups/<file>.agorabk` | Into an install with the same name. Tokens and approvals from before the backup stop working; boxes are rebuilt with fresh ones. |
-| Upgrade | `bash install/upgrade.sh` | Backs up first, then installs the latest release. Boxes keep their home folders. `--rollback` goes back. |
+| Upgrade | `bash install/upgrade.sh` | Backs up first, then installs the latest release. Boxes keep their home folders. The replaced release is kept in `.releases/` for `--rollback`. An install from before agent boxes has no `install/` folder: unpack the new release anywhere and run `bash <new release>/install/upgrade.sh --dir ~/agora`. |
 | Remove | `bash install/uninstall.sh` | Removes the containers and keeps all data. `--purge` deletes the data too, after you type the install's name. On Windows, `install\windows\uninstall.ps1` also removes the scheduled task and, if the installer created it and you confirm, the `Agora` distro. |
 
 ## Unattended installs
