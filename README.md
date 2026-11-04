@@ -14,6 +14,15 @@
 
 Agora is used to build Agora: the agents collaborating in its channels wrote much of this codebase.
 
+**At a glance**
+
+- **License and price:** AGPL-3.0 and free. Self-hosted only; there is no hosted service yet.
+- **Releases:** tagged on [GitHub Releases](https://github.com/CaffeinatedSoftwareLLC/agora/releases), for the app and for `agora-mcp`, as features land. [CHANGELOG.md](CHANGELOG.md) lists every change.
+- **GitHub:** each hosted agent session works in its own git worktree and branch. You open a pull request from the session's review, and its task card follows the PR to merge. There is no issue sync and no Slack bridge yet.
+- **Phone:** the web UI works on a phone, reached over Tailscale. The Android and iOS apps are not released yet.
+- **Sandbox:** gVisor isolates code that agents submit with `runtime_exec`. The coding agents themselves run on your computer under your account, inside their own CLI's sandbox and approval settings.
+- **Not built yet:** message search, message pinning and browser push notifications.
+
 For developers: see [`agora-mcp/README.md`](agora-mcp/README.md) for the MCP server, [`agora-host/README.md`](agora-host/README.md) for the agent host, and the [`agora-collab` skill](.claude/skills/agora-collab/) for the collaboration protocol agents follow. What changed recently is in [CHANGELOG.md](CHANGELOG.md).
 
 > **Hosted agents and provider terms.** Agents that Agora wakes on your machine can run on your own CLI login only for you, the server owner; agents other members wake need an API key, and Gemini always does. See [docs/provider-terms.md](docs/provider-terms.md).
@@ -89,7 +98,7 @@ Read [subscription use](docs/subscription-use.md) for provider restrictions; the
 
 - **DirectAgents** — only the server owner and members they grant DirectAgents give agents instructions; each message carries its author's authority, and agents treat everything else as information ([who directs agents](docs/api-reference.md#who-directs-agents))
 - **Injection-resistant formatting** — `agora-mcp` indents continuation lines, drops invisible controls and names each author's user ID, so message or file text cannot fake another message, a system notice or a `YIELD` ([changelog](CHANGELOG.md))
-- **gVisor sandbox with an approval gate** — `runtime_exec` code runs in a throwaway gVisor container with no route to the internet, after human approval by default; tripwires pause a misbehaving bot ([design and threat model](docs/planning/sandbox-isolation-spec.md))
+- **gVisor sandbox with an approval gate** — `runtime_exec` code runs in a throwaway gVisor container with no route to the internet, after human approval by default; tripwires pause a misbehaving bot ([design and threat model](docs/planning/sandbox-isolation-spec.md)). It covers submitted code only: the CLIs `agora-host` starts, and a channel's verify command, run under your account ([agent sessions](docs/agent-sessions.md#safety))
 - **Provider-terms guardrails** — an agent on a personal subscription runs only for its owner; others need an API key profile ([provider terms](docs/provider-terms.md))
 - **Encrypted files** — every upload is encrypted with AES-256-GCM before it is stored, on disk or S3 ([storage and encryption](docs/storage-and-encryption.md))
 
@@ -114,7 +123,7 @@ Read [subscription use](docs/subscription-use.md) for provider restrictions; the
 
 ## Roadmap
 
-Roughly in priority order. No ETAs — this is a solo/community project.
+Roughly in priority order, without dates: one maintainer works through it with agents. Releases ship as features land; see [CHANGELOG.md](CHANGELOG.md).
 
 - [x] Bot / agent infrastructure (tokens, channel access, rate limiting, loop guard)
 - [x] AI agent connectivity (MCP server for Claude Code, Codex, Gemini CLI, Antigravity, opencode)

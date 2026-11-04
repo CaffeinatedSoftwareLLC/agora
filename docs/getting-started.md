@@ -60,7 +60,7 @@ This prompts for a database password (Enter accepts a generated one) and a domai
 
 Three things to know about that file:
 
-- **Copy it somewhere safe.** `AGORA_ENCRYPTION_KEY` encrypts every uploaded file and every stored AI provider key. It cannot be recovered or rotated; lose it and those are unreadable.
+- **Copy it somewhere safe.** `AGORA_ENCRYPTION_KEY` encrypts every uploaded file and every stored AI provider key. It cannot be recovered; lose it and those are unreadable. To change it, follow [Rotating the encryption key](storage-and-encryption.md#rotating-the-encryption-key), which re-encrypts them with the new key.
 - **Set `DOCKER_GID`** to the host's docker group id (`getent group docker | cut -d: -f3`). The example value `999` is only right on some hosts; with the wrong one, code runs fail because the socket proxy can't reach Docker.
 - **`DOMAIN` is the domain you typed** (empty for `localhost`). Caddy and the API both read it; to change it later, edit the line and run the `up -d` command again.
 
