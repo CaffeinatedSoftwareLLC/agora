@@ -134,13 +134,15 @@ export async function createBox(inst: Instance, name: string, adapter: 'claude' 
 }
 
 export async function waitRunning(inst: Instance, boxId: string, minGeneration = 1): Promise<void> {
+    // A check-in from before this call may be the old container's (a rebuild keeps the host row)
+    const since = await psql('SELECT NOW()');
     await until(`box ${boxId} running`, async () => {
         const list = await api(`/servers/${inst.serverId}/boxes`, { auth: inst.admin });
         const box = list.body.boxes?.find((b: any) => b.id === boxId);
         if (box?.state === 'failed') throw new Error(`box failed: ${box.lastError}`);
         if (box?.state !== 'running' || box.generation < minGeneration) return false;
         // Its agora-host has reached Agora through the edge
-        const seen = await psql(`SELECT h.last_seen_at > NOW() - INTERVAL '2 minutes' FROM agent_boxes b JOIN agent_hosts h ON h.id = b.host_id WHERE b.id = '${boxId}'`);
+        const seen = await psql(`SELECT h.last_seen_at > '${since}'::timestamptz AND h.box_generation = b.generation FROM agent_boxes b JOIN agent_hosts h ON h.id = b.host_id WHERE b.id = '${boxId}'`);
         return seen === 't';
     });
 }
