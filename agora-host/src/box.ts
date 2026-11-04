@@ -86,7 +86,7 @@ export function boxConfig(env: NodeJS.ProcessEnv, paths: BoxPaths = { home: BOX_
     const profile = readBoxProfile(env);
     const exists = paths.exists ?? existsSync;
     const first = profile.repos[0];
-    const workdir = first && exists(join(repoDir(paths.home, first), '.git')) ? repoDir(paths.home, first) : posix.join(paths.home, 'work', 'scratch');
+    const workdir = first && exists(posix.join(repoDir(paths.home, first), '.git')) ? repoDir(paths.home, first) : posix.join(paths.home, 'work', 'scratch');
     const config = {
         instance: env.AGORA_INSTANCE_URL!.trim().replace(/\/?$/, '/'),
         hostToken: env.AGORA_HOST_TOKEN!.trim(),

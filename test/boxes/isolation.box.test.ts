@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import {
-    api, boxAction, connectFromBox, createBox, docker, httpFromBox, inBox, inspectBox, instance, INSTANCE, psql,
+    api, boxAction, connectFromBox, createBox, docker, httpFromBox, inBox, inBoxInput, inspectBox, instance, INSTANCE, psql,
     RUNTIME, serviceAddress, tcpFromBox, waitRunning, type Box, type Instance,
 } from './harness';
 
@@ -33,13 +33,14 @@ async function checkIsolation(label: string) {
 
     // B1/B2: B's token strings appear nowhere A can read: files, any process environment.
     for (const secret of [b.botToken, b.hostToken]) {
+        // The secret goes in on stdin into grep's pattern file, never onto a command line
         const secretPart = secret.slice(secret.indexOf('.') + 1);
-        const grep = await inBox(a.container,
-            `grep -rIl --exclude-dir=proc --exclude-dir=sys -F '${secretPart}' / 2>/dev/null | head -5; ` +
-            `for f in /proc/[0-9]*/environ /proc/[0-9]*/cmdline; do tr '\\0' '\\n' < "$f" 2>/dev/null; done | grep -cF '${secretPart}' || true`, 180_000);
-        const [files, count] = [grep.stdout.trim().split('\n').slice(0, -1).filter(Boolean), grep.stdout.trim().split('\n').pop()];
-        expect(files, `${label}: files holding B's token`).toEqual([]);
-        expect(count, `${label}: processes holding B's token`).toBe('0');
+        const files = await inBoxInput(a.container,
+            'grep -rIlF -f /dev/stdin --exclude-dir=proc --exclude-dir=sys / 2>/dev/null | head -5', `${secretPart}\n`);
+        expect(files.stdout.trim(), `${label}: files holding B's token`).toBe('');
+        const procs = await inBoxInput(a.container,
+            'exec 3<&0; for f in /proc/[0-9]*/environ /proc/[0-9]*/cmdline; do tr "\\0" "\\n" < "$f" 2>/dev/null; done | grep -cF -f /dev/fd/3 || true', `${secretPart}\n`);
+        expect(procs.stdout.trim(), `${label}: processes holding B's token`).toBe('0');
     }
     // A's own environment carries only A's tokens
     const env = await inBox(a.container, 'tr "\\0" "\\n" < /proc/1/environ');
@@ -57,7 +58,8 @@ async function checkIsolation(label: string) {
     }
     // ...and the edge doesn't take it there either
     for (const authority of [`${b.address}:443`, `${await serviceAddress('postgres')}:443`, 'postgres:443', 'api:443']) {
-        expect((await connectFromBox(a.container, authority)).status, `${label}: CONNECT ${authority}`).toBe(403);
+        // 403 (refused), or 400 for a name that isn't a public host name at all
+        expect([400, 403], `${label}: CONNECT ${authority}`).toContain((await connectFromBox(a.container, authority)).status);
     }
 
     // B4: B's real token is useless from A (REST through the edge) and outside any box.

@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
-    api, boxAction, compose, createBox, docker, inBox, inspectBox, instance, psql, sh, until, waitRunning,
+    api, boxAction, compose, createBox, docker, inBox, inspectBox, instance, psql, sh, shEnv, until, waitRunning,
     type Box, type Instance,
 } from './harness';
 
@@ -57,7 +59,7 @@ describe('box recovery', () => {
         // Nothing happens while boxd is down
         await new Promise(r => setTimeout(r, 5000));
         expect(await startedAt()).toBe(started);
-        expect((await compose('start', 'boxd')).code).toBe(0);
+        expect((await compose('up', '-d', '--no-deps', '--no-build', 'boxd')).code).toBe(0);
         await waitRunning(inst, box.id, generation + 1);
         box = await inspectBox(box.id);
         expect(box.generation).toBe(generation + 1);
@@ -77,16 +79,20 @@ describe('box recovery', () => {
         expect((await api('/bots/@me', { auth: `Bot ${box.botToken}` })).body?.error).toBe('box_token_outside_box');
     }, 900_000);
 
-    it.runIf(existsSync('install/backup.sh') && existsSync('install/restore.sh'))('backup, reset, restore: the home folder comes back and old tokens are dead', async () => {
-        const env = { ...process.env, AGORA_BACKUP_PASSPHRASE: 'box-test-passphrase-1' };
-        const bundle = `/tmp/agora-boxtest-backup-${Date.now()}.agora-backup`;
-        const backup = await sh('bash', ['install/backup.sh', '--instance-dir', '.', '--env-file', '.env.boxtest', '--out', bundle], 900_000);
+    // backup.sh and restore.sh run on the Linux side (in WSL on Windows), so not from Git Bash
+    it.runIf(existsSync('install/backup.sh') && existsSync('install/restore.sh') && process.platform !== 'win32')('backup, reset, restore: the home folder comes back and old tokens are dead', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agora-boxtest-backup-'));
+        const pass = join(dir, 'passphrase');
+        writeFileSync(pass, 'box-test-passphrase-1\n', { mode: 0o600 });
+        const bundle = join(dir, 'bundle.agora-backup');
+        const env = { AGORA_ENV_FILE_NAME: '.env.boxtest', NON_INTERACTIVE: '1' };
+        const backup = await shEnv('bash', ['install/backup.sh', '--dir', '.', '--out', bundle, '--passphrase-file', pass], env, 900_000);
         expect(backup.code, backup.stderr).toBe(0);
         const before = await inspectBox(box.id);
         await boxAction(inst, box.id, 'reset', 'recover');
         await waitRunning(inst, box.id, before.generation + 1);
         expect((await inBox(containerFor(box), 'cat ~/marker 2>&1')).stdout).toMatch(/No such file/);
-        const restore = await sh('bash', ['install/restore.sh', '--instance-dir', '.', '--env-file', '.env.boxtest', '--yes', bundle], 900_000);
+        const restore = await shEnv('bash', ['install/restore.sh', bundle, '--dir', '.', '--passphrase-file', pass, '--yes'], env, 900_000);
         expect(restore.code, restore.stderr).toBe(0);
         await until('the API', async () => (await api('/health')).status === 200, 300_000);
         inst = await instance();
@@ -96,7 +102,6 @@ describe('box recovery', () => {
         // Tokens from before the restore are dead
         expect((await api('/bots/@me', { auth: `Bot ${before.botToken}` })).status).toBe(401);
         expect(await psql(`SELECT count(*) FROM box_edge_requests WHERE status IN ('pending', 'allowed', 'in_flight')`)).toBe('0');
-        void env;
     }, 1_800_000);
 });
 

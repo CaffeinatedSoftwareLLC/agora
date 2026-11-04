@@ -40,6 +40,11 @@ export function normalizeHost(raw: string): { host: string } | { error: 'ip' | '
     return { host };
 }
 
+async function currentAllowlist(opts: ForwardProxyOptions, box: EdgeBox): Promise<string[]> {
+    const r = await opts.deps.db.query('SELECT allowed_domains FROM agent_boxes WHERE id = $1 AND generation = $2', [box.id, box.generation]);
+    return r.rows[0]?.allowed_domains ?? [];
+}
+
 async function decide(opts: ForwardProxyOptions, box: EdgeBox, rawHost: string): Promise<Verdict> {
     const norm = normalizeHost(rawHost);
     if ('error' in norm) {
@@ -48,7 +53,9 @@ async function decide(opts: ForwardProxyOptions, box: EdgeBox, rawHost: string):
             : { ok: false, status: 400, text: 'invalid host name' };
     }
     const { host } = norm;
-    if (!domainAllowed(host, box.allowedDomains)) {
+    // The directory is a few seconds old; before refusing, read the allowlist itself, so a
+    // retry right after the owner allows a domain goes through instead of making a new card
+    if (!domainAllowed(host, box.allowedDomains) && !domainAllowed(host, await currentAllowlist(opts, box))) {
         if (await domainRecentlyDenied(opts.deps.db, box.id, host)) {
             return { ok: false, status: 403, text: `domain ${host} was denied by the owner` };
         }

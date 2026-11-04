@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 /**
@@ -26,8 +26,29 @@ export async function sh(cmd: string, args: string[], timeout = 120_000): Promis
         return { code: typeof err.code === 'number' ? err.code : 1, stdout: err.stdout ?? '', stderr: err.stderr ?? String(err) };
     }
 }
+/** Like sh, with extra environment variables. */
+export async function shEnv(cmd: string, args: string[], env: Record<string, string>, timeout = 120_000): Promise<Exec> {
+    try {
+        const { stdout, stderr } = await run(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, ...env } });
+        return { code: 0, stdout, stderr };
+    } catch (err: any) {
+        return { code: typeof err.code === 'number' ? err.code : 1, stdout: err.stdout ?? '', stderr: err.stderr ?? String(err) };
+    }
+}
 export const docker = (...args: string[]) => sh('docker', args);
 export const compose = (...args: string[]) => sh(COMPOSE[0], [...COMPOSE.slice(1), ...args], 300_000);
+/** Run a script inside a container with `input` on its stdin (keeps secrets off command lines). */
+export function inBoxInput(container: string, script: string, input: string, timeout = 180_000): Promise<Exec> {
+    return new Promise(resolve => {
+        const child = spawn('docker', ['exec', '-i', container, 'sh', '-c', script]);
+        let stdout = ''; let stderr = '';
+        const timer = setTimeout(() => child.kill(), timeout);
+        child.stdout.on('data', d => { stdout += d; });
+        child.stderr.on('data', d => { stderr += d; });
+        child.on('close', code => { clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr }); });
+        child.stdin.end(input);
+    });
+}
 /** Run a command inside a container as its own user. */
 export const inBox = (container: string, script: string, timeout = 60_000) => sh('docker', ['exec', container, 'sh', '-c', script], timeout);
 /** Node one-liner inside a box (the image has Node); prints what the script prints. */

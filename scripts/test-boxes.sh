@@ -31,7 +31,9 @@ else
 fi
 
 hex() { node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"; }
-gid=$(getent group docker 2>/dev/null | cut -d: -f3 || true)
+# The socket proxies need the group that owns the Docker socket on the engine's side (on Docker
+# Desktop that isn't the host's docker group), so ask the engine
+gid=$(MSYS_NO_PATHCONV=1 docker run --rm -v /var/run/docker.sock:/s:ro alpine:3 stat -c %g /s 2>/dev/null || getent group docker 2>/dev/null | cut -d: -f3 || true)
 cat > "$ENV_FILE" <<EOF
 COMPOSE_PROJECT_NAME=$INSTANCE
 AGORA_INSTANCE=$INSTANCE
@@ -44,28 +46,34 @@ JWT_SECRET=$(hex)
 AGORA_ENCRYPTION_KEY=$(hex)
 AGORA_EDGE_SECRET=$(hex)
 DOCKER_GID=${gid:-999}
-AGORA_BOX_IMAGE=agora/box:$(tr -d '[:space:]' < box/VERSION)-test
+AGORA_BOX_VERSION=$(tr -d "[:space:]" < box/VERSION)
+AGORA_BOX_TAG_SUFFIX=-test
 AGORA_BOX_INSECURE_DEV=$INSECURE
 AGORA_BOX_SUBNETS=${BOXTEST_SUBNETS:-10.214.0.0/20}
 DOMAIN=
 EOF
 
-cleanup() {
-    if [ "${BOXTEST_KEEP:-}" = 1 ]; then echo "==> BOXTEST_KEEP=1: leaving $INSTANCE up"; return; fi
-    echo "==> removing $INSTANCE"
+remove_stack() {
     # Boxes are boxd's, not compose's: remove them by their instance label
     docker ps -aq --filter "label=org.agora.instance=$INSTANCE" | xargs -r docker rm -f >/dev/null 2>&1 || true
     "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
     docker network ls -q --filter "label=org.agora.instance=$INSTANCE" | xargs -r docker network rm >/dev/null 2>&1 || true
     docker volume ls -q --filter "label=org.agora.instance=$INSTANCE" | xargs -r docker volume rm >/dev/null 2>&1 || true
+}
+cleanup() {
+    if [ "${BOXTEST_KEEP:-}" = 1 ]; then echo "==> BOXTEST_KEEP=1: leaving $INSTANCE up"; return; fi
+    echo "==> removing $INSTANCE"
+    remove_stack
     rm -f "$ENV_FILE"
 }
+# A stack left by an earlier BOXTEST_KEEP=1 run goes first
+remove_stack
 trap cleanup EXIT
 
 echo "==> images"
 BOX_VERSION=$(tr -d "[:space:]" < box/VERSION)
 docker build -q -f box/Dockerfile --target test --build-arg BOX_VERSION="$BOX_VERSION" -t "agora/box:$BOX_VERSION-test" . >/dev/null
-"${DC[@]}" build -q api
+"${DC[@]}" build -q api migrate files-perms boxd box-edge
 
 echo "==> stack $INSTANCE ($BOXTEST_RUNTIME)"
 "${DC[@]}" up -d --no-build postgres redis migrate files-perms api box-socket-proxy box-edge
