@@ -58,7 +58,7 @@ services:
     # Plain HTTP for agents on this machine only; everything else goes through Caddy.
     # API_BIND=0.0.0.0 reopens it to the network (prefer https://<domain> instead).
     ports:
-      - "${API_BIND:-127.0.0.1}:3000:3000"
+      - "${API_BIND:-127.0.0.1}:${AGORA_API_PORT:-3000}:3000"
     environment:
       DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
       REDIS_URL: redis://redis:6379
@@ -122,7 +122,7 @@ services:
       - "-allowfrom=runner"
       - "-allowbindmountfrom=/nonexistent-agora-no-bind-mounts"
       - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
-      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/agora_sandbox[a-z0-9_]*|images/.+/json)"
+      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/${AGORA_INSTANCE:-agora}_sandbox|images/.+/json)"
       - "-allowPOST=(/v1\\.[0-9]+)?/containers/(create|agora-run-[0-9a-z]{26}/(start|wait|kill))"
       - "-allowDELETE=(/v1\\.[0-9]+)?/containers/agora-run-[0-9a-z]{26}"
 
@@ -137,7 +137,8 @@ services:
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
       AGORA_DOCKER_HOST: http://socket-proxy:2375
       AGORA_SANDBOX_IMAGE: ${AGORA_SANDBOX_IMAGE:-agora/sandbox-deno:local}
-      AGORA_SANDBOX_NETWORK: agora_sandbox
+      AGORA_INSTANCE: ${AGORA_INSTANCE:-agora}
+      AGORA_SANDBOX_NETWORK: ${AGORA_INSTANCE:-agora}_sandbox
       AGORA_CAP_URL: http://cap-gateway:8080
       RUNTIME_PER_SERVER_CONCURRENCY: ${RUNTIME_PER_SERVER_CONCURRENCY:-2}
       RUNTIME_INSTANCE_CONCURRENCY: ${RUNTIME_INSTANCE_CONCURRENCY:-4}
@@ -209,8 +210,9 @@ services:
     image: caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      # AGORA_HTTP_PORT / AGORA_HTTPS_PORT: another port for a second install on this machine (#209)
+      - "${AGORA_HTTP_PORT:-80}:80"
+      - "${AGORA_HTTPS_PORT:-443}:443"
     environment:
       # The Caddyfile serves {$DOMAIN}: a real domain gets a public certificate,
       # localhost gets Caddy's local one
@@ -224,8 +226,9 @@ services:
 networks:
   default: {}
   # Internal-only: no route out. Members: cap-gateway + per-run sandbox containers.
+  # Named after the instance so two installs on one engine never share it (#209).
   sandbox:
-    name: agora_sandbox
+    name: ${AGORA_INSTANCE:-agora}_sandbox
     internal: true
 
 volumes:

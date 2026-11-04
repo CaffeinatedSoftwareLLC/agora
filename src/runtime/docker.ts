@@ -173,14 +173,21 @@ export class SandboxDocker {
         }
     }
 
-    /** Remove any sandbox containers left behind (e.g. runner crashed mid-run). */
-    async removeOrphans(): Promise<number> {
+    /**
+     * Remove this install's sandbox containers left behind (e.g. runner crashed mid-run).
+     * Another install on the same engine has its own `agora.instance` label, and its runs are
+     * left alone (#209). Containers from before the label existed count as the default install's.
+     */
+    async removeOrphans(instance = 'agora'): Promise<number> {
         const containers = await this.docker.listContainers({ all: true, filters: { label: ['agora.managed=runtime'] } });
+        let removed = 0;
         for (const c of containers) {
             const name = c.Names?.[0]?.replace(/^\//, '');
             if (!name?.startsWith('agora-run-')) continue;
+            if ((c.Labels?.['agora.instance'] ?? 'agora') !== instance) continue;
             await this.docker.getContainer(name).remove({ force: true }).catch(() => { /* ignore */ });
+            removed++;
         }
-        return containers.length;
+        return removed;
     }
 }

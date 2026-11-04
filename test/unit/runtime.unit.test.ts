@@ -105,6 +105,11 @@ describe('container spec', () => {
         expect(containerName(' 01JABCDEFGHJKMNPQRSTVWXYZ0 ')).toBe(spec.name);
     });
 
+    it('labels the run with its install, default "agora" (#209)', () => {
+        expect(spec.Labels!['agora.instance']).toBe('agora');
+        expect(buildContainerSpec({ ...base, instance: 'agora2' }).Labels!['agora.instance']).toBe('agora2');
+    });
+
     it('passes only allowlisted env vars', () => {
         const names = spec.Env!.map(e => e.split('=')[0]);
         expect(names).toEqual(['AGORA_CAP_URL', 'AGORA_RUN_TOKEN', 'AGORA_CODE_0', 'DENO_DIR', 'NO_COLOR']);

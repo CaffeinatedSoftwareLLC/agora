@@ -14,7 +14,9 @@ import { publishEvents } from './lib/event-bridge';
 async function main() {
     const insecureDev = process.env.AGORA_SANDBOX_INSECURE_DEV === '1';
     const image = process.env.AGORA_SANDBOX_IMAGE ?? 'agora/sandbox-deno:dev';
-    const network = process.env.AGORA_SANDBOX_NETWORK ?? 'agora_sandbox';
+    // One name per install, so two installs on one engine never share a network or runs (#209)
+    const instance = process.env.AGORA_INSTANCE || 'agora';
+    const network = process.env.AGORA_SANDBOX_NETWORK ?? `${instance}_sandbox`;
 
     const sandbox = new SandboxDocker(dockerFromEnv());
     const { runtime } = await sandbox.preflight({ image, network, requireGvisor: !insecureDev });
@@ -24,7 +26,7 @@ async function main() {
     }
 
     const db = new Pool({ connectionString: config.dbUrl, max: 5 });
-    const orphans = await sandbox.removeOrphans();
+    const orphans = await sandbox.removeOrphans(instance);
     const interrupted = await reconcileInterruptedRuns(db);
     console.log(`Sandbox runner: runtime=${runtime} image=${image} network=${network}; `
         + `removed ${orphans} orphan container(s), marked ${interrupted} interrupted run(s) as error`);
@@ -39,6 +41,7 @@ async function main() {
                 image,
                 network,
                 runtime,
+                instance,
                 capUrl: process.env.AGORA_CAP_URL ?? 'http://cap-gateway:8080',
                 perServerConcurrency: Number(process.env.RUNTIME_PER_SERVER_CONCURRENCY ?? 2),
                 capacityRetryMs: 2000,

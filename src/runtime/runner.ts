@@ -27,6 +27,8 @@ export interface RunnerConfig {
     capacityRetryMs: number;
     /** How often to check whether the submitting bot was paused while a run executes. */
     stopPollMs?: number;
+    /** This install's name (AGORA_INSTANCE); labels its run containers. */
+    instance?: string;
     /** Name (substring) of the gateway container on the sandbox network; defaults to the capUrl hostname. */
     capContainer?: string;
 }
@@ -182,6 +184,7 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
             runToken: token,
             capUrl: config.capUrl,
             limits,
+            instance: config.instance,
             gatewayIp: await resolveGatewayIp(sandbox, config),
         });
 
