@@ -275,7 +275,8 @@ describe('wake routing (S1)', () => {
         expect((await inbox(sx)).map(r => r.message_id)).not.toContain(peer.id);
     });
 
-    it('a handoff reminder wakes an api_key session; a subscription session is never woken, its owner is told (#327)', async () => {
+    // An API-key session takes reminders like any wake only on a box host; on a machine host it is owner-only (§10)
+    it('a handoff reminder wakes an api_key session; a subscription session is never woken, its owner is told (#327)', () => onBoxHost(async () => {
         await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
         const sx = await startSession(codex);
         const nudgeIn = async (threadId: string) => (await ctx.db.query(
@@ -299,9 +300,9 @@ describe('wake routing (S1)', () => {
         } finally {
             await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'ANTHROPIC_API_KEY' WHERE id = $1`, [codex.profileId]);
         }
-    });
+    }));
 
-    it('a handoff reminder skips a hosted standby while a terminal answers, and goes to a thread-bound worker over the channel session (#327)', async () => {
+    it('a handoff reminder skips a hosted standby while a terminal answers, and goes to a thread-bound worker over the channel session (#327)', () => onBoxHost(async () => {
         // No recent reminder for codex from other tests (one per bot per nudge time)
         await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
         const nudges = async (threadId: string) => (await ctx.db.query(
@@ -333,7 +334,7 @@ describe('wake routing (S1)', () => {
         } finally {
             await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [terminal]);
         }
-    });
+    }));
 
     it('binds nothing for a START from a bot without a session or naming no live agent', async () => {
         await startSession(codex);

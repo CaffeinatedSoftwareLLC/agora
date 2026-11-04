@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { Permissions } from '../../src/permissions';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -62,10 +62,13 @@ beforeAll(async () => {
     const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'gh-host' });
     hostId = host.body.host.id; hostAuth = { Authorization: `AgentHost ${host.body.token}` };
     const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-        .send({ name: 'builder', hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
+        .send({ hostModeAck: true, name: 'builder', hostId, adapter: 'codex', workdirAlias: 'agora', channelId });
     expect(agent.status, JSON.stringify(agent.body)).toBe(201);
     botAuth = { Authorization: `Bot ${agent.body.token}` };
     await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'OPENAI_API_KEY' WHERE server_id = $1`, [serverId]);
+    // Directors start the issue's agent here: an API-key agent takes that only in a box; on a
+    // machine host it is host mode, owner-only (docs/agent-boxes.md §10)
+    await setHostKind(ctx.db, hostId, 'box');
 });
 afterAll(async () => { await ctx.close(); });
 beforeEach(async () => {
@@ -228,9 +231,10 @@ describe('reporting the pull request on the issue', () => {
         const other = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'agent-box' });
         const otherAuth = { Authorization: `AgentHost ${other.body.token}` };
         const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
-            .send({ name: 'remote', hostId: other.body.host.id, adapter: 'codex', workdirAlias: 'agora', channelId });
+            .send({ hostModeAck: true, name: 'remote', hostId: other.body.host.id, adapter: 'codex', workdirAlias: 'agora', channelId });
         expect(agent.status, JSON.stringify(agent.body)).toBe(201);
         await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'api_key', api_key_env = 'OPENAI_API_KEY' WHERE id = $1`, [agent.body.profile.id]);
+        await setHostKind(ctx.db, other.body.host.id, 'box');
         try {
             const card = await startedCard('remote');
             await workspace(card.session.id, { action: 'pr', message: 'Fix 7' }, { url: 'https://github.com/acme/widgets/pull/20' }, otherAuth);
