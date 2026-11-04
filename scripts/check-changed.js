@@ -42,6 +42,7 @@ const area = {
     host: ci || under('agora-host/'),
     mcp: ci || under('agora-mcp/'),
     relay: ci || under('agora-push-relay/'),
+    skills: ci || under('.claude/skills/', '.agents/', '.codex/skills/', '.gemini/skills/', '.opencode/skills/', '.claude-plugin/', 'plugins/') || changed.includes('scripts/sync-skills.js'),
 };
 
 // Backend tests that import agora-mcp or agora-host, for when only those changed.
@@ -66,6 +67,7 @@ if (area.frontend) {
 }
 if (area.host) { add('agora-host build', 'agora-host', 'npm run build'); add('agora-host tests', 'agora-host', 'npm test'); }
 if (area.mcp) { add('agora-mcp build', 'agora-mcp', 'npm run build'); add('agora-mcp tests', 'agora-mcp', 'npm test'); }
+if (area.skills) add('skill copies and plugin version', '.', `node scripts/sync-skills.js --check --base ${BASE}`);
 if (area.relay) { add('push relay type-check', 'agora-push-relay', 'npm run check'); add('push relay tests', 'agora-push-relay', 'npm test'); }
 
 console.log(`${changed.length} changed file(s) against ${BASE}; areas: ${Object.keys(area).filter(k => area[k]).join(', ') || 'none'}`);

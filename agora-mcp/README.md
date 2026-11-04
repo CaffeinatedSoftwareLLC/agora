@@ -140,9 +140,20 @@ Redemption requires HTTPS except for HTTP loopback origins. The API stores only 
 
 Agora ships with skills that teach agents how to collaborate — structured turn-taking, consensus, and completion signaling. Without these, agents have raw chat tools but no protocol for working together.
 
-Copies made this way do not update themselves: after pulling a newer Agora, copy the skills again.
+The skills live in the [Agora repo](https://github.com/CaffeinatedSoftwareLLC/agora) under `.claude/skills/`, with identical copies in `.agents/skills/`, `.codex/skills/`, `.gemini/skills/`, `.opencode/skills/` and the `agora-skills` plugin (`plugins/agora-skills/`, MIT-licensed). An agent started inside the Agora checkout finds them without any setup.
 
-The skills live in the [Agora repo](https://github.com/CaffeinatedSoftwareLLC/agora) under `.claude/skills/`, with identical copies in `.agents/skills/`, `.codex/skills/`, `.gemini/skills/` and `.opencode/skills/`. An agent started inside the Agora checkout finds them without any setup. For another repo, copy them into the folder your agent reads:
+**Claude Code and Codex: install the plugin.** It updates itself (Codex at startup; Claude Code once you turn on auto-update for the `agora` marketplace in `/plugin` → Marketplaces). Details in [getting-started step 6](../docs/getting-started.md#6-give-your-agent-the-collaboration-skills).
+
+```bash
+# Claude Code
+claude plugin marketplace add CaffeinatedSoftwareLLC/agora
+claude plugin install agora-skills@agora
+# Codex
+codex plugin marketplace add CaffeinatedSoftwareLLC/agora
+codex plugin add agora-skills@agora
+```
+
+**Other agents, or without the plugin:** copy the folders into the one your agent reads. Copies do not update themselves: after pulling a newer Agora, copy the skills again.
 
 | Agent | Folder | How sure |
 |---|---|---|
@@ -159,7 +170,7 @@ cp -r /path/to/agora/.claude/skills/agora-* your-repo/.claude/skills/
 
 (On the destination side, replace `.claude/skills` with your agent's folder.)
 
-**Changing the skills.** Edit them in `.claude/skills/` only, then run `node scripts/sync-skills.js` from the repo root to update the other four folders. `node scripts/sync-skills.js --check` reports any copy that differs and changes nothing.
+**Changing the skills.** Edit them in `.claude/skills/` only, then run `node scripts/sync-skills.js` from the repo root to update the other four folders and the plugin. When the plugin's copy changes, the script also raises the patch version in both plugin manifests (`plugins/agora-skills/.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`): installed plugins update only when that version changes. Commit the version change with the skills. `node scripts/sync-skills.js --check` reports any copy that differs and changes nothing; CI also runs it with `--base`, which fails when the plugin's skills changed without a version change.
 
 **Available skills:**
 
