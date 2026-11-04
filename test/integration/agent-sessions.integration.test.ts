@@ -291,33 +291,38 @@ describe('wake routing (S1)', () => {
         }
     });
 
-    it('a handoff reminder goes to the terminal, not a hosted standby, and to the thread-bound session over the channel one (#327)', async () => {
+    it('a handoff reminder skips a hosted standby while a terminal answers, and goes to a thread-bound worker over the channel session (#327)', async () => {
         // No recent reminder for codex from other tests (one per bot per nudge time)
         await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
+        const nudges = async (threadId: string) => (await ctx.db.query(
+            `SELECT id FROM messages WHERE thread_id = $1 AND system_event = 'handoff_nudge' ORDER BY id`, [threadId])).rows.map(r => r.id.trim());
         const channelSession = await startSession(codex);
-        const thread = await post(owner.auth, 'Relay on Heroku');
-        await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=builder commit]');
-        const bound = generateUlid();
-        await ctx.db.query(
-            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, thread_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [bound, serverId, channelId, codex.botId, codex.profileId, owner.userId, thread.id]);
         const terminal = generateUlid();
         await ctx.db.query(
             `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, kind, terminal_mode) VALUES ($1, $2, $3, $4, 'terminal', 'mcp')`,
             [terminal, serverId, channelId, codex.botId]);
-        await runHandoffNudges({ db: ctx.db }, Date.now() + 16 * 60_000);
-        const first = (await ctx.db.query(`SELECT id FROM messages WHERE thread_id = $1 AND system_event = 'handoff_nudge'`, [thread.id])).rows[0];
-        expect(first).toBeDefined();
-        expect([...await inbox(channelSession), ...await inbox(bound)].map(r => r.message_id)).not.toContain(first.id.trim());
+        try {
+            // Terminal + hosted channel standby: the terminal answers, nothing is queued
+            const thread = await post(owner.auth, 'Relay on Heroku');
+            await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nbuilding\n[WAIT on=codex for=builder commit]');
+            await runHandoffNudges({ db: ctx.db }, Date.now() + 16 * 60_000);
+            const [first] = await nudges(thread.id);
+            expect(first).toBeDefined();
+            expect((await inbox(channelSession)).map(r => r.message_id)).not.toContain(first);
 
-        // Without the terminal, only the session bound to the thread gets the next one
-        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [terminal]);
-        await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nstill building\n[WAIT on=codex for=builder commit]');
-        await runHandoffNudges({ db: ctx.db }, Date.now() + 32 * 60_000);
-        const rows = (await ctx.db.query(`SELECT id FROM messages WHERE thread_id = $1 AND system_event = 'handoff_nudge' ORDER BY id`, [thread.id])).rows;
-        const next = rows[1].id.trim();
-        expect((await inbox(bound)).map(r => r.message_id)).toContain(next);
-        expect((await inbox(channelSession)).map(r => r.message_id)).not.toContain(next);
+            // A worker session bound to the thread (task or subtask) still gets it, as in routeThreadReply
+            const bound = generateUlid();
+            await ctx.db.query(
+                `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, thread_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [bound, serverId, channelId, codex.botId, codex.profileId, owner.userId, thread.id]);
+            await reply(codex.auth, thread.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nstill building\n[WAIT on=codex for=builder commit]');
+            await runHandoffNudges({ db: ctx.db }, Date.now() + 32 * 60_000);
+            const next = (await nudges(thread.id))[1];
+            expect((await inbox(bound)).map(r => r.message_id)).toContain(next);
+            expect((await inbox(channelSession)).map(r => r.message_id)).not.toContain(next);
+        } finally {
+            await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [terminal]);
+        }
     });
 
     it('binds nothing for a START from a bot without a session or naming no live agent', async () => {

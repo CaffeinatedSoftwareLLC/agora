@@ -174,7 +174,7 @@ describe('handoff nudges', () => {
     });
 
     it('nudges the agent a TURN yields to, and never a person or a finished or closed thread', async () => {
-        const toCodex = await post('Review this', owner.auth);
+        const toCodex = await post('Review this', claude());
         await post('[AGORA/v1 MODE=fix STATE=ACK]\nready\n[YIELD to=WaitClaude]', codex(), toCodex.id);
         await post(turn('WaitCodex'), claude(), toCodex.id);
         const toPerson = await post('Ask the owner', owner.auth);
@@ -226,14 +226,45 @@ describe('handoff nudges', () => {
         expect(told.rows).toHaveLength(1);
     });
 
-    it('never turns an ordinary member\'s WAIT or YIELD into a reminder', async () => {
-        const { thread } = await deferredHandoff();
-        await post(wait('WaitClaude', 'forged'), member.auth, thread);
-        const other = await deferredHandoff();
-        await post(turn('WaitCodex'), member.auth, other.thread);
+    it('never turns an ordinary member\'s WAIT or YIELD into a reminder, and a member cannot cancel one', async () => {
+        // Both agents took part, then the work paused without a wait
+        const thread = await post('Relay on Heroku', claude());
+        await post('Looking.', codex(), thread.id);
+        await post(wait('WaitCodex', 'forged'), member.auth, thread.id);
+        await post(turn('WaitClaude'), member.auth, thread.id);
+        // A real wait, which a member's DONE does not end
+        const real = await deferredHandoff();
+        await post('[AGORA/v1 MODE=fix STATE=DONE]\nnothing to do', member.auth, real.thread);
         await run(later(16));
-        expect(await nudgesIn(thread)).toHaveLength(0);
-        expect(await nudgesIn(other.thread)).toHaveLength(0);
+        expect(await nudgesIn(thread.id)).toHaveLength(0);
+        expect((await nudgesIn(real.thread)).map(n => n.systemData.protocolMessageId)).toEqual([real.promise]);
+    });
+
+    it('counts another bot\'s handoff only once that bot has taken part in the thread', async () => {
+        const thread = await post('Relay on Heroku', owner.auth);
+        await post('Looking.', codex(), thread.id);
+        // WaitClaude's first post in the thread hands off to Codex: not a participant's handoff
+        await post(turn('WaitCodex'), claude(), thread.id);
+        await run(later(16));
+        expect(await nudgesIn(thread.id)).toHaveLength(0);
+    });
+
+    it('drops a wait whose author could direct agents but no longer can, without starving the rest', async () => {
+        // 55 threads where Claude took part and a former director YIELDed to it, as stored rows: the
+        // stamp says they could direct when they posted; the member has no DirectAgents now
+        for (let i = 0; i < 55; i++) {
+            const parent = generateUlid();
+            await ctx.db.query(`INSERT INTO messages (id, channel_id, author_id, content) VALUES ($1, $2, $3, 'job')`,
+                [parent, channelId, bots.WaitClaude.id]);
+            await ctx.db.query(`INSERT INTO messages (id, channel_id, author_id, content, thread_id, protocol, author_could_direct)
+                VALUES ($1, $2, $3, 'over to you', $4, $5, true)`,
+            [generateUlid(), channelId, member.userId, parent, JSON.stringify({ version: 1, mode: 'fix', state: 'TURN', yieldTo: 'WaitClaude' })]);
+            await ctx.db.query('UPDATE messages SET reply_count = 1, last_reply_at = NOW() WHERE id = $1', [parent]);
+        }
+        const { thread } = await deferredHandoff();
+        const pass = await run(later(16));
+        expect(pass.nudged).toBe(1);
+        expect(await nudgesIn(thread)).toHaveLength(1);
     });
 
     it('is not starved by a batch of waits it may not nudge', async () => {

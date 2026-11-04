@@ -15,9 +15,10 @@ import { generateUlid, ulidFloor } from '../utils/ulid';
  * owner gets a notification.
  *
  * A reminder is Agora's own post, so the wait behind it must be one Agora trusts:
- * - Written by the agent waited on itself, by another unpaused bot with access to the channel,
- *   or by someone who could direct agents when they posted and still can. An ordinary member's
- *   WAIT or YIELD never produces one.
+ * - Written by the agent waited on itself, by another active, unpaused bot with access to the
+ *   channel that took part in the thread before (a participant handing off), or by someone who
+ *   could direct agents when they posted and still can. An ordinary member's WAIT or YIELD
+ *   never produces one, and doesn't cancel one either: only those authors' protocol posts count.
  * - Aimed at an unpaused bot with access to the channel that has already posted in the thread.
  *   People are never nudged.
  * - At most one reminder per waiting message, one per bot per nudge time, and one owner
@@ -32,6 +33,8 @@ export const DEFAULT_NUDGE_MINUTES = 15;
 /** An owner hears about the same quiet bot at most this often. */
 const OWNER_NOTICE_MINUTES = 60;
 const BATCH = 50;
+/** Pages of BATCH looked at per pass. */
+const MAX_PAGES = 20;
 
 export interface NudgeEvent { room: string; event: string; data: unknown }
 
@@ -54,20 +57,25 @@ interface Candidate {
     thread_id: string; id: string; channel_id: string; protocol: ProtocolInfo; began: Date;
     author_id: string | null; author_username: string | null; author_bot: boolean | null; author_could_direct: boolean;
     bot_id: string; bot_username: string; bot_owner_id: string | null;
+    /** The author is a bot that took part in the thread before this post. */
+    author_participant: boolean;
 }
 
 /**
  * Waits due for a reminder, eligibility included, so ineligible waits never fill the batch.
  * $1 lookback floor (ULID), $2 due before (ms), $3 lookback (ms), $4 now (ms), $5 per-bot gap
- * (ms), $6 one thread only (the recheck) or null. Reminder times are kept in the reminder's
+ * (ms), $6 one thread only (the recheck) or null, $7 keyset: waits after this message id ('' for the start). Reminder times are kept in the reminder's
  * system_data (`at`, ms) so the limits use the same clock as the pass.
  */
 const DUE_WAITS = `WITH latest AS (
+        -- Protocol posts by bots and by people who could direct agents; an ordinary member's
+        -- protocol line neither starts nor cancels a wait
         SELECT DISTINCT ON (COALESCE(m.thread_id, m.id)) COALESCE(m.thread_id, m.id) AS thread_id,
                m.id, m.channel_id, m.protocol, m.author_id, m.author_could_direct,
                COALESCE(m.edited_at, m.created_at) AS began
-        FROM messages m
+        FROM messages m JOIN users mu ON mu.id = m.author_id
         WHERE m.protocol IS NOT NULL AND m.id >= $1 AND m.deleted_at IS NULL
+          AND (m.author_could_direct OR mu.bot)
           AND ($6::char(26) IS NULL OR m.thread_id = $6 OR m.id = $6)
         ORDER BY COALESCE(m.thread_id, m.id), m.id DESC
     ), waits AS (
@@ -81,14 +89,31 @@ const DUE_WAITS = `WITH latest AS (
           AND l.began >= to_timestamp(($4::double precision - $3) / 1000)
     )
     SELECT w.thread_id, w.id, w.channel_id, w.protocol, w.began, w.author_id, w.author_username, w.author_bot,
-           w.author_could_direct, b.id AS bot_id, b.username AS bot_username, b.bot_owner_id
+           w.author_could_direct, b.id AS bot_id, b.username AS bot_username, b.bot_owner_id,
+           (w.author_bot AND EXISTS (
+               -- An active, unpaused bot with access here, whose owner is active, that took part in
+               -- the thread before this post: a participant handing off, as in routeMessage
+               SELECT 1 FROM bot_channel_access aa JOIN users ua ON ua.id = aa.bot_id
+               LEFT JOIN users uo ON uo.id = ua.bot_owner_id
+               WHERE aa.bot_id = w.author_id AND aa.channel_id = w.channel_id AND ua.bot_paused_at IS NULL
+                 AND ua.account_status = 'active' AND COALESCE(uo.account_status, 'active') = 'active'
+                 AND EXISTS (SELECT 1 FROM messages y WHERE (y.thread_id = w.thread_id OR y.id = w.thread_id)
+                             AND y.author_id = w.author_id AND y.id < w.id AND y.deleted_at IS NULL)
+           )) AS author_participant
     FROM waits w
     JOIN messages p ON p.id = w.thread_id AND p.thread_id IS NULL AND p.deleted_at IS NULL AND p.thread_closed_at IS NULL
     JOIN users b ON lower(b.username) = lower(w.target) AND b.bot = true AND b.bot_paused_at IS NULL
+        AND b.account_status = 'active'
     JOIN bot_channel_access a ON a.bot_id = b.id AND a.channel_id = w.channel_id
-    WHERE (w.author_id = b.id OR w.author_could_direct
-           OR (w.author_bot AND EXISTS (SELECT 1 FROM bot_channel_access aa JOIN users ua ON ua.id = aa.bot_id
-               WHERE aa.bot_id = w.author_id AND aa.channel_id = w.channel_id AND ua.bot_paused_at IS NULL)))
+    WHERE w.id > $7
+      AND (w.author_id = b.id OR w.author_could_direct
+           OR (w.author_bot AND EXISTS (
+               SELECT 1 FROM bot_channel_access aa JOIN users ua ON ua.id = aa.bot_id
+               LEFT JOIN users uo ON uo.id = ua.bot_owner_id
+               WHERE aa.bot_id = w.author_id AND aa.channel_id = w.channel_id AND ua.bot_paused_at IS NULL
+                 AND ua.account_status = 'active' AND COALESCE(uo.account_status, 'active') = 'active'
+                 AND EXISTS (SELECT 1 FROM messages y WHERE (y.thread_id = w.thread_id OR y.id = w.thread_id)
+                             AND y.author_id = w.author_id AND y.id < w.id AND y.deleted_at IS NULL))))
       AND EXISTS (SELECT 1 FROM messages x WHERE (x.thread_id = w.thread_id OR x.id = w.thread_id)
                   AND x.author_id = b.id AND x.id <= w.id AND x.deleted_at IS NULL)
       AND NOT EXISTS (SELECT 1 FROM messages x WHERE (x.thread_id = w.thread_id OR x.id = w.thread_id)
@@ -112,10 +137,18 @@ export async function runHandoffNudges(deps: HandoffNudgeDeps, now = Date.now())
         const minutes = await nudgeMinutes(c);
         if (minutes === 0) return { nudged, ownersNotified };
         const lookbackMs = Math.max(4 * minutes, 60) * 60_000;
-        const params = (threadId: string | null) => [ulidFloor(now - lookbackMs), now - minutes * 60_000, lookbackMs, now, minutes * 60_000, threadId];
+        const params = (threadId: string | null, after = '') => [ulidFloor(now - lookbackMs), now - minutes * 60_000, lookbackMs, now, minutes * 60_000, threadId, after];
 
-        const due = await c.query<Candidate>(DUE_WAITS, params(null));
-        for (const first of due.rows) {
+        // Keyset pages, so waits that a later check in remind() turns down (a director who lost
+        // the right) can't fill every batch and starve the rest
+        const due: Candidate[] = [];
+        for (let page = 0, after = ''; page < MAX_PAGES; page++) {
+            const rows = (await c.query<Candidate>(DUE_WAITS, params(null, after))).rows;
+            due.push(...rows);
+            if (rows.length < BATCH) break;
+            after = rows[rows.length - 1].id;
+        }
+        for (const first of due) {
             const threadId = first.thread_id.trim();
             await c.query('BEGIN');
             try {
@@ -149,14 +182,15 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
     const threadId = row.thread_id.trim(), protocolId = row.id.trim(), channelId = row.channel_id.trim();
     const botId = row.bot_id.trim(), name = row.bot_username;
 
-    // A person's wait counts only while they can still direct agents here
-    if (row.author_id && row.author_id.trim() !== botId && !row.author_bot) {
-        const authority = await readAuthorities(c, channelId, [{ id: protocolId, author_id: row.author_id.trim(), author_bot: false, author_could_direct: row.author_could_direct }]);
+    // Someone else's wait counts from a participant bot, or while its author can still direct agents here
+    if (row.author_id && row.author_id.trim() !== botId && !row.author_participant) {
+        const authority = await readAuthorities(c, channelId, [{ id: protocolId, author_id: row.author_id.trim(), author_bot: !!row.author_bot, author_could_direct: row.author_could_direct }]);
         if (!authority.get(protocolId)) return null;
     }
 
     const listening = deps.isConnected?.(botId) || (await c.query(
-        `SELECT 1 FROM agent_sessions WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' LIMIT 1`, [botId])).rows.length > 0;
+        `SELECT 1 FROM agent_sessions WHERE bot_id = $1 AND channel_id = $2 AND kind = 'terminal' AND state = 'live' LIMIT 1`,
+        [botId, channelId])).rows.length > 0;
     const sessions = await reminderSessions(c, { channelId, threadId, botId });
     const reached = listening || sessions.length > 0;
     const ownerId = row.bot_owner_id?.trim() || null;

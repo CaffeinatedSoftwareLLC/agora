@@ -180,23 +180,26 @@ async function addInbox(db: any, sessionIds: string[], messageId: string, thread
 
 /**
  * A handoff reminder (#327, src/workers/handoff-nudge.ts) for a bot: the one hosted session
- * that should get it. Single responder, as in routeMessage: none while the bot has a live
- * terminal session in the channel (it answers there); else its session bound to the thread,
- * else its channel session. Only api_key sessions: the reminder is Agora's automation, which
- * the subscription rule (provider-terms.ts) never lets wake a subscription session.
+ * that should get it, as routeMessage would pick: the bot's session scoped to this thread (a
+ * task or subtask worker) when there is one, as in routeThreadReply; otherwise none while the
+ * bot has a live terminal session in the channel (single responder: it answers there), else
+ * its channel session. Only api_key sessions: the reminder is Agora's automation, which the
+ * subscription rule (provider-terms.ts) never lets wake a subscription session.
  * `reminderSessions` finds it before the reminder is written (so its text can say whether the
  * agent was reached); `queueReminder` queues the written one.
  */
 export async function reminderSessions(db: any, input: { channelId: string; threadId: string; botId: string }): Promise<string[]> {
     return asService(db, async () => {
-        const terminal = await db.query(
-            `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND bot_id = $2 AND state = 'live' AND kind = 'terminal' LIMIT 1`,
-            [input.channelId, input.botId]
-        );
-        if (terminal.rows.length > 0) return [];
         const mine = (sessions: LiveSession[]) => sessions.filter(s => s.botId === input.botId);
-        const bound = mine(await liveSessions(db, input.channelId, input.threadId));
-        const target = (bound.length > 0 ? bound : mine(await liveSessions(db, input.channelId)))[0];
+        let target = mine(await liveSessions(db, input.channelId, input.threadId))[0];
+        if (!target) {
+            const terminal = await db.query(
+                `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND bot_id = $2 AND state = 'live' AND kind = 'terminal' LIMIT 1`,
+                [input.channelId, input.botId]
+            );
+            if (terminal.rows.length > 0) return [];
+            target = mine(await liveSessions(db, input.channelId))[0];
+        }
         return target && !target.subscription ? [target.id] : [];
     });
 }
