@@ -17,12 +17,12 @@ CREATE OR REPLACE FUNCTION agent_profiles_host_mode_from_host()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     host_kind TEXT;
 BEGIN
-    SELECT kind INTO host_kind FROM agent_hosts WHERE id = NEW.host_id;
+    SELECT kind INTO host_kind FROM public.agent_hosts WHERE id = NEW.host_id;
     IF host_kind = 'machine' THEN
         NEW.host_mode := true;
     ELSIF host_kind = 'box' THEN
