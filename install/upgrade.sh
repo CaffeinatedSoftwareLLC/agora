@@ -71,6 +71,15 @@ wait_up() {
 if [ "$ROLLBACK" = 1 ]; then
     step upgrade.rollback 'Putting the previous release and its backup back'
     [ -f "$STATE" ] || die "no upgrade recorded in $DIR"
+    # The record must be the upgrade that put this release here: a finished one names this
+    # folder's version as its target; a pending one is the upgrade that failed half way
+    rec_state=$(state_get state)
+    rec_to=$(state_get to)
+    case "$rec_state" in
+        done) [ "$rec_to" = "$OLD_VERSION" ] || die "the recorded upgrade went to $rec_to, but this folder has $OLD_VERSION; not rolling back with a stale record" ;;
+        pending) warn "the last upgrade (to $rec_to) didn't finish; putting back the release it replaced" ;;
+        *) die "the upgrade record in $STATE is unreadable" ;;
+    esac
     prev=$(state_get previous)
     bundle=$(state_get backup)
     maint=$(state_get maintenance)
@@ -80,6 +89,8 @@ if [ "$ROLLBACK" = 1 ]; then
     compose_in "$DIR" stop -t 60 >/dev/null || die "could not stop the stack"
     stash_release "$DIR" "$cur"
     place_release "$prev" "$DIR"
+    # The box image tag follows the release in the folder: box/Dockerfile refuses another BOX_VERSION
+    if [ -f "$DIR/box/VERSION" ]; then env_set "$ENV" AGORA_BOX_VERSION "$(box_version "$DIR")"; fi
     ok "release $(agora_version "$DIR") is back in place (the newer one is in $cur)"
     # The old release may have no backup tool or restore script: use the newer release's, with
     # the maintenance image it built (rebuilt from it if it was removed)
@@ -110,7 +121,7 @@ if [ -n "$SOURCE" ]; then
     mkdir -p "$STAGE"
     place_release "$SOURCE" "$STAGE"
 else
-    if [ -z "$REF" ] || [ "$REF" = latest ]; then url="$AGORA_RELEASE_BASE/latest/download"; else url="$AGORA_RELEASE_BASE/download/$REF"; fi
+    if [ -z "$REF" ] || [ "$REF" = latest ]; then url="$AGORA_RELEASE_BASE/download/agora-latest"; else url="$AGORA_RELEASE_BASE/download/$REF"; fi
     dl=$(mktemp -d)
     curl -fsSL -o "$dl/agora.tar.gz" "$url/agora.tar.gz"
     curl -fsSL -o "$dl/agora.tar.gz.sha256" "$url/agora.tar.gz.sha256"
@@ -141,11 +152,17 @@ fi
 
 step upgrade.replace 'Moving the old release aside and putting the new one in place'
 PREV="$DIR/.releases/$(tag_version "$OLD_VERSION")-$STAMP"
+write_state() {
+    printf 'state=%s\nfrom=%s\nto=%s\nbackup=%s\nprevious=%s\nmaintenance=%s\nat=%s\n' \
+        "$1" "$OLD_VERSION" "$NEW_VERSION" "$bundle" "$PREV" "$MAINT" "$STAMP" > "$STATE.tmp"
+    mv "$STATE.tmp" "$STATE"
+}
+# Recorded before anything moves, so a --rollback after a failure here finds this upgrade, never an older one
+write_state pending
 stash_release "$DIR" "$PREV"
 place_release "$STAGE" "$DIR"
 rm -rf "$STAGE"
-printf 'from=%s\nto=%s\nbackup=%s\nprevious=%s\nmaintenance=%s\nat=%s\n' \
-    "$OLD_VERSION" "$NEW_VERSION" "$bundle" "$PREV" "$MAINT" "$STAMP" > "$STATE"
+write_state 'done'
 # Only the release just replaced is kept for --rollback
 for old in "$DIR"/.releases/*; do
     [ -d "$old" ] && [ "$old" != "$PREV" ] && rm -rf "$old"

@@ -155,6 +155,17 @@ port_free() {
     fi
 }
 
+# Host ports any container on this engine publishes, running or not (one per line). A stopped
+# install keeps its ports: they must not go to another install.
+published_ports() {
+    local ids
+    ids=$(dk ps -aq 2>/dev/null) || return 0
+    [ -n "$ids" ] || return 0
+    # shellcheck disable=SC2086 # one argument per container id
+    dk inspect -f '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}} {{end}}{{end}}' $ids 2>/dev/null \
+        | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un || true
+}
+
 # free_port <start> <step> <taken...>
 free_port() {
     local p=$1 st=$2 i; shift 2
@@ -291,9 +302,10 @@ on_exit() {
     [ "$code" = 0 ] && return 0
     printf '\n%sFailed at step %s%s: %s\n' "$RED" "$STEP" "$RESET" "$STEP_DESC" >&2
     if [ "${#CLEANUP_CMDS[@]}" -gt 0 ]; then
-        printf '\n  To remove what this run created:\n' >&2
-        local c
-        for c in "${CLEANUP_CMDS[@]}"; do printf '    %s\n' "$c" >&2; done
+        # Newest first: the stack goes before its folder, the folder before Docker itself
+        printf '\n  To remove what this run created, in this order:\n' >&2
+        local i
+        for (( i=${#CLEANUP_CMDS[@]}-1; i>=0; i-- )); do printf '    %s\n' "${CLEANUP_CMDS[$i]}" >&2; done
     fi
     send_install_report failed "$STEP"
     if [ -n "${DOCTOR_SCRIPT:-}" ]; then offer_problem_report "$DOCTOR_SCRIPT" "${INSTALL_DIR:-}"; fi

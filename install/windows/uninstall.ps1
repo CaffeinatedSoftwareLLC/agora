@@ -23,8 +23,7 @@ if (-not $Distro) { throw 'No Agora distro recorded; pass -Distro <name>' }
 $created = $state.ContainsKey('CreatedDistro') -and [bool]$state.CreatedDistro -and ($Distro -eq 'Agora')
 $asRoot = $Distro -eq 'Agora'
 
-$find = 'docker ps -a --filter label=com.docker.compose.service=api --format "{{.Label \"com.docker.compose.project.working_dir\"}}" 2>/dev/null | sort -u'
-$dirs = @((Invoke-Wsl '-d' $Distro '--exec' 'sh' '-c' $find).Output | Where-Object { $_ -match '^/' })
+$dirs = Find-AgoraInstalls -Distro $Distro -ScriptWindowsPath (Join-Path $PSScriptRoot '..\lib\find-installs.sh') -AsRoot $asRoot
 foreach ($dir in $dirs) {
     Write-Host "Removing the install in $Distro`:$dir"
     $wslArgs = @('-d', $Distro)

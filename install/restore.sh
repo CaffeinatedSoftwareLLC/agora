@@ -39,8 +39,9 @@ DIR=$(cd "$DIR" && pwd)
 [ -f "$DIR/$COMPOSE_FILE_NAME" ] || die "$DIR is not an Agora folder"
 pick_docker || die "Docker isn't reachable"
 DOCTOR_SCRIPT="$HERE/doctor.sh" INSTALL_DIR=$DIR
-trap 'forget_passphrase; on_exit $?' EXIT
 WORK=$(mktemp -d)
+restore_exit() { local code=$1; forget_passphrase; rm -rf "$WORK"; on_exit "$code"; }
+trap 'restore_exit $?' EXIT
 chmod 700 "$WORK"
 
 step restore.verify 'Checking the bundle'
@@ -89,11 +90,13 @@ crypt extract --name env.prod < "$BUNDLE" > "$WORK/env.prod"
 chmod 600 "$WORK/env.prod"
 cp -p "$DIR/$ENV_FILE_NAME" "$DIR/$ENV_FILE_NAME.before-restore"
 # This machine's ports and docker group stay; everything else (secrets, the key) is the bundle's
-for k in AGORA_HTTP_PORT AGORA_HTTPS_PORT AGORA_API_PORT DOCKER_GID AGORA_BOX_VERSION AGORA_BOX_TARGET AGORA_BOX_TAG_SUFFIX AGORA_BOX_INSECURE_DEV AGORA_SANDBOX_INSECURE_DEV; do
+for k in AGORA_HTTP_PORT AGORA_HTTPS_PORT AGORA_API_PORT DOCKER_GID AGORA_BOX_TARGET AGORA_BOX_TAG_SUFFIX AGORA_BOX_INSECURE_DEV AGORA_SANDBOX_INSECURE_DEV; do
     v=$(env_get "$DIR/$ENV_FILE_NAME" "$k")
     [ -z "$v" ] || env_set "$WORK/env.prod" "$k" "$v"
 done
 mv "$WORK/env.prod" "$DIR/$ENV_FILE_NAME"
+# The box image tag is the release in this folder's, whatever the bundle's install had
+if [ -f "$DIR/box/VERSION" ]; then env_set "$DIR/$ENV_FILE_NAME" AGORA_BOX_VERSION "$(box_version "$DIR")"; fi
 PROJECT=$(env_get "$DIR/$ENV_FILE_NAME" COMPOSE_PROJECT_NAME); PROJECT=${PROJECT:-$B_INSTANCE}
 ok ".env.prod (the previous one is $ENV_FILE_NAME.before-restore)"
 

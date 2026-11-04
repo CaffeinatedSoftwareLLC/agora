@@ -31,6 +31,7 @@ Usage: install.sh [options]
   --telemetry on|off         send one anonymous install report (default: ask; off)
   --existing upgrade|alongside|stop   what to do when this engine already has Agora
                              (default: ask; stop without a terminal)
+  --passphrase-file F        backup passphrase, for --existing upgrade without a terminal
   --wsl                      running inside WSL (the Windows installer passes this)
   --box-image-target box|test   test: the box image with fake CLIs (CI only)
   --box-insecure-dev         run boxes with runc instead of gVisor (dev only, never production)
@@ -45,7 +46,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ARGS=("$@")
 NON_INTERACTIVE=0 INSTANCE='' INSTALL_DIR='' SOURCE='' REF=latest DOMAIN=''
 HTTP_PORT='' HTTPS_PORT='' API_PORT='' ADMIN_USER='' ADMIN_EMAIL='' ADMIN_PW_FILE=''
-AGENT='' AGENT_NAME='' AGENT_KEY_FILE='' TELEMETRY_ARG='' EXISTING='' WSL=0
+AGENT='' AGENT_NAME='' AGENT_KEY_FILE='' TELEMETRY_ARG='' EXISTING='' WSL=0 PASS_FILE_ARG='' DOCKER_INSTALLED=0
 BOX_TARGET=box BOX_INSECURE=0 MIN_DISK_GB=${AGORA_MIN_DISK_GB:-20}
 need() { [ $# -ge 2 ] && [ -n "$2" ] || { echo "install.sh: $1 needs a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
@@ -67,6 +68,7 @@ while [ $# -gt 0 ]; do
         --agent-api-key-file) need "$@"; AGENT_KEY_FILE=$2; shift ;;
         --telemetry) need "$@"; TELEMETRY_ARG=$2; shift ;;
         --existing) need "$@"; EXISTING=$2; shift ;;
+        --passphrase-file) need "$@"; PASS_FILE_ARG=$2; shift ;;
         --wsl) WSL=1 ;;
         --box-image-target) need "$@"; BOX_TARGET=$2; shift ;;
         --box-insecure-dev) BOX_INSECURE=1 ;;
@@ -110,6 +112,7 @@ case "$BOX_TARGET" in box|test) ;; *) die "--box-image-target must be box or tes
 [ -z "$INSTANCE" ] || printf '%s' "$INSTANCE" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || die "--instance must be lowercase letters, digits and dashes, starting with a letter"
 [ -z "$ADMIN_PW_FILE" ] || [ -r "$ADMIN_PW_FILE" ] || die "can't read --admin-password-file $ADMIN_PW_FILE"
 [ -z "$AGENT_KEY_FILE" ] || [ -r "$AGENT_KEY_FILE" ] || die "can't read --agent-api-key-file $AGENT_KEY_FILE"
+[ -z "$PASS_FILE_ARG" ] || [ -r "$PASS_FILE_ARG" ] || die "can't read --passphrase-file $PASS_FILE_ARG"
 for p in "$HTTP_PORT" "$HTTPS_PORT" "$API_PORT"; do [ -z "$p" ] || printf '%s' "$p" | grep -Eq '^[0-9]{1,5}$' || die "ports must be numbers"; done
 
 SRC_ROOT=$(cd "$HERE/../.." && pwd)
@@ -158,7 +161,7 @@ if [ "$WSL" = 1 ]; then
     ok "WSL with systemd"
 fi
 
-# ─── 3. Docker Engine and gVisor (before 2: listing installs needs Docker) ───
+# ─── 3. Docker Engine (before 2: listing installs needs Docker; gVisor after the question) ───
 step docker.install 'Docker Engine'
 if have docker && pick_docker; then
     if docker_is_desktop; then
@@ -169,19 +172,10 @@ if have docker && pick_docker; then
 else
     if have docker; then die "docker is installed but not reachable (is the daemon running? sudo systemctl start docker)"; fi
     install_docker_engine
+    DOCKER_INSTALLED=1
     add_cleanup 'Docker Engine was installed by this run; to remove it: sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
     pick_docker || die "Docker was installed but doesn't answer"
     ok "Docker $(dk version --format '{{.Server.Version}}')"
-fi
-
-step gvisor.install 'gVisor (runsc)'
-if [ "$BOX_INSECURE" = 1 ]; then
-    warn "--box-insecure-dev: boxes and code runs share this machine's kernel. Never use this in production."
-else
-    install_gvisor
-    step gvisor.check 'A test container under gVisor'
-    check_gvisor
-    ok "runsc works"
 fi
 
 # ─── 2. Existing installs ───
@@ -189,7 +183,16 @@ step existing 'Looking for Agora installs on this Docker engine'
 mapfile -t found < <(agora_instances)
 if [ "${#found[@]}" -gt 0 ]; then
     info "this engine already has: ${found[*]}"
-    for f in "${found[@]}"; do info "  $f: $(instance_dir "$f" || true)"; done
+    partial=()
+    for f in "${found[@]}"; do
+        d=$(instance_dir "$f" || true)
+        if [ -n "$d" ] && [ -f "$d/.agora-install-pending" ]; then
+            info "  $f: $d (an install that didn't finish)"
+            partial+=("$f")
+        else
+            info "  $f: ${d:-folder unknown}"
+        fi
+    done
     choice=$EXISTING
     if [ -z "$choice" ]; then
         if [ "$NON_INTERACTIVE" = 1 ] || [ ! -t 0 ]; then choice=stop
@@ -200,8 +203,10 @@ if [ "${#found[@]}" -gt 0 ]; then
             target=${INSTANCE:-${found[0]}}
             tdir=$(instance_dir "$target")
             [ -n "$tdir" ] && [ -f "$tdir/$ENV_FILE_NAME" ] || die "can't find the folder of install $target; run install/upgrade.sh in it"
+            [ ! -f "$tdir/.agora-install-pending" ] || die "install $target didn't finish (it has no admin yet); remove it with: bash $tdir/install/uninstall.sh --dir $tdir --purge --confirm $target, then install again"
             up_args=(--dir "$tdir" --source "$SOURCE")
             [ "$NON_INTERACTIVE" = 0 ] || up_args+=(--non-interactive)
+            [ -z "$PASS_FILE_ARG" ] || up_args+=(--passphrase-file "$PASS_FILE_ARG")
             FINISHED=1
             exec bash "$HERE/../upgrade.sh" "${up_args[@]}"
             ;;
@@ -213,11 +218,34 @@ if [ "${#found[@]}" -gt 0 ]; then
             printf '%s\n' "${found[@]}" | grep -qx "$INSTANCE" && die "an install named $INSTANCE already exists; choose another --instance"
             ok "installing alongside as $INSTANCE"
             ;;
-        *) FINISHED=1; say '  Stopped; nothing was changed.'; exit 0 ;;
+        *)
+            FINISHED=1
+            if [ "$DOCKER_INSTALLED" = 1 ]; then say '  Stopped. This run installed Docker Engine; nothing else was changed.'
+            else say '  Stopped; nothing was changed.'; fi
+            if [ "${#partial[@]}" -gt 0 ]; then
+                for f in "${partial[@]}"; do
+                    d=$(instance_dir "$f")
+                    say "  Install $f didn't finish. Remove it with: bash $d/install/uninstall.sh --dir $d --purge --confirm $f"
+                done
+                exit 1
+            fi
+            exit 0 ;;
     esac
 fi
 INSTANCE=${INSTANCE:-agora}
 printf '%s\n' "${found[@]:-}" | grep -qx "$INSTANCE" && die "an install named $INSTANCE already exists on this engine"
+
+# ─── 3b. gVisor ───
+step gvisor.install 'gVisor (runsc)'
+if [ "$BOX_INSECURE" = 1 ]; then
+    warn "--box-insecure-dev: boxes and code runs share this machine's kernel. Never use this in production."
+else
+    install_gvisor
+    step gvisor.check 'A test container under gVisor'
+    check_gvisor
+    ok "runsc works"
+fi
+
 
 if [ -z "$INSTALL_DIR" ]; then
     if [ "$INSTANCE" = agora ]; then INSTALL_DIR="$HOME/agora"; else INSTALL_DIR="$HOME/agora-$INSTANCE"; fi
@@ -232,9 +260,17 @@ dfree_kb=$(df -Pk "$docker_root" 2>/dev/null | awk 'NR==2 {print $4}' || echo "$
 ok "$((dfree_kb / 1024 / 1024)) GB free"
 
 step preflight.ports 'Choosing ports'
-taken=()
+# Ports other installs publish count as taken even while those installs are stopped
+mapfile -t taken < <(published_ports)
 pick() { # pick <given> <default> <step>
-    if [ -n "$1" ]; then port_free "$1" || die "port $1 is in use"; printf '%s' "$1"; return; fi
+    if [ -n "$1" ]; then
+        if port_free "$1" && ! printf '%s\n' "${taken[@]:-}" | grep -qx "$1"; then printf '%s' "$1"; return; fi
+        # The Windows installer picks ports that are free on Windows; inside WSL take the next free one
+        [ "$WSL" = 1 ] || die "port $1 is in use (or published by another install)"
+        warn "port $1 is in use here; choosing another"
+        free_port "$(( $1 + $3 ))" "$3" "${taken[@]:-}" || die "no free port after $1"
+        return
+    fi
     free_port "$2" "$3" "${taken[@]:-}" || die "no free port from $2"
 }
 HTTP_PORT=$(pick "$HTTP_PORT" 80 8000); taken+=("$HTTP_PORT")
@@ -289,19 +325,11 @@ chmod 600 "$ENV_FILE"
 [ "$BOX_INSECURE" = 0 ] || env_set "$ENV_FILE" AGORA_SANDBOX_INSECURE_DEV 1
 [ -z "${AGORA_TELEMETRY_URL:-}" ] || env_set "$ENV_FILE" AGORA_TELEMETRY_URL "$AGORA_TELEMETRY_URL"
 ok "$ENV_FILE (keep a copy somewhere safe: AGORA_ENCRYPTION_KEY can't be recovered)"
+# Until the end: another run sees this as an install that didn't finish
+date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.agora-install-pending"
 
-# ─── 7. Start ───
-step start 'Building and starting the stack (the first build takes a while)'
-add_cleanup "$(compose_cmd_text "$INSTALL_DIR" 'down -v --remove-orphans')   # removes this install's containers and data"
-compose_in "$INSTALL_DIR" up -d --build
-api_base "$API_PORT"
-
-step health 'Waiting for the API'
-wait_health 300 || die "the API didn't answer on $API/health within 5 minutes ($(compose_cmd_text "$INSTALL_DIR" 'logs api'))"
-ok "$API/health"
-
-# ─── 8. First admin ───
-step admin 'Creating the first admin'
+# ─── 8a. The first admin's name and password, checked before anything starts ───
+step admin.password 'The first admin'
 [ -n "$ADMIN_USER" ] || ask ADMIN_USER 'Admin username [admin]:' admin
 ADMIN_USER=${ADMIN_USER:-admin}
 ADMIN_EMAIL=${ADMIN_EMAIL:-$ADMIN_USER@localhost.localdomain}
@@ -319,6 +347,19 @@ if [ -z "$ADMIN_PW_FILE" ]; then
     ADMIN_PW_FILE=$pw_tmp
 fi
 [ "$(wc -c < "$ADMIN_PW_FILE")" -ge 8 ] || die "the admin password must be at least 8 characters"
+
+# ─── 7. Start ───
+step start 'Building and starting the stack (the first build takes a while)'
+add_cleanup "bash $INSTALL_DIR/install/uninstall.sh --dir $INSTALL_DIR --purge --confirm $INSTANCE   # this install's containers, boxes and data"
+compose_in "$INSTALL_DIR" up -d --build
+api_base "$API_PORT"
+
+step health 'Waiting for the API'
+wait_health 300 || die "the API didn't answer on $API/health within 5 minutes ($(compose_cmd_text "$INSTALL_DIR" 'logs api'))"
+ok "$API/health"
+
+# ─── 8. First admin ───
+step admin 'Creating the first admin'
 token=$(setup_token "$INSTALL_DIR") || die "no setup token in the API's log ($(compose_cmd_text "$INSTALL_DIR" 'logs api'))"
 ACCESS=$(instance_setup "$token" "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PW_FILE")
 unset token
@@ -351,6 +392,7 @@ FINISHED=1
 send_install_report ok null
 host=${DOMAIN:-localhost}
 URL="https://$host$([ "$HTTPS_PORT" = 443 ] || printf ':%s' "$HTTPS_PORT")"
+rm -f "$INSTALL_DIR/.agora-install-pending"
 cat > "$INSTALL_DIR/.agora-install" <<EOF
 instance=$INSTANCE
 version=$AGORA_VERSION
@@ -370,3 +412,5 @@ say "  Agents on this machine: http://localhost:$API_PORT"
 say "  Folder:    $INSTALL_DIR   (doctor: bash install/doctor.sh, backup: bash install/backup.sh)"
 if have xdg-open && [ "$WSL" = 0 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then xdg-open "$URL" >/dev/null 2>&1 || true; fi
 printf 'AGORA_URL=%s\n' "$URL" > "$INSTALL_DIR/.agora-url"
+# The Windows installer opens this (the ports may differ from the ones it suggested)
+mkdir -p "$HOME/.agora" && printf '%s\n' "$URL" > "$HOME/.agora/last-install-url"

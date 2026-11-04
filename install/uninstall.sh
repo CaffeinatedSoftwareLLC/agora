@@ -44,28 +44,46 @@ if [ "$PURGE" = 1 ]; then
     [ "$CONFIRM" = "$INSTANCE" ] || die "not confirmed; nothing was removed"
 fi
 
+# boxd first: while it runs it recreates the boxes removed below (its reconcile loop), and a
+# box keeps its home volume in use. The database goes last, after every box resource is gone.
+step uninstall.boxd 'Stopping boxd'
+services=$(compose_in "$DIR" config --services) || die "can't read this install's compose file; nothing was removed"
+if printf '%s\n' "$services" | grep -qx boxd; then
+    compose_in "$DIR" stop -t 90 boxd >/dev/null || die "could not stop boxd; nothing was removed"
+    ok 'boxd stopped'
+else
+    ok 'no boxd in this release'
+fi
+
 step uninstall.boxes 'Removing the box containers'
+boxes=$(box_containers "$INSTANCE") || die "can't list this install's box containers"
 n=0
-while read -r c; do [ -z "$c" ] || { dk rm -f "$c" >/dev/null; n=$((n + 1)); }; done < <(box_containers "$INSTANCE")
+while read -r c; do [ -z "$c" ] || { dk rm -f "$c" >/dev/null || die "could not remove $c"; n=$((n + 1)); }; done <<< "$boxes"
 ok "$n box container(s)"
 
 step uninstall.stack 'Removing the stack'
-if [ "$PURGE" = 1 ]; then compose_in "$DIR" down -v --remove-orphans; else compose_in "$DIR" down --remove-orphans; fi
+compose_in "$DIR" down --remove-orphans
 
 step uninstall.networks 'Removing the box networks'
+nets=$(dk network ls --filter "label=org.agora.instance=$INSTANCE" --format '{{.Name}}') || die "can't list this install's networks"
 n=0
 while read -r net; do
     [ -n "$net" ] || continue
     printf '%s' "$net" | grep -Eq "^${INSTANCE}_box_[0-9a-z]{26}\$" || continue
-    dk network rm "$net" >/dev/null && n=$((n + 1))
-done < <(dk network ls --filter "label=org.agora.instance=$INSTANCE" --format '{{.Name}}')
+    dk network rm "$net" >/dev/null || die "could not remove network $net"
+    n=$((n + 1))
+done <<< "$nets"
 ok "$n network(s)"
 
 if [ "$PURGE" = 1 ]; then
     step uninstall.volumes 'Deleting the box home volumes'
+    vols=$(box_volumes "$INSTANCE") || die "can't list this install's volumes"
     n=0
-    while IFS='|' read -r vol _; do [ -z "$vol" ] || { dk volume rm -f "$vol" >/dev/null; n=$((n + 1)); }; done < <(box_volumes "$INSTANCE")
+    while IFS='|' read -r vol _; do [ -z "$vol" ] || { dk volume rm "$vol" >/dev/null || die "could not delete $vol (still in use?)"; n=$((n + 1)); }; done <<< "$vols"
     ok "$n volume(s)"
+    step uninstall.data 'Deleting the database, files and other volumes of the stack'
+    compose_in "$DIR" down -v --remove-orphans
+    rm -f "$DIR/.agora-install-pending"
 fi
 
 FINISHED=1

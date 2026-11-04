@@ -136,5 +136,62 @@ if bash "$NEW/install/upgrade.sh" --dir "$CON" --passphrase-file "$T/pass" --non
 check 'conflicting names: refused' 1 "$code"
 check 'conflicting names: nothing stopped' 0 "$(grep -c 'compose .* stop' "$FAKE/log" || true)"
 
+# ─── Two box-era releases with different box/VERSION: upgrade, then roll back ───
+# The fake `compose build` refuses an AGORA_BOX_VERSION that isn't the folder's box/VERSION, as
+# box/Dockerfile does, so a rollback that kept the newer tag would fail here.
+mk_release() { # mk_release <dir> <version> <box version>
+    mkdir -p "$1/src/db/migrations" "$1/src/tools" "$1/box"
+    cp -r "$ROOT/install" "$1/"
+    printf '{\n  "name": "agora",\n  "version": "%s"\n}\n' "$2" > "$1/package.json"
+    printf 'services: {}\n' > "$1/docker-compose.prod.yml"
+    printf 'FROM node:22-alpine\n' > "$1/Dockerfile"
+    printf -- '-- core\n' > "$1/src/db/migrations/001_core.sql"
+    printf -- '-- boxes\n' > "$1/src/db/migrations/080_agent_boxes.sql"
+    printf '// prep\n' > "$1/src/tools/box-restore-prep.ts"
+    printf '%s\n' "$3" > "$1/box/VERSION"
+}
+BE="$T/agora-be"
+mk_release "$BE" 0.9.0 1
+printf 'COMPOSE_PROJECT_NAME=agora-be\nAGORA_INSTANCE=agora-be\nDB_PASSWORD=%s\nAGORA_EDGE_SECRET=%s\nAGORA_BOX_VERSION=1\nDOCKER_GID=999\n' "$DBPW" "$(printf 'a%.0s' $(seq 1 64))" > "$BE/.env.prod"
+chmod 600 "$BE/.env.prod"
+NEW2="$T/new2"
+mk_release "$NEW2" 1.0.0 2
+printf '%s\n' postgres redis api runner cap-gateway web caddy socket-proxy box-socket-proxy box-edge boxd migrate > "$FAKE/services"
+printf '%s\n' postgres redis api runner cap-gateway web caddy socket-proxy box-socket-proxy box-edge boxd > "$FAKE/running"
+echo t > "$FAKE/regclass"; : > "$FAKE/dbboxes"; : > "$FAKE/boxes"; : > "$FAKE/boxes_running"; : > "$FAKE/volumes"
+: > "$FAKE/log"
+if bash "$NEW2/install/upgrade.sh" --dir "$BE" --passphrase-file "$T/pass" --non-interactive > "$T/be-up.log" 2>&1; then code=0; else code=$?; fi
+check 'box-era upgrade: exit 0' 0 "$code"
+[ "$code" = 0 ] || tail -n 30 "$T/be-up.log"
+check 'box-era upgrade: AGORA_BOX_VERSION=2' 1 "$(grep -c '^AGORA_BOX_VERSION=2$' "$BE/.env.prod")"
+check 'box-era upgrade: the record is finished' 1 "$(grep -c '^state=done$' "$BE/.agora-upgrade")"
+: > "$FAKE/log"
+if bash "$BE/install/upgrade.sh" --rollback --dir "$BE" --passphrase-file "$T/pass" --non-interactive > "$T/be-rb.log" 2>&1; then code=0; else code=$?; fi
+check 'box-era rollback: exit 0' 0 "$code"
+[ "$code" = 0 ] || tail -n 30 "$T/be-rb.log"
+check 'box-era rollback: AGORA_BOX_VERSION back to 1' 1 "$(grep -c '^AGORA_BOX_VERSION=1$' "$BE/.env.prod")"
+check 'box-era rollback: the images built' 0 "$(grep -c 'fake build: BOX_VERSION' "$T/be-rb.log" || true)"
+check 'box-era rollback: the old release is back' 0.9.0 "$(sed -n 's/.*"version": "\(.*\)".*/\1/p' "$BE/package.json")"
+check 'box-era rollback: box-restore-prep ran' 1 "$(grep -c 'migrate node dist/src/tools/box-restore-prep.js' "$FAKE/log")"
+
+# ─── Stale and pending upgrade records ───
+# The record still says "to 1.0.0, done", but the folder is at 0.9.0 now: a second rollback must refuse
+: > "$FAKE/log"
+if bash "$NEW2/install/upgrade.sh" --rollback --dir "$BE" --passphrase-file "$T/pass" --non-interactive > "$T/be-rb2.log" 2>&1; then code=0; else code=$?; fi
+check 'stale record: rollback refused' 1 "$([ "$code" != 0 ] && echo 1 || echo 0)"
+check 'stale record: says why' yes "$(yes_if "grep -q 'stale record' '$T/be-rb2.log'")"
+check 'stale record: nothing stopped' 0 "$(grep -c 'compose .* stop' "$FAKE/log" || true)"
+# A pending record (an upgrade that failed after writing it) is used: it names the release it replaced
+prevdir=$(sed -n 's/^previous=//p' "$BE/.agora-upgrade")
+mkdir -p "$prevdir"
+cp -r "$BE"/. "$prevdir"/ 2>/dev/null || true
+rm -rf "$prevdir/.releases" "$prevdir/backups" "$prevdir/.env.prod" "$prevdir/.agora-upgrade"
+sed -i 's/^state=done$/state=pending/; s/^to=.*/to=9.9.9/' "$BE/.agora-upgrade"
+: > "$FAKE/log"
+if bash "$NEW2/install/upgrade.sh" --rollback --dir "$BE" --passphrase-file "$T/pass" --non-interactive > "$T/be-rb3.log" 2>&1; then code=0; else code=$?; fi
+check 'pending record: rollback goes ahead' 0 "$code"
+[ "$code" = 0 ] || tail -n 20 "$T/be-rb3.log"
+check 'pending record: says the upgrade did not finish' yes "$(yes_if "grep -q \"didn't finish\" '$T/be-rb3.log'")"
+
 printf '\n%d checks, %d failed\n' "$n" "$failed"
 [ "$failed" = 0 ]

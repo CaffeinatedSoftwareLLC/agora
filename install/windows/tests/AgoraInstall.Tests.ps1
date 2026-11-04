@@ -8,14 +8,19 @@ BeforeAll {
     $modulePath = Join-Path $PSScriptRoot '..\lib\AgoraInstall.psm1'
     Import-Module $modulePath -Force
 
-    # The fake machine: WSL present or not, its distros, which of them have Docker Engine,
-    # and every wsl.exe call made
+    # The fake machine: WSL present or not, its distros, which of them have Docker Engine
+    # (Engines: dockerd installed and started by systemd, so running once the distro runs;
+    # Stopped: installed but its service off), and every wsl.exe call made. Running a command in
+    # a stopped distro boots it, which is recorded in Booted.
     function New-Fake {
-        param([bool]$Wsl = $true, [object[]]$Distros = @(), [string[]]$Engines = @(), [string[]]$Answers = @())
+        param([bool]$Wsl = $true, [object[]]$Distros = @(), [string[]]$Engines = @(), [string[]]$Answers = @(), [string[]]$EngineOff = @())
         $global:AgoraFake = @{
             Wsl = $Wsl
             Distros = [System.Collections.ArrayList]@($Distros)
             Engines = $Engines
+            EngineOff = $EngineOff
+            Booted = [System.Collections.ArrayList]@()
+            Utf16 = $false
             Calls = [System.Collections.ArrayList]@()
             Answers = [System.Collections.Queue]::new()
             Prompts = [System.Collections.ArrayList]@()
@@ -44,24 +49,31 @@ BeforeAll {
             $first = $Arguments[0]
             if ($first -eq '--status') { return [pscustomobject]@{ ExitCode = $(if ($f.Wsl) { 0 } else { 1 }); Output = @() } }
             if ($first -eq '-l') {
-                $lines = @('  NAME            STATE           VERSION')
-                foreach ($d in $f.Distros) { $lines += ('{0} {1,-15} {2,-15} {3}' -f $(if ($d.Default) { '*' } else { ' ' }), $d.Name, $d.State, $d.Version) }
-                return [pscustomobject]@{ ExitCode = 0; Output = $lines }
+                # Names only, as `wsl -l -q` and `wsl -l --running -q` print them; optionally the raw
+                # UTF-16 bytes an older wsl.exe gives, and a localized message when there are none
+                $names = if ($Arguments -contains '--running') { @($f.Distros | Where-Object { $_.State -eq 'Running' } | ForEach-Object { $_.Name }) } else { @($f.Distros | ForEach-Object { $_.Name }) }
+                if ($names.Count -eq 0) { return [pscustomobject]@{ ExitCode = -1; Output = @('Es werden keine Distributionen ausgef' + [char]0xFC + 'hrt.') } }
+                if ($f.Utf16) { $names = @($names | ForEach-Object { ([char]0xFEFF) + (($_.ToCharArray() | ForEach-Object { "$_`0" }) -join '') }) }
+                return [pscustomobject]@{ ExitCode = 0; Output = $names }
             }
             if ($first -eq '--import') { [void]$f.Distros.Add((D $Arguments[1])); return [pscustomobject]@{ ExitCode = 0; Output = @() } }
             if ($first -eq '--terminate') { return [pscustomobject]@{ ExitCode = 0; Output = @() } }
             if ($first -eq '-d') {
                 $name = $Arguments[1]
                 $script = $Arguments[-1]
+                $d = @($f.Distros | Where-Object { $_.Name -eq $name }) | Select-Object -First 1
+                if ($d -and $d.State -ne 'Running') { [void]$f.Booted.Add($name); $d.State = 'Running' }
                 if ($Arguments -contains 'wslpath') { return [pscustomobject]@{ ExitCode = 0; Output = @('/mnt/c/agora') } }
                 if ($script -like '*command -v dockerd*') {
-                    $has = $f.Engines -contains $name
-                    return [pscustomobject]@{ ExitCode = 0; Output = @($(if ($has) { 'agora-engine-yes' } else { 'agora-engine-no' })) }
+                    $state = if ($f.EngineOff -contains $name) { 'agora-engine-installed' } elseif ($f.Engines -contains $name) { 'agora-engine-running' } else { 'agora-engine-none' }
+                    return [pscustomobject]@{ ExitCode = 0; Output = @($state) }
                 }
+                if ($script -like '*last-install-url*') { return [pscustomobject]@{ ExitCode = 0; Output = @($(if ($f.ContainsKey('Url')) { $f.Url } else { '' })) } }
                 return [pscustomobject]@{ ExitCode = 0; Output = @() }
             }
             return [pscustomobject]@{ ExitCode = 1; Output = @("unexpected wsl call: $($Arguments -join ' ')") }
         }
+        Mock -ModuleName AgoraInstall Get-LxssDistros { @($global:AgoraFake.Distros | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Version = $_.Version; Default = $_.Default } }) }
         Mock -ModuleName AgoraInstall Start-WslInstall { 0 }
         Mock -ModuleName AgoraInstall Register-ResumeAfterReboot { }
         Mock -ModuleName AgoraInstall Unregister-ResumeAfterReboot { }
@@ -81,6 +93,7 @@ BeforeAll {
         return $o
     }
     function Imported { @($global:AgoraFake.Calls | Where-Object { $_ -like '--import *' }) }
+    function Probed { param($Name) @($global:AgoraFake.Calls | Where-Object { $_ -like "-d $Name --exec sh -c *dockerd*" }) }
     function DockerDesktopTouched { @($global:AgoraFake.Calls | Where-Object { $_ -match '(^| )-d docker-desktop' }) }
 }
 
@@ -153,7 +166,7 @@ Describe 'WSL missing' {
         $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = '' })
         $r.Status | Should -Be 'rebooting'
         Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 1 -Exactly
-        Should -Invoke -ModuleName AgoraInstall Register-ResumeAfterReboot -Times 1 -Exactly -ParameterFilter { $Command -like '*install.ps1*-Resume*-Telemetry off*' }
+        Should -Invoke -ModuleName AgoraInstall Register-ResumeAfterReboot -Times 1 -Exactly -ParameterFilter { $Command -like '*install.ps1*-Resume*-Telemetry "off"*' }
         Should -Invoke -ModuleName AgoraInstall Restart-Machine -Times 1 -Exactly
         $global:AgoraFake.State.Phase | Should -Be 'after-wsl'
         @(Imported).Count | Should -Be 0
@@ -225,12 +238,21 @@ Describe 'existing Docker Engine distro (one engine rule)' {
         Should -Invoke -ModuleName AgoraInstall Invoke-LinuxInstaller -Times 0
     }
 
-    It 'prefers the installer''s own Agora distro when it already has an engine' {
-        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default), (D 'Agora')) -Engines @('Ubuntu', 'Agora')
+    It 'prefers the installer''s own Agora distro when both run an engine' {
+        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default), (D 'Agora' 'Running')) -Engines @('Ubuntu', 'Agora')
         $global:AgoraFake.State = @{ CreatedDistro = $true }
         $r = Invoke-AgoraInstall -Options (Opt)
         $r.Distro | Should -Be 'Agora'
         $global:AgoraFake.LinuxRoot | Should -BeTrue
+        @(Imported).Count | Should -Be 0
+    }
+
+    It 'does not boot its own stopped Agora distro while another distro runs an engine' {
+        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default), (D 'Agora')) -Engines @('Ubuntu', 'Agora')
+        $global:AgoraFake.State = @{ CreatedDistro = $true }
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Distro | Should -Be 'Ubuntu'
+        @($global:AgoraFake.Booted) | Should -Not -Contain 'Agora'
         @(Imported).Count | Should -Be 0
     }
 
@@ -332,12 +354,88 @@ Describe 'Get-UbuntuWslImage' {
 }
 
 Describe 'Get-WslDistros' {
-    It 'parses wsl -l -v, default marker included' {
-        Mock -ModuleName AgoraInstall Invoke-Wsl { [pscustomobject]@{ ExitCode = 0; Output = @('  NAME                   STATE           VERSION', '* Ubuntu                 Running         2', '  docker-desktop         Stopped         2', '  Legacy                 Stopped         1') } }
+    It 'takes names from wsl -l -q, running ones from --running, versions from the registry' {
+        New-Fake -Distros @((D 'Ubuntu' 'Running' -Default), (D 'docker-desktop' 'Running'), (D 'Legacy' 'Stopped' 1))
+        Set-Mocks
         $d = Get-WslDistros
         $d.Count | Should -Be 3
-        $d[0].Name | Should -Be 'Ubuntu'
-        $d[0].Default | Should -BeTrue
-        $d[2].Version | Should -Be 1
+        ($d | Where-Object Name -eq 'Ubuntu').State | Should -Be 'Running'
+        ($d | Where-Object Name -eq 'Ubuntu').Default | Should -BeTrue
+        ($d | Where-Object Name -eq 'Legacy').State | Should -Be 'Stopped'
+        ($d | Where-Object Name -eq 'Legacy').Version | Should -Be 1
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '-l -v*' }).Count | Should -Be 0
+    }
+
+    It 'reads UTF-16 output and a localized "none running" message' {
+        New-Fake -Distros @((D 'Ubuntu' 'Stopped'), (D 'Agora' 'Stopped'))
+        Set-Mocks
+        $global:AgoraFake.Utf16 = $true
+        $d = Get-WslDistros
+        @($d | ForEach-Object Name) | Should -Be @('Ubuntu', 'Agora')
+        @($d | Where-Object State -eq 'Running').Count | Should -Be 0
+    }
+}
+
+Describe 'one Docker engine: probing distros' {
+    It 'a running engine wins and no stopped distro is booted' {
+        New-Fake -Distros @((D 'Work' 'Running'), (D 'Ubuntu' 'Stopped' -Default), (D 'Agora' 'Stopped')) -Engines @('Work', 'Ubuntu', 'Agora')
+        Set-Mocks
+        Find-EngineDistro -Distros (Get-WslDistros) | Should -Be 'Work'
+        $global:AgoraFake.Booted.Count | Should -Be 0
+        @(Probed 'Ubuntu').Count | Should -Be 0
+        @(Probed 'Agora').Count | Should -Be 0
+    }
+
+    It 'a running distro with Docker Engine installed but stopped is used before booting another' {
+        New-Fake -Distros @((D 'Work' 'Running'), (D 'Ubuntu' 'Stopped' -Default)) -Engines @('Ubuntu') -EngineOff @('Work')
+        Set-Mocks
+        Find-EngineDistro -Distros (Get-WslDistros) | Should -Be 'Work'
+        $global:AgoraFake.Booted.Count | Should -Be 0
+    }
+
+    It 'with no running engine, a stopped distro with Docker Engine is used (no import)' {
+        New-Fake -Distros @((D 'Plain' 'Running'), (D 'Ubuntu' 'Stopped' -Default)) -Engines @('Ubuntu')
+        Set-Mocks
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Distro | Should -Be 'Ubuntu'
+        @(Imported).Count | Should -Be 0
+        @($global:AgoraFake.Booted) | Should -Be @('Ubuntu')
+    }
+
+    It 'a distro with only the docker CLI (Docker Desktop integration) is not an engine' {
+        New-Fake -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @()
+        Set-Mocks
+        Find-EngineDistro -Distros (Get-WslDistros) | Should -BeNullOrEmpty
+    }
+
+    It 'the probe and the install finder pass no double quotes through wsl.exe' {
+        New-Fake -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @('Ubuntu')
+        Set-Mocks
+        Find-EngineDistro -Distros (Get-WslDistros) | Out-Null
+        Find-AgoraInstalls -Distro 'Ubuntu' -ScriptWindowsPath 'C:\agora\install\lib\find-installs.sh' | Out-Null
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '-d *' }).Count | Should -BeGreaterThan 1
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '*"*' }).Count | Should -Be 0
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '-d Ubuntu --exec sh /mnt/c/agora' }).Count | Should -Be 1
+    }
+}
+
+Describe 'after the Linux installer' {
+    It 'opens the URL the Linux installer wrote (its ports may differ)' {
+        New-Fake -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @('Ubuntu')
+        Set-Mocks
+        $global:AgoraFake.Url = 'https://localhost:16443'
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Url | Should -Be 'https://localhost:16443'
+        Should -Invoke -ModuleName AgoraInstall Open-Browser -ParameterFilter { $Url -eq 'https://localhost:16443' }
+    }
+}
+
+Describe 'Get-ResumeCommand' {
+    It 'carries every answer to the run after the reboot' {
+        $c = Get-ResumeCommand -ScriptPath 'C:\Program Files\Agora\install.ps1' -Options (Opt @{ Telemetry = 'on'; Agent = 'codex'; Instance = 'agora2'; AdminUser = 'eryk'; Existing = 'alongside'; AllowWslInstall = $true; SourceDir = 'C:\Agora src' })
+        $c | Should -BeLike '*-File "C:\Program Files\Agora\install.ps1" -Resume*'
+        foreach ($part in '-Telemetry "on"', '-Agent "codex"', '-Instance "agora2"', '-AdminUser "eryk"', '-Existing "alongside"', '-NonInteractive', '-AllowWslInstall', '-SourceDir "C:\Agora src"') {
+            $c | Should -BeLike "*$part*"
+        }
     }
 }

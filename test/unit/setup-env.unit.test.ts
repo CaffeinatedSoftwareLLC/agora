@@ -14,10 +14,12 @@ let dir: string;
 let bin: string;
 
 /** A fake docker CLI: reports containers for the projects in FAKE_PROJECTS and logs every call. */
-function fakeDocker(projects: string[], upFails = false) {
+function fakeDocker(projects: string[], upFails = false, published: number[] = []) {
     writeFileSync(join(bin, 'docker'), `#!/bin/sh
 echo "$@" >> "${join(dir, 'docker.log')}"
 case "$*" in
+  "ps -aq") ${published.length ? 'echo c0ffee' : ':'}; exit 0 ;;
+  inspect*) echo "${published.join(' ')} "; exit 0 ;;
   *"up -d"*) ${upFails ? 'exit 1' : 'exit 0'} ;;
   *"down"*) exit 0 ;;
   *"logs api"*) printf 'api-1  | AGORA SETUP TOKEN\\napi-1  |   ${'a'.repeat(64)}\\n'; exit 0 ;;
@@ -95,6 +97,16 @@ describe.skipIf(process.platform === 'win32')('setup-env --prod (#209)', () => {
         expect(run([...PORTS, '--docker-gid', '4242']).status).toBe(0);
         expect(env().DOCKER_GID).toBe('4242');
         expect(run([...PORTS, '--docker-gid', 'docker', '--force']).status).toBe(1);
+    });
+
+    it('skips ports another install publishes, even while it is stopped', () => {
+        fakeDocker([], false, [80, 443, 3000, 3001]);
+        expect(run(['--instance', 'agora']).status).toBe(0);
+        const e = env();
+        expect(Number(e.AGORA_HTTP_PORT)).not.toBe(80);
+        expect(Number(e.AGORA_HTTPS_PORT)).not.toBe(443);
+        expect([3000, 3001]).not.toContain(Number(e.AGORA_API_PORT));
+        expect(calls()).toMatch(/inspect -f .*PortBindings.* c0ffee/);
     });
 
     it('rejects an unknown telemetry answer', () => {

@@ -74,8 +74,8 @@ if (-not (Test-WslInstalled)) {
         if ($task) { if ($task.State -eq 'Running') { Pass "keep-alive task running" } else { Fail "keep-alive task is $($task.State)" } }
         else { Fail "no keep-alive task '$(Get-KeepAliveTaskName -Distro $Distro)' (the distro stops a minute after its last window closes)" }
 
-        $find = 'd=$(docker ps -a --filter label=com.docker.compose.service=api --format "{{.Label \"com.docker.compose.project.working_dir\"}}" 2>/dev/null | sort -u); [ -n "$d" ] || d=$(sudo -n docker ps -a --filter label=com.docker.compose.service=api --format "{{.Label \"com.docker.compose.project.working_dir\"}}" 2>/dev/null | sort -u); printf "%s\n" $d'
-        $dirs = @((Invoke-Wsl '-d' $Distro '--exec' 'sh' '-c' $find).Output | Where-Object { $_ -match '^/' })
+        $asRoot = $Distro -eq 'Agora'
+        $dirs = Find-AgoraInstalls -Distro $Distro -ScriptWindowsPath (Join-Path $PSScriptRoot '..\lib\find-installs.sh') -AsRoot $asRoot
         if ($dirs.Count -eq 0) { Fail 'no Agora install found in the distro (no api container)' }
         foreach ($dir in $dirs) {
             $lines.Add(''); $lines.Add("## Inside $Distro ($dir)")

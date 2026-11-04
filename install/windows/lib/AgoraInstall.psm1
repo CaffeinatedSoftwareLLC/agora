@@ -164,15 +164,60 @@ function Test-WslInstalled {
     return ($r.ExitCode -eq 0)
 }
 
-function Get-WslDistros {
-    # `wsl -l -v`: "* Ubuntu    Running   2"
-    $r = Invoke-Wsl '-l' '-v'
+function ConvertFrom-WslText {
+    # wsl.exe -l writes UTF-16 (WSL_UTF8 isn't honoured by every version): drop NULs, BOMs, blanks
+    param([string[]]$Lines)
+    $out = @()
+    foreach ($l in $Lines) {
+        $t = ("$l" -replace "`0", '' -replace [char]0xFEFF, '').Trim()
+        if ($t) { $out += $t }
+    }
+    return , $out
+}
+
+function Get-WslDistroNames {
+    # `wsl -l -q`: one name per line, the same in every Windows language. Non-zero without distros.
+    $r = Invoke-Wsl '-l' '-q'
+    if ($r.ExitCode -ne 0) { return , @() }
+    return , (ConvertFrom-WslText $r.Output)
+}
+
+function Get-WslRunningNames {
+    # `wsl -l --running -q`; non-zero (and a localized message) when none runs
+    $r = Invoke-Wsl '-l' '--running' '-q'
+    if ($r.ExitCode -ne 0) { return , @() }
+    return , (ConvertFrom-WslText $r.Output)
+}
+
+function Get-LxssDistros {
+    # Versions and the default distro from the registry, which (unlike `wsl -l -v`) isn't localized
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
     $list = @()
-    if ($r.ExitCode -ne 0) { return , $list }
-    foreach ($line in $r.Output) {
-        $m = [regex]::Match($line, '^\s*(\*)?\s*(\S+)\s+(Running|Stopped|Installing|Converting|Uninstalling)\s+(\d)\s*$')
-        if ($m.Success) {
-            $list += [pscustomobject]@{ Name = $m.Groups[2].Value; State = $m.Groups[3].Value; Version = [int]$m.Groups[4].Value; Default = $m.Groups[1].Success }
+    if (-not (Test-Path $key)) { return , $list }
+    $default = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DefaultDistribution
+    foreach ($k in Get-ChildItem -Path $key -ErrorAction SilentlyContinue) {
+        $p = Get-ItemProperty -Path $k.PSPath -ErrorAction SilentlyContinue
+        if (-not $p -or -not $p.DistributionName) { continue }
+        $v = 2
+        if ($p.PSObject.Properties.Name -contains 'Version') { $v = [int]$p.Version }
+        $list += [pscustomobject]@{ Name = [string]$p.DistributionName; Version = $v; Default = ($k.PSChildName -eq $default) }
+    }
+    return , $list
+}
+
+function Get-WslDistros {
+    # Names from `wsl -l -q`, running ones from `wsl -l --running -q`, version and default from the registry
+    $names = Get-WslDistroNames
+    $running = Get-WslRunningNames
+    $reg = Get-LxssDistros
+    $list = @()
+    foreach ($n in $names) {
+        $r = @($reg | Where-Object { $_.Name -eq $n }) | Select-Object -First 1
+        $list += [pscustomobject]@{
+            Name = $n
+            State = $(if ($running -contains $n) { 'Running' } else { 'Stopped' })
+            Version = $(if ($r) { $r.Version } else { 2 })
+            Default = $(if ($r) { [bool]$r.Default } else { $false })
         }
     }
     return , $list
@@ -180,23 +225,55 @@ function Get-WslDistros {
 
 function Test-IsDockerDesktopDistro { param([string]$Name) $Name -like 'docker-desktop*' }
 
-function Test-DistroHasDockerEngine {
-    # Docker Engine itself (dockerd), not Docker Desktop's integration, which adds only the CLI
+function Get-DistroEngineState {
+    # 'running' (dockerd runs in it), 'installed' (Docker Engine is there but stopped) or 'none'.
+    # Docker Desktop's WSL integration adds only the CLI and a socket, so neither counts.
+    # Runs a command in the distro: for a stopped distro that boots it, so only call it on a
+    # stopped one when no running distro has an engine. No double quotes in the script: Windows
+    # PowerShell 5.1 doesn't escape them for native programs.
     param([string]$Distro)
-    $r = Invoke-Wsl '-d' $Distro '--exec' 'sh' '-c' 'if command -v dockerd >/dev/null 2>&1; then echo agora-engine-yes; else echo agora-engine-no; fi'
-    return ($r.ExitCode -eq 0 -and ($r.Output -contains 'agora-engine-yes'))
+    $script = 'if command -v dockerd >/dev/null 2>&1; then if pidof dockerd >/dev/null 2>&1 || systemctl is-active --quiet docker 2>/dev/null; then echo agora-engine-running; else echo agora-engine-installed; fi; else echo agora-engine-none; fi'
+    $r = Invoke-Wsl '-d' $Distro '--exec' 'sh' '-c' $script
+    $o = ConvertFrom-WslText $r.Output
+    if ($o -contains 'agora-engine-running') { return 'running' }
+    if ($o -contains 'agora-engine-installed') { return 'installed' }
+    return 'none'
 }
 
 function Find-EngineDistro {
-    # The one Docker engine rule: a WSL 2 distro that already has Docker Engine, if any.
-    # The installer's own distro first, then the default, then a running one.
+    # The one Docker engine rule. Running distros are asked first; one with a running engine wins
+    # and no stopped distro is booted (its own dockerd would start beside it). Only when no
+    # running distro has a running engine: a running one with Docker Engine installed, then the
+    # stopped ones (booting one starts no second engine, as none runs). The installer's own
+    # distro first, then the default.
     param($Distros)
     $candidates = @($Distros | Where-Object { -not (Test-IsDockerDesktopDistro $_.Name) -and $_.Version -eq 2 })
-    $ordered = @($candidates | Sort-Object @{ Expression = { $_.Name -ne $script:DistroName } }, @{ Expression = { -not $_.Default } }, @{ Expression = { $_.State -ne 'Running' } }, Name)
-    foreach ($d in $ordered) {
-        if (Test-DistroHasDockerEngine -Distro $d.Name) { return $d.Name }
+    $order = { param($list) @($list | Sort-Object @{ Expression = { $_.Name -ne $script:DistroName } }, @{ Expression = { -not $_.Default } }, Name) }
+    $running = & $order @($candidates | Where-Object { $_.State -eq 'Running' })
+    $stopped = & $order @($candidates | Where-Object { $_.State -ne 'Running' })
+    $installed = $null
+    foreach ($d in $running) {
+        $s = Get-DistroEngineState -Distro $d.Name
+        if ($s -eq 'running') { return $d.Name }
+        if ($s -eq 'installed' -and -not $installed) { $installed = $d.Name }
+    }
+    if ($installed) { return $installed }
+    foreach ($d in $stopped) {
+        if ((Get-DistroEngineState -Distro $d.Name) -ne 'none') { return $d.Name }
     }
     return $null
+}
+
+function Find-AgoraInstalls {
+    # The folder of every Agora install in the distro, from install/lib/find-installs.sh (a script
+    # in the release, so no quoting passes through wsl.exe)
+    param([string]$Distro, [string]$ScriptWindowsPath, [bool]$AsRoot = $false)
+    $sh = ConvertTo-WslPath -Distro $Distro -WindowsPath $ScriptWindowsPath
+    $a = @('-d', $Distro)
+    if ($AsRoot) { $a += @('-u', 'root') }
+    $all = $a + @('--exec', 'sh', $sh)
+    $r = Invoke-Wsl @all
+    return , @((ConvertFrom-WslText $r.Output) | Where-Object { $_ -match '^/' })
 }
 
 function Select-UbuntuWslImage {
@@ -318,10 +395,30 @@ function Send-InstallReport {
     return $true
 }
 
+function Get-InstalledUrl {
+    # The URL the Linux installer wrote: inside WSL it may have taken other ports than suggested
+    param([string]$Distro, [bool]$AsRoot, $Ports)
+    $a = @('-d', $Distro)
+    if ($AsRoot) { $a += @('-u', 'root') }
+    $all = $a + @('--exec', 'sh', '-c', 'cat $HOME/.agora/last-install-url')
+    $r = Invoke-Wsl @all
+    $u = @((ConvertFrom-WslText $r.Output) | Where-Object { $_ -match '^https://[A-Za-z0-9.-]+(:\d+)?$' }) | Select-Object -Last 1
+    if ($r.ExitCode -eq 0 -and $u) { return $u }
+    if ($Ports.Https -eq 443) { return 'https://localhost' }
+    return "https://localhost:$($Ports.Https)"
+}
+
 function Get-ResumeCommand {
     param([string]$ScriptPath, [hashtable]$Options)
+    # Every answer the first run was given, so the resumed run asks and does the same
     $parts = @('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"", '-Resume')
-    if ($Options.Telemetry) { $parts += @('-Telemetry', $Options.Telemetry) }
+    foreach ($k in 'Telemetry', 'Agent', 'Instance', 'AdminUser', 'Existing') {
+        if ($Options.ContainsKey($k) -and $Options[$k]) { $parts += @("-$k", "`"$($Options[$k])`"") }
+    }
+    foreach ($k in 'NonInteractive', 'AllowWslInstall') {
+        if ($Options.ContainsKey($k) -and $Options[$k]) { $parts += "-$k" }
+    }
+    if ($Options.ContainsKey('SourceDir') -and $Options.SourceDir) { $parts += @('-SourceDir', "`"$($Options.SourceDir)`"") }
     return ($parts -join ' ')
 }
 
@@ -445,7 +542,7 @@ function Invoke-AgoraInstall {
         Register-KeepAlive -Distro $distro
         Write-Ok (Get-KeepAliveTaskName -Distro $distro)
 
-        $url = if ($ports.Https -eq 443) { 'https://localhost' } else { "https://localhost:$($ports.Https)" }
+        $url = Get-InstalledUrl -Distro $distro -AsRoot $asRoot -Ports $ports
         $step = 'win.browser'
         Open-Browser -Url $url
         Write-Host ''

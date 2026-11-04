@@ -207,6 +207,14 @@ async function freePort(start, step, taken) {
     throw new Error(`No free port found from ${start}`);
 }
 
+/** Host ports published by any container on this engine, running or not (empty without Docker). */
+function publishedPorts() {
+    const ids = (capture('docker', ['ps', '-aq']) ?? '').split(/\s+/).filter(Boolean);
+    if (ids.length === 0) return [];
+    const out = capture('docker', ['inspect', '-f', '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}} {{end}}{{end}}', ...ids]) ?? '';
+    return out.split(/\s+/).filter(p => /^\d+$/.test(p)).map(Number);
+}
+
 function dockerGid() {
     if (process.platform !== 'linux') return undefined;
     const line = capture('getent', ['group', 'docker']);
@@ -290,7 +298,9 @@ async function setupProd() {
         if (state === true) occupied(instance);
         if (state === null && wantsStart) { console.error('  Docker could not be asked whether this install name is taken; not starting anything. Is Docker running?'); process.exit(1); }
     }
-    const taken = new Set();
+    // Ports any container on this engine publishes, running or stopped: a stopped install keeps
+    // its ports and gets them back when it starts, so a new install must not take them
+    const taken = new Set(publishedPorts());
     const pickPort = async (name, def, step) => {
         const given = flag(name);
         if (given !== undefined) {
