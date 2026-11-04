@@ -16,7 +16,7 @@ import { generateUlid, ulidFloor } from '../utils/ulid';
  *
  * A reminder is Agora's own post, so the wait behind it must be one Agora trusts:
  * - Written by the agent waited on itself, by another active, unpaused bot with access to the
- *   channel that took part in the thread before (a participant handing off), or by someone who
+ *   channel, of the same owner, that took part in the thread before (a participant handing off), or by someone (a person or a bot) who
  *   could direct agents when they posted and still can. An ordinary member's WAIT or YIELD
  *   never produces one, and doesn't cancel one either: only those authors' protocol posts count.
  * - Aimed at an unpaused bot with access to the channel that has already posted in the thread.
@@ -91,12 +91,14 @@ const DUE_WAITS = `WITH latest AS (
     SELECT w.thread_id, w.id, w.channel_id, w.protocol, w.began, w.author_id, w.author_username, w.author_bot,
            w.author_could_direct, b.id AS bot_id, b.username AS bot_username, b.bot_owner_id,
            (w.author_bot AND EXISTS (
-               -- An active, unpaused bot with access here, whose owner is active, that took part in
-               -- the thread before this post: a participant handing off, as in routeMessage
+               -- An active, unpaused bot with access here, of the same (active) owner as the target,
+               -- that took part in the thread before this post: one owner's agents handing off.
+               -- Another owner's bot needs to be able to direct agents here (the stamp path)
                SELECT 1 FROM bot_channel_access aa JOIN users ua ON ua.id = aa.bot_id
                LEFT JOIN users uo ON uo.id = ua.bot_owner_id
                WHERE aa.bot_id = w.author_id AND aa.channel_id = w.channel_id AND ua.bot_paused_at IS NULL
                  AND ua.account_status = 'active' AND COALESCE(uo.account_status, 'active') = 'active'
+                 AND ua.bot_owner_id = b.bot_owner_id
                  AND EXISTS (SELECT 1 FROM messages y WHERE (y.thread_id = w.thread_id OR y.id = w.thread_id)
                              AND y.author_id = w.author_id AND y.id < w.id AND y.deleted_at IS NULL)
            )) AS author_participant
@@ -112,6 +114,7 @@ const DUE_WAITS = `WITH latest AS (
                LEFT JOIN users uo ON uo.id = ua.bot_owner_id
                WHERE aa.bot_id = w.author_id AND aa.channel_id = w.channel_id AND ua.bot_paused_at IS NULL
                  AND ua.account_status = 'active' AND COALESCE(uo.account_status, 'active') = 'active'
+                 AND ua.bot_owner_id = b.bot_owner_id
                  AND EXISTS (SELECT 1 FROM messages y WHERE (y.thread_id = w.thread_id OR y.id = w.thread_id)
                              AND y.author_id = w.author_id AND y.id < w.id AND y.deleted_at IS NULL))))
       AND EXISTS (SELECT 1 FROM messages x WHERE (x.thread_id = w.thread_id OR x.id = w.thread_id)
@@ -148,7 +151,29 @@ export async function runHandoffNudges(deps: HandoffNudgeDeps, now = Date.now())
             if (rows.length < BATCH) break;
             after = rows[rows.length - 1].id;
         }
+        // Waits that rest on someone's authority: drop the ones whose author can't direct any
+        // more before taking a lock for each (remind() checks again inside the transaction)
+        const lost = new Set<string>();
+        const byChannel = new Map<string, Candidate[]>();
+        for (const row of due) {
+            if (!needsAuthority(row)) continue;
+            const list = byChannel.get(row.channel_id.trim()) ?? [];
+            list.push(row); byChannel.set(row.channel_id.trim(), list);
+        }
+        if (byChannel.size > 0) {
+            // readAuthorities switches roles under a savepoint: it needs a transaction
+            await c.query('BEGIN');
+            try {
+                for (const [channelId, rows] of byChannel) {
+                    const authority = await readAuthorities(c, channelId, rows.map(authorRow));
+                    for (const row of rows) if (!authority.get(row.id.trim())) lost.add(row.id.trim());
+                }
+            } finally {
+                await c.query('COMMIT');
+            }
+        }
         for (const first of due) {
+            if (lost.has(first.id.trim())) continue;
             const threadId = first.thread_id.trim();
             await c.query('BEGIN');
             try {
@@ -183,8 +208,8 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
     const botId = row.bot_id.trim(), name = row.bot_username;
 
     // Someone else's wait counts from a participant bot, or while its author can still direct agents here
-    if (row.author_id && row.author_id.trim() !== botId && !row.author_participant) {
-        const authority = await readAuthorities(c, channelId, [{ id: protocolId, author_id: row.author_id.trim(), author_bot: !!row.author_bot, author_could_direct: row.author_could_direct }]);
+    if (needsAuthority(row)) {
+        const authority = await readAuthorities(c, channelId, [authorRow(row)]);
         if (!authority.get(protocolId)) return null;
     }
 
@@ -230,6 +255,15 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
             threadClosedAt: parent.rows[0].thread_closed_at ?? null,
         } },
     ] };
+}
+
+/** A wait by someone other than the target and not by a participant bot rests on its author's authority. */
+function needsAuthority(row: Candidate): boolean {
+    return !!row.author_id && row.author_id.trim() !== row.bot_id.trim() && !row.author_participant;
+}
+
+function authorRow(row: Candidate) {
+    return { id: row.id.trim(), author_id: row.author_id!.trim(), author_bot: !!row.author_bot, author_could_direct: row.author_could_direct };
 }
 
 /** Agent names and reasons are the agents' own text: no mentions or markup from them. */

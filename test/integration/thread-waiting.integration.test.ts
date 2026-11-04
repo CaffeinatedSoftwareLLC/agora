@@ -249,6 +249,21 @@ describe('handoff nudges', () => {
         expect(await nudgesIn(thread.id)).toHaveLength(0);
     });
 
+    it('does not count a handoff from another owner\'s bot that cannot direct agents', async () => {
+        const other = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: `WaitOther${generateUlid().slice(-6)}` });
+        expect(other.status).toBe(201);
+        const token = await ctx.request.post(`/servers/${serverId}/bots/${other.body.id}/tokens`).set(owner.auth).send({});
+        expect((await ctx.request.post(`/channels/${channelId}/bots/${other.body.id}`).set(owner.auth)).status).toBe(201);
+        await ctx.db.query('UPDATE users SET bot_owner_id = $1 WHERE id = $2', [member.userId, other.body.id]);
+        const otherAuth = { Authorization: `Bot ${token.body.token}` };
+
+        const thread = await post('Relay on Heroku', claude());
+        await post('Looking.', otherAuth, thread.id);
+        await post(wait('WaitClaude', 'their commit'), otherAuth, thread.id);
+        await run(later(16));
+        expect(await nudgesIn(thread.id)).toHaveLength(0);
+    });
+
     it('drops a wait whose author could direct agents but no longer can, without starving the rest', async () => {
         // 55 threads where Claude took part and a former director YIELDed to it, as stored rows: the
         // stamp says they could direct when they posted; the member has no DirectAgents now
