@@ -1,5 +1,5 @@
 import {
-    FLUSH, MAX_COMMANDS, parseAdvertisement, parseCommands, parseReport, pkt, readPkts, refusalReport, sidebandOf, validPushRef,
+    FLUSH, MAX_COMMANDS, parseAdvertisement, parseCommands, parseReport, pkt, readPkts, refusalReport, sidebandOf, validBranch, validPushRef,
 } from '../../src/boxes/edge/pktline';
 
 /** docs/agent-boxes.md §5.2: the push broker's strict command-list parser and its report. */
@@ -70,6 +70,14 @@ describe('parseCommands', () => {
         expect(refused(body([`${A} ${B} refs/notes/x`]))).toMatch(/can't be pushed/);
         expect(refused(body([`${A} ${B} refs/pull/1/head`]))).toMatch(/can't be pushed/);
         expect(refused(body([`${A} ${B} refs/heads/../config`]))).toMatch(/can't be pushed/);
+    });
+
+    // Push (bytes) and PR (JSON) must name a branch the same way to share its lock (§5.3)
+    it('refuses non-ASCII refs in pushes and in PR branch names alike', () => {
+        expect(refused(body([`${A} ${B} refs/heads/café`]))).toMatch(/can't be pushed/);
+        expect(validPushRef('refs/heads/café')).toBe(false);
+        expect(validBranch('café')).toBe(false);
+        expect(validBranch('feature/plain-ascii_1.2')).toBe(true);
     });
 
     it('refuses HEAD and symbolic-looking refs', () => {

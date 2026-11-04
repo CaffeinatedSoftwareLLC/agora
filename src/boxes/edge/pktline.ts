@@ -32,6 +32,9 @@ export type CommandParse =
 /** A ref name a push may write: refs/heads/* or refs/tags/*, by git's check-ref-format rules, never HEAD. */
 export function validPushRef(ref: string): boolean {
     if (ref.length > 255 || !/^refs\/(heads|tags)\/./.test(ref)) return false;
+    // Printable ASCII only. A push's ref arrives as bytes and a PR's branch as JSON text: with
+    // anything else the two could name one branch differently and take different locks (§5.3)
+    if (!/^[\x21-\x7e]+$/.test(ref)) return false;
     // eslint-disable-next-line no-control-regex
     if (/[\x00-\x20\x7f~^:?*[\\]/.test(ref)) return false;
     if (ref.includes('..') || ref.includes('@{') || ref.includes('//') || ref.endsWith('/') || ref.endsWith('.') || ref === '@') return false;
