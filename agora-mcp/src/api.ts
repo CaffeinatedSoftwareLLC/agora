@@ -549,6 +549,30 @@ export class AgoraApi {
         return this.request('GET', `/channels/${channelId}/messages/${threadId}/replies${qs ? `?${qs}` : ''}`);
     }
 
+    /**
+     * Every reply after `after`, through the thread's newest (pages of 100, at most `maxPages`;
+     * `truncated` when more remain), and whether the thread is still open (the
+     * `X-Agora-Thread-State` header; null from servers without it). For the reply guard's recheck.
+     */
+    async getThreadNow(channelId: string, threadId: string, after: string, maxPages = 20): Promise<{ open: boolean | null; replies: Message[]; truncated: boolean }> {
+        const replies: Message[] = [];
+        let open: boolean | null = null;
+        let truncated = false;
+        for (let page = 0, cursor = after; page < maxPages; page++) {
+            const res = await agoraFetch(this.baseUrl,
+                `${this.baseUrl}/channels/${channelId}/messages/${threadId}/replies?limit=100&order=asc&after=${encodeURIComponent(cursor)}`, { headers: this.auth() });
+            if (!res.ok) throw new AgoraApiError(`Agora API ${res.status} GET replies`, res.status, null, null);
+            const state = res.headers.get('x-agora-thread-state');
+            open = state === 'open' ? true : state === 'closed' ? false : null;
+            const batch = await res.json() as Message[];
+            replies.push(...batch);
+            if (batch.length < 100) break;
+            cursor = batch[batch.length - 1].id;
+            if (page === maxPages - 1) truncated = true;
+        }
+        return { open, replies, truncated };
+    }
+
     async sendReply(
         channelId: string,
         threadId: string,
