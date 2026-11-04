@@ -172,12 +172,21 @@ function capture(cmd, args) {
     return r.status === 0 ? r.stdout : null;
 }
 
-/** Does this Docker engine already have anything of install `name` (#209)? */
+/**
+ * Does this Docker engine already have anything of install `name` (#209)? true or false, or
+ * null when Docker couldn't be asked (not installed, not running, no permission): unknown is
+ * never taken to mean "free".
+ */
 function instanceInUse(name) {
-    const containers = capture('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${name}`]);
-    const volumes = capture('docker', ['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${name}`]);
-    const network = capture('docker', ['network', 'ls', '-q', '--filter', `name=^${name}_sandbox$`]);
-    return [containers, volumes, network].some(out => out && out.trim() !== '');
+    const outs = [
+        capture('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${name}`]),
+        capture('docker', ['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${name}`]),
+        capture('docker', ['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${name}`]),
+        capture('docker', ['network', 'ls', '-q', '--filter', `name=^${name}_sandbox$`]),
+    ];
+    if (outs.some(out => out !== null && out.trim() !== '')) return true;
+    if (outs.some(out => out === null)) return null;
+    return false;
 }
 
 /** Can this machine accept connections on `port`? Checked on every interface, as Docker publishes. */
@@ -260,13 +269,26 @@ async function setupProd() {
         console.error('  --instance must be lowercase letters, digits and dashes, starting with a letter.');
         process.exit(1);
     }
+    const wantsStart = process.argv.includes('--start');
+    const occupied = (name) => {
+        // A new config holds new secrets: it would lock an existing install out of its own
+        // database and encrypted files. Reusing an install is install/upgrade.sh's job.
+        console.error(`  This Docker engine already has containers, volumes or networks of an install named "${name}".`);
+        console.error('  A new .env.prod would hold new secrets that don\'t open its data. To keep using it, use its');
+        console.error('  existing .env.prod (or install/upgrade.sh); for a separate install, pick another --instance.');
+        process.exit(1);
+    };
     if (instance === undefined) {
         instance = 'agora';
-        for (let n = 2; instanceInUse(instance); n++) instance = `agora${n}`;
-        if (instance !== 'agora') console.log(`  This Docker engine already has an Agora install named "agora"; this one is "${instance}".`);
-    } else if (instanceInUse(instance)) {
-        console.log(`  Note: this Docker engine already has containers, volumes or a network of an install named "${instance}".`);
-        console.log('  Starting will reuse them. Pick another --instance for a separate install.');
+        let state = instanceInUse(instance);
+        for (let n = 2; state === true; n++) { instance = `agora${n}`; state = instanceInUse(instance); }
+        if (state === null && wantsStart) { console.error('  Docker could not be asked which install names are taken; not starting anything. Is Docker running?'); process.exit(1); }
+        if (state === null) console.log(`  Docker could not be asked which install names are taken; using "${instance}". Check before starting.`);
+        else if (instance !== 'agora') console.log(`  This Docker engine already has an Agora install named "agora"; this one is "${instance}".`);
+    } else {
+        const state = instanceInUse(instance);
+        if (state === true) occupied(instance);
+        if (state === null && wantsStart) { console.error('  Docker could not be asked whether this install name is taken; not starting anything. Is Docker running?'); process.exit(1); }
     }
     const taken = new Set();
     const pickPort = async (name, def, step) => {
@@ -402,8 +424,16 @@ async function setupProd() {
     // --- Build and start Docker ---
 
     const { spawnSync } = require('node:child_process');
-    // Anything that existed before this start must survive a cleanup after a failed one
-    const hadVolumes = (capture('docker', ['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${instance}`]) ?? '').trim() !== '';
+    // Check again right before starting: a cleanup after a failed start removes the whole
+    // project, so it may only run when this start is the first thing that project ever had
+    const before = instanceInUse(instance);
+    if (before !== false) {
+        console.error(before === null
+            ? '\n  Docker could not be asked what already exists for this install; not starting anything.'
+            : `\n  Something of an install named "${instance}" appeared meanwhile; not starting anything.`);
+        console.error(`  Start it yourself with:\n  ${upCommand}`);
+        process.exit(1);
+    }
 
     console.log('\n  Building and starting Docker containers...');
     console.log('  This may take a few minutes on first run.\n');
@@ -412,10 +442,10 @@ async function setupProd() {
 
     if (up.status !== 0) {
         console.error('\n  Docker Compose failed. Check the output above.');
-        console.error('  Removing what this start created...');
-        const downArgs = [...compose, 'down', '--remove-orphans', ...(hadVolumes ? [] : ['-v'])];
+        console.error('  Removing what this start created (the project had nothing before it)...');
+        const downArgs = [...compose, 'down', '--remove-orphans', '-v'];
         const down = spawnSync('docker', downArgs, { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] });
-        if (down.status === 0) console.error(`  Removed the containers${hadVolumes ? ' (volumes from before this start were kept)' : ' and volumes'}. Fix the problem above, then run:\n  ${upCommand}`);
+        if (down.status === 0) console.error(`  Removed its containers, networks and volumes. Fix the problem above, then run:\n  ${upCommand}`);
         else console.error(`  Cleanup failed too. Remove it by hand with:\n  docker ${downArgs.join(' ')}`);
         process.exit(1);
     }

@@ -139,10 +139,40 @@ describe.skipIf(process.platform === 'win32')('setup-env --prod (#209)', () => {
         expect(calls()).toMatch(/down --remove-orphans -v/);
     });
 
-    it('keeps volumes from before a failed start', () => {
-        fakeDocker(['agora'], true);
+    // Codex review #8: new secrets over an existing install would lock it out of its own data
+    it('refuses an --instance name this engine already has, and writes nothing', () => {
+        fakeDocker(['agora']);
+        const r = run([...PORTS, '--instance', 'agora']);
+        expect(r.status).toBe(1);
+        expect(r.stderr).toMatch(/already has containers, volumes or networks/);
+        expect(existsSync(join(dir, '.env.prod'))).toBe(false);
+        expect(calls()).not.toMatch(/up -d|down/);
+    });
+
+    // Codex review #9: an unknown inventory is never "free", and cleanup never reaches older resources
+    it('starts nothing when Docker cannot be asked what exists', () => {
+        fakeDocker([]);
+        writeFileSync(join(bin, 'docker'), `#!/bin/sh\necho "$@" >> "${join(dir, 'docker.log')}"\ncase "$*" in *"volume ls"*) exit 1 ;; esac\nexit 0\n`);
+        chmodSync(join(bin, 'docker'), 0o755);
         const r = run([...PORTS, '--start', '--instance', 'agora']);
         expect(r.status).toBe(1);
-        expect(calls()).toMatch(/down --remove-orphans\n/);
+        expect(calls()).not.toMatch(/up -d|down/);
+    });
+
+    it('starts nothing, and removes nothing, when resources appear between the check and the start', () => {
+        // The first inventory sees an empty engine, the second (right before `up`) a volume
+        const marker = join(dir, 'seen');
+        writeFileSync(join(bin, 'docker'), `#!/bin/sh
+echo "$@" >> "${join(dir, 'docker.log')}"
+case "$*" in
+  *"volume ls"*) if [ -f "${marker}" ]; then echo vol1; else touch "${marker}"; fi ;;
+esac
+exit 0
+`);
+        chmodSync(join(bin, 'docker'), 0o755);
+        const r = run([...PORTS, '--start', '--instance', 'agora']);
+        expect(r.status).toBe(1);
+        expect(r.stderr).toMatch(/appeared meanwhile/);
+        expect(calls()).not.toMatch(/up -d|down/);
     });
 });
