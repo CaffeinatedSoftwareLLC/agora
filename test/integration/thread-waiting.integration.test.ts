@@ -1,4 +1,4 @@
-import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
+import { setupTestApp, authedUser, createServer, cleanDatabase, joinViaInvite } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { runHandoffNudges, type NudgeEvent } from '../../src/workers/handoff-nudge';
 
@@ -10,6 +10,7 @@ import { runHandoffNudges, type NudgeEvent } from '../../src/workers/handoff-nud
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: Awaited<ReturnType<typeof authedUser>>;
+let member: Awaited<ReturnType<typeof authedUser>>;
 let serverId: string, channelId: string;
 const bots: Record<string, { id: string; auth: Record<string, string> }> = {};
 
@@ -17,6 +18,9 @@ beforeAll(async () => {
     ctx = await setupTestApp(); await cleanDatabase(ctx.db);
     owner = await authedUser(ctx.request, 'waitowner');
     serverId = (await createServer(ctx.request, owner.auth, 'Waiting')).serverId;
+    // An ordinary member: may post, may not direct agents
+    member = await authedUser(ctx.request, 'waitmember');
+    await joinViaInvite(ctx.request, owner.auth, member.auth, serverId);
     for (const name of ['WaitClaude', 'WaitCodex']) {
         const bot = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: name });
         expect(bot.status).toBe(201);
@@ -30,6 +34,8 @@ beforeEach(async () => {
     const ch = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: `wait-${generateUlid().toLowerCase()}`, channelType: 3 });
     expect(ch.status).toBe(201); channelId = ch.body.id;
     for (const { id } of Object.values(bots)) expect((await ctx.request.post(`/channels/${channelId}/bots/${id}`).set(owner.auth)).status).toBe(201);
+    // Each test starts with no recent reminders for the per-bot limits
+    await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
 });
 
 const claude = () => bots.WaitClaude.auth;
@@ -46,9 +52,20 @@ const threads = async () => (await ctx.request.get(`/channels/${channelId}/threa
 const replies = async (thread: string) => (await ctx.request.get(`/channels/${channelId}/messages/${thread}/replies`).set(owner.auth)).body as any[];
 const MIN = 60_000;
 const later = (minutes: number) => Date.now() + minutes * MIN;
-const run = (now: number, connected: string[] = []) => {
+const run = (now: number, connected: string[] = [], beforeWrite?: () => Promise<void>) => {
     const events: NudgeEvent[] = [];
-    return runHandoffNudges({ db: ctx.db, emit: e => events.push(e), isConnected: id => connected.includes(id) }, now)
+    // beforeWrite runs once, after the pass picked its waits and before it locks the first one
+    const db = !beforeWrite ? ctx.db : { connect: async () => {
+        const client = await ctx.db.connect();
+        const query = client.query.bind(client) as (...a: any[]) => any;
+        let fired = false;
+        (client as any).query = async (...a: any[]) => {
+            if (!fired && a[0] === 'BEGIN') { fired = true; await beforeWrite(); }
+            return query(...a);
+        };
+        return client;
+    } } as any;
+    return runHandoffNudges({ db, emit: e => events.push(e), isConnected: id => connected.includes(id) }, now)
         .then(result => ({ ...result, events }));
 };
 const nudgesIn = async (thread: string) => (await replies(thread)).filter(m => m.systemEvent === 'handoff_nudge');
@@ -193,18 +210,52 @@ describe('handoff nudges', () => {
         expect((await ctx.request.patch(`/channels/${channelId}/messages/${thread}/thread`).set(owner.auth).send({ closed: true })).status).toBe(200);
     });
 
-    it('tells an owner about the same quiet bot at most once an hour', async () => {
-        // Earlier tests told this owner about WaitClaude just now
-        await ctx.db.query("UPDATE notifications SET created_at = NOW() - INTERVAL '2 hours'");
+    it('reminds a bot at most once per nudge time, and tells its owner at most once an hour', async () => {
         const a = await deferredHandoff();
         const b = await deferredHandoff();
-        const pass = await run(later(16));
+        const first = await run(later(16));
         expect(await nudgesIn(a.thread)).toHaveLength(1);
-        expect(await nudgesIn(b.thread)).toHaveLength(1);
-        expect(pass.ownersNotified).toBe(1);
-        const told = await ctx.db.query(`SELECT 1 FROM notifications WHERE user_id = $1 AND thread_id IN ($2, $3)`, [owner.userId, a.thread, b.thread]);
+        expect(await nudgesIn(b.thread)).toHaveLength(0);
+        expect(first.ownersNotified).toBe(1);
+
+        const second = await run(later(32));
+        const [late] = await nudgesIn(b.thread);
+        expect(late.content).toMatch(/Agora can't reach WaitClaude here\.$/);
+        expect(second.ownersNotified).toBe(0);
+        const told = await ctx.db.query('SELECT 1 FROM notifications WHERE user_id = $1 AND thread_id IN ($2, $3)', [owner.userId, a.thread, b.thread]);
         expect(told.rows).toHaveLength(1);
     });
+
+    it('never turns an ordinary member\'s WAIT or YIELD into a reminder', async () => {
+        const { thread } = await deferredHandoff();
+        await post(wait('WaitClaude', 'forged'), member.auth, thread);
+        const other = await deferredHandoff();
+        await post(turn('WaitCodex'), member.auth, other.thread);
+        await run(later(16));
+        expect(await nudgesIn(thread)).toHaveLength(0);
+        expect(await nudgesIn(other.thread)).toHaveLength(0);
+    });
+
+    it('is not starved by a batch of waits it may not nudge', async () => {
+        // More top-level YIELDs to a bot that never posted than one pass takes
+        for (let i = 0; i < 55; i++) await post(turn('WaitCodex', `job ${i}`), owner.auth);
+        const { thread } = await deferredHandoff();
+        await run(later(16));
+        expect(await nudgesIn(thread)).toHaveLength(1);
+    });
+
+    for (const [what, act] of [
+        ['a DONE', (t: string) => post('[AGORA/v1 MODE=fix STATE=DONE]\nshipped', codex(), t)],
+        ['a reply from the agent', (t: string) => post('Here is the commit.', claude(), t)],
+        ['closing the thread', (t: string) => ctx.request.patch(`/channels/${channelId}/messages/${t}/thread`).set(owner.auth).send({ closed: true })],
+    ] as const) {
+        it(`posts nothing when ${what} lands while the pass runs`, async () => {
+            const { thread } = await deferredHandoff();
+            const pass = await run(later(16), [], async () => { await act(thread); });
+            expect(await nudgesIn(thread)).toHaveLength(0);
+            expect(pass.events.filter(e => (e.data as any).threadId === thread || (e.data as any).messageId === thread)).toEqual([]);
+        });
+    }
 
     it('sends the reminder live with what agora-mcp needs to filter it', async () => {
         const { thread } = await deferredHandoff();
