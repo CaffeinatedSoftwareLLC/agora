@@ -15,6 +15,9 @@ import { mcpClientName } from './api.js';
  * 2. `initialize`'s clientInfo (every client today);
  * 3. `--client <name>` / `AGORA_CLIENT`, for a client that names itself in neither.
  * With none of these, requests name no client and Agora refuses a token already bound to one.
+ * The first name used is kept for the life of the process: one stdio process serves one
+ * client, so a later request naming another client doesn't change who agora-mcp says it is
+ * (an in-flight request keeps its name too). The mismatch is logged once.
  *
  * The session starts (agora-mcp opens its socket) on `notifications/initialized`, or on the
  * first request that is not `initialize`, `ping` or `server/discover`, whichever comes first. A legacy client
@@ -43,13 +46,18 @@ export interface ClientSessionOptions {
 
 export class ClientSession {
     private metaName: string | null = null;
+    private pinned: string | null = null;
+    private warned = false;
     private started = false;
 
     constructor(private opts: ClientSessionOptions) {}
 
     /** The client name to send to Agora, or null when the client has named itself nowhere. */
     name(): string | null {
-        return this.metaName ?? mcpClientName(this.opts.initializeName()) ?? this.opts.configured ?? null;
+        if (this.pinned) return this.pinned;
+        const name = this.metaName ?? mcpClientName(this.opts.initializeName()) ?? this.opts.configured ?? null;
+        if (name) this.pinned = name;
+        return name;
     }
 
     get hasStarted(): boolean { return this.started; }
@@ -60,7 +68,14 @@ export class ClientSession {
         const params = (message as { params?: { _meta?: Record<string, unknown> } }).params;
         const info = params?._meta?.[CLIENT_INFO_META] as { name?: unknown } | undefined;
         const name = mcpClientName(info?.name);
-        if (name) this.metaName = name;
+        if (name) {
+            this.metaName ??= name;
+            if (this.pinned && name !== this.pinned && !this.warned) {
+                this.warned = true;
+                process.stderr.write(`[agora-mcp] client named itself ${name} after ${this.pinned}; Agora keeps ${this.pinned} for this session
+`);
+            }
+        }
 
         if (message.method === 'notifications/initialized') this.start();
         else if ('id' in message && !NOT_A_START.has(message.method)) this.start();

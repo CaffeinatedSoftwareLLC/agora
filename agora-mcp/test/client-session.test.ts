@@ -111,6 +111,46 @@ describe('a stateless (2026-07-28) client', () => {
     });
 });
 
+describe('one client identity per process', () => {
+    it('keeps the first name used when a later request names another client', async () => {
+        const h = await harness();
+        const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        try {
+            await statelessClient(h.clientSide, { name: 'first-cli', version: '1' }).call('tools/call', { name: 'whoami', arguments: {} });
+            const replies: JSONRPCMessage[] = [];
+            h.clientSide.onmessage = m => { replies.push(m); };
+            await h.clientSide.send({ jsonrpc: '2.0', id: 99, method: 'tools/call', params: { name: 'whoami', arguments: {},
+                _meta: { [CLIENT_INFO_META]: { name: 'other-cli', version: '1' } } } });
+            await vi.waitFor(() => expect(replies).toHaveLength(1));
+            expect(h.seen).toEqual(['first-cli', 'first-cli']);
+            expect(stderr.mock.calls.map(c => String(c[0])).join('')).toMatch(/named itself other-cli after first-cli/);
+        } finally { stderr.mockRestore(); }
+    });
+});
+
+describe('a dual-era client that probes, then initializes', () => {
+    it('starts nothing on the failed probe or initialize, then exactly once on initialized', async () => {
+        const h = await harness();
+        const replies: JSONRPCMessage[] = [];
+        h.clientSide.onmessage = m => { replies.push(m); };
+        await h.clientSide.start();
+        await h.clientSide.send({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28', [CLIENT_INFO_META]: { name: 'claude-code', version: '3' } } } });
+        await vi.waitFor(() => expect(replies).toHaveLength(1));
+        expect((replies[0] as any).error.code).toBe(-32601);
+        await h.clientSide.send({ jsonrpc: '2.0', id: 2, method: 'initialize', params: {
+            protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', version: '3' } } });
+        await vi.waitFor(() => expect(replies).toHaveLength(2));
+        expect(h.onStart).not.toHaveBeenCalled();
+        await h.clientSide.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+        await vi.waitFor(() => expect(h.onStart).toHaveBeenCalledTimes(1));
+        await h.clientSide.send({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
+        await vi.waitFor(() => expect(replies).toHaveLength(3));
+        expect(h.onStart).toHaveBeenCalledTimes(1);
+        expect(h.session.name()).toBe('claude-code');
+    });
+});
+
 describe('a client that initializes (every client today)', () => {
     it('starts once, on notifications/initialized, and is named by initialize', async () => {
         const h = await harness('configured-name');
