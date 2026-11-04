@@ -113,6 +113,14 @@ describe('child environment in a box', () => {
         expect(childEnv(c.profiles.builder, source).HTTPS_PROXY).toBeUndefined();
         expect(proxyVars({ HTTPS_PROXY: 'http://edge:3128\nX: y' })).toEqual({});
     });
+    it('turns Claude Code non-essential traffic off in a box, so no telemetry host needs a card', async () => {
+        const { c } = await setup('claude');
+        const source = { PATH: '/usr/bin', HOME: '/home/agent', ...proxies, AGORA_HOST_IN_BOX: '1' };
+        boxMode.marker = marker;
+        expect(childEnv(c.profiles.builder, source)).toMatchObject({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' });
+        boxMode.marker = join(marker, '..', 'missing');
+        expect(childEnv(c.profiles.builder, source).CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
+    });
     it('never gives the CLI the host token; the bot token only as agora-host passes it for agora-mcp', async () => {
         enterBox();
         Object.assign(process.env, proxies, { AGORA_HOST_TOKEN: HOST_TOKEN, AGORA_BOT_TOKEN: 'bot_from_env.value', AGORA_BOX_PROFILE: '{}', ANTHROPIC_API_KEY: 'sk-not-this-profile' });

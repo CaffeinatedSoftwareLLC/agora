@@ -44,7 +44,11 @@ export const DEFAULT_BOX_SUBNETS = '10.213.0.0/16';
 
 /** Default allowlist per adapter (§4.2); github.com is deliberately absent (git goes through the broker). */
 export const PROVIDER_DOMAINS: Record<string, string[]> = {
-    claude: ['api.anthropic.com', 'claude.ai', 'console.anthropic.com', 'statsig.anthropic.com'],
+    // Checked against the pinned CLIs' binaries (2026-11-04): claude 2.1.x calls the API at
+    // api.anthropic.com and exchanges its login code at platform.claude.com/v1/oauth/token; codex
+    // 0.163 signs in at auth.openai.com and talks to chatgpt.com/backend-api and api.openai.com.
+    // Telemetry hosts are left out: the box turns the CLIs' non-essential traffic off.
+    claude: ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'console.anthropic.com'],
     codex: ['api.openai.com', 'chatgpt.com', 'auth.openai.com'],
     gemini: ['generativelanguage.googleapis.com'],
     opencode: ['openrouter.ai'],

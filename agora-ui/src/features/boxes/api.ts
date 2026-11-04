@@ -67,6 +67,8 @@ export interface BoxLogin {
   userCode: string | null;
   error: string | null;
   expiresAt: string | null;
+  /** Domains the box was refused while this login ran (older servers leave it out) */
+  blockedHosts?: string[];
 }
 
 export interface GithubCredential { set: boolean; accountLogin: string | null; setAt: string | null }

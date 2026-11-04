@@ -127,7 +127,12 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
         if (key) env[name] = key;
     }
     // In an agent box the CLI reaches allowed domains only through the edge's proxy (box.ts)
-    if (profile.proxyEnv && inBox(source)) Object.assign(env, proxyVars(source));
+    if (profile.proxyEnv && inBox(source)) {
+        Object.assign(env, proxyVars(source));
+        // In a box only the allowlisted hosts answer: no telemetry, error reports or update checks
+        // to be blocked (each would be an approval card), and the CLI is pinned in the image anyway
+        if (profile.adapter === 'claude') Object.assign(env, { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' });
+    }
     return env;
 }
 export async function verifyProfile(profile: LocalProfile): Promise<string> {

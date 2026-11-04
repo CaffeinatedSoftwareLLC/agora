@@ -1,6 +1,7 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
+import { recordEdgeRequest } from '../../src/lib/boxes/edge-requests';
 
 /**
  * CLI login inside a box (docs/agent-boxes.md §8.2; src/routes/boxes.ts, src/routes/box-hosts.ts):
@@ -159,4 +160,28 @@ it('a box host cannot change its profile auth (subscription stays owner-only)', 
     const same = await ctx.request.post('/agent-hosts/@me/profiles').set(box.host)
         .send({ profiles: [{ name, adapter: 'claude', authMode: 'subscription', apiKeyEnv: null, runApproval: false }] });
     expect([same.status, same.body.updated]).toEqual([200, [name]]);
+});
+
+// Seen live: Claude's code exchange at platform.claude.com was refused by the edge, and the
+// owner only saw "login_failed". The login now says which domain it waits on, and fails as such.
+it('a login blocked on a domain says which, while it runs and when it fails', async () => {
+    const box = await makeBox('delta2', 'claude');
+    const id = (await ctx.request.post(`/boxes/${box.id}/login`).set(owner.auth)).body.login.id;
+    expect((await ctx.request.get('/agent-hosts/@me/box-login').set(box.host)).status).toBe(200);
+    expect((await report(box, id, { status: 'awaiting_code', verificationUrl: 'https://claude.ai/oauth/authorize?x=1' })).status).toBe(200);
+    expect((await ownerLogin(box)).blockedHosts).toEqual([]);
+    // The edge refuses the CLI's token exchange
+    const gen = Number((await ctx.db.query(`SELECT generation FROM agent_boxes WHERE id = $1`, [box.id])).rows[0].generation);
+    const client = await ctx.db.connect();
+    try {
+        await client.query('BEGIN');
+        await recordEdgeRequest(client, { boxId: box.id, generation: gen, kind: 'domain', subject: { host: 'platform.claude.com' } });
+        await client.query('COMMIT');
+    } finally { client.release(); }
+    expect(await ownerLogin(box)).toMatchObject({ status: 'awaiting_code', blockedHosts: ['platform.claude.com'] });
+    expect((await report(box, id, { status: 'failed', error: 'login_failed' })).status).toBe(200);
+    expect(await ownerLogin(box)).toMatchObject({ status: 'failed', error: 'needs_domain', blockedHosts: ['platform.claude.com'] });
+    // Not the code, not the URL
+    const row = (await ctx.db.query(`SELECT verification_url, user_code FROM box_login_requests WHERE id = $1`, [id])).rows[0];
+    expect(row).toEqual({ verification_url: null, user_code: null });
 });

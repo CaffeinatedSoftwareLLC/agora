@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import type { Config } from './config.js';
 import { prepare, type Launch } from './adapters.js';
-import { fatalAuth, fenced, HttpError } from './client.js';
+import { errorCode, fatalAuth, fenced, HttpError } from './client.js';
 import type { Claim, HostApi, Result, Verification } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
 import { reconcileWorkspaces, recoverWorkspaceGitLocks, workspaceHead } from './workspaces.js';
@@ -123,7 +123,7 @@ export class Scheduler {
                 catch (err) {
                     if (fatalAuth(err)) { a.noReport = true; await this.stop(); }
                     else if (fenced(err)) a.noReport = true;
-                    else this.log('image_discovery_failed');
+                    else this.log(`image_discovery_failed ${errorCode(err)}`);
                 }
             }
         } catch (err) {
@@ -173,7 +173,7 @@ export class Scheduler {
                     }
                 } catch (err) {
                     if (fatalAuth(err)) await this.stop();
-                    this.log(fenced(err) ? 'report_fenced' : 'report_failed');
+                    this.log(`${fenced(err) ? 'report_fenced' : 'report_failed'} ${errorCode(err)}`);
                 }
             }
             try { await launch?.cleanup(); } catch { this.log('run_cleanup_failed'); }
@@ -261,10 +261,10 @@ export class Scheduler {
                 }
                 await api.workspaceCommandResult(cmd, success, result, this.abort.signal);
             } catch (err) {
-                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                if (fatalAuth(err)) { this.log(`host_auth_rejected ${errorCode(err)}`); await this.stop(); }
                 // An older server without the command queue: leave runs working, stop polling.
                 else if (err instanceof HttpError && err.status === 404) { this.log('workspace_commands_unsupported'); return; }
-                else if (!this.stopping) { this.log('workspace_command_failed'); await this.pause(2000); }
+                else if (!this.stopping) { this.log(`workspace_command_failed ${errorCode(err)}`); await this.pause(2000); }
             }
         }
     }
@@ -284,10 +284,10 @@ export class Scheduler {
                 if (!outcome.success) this.log(`preview_${outcome.error}`);
                 await api.previewResult(cmd, outcome, this.abort.signal);
             } catch (err) {
-                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                if (fatalAuth(err)) { this.log(`host_auth_rejected ${errorCode(err)}`); await this.stop(); }
                 // An older server without previews: stop polling for them
                 else if (err instanceof HttpError && err.status === 404) { this.log('previews_unsupported'); return; }
-                else if (!this.stopping) { this.log('preview_failed'); await this.pause(2000); }
+                else if (!this.stopping) { this.log(`preview_failed ${errorCode(err)}`); await this.pause(2000); }
             }
         }
     }
@@ -313,10 +313,10 @@ export class Scheduler {
                 try { await api.githubCommandResult(cmd, success, result, this.abort.signal); }
                 catch (err) { if (!(err instanceof HttpError && (err.status === 404 || err.status === 409))) throw err; this.log('github_result_rejected'); }
             } catch (err) {
-                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                if (fatalAuth(err)) { this.log(`host_auth_rejected ${errorCode(err)}`); await this.stop(); }
                 // An older server without the bridge: stop polling for it
                 else if (err instanceof HttpError && err.status === 404) { this.log('github_commands_unsupported'); return; }
-                else if (!this.stopping) { this.log('github_command_failed'); await this.pause(2000); }
+                else if (!this.stopping) { this.log(`github_command_failed ${errorCode(err)}`); await this.pause(2000); }
             }
         }
     }
@@ -340,9 +340,9 @@ export class Scheduler {
                 const delivery = await this.api.claim(this.abort.signal);
                 if (delivery && !this.stopping) void this.submit(delivery.claim, delivery.sentAt);
             } catch (err) {
-                if (fatalAuth(err)) { this.log('host_auth_rejected'); await this.stop(); }
+                if (fatalAuth(err)) { this.log(`host_auth_rejected ${errorCode(err)}`); await this.stop(); }
                 else if (!this.stopping) {
-                    this.log('claim_failed');
+                    this.log(`claim_failed ${errorCode(err)}`);
                     await new Promise<void>(resolve => {
                         const end = () => { clearTimeout(timer); resolve(); };
                         const timer = setTimeout(() => { this.abort.signal.removeEventListener('abort', end); resolve(); }, 1000);

@@ -117,7 +117,7 @@ Rules:
 - The box's CLI, `git`, `npm`, `pip` and `curl` use `HTTPS_PROXY`/`HTTP_PROXY=http://edge:3128` (`NO_PROXY=edge`). Node's own `fetch` in agora-host and agora-mcp doesn't use a proxy, and doesn't need one: they only talk to `edge`.
 - The edge allows `CONNECT host:port` (port 443, or 80 for plain HTTP requests) when `host` matches the box's allowlist: exact names or `*.example.com` suffixes, no IPs, no wildcard-all.
 - **Default allowlist**, set when the box is created:
-  - the adapter's provider: Claude `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `statsig.anthropic.com`; Codex `api.openai.com`, `chatgpt.com`, `auth.openai.com`,
+  - the adapter's provider: Claude `api.anthropic.com`, `platform.claude.com` (where `claude auth login` exchanges its code), `claude.ai`, `console.anthropic.com`; Codex `api.openai.com`, `chatgpt.com`, `auth.openai.com`. The CLIs' telemetry and update hosts are not on it: the box turns their non-essential traffic off,
   - package registries: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`.
 - `github.com` is **not** on it: git goes through the git broker (§5.1), which is the only path with credentials.
 - **SSRF guard, pinned:** the edge resolves `host` once, refuses the request if **any** answer is private, loopback, link-local, multicast, reserved, CGNAT, an IPv4-mapped or NAT64 IPv6 address, or inside one of the engine's Docker networks (the existing `src/lib/url-guard.ts` rules plus those), and then dials **the validated address itself**, never the name again. A retry repeats the whole check. So a name that answers differently between check and connect (DNS rebinding) can't reach `postgres` or another box.

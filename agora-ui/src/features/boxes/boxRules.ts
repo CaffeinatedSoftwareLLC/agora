@@ -84,6 +84,10 @@ export function loginEnded(status: LoginStatus): boolean {
 /** A sentence for the login dialog. */
 export function loginStatusText(login: BoxLogin | null, adapter: Box['adapter']): string {
   if (!login) return 'Starting…';
+  // The CLI is waiting on a domain the box isn't allowed to reach yet
+  if (login.blockedHosts?.length && login.status !== 'failed' && !loginEnded(login.status)) {
+    return `Blocked: the login needs ${login.blockedHosts.join(', ')}. Allow it on the box's card in its channel, then log in again if this login fails.`;
+  }
   switch (login.status) {
     case 'requested': return 'Waiting for the box to pick up the login. The box must be running.';
     case 'claimed': return `The box is starting ${ADAPTER_LABEL[adapter] ?? adapter}'s login…`;
@@ -93,7 +97,9 @@ export function loginStatusText(login: BoxLogin | null, adapter: Box['adapter'])
     case 'awaiting_code': return 'Open the link, sign in to Anthropic, then paste the code Anthropic shows.';
     case 'code_sent': return 'Code sent. Waiting for the CLI to finish…';
     case 'succeeded': return 'Logged in. The login is saved in the box\'s home folder only.';
-    case 'failed': return `Login failed${login.error ? `: ${login.error}` : '.'}`;
+    case 'failed': return login.error === 'needs_domain' && login.blockedHosts?.length
+      ? `Login failed: the box was blocked from ${login.blockedHosts.join(', ')}. Allow it on the box's card, then log in again.`
+      : `Login failed${login.error ? `: ${login.error}` : '.'}`;
     case 'expired': return 'The login expired. Start again.';
     case 'cancelled': return 'Login cancelled.';
   }

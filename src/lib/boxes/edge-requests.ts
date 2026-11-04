@@ -151,6 +151,20 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
     return { id, created: true, events };
 }
 
+/**
+ * Domains the edge refused this box since `since` and that nobody has allowed: what a CLI login
+ * was blocked on (docs/agent-boxes.md §8.2). Only host names, which the owner sees on cards anyway.
+ */
+export async function domainsRefusedSince(db: any, boxId: string, since: Date | string): Promise<string[]> {
+    const r = await db.query(
+        `SELECT DISTINCT subject->>'host' AS host FROM box_edge_requests
+         WHERE box_id = $1 AND kind = 'domain' AND status IN ('pending', 'denied') AND created_at >= $2
+         ORDER BY 1 LIMIT 10`,
+        [boxId, since]
+    );
+    return r.rows.map((x: any) => x.host).filter((h: unknown): h is string => typeof h === 'string');
+}
+
 /** A domain the owner denied recently: no new card for it. */
 export async function domainRecentlyDenied(db: any, boxId: string, host: string): Promise<boolean> {
     const r = await db.query(
