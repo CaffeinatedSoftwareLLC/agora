@@ -1,3 +1,6 @@
 # Shell scripts run on Linux (and in containers): keep LF even on Windows checkouts
 *.sh text eol=lf
 e2e/fixtures/* binary
+box/** text eol=lf
+install/** text eol=lf
+install/windows/*.ps1 text eol=crlf
