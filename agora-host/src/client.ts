@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { claimSchema, type Claim, type Completion, type Failure, type Heartbeat, type HostApi, type PlanRequest, type PlanStatus, type Progress, type ProfileReport } from './types.js';
 import type { ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
+import { REPO, type GithubCommand, type GithubResult } from './github.js';
 
 export class HttpError extends Error {
     constructor(public readonly status: number) { super(`host_http_${status}`); }
@@ -67,6 +68,22 @@ export class Client implements HostApi {
         for (let attempt=0;;attempt++) {
             try { await this.request('POST',`workspace-commands/${cmd.id}/result`,{claimToken:cmd.claimToken,success,result},signal); return; }
             catch (e) { if (attempt>=2 || signal?.aborted || e instanceof HttpError && e.status<500) throw e; await sleep(this.retryDelayMs,signal); }
+        }
+    }
+    async claimGithubCommand(signal?: AbortSignal): Promise<GithubCommand | null> {
+        const data = await this.request('GET', 'github-commands/next', undefined, signal);
+        if (data === null) return null;
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), claimToken: z.string().min(10),
+            action: z.enum(['issue_list', 'issue_comment']), repo: z.string().regex(REPO),
+            payload: z.object({ limit: z.number().int().min(1).max(30).optional(), number: z.number().int().min(1).optional(),
+                body: z.string().max(1000).optional() }).passthrough(),
+        }).parse(data);
+    }
+    async githubCommandResult(cmd: GithubCommand, success: boolean, result: GithubResult, signal?: AbortSignal): Promise<void> {
+        // Retrying the report is safe; never retry the GitHub call (a comment would post twice).
+        for (let attempt = 0; ; attempt++) {
+            try { await this.request('POST', `github-commands/${cmd.id}/result`, { claimToken: cmd.claimToken, success, result }, signal); return; }
+            catch (e) { if (attempt >= 2 || signal?.aborted || e instanceof HttpError && e.status < 500) throw e; await sleep(this.retryDelayMs, signal); }
         }
     }
     async claimPreview(signal?: AbortSignal): Promise<PreviewCommand | null> {

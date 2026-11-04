@@ -503,6 +503,18 @@ to a profile's `approvedTools` to let it delegate. The workspace command
 session worktree and returns only the state and an https URL. See
 [task-board.md](../docs/task-board.md).
 
+### GitHub issues
+
+A channel linked to a GitHub repository (owner only) uses the host picked for it to
+list its open issues, and the host of a card's session to comment on the card's issue
+when its pull request opens, merges or closes. The host polls
+`/agent-hosts/@me/github-commands/next` on its own loop and runs
+`gh issue list --repo=owner/name --state=open` or
+`gh issue comment <n> --repo=owner/name --body=<fixed text>` with your own `gh`
+login, so `gh` must be installed and signed in. It reports issue fields (body cut to
+2,000 characters) or a short error code, never `gh`'s output. See
+[github-issues.md](../docs/github-issues.md).
+
 ### Browser preview
 
 With a `preview` block in the config, agents can screenshot pages their session
