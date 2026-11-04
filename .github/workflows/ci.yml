@@ -40,6 +40,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       relay: ${{ steps.filter.outputs.relay }}
       boxes: ${{ steps.filter.outputs.boxes }}
+      install: ${{ steps.filter.outputs.install }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -76,6 +77,13 @@ jobs:
               - '.github/workflows/ci.yml'
             # The box stack end to end (docs/agent-boxes.md §14): anything a box, boxd, the edge,
             # their auth or the installer is made of
+            install:
+              - 'install/**'
+              - 'test/install/**'
+              - 'box/**'
+              - 'scripts/setup-env.js'
+              - 'docker-compose.prod.yml'
+              - '.github/workflows/ci.yml'
             boxes:
               - 'box/**'
               - 'install/**'
@@ -324,3 +332,31 @@ jobs:
       - run: bash scripts/test-boxes.sh
         env:
           BOXTEST_ALLOW_DAEMON_RESTART: '1'
+
+  # The Linux installer on a fresh runner: installs gVisor, builds, starts, makes the admin and a
+  # boxed agent (test image), checks it answers a mention and that the doctor is happy.
+  install-linux:
+    name: Installer (Linux, clean machine)
+    needs: changes
+    if: needs.changes.outputs.install == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash test/install/lib.test.sh
+      - run: bash test/install/clean-install.sh
+
+  # The Windows installer's decisions (WSL missing, an existing engine distro, Docker Desktop,
+  # reboot resume, telemetry off), with wsl.exe and docker mocked. CI runners have no WSL2.
+  install-windows:
+    name: Installer (Windows decisions, Pester)
+    needs: changes
+    if: needs.changes.outputs.install == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - shell: pwsh
+        run: |
+          Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
+          Invoke-Pester install/windows/tests -CI

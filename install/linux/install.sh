@@ -82,7 +82,7 @@ if [ ! -f "$HERE/../lib/common.sh" ]; then
     [ -z "$SOURCE" ] || { echo "install.sh: --source $SOURCE has no install/lib; use a full checkout" >&2; exit 2; }
     command -v curl >/dev/null || { echo "install.sh: needs curl (sudo apt-get install -y curl)" >&2; exit 1; }
     base=${AGORA_RELEASE_BASE:-https://github.com/CaffeinatedSoftwareLLC/agora/releases}
-    if [ "$REF" = latest ]; then url="$base/latest/download"; else url="$base/download/$REF"; fi
+    if [ "$REF" = latest ]; then url="$base/download/agora-latest"; else url="$base/download/$REF"; fi
     tmp=$(mktemp -d)
     echo "Downloading Agora ($REF) from $url"
     curl -fsSL -o "$tmp/agora.tar.gz" "$url/agora.tar.gz"

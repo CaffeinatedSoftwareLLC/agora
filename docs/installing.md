@@ -13,11 +13,12 @@ macOS has no installer yet: see [Local stack on macOS](getting-started.md#local-
 
 ## Windows
 
-1. Download and unpack the latest release from <https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest> (`agora.tar.gz`) and unpack it in PowerShell with `tar -xzf agora.tar.gz` (Windows 10 and 11 include `tar`).
-2. In that folder, open PowerShell and run:
+1. Download the installer, <https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/install.ps1>, to your Downloads folder.
+2. Open PowerShell and run:
    ```powershell
-   powershell -ExecutionPolicy Bypass -File install\windows\install.ps1
+   powershell -ExecutionPolicy Bypass -File $HOME\Downloads\install.ps1
    ```
+   It downloads the release (`agora.tar.gz`), checks its SHA-256, unpacks it under `%LOCALAPPDATA%\Agora` and runs `install\windows\install.ps1` from it. From a checkout, run that script directly.
 3. Answer its questions. If WSL isn't installed, it asks first, then asks for administrator rights once and for a restart; after you log in again it carries on by itself.
 
 What it does:
@@ -32,7 +33,7 @@ What it does:
 ## Ubuntu or Debian
 
 ```bash
-curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/latest/download/install.sh
+curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/install.sh
 bash install.sh
 ```
 

@@ -84,7 +84,7 @@ if [ -n "$SOURCE" ]; then
     [ "$SOURCE" != "$DIR" ] || die "--source is this install folder; give the new checkout"
     copy_tree "$SOURCE" "$NEW"
 else
-    if [ "$REF" = latest ]; then url="$AGORA_RELEASE_BASE/latest/download"; else url="$AGORA_RELEASE_BASE/download/$REF"; fi
+    if [ "$REF" = latest ]; then url="$AGORA_RELEASE_BASE/download/agora-latest"; else url="$AGORA_RELEASE_BASE/download/$REF"; fi
     curl -fsSL -o "$NEW/agora.tar.gz" "$url/agora.tar.gz"
     curl -fsSL -o "$NEW/agora.tar.gz.sha256" "$url/agora.tar.gz.sha256"
     (cd "$NEW" && sha256sum -c agora.tar.gz.sha256 >/dev/null) || die "the download doesn't match its SHA-256"

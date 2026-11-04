@@ -7,7 +7,8 @@
 AGORA_RELEASE_BASE=${AGORA_RELEASE_BASE:-https://github.com/CaffeinatedSoftwareLLC/agora/releases}
 AGORA_TELEMETRY_URL_DEFAULT=https://push.agora.host
 COMPOSE_FILE_NAME=docker-compose.prod.yml
-ENV_FILE_NAME=.env.prod
+# Overridable so the box test suite can back up its own stack (.env.boxtest)
+ENV_FILE_NAME=${AGORA_ENV_FILE_NAME:-.env.prod}
 
 STEP=start
 STEP_DESC=''
