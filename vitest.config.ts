@@ -12,8 +12,9 @@ export default defineConfig({
         // File uploads go to the disk store; keep test blobs out of the repo
         env: { STORAGE_DIR: path.join(os.tmpdir(), 'agora-test-files') },
         // test/sandbox needs Docker + the socket proxy: run with `npm run test:sandbox`.
+        // test/boxes needs a whole stack with boxes: run with scripts/test-boxes.sh.
         // .claude/** holds agent worktrees (copies of this repo's tests).
         // agora-ui, agora-mcp, agora-host, agora-push-relay and agora-mobile have their own vitest configs; e2e/ is Playwright.
-        exclude: ['**/node_modules/**', '**/dist/**', 'agora-ui/**', 'agora-mcp/**', 'agora-host/**', 'agora-push-relay/**', 'agora-mobile/**', 'e2e/**', 'test/sandbox/**', '.claude/**'],
+        exclude: ['**/node_modules/**', '**/dist/**', 'agora-ui/**', 'agora-mcp/**', 'agora-host/**', 'agora-push-relay/**', 'agora-mobile/**', 'e2e/**', 'test/sandbox/**', 'test/boxes/**', '.claude/**'],
     },
 });
