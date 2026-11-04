@@ -38,6 +38,23 @@ async function hostBox(request: FastifyRequest, reply: FastifyReply): Promise<{ 
     return { boxId: row.id.trim(), adapter: row.adapter, profile: row.name };
 }
 
+/**
+ * Where each CLI's own sign-in page may be. The box reports the URL its CLI printed, and the
+ * agent in the box could report anything, so the server holds the line: the owner is only ever
+ * sent to the provider's own hosts (and their subdomains), over https.
+ */
+export const LOGIN_HOSTS: Record<string, string[]> = {
+    claude: ['claude.ai', 'claude.com', 'anthropic.com'],
+    codex: ['openai.com', 'chatgpt.com'],
+};
+export function loginUrlAllowed(adapter: string, raw: string): boolean {
+    let url: URL;
+    try { url = new URL(raw); } catch { return false; }
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return false;
+    const host = url.hostname.toLowerCase();
+    return (LOGIN_HOSTS[adapter] ?? []).some(d => host === d || host.endsWith(`.${d}`));
+}
+
 const CLEARED = `verification_url = NULL, user_code = NULL, pasted_code_enc = NULL, pasted_code_iv = NULL, pasted_code_tag = NULL`;
 
 /** The box's login `id`, locked; 404 if it isn't this box's, 409 once it has ended. */
@@ -93,6 +110,7 @@ export async function boxHostRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
         if (b.status === 'awaiting_user' || b.status === 'awaiting_code') {
             if (!b.verificationUrl) return reply.status(400).send({ error: 'verificationUrl is required' });
+            if (!loginUrlAllowed(box.adapter, b.verificationUrl)) return reply.status(400).send({ error: 'verification_url_not_allowed' });
             if (b.status === 'awaiting_user' && !b.userCode) return reply.status(400).send({ error: 'userCode is required' });
             await db.query(
                 `UPDATE box_login_requests SET status = $2, verification_url = $3, user_code = $4, error = NULL, updated_at = NOW() WHERE id = $1`,

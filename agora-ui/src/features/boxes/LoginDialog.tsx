@@ -3,7 +3,7 @@ import { ApiError } from '../../lib/api';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { boxApi, type Box, type BoxLogin } from './api';
-import { ADAPTER_LABEL, INPUT, TOUCH, boxError, loginEnded, loginStatusText, safeUrl } from './boxRules';
+import { ADAPTER_LABEL, INPUT, TOUCH, boxError, loginEnded, loginStatusText, loginUrl } from './boxRules';
 
 /**
  * Logging a box's CLI in (docs/agent-boxes.md §8.2). Agora records a login request, the box's
@@ -50,7 +50,7 @@ export function LoginDialog({ box, onClose, pollMs = 2000 }: { box: Box; onClose
   }, [box.id, pollMs]);
 
   const ended = !!login && loginEnded(login.status);
-  const url = safeUrl(login?.verificationUrl);
+  const url = loginUrl(box.adapter, login?.verificationUrl);
   const wantsCode = box.adapter === 'claude' && !sent && (login?.status === 'awaiting_code' || login?.status === 'awaiting_user');
 
   const close = async () => {

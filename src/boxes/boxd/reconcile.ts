@@ -409,6 +409,11 @@ export class Reconciler {
         if (vol.Labels?.[LABEL_INSTANCE] !== want[LABEL_INSTANCE] || vol.Labels?.[LABEL_BOX] !== want[LABEL_BOX]) {
             throw new DriftError(`volume ${n.volume} was not made by boxd (labels)`);
         }
+        // A local volume with options (type=none,o=bind,device=/host/path) is a bind mount by
+        // another name: labels can be copied, so the driver and its options are checked too
+        if (vol.Driver !== 'local' || Object.keys(vol.Options ?? {}).length > 0) {
+            throw new DriftError(`volume ${n.volume} is not a plain local volume (driver ${vol.Driver ?? '?'}${Object.keys(vol.Options ?? {}).length ? ', with options' : ''})`);
+        }
     }
 
     private async drift(box: BoxRow, info: any, subnet: string): Promise<string[]> {

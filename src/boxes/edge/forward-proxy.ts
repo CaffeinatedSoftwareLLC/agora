@@ -3,7 +3,7 @@ import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { DOMAIN_ENTRY, domainAllowed } from '../../lib/boxes/contract';
 import { domainRecentlyDenied } from '../../lib/boxes/edge-requests';
-import { frameBody, requestApproval, sendText, type EdgeDeps } from './common';
+import { frameBody, requestApproval, sendText, TOO_MANY_WAITING, type EdgeDeps } from './common';
 import type { EdgeBox, Identify } from './identity';
 import { looksLikeIpLiteral, pinAddress, type Resolver, type Subnet } from './ssrf';
 
@@ -60,6 +60,7 @@ async function decide(opts: ForwardProxyOptions, box: EdgeBox, rawHost: string):
             return { ok: false, status: 403, text: `domain ${host} was denied by the owner` };
         }
         const id = await requestApproval(opts.deps, box, 'domain', { host });
+        if (!id) return { ok: false, status: 429, text: TOO_MANY_WAITING };
         return { ok: false, status: 403, text: `domain ${host} needs the owner's approval; request ${id} was sent`, headers: { 'X-Agora-Edge-Request': id } };
     }
     const pin = await pinAddress(host, { resolve: opts.resolve, subnets: opts.subnets });

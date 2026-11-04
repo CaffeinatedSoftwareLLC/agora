@@ -110,9 +110,29 @@ export function safeUrl(url: string | null | undefined): string | null {
   }
 }
 
+/** Where each CLI's own sign-in page may be (the server checks the same list; src/routes/box-hosts.ts). */
+const LOGIN_HOSTS: Record<string, string[]> = {
+  claude: ['claude.ai', 'claude.com', 'anthropic.com'],
+  codex: ['openai.com', 'chatgpt.com'],
+};
+
+/** A sign-in link to show the owner: https, on the CLI's provider's own hosts; else nothing. */
+export function loginUrl(adapter: string, url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+    return (LOGIN_HOSTS[adapter] ?? []).some(d => host === d || host.endsWith(`.${d}`)) ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 const BOX_ERRORS: Record<string, string> = {
   owner_only: 'Only the server owner can do this.',
   forbidden: 'Only the server owner can do this.',
+  verification_url_not_allowed: 'The box sent a sign-in link that is not on the provider’s own site, so it was not shown.',
   name_taken: 'An agent with that name already exists.',
   confirm_required: 'Type the box\'s name exactly to confirm.',
   box_deleted: 'This box is deleted. Restore it first.',

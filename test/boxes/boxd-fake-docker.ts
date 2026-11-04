@@ -107,7 +107,7 @@ export class FakeDocker implements BoxDockerApi {
         this.networks.delete(name);
     }
     async inspectVolume(name: string) { return this.volumes.get(name) ?? null; }
-    async createVolume(body: any) { this.hit(`createVolume ${body.Name}`); this.volumes.set(body.Name, { Name: body.Name, Labels: { ...body.Labels } }); }
+    async createVolume(body: any) { this.hit(`createVolume ${body.Name}`); this.volumes.set(body.Name, { Name: body.Name, Driver: body.Driver ?? 'local', Options: body.DriverOpts ?? null, Labels: { ...body.Labels } }); }
     async removeVolume(name: string) {
         this.hit(`removeVolume ${name}`);
         for (const c of this.containers.values()) {

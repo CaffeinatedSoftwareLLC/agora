@@ -220,9 +220,9 @@ boxd reaches Docker only through its own `box-socket-proxy` (the same `wollomati
 - create, inspect, delete of volumes named `<instance>-box-<ulid>-home`,
 - `images/<name>/json`.
 
-No exec, no attach, no bind mounts (`-allowbindmountfrom` points nowhere), no image pulls or builds, nothing outside those names. The names include the instance, so one install's boxd can't touch another's boxes.
+No exec, no attach, no bind mounts (`-allowbindmountfrom` points nowhere), no image pulls or builds. Start, stop, inspect, connect and delete are limited to the instance's names, so one install's boxd can't touch another's boxes. **Create is not name-filtered** (the name travels in the query or the body), so what boxd creates rests on boxd itself, below.
 
-The proxy filters paths, not request bodies: it can't stop a create request that asks for privileges, another network or another box's volume. That is boxd's job, and the residual risk is the same as the runner's (sandbox spec T9): a compromised boxd could create a privileged container. So boxd stays small, builds every body from the constants above, and before each start inspects the container and refuses to start it (and alerts) unless its image, user, runtime, capabilities, read-only flag, tmpfs, its single volume (its own `-home`), its single network (its own) with address `.3`, and its labels are exactly what the row says. It also checks that its own volume is mounted by no other container.
+The proxy filters paths, not request bodies: it can't stop a create request that asks for privileges, another network or another box's volume. That is boxd's job, and the residual risk is the same as the runner's (sandbox spec T9): a compromised boxd could create a privileged container. So boxd stays small, builds every body from the constants above, and before each start inspects the container and refuses to start it (and alerts) unless its image, user, runtime, capabilities, read-only flag, tmpfs, its single volume (its own `-home`), its single network (its own) with address `.3`, and its labels are exactly what the row says. It also checks that its own volume is mounted by no other container, and that the home volume is a plain `local` volume with no driver options (a local volume with `type=none,o=bind,device=…` would be a host bind mount under another name).
 
 ## 8. agora-host inside a box
 
@@ -305,7 +305,7 @@ Deleting a box revokes its tokens at once and removes its container and network.
 
 - A profile on an agora-host running on the machine itself (a host of kind `machine`, which every host is today) is **host mode**.
 - New profiles in host mode need the owner to tick "Run unboxed on this machine (it can read and change your files)" when creating or editing the agent. `agent_profiles.host_mode` records it; existing profiles are migrated as host mode with that acknowledgement, since that is what they already are.
-- Host-mode agents are **owner-only**: only the server owner's messages, `/start` and approvals wake them, whatever their auth mode. Settings → Agents, `/sessions` and the agent strip label them **unboxed**.
+- Host-mode agents are **owner-only**: only the server owner's messages, `/start` and approvals wake them, whatever their auth mode. One exception, unchanged from before boxes: a profile on Sign in with ChatGPT (`siwc`) runs on its plan owner's plan, so it follows that person (who can only be someone the owner let connect a plan on the owner's host); nobody else can wake it. Settings → Agents, `/sessions` and the agent strip label them **unboxed**.
 - Host mode keeps today's rules unchanged: the CLI's own sandbox stays on, no bypass flags, tool requests as cards.
 - Host mode is for work a box can't do (a GPU, a local device). Everything else should be boxed.
 
@@ -390,7 +390,7 @@ At install the installer asks once, default **no**:
 | B7 | Reaching what it shouldn't, outside or inside | allowlist; pinned SSRF guard; no DNS. Narrows, doesn't prevent, exfiltration: allowed domains are data paths (§4.2) | CONNECT to an unlisted domain → 403 and a pending request; to an IP literal → 403; an allowed name whose DNS answer changes to a private address between lookups → refused; direct connection to a public IP (no proxy) fails |
 | B8 | Push or PR without approval, or replayed | git and PR brokers; token only at the edge; exact, single-use approvals (§5.2, §5.3) | the push tests in §5.2; a PR whose head moved or whose title changed after approval is refused; a retried PR returns the same PR; traversal and encoded-separator paths are 404; no GitHub token inside the box |
 | B9 | Box escapes to the host | gVisor, read-only root, no capabilities | the box reports a `-gvisor` kernel; `mount`, raw sockets, `ptrace` of PID 1 fail |
-| B10 | boxd touches another install's boxes | instance-named proxy allowlist | boxd of instance `agora` gets 403 creating/inspecting `agora2-box-*` |
+| B10 | boxd touches another install's boxes | instance-named proxy allowlist (not for create: §7.2) | boxd of instance `agora` gets 403 starting, inspecting, exec'ing or deleting `agora2-box-*` |
 | B11 | A box exhausts the machine | per-box CPU, memory and PID limits | a fork bomb in A is contained; B keeps answering |
 
 **Recovery and reboot tests** (`test/boxes/recovery.box.test.ts`, on the same engine):

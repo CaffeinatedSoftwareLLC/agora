@@ -38,9 +38,9 @@ The request has no user agent header and no cookies. Nothing else is ever sent: 
 
 ### Step ids
 
-Linux installer (`install/linux/install.sh`): `preflight.os`, `preflight.kernel`, `preflight.memory`, `preflight.wsl`, `docker.install`, `gvisor.install`, `gvisor.check`, `existing`, `preflight.disk`, `preflight.ports`, `source.copy`, `telemetry`, `config`, `start`, `health`, `admin`, `box`, `box.start`, `done`.
+Linux installer (`install/linux/install.sh`): `preflight.os`, `preflight.kernel`, `preflight.memory`, `preflight.wsl`, `docker.install`, `gvisor.install`, `gvisor.check`, `existing`, `preflight.disk`, `preflight.ports`, `source.copy`, `telemetry`, `config`, `admin.password`, `start`, `health`, `admin`, `box`, `box.start`, `done`.
 
-Upgrade (`install/upgrade.sh`): `upgrade.fetch`, `upgrade.backup`, `upgrade.replace`, `upgrade.config`, `upgrade.build`, `upgrade.start`.
+Upgrade (`install/upgrade.sh`): `upgrade.fetch`, `upgrade.maintenance`, `upgrade.backup`, `upgrade.replace`, `upgrade.config`, `upgrade.build`, `upgrade.start`, `upgrade.rollback`. Uninstall sends nothing.
 
 Windows installer (`install/windows/install.ps1`): `win.preflight`, `win.telemetry`, `win.wsl`, `win.reboot`, `win.distro`, `win.import`, `win.linux`, `win.keepalive`, `win.browser`. When the Linux installer fails inside WSL it sends its own report; the Windows installer doesn't send a second one.
 

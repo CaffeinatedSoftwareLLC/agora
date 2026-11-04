@@ -87,6 +87,13 @@ it('never renders a non-http link', async () => {
   expect(screen.queryByRole('link')).toBeNull();
 });
 
+it('never links a sign-in page off the provider’s own hosts', async () => {
+  polls = [login({ status: 'awaiting_user', verificationUrl: 'https://auth.openai.com.evil.example/codex/device', userCode: 'Q' })];
+  render(<LoginDialog box={box('codex')} onClose={vi.fn()} pollMs={5} />);
+  await screen.findByText('https://auth.openai.com.evil.example/codex/device');
+  expect(screen.queryByRole('link')).toBeNull();
+});
+
 it('follows a login that is already running', async () => {
   post.mockRejectedValue(new ApiError(409, 'login_active'));
   polls = [login({ status: 'awaiting_user', verificationUrl: 'https://auth.openai.com/x', userCode: 'ZZ' })];

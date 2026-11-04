@@ -229,7 +229,9 @@ TELEMETRY_QUESTION='Send one anonymous report when this install finishes? It con
 
 No names, addresses, IPs or IDs are kept. [y/N]'
 
-TELEMETRY=${TELEMETRY:-off}
+# Off until the person says yes: never taken from the caller's environment (a variable named
+# TELEMETRY someone happened to export is not consent)
+TELEMETRY=off
 TELEMETRY_SENT=0
 AGORA_VERSION=${AGORA_VERSION:-unknown}
 OS_NAME=${OS_NAME:-}

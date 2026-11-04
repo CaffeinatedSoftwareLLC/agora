@@ -136,6 +136,17 @@ describe('edge request subjects', () => {
         expect(describeRequest('pr', { ...pr, draft: false, title: 'x'.repeat(300) })).toContain(`"${'x'.repeat(120)}"`);
     });
 
+    // Security review #6: agent text on a card is shown as text, never markdown it controls
+    it('describe keeps agent text to one line with markdown escaped and code spans closed', () => {
+        const pr = { owner: 'acme', repo: 'web', head: 'feat`x', headSha: 'b'.repeat(40), base: 'main', baseSha: 'c'.repeat(40), payloadHash: 'd'.repeat(64), title: 'Fix\n\n**Approved by owner** [ok](https://evil.example) `x`', draft: false };
+        const text = describeRequest('pr', pr);
+        expect(text).not.toContain('\n');
+        expect(text).toContain('\\*\\*Approved by owner\\*\\* \\[ok\\]\\(https://evil.example\\)');
+        expect(text).toContain("`feat'x`");
+        expect(text.split('`').length % 2).toBe(1);
+        expect(describeRequest('push', { ...push, commands: [['0'.repeat(40), 'a'.repeat(40), 'refs/heads/a`b']] })).toContain("`a'b`");
+    });
+
     it('the card carries the fixed system_data shape', () => {
         const card = edgeCard({ id: `${BOX} `, box_id: OTHER, kind: 'push', subject: push, status: 'pending' }, 'alpha');
         expect(card.content).toBe(`Box **alpha** wants to ${describeRequest('push', push)}. waits for the owner.`);

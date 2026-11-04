@@ -1,7 +1,7 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http';
 import { subjectHash, type PushSubject } from '../../lib/boxes/edge-requests';
 import type { EdgeBox } from './identity';
-import { boxPolicy, defaultBranch, loadRepo, loadToken, requestApproval, sendText, settleRequest, type BoxRepo, type EdgeDeps } from './common';
+import { boxPolicy, defaultBranch, loadRepo, loadToken, requestApproval, sendText, settleRequest, TOO_MANY_WAITING, type BoxRepo, type EdgeDeps } from './common';
 import { inTransaction, RefLockTimeout, withRefLocks } from './locks';
 import type { GitRoute } from './paths';
 import {
@@ -168,6 +168,7 @@ async function authorize(deps: EdgeDeps, box: EdgeBox, repo: BoxRepo, token: str
     if (claimed === 'busy') return { kind: 'refuse', reason: 'another push with this approval is in progress' };
     if (claimed) return { kind: 'approval', requestId: claimed };
     const requestId = await requestApproval(deps, box, 'push', subject);
+    if (!requestId) return { kind: 'refuse', reason: TOO_MANY_WAITING };
     return {
         kind: 'refuse',
         reason: `push needs the owner's approval (request ${requestId}); push again after it's approved`,

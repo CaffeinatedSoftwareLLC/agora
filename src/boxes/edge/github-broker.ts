@@ -4,7 +4,7 @@ import type { PoolClient } from 'pg';
 import { ALLOWED_TTL_MINUTES, subjectHash, type PrSubject } from '../../lib/boxes/edge-requests';
 import { generateUlid } from '../../utils/ulid';
 import type { EdgeBox } from './identity';
-import { boxPolicy, loadRepo, loadToken, requestApproval, sendJson, sendText, settleRequest, type BoxRepo, type EdgeDeps } from './common';
+import { boxPolicy, loadRepo, loadToken, requestApproval, sendJson, sendText, settleRequest, TOO_MANY_WAITING, type BoxRepo, type EdgeDeps } from './common';
 import { inTransaction, RefLockTimeout, withRefLocks } from './locks';
 import type { GithubRoute } from './paths';
 import { validBranch } from './pktline';
@@ -176,6 +176,7 @@ async function createPr(deps: EdgeDeps, box: EdgeBox, req: IncomingMessage, res:
             const c = await claim(deps, box, client, subject);
             if ('refuse' in c) {
                 if (c.refuse === 'busy') return sendJson(res, 409, { error: 'in_progress', message: 'this pull request is being opened by another request' });
+                if (!c.requestId) return sendJson(res, 429, { error: 'too_many_waiting', message: TOO_MANY_WAITING });
                 return sendJson(res, 403, {
                     error: 'needs_approval', requestId: c.requestId,
                     message: `opening this pull request needs the owner's approval (request ${c.requestId}); send the same request again after it's approved`,

@@ -103,5 +103,8 @@ check 'send_problem_report returns the report id' pr_ABCDEFGHIJKLMNOP "$(send_pr
 check 'status_of takes the last line' 201 "$(printf '{"a":1}\n201' | status_of)"
 check 'body_of drops it' '{"a":1}' "$(printf '{"a":1}\n201' | body_of)"
 
+# Telemetry is off until the person says yes: an exported TELEMETRY=on is not consent
+check 'telemetry ignores a TELEMETRY variable from the environment' off "$(TELEMETRY=on bash -c '. "$1/install/lib/common.sh"; printf %s "$TELEMETRY"' _ "$ROOT")"
+
 printf '\n%d checks, %d failed\n' "$n" "$failed"
 [ "$failed" = 0 ]

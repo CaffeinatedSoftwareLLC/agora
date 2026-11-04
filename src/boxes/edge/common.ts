@@ -101,6 +101,7 @@ export async function defaultBranch(deps: EdgeDeps, boxId: string, repo: BoxRepo
 }
 
 /** Record (or find) a pending request in its own transaction and publish its card. */
+/** The request ID, or '' when the box already has too many requests waiting (no card was made). */
 export async function requestApproval(deps: EdgeDeps, box: EdgeBox, kind: EdgeKind, subject: EdgeSubject): Promise<string> {
     const client = await deps.db.connect();
     let result: Awaited<ReturnType<typeof recordEdgeRequest>>;
@@ -110,9 +111,12 @@ export async function requestApproval(deps: EdgeDeps, box: EdgeBox, kind: EdgeKi
         client.release();
     }
     if (result.created) deps.log.info({ boxId: box.id, kind, requestId: result.id }, 'Edge request recorded');
+    if (result.limited) deps.log.warn({ boxId: box.id, kind }, 'Edge request refused: too many waiting');
     await deps.publish(result.events);
     return result.id;
 }
+
+export const TOO_MANY_WAITING = 'too many requests from this box are waiting for the owner; ask again after some are decided';
 
 /** Move a request to a new status (and record what happened), then re-render its card. */
 export async function settleRequest(deps: EdgeDeps, requestId: string, status: string, result?: unknown): Promise<void> {

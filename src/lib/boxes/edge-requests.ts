@@ -21,6 +21,10 @@ export type EdgeDecision = 'allow' | 'deny' | 'always';
 /** How long a card waits for the owner, and how long an allowed approval stays usable. */
 export const PENDING_TTL_HOURS = 24;
 export const ALLOWED_TTL_MINUTES = 30;
+/** A box can have at most this many cards waiting; past it, the edge refuses without a new card. */
+export const MAX_PENDING_PER_BOX = 25;
+/** The owner's phone hears about a box's new requests at most this often. */
+export const NOTIFY_QUIET_MINUTES = 5;
 /** After a deny, the same domain makes no new card for this long. */
 export const DOMAIN_DENY_QUIET_HOURS = 24;
 
@@ -45,16 +49,27 @@ export function subjectHash(kind: EdgeKind, subject: EdgeSubject): string {
 }
 
 const short = (sha: string) => /^0+$/.test(sha) ? '(none)' : sha.slice(0, 10);
+/**
+ * Agent-written text on a card (a PR title, a ref name) is shown as text, never as markdown:
+ * one line, no backticks, and markdown's special characters escaped, so a box can't make its
+ * card say something else (security review #6).
+ */
+export function plain(text: string, max = 120): string {
+    return text.replace(/\s+/g, ' ').replace(/`/g, "'").slice(0, max)
+        .replace(/[\\*_~[\]()<>#|!]/g, ch => `\\${ch}`);
+}
+/** A short code span for a value the edge has validated (refs may still hold backticks). */
+const code = (text: string) => `\`${text.replace(/`/g, "'").replace(/[\r\n]+/g, ' ').slice(0, 200)}\``;
 /** One line for the card and the notification. Subjects are validated by the edge before they get here. */
 export function describe(kind: EdgeKind, subject: EdgeSubject): string {
-    if (kind === 'domain') return `reach \`${(subject as DomainSubject).host}\``;
+    if (kind === 'domain') return `reach ${code((subject as DomainSubject).host)}`;
     if (kind === 'push') {
         const s = subject as PushSubject;
-        const cmds = s.commands.map(([o, n, ref]) => `\`${ref.replace(/^refs\/heads\//, '')}\` ${short(o)} → ${short(n)}`);
-        return `push to \`${s.owner}/${s.repo}\`: ${cmds.join(', ')}`;
+        const cmds = s.commands.map(([o, n, ref]) => `${code(ref.replace(/^refs\/heads\//, ''))} ${short(o)} → ${short(n)}`);
+        return `push to ${code(`${s.owner}/${s.repo}`)}: ${cmds.join(', ')}`;
     }
     const s = subject as PrSubject;
-    return `open a ${s.draft ? 'draft ' : ''}pull request in \`${s.owner}/${s.repo}\`: \`${s.head}\` (${short(s.headSha)}) → \`${s.base}\`, "${s.title.slice(0, 120)}"`;
+    return `open a ${s.draft ? 'draft ' : ''}pull request in ${code(`${s.owner}/${s.repo}`)}: ${code(s.head)} (${short(s.headSha)}) → ${code(s.base)}, "${plain(s.title)}"`;
 }
 
 export function edgeCard(row: { id: string; box_id: string; kind: EdgeKind; subject: EdgeSubject; status: EdgeStatus }, boxName: string): { content: string; systemData: Record<string, unknown> } {
@@ -78,7 +93,7 @@ export function edgeCard(row: { id: string; box_id: string; kind: EdgeKind; subj
  * Record a pending request, or find the open one for the same subject. A new one posts a card in
  * the box's home channel and notifies the server owner. Returns the request ID and events to emit.
  */
-export async function recordEdgeRequest(db: any, input: { boxId: string; generation: number; kind: EdgeKind; subject: EdgeSubject }): Promise<{ id: string; created: boolean; events: BridgedEvent[] }> {
+export async function recordEdgeRequest(db: any, input: { boxId: string; generation: number; kind: EdgeKind; subject: EdgeSubject }): Promise<{ id: string; created: boolean; limited?: boolean; events: BridgedEvent[] }> {
     if (input.kind === 'domain' && !DOMAIN_ENTRY.test((input.subject as DomainSubject).host)) throw new Error('invalid domain subject');
     const hash = subjectHash(input.kind, input.subject);
     const box = (await db.query(
@@ -87,6 +102,12 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
         [input.boxId]
     )).rows[0];
     if (!box) throw new Error('unknown box');
+    // A box can't flood the owner: an open card for the same subject is returned as before, but
+    // past MAX_PENDING_PER_BOX waiting cards nothing new is recorded until some are decided
+    const open = await db.query(`SELECT id FROM box_edge_requests WHERE box_id = $1 AND kind = $2 AND subject_hash = $3 AND status = 'pending'`, [input.boxId, input.kind, hash]);
+    if (open.rows[0]) return { id: open.rows[0].id.trim(), created: false, events: [] };
+    const waiting = Number((await db.query(`SELECT count(*) AS n FROM box_edge_requests WHERE box_id = $1 AND status = 'pending'`, [input.boxId])).rows[0].n);
+    if (waiting >= MAX_PENDING_PER_BOX) return { id: '', created: false, limited: true, events: [] };
     const id = generateUlid();
     const inserted = await db.query(
         `INSERT INTO box_edge_requests (id, server_id, box_id, generation, kind, subject, subject_hash, expires_at)
@@ -105,7 +126,14 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
         const posted = await postSystemMessage(db, { channelId: box.home_channel_id, threadId: null, content: card.content, systemEvent: EDGE_SYSTEM_EVENT, systemData: card.systemData });
         await db.query('UPDATE box_edge_requests SET message_id = $1 WHERE id = $2', [posted.messageId, id]);
         events.push(...posted.events);
-        await notify(db, { type: 'approval', recipients: [box.owner_id], channelId: box.home_channel_id, label: ch => `Box ${box.name} needs approval in #${ch}` });
+        // One phone notification per box per few minutes; the cards themselves all show
+        const recent = await db.query(
+            `SELECT 1 FROM box_edge_requests WHERE box_id = $1 AND id <> $2 AND created_at > NOW() - ($3 || ' minutes')::interval LIMIT 1`,
+            [input.boxId, id, String(NOTIFY_QUIET_MINUTES)]
+        );
+        if (recent.rows.length === 0) {
+            await notify(db, { type: 'approval', recipients: [box.owner_id], channelId: box.home_channel_id, label: ch => `Box ${box.name} needs approval in #${ch}` });
+        }
     }
     return { id, created: true, events };
 }

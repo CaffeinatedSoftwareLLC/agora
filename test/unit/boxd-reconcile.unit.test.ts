@@ -161,6 +161,18 @@ describe('boxd reconcile', () => {
         expect(t.store.get(box.id).state).toBe('failed');
     });
 
+    // Security review #5: a pre-created volume with copied labels and bind options is a host bind mount
+    it('refuses a home volume with driver options or another driver, even with the right labels', async () => {
+        for (const vol of [{ Driver: 'local', Options: { type: 'none', o: 'bind', device: '/etc' } }, { Driver: 'nfs', Options: null }]) {
+            const box = t.store.add();
+            const n = names(box.id);
+            t.docker.volumes.set(n.v, { Name: n.v, ...vol, Labels: { 'org.agora.instance': 'agora', 'org.agora.box': box.id } });
+            await t.r.pass();
+            expect(t.store.get(box.id).lastError).toContain('not a plain local volume');
+            expect(t.docker.containers.has(n.c)).toBe(false);
+        }
+    });
+
     it('refuses when its home volume is mounted by another container', async () => {
         const box = t.store.add();
         await t.r.pass();

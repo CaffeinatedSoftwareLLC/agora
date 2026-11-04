@@ -63,6 +63,11 @@ test('Claude: request, claim, URL, pasted code read once, success clears everyth
     // Pasting before the CLI asks for it is refused
     expect((await ctx.request.post(`/boxes/${box.id}/login/code`).set(owner.auth).send({ code: 'early' })).status).toBe(409);
     expect((await report(box, id, { status: 'awaiting_code', verificationUrl: 'http://claude.ai/plain' })).status).toBe(400);
+    // A box could report any page; the owner is only sent to the provider's own hosts
+    for (const verificationUrl of ['https://claude-ai.evil.example/oauth', 'https://claude.ai.evil.example/x', 'https://evil.example/?claude.ai', 'https://chatgpt.com/device', 'https://user@claude.ai/x']) {
+        const r = await report(box, id, { status: 'awaiting_code', verificationUrl });
+        expect([verificationUrl, r.status, r.body.error]).toEqual([verificationUrl, 400, 'verification_url_not_allowed']);
+    }
     expect((await report(box, id, { status: 'awaiting_code', verificationUrl: 'https://claude.ai/oauth?x=1' })).body).toEqual({ ok: true });
     expect(await ownerLogin(box)).toMatchObject({ id, status: 'awaiting_code', verificationUrl: 'https://claude.ai/oauth?x=1', userCode: null });
 
@@ -140,4 +145,18 @@ test('deleting the box ends its open login', async () => {
     await ctx.request.delete(`/boxes/${box.id}`).set(owner.auth);
     expect((await ctx.db.query(`SELECT status FROM box_login_requests WHERE id = $1`, [id])).rows[0].status).toBe('cancelled');
     expect((await ctx.request.post(`/boxes/${box.id}/login`).set(owner.auth)).body).toEqual({ error: 'box_deleted' });
+});
+
+// Security review #1: the agent in a box can read its own host token, so a box never sets its
+// own auth: a report that differs from what the owner chose is refused and changes nothing
+it('a box host cannot change its profile auth (subscription stays owner-only)', async () => {
+    const box = await makeBox('gamma', 'claude');
+    const name = (await ctx.db.query(`SELECT p.name FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id WHERE b.id = $1`, [box.id])).rows[0].name;
+    const flip = await ctx.request.post('/agent-hosts/@me/profiles').set(box.host)
+        .send({ profiles: [{ name, adapter: 'claude', authMode: 'api_key', apiKeyEnv: 'ANTHROPIC_API_KEY', runApproval: false }] });
+    expect([flip.status, flip.body.error]).toEqual([409, 'box_auth_is_owner_set']);
+    expect((await ctx.db.query(`SELECT p.auth_mode FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id WHERE b.id = $1`, [box.id])).rows[0].auth_mode).toBe('subscription');
+    const same = await ctx.request.post('/agent-hosts/@me/profiles').set(box.host)
+        .send({ profiles: [{ name, adapter: 'claude', authMode: 'subscription', apiKeyEnv: null, runApproval: false }] });
+    expect([same.status, same.body.updated]).toEqual([200, [name]]);
 });

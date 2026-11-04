@@ -347,6 +347,9 @@ jobs:
       - run: bash test/install/backup.test.sh
       - run: bash test/install/upgrade.test.sh
       - run: bash test/install/db-password.test.sh
+      - run: bash test/install/uninstall.test.sh
+      # Adds a docker group to check the installer's group handling, so it needs root
+      - run: sudo bash test/install/install.test.sh
       - run: bash test/install/clean-install.sh
 
   # The Windows installer's decisions (WSL missing, an existing engine distro, Docker Desktop,
