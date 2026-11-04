@@ -7,6 +7,8 @@ import { PgHandleStore } from './store-pg.js';
 import { ApnsSender, loadApnsKey, parseApnsKey } from './senders/apns.js';
 import { FcmSender, loadServiceAccount, parseServiceAccount } from './senders/fcm.js';
 import type { Sender } from './senders/types.js';
+import { pruneProblems } from './telemetry.js';
+import { PgTelemetryStore, SqliteTelemetryStore, type TelemetryStore } from './telemetry-store.js';
 
 const DAY = 86_400_000;
 
@@ -16,10 +18,16 @@ async function openStore(config: RelayConfig['store'], keys: Keys, log: () => Fa
     return PgHandleStore.open(config.url, keys, { ssl: config.ssl, onError: (err) => log()?.warn({ code: err.code ?? 'unknown' }, 'database connection lost') });
 }
 
+async function openTelemetry(config: RelayConfig['store'], log: () => FastifyBaseLogger | undefined): Promise<TelemetryStore> {
+    if (config.kind === 'sqlite') return new SqliteTelemetryStore(config.path);
+    return PgTelemetryStore.open(config.url, { ssl: config.ssl, onError: (err) => log()?.warn({ code: err.code ?? 'unknown' }, 'database connection lost') });
+}
+
 async function main() {
     const config = loadConfig();
     let log: FastifyBaseLogger | undefined;
     const store = await openStore(config.store, deriveKeys(config.masterKey), () => log);
+    const telemetry = await openTelemetry(config.store, () => log);
 
     const senders: Partial<Record<Platform, Sender>> = {};
     if (config.fcm) {
@@ -37,6 +45,7 @@ async function main() {
         registerPerMinute: config.registerPerMinute,
         trustProxy: config.trustProxy,
         logger: { level: config.logLevel },
+        telemetry: { store: telemetry, adminToken: config.adminToken },
     });
     log = app.log;
     if (!senders.android && !senders.ios) app.log.warn('no provider configured: every register answers 503 platform_unavailable');
@@ -62,8 +71,21 @@ async function main() {
             app.log.warn({ code: (err as { code?: string }).code ?? 'unknown' }, 'prune failed; retrying tomorrow');
         }
     };
+    // Problem reports are kept RELAY_PROBLEM_DAYS (90), whatever the handle TTL
+    const pruneReports = async () => {
+        try {
+            const removed = await pruneProblems(telemetry, Date.now(), config.problemDays);
+            if (removed > 0) app.log.info({ removed }, 'pruned old problem reports');
+        } catch (err) {
+            app.log.warn({ code: (err as { code?: string }).code ?? 'unknown' }, 'problem report prune failed; retrying tomorrow');
+        }
+    };
     await prune();
-    const pruneTimer = setInterval(() => void prune(), DAY);
+    await pruneReports();
+    const pruneTimer = setInterval(() => {
+        void prune();
+        void pruneReports();
+    }, DAY);
 
     let closing = false;
     const shutdown = async (signal: string) => {
@@ -75,6 +97,7 @@ async function main() {
         await app.close();
         await Promise.all(Object.values(senders).map((s) => s?.close?.()));
         await store.close();
+        await telemetry.close();
         process.exit(0);
     };
     process.on('SIGTERM', () => void shutdown('SIGTERM'));

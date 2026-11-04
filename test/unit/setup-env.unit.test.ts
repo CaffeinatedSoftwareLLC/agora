@@ -67,6 +67,42 @@ describe.skipIf(process.platform === 'win32')('setup-env --prod (#209)', () => {
         expect(e.AGORA_ENCRYPTION_KEY).toMatch(/^[0-9a-f]{64}$/);
     });
 
+    it('generates the box edge secret, keeps telemetry off and follows box/VERSION', () => {
+        fakeDocker([]);
+        mkdirSync(join(dir, 'box'));
+        writeFileSync(join(dir, 'box', 'VERSION'), '7\n');
+        expect(run(PORTS).status).toBe(0);
+        const e = env();
+        expect(e.AGORA_EDGE_SECRET).toMatch(/^[0-9a-f]{64}$/);
+        expect(e.AGORA_EDGE_SECRET).not.toBe(e.AGORA_ENCRYPTION_KEY);
+        expect(e.AGORA_TELEMETRY).toBe('off');
+        expect(e.AGORA_BOX_VERSION).toBe('7');
+        expect(e.AGORA_BOX_TARGET).toBeUndefined();
+    });
+
+    it('records the telemetry answer and the test box image when asked', () => {
+        fakeDocker([]);
+        expect(run([...PORTS, '--telemetry', 'on', '--box-target', 'test']).status).toBe(0);
+        const e = env();
+        expect(e.AGORA_TELEMETRY).toBe('on');
+        expect(e.AGORA_BOX_TARGET).toBe('test');
+        expect(e.AGORA_BOX_TAG_SUFFIX).toBe('-test');
+        expect(e.AGORA_BOX_VERSION).toBe('1');
+    });
+
+    it('takes the docker group id from the installer', () => {
+        fakeDocker([]);
+        expect(run([...PORTS, '--docker-gid', '4242']).status).toBe(0);
+        expect(env().DOCKER_GID).toBe('4242');
+        expect(run([...PORTS, '--docker-gid', 'docker', '--force']).status).toBe(1);
+    });
+
+    it('rejects an unknown telemetry answer', () => {
+        fakeDocker([]);
+        expect(run([...PORTS, '--telemetry', 'maybe']).status).toBe(1);
+        expect(existsSync(join(dir, '.env.prod'))).toBe(false);
+    });
+
     it('names a second install on the same engine agora2', () => {
         fakeDocker(['agora']);
         const r = run(PORTS);

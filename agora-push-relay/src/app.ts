@@ -4,6 +4,7 @@ import { normalizeInstance } from './origin.js';
 import { FixedWindowLimiter } from './rate-limit.js';
 import type { HandleStore, Platform } from './store.js';
 import type { Sender } from './senders/types.js';
+import { telemetryRoutes, type TelemetryOptions } from './telemetry.js';
 
 /** Contract (docs/planning/mobile-apps.md section 8): 30 pushes a minute per handle. */
 export const PUSH_PER_MINUTE = 30;
@@ -21,6 +22,8 @@ export interface AppOptions {
     now?: () => number;
     /** How long /v1/push waits for its database write after the provider answered (ms). */
     writeDeadlineMs?: number;
+    /** The install and problem report collector (src/telemetry.ts); off when absent. */
+    telemetry?: Omit<TelemetryOptions, 'now'>;
 }
 
 /**
@@ -242,6 +245,8 @@ export function buildApp(opts: AppOptions): FastifyInstance & { counters: Counte
         }
         return fail(req, reply, 502, 'provider_error', result.reason);
     });
+
+    if (opts.telemetry) telemetryRoutes(app, { ...opts.telemetry, now });
 
     app.delete('/v1/handles', { onRequest: cors }, async (req, reply) => {
         const handle = bearer(req);

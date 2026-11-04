@@ -9,6 +9,8 @@
  *   node scripts/setup-env.js --prod --start      # Write .env.prod, then build and start the stack
  *   node scripts/setup-env.js --prod --non-interactive [--instance agora2] [--domain x]
  *        [--http-port 8080] [--https-port 8443] [--api-port 3001] [--telemetry on|off]
+ *        [--box-target test]   # box image with fake CLIs (test/install/clean-install.sh only)
+ *        [--docker-gid 998]    # the host's docker group, when this runs in a container (the installer)
  *
  * Prod never starts Docker unless asked (--start, or "y" at the prompt; #209). It picks an
  * instance name (AGORA_INSTANCE, also COMPOSE_PROJECT_NAME) and ports that no other Agora
@@ -283,23 +285,52 @@ async function setupProd() {
     // --- Auto-generated secrets ---
 
     const host = domain || 'localhost';
+    // The box image tag follows box/VERSION (docs/agent-boxes.md §6); install/upgrade.sh keeps it in step
+    let boxVersion = '1';
+    try {
+        const v = fs.readFileSync(path.join(ROOT, 'box', 'VERSION'), 'utf8').trim();
+        if (/^\d+$/.test(v)) boxVersion = v;
+    } catch { /* no box/ in this checkout: the compose default */ }
+    const boxTarget = flag('box-target');
+    if (boxTarget !== undefined && boxTarget !== 'test' && boxTarget !== 'box') {
+        console.error('  --box-target must be box or test.');
+        process.exit(1);
+    }
     const generated = {
         COMPOSE_PROJECT_NAME: instance,
         AGORA_INSTANCE: instance,
         DB_PASSWORD: dbPassword,
         JWT_SECRET: hexSecret(),
         AGORA_ENCRYPTION_KEY: hexSecret(),
+        // Signs what the box edge forwards to the API (§4.1)
+        AGORA_EDGE_SECRET: hexSecret(),
+        AGORA_BOX_VERSION: boxVersion,
         DOMAIN: domain,
         AGORA_HTTP_PORT: String(httpPort),
         AGORA_HTTPS_PORT: String(httpsPort),
         AGORA_API_PORT: String(apiPort),
     };
-    const gid = dockerGid();
+    // In a container (install/linux/install.sh) getent sees the container's groups, not the host's
+    const givenGid = flag('docker-gid');
+    if (givenGid !== undefined && !/^\d+$/.test(givenGid)) {
+        console.error('  --docker-gid must be a number.');
+        process.exit(1);
+    }
+    const gid = givenGid ?? dockerGid();
     if (gid) generated.DOCKER_GID = gid;
     const telemetry = flag('telemetry');
-    if (telemetry === 'on' || telemetry === 'off') generated.AGORA_TELEMETRY = telemetry;
+    if (telemetry !== undefined && telemetry !== 'on' && telemetry !== 'off') {
+        console.error('  --telemetry must be on or off.');
+        process.exit(1);
+    }
+    // Off unless the installer's question was answered yes (docs/telemetry.md)
+    generated.AGORA_TELEMETRY = telemetry ?? 'off';
     // The browser's origin includes the port when it isn't 443
     const extra = {};
+    if (boxTarget === 'test') {
+        extra.AGORA_BOX_TARGET = 'test';
+        extra.AGORA_BOX_TAG_SUFFIX = '-test';
+    }
     if (httpsPort !== 443) extra.CORS_ORIGIN = `https://${host}:${httpsPort}`;
 
     // --- Write .env.prod ---

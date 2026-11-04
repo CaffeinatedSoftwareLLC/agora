@@ -79,6 +79,11 @@ services:
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
       # Set to 1 for one start to record a different key (data under the old key is lost)
       AGORA_ACCEPT_NEW_ENCRYPTION_KEY: ${AGORA_ACCEPT_NEW_ENCRYPTION_KEY:-}
+      # Verifies the box edge's request signatures (docs/agent-boxes.md §4.1); same value as box-edge
+      AGORA_EDGE_SECRET: ${AGORA_EDGE_SECRET:?Set AGORA_EDGE_SECRET in .env.prod (setup-env.js generates it)}
+      AGORA_INSTANCE: ${AGORA_INSTANCE:-agora}
+      # Where Admin → Report setup problem sends a report (only when the admin presses Send)
+      AGORA_TELEMETRY_URL: ${AGORA_TELEMETRY_URL:-https://push.agora.host}
     volumes:
       - files-data:/data/files
     depends_on:
@@ -88,6 +93,111 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Agent boxes (docs/agent-boxes.md) ───
+  # Requires gVisor (runsc) on the host; AGORA_BOX_INSECURE_DEV=1 uses runc (dev and CI only).
+
+  # Build-only: the image every box runs (box/Dockerfile, tag from box/VERSION).
+  # AGORA_BOX_VERSION is kept in step with box/VERSION by the installer and install/upgrade.sh.
+  box-image:
+    build:
+      context: .
+      dockerfile: box/Dockerfile
+      # `box` (real CLIs) by default; `test` has fake CLIs for the clean-install test
+      target: ${AGORA_BOX_TARGET:-box}
+      args:
+        BOX_VERSION: ${AGORA_BOX_VERSION:-1}
+    image: agora/box:${AGORA_BOX_VERSION:-1}${AGORA_BOX_TAG_SUFFIX:-}
+    entrypoint: ["true"]
+    network_mode: none
+    restart: "no"
+
+  # boxd's own restricted Docker API (§7.2). Only names of this instance's boxes: containers
+  # <instance>-box-<ulid>, networks <instance>_box_<ulid>, volumes <instance>-box-<ulid>-home.
+  # It filters paths, not bodies: create calls carry the name in the query or body, which
+  # boxd builds from constants and re-checks by inspecting before every start.
+  box-socket-proxy:
+    image: wollomatic/socket-proxy:1.13.1
+    restart: unless-stopped
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID in .env.prod to the host's docker group id: getent group docker | cut -d: -f3}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - "-loglevel=info"
+      - "-listenip=0.0.0.0"
+      - "-allowfrom=boxd"
+      - "-allowbindmountfrom=/nonexistent-agora-no-bind-mounts"
+      - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
+      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|networks|volumes|containers/${AGORA_INSTANCE:-agora}-box-[0-9a-z]{26}/json|networks/${AGORA_INSTANCE:-agora}_box_[0-9a-z]{26}|volumes/${AGORA_INSTANCE:-agora}-box-[0-9a-z]{26}-home|images/agora/box:[0-9A-Za-z._-]+/json)"
+      - "-allowPOST=(/v1\\.[0-9]+)?/(containers/create|containers/${AGORA_INSTANCE:-agora}-box-[0-9a-z]{26}/(start|stop|restart|kill)|networks/create|networks/${AGORA_INSTANCE:-agora}_box_[0-9a-z]{26}/(connect|disconnect)|volumes/create)"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/(containers/${AGORA_INSTANCE:-agora}-box-[0-9a-z]{26}|networks/${AGORA_INSTANCE:-agora}_box_[0-9a-z]{26}|volumes/${AGORA_INSTANCE:-agora}-box-[0-9a-z]{26}-home)"
+
+  # The box runner: creates, starts, upgrades and removes boxes. The only box component with
+  # Docker access; it reads DB rows and Docker replies, never traffic from a box (§2).
+  boxd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/boxd-main.js"]
+    # A rebuild stops the old container (30 s timeout); boxd finishes it before exiting, and
+    # install/backup.sh's quiesce relies on that
+    stop_grace_period: 90s
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      REDIS_URL: redis://redis:6379
+      AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+      AGORA_INSTANCE: ${AGORA_INSTANCE:-agora}
+      AGORA_BOX_DOCKER_HOST: http://box-socket-proxy:2375
+      AGORA_BOX_IMAGE: agora/box:${AGORA_BOX_VERSION:-1}${AGORA_BOX_TAG_SUFFIX:-}
+      AGORA_BOX_SUBNETS: ${AGORA_BOX_SUBNETS:-10.213.0.0/16}
+      AGORA_BOX_INSECURE_DEV: ${AGORA_BOX_INSECURE_DEV:-}
+      # Compose names it <project>-box-edge-1; the project is the instance (setup-env sets both)
+      AGORA_EDGE_CONTAINER: ${AGORA_INSTANCE:-agora}-box-edge-1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      box-socket-proxy:
+        condition: service_started
+      box-image:
+        condition: service_completed_successfully
+      box-edge:
+        condition: service_started
+    restart: unless-stopped
+
+  # The box edge: every box's only way out (§4, §5). On the default network; boxd attaches it
+  # to each box network at .2. Never exposed through Caddy/nginx, no Docker access.
+  box-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/src/box-edge-main.js"]
+    environment:
+      DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
+      REDIS_URL: redis://redis:6379
+      AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
+      AGORA_EDGE_SECRET: ${AGORA_EDGE_SECRET:?Set AGORA_EDGE_SECRET in .env.prod (setup-env.js generates it)}
+      AGORA_INSTANCE: ${AGORA_INSTANCE:-agora}
+      AGORA_API_UPSTREAM: http://api:3000
+    # /healthz answers only over loopback (from anywhere else it is box traffic)
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
 
   # ─── Sandboxed runtime (docs/planning/sandbox-isolation-spec.md) ───

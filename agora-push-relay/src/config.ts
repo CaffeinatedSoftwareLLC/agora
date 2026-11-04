@@ -10,6 +10,10 @@ export interface RelayConfig {
     registerPerMinute: number;
     handleTtlDays: number;
     logLevel: string;
+    /** Bearer token for reading telemetry (GET /telemetry/v1/...); unset turns those routes off. */
+    adminToken: string | undefined;
+    /** Days a problem report is kept. */
+    problemDays: number;
     /** The service-account JSON from a file, or the JSON itself (FCM_SERVICE_ACCOUNT_JSON). */
     fcm: { serviceAccountFile: string } | { serviceAccountJson: string } | null;
     apns: { key: { file: string } | { pem: string }; keyId: string; teamId: string; bundleId: string; production: boolean } | null;
@@ -95,6 +99,9 @@ export function loadConfig(env: Env = process.env): RelayConfig {
         apns = { key, keyId, teamId, bundleId: env.APNS_BUNDLE_ID!.trim(), production: environment === 'production' };
     }
 
+    const adminToken = env.RELAY_ADMIN_TOKEN?.trim() || undefined;
+    if (adminToken !== undefined && !/^[A-Za-z0-9_-]{32,}$/.test(adminToken)) throw new Error('RELAY_ADMIN_TOKEN must be at least 32 letters, digits, - or _ (openssl rand -hex 32)');
+
     const databaseUrl = env.DATABASE_URL?.trim();
     return {
         host: env.RELAY_HOST?.trim() || '0.0.0.0',
@@ -106,6 +113,8 @@ export function loadConfig(env: Env = process.env): RelayConfig {
         registerPerMinute: int(env, 'RELAY_REGISTER_PER_MINUTE', 10, 1, 10_000),
         handleTtlDays: int(env, 'RELAY_HANDLE_TTL_DAYS', 365, 0, 10_000),
         logLevel: env.RELAY_LOG_LEVEL?.trim() || 'info',
+        adminToken,
+        problemDays: int(env, 'RELAY_PROBLEM_DAYS', 90, 1, 3650),
         fcm,
         apns,
     };
