@@ -4,11 +4,12 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { hashClaimToken, postNotice, type Notice } from '../lib/agent-runs';
+import { hashClaimToken, type Notice } from '../lib/agent-runs';
 import { cardUpdate } from '../lib/task-cards';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import {
-    ISSUE_BODY_MAX, ISSUE_LIST_LIMIT, LIST_FRESH_MINUTES, REPO_PATTERN, issueDescription, issueUrlOk, validRepo, type ListedIssue,
+    ISSUE_BODY_MAX, ISSUE_LIST_LIMIT, LIST_FRESH_MINUTES, REPO_PATTERN, commentFailed, commentPosted, issueDescription, issueUrlOk, validRepo,
+    type ListedIssue,
 } from '../lib/github-issues';
 import { CommandError, profileByName } from './agent-commands';
 import { cleanTitle, startCard } from './task-board';
@@ -50,6 +51,12 @@ async function listedIssues(db: any, channelId: string, repo: string, issues: Li
         [channelId, repo, issues.map(i => i.number)])).rows;
     const byNumber = new Map(cards.map((c: any) => [Number(c.issue_number), c.id]));
     return issues.map(i => ({ ...i, cardId: byNumber.get(i.number) ?? null }));
+}
+
+/** Queued GitHub work of a channel whose link changed. A comment it cancels is retried by the next Check PR. */
+async function cancelQueued(db: any, channelId: string) {
+    await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"binding_changed"}', finished_at = NOW()
+        WHERE channel_id = $1 AND status = 'queued'`, [channelId]);
 }
 
 export async function githubIssueRoutes(app: FastifyInstance) {
@@ -98,6 +105,8 @@ export async function githubIssueRoutes(app: FastifyInstance) {
         const link = await asService(db, async () => {
             const host = (await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL', [b.hostId, serverId])).rows[0];
             if (!host) return null;
+            // Queued work was for the old repository or host: it never runs on the new one
+            await cancelQueued(db, channelId);
             await db.query(
                 `INSERT INTO channel_github_repos (channel_id, server_id, repo, host_id, linked_by) VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (channel_id) DO UPDATE SET repo = EXCLUDED.repo, host_id = EXCLUDED.host_id, linked_by = EXCLUDED.linked_by, updated_at = NOW()`,
@@ -116,7 +125,10 @@ export async function githubIssueRoutes(app: FastifyInstance) {
         const serverId = await channelServer(db, channelId);
         if (!serverId) return reply.status(404).send({ error: 'channel_not_found' });
         if (!await isServerOwner(db, serverId, request.userId!)) return reply.status(403).send({ error: 'owner_only' });
-        await asService(db, () => db.query('DELETE FROM channel_github_repos WHERE channel_id = $1', [channelId]));
+        await asService(db, async () => {
+            await cancelQueued(db, channelId);
+            await db.query('DELETE FROM channel_github_repos WHERE channel_id = $1', [channelId]);
+        });
         return reply.status(204).send();
     });
 
@@ -227,25 +239,30 @@ export async function githubIssueRoutes(app: FastifyInstance) {
     // GET /agent-hosts/@me/github-commands/next → 200 { id, claimToken, action, repo, payload } | 204
     app.get('/agent-hosts/@me/github-commands/next', async (request, reply) => {
         const db = request.dbClient!, host = request.agentHost!;
+        const notices: Notice[] = [];
         const r = await asService(db, async () => {
             if (!(await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL FOR SHARE', [host.id, host.serverId])).rows.length)
                 return { status: 401, body: { error: 'host_revoked' } };
-            // A claim the host never answered: a list is asked again by the person; a comment is not retried
-            await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"host_timeout"}', finished_at = NOW()
-                WHERE host_id = $1 AND status = 'claimed' AND lease_until < NOW()`, [host.id]);
+            // A claim the host never answered: a list is asked again by the person; a comment may
+            // have posted, so it is said in the card's thread and not retried
+            const expired = (await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"host_timeout"}', finished_at = NOW()
+                WHERE host_id = $1 AND status = 'claimed' AND lease_until < NOW() RETURNING *`, [host.id])).rows;
+            for (const c of expired) if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, 'host_timeout'));
             const candidates = (await db.query(
                 `SELECT * FROM github_commands WHERE host_id = $1 AND server_id = $2 AND status = 'queued' ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED`,
                 [host.id, host.serverId])).rows;
             for (const c of candidates) {
-                // A list runs for someone who may still direct agents there, on the repo still linked
-                if (c.action === 'issue_list') {
-                    const link = (await db.query('SELECT repo, host_id FROM channel_github_repos WHERE channel_id = $1', [c.channel_id])).rows[0];
-                    const ok = link && link.repo === c.repo && link.host_id.trim() === host.id && c.requested_by
-                        && await stampAuthority(db, c.channel_id.trim(), c.requested_by.trim(), false);
-                    if (!ok) {
-                        await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"binding_or_authority_changed"}', finished_at = NOW() WHERE id = $1`, [c.id]);
-                        continue;
-                    }
+                // Every call runs only on the host the owner linked, for the repository still linked to
+                // the channel; a list also only for someone who may still direct agents there
+                const link = (await db.query('SELECT repo, host_id FROM channel_github_repos WHERE channel_id = $1', [c.channel_id])).rows[0];
+                const bound = link && link.repo.toLowerCase() === c.repo.toLowerCase() && link.host_id.trim() === host.id;
+                const ok = bound && (c.action !== 'issue_list'
+                    || c.requested_by && await stampAuthority(db, c.channel_id.trim(), c.requested_by.trim(), false));
+                if (!ok) {
+                    const error = c.action === 'issue_list' ? 'binding_or_authority_changed' : 'binding_changed';
+                    await db.query(`UPDATE github_commands SET status = 'failed', result = $2, finished_at = NOW() WHERE id = $1`, [c.id, { error }]);
+                    if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, error));
+                    continue;
                 }
                 const token = randomBytes(32).toString('hex');
                 await db.query(`UPDATE github_commands SET status = 'claimed', claim_token_hash = $2, lease_until = NOW() + make_interval(secs => $3) WHERE id = $1`,
@@ -254,6 +271,7 @@ export async function githubIssueRoutes(app: FastifyInstance) {
             }
             return { status: 204, body: undefined };
         });
+        emit(request, notices);
         return r.body === undefined ? reply.status(r.status).send() : reply.status(r.status).send(r.body);
     });
 
@@ -297,15 +315,14 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                     updatedAt: i.updatedAt, body: sanitizeMessageText(i.body).slice(0, ISSUE_BODY_MAX + 1),
                 })) };
             }
-            if (b.success && c.action === 'issue_comment' && typeof b.result.url === 'string' && /^https:\/\/\S+$/.test(b.result.url)) result = { url: b.result.url };
+            if (b.success && c.action === 'issue_comment') {
+                if (typeof b.result.url === 'string' && /^https:\/\/\S+$/.test(b.result.url)) result = { url: b.result.url };
+                await commentPosted(db, c);
+            }
             await db.query('UPDATE github_commands SET status = $2, result = $3, finished_at = NOW() WHERE id = $1',
                 [c.id, b.success ? 'succeeded' : 'failed', result]);
             // A comment that didn't land is said in the card's thread, not dropped silently
-            if (!b.success && c.action === 'issue_comment') {
-                const card = (await db.query('SELECT thread_id FROM task_cards WHERE id = $1', [c.payload?.cardId ?? ''])).rows[0];
-                notice = await postNotice(db, c.channel_id.trim(), `Couldn't comment on GitHub issue ${c.repo}#${c.payload?.number}: ${result.error}. Is gh signed in on the host?`,
-                    card?.thread_id?.trim() ?? null);
-            }
+            if (!b.success && c.action === 'issue_comment') notice = await commentFailed(db, c, result.error);
             return { status: 200, body: { ok: true } };
         });
         emit(request, [notice]);

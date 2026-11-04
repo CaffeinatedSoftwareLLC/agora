@@ -506,7 +506,7 @@ session worktree and returns only the state and an https URL. See
 ### GitHub issues
 
 A channel linked to a GitHub repository (owner only) uses the host picked for it to
-list its open issues, and the host of a card's session to comment on the card's issue
+list its open issues and to comment on a card's issue
 when its pull request opens, merges or closes. The host polls
 `/agent-hosts/@me/github-commands/next` on its own loop and runs
 `gh issue list --repo=owner/name --state=open` or
