@@ -122,4 +122,45 @@ describe('sync-skills.js', () => {
         expect(r.status).toBe(1);
         expect(r.stderr).toMatch(/Plugin versions differ/);
     });
+
+    // main moves to 1.0.1 with a skill edit while a branch cut at 1.0.0 is still open.
+    const branchBehindMain = () => {
+        git('branch', 'feature');
+        editEverywhere('\nmain edit\n');
+        setVersion('1.0.1');
+        git('commit', '-qam', 'main: release 1.0.1');
+        git('branch', 'main-tip');
+        git('checkout', '-q', 'feature');
+    };
+
+    it('does not bump a branch that is only behind the base', () => {
+        branchBehindMain();
+        expect(run('--base', 'main-tip').status).toBe(0);
+        expect(version()).toBe('1.0.0');
+        expect(run('--check', '--base', 'main-tip').status).toBe(0);
+    });
+
+    it('bumps a branch with its own skill edits above the base tip, not just above its branch point', () => {
+        branchBehindMain();
+        appendFileSync(join(repo, '.claude/skills/agora-fix/SKILL.md'), '\nbranch edit\n');
+        expect(run('--base', 'main-tip').status).toBe(0);
+        expect(version()).toBe('1.0.2');
+        expect(run('--check', '--base', 'main-tip').status).toBe(0);
+    });
+
+    it('counts a new, not yet committed skill as a change', () => {
+        cpSync(join(repo, '.claude/skills/agora-fix'), join(repo, '.claude/skills/agora-new'), { recursive: true });
+        expect(run('--base', 'HEAD').status).toBe(0);
+        expect(version()).toBe('1.0.1');
+    });
+
+    it('reports a base manifest that is not valid JSON instead of crashing', () => {
+        writeFileSync(join(repo, MANIFESTS[0]), '{ not json');
+        git('commit', '-qam', 'broken manifest');
+        git('checkout', '-q', 'HEAD~1', '--', MANIFESTS[0]);
+        const r = run('--check', '--base', 'HEAD');
+        expect(r.status).toBe(1);
+        expect(r.stderr).toMatch(/is not valid JSON/);
+        expect(r.stderr).not.toMatch(/SyntaxError/);
+    });
 });

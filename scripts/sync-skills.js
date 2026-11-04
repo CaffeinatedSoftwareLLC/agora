@@ -135,14 +135,35 @@ function readBase(ref, { required }) {
         return { skip: `base ref ${ref} not found` };
     }
     const sha = resolved.stdout.trim();
-    const shown = git('show', `${sha}:${MANIFESTS[0]}`);
-    if (shown.status !== 0) return { skip: `the plugin is not in ${ref} yet` };
-    const diff = git('diff', '--quiet', sha, '--', PLUGIN_SKILLS);
+    const versionAt = (commit) => {
+        const shown = git('show', `${commit}:${MANIFESTS[0]}`);
+        if (shown.status !== 0) return null;
+        try {
+            return JSON.parse(shown.stdout).version;
+        } catch {
+            problems.push(`${MANIFESTS[0]} at ${commit.slice(0, 12)} is not valid JSON`);
+            return undefined;
+        }
+    };
+    const tipVersion = versionAt(sha);
+    if (tipVersion === undefined) return { failed: true };
+    if (tipVersion === null) return { skip: `the plugin is not in ${ref} yet` };
+
+    // Changes are counted from where this branch left the base, so a branch that is only
+    // behind the base is not "changed". The version must still beat the base's tip.
+    const mb = git('merge-base', 'HEAD', sha);
+    const fork = mb.status === 0 ? mb.stdout.trim() : sha;
+    const forkVersion = fork === sha ? tipVersion : versionAt(fork);
+    if (forkVersion === undefined) return { failed: true };
+    const from = forkVersion === null ? sha : fork;
+    const diff = git('diff', '--quiet', from, '--', PLUGIN_SKILLS);
     if (diff.status > 1) {
         problems.push(`git diff against ${ref} failed: ${diff.stderr.trim()}`);
         return { failed: true };
     }
-    return { version: JSON.parse(shown.stdout).version, changed: diff.status === 1 };
+    const untracked = git('ls-files', '--others', '--exclude-standard', '--', PLUGIN_SKILLS).stdout.trim() !== '';
+    const version = forkVersion && greater(forkVersion, tipVersion) ? forkVersion : tipVersion;
+    return { version, changed: diff.status === 1 || untracked };
 }
 
 const versionOk = problems.length === 0;
