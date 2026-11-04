@@ -130,10 +130,13 @@ export class DbBoxStore implements BoxStore {
         await this.db.query(`UPDATE agent_boxes SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, vals);
     }
 
+    // Postgres keeps microseconds, a JS Date only milliseconds: compare at the Date's precision,
+    // or the action is never cleared and boxd redoes it every pass (found on a real stack)
     async clearAction(boxId: string, action: PendingAction, requestedAt: Date | null): Promise<void> {
         await this.db.query(
             `UPDATE agent_boxes SET pending_action = NULL, action_requested_at = NULL, updated_at = NOW()
-             WHERE id = $1 AND pending_action = $2 AND action_requested_at IS NOT DISTINCT FROM $3`,
+             WHERE id = $1 AND pending_action = $2
+               AND date_trunc('milliseconds', action_requested_at) IS NOT DISTINCT FROM date_trunc('milliseconds', $3::timestamptz)`,
             [boxId, action, requestedAt]
         );
     }

@@ -72,7 +72,16 @@ export function createEdge(opts: EdgeOptions): Edge {
         publish: async (events) => { try { await publish(events); } catch (err) { log.warn({ err: (err as Error).message }, 'Event publish failed'); } },
     };
     const directory = new BoxDirectory(opts.db, opts.directoryTtlMs ?? 3000);
-    const identify = opts.identify ?? directory.identify;
+    const identifyCached = opts.identify ?? directory.identify;
+    // The directory is a few seconds old, but a box's generation must be today's: right after a
+    // rebuild the new container already holds the new generation's tokens, and signing with the
+    // old one gets them refused (and its agora-host stops). One primary-key read per request.
+    const identify = async (local: string, remote: string) => {
+        const box = await identifyCached(local, remote);
+        if (!box) return null;
+        const row = (await opts.db.query(`SELECT generation FROM agent_boxes WHERE id = $1 AND deleted_at IS NULL`, [box.id])).rows[0];
+        return row ? { ...box, generation: Number(row.generation) } : null;
+    };
     const api = createApiProxy(opts.apiUpstream, opts.edgeSecret);
 
     const raw = new Set<Duplex>();

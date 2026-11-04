@@ -6,6 +6,7 @@ import { hashPassword } from '../../src/auth/passwords';
 import { generateBotToken } from '../../src/auth/bot-tokens';
 import { signEdge } from '../../src/lib/boxes/contract';
 import { BoxGoneError, prepareBoxRestore, rotateBoxTokens } from '../../src/lib/boxes/tokens';
+import { DbBoxStore } from '../../src/boxes/boxd/store';
 
 /**
  * boxd's token minting (docs/agent-boxes.md §3.2, §4.1, §9.4) against the real API auth:
@@ -176,5 +177,23 @@ describe('box restore prep', () => {
         const next = await rotateBoxTokens(ctx.db, box.boxId);
         expect(next.generation).toBe(gen + 1);
         expect((await asHost(next.hostToken, box.boxId, next.generation)).status).toBe(204);
+    });
+});
+
+describe('boxd store', () => {
+    // A rebuild asked for at NOW() (microseconds) must be cleared by boxd, which reads the time
+    // back as a millisecond JS Date; otherwise it redoes the rebuild on every pass
+    it('clears a finished owner action whose time has microseconds', async () => {
+        const box = await makeBox('clr1');
+        await ctx.db.query(`UPDATE agent_boxes SET pending_action = 'rebuild', action_requested_at = '2026-11-04 12:00:00.123456+00' WHERE id = $1`, [box.boxId]);
+        const store = new DbBoxStore(ctx.db, Buffer.alloc(32), async () => {});
+        const row = (await store.listBoxes()).find(b => b.id === box.boxId)!;
+        expect(row.actionRequestedAt?.toISOString()).toBe('2026-11-04T12:00:00.123Z');
+        await store.clearAction(box.boxId, 'rebuild', row.actionRequestedAt);
+        expect((await ctx.db.query(`SELECT pending_action FROM agent_boxes WHERE id = $1`, [box.boxId])).rows[0].pending_action).toBeNull();
+        // An action asked for again meanwhile (a later time) is kept
+        await ctx.db.query(`UPDATE agent_boxes SET pending_action = 'reset', action_requested_at = '2026-11-04 12:00:05.5+00' WHERE id = $1`, [box.boxId]);
+        await store.clearAction(box.boxId, 'reset', new Date('2026-11-04T12:00:00.123Z'));
+        expect((await ctx.db.query(`SELECT pending_action FROM agent_boxes WHERE id = $1`, [box.boxId])).rows[0].pending_action).toBe('reset');
     });
 });
