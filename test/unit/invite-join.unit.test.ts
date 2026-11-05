@@ -15,7 +15,7 @@ async function fixture(join: { server_id: string; joined: boolean } | null, fail
             return { rows: join ? [join] : [] };
         }
         if (sql.includes('FROM servers')) return { rows: [{ id: 'S', name: 'Server', owner_id: 'O' }] };
-        if (sql.includes('FROM channels')) return { rows: [{ id: 'C', name: 'general', channel_type: 3 }] };
+        if (sql.includes('FROM channels')) return { rows: [{ id: 'C', name: 'general', channel_type: 3, max_bot_hops: 6, max_thread_bot_hops: 2 }] };
         throw new Error(`Unexpected query: ${sql}`);
     });
     app.addHook('onRequest', async request => {
@@ -36,7 +36,7 @@ it('uses only the exact-code function for joining and queues ServerJoin for a ne
     expect(f.query).toHaveBeenCalledWith('SELECT server_id, joined FROM public.join_server_by_invite($1)', ['known-code']);
     expect(f.query.mock.calls.some(([sql]) => /INSERT INTO server_members|UPDATE server_invites/.test(sql))).toBe(false);
     expect(f.events()).toEqual([{ event: 'ServerJoin', room: 'user:U', data: {
-        server: { id: 'S', name: 'Server', ownerId: 'O' }, channels: [{ id: 'C', name: 'general', channelType: 3, serverId: 'S' }],
+        server: { id: 'S', name: 'Server', ownerId: 'O' }, channels: [{ id: 'C', name: 'general', channelType: 3, serverId: 'S', maxBotHops: 6, maxThreadBotHops: 2 }],
     } }]);
 });
 

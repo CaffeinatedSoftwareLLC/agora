@@ -102,7 +102,8 @@ describe('POST /channels/:id/loop-guard/resume (channel)', () => {
     test('only ManageBots humans who can see the channel may resume; nothing is posted otherwise', async () => {
         const before = (await ctx.db.query("SELECT count(*)::int AS n FROM messages WHERE system_event = 'loop_guard_resume'")).rows[0].n;
         expect((await resume(member.auth, {})).status).toBe(403);
-        expect((await resume(outsider.auth, {})).status).toBe(403);
+        // A non-member can't see the channel at all (RLS), so it's not found rather than forbidden
+        expect((await resume(outsider.auth, {})).status).toBe(404);
         expect((await resume(botAuth, {})).status).toBe(403);
         expect((await ctx.request.post(`/channels/${channelId}/loop-guard/resume`).send({})).status).toBe(401);
         expect((await ctx.request.post(`/channels/${ULID_ZERO}/loop-guard/resume`).set(owner.auth).send({})).status).toBe(404);
