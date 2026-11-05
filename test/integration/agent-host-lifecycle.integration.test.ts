@@ -315,7 +315,7 @@ describe('S0063/S0064 ended-session worktrees', () => {
                 expect((await stat(w.cwd)).isDirectory()).toBe(true);
                 expect(await notices(s)).toEqual([]);
             }
-            expect(log).toEqual(['dirty_workspace_kept']);
+            expect([...log].sort()).toEqual(['dirty_workspace_kept', `workspace_removed wt-${cleanS.slice(-10)}.json`]);
 
             // A second pass posts nothing new
             await reconcileWorkspaces(config, api, new Set(), () => {});

@@ -1,7 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { lstat, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { uptime } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const exec = promisify(execFile);
@@ -14,6 +15,74 @@ const key = (cwd: string) => process.platform === 'win32' ? resolve(cwd).toLower
 export class GitLockError extends Error {
     constructor(public readonly detail: string) { super('stale_git_lock'); }
 }
+
+/** fsync before close: a power cut after an unsynced write can leave the file zero-filled (seen 2026-11-02). */
+export async function writeSynced(path: string, data: string, flag = 'w') {
+    const file = await open(path, flag, 0o600);
+    try { await file.writeFile(data); await file.sync(); } finally { await file.close(); }
+}
+// Margin for clock adjustments between the record's write and this boot.
+const BOOT_MARGIN_MS = 5 * 60 * 1000;
+const writtenBeforeBoot = (mtimeMs: number) => mtimeMs < Date.now() - uptime() * 1000 - BOOT_MARGIN_MS;
+const INVALID_RECORD = 'Git ownership record is invalid; locks retained.';
+// Unparseable only: a rename-replaced record cannot be torn while its writer runs. A well-formed record that
+// fails a field check (another Node path) may still name a live writer and keeps blocking.
+const TORN_RECORD = 'Git ownership record is not valid JSON (torn write?); locks retained.';
+// Every gate since the first (fc1f35d) has this line, and Git runs only while its gate lives.
+export const GATE_MARK = 'if (!started) process.exit(1)';
+const ownGates = new Set<string>(); // nonces of gates this process started that have not closed
+const gateNonce = (commandLine: string) => commandLine.match(/[0-9a-f]{32}(?=["'\s]*$)/)?.[0] ?? '';
+
+export interface ProcessEntry { name: string; commandLine: string | null }
+const nodeLike = (name: string) => /^node(js)?(\.exe)?$/i.test(name) || name.toLowerCase() === basename(process.execPath).toLowerCase();
+/**
+ * Nonces of live gates in a process list, minus this process's own. Fails closed: a Node process whose arguments
+ * could not be read might be a gate, so it throws instead of guessing.
+ */
+export function gatesIn(list: ProcessEntry[]): string[] {
+    const nonces: string[] = [];
+    for (const p of list) {
+        if (p.commandLine === null) { if (nodeLike(p.name)) throw new Error('git_gate_identity_unavailable'); continue; }
+        if (p.commandLine.includes(GATE_MARK)) nonces.push(gateNonce(p.commandLine));
+    }
+    return nonces.filter(n => !ownGates.has(n));
+}
+const gone = (e: any) => e?.code === 'ENOENT' || e?.code === 'ESRCH';
+/**
+ * Nonces of live Git gates on this machine that this process did not start. Clock-free evidence: with none, no
+ * owned Git writer from an earlier host can still run. Throws when the process list cannot be read in full.
+ */
+export async function foreignGitGates(): Promise<string[]> {
+    const list: ProcessEntry[] = [];
+    if (process.platform === 'win32') {
+        const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+        // CommandLine is null for a process this user cannot inspect; gatesIn() fails closed on a Node one.
+        const script = `$ErrorActionPreference = 'Stop'; @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID } | ForEach-Object { @{ name = [string]$_.Name; commandLine = $_.CommandLine } }) | ConvertTo-Json -Compress`;
+        const r = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 30000, maxBuffer: 32 * 1024 * 1024 });
+        const value = JSON.parse(r.stdout.trim() || '[]');
+        for (const v of Array.isArray(value) ? value : [value])
+            list.push({ name: String(v?.name ?? ''), commandLine: typeof v?.commandLine === 'string' && v.commandLine ? v.commandLine : null });
+    } else if (process.platform === 'linux') {
+        for (const pid of (await readdir('/proc')).filter(d => /^\d+$/.test(d) && d !== String(process.pid))) {
+            try {
+                const [name, command] = await Promise.all([readFile(`/proc/${pid}/comm`, 'utf8'), readFile(`/proc/${pid}/cmdline`, 'utf8')]);
+                // An empty cmdline is a kernel thread or an exited (zombie) process: neither runs Git.
+                list.push({ name: name.trim(), commandLine: command.split('\0').filter(Boolean).join(' ') });
+            } catch (e) { if (!gone(e)) throw e; }
+        }
+    } else {
+        const r = await exec('ps', ['-ww', '-axo', 'command='], { timeout: 10000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
+        for (const line of r.stdout.split('\n').map(l => l.trim()).filter(Boolean)) {
+            // ps prints only the name, sometimes in parentheses, when it cannot read a process's arguments.
+            const bare = !/\s/.test(line);
+            list.push({ name: basename(line.split(/\s/)[0].replace(/^\(|\)$/g, '')), commandLine: bare ? null : line });
+        }
+    }
+    return gatesIn(list);
+}
+let gateProbe: () => Promise<string[]> = foreignGitGates;
+/** Tests only: replace the process-list probe (no argument restores it). */
+export function setGitGateProbe(probe?: () => Promise<string[]>) { gateProbe = probe ?? foreignGitGates; }
 
 /** Only recovery needs an OS probe. A reused PID cannot accidentally have this random nonce. */
 export async function gitOwnerAlive(owner: GitOwner): Promise<boolean> {
@@ -58,12 +127,32 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
     if (!stat) return null;
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192n) throw new GitLockError('Git ownership record is not a small regular file; locks retained.');
     let o: GitOwner;
-    try { o = JSON.parse(await readFile(w.record, 'utf8')); }
-    catch { throw new GitLockError('Git ownership record is invalid; locks retained.'); }
+    // A read failure (EACCES, EBUSY) says nothing about the record; only a parse failure means torn.
+    const text = await readFile(w.record, 'utf8');
+    try { o = JSON.parse(text); }
+    catch { throw new GitLockError(TORN_RECORD); }
     if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.pid) || o.pid <= 0 || typeof o.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(o.nonce)
         || o.argv0 !== process.execPath || typeof o.at !== 'string' || !Number.isFinite(Date.parse(o.at)))
-        throw new GitLockError('Git ownership record is invalid; locks retained.');
+        throw new GitLockError(INVALID_RECORD);
     return o;
+}
+/**
+ * The gate before a new owned Git run. A torn record (zero bytes after a power cut) would otherwise block every
+ * run in the worktree forever. It is set aside only when it was last written before this boot AND no Git gate
+ * from another process is alive anywhere on the machine, so a clock jump alone cannot hide a live writer.
+ * Lock recovery still treats it as unknown, so a lock beside it stays for its owner to check.
+ */
+async function previousOwner(w: GitWorkspace): Promise<GitOwner | null> {
+    try { return await ownerOf(w); } catch (e) {
+        if (!(e instanceof GitLockError) || e.detail !== TORN_RECORD) throw e;
+        const stat = await statOrNull(w.record);
+        if (!stat || !writtenBeforeBoot(Number(stat.mtimeMs))) throw e;
+        let gates: string[];
+        try { gates = await gateProbe(); } catch { throw new GitLockError(`${TORN_RECORD} The process list could not be read to rule out a live Git gate.`); }
+        if (gates.length) throw new GitLockError(`${TORN_RECORD} Another Git gate is still running (${gates.length}).`);
+        w.log(`git_owner_record_replaced ${w.record}: not valid JSON, written before this boot, no other Git gate alive`);
+        return null;
+    }
 }
 
 /** Only the linked worktree's private index/HEAD locks, never common refs or a human's lock. */
@@ -167,13 +256,16 @@ async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExec
     let onAbort = () => {};
     try {
         await recoverGitLocks(cwd);
-        const previous = await ownerOf(w);
+        const previous = await previousOwner(w);
         if (previous && await gitOwnerAlive(previous))
             throw new GitLockError('Recorded Git process is still running in this worktree.');
         if (options.signal?.aborted) throw new Error('Git operation aborted');
         const nonce = randomUUID().replace(/-/g, '');
+        ownGates.add(nonce);
         child = spawn(process.execPath, ['-e', GATE, nonce], { cwd, env, windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+        child.on('close', () => ownGates.delete(nonce));
+        child.on('error', () => { if (!child?.pid) ownGates.delete(nonce); });
         let stdout = '', stderr = '', bytes = 0;
         let failure: Error | undefined;
         let rejectResult!: (error: Error) => void;
@@ -214,8 +306,8 @@ async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExec
         if (closed || options.signal?.aborted) throw new Error('Git operation aborted');
         owner = { pid: child.pid, nonce, argv0: process.execPath, at: new Date().toISOString() };
         const temp = `${w.record}.${randomUUID()}.tmp`;
-        await writeFile(temp, JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
-        await rename(temp, w.record);
+        await writeSynced(temp, JSON.stringify(owner), 'wx');
+        await rename(temp, w.record).catch(async e => { await unlink(temp).catch(() => {}); throw e; });
         if (closed || options.signal?.aborted || failure) throw new Error('Git operation aborted');
         started = true;
         child.send({ args, cwd });

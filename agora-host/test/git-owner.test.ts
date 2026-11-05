@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdir, readFile, symlink, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, symlink, utimes, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { uptime } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { GitLockError, gitOwnerAlive, recoverGitLocks, registerGitWorkspace, type GitOwner } from '../src/git-owner.js';
+import { GATE_MARK, GitLockError, foreignGitGates, gatesIn, gitOwnerAlive, recoverGitLocks, registerGitWorkspace, setGitGateProbe, type GitOwner } from '../src/git-owner.js';
 import { ensureWorkspace, git, recoverWorkspaceGitLocks, withGitSignal } from '../src/workspaces.js';
 import { executeReview } from '../src/review.js';
 import { claim, config, id, tempDir } from './helpers.js';
@@ -94,7 +95,7 @@ it('startup recovery clears recorded stale locks and preserves an unknown lock',
     await writeFile(lock, 'unknown');
     await recoverWorkspaceGitLocks(s.c, s.log);
     expect(await readFile(lock, 'utf8')).toBe('unknown');
-    expect(s.log).toHaveBeenCalledWith('stale_git_lock');
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^stale_git_lock wt-\w{10}\.json message=stale_git_lock detail=.*index\.lock/));
 });
 
 it('a workspace commit recovers a recorded stale lock and commits without changing the main checkout', async () => {
@@ -121,6 +122,74 @@ it('a workspace command refuses a human lock before spawning a new owned Git ope
     expect(await readFile(lock, 'utf8')).toBe('human');
     expect(await readFile(join(s.w.cwd, 'keep.txt'), 'utf8')).toBe('uncommitted');
     await expect(stat(s.record)).rejects.toThrow();
+});
+
+// A power cut left a 134-byte zero-filled record (2026-11-02); every later Git call in that worktree failed.
+const torn = '\0'.repeat(134), beforeBoot = new Date('2000-01-01T00:00:00Z');
+
+it('replaces a torn ownership record written before this boot instead of blocking the worktree forever', async () => {
+    const s = await fixture();
+    setGitGateProbe(async () => []); cleanups.push(async () => setGitGateProbe());
+    await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
+    expect((await git(s.w.cwd, ['rev-parse', 'HEAD'])).trim()).toMatch(/^[0-9a-f]{40}$/);
+    await expect(stat(s.record)).rejects.toThrow();
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^git_owner_record_replaced .*no other Git gate alive$/));
+});
+
+it('a clock jump alone cannot set a torn record aside: a live foreign Git gate, or an unreadable process list, keeps it blocking', async () => {
+    const s = await fixture();
+    await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
+    setGitGateProbe(async () => ['0123456789abcdef0123456789abcdef']); cleanups.push(async () => setGitGateProbe());
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('Another Git gate is still running') });
+    setGitGateProbe(async () => { throw new Error('access denied'); });
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ detail: expect.stringContaining('could not be read') });
+    expect(await readFile(s.record, 'utf8')).toBe(torn);
+});
+
+it('the gate list fails closed on a Node process whose arguments cannot be read', () => {
+    const nonce = 'fedcba9876543210fedcba9876543210';
+    const gate = { name: 'node.exe', commandLine: `"C:\\node.exe" -e "...${GATE_MARK}..." ${nonce}` };
+    expect(gatesIn([{ name: 'svchost.exe', commandLine: null }, { name: 'code.exe', commandLine: 'code .' }, gate])).toEqual([nonce]);
+    // Windows CIM: null CommandLine for a process this user cannot inspect; macOS ps: bare "(node)".
+    expect(() => gatesIn([{ name: 'node.exe', commandLine: null }])).toThrow('git_gate_identity_unavailable');
+    expect(() => gatesIn([{ name: 'node', commandLine: null }])).toThrow('git_gate_identity_unavailable');
+    expect(gatesIn([{ name: 'svchost.exe', commandLine: null }])).toEqual([]);
+});
+
+it('the gate probe sees a live gate from another process and drops it once it exits', async () => {
+    const nonce = randomUUID().replace(/-/g, '');
+    const child = spawn(process.execPath, ['-e', `setInterval(() => {}, 1000); // ${GATE_MARK}`, nonce], { windowsHide: true, stdio: 'ignore' });
+    const closed = once(child, 'close');
+    try {
+        await new Promise(r => setTimeout(r, 300));
+        expect(await foreignGitGates()).toContain(nonce);
+    } finally { child.kill(); await closed; }
+    expect(await foreignGitGates()).not.toContain(nonce);
+}, 60000);
+
+it('keeps blocking on a torn ownership record written since this boot', async () => {
+    const s = await fixture();
+    await writeFile(s.record, torn);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('not valid JSON') });
+    expect(await readFile(s.record, 'utf8')).toBe(torn);
+    // Inside the margin before boot still counts as "since boot".
+    const nearBoot = new Date(Date.now() - uptime() * 1000 - 60 * 1000);
+    await utimes(s.record, nearBoot, nearBoot);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toThrow('stale_git_lock');
+});
+
+it('a well-formed record from another Node path keeps blocking even when written before this boot', async () => {
+    const s = await fixture(), other = JSON.stringify({ ...deadOwner, argv0: 'C:\\old\\node.exe' });
+    await writeFile(s.record, other); await utimes(s.record, beforeBoot, beforeBoot);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('invalid') });
+    expect(await readFile(s.record, 'utf8')).toBe(other);
+});
+
+it('a torn record from before this boot never lets lock recovery clear a lock', async () => {
+    const s = await fixture(), lock = join(s.gitDir, 'index.lock');
+    await writeFile(lock, 'unknown'); await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toThrow('stale_git_lock');
+    expect(await readFile(lock, 'utf8')).toBe('unknown');
 });
 
 it('records a live owner durably before Git can run a clean filter', async () => {
