@@ -111,6 +111,9 @@ beforeAll(async () => {
     await ctx.request.post(`/channels/${channelId}/bots/${botId}`).set(owner.auth);
     const tts = await ctx.request.put(`/servers/${serverId}/ai/routes/tts`).set(owner.auth).send({ providerId: geminiId, model: 'gemini-3.8-flash-tts', enabled: true });
     expect(tts.status).toBe(200);
+    // Something to summarise: an overview leaves the request itself out of its transcript (#40)
+    const seedMsg = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Release plan: ship Friday if QA signs off.' });
+    expect(seedMsg.status).toBe(201);
 });
 
 afterEach(() => { vi.unstubAllGlobals(); });
