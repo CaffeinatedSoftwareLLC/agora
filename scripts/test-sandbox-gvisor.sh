@@ -8,17 +8,19 @@
 #   scripts/test-sandbox-gvisor.sh                              # the whole suite
 #   scripts/test-sandbox-gvisor.sh test/sandbox/negative.sandbox.test.ts
 #
-# It starts its own Postgres, Redis, socket proxy and internal network (all named
-# agora-sbxtest-* / agora_sandbox_test) and removes them when it finishes.
+# It starts its own Postgres, Redis, socket proxy and internal network, as an install named
+# sbxtest (runs sbxtest-run-*, network sbxtest_sandbox, the proxy rules of
+# docker-compose.prod.yml for that name), and removes them when it finishes.
 #
-# CAUTION: the suite force-removes every agora-run-* container on this engine
-# (SandboxDocker.removeOrphans), and a live runner restart can remove the suite's. So it
-# refuses to run on an engine that hosts any Agora stack or runtime container, running or
-# stopped. There is no override: run it on a dedicated engine (until #126 lands).
+# CAUTION: since #126 the suite's runner can't touch another install's runs, but its harness
+# uses the host Docker CLI (probe containers, test proxies, networks). So it still refuses to
+# run on an engine that hosts any Agora stack or runtime container, running or stopped. There
+# is no override: run it on a dedicated engine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NET=agora_sandbox_test
+INSTANCE=sbxtest
+NET=${INSTANCE}_sandbox
 PG=agora-sbxtest-postgres
 REDIS=agora-sbxtest-redis
 PROXY=agora-sbxtest-socket-proxy
@@ -32,28 +34,32 @@ PROXY_PORT=12375
 source scripts/lib/engine-guard.sh
 
 cleanup() {
-    docker rm -f "$RUNNER" "$PG" "$REDIS" "$PROXY" agora-test-cap-forwarder agora-neg-target >/dev/null 2>&1 || true
-    docker network rm "$NET" >/dev/null 2>&1 || true
+    docker rm -f "$RUNNER" "$PG" "$REDIS" "$PROXY" agora-test-cap-forwarder agora-neg-target agora-neg-host-listener \
+        agora-neg-other-run agora-pxa-test-socket-proxy agora-pxb-test-socket-proxy >/dev/null 2>&1 || true
+    # Run containers of this suite's installs (sbxtest, and the proxy test's two)
+    for i in "$INSTANCE" agora-pxa agora-pxb; do
+        docker ps -aq --filter "label=agora.instance=$i" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    done
+    docker network rm "$NET" agora-neg-other_sandbox >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 cleanup
 
 echo "==> network, sandbox image, test services"
-docker network create --internal "$NET" >/dev/null
+# As docker-compose.prod.yml creates it: internal, and the host has no address on it (spec §6.1)
+docker network create --internal -o com.docker.network.bridge.inhibit_ipv4=true "$NET" >/dev/null
 docker build -q -t "$IMAGE" sandbox >/dev/null
 docker run -d --name "$PG" -e POSTGRES_USER=accord -e POSTGRES_PASSWORD=accord -e POSTGRES_DB=accord_test \
     -p "127.0.0.1:$PG_PORT:5432" postgres:16-alpine >/dev/null
 docker run -d --name "$REDIS" -p "127.0.0.1:$REDIS_PORT:6379" redis:7-alpine >/dev/null
-# The same restricted Docker API the runner uses in production (docker-compose.yml)
+# The restricted Docker API the runner uses in production: the rules of docker-compose.prod.yml
+# for this install name, open to the test process on the host network
+mapfile -t PROXY_ARGS < <(docker run --rm -v "$PWD":/src:ro -w /src node:22-bookworm \
+    node scripts/lib/socket-proxy-rules.js "$INSTANCE" --allowfrom 0.0.0.0/0)
+[ "${#PROXY_ARGS[@]}" -gt 3 ] || { echo "could not read the socket proxy rules from docker-compose.prod.yml" >&2; exit 1; }
 docker run -d --name "$PROXY" --user 0:0 --read-only --cap-drop ALL --security-opt no-new-privileges \
     -v /var/run/docker.sock:/var/run/docker.sock:ro -p "127.0.0.1:$PROXY_PORT:2375" \
-    wollomatic/socket-proxy:1.13.1 \
-    -loglevel=info -listenip=0.0.0.0 -allowfrom=0.0.0.0/0 \
-    -allowbindmountfrom=/nonexistent-agora-no-bind-mounts \
-    '-allowHEAD=(/v1\.[0-9]+)?/_ping' \
-    '-allowGET=(/v1\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/agora_sandbox[a-z0-9_]*|images/.+/json)' \
-    '-allowPOST=(/v1\.[0-9]+)?/containers/(create|agora-run-[0-9a-z]{26}/(start|wait|kill))' \
-    '-allowDELETE=(/v1\.[0-9]+)?/containers/agora-run-[0-9a-z]{26}' >/dev/null
+    wollomatic/socket-proxy:1.13.1 "${PROXY_ARGS[@]}" >/dev/null
 
 for _ in $(seq 1 60); do
     docker exec "$PG" pg_isready -U accord -d accord_test >/dev/null 2>&1 && break
@@ -75,12 +81,13 @@ docker run --rm --name "$RUNNER" --network host \
     -e AGORA_DOCKER_HOST="http://127.0.0.1:$PROXY_PORT" \
     -e AGORA_SANDBOX_IMAGE="$IMAGE" \
     -e AGORA_SANDBOX_NETWORK="$NET" \
+    -e AGORA_INSTANCE="$INSTANCE" \
     -e SANDBOX_TEST_RUNTIME=runsc \
     -e STORAGE_DIR=/tmp/agora-test-files \
     node:22-bookworm bash -c '
         set -e
         mkdir /work && cd /src
-        cp -r package.json package-lock.json tsconfig.json vitest.config.ts vitest.sandbox.config.ts src test sandbox /work/
+        cp -r package.json package-lock.json tsconfig.json vitest.config.ts vitest.sandbox.config.ts docker-compose.prod.yml src test sandbox scripts /work/
         cd /work
         echo "==> npm ci"
         npm ci --no-audit --no-fund --loglevel=error >/dev/null

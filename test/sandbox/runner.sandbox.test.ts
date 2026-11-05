@@ -3,9 +3,11 @@ import { Queue } from 'bullmq';
 import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { dockerFromEnv, SandboxDocker } from '../../src/runtime/docker';
-import { processRun, reconcileInterruptedRuns, startRunnerWorker, RUNTIME_QUEUE, type RunnerDeps } from '../../src/runtime/runner';
+import { processRun, reconcileInterruptedRuns, runContainerCandidates, startRunnerWorker, RUNTIME_QUEUE, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits, type RunLimits } from '../../src/runtime/limits';
 import { startGatewayHarness, FORWARDER } from './gateway-harness';
+import { containerName } from '../../src/runtime/container-spec';
+import { INSTANCE, leftoverContainers, containerExists, hostDocker } from './host-docker';
 
 /**
  * WBS 3.2: the runner against real containers (through the socket proxy).
@@ -13,7 +15,7 @@ import { startGatewayHarness, FORWARDER } from './gateway-harness';
  */
 
 const IMAGE = process.env.AGORA_SANDBOX_IMAGE ?? 'agora/sandbox-deno:dev';
-const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? 'agora_sandbox';
+const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? `${INSTANCE}_sandbox`;
 const RUNTIME = (process.env.SANDBOX_TEST_RUNTIME as 'runsc' | 'runc') ?? 'runc';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
@@ -50,7 +52,7 @@ beforeAll(async () => {
     deps = {
         db: ctx.db,
         sandbox,
-        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 2, capacityRetryMs: 100, capContainer: FORWARDER },
+        config: { image: IMAGE, network: NETWORK, runtime, instance: INSTANCE, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 2, capacityRetryMs: 100, capContainer: FORWARDER },
         onFinished: async (runId, status) => { finished.push({ runId, status }); },
     };
     // Under gVisor the runner pins the gateway's address into each run, so one has to exist
@@ -122,9 +124,7 @@ describe('running code', () => {
         const run = await getRun(id);
         expect(run.error).toContain('time limit');
         expect(run.exit_code).toBeNull();
-        const leftovers = await dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375')
-            .listContainers({ all: true, filters: { label: [`agora.run=${id}`] } });
-        expect(leftovers).toHaveLength(0);
+        expect(leftoverContainers(id)).toHaveLength(0);
     });
 
     test('pausing the submitting bot kills its running container (3.8)', async () => {
@@ -144,9 +144,7 @@ describe('running code', () => {
         expect(await pending).toEqual({ kind: 'ran', status: 'killed' });
         expect(Date.now() - started).toBeLessThan(20_000);
         expect((await getRun(id)).error).toContain('bot was paused');
-        const leftovers = await dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375')
-            .listContainers({ all: true, filters: { label: [`agora.run=${id}`] } });
-        expect(leftovers).toHaveLength(0);
+        expect(leftoverContainers(id)).toHaveLength(0);
     });
 
     test('output is truncated to the limit', async () => {
@@ -248,26 +246,41 @@ describe('queue worker', () => {
     });
 });
 
-describe('orphan cleanup', () => {
-    test('removes leftover agora-run containers only', async () => {
-        const docker = dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375');
-        const name = `agora-run-${generateUlid().toLowerCase()}`;
-        await docker.createContainer({ name, Image: IMAGE, Cmd: ['--version'], Labels: { 'agora.managed': 'runtime' }, HostConfig: { NetworkMode: NETWORK } });
-        expect(await sandbox.removeOrphans()).toBeGreaterThanOrEqual(1);
-        const left = await docker.listContainers({ all: true, filters: { name: [name] } });
-        expect(left).toHaveLength(0);
+describe('leftover containers (#126)', () => {
+    // A container this install's runner left behind, made with the host CLI the way a crashed run leaves one
+    const leaveContainer = (name: string, instance: string) => hostDocker([
+        'create', '--name', name, '--label', 'agora.managed=runtime', '--label', `agora.instance=${instance}`,
+        '--network', 'none', '--entrypoint', 'deno', IMAGE, '--version',
+    ]);
+
+    test("removes this install's leftovers by name, from its own database", async () => {
+        const crashed = await insertRun('1', { status: 'running' });
+        const name = containerName(crashed, INSTANCE);
+        leaveContainer(name, INSTANCE);
+        const candidates = await runContainerCandidates(ctx.db);
+        expect(candidates).toContain(crashed);
+        const { removed, failed } = await sandbox.removeRunContainers(candidates.map(id => containerName(id, INSTANCE)));
+        expect(failed).toEqual([]);
+        expect(removed).toBeGreaterThanOrEqual(1);
+        expect(containerExists(name)).toBe(false);
+        await reconcileInterruptedRuns(ctx.db);
     });
 
-    test("leaves another install's runs alone (#209)", async () => {
-        const docker = dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375');
-        const name = `agora-run-${generateUlid().toLowerCase()}`;
-        await docker.createContainer({ name, Image: IMAGE, Cmd: ['--version'], Labels: { 'agora.managed': 'runtime', 'agora.instance': 'agora-other' }, HostConfig: { NetworkMode: NETWORK } });
+    test("another install's run with the same ID is out of reach: the proxy refuses its name", async () => {
+        const id = generateUlid();
+        const other = containerName(id, `${INSTANCE}x`);
+        leaveContainer(other, `${INSTANCE}x`);
         try {
-            await sandbox.removeOrphans('agora');
-            expect(await docker.listContainers({ all: true, filters: { name: [name] } })).toHaveLength(1);
-            expect(await sandbox.removeOrphans('agora-other')).toBe(1);
+            const { removed, failed } = await sandbox.removeRunContainers([other]);
+            expect(removed).toBe(0);
+            expect(failed.map(f => f.name)).toEqual([other]);
+            expect(containerExists(other)).toBe(true);
         } finally {
-            await docker.getContainer(name).remove({ force: true }).catch(() => {});
+            hostDocker(['rm', '-f', other], { ignoreErrors: true });
         }
+    });
+
+    test('a name that is already gone is skipped', async () => {
+        expect(await sandbox.removeRunContainers([containerName(generateUlid(), INSTANCE)])).toEqual({ removed: 0, failed: [] });
     });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveLimits, timeProfileFor, DEFAULT_LIMITS, HARD_CEILINGS } from '../../src/runtime/limits';
 import { buildContainerSpec, chunkCode, capHostPort, containerName, gatewayHostEntry, MAX_CODE_BYTES } from '../../src/runtime/container-spec';
-import { demuxLogs } from '../../src/runtime/docker';
+import { demuxLogs, sandboxNetworkProblem, INHIBIT_IPV4 } from '../../src/runtime/docker';
 import { redact, statusFor, hashToken } from '../../src/runtime/runner';
 
 describe('limits', () => {
@@ -108,6 +108,8 @@ describe('container spec', () => {
     it('labels the run with its install, default "agora" (#209)', () => {
         expect(spec.Labels!['agora.instance']).toBe('agora');
         expect(buildContainerSpec({ ...base, instance: 'agora2' }).Labels!['agora.instance']).toBe('agora2');
+        // and its name, which the install's socket proxy holds it to (#126)
+        expect(buildContainerSpec({ ...base, instance: 'agora2' }).name).toBe('agora2-run-01jabcdefghjkmnpqrstvwxyz0');
     });
 
     it('passes only allowlisted env vars', () => {
@@ -230,5 +232,22 @@ describe('stripComments', () => {
         expect(out).not.toContain('trust me');
         expect(out).toContain('https://x.test');
         expect(out).toContain('run(u);');
+    });
+});
+
+describe('sandbox network preflight (spec §6.1)', () => {
+    it('accepts an internal bridge with inhibit_ipv4', () => {
+        expect(sandboxNetworkProblem({ Internal: true, Driver: 'bridge', Options: { [INHIBIT_IPV4]: 'true' } })).toBeNull();
+    });
+
+    it('refuses a network with a route out', () => {
+        expect(sandboxNetworkProblem({ Internal: false, Driver: 'bridge', Options: { [INHIBIT_IPV4]: 'true' } })).toContain('must be internal');
+    });
+
+    it('refuses an internal bridge where the host holds the gateway address', () => {
+        for (const Options of [null, {}, { [INHIBIT_IPV4]: 'false' }]) {
+            expect(sandboxNetworkProblem({ Internal: true, Driver: 'bridge', Options }), JSON.stringify(Options)).toContain('reach the host');
+        }
+        expect(sandboxNetworkProblem({ Internal: true, Options: {} })).toContain('install/sandbox-network.sh');
     });
 });

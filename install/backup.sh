@@ -118,7 +118,11 @@ while read -r c; do
         dk stop -t 30 "$c" >/dev/null || die "could not stop box container $c"
     fi
 done <<< "$boxes"
-for s in api runner cap-gateway; do if is_running "$s"; then stop_svc "$s" 30; fi; done
+# The runner finishes code runs in progress on SIGTERM (up to 10 minutes; stop_grace_period 11m),
+# and cap-gateway serves them until then
+if is_running api; then stop_svc api 30; fi
+if is_running runner; then stop_svc runner 660; fi
+if is_running cap-gateway; then stop_svc cap-gateway 30; fi
 
 # Quiet means quiet: none of the writers and no box may still run
 still=$(running_services "$DIR") || die "can't list this install's containers after stopping them"

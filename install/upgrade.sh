@@ -13,10 +13,13 @@
 #   2. backs up with the new release's backup.sh and that image, reading the old stack;
 #   3. moves the old release's files to .releases/<old version>-<time>/ and puts the new one in
 #      their place (so nothing of either release is left in the other);
-#   4. adds the settings the new release needs (AGORA_EDGE_SECRET, AGORA_BOX_VERSION), builds and
-#      starts it. boxd then rebuilds boxes on an older image one at a time.
-# --rollback moves the new release out the same way, puts the previous one back and restores
-# the backup taken before the upgrade.
+#   4. adds the settings the new release needs (AGORA_EDGE_SECRET, AGORA_BOX_VERSION), builds it;
+#   5. lets code runs in progress finish, recreates the sandbox network when the new release
+#      declares other settings for it (lib/sandbox-net.sh), and starts the new release.
+#      boxd then rebuilds boxes on an older image one at a time.
+# --rollback moves the new release out the same way, puts the previous one back, sets the
+# sandbox network back to what that release declares and restores the backup taken before the
+# upgrade.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -26,6 +29,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib/bundle.sh"
 # shellcheck source=lib/release.sh
 . "$HERE/lib/release.sh"
+# shellcheck source=lib/sandbox-net.sh
+. "$HERE/lib/sandbox-net.sh"
 
 SELF=$(cd "$HERE/.." && pwd)
 DIR='' SOURCE='' REF='' PASS_ARG='' ROLLBACK=0 NO_BACKUP=0
@@ -86,9 +91,13 @@ if [ "$ROLLBACK" = 1 ]; then
     [ -n "$prev" ] && [ -d "$prev" ] || die "the previous release ($prev) is gone"
     [ -n "$bundle" ] && [ -f "$bundle" ] || die "the backup taken before the upgrade (${bundle:-none}) is gone"
     cur="$DIR/.releases/$(tag_version "$OLD_VERSION")-rolled-back-$STAMP"
+    INST=$(env_get "$ENV" AGORA_INSTANCE); INST=${INST:-agora}
+    drain_code_runs "$DIR" "$INST"
     compose_in "$DIR" stop -t 60 >/dev/null || die "could not stop the stack"
     stash_release "$DIR" "$cur"
     place_release "$prev" "$DIR"
+    # Back to the sandbox network the previous release declares (restore.sh starts the stack)
+    prepare_sandbox_network "$DIR" "$INST"
     # The box image tag follows the release in the folder: box/Dockerfile refuses another BOX_VERSION
     if [ -f "$DIR/box/VERSION" ]; then env_set "$ENV" AGORA_BOX_VERSION "$(box_version "$DIR")"; fi
     ok "release $(agora_version "$DIR") is back in place (the newer one is in $cur)"
@@ -180,6 +189,13 @@ ok "AGORA_BOX_VERSION=$(box_version "$DIR")"
 
 step upgrade.build 'Building the new images'
 compose_in "$DIR" build
+
+step upgrade.drain 'Letting code runs in progress finish'
+INST=$(env_get "$ENV" AGORA_INSTANCE)
+drain_code_runs "$DIR" "$INST"
+
+step upgrade.network 'Checking the sandbox network'
+prepare_sandbox_network "$DIR" "$INST"
 
 step upgrade.start 'Starting the new release'
 compose_in "$DIR" up -d --remove-orphans

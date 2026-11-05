@@ -40,6 +40,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       relay: ${{ steps.filter.outputs.relay }}
       boxes: ${{ steps.filter.outputs.boxes }}
+      sandbox: ${{ steps.filter.outputs.sandbox }}
       install: ${{ steps.filter.outputs.install }}
       skills: ${{ steps.filter.outputs.skills }}
     steps:
@@ -103,6 +104,21 @@ jobs:
               - 'docker-compose.prod.yml'
               - 'Dockerfile'
               - 'vitest.box.config.ts'
+              - '.github/workflows/ci.yml'
+            # Code runs: the runner, its socket proxy rules, the sandbox network, the image and the
+            # gateway runs talk to (sandbox-isolation-spec §6, §14)
+            sandbox:
+              - 'src/runtime/**'
+              - 'src/runner-main.ts'
+              - 'src/gateway/**'
+              - 'src/gateway-main.ts'
+              - 'sandbox/**'
+              - 'test/sandbox/**'
+              - 'scripts/test-sandbox-gvisor.sh'
+              - 'scripts/lib/socket-proxy-rules.js'
+              - 'scripts/lib/engine-guard.sh'
+              - 'docker-compose.prod.yml'
+              - 'vitest.sandbox.config.ts'
               - '.github/workflows/ci.yml'
             skills:
               - '.claude/skills/**'
@@ -343,6 +359,25 @@ jobs:
       - run: bash scripts/test-boxes.sh
         env:
           BOXTEST_ALLOW_DAEMON_RESTART: '1'
+
+  # The code-run suites (test/sandbox: the runner, the negative security suite of
+  # sandbox-isolation-spec §14, the socket proxy between installs #126) on real gVisor containers.
+  sandbox:
+    name: Sandbox (code runs under gVisor)
+    needs: changes
+    if: needs.changes.outputs.sandbox == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -q && sudo apt-get install -yq runsc
+          sudo runsc install && sudo systemctl restart docker
+          docker run --rm --runtime=runsc alpine uname -r
+      - run: bash scripts/test-sandbox-gvisor.sh
 
   # The Linux installer on a fresh runner: installs gVisor, builds, starts, makes the admin and a
   # boxed agent (test image), checks it answers a mention and that the doctor is happy.

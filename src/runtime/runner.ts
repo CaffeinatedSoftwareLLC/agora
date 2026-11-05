@@ -235,6 +235,22 @@ export async function processRun(deps: RunnerDeps, runId: string): Promise<Proce
     return { kind: 'ran', status: final.status };
 }
 
+/**
+ * On startup, before reconcileInterruptedRuns: the run IDs whose containers may still exist.
+ * A run is 'running' before its container is created, so a crash leaves it in that state; a
+ * finished run whose removal failed has a container_id and a recent finished_at. The runner
+ * removes these by name, since it can't list containers (#126, removeRunContainers).
+ */
+export async function runContainerCandidates(db: Pool, lookbackHours = 24): Promise<string[]> {
+    const res = await db.query(
+        `SELECT id FROM exec_runs
+         WHERE status = 'running'
+            OR (container_id IS NOT NULL AND finished_at > NOW() - ($1 || ' hours')::interval)`,
+        [String(lookbackHours)]
+    );
+    return res.rows.map(r => String(r.id).trim());
+}
+
 /** On startup: runs left 'running' by a crashed runner can't be resumed. */
 export async function reconcileInterruptedRuns(db: Pool): Promise<number> {
     const res = await db.query(
