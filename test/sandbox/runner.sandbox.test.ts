@@ -20,6 +20,7 @@ const RUNTIME = (process.env.SANDBOX_TEST_RUNTIME as 'runsc' | 'runc') ?? 'runc'
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let serverId: string;
+let ownerId: string;
 let sandbox: SandboxDocker;
 let deps: RunnerDeps;
 let gateway: Awaited<ReturnType<typeof startGatewayHarness>>;
@@ -45,6 +46,7 @@ beforeAll(async () => {
     ctx = await setupTestApp();
     await cleanDatabase(ctx.db);
     const owner = await authedUser(ctx.request, 'sandboxowner');
+    ownerId = owner.userId;
     ({ serverId } = await createServer(ctx.request, owner.auth, 'Sandbox Server'));
 
     sandbox = new SandboxDocker(dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375'));
@@ -130,8 +132,9 @@ describe('running code', () => {
     test('pausing the submitting bot kills its running container (3.8)', async () => {
         const botId = generateUlid();
         await ctx.db.query(
-            `INSERT INTO users (id, username, bot, server_id) VALUES ($1, $2, true, $3)`,
-            [botId, `pausebot${botId.slice(-6).toLowerCase()}`, serverId]
+            // An active owner: since 43588e3 a bot without one is denied before it runs
+            `INSERT INTO users (id, username, bot, server_id, bot_owner_id) VALUES ($1, $2, true, $3, $4)`,
+            [botId, `pausebot${botId.slice(-6).toLowerCase()}`, serverId, ownerId]
         );
         const id = await insertRun('while (true) {}', { limits: { wallClockMs: 30_000 } });
         await ctx.db.query('UPDATE exec_runs SET submitted_by = $1 WHERE id = $2', [botId, id]);
