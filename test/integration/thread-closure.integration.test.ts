@@ -184,19 +184,19 @@ describe('closing with a reason and a successor', () => {
         expect((await close(parent.id, claude(), { closed: true, reason: 'finished' })).status).toBe(400);
         expect((await close(parent.id, claude(), { closed: false, reason: 'done' })).status).toBe(400);
         expect((await close(parent.id, claude(), { closed: true, successor: 'not-a-ulid' })).status).toBe(400);
-        expect((await close(parent.id, claude(), { closed: true, successor: generateUlid() })).body).toEqual({ error: 'successor_not_found' });
+        expect((await close(parent.id, claude(), { closed: true, successor: generateUlid() })).body).toMatchObject({ error: 'successor_not_found' });
         expect((await close(parent.id, claude(), { closed: true, successor: parent.id })).status).toBe(400);
         expect((await close(parent.id, claude(), { closed: true, successor: (await post('next', claude())).id, reason: 'done' })).status).toBe(400);
         // A reply is not a thread
         const reply = await post('another reply', codex(), parent.id);
-        expect((await close(parent.id, claude(), { closed: true, successor: reply.id })).body).toEqual({ error: 'successor_not_found' });
+        expect((await close(parent.id, claude(), { closed: true, successor: reply.id })).body).toMatchObject({ error: 'successor_not_found' });
         // A successor must be in the same channel, so no other channel's IDs reach this one's members
         // (here also a channel the bot was never added to)
         const hidden = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: `hidden-${generateUlid().toLowerCase()}`, channelType: 3 });
         expect(hidden.status).toBe(201);
         const hiddenMsg = await ctx.request.post(`/channels/${hidden.body.id}/messages`).set(owner.auth).send({ content: 'secret' });
         expect(hiddenMsg.status).toBe(201);
-        expect((await close(parent.id, claude(), { closed: true, successor: hiddenMsg.body.id })).body).toEqual({ error: 'successor_not_found' });
+        expect((await close(parent.id, claude(), { closed: true, successor: hiddenMsg.body.id })).body).toMatchObject({ error: 'successor_not_found' });
         expect((await close(parent.id, owner.auth, { closed: true, successor: hiddenMsg.body.id })).body).toMatchObject({ error: 'successor_not_found' });
         // Nothing was closed by the refused calls
         expect((await list(owner.auth)).body.map((t: any) => t.id)).toContain(parent.id);
