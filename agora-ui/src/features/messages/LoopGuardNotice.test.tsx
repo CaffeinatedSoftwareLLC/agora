@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ApiError, botApi, serverApi } from '../../lib/api';
 import type { ServerAccess } from '../../lib/contracts/server';
 import { useChannelStore } from '../../stores/channelStore';
+import { useAuthStore } from '../../stores/authStore';
+import { useMessageStore } from '../../stores/messageStore';
+import { useThreadStore } from '../../stores/threadStore';
 import type { Message } from '../../stores/messageStore';
 import { clearCanManageBotsCache } from '../../hooks/useCanManageBots';
 import { LoopGuardNotice } from './LoopGuardNotice';
@@ -26,6 +29,9 @@ const threadNotice = (extra: Partial<Message> = {}): Message => channelNotice({
 
 beforeEach(() => {
   clearCanManageBotsCache();
+  useAuthStore.setState({ user: { id: 'me', username: 'me' } });
+  useMessageStore.setState({ byChannel: new Map() });
+  useThreadStore.setState({ repliesByThread: new Map() });
   useChannelStore.setState({ channels: new Map([['ch', { id: 'ch', name: 'agents', channelType: 3, serverId: 'srv', maxBotHops: 4, maxThreadBotHops: 3 }]]) });
   vi.spyOn(botApi, 'resumeLoopGuard').mockResolvedValue({ messageId: 'r1', scope: 'channel', threadId: null, limit: 4 });
   vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (channelId, data) =>
@@ -90,6 +96,53 @@ describe('LoopGuardNotice', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('no longer have permission');
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+  });
+
+  it('drops its buttons once a later resume, guard notice or human post settles it', async () => {
+    vi.spyOn(serverApi, 'getAccess').mockResolvedValue(access(MANAGE_BOTS));
+    const notice = channelNotice({ id: '01J00000000000000000000001' });
+    render(<LoopGuardNotice message={notice} />);
+    await screen.findByRole('button', { name: 'Continue' });
+    // A bot post after it doesn't settle it; a resume notice does
+    act(() => useMessageStore.setState({ byChannel: new Map([['ch', [notice,
+      { ...notice, id: '01J00000000000000000000002', systemEvent: undefined, authorBot: true, content: 'still going' }]]]) }));
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+    act(() => useMessageStore.setState({ byChannel: new Map([['ch', [notice,
+      { ...notice, id: '01J00000000000000000000003', systemEvent: 'loop_guard_resume', content: 'Agents may continue' }]]]) }));
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('a thread notice is settled by a human reply in that thread', async () => {
+    vi.spyOn(serverApi, 'getAccess').mockResolvedValue(access(MANAGE_BOTS));
+    const notice = threadNotice({ id: '01J00000000000000000000001' });
+    render(<LoopGuardNotice message={notice} />);
+    await screen.findByRole('button', { name: 'Continue' });
+    act(() => useThreadStore.setState({ repliesByThread: new Map([['T1', [notice,
+      { ...notice, id: '01J00000000000000000000002', systemEvent: undefined, authorBot: false, content: 'carry on' }]]]) }));
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('after a saved raise whose resume failed, a retry only resumes', async () => {
+    vi.spyOn(serverApi, 'getAccess').mockResolvedValue(access(MANAGE_BOTS));
+    vi.mocked(botApi.resumeLoopGuard).mockRejectedValueOnce(new ApiError(500, 'internal'));
+    render(<LoopGuardNotice message={channelNotice()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Raise limit to 8' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The new limit is saved, but the agents were not told to continue: internal');
+    expect(screen.queryByRole('button', { name: /Raise limit/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText('Agents may continue.')).toBeInTheDocument();
+    expect(botApi.updateChannelBotConfig).toHaveBeenCalledTimes(1);
+    expect(botApi.resumeLoopGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks again for a different signed-in user', async () => {
+    const get = vi.spyOn(serverApi, 'getAccess').mockResolvedValueOnce(access(MANAGE_BOTS)).mockResolvedValueOnce(access('0'));
+    const { rerender } = render(<LoopGuardNotice message={channelNotice()} />);
+    await screen.findByRole('button', { name: 'Continue' });
+    act(() => useAuthStore.setState({ user: { id: 'someone-else', username: 'other' } }));
+    rerender(<LoopGuardNotice message={channelNotice()} />);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('button')).toBeNull());
   });
 });
 

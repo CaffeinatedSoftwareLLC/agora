@@ -1,8 +1,9 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import { Avatar } from '../../components/ui/Avatar';
 import { useServerStore } from '../../stores/serverStore';
+import { useChannelStore } from '../../stores/channelStore';
 import { botApi, serverApi, runtimeApi, ApiError } from '../../lib/api';
 import type { Bot, BotDetail, BotToken, RuntimeAccess } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
@@ -144,12 +145,20 @@ function BotList({
   onChanged: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const expandedIndex = expandedBotId ? bots.findIndex(b => b.id === expandedBotId) : -1;
+  // This component is not compiled by the React Compiler; the virtualizer is read during render only
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: bots.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 60,
     overscan: 8,
     getItemKey: index => bots[index].id,
+    // The open bot stays mounted while scrolled away, so its panel (a half-made token, an error) survives
+    rangeExtractor: range => {
+      const indexes = defaultRangeExtractor(range);
+      return expandedIndex < 0 || indexes.includes(expandedIndex) ? indexes : [...indexes, expandedIndex].sort((a, b) => a - b);
+    },
   });
 
   return (
@@ -194,13 +203,20 @@ const GUARD_DEFAULT: Limits = { maxBotHops: 4, maxThreadBotHops: 4 };
  */
 function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [values, setValues] = useState<Record<string, Limits>>({});
-  const [saving, setSaving] = useState<string | null>(null);
+  // Limits as loaded or last confirmed by a save here
+  const [loaded, setLoaded] = useState<Record<string, Limits>>({});
+  // Edits not yet confirmed by the server, by `${channelId}:${field}`
+  const [dirty, setDirty] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
-  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // A change made elsewhere (a notice's Raise limit or Turn off) arrives as ChannelBotConfig
+  const live = useChannelStore(s => s.channels);
+  const pending = useRef<Record<string, { timer: ReturnType<typeof setTimeout>; value: number }>>({});
+  // Saves of one field go out one at a time, in order, so the last change made wins
+  const queues = useRef<Record<string, Promise<void>>>({});
   // The last limit above 0, restored when a guard is switched back on
   const lastOn = useRef<Record<string, number>>({});
-  const requestSeq = useRef<Record<string, number>>({});
+  const mounted = useRef(true);
 
   useEffect(() => {
     serverApi.getChannels(serverId).then((chs) => {
@@ -210,56 +226,87 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
       for (const ch of textChannels) {
         initial[ch.id] = { maxBotHops: ch.maxBotHops ?? 4, maxThreadBotHops: ch.maxThreadBotHops ?? 0 };
       }
-      setValues(initial);
+      setLoaded(initial);
     }).catch(() => setError('Failed to load channels'));
   }, [serverId]);
 
-  // Clear pending debounced saves on unmount
+  // Leaving the page sends a change still waiting out its debounce instead of dropping it
   useEffect(() => {
-    const timers = debounceTimers.current;
-    return () => { for (const t of Object.values(timers)) clearTimeout(t); };
+    mounted.current = true;
+    const waiting = pending.current;
+    return () => {
+      mounted.current = false;
+      for (const [key, p] of Object.entries(waiting)) {
+        clearTimeout(p.timer);
+        delete waiting[key];
+        const [channelId, field] = key.split(':') as [string, GuardField];
+        void botApi.updateChannelBotConfig(channelId, { [field]: p.value })
+          .then(({ maxBotHops, maxThreadBotHops }) => useChannelStore.getState().patchChannel(channelId, { maxBotHops, maxThreadBotHops }))
+          .catch(() => {});
+      }
+    };
   }, []);
 
-  function set(channelId: string, field: GuardField, value: number, delay: number) {
-    const prev = values[channelId]?.[field];
-    if (prev && prev > 0) lastOn.current[`${channelId}:${field}`] = prev;
-    setValues(v => ({ ...v, [channelId]: { ...(v[channelId] ?? GUARD_DEFAULT), [field]: value } }));
+  const shown = (channelId: string, field: GuardField): number => {
     const key = `${channelId}:${field}`;
-    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key]);
-    debounceTimers.current[key] = setTimeout(() => { void save(channelId, field, value); }, delay);
+    return dirty[key] ?? live.get(channelId)?.[field] ?? loaded[channelId]?.[field] ?? GUARD_DEFAULT[field];
+  };
+
+  function change(channelId: string, field: GuardField, value: number, delay: number) {
+    const key = `${channelId}:${field}`;
+    const prev = shown(channelId, field);
+    if (prev > 0) lastOn.current[key] = prev;
+    setDirty(d => ({ ...d, [key]: value }));
+    if (pending.current[key]) clearTimeout(pending.current[key].timer);
+    const timer = setTimeout(() => {
+      delete pending.current[key];
+      queues.current[key] = (queues.current[key] ?? Promise.resolve()).then(() => save(channelId, field, value));
+    }, delay);
+    pending.current[key] = { timer, value };
   }
 
   function handleNumber(channelId: string, field: GuardField, raw: string) {
     const num = parseInt(raw, 10);
     // 0 would be "off": that is the switch's job, so the box keeps a limit while typing
     if (isNaN(num) || num < 1 || num > 1000) return;
-    set(channelId, field, num, 600);
+    change(channelId, field, num, 600);
   }
 
   function handleToggle(channelId: string, field: GuardField, on: boolean) {
     const restore = lastOn.current[`${channelId}:${field}`] ?? GUARD_DEFAULT[field];
-    set(channelId, field, on ? restore : 0, 0);
+    change(channelId, field, on ? restore : 0, 0);
   }
 
   async function save(channelId: string, field: GuardField, value: number) {
     const key = `${channelId}:${field}`;
-    const seq = (requestSeq.current[key] ?? 0) + 1;
-    requestSeq.current[key] = seq;
-    setSaving(key);
-    setError('');
+    if (mounted.current) { setSaving(s => ({ ...s, [key]: true })); setError(''); }
+    // Only the latest edit clears the dirty value; an older save finishing must not
+    const settle = (d: Record<string, number>) => {
+      if (d[key] !== value || pending.current[key]) return d;
+      const next = { ...d };
+      delete next[key];
+      return next;
+    };
     try {
-      await botApi.updateChannelBotConfig(channelId, { [field]: value });
+      const config = await botApi.updateChannelBotConfig(channelId, { [field]: value });
+      useChannelStore.getState().patchChannel(channelId, { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops });
+      if (!mounted.current) return;
+      setLoaded(l => ({ ...l, [channelId]: { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops } }));
+      setDirty(settle);
     } catch (err) {
-      if (requestSeq.current[key] === seq) setError(err instanceof ApiError ? err.code : 'Failed to save');
+      if (!mounted.current) return;
+      // Show what the server still has, not the value that failed
+      setDirty(settle);
+      setError(err instanceof ApiError ? err.code : 'Failed to save');
     } finally {
-      if (requestSeq.current[key] === seq) setSaving(s => (s === key ? null : s));
+      if (mounted.current) setSaving(s => ({ ...s, [key]: false }));
     }
   }
 
   if (channels.length === 0) return null;
 
   const guard = (ch: Channel, field: GuardField, label: string, unit: string) => {
-    const value = values[ch.id]?.[field] ?? 0;
+    const value = shown(ch.id, field);
     const on = value > 0;
     const key = `${ch.id}:${field}`;
     return (
@@ -289,7 +336,7 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
         ) : (
           <span className="w-16 text-text-muted text-xs">Off</span>
         )}
-        <span className="w-12 text-text-muted text-xs" aria-live="polite">{saving === key ? 'Saving…' : ''}</span>
+        <span className="w-12 text-text-muted text-xs" aria-live="polite">{saving[key] ? 'Saving…' : ''}</span>
       </div>
     );
   };

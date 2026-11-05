@@ -1,6 +1,18 @@
 import type { Message } from '../../stores/messageStore';
 import type { Channel } from '../../lib/contracts/server';
 
+type Later = Pick<Message, 'id' | 'systemEvent' | 'authorBot' | 'deletedAt' | 'pending'>;
+
+/**
+ * Whether something after this loop guard notice already unblocked its scope (the channel's
+ * top-level feed or one thread's replies): a later guard or resume notice, or a human post,
+ * which resets the counter. Only the notice still in force keeps its buttons. ULIDs sort by time.
+ */
+export function loopGuardSettled(later: readonly Later[] | undefined, noticeId: string): boolean {
+  return !!later?.some(m => m.id > noticeId && !m.pending && !m.deletedAt && (
+    m.systemEvent === 'loop_guard' || m.systemEvent === 'loop_guard_resume' || (!m.systemEvent && !m.authorBot)));
+}
+
 // Loop guard helpers shared by the notice (LoopGuardNotice) and the header badge (LoopGuardBadge).
 
 /** What a loop_guard notice is about. Older notices have no systemData: read the text. */

@@ -243,7 +243,7 @@ export async function serverRoutes(app: FastifyInstance) {
             );
 
             const channelsResult = await db.query(
-                'SELECT id, name, channel_type FROM channels WHERE server_id = $1 ORDER BY position',
+                'SELECT id, name, channel_type, max_bot_hops, max_thread_bot_hops FROM channels WHERE server_id = $1 ORDER BY position',
                 [serverId]
             );
 
@@ -258,6 +258,8 @@ export async function serverRoutes(app: FastifyInstance) {
                 name: c.name,
                 channelType: c.channel_type,
                 serverId: serverId.trim(),
+                maxBotHops: c.max_bot_hops ?? 4,
+                maxThreadBotHops: c.max_thread_bot_hops ?? 0,
             }));
 
             request.pendingEvents = request.pendingEvents || [];

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import type { Message } from '../../stores/messageStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { useMessageStore } from '../../stores/messageStore';
+import { useThreadStore } from '../../stores/threadStore';
 import { useCanManageBots } from '../../hooks/useCanManageBots';
 import { botApi, ApiError } from '../../lib/api';
 import { NoticeText } from './SystemNoticeRun';
-import { loopGuardScope } from './loopGuard';
+import { loopGuardScope, loopGuardSettled } from './loopGuard';
 
 const MAX_LIMIT = 1000;
 const DEFAULT_CHANNEL_LIMIT = 4;
@@ -23,6 +25,11 @@ export function LoopGuardNotice({ message, channelId }: { message: Message; chan
   const [busy, setBusy] = useState<Busy>(null);
   const [done, setDone] = useState('');
   const [error, setError] = useState('');
+  // The limit was saved but the resume failed: a retry only resumes, it doesn't raise again
+  const [configured, setConfigured] = useState(false);
+  const settledInChannel = useMessageStore(s => scope === 'channel' && loopGuardSettled(s.byChannel.get(id), message.id));
+  const settledInThread = useThreadStore(s => scope === 'thread' && !!threadId && loopGuardSettled(s.repliesByThread.get(threadId), message.id));
+  const settled = settledInChannel || settledInThread;
 
   const current = scope === 'thread' ? channel?.maxThreadBotHops ?? 0 : channel?.maxBotHops ?? DEFAULT_CHANNEL_LIMIT;
   const raiseTo = Math.min(MAX_LIMIT, Math.max(current, firedAt ?? 0, 1) * 2);
@@ -33,18 +40,22 @@ export function LoopGuardNotice({ message, channelId }: { message: Message; chan
   async function act(kind: Exclude<Busy, null>) {
     setBusy(kind);
     setError('');
+    let saved = false;
     try {
       if (kind !== 'continue') {
         const value = kind === 'raise' ? raiseTo : 0;
         const config = await botApi.updateChannelBotConfig(id, { [field]: value });
         useChannelStore.getState().patchChannel(id, { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops });
+        saved = true;
+        setConfigured(true);
       }
       if (canResume) await botApi.resumeLoopGuard(id, scope === 'thread' ? threadId ?? undefined : undefined);
       setDone(kind === 'continue' ? 'Agents may continue.'
         : kind === 'raise' ? `Limit raised to ${raiseTo}.${canResume ? ' Agents may continue.' : ''}`
         : `Loop guard off ${scope === 'thread' ? 'for threads in this channel' : 'in this channel'}.${canResume ? ' Agents may continue.' : ''}`);
     } catch (err) {
-      setError(err instanceof ApiError ? (err.status === 403 ? 'You no longer have permission to change the loop guard.' : err.code) : 'Could not update the loop guard');
+      const reason = err instanceof ApiError ? (err.status === 403 ? 'You no longer have permission to change the loop guard.' : err.code) : 'Could not update the loop guard';
+      setError(saved ? `The new limit is saved, but the agents were not told to continue: ${reason}` : reason);
     } finally {
       setBusy(null);
     }
@@ -59,7 +70,15 @@ export function LoopGuardNotice({ message, channelId }: { message: Message; chan
         </svg>
         <NoticeText text={message.content} className="text-[13px] leading-5 text-text-muted" />
       </div>
-      {canManage && !done && (
+      {canManage && !done && !settled && configured && canResume && (
+        <div role="group" aria-label="Loop guard actions" className="flex flex-wrap justify-center gap-2">
+          <button type="button" className={button} disabled={busy !== null} onClick={() => act('continue')}
+            title="The new limit is saved; tell the agents they may carry on">
+            {busy === 'continue' ? 'Continuing…' : 'Continue'}
+          </button>
+        </div>
+      )}
+      {canManage && !done && !settled && !configured && (
         <div role="group" aria-label="Loop guard actions" className="flex flex-wrap justify-center gap-2">
           {canResume && (
             <button type="button" className={button} disabled={busy !== null} onClick={() => act('continue')}

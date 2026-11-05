@@ -775,8 +775,9 @@ export async function botRoutes(app: FastifyInstance) {
         preHandler: [requireManageBotsForChannelConfig],
         schema: {
             params: { type: 'object', required: ['id'], properties: { id: { type: 'string', pattern: ULID_PATTERN } } },
+            // No body at all (Fastify passes null) means the channel guard
             body: {
-                type: 'object',
+                type: ['object', 'null'],
                 additionalProperties: false,
                 properties: { threadId: { type: 'string', pattern: ULID_PATTERN } },
             },
@@ -787,7 +788,8 @@ export async function botRoutes(app: FastifyInstance) {
         const userId = request.userId;
         const db = request.dbClient!;
 
-        const view = await checkChannelPermissions(db, channelId, userId, Permissions.ViewChannel);
+        // Channel overrides count too: ManageBots denied here, or the channel hidden, refuses
+        const view = await checkChannelPermissions(db, channelId, userId, Permissions.ViewChannel | Permissions.ManageBots);
         if (!view.allowed) return reply.status(view.status!).send({ error: view.error });
 
         if (threadId) {

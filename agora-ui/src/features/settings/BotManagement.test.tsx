@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { botApi, serverApi } from '../../lib/api';
+import { ApiError, botApi, serverApi } from '../../lib/api';
 import type { Bot, BotDetail } from '../../lib/api';
 import { useServerStore } from '../../stores/serverStore';
+import { useChannelStore } from '../../stores/channelStore';
 import { BotManagement } from './BotManagement';
 
 vi.hoisted(() => {
@@ -20,7 +21,8 @@ vi.mock('@tanstack/react-virtual', async importOriginal => {
   return { ...actual, useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => actual.useVirtualizer({
     ...options, initialRect: { width: 800, height: 600 },
     observeElementRect: (_instance, callback) => { callback({ width: 800, height: 600 }); return () => {}; },
-    observeElementOffset: (_instance, callback) => { callback(0, false); return () => {}; },
+    // Tests scroll by calling the latest offset callback
+    observeElementOffset: (_instance, callback) => { (globalThis as { scrollBots?: (o: number, s: boolean) => void }).scrollBots = callback; callback(0, false); return () => {}; },
     scrollToFn: () => {},
     measureElement: () => 60,
   }) };
@@ -132,4 +134,73 @@ test('Loop Guard shows both limits per channel with on/off switches (#23)', asyn
   expect(channelSwitch).not.toBeChecked();
   fireEvent.click(channelSwitch);
   await waitFor(() => expect(patch).toHaveBeenLastCalledWith('C1', { maxBotHops: 9 }));
+});
+
+test('the open bot stays mounted when its row scrolls out of view', async () => {
+  render(<MemoryRouter><BotManagement /></MemoryRouter>);
+  await screen.findByText('bot-1999');
+  fireEvent.click(screen.getByText('bot-1995'));
+  await screen.findByText('Delete Bot');
+  const scroll = (globalThis as { scrollBots?: (o: number, s: boolean) => void }).scrollBots!;
+  act(() => scroll(60 * 1000, true));
+  expect(await screen.findByText('bot-999')).toBeInTheDocument();
+  expect(screen.getByText('bot-1995')).toBeInTheDocument();
+  expect(screen.getByText('Delete Bot')).toBeInTheDocument();
+  expect(screen.queryByText('bot-1990')).toBeNull();
+});
+
+describe('Loop Guard saves', () => {
+  const agents = { id: 'C1', name: 'agents', channelType: 3, serverId: 'server', maxBotHops: 4, maxThreadBotHops: 0 };
+  const limit = () => screen.getByLabelText('Channel limit in #agents (bot messages)');
+  beforeEach(() => {
+    vi.mocked(serverApi.getChannels).mockResolvedValue([agents]);
+    useChannelStore.setState({ channels: new Map([['C1', agents]]) });
+  });
+
+  it('sends a change still in its debounce when the page closes', async () => {
+    const patch = vi.spyOn(botApi, 'updateChannelBotConfig').mockResolvedValue({ channelId: 'C1', maxBotHops: 7, maxThreadBotHops: 0 });
+    const { unmount } = render(<MemoryRouter><BotManagement /></MemoryRouter>);
+    await screen.findByLabelText('Channel limit in #agents (bot messages)');
+    fireEvent.change(limit(), { target: { value: '7' } });
+    unmount();
+    expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 7 });
+    await waitFor(() => expect(useChannelStore.getState().channels.get('C1')?.maxBotHops).toBe(7));
+  });
+
+  it('shows the saved value again when a save fails', async () => {
+    vi.spyOn(botApi, 'updateChannelBotConfig').mockRejectedValue(new ApiError(403, 'Missing ManageBots permission'));
+    render(<MemoryRouter><BotManagement /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('switch', { name: 'Channel loop guard in #agents' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Missing ManageBots permission');
+    expect(screen.getByRole('switch', { name: 'Channel loop guard in #agents' })).toBeChecked();
+    expect(limit()).toHaveValue(4);
+  });
+
+  it('follows a change made elsewhere, such as Raise limit on a notice', async () => {
+    render(<MemoryRouter><BotManagement /></MemoryRouter>);
+    await screen.findByLabelText('Channel limit in #agents (bot messages)');
+    act(() => useChannelStore.getState().patchChannel('C1', { maxBotHops: 8, maxThreadBotHops: 2 }));
+    expect(limit()).toHaveValue(8);
+    expect(screen.getByRole('switch', { name: 'Threads loop guard in #agents' })).toBeChecked();
+  });
+
+  it('sends saves of one field in order, one at a time', async () => {
+    const calls: number[] = [];
+    let release: (() => void) | undefined;
+    vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (_c, data) => {
+      calls.push(data.maxBotHops!);
+      if (calls.length === 1) await new Promise<void>(r => { release = r; });
+      return { channelId: 'C1', maxBotHops: data.maxBotHops!, maxThreadBotHops: 0 };
+    });
+    render(<MemoryRouter><BotManagement /></MemoryRouter>);
+    const sw = await screen.findByRole('switch', { name: 'Channel loop guard in #agents' });
+    fireEvent.click(sw); // off
+    await waitFor(() => expect(calls).toEqual([0]));
+    fireEvent.click(sw); // back on while the first save is still out
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(calls).toEqual([0]);
+    release!();
+    await waitFor(() => expect(calls).toEqual([0, 4]));
+    expect(sw).toBeChecked();
+  });
 });

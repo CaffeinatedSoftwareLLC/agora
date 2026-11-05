@@ -123,7 +123,8 @@ describe('POST /channels/:id/loop-guard/resume (channel)', () => {
 
     test('validates the body', async () => {
         expect((await resume(owner.auth, { threadId: 'nope' })).status).toBe(400);
-        expect((await resume(owner.auth, { threadId: ULID_ZERO, extra: true })).status).toBe(400);
+        expect((await resume(owner.auth, { threadId: 12345 })).status).toBe(400);
+        expect((await resume(owner.auth, [])).status).toBe(400);
         expect((await ctx.request.post('/channels/not-a-ulid/loop-guard/resume').set(owner.auth).send({})).status).toBe(400);
     });
 });
