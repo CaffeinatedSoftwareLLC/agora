@@ -12,6 +12,13 @@ export function loadSeed(): Seed {
 
 type Fixtures = {
     seed: Seed;
+    /**
+     * The run tag plus this test's repeat (and retry): `<runTag>-r<repeat>[-t<retry>]`. Use it
+     * for anything a test creates by name in a shared channel or account (titles, message
+     * text, key names), so `--repeat-each` and retries don't meet the earlier copy (#150).
+     * Names of the run's seeded channels and agents stay on `seed.runTag`.
+     */
+    tag: string;
     consoleErrors: string[];
     /** Secrets this test shows on screen; see lib/sensitive.ts. */
     sensitive: Sensitive;
@@ -27,6 +34,9 @@ type Fixtures = {
 export const test = base.extend<Fixtures>({
     storageState: async ({}, use) => { await use(storageStatePath('owner')); },
     seed: async ({}, use) => { await use(loadSeed()); },
+    tag: async ({ seed }, use, testInfo) => {
+        await use(`${seed.runTag}-r${testInfo.repeatEachIndex}${testInfo.retry ? `-t${testInfo.retry}` : ''}`);
+    },
     consoleErrors: async ({ page }, use) => {
         const errs: string[] = [];
         page.on('console', m => { if (m.type() === 'error') errs.push(m.text().slice(0, 500)); });

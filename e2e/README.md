@@ -46,6 +46,13 @@ MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash e2e/down.sh agora-e2e
 Reruns against the same instance are fine: the first run performs instance setup; later runs log in
 with the same passwords and create their own run-tagged channels and agents.
 
+Repeats within one run work too: `npx playwright test --grep @smoke --repeat-each 3` measures the
+flake rate. A test that creates something by name in a shared channel or account (a canvas title,
+a thread root, a card, a passkey) names it with the `tag` fixture (`<runTag>-r<repeat>`, plus
+`-t<retry>` on a retry), not `seed.runTag`, so a repeat never finds the copy an earlier repeat
+left. `seed.runTag` stays for the run's seeded channels and agents (`agents-<runTag>`). A test
+that changes state a repeat would find (a pending ChatGPT plan request) resets it first.
+
 ## What a run produces
 
 `artifacts/<run-id>/` (gitignored):

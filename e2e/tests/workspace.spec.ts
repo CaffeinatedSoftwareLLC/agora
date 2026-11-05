@@ -2,7 +2,7 @@ import { test, expect, apis, openChannel, storageStateFor } from '../lib/fixture
 import { snap } from '../lib/snap';
 
 test.describe('task board and project context @smoke', () => {
-    test('[UI-06.task-crud] create, edit, move and delete a card from the task board', async ({ page, seed }, ti) => {
+    test('[UI-06.task-crud] create, edit, move and delete a card from the task board', async ({ page, seed, tag }, ti) => {
         const { owner } = apis(seed);
         const ch = seed.channels.agents, name = `agents-${seed.runTag}`;
         await openChannel(page, ch, name);
@@ -10,7 +10,7 @@ test.describe('task board and project context @smoke', () => {
         const pane = page.locator('aside[aria-label="tasks"]');
         await expect(pane.getByRole('heading', { name: 'Tasks' })).toBeVisible();
 
-        const title = `E2E card ${seed.runTag}`;
+        const title = `E2E card ${tag}`;
         await pane.getByRole('button', { name: 'New card' }).click();
         await pane.getByLabel('Card title').fill(title);
         await pane.getByLabel('Card description').fill('Lorem ipsum task for the harness.');
@@ -45,14 +45,15 @@ test.describe('task board and project context @smoke', () => {
         await expect(pane.getByRole('button', { name: new RegExp(`${title} edited`) })).toHaveCount(0);
     });
 
-    test('[UI-06.project-pin] owner saves project instructions; member can read but not edit', async ({ page, browser, seed }, ti) => {
+    test('[UI-06.project-pin] owner saves project instructions; member can read but not edit', async ({ page, browser, seed, tag }, ti) => {
         const { owner } = apis(seed);
         const ch = seed.channels.agents, name = `agents-${seed.runTag}`;
         await openChannel(page, ch, name);
         await page.getByRole('button', { name: 'Project context for agents' }).click();
         const pane = page.locator('aside[aria-label="project"]');
         await expect(pane.getByRole('heading', { name: 'Instructions' })).toBeVisible();
-        const text = `Use the e2e fixtures only. Run ${seed.runTag}.`;
+        // A new text per repeat: saving the same text again leaves Save disabled
+        const text = `Use the e2e fixtures only. Run ${tag}.`;
         await pane.getByLabel('Project instructions').fill(text);
         await pane.getByRole('button', { name: 'Save instructions' }).click();
         await expect(page.getByText('Instructions saved. Agents get them on their next wake.')).toBeVisible();

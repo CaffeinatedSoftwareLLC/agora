@@ -4,7 +4,7 @@ import { snap } from '../lib/snap';
 test.describe('passkeys @smoke', () => {
     test.use({ storageState: { cookies: [], origins: [] } });
 
-    test('[ID-03.passkey] add a passkey with a virtual authenticator, sign in with it, remove it', async ({ page, browserName, seed }, ti) => {
+    test('[ID-03.passkey] add a passkey with a virtual authenticator, sign in with it, remove it', async ({ page, browserName, seed, tag }, ti) => {
         test.skip(browserName !== 'chromium', 'not_applicable: virtual authenticator needs Chromium CDP');
         const cdp = await page.context().newCDPSession(page);
         await cdp.send('WebAuthn.enable');
@@ -21,7 +21,7 @@ test.describe('passkeys @smoke', () => {
 
         await page.goto('/account');
         await expect(page.getByRole('heading', { name: 'Passkeys' })).toBeVisible();
-        const keyName = `E2E key ${seed.runTag}`;
+        const keyName = `E2E key ${tag}`;
         await page.getByLabel('Passkey name').fill(keyName);
         await page.getByRole('button', { name: 'Add a passkey' }).click();
         const item = page.getByRole('list', { name: 'Your passkeys' }).getByRole('listitem').filter({ hasText: keyName });

@@ -15,7 +15,7 @@ fetch('${CANARY}').then(r => r.text()).then(t => out('fetch', t === 'canary-ok' 
 </script></body></html>`;
 
 test.describe('canvas @smoke', () => {
-    test('[UI-05.canvas-render] a bot-published HTML artifact renders in a sandboxed pane, network off by default', async ({ page, seed }, ti) => {
+    test('[UI-05.canvas-render] a bot-published HTML artifact renders in a sandboxed pane, network off by default', async ({ page, seed, tag }, ti) => {
         const { bot } = apis(seed);
         const hits: string[] = [];
         await page.route(`${CANARY}*`, route => {
@@ -23,7 +23,7 @@ test.describe('canvas @smoke', () => {
             return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': 'text/plain' }, body: 'canary-ok' });
         });
         const ch = seed.channels.agents, name = `agents-${seed.runTag}`;
-        const title = `E2E canvas ${seed.runTag}`;
+        const title = `E2E canvas ${tag}`;
         await bot.ok('POST', `/channels/${ch}/messages`, { content: 'Published a canvas page.', artifact: { title, kind: 'html', content: PAGE } }, [201]);
         await openChannel(page, ch, name);
         const open = page.getByRole('button', { name: `Open ${title} in the canvas` });
