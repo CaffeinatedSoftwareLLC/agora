@@ -17,7 +17,7 @@ import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
 import { sessionPorts } from './preview.js';
 import { probeAcp, SESSION_ID, type AcpPlan } from './acp/session.js';
 import { geminiPolicy } from './acp/permissions.js';
-import { inBox, proxyVars } from './box.js';
+import { CLAUDE_BOX_QUIET, CODEX_BOX_QUIET, inBox, proxyVars } from './box.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -131,7 +131,7 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
         Object.assign(env, proxyVars(source));
         // In a box only the allowlisted hosts answer: no telemetry, error reports or update checks
         // to be blocked (each would be an approval card), and the CLI is pinned in the image anyway
-        if (profile.adapter === 'claude') Object.assign(env, { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' });
+        if (profile.adapter === 'claude') Object.assign(env, CLAUDE_BOX_QUIET);
     }
     return env;
 }
@@ -274,7 +274,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 // output schema go over JSON-RPC (siwc/appserver.ts)
                 // "on-request": Codex asks before anything outside its sandbox, and the host
                 // answers from the rules or a tool-request card (siwc/approvals.ts, #93)
-                args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS,
+                args = ['app-server', '--listen', 'stdio://', ...PROVIDER_ARGS, ...(yeet ? CODEX_BOX_QUIET : []),
                     '-c', 'approval_policy="on-request"', '-c', `mcp_servers=${mcp}`,
                     ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                     ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
@@ -292,7 +292,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             // Box mode (box.ts, docs/agent-boxes.md §8.1): the box is the sandbox, so Codex runs
             // with its own sandbox and approvals off. Presets don't apply inside a box; web search
             // stays off because a box has no open web (§4.2). Never on a machine.
-            const policy = yeet ? ['--dangerously-bypass-approvals-and-sandbox', '-c', `mcp_servers=${mcp}`, '-c', 'web_search="disabled"']
+            const policy = yeet ? ['--dangerously-bypass-approvals-and-sandbox', '-c', `mcp_servers=${mcp}`, '-c', 'web_search="disabled"', ...CODEX_BOX_QUIET]
                 : ['-s', perms.codex.sandbox, '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
                     ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                     ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),

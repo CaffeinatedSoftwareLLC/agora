@@ -114,7 +114,7 @@ describe.skipIf(!unix)('box login relay (fake CLIs)', () => {
         expect(reports[1]).toEqual({ status: 'succeeded' });
         expect(existsSync(join(state, '.fake-login'))).toBe(true);
         const call = JSON.parse(await readFile(join(state, '.fake-last-call.json'), 'utf8'));
-        expect(call.args).toEqual(['login', '--device-auth']);
+        expect(call.args).toEqual(['-c', 'analytics.enabled=false', '-c', 'feedback.enabled=false', '-c', 'check_for_update_on_startup=false', 'login', '--device-auth']);
         expect(call.envNames).toContain('CODEX_HOME');
         for (const secret of ['AGORA_HOST_TOKEN', 'AGORA_BOT_TOKEN']) expect(call.envNames).not.toContain(secret);
         expect(logs).toEqual(['box_login_started', 'box_login_succeeded']); onlyCodes(logs);

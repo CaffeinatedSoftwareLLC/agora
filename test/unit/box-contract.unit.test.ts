@@ -34,7 +34,7 @@ describe('allowlist', () => {
         expect(defaultAllowlist('claude')).toEqual(['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'console.anthropic.com',
             'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
         // auth.openai.com signs in, chatgpt.com/backend-api serves a ChatGPT-plan Codex, api.openai.com an API key
-        expect(defaultAllowlist('codex')).toEqual(['api.openai.com', 'chatgpt.com', 'auth.openai.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        expect(defaultAllowlist('codex')).toEqual(['api.openai.com', 'chatgpt.com', 'auth.openai.com', '*.oaiusercontent.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
         expect(defaultAllowlist('codex')).not.toContain('github.com');
         expect(defaultAllowlist('unknown')).toEqual(['registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
     });

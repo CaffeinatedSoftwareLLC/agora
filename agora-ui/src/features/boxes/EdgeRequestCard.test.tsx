@@ -57,6 +57,19 @@ describe('edge request card', () => {
     await waitFor(() => expect(buttons()).toEqual(['Allow', 'Deny']));
   });
 
+  it('offers the wildcard the server picked on a domain card, and sends only the decision', async () => {
+    render(<EdgeRequestCard message={card('pending', { kind: 'domain', summary: 'reach `sdmntprwestus.oaiusercontent.com`', canAlways: false, wildcard: '*.oaiusercontent.com' })} />);
+    await waitFor(() => expect(buttons()).toEqual(['Allow', 'Allow *.oaiusercontent.com', 'Deny']));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow *.oaiusercontent.com' }));
+    // The entry itself is never sent: the server recomputes it from the stored host
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/box-edge-requests/${REQ}`, { decision: 'wildcard' }));
+  });
+
+  it('has no wildcard button when the server offers none', async () => {
+    render(<EdgeRequestCard message={card('pending', { kind: 'domain', summary: 'reach `example.com`', canAlways: false, wildcard: null })} />);
+    await waitFor(() => expect(buttons()).toEqual(['Allow', 'Deny']));
+  });
+
   it.each(['dir', 'member'])('shows no buttons to a non-owner (%s)', async who => {
     viewAs(who);
     render(<EdgeRequestCard message={card('pending')} />);

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import type { Config, LocalProfile } from './config.js';
 import { childEnv } from './adapters.js';
-import { inBox } from './box.js';
+import { CODEX_BOX_QUIET, inBox } from './box.js';
 import { errorCode, fatalAuth, HttpError } from './client.js';
 import { killTree } from './process.js';
 import type { BoxLoginReport, BoxLoginRequest, HostApi } from './types.js';
@@ -14,7 +14,8 @@ import type { BoxLoginReport, BoxLoginRequest, HostApi } from './types.js';
  * the code the owner pastes back. The URL, the codes and the CLI's output are never logged.
  */
 
-const CLI_ARGS = { codex: ['login', '--device-auth'], claude: ['auth', 'login', '--claudeai'] } as const;
+// A box login: Codex's non-essential traffic is off for it too (box.ts)
+const CLI_ARGS = { codex: [...CODEX_BOX_QUIET, 'login', '--device-auth'], claude: ['auth', 'login', '--claudeai'] } as const;
 /** Where each CLI's sign-in page may be; anything else in its output is not relayed. */
 const LOGIN_HOSTS = { codex: ['openai.com', 'chatgpt.com'], claude: ['claude.ai', 'claude.com', 'anthropic.com'] } as const;
 const MAX_OUTPUT = 64 * 1024;

@@ -47,9 +47,11 @@ export const PROVIDER_DOMAINS: Record<string, string[]> = {
     // Checked against the pinned CLIs' binaries (2026-11-04): claude 2.1.x calls the API at
     // api.anthropic.com and exchanges its login code at platform.claude.com/v1/oauth/token; codex
     // 0.163 signs in at auth.openai.com and talks to chatgpt.com/backend-api and api.openai.com.
-    // Telemetry hosts are left out: the box turns the CLIs' non-essential traffic off.
+    // Codex also fetches content from regional *.oaiusercontent.com hosts on its first start
+    // (seen live 2026-11-04: three regions, one card each). Telemetry hosts are left out and
+    // refused without a card (domains.ts): the box also turns the CLIs' non-essential traffic off.
     claude: ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'console.anthropic.com'],
-    codex: ['api.openai.com', 'chatgpt.com', 'auth.openai.com'],
+    codex: ['api.openai.com', 'chatgpt.com', 'auth.openai.com', '*.oaiusercontent.com'],
     gemini: ['generativelanguage.googleapis.com'],
     opencode: ['openrouter.ai'],
 };

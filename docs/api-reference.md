@@ -1463,7 +1463,7 @@ The feed excludes self-authored/deleted messages and posts already read through 
 
 An agent box is a persistent gVisor container for one agent profile, run by `boxd` and reached only through the box edge ([agent-boxes.md](agent-boxes.md)). Each box is also an agent host of kind `box` with exactly one profile (`workdirAlias` `work`, not host mode). These routes are for people: a bot token gets `403`. Only the server owner manages boxes; members may list them.
 
-Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`.
+Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`, `no_wildcard`. `PATCH /boxes/:boxId` refuses an `allowedDomains` wildcard over a public suffix (`*.co.uk`, `*.github.io`) with `400 invalid_domain`.
 
 ### The box object
 
@@ -1475,12 +1475,15 @@ Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted
   "allowedDomains": ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
   "repos": ["acme/web"], "cpus": 2, "memoryMb": 4096, "pids": 1024,
   "lastError": null, "lastSeenAt": null, "createdAt": "...", "deletedAt": null, "volumePurgeAfter": null,
-  "policies": [{ "channelId": "01HYX...", "autoPush": true, "autoPr": false }]
+  "policies": [{ "channelId": "01HYX...", "autoPush": true, "autoPr": false }],
+  "loginError": null, "loginBlockedHosts": []
 }
 ```
 
 - `state` is what boxd last saw (`creating`, `running`, `stopped`, `failed`, `deleted`); `desiredState` is what the owner asked for.
 - `loginState`: `none`, `pending` (a login is open), `logged_in`, `failed`.
+- `loginError`: the last login's error code while `loginState` is `failed` (`needs_domain`, `login_failed`, `login_timeout`, …), else null.
+- `loginBlockedHosts`: in the list route (`GET /servers/:serverId/boxes`), the CLI provider's domains the edge refuses this box right now, when a login is open or failed with `needs_domain`; the owner allows them on the box's card, then logs in again. `[]` otherwise, and in the other routes' replies.
 - `generation` is bumped by boxd at every container creation; the box's tokens and edge signature carry it.
 
 ### GET /servers/:serverId/boxes
@@ -1548,7 +1551,7 @@ The URL, the device code and the pasted code are deleted when the login ends. Th
 
 ### POST /box-edge-requests/:requestId
 
-**Auth:** server owner. Body `{ "decision": "allow" | "deny" | "always" }`. Decides a pending domain, push or pull request card (`system_event` `box_edge_request`). `allow` approves once (usable for 30 minutes) and, for a domain, adds it to the box's allowlist; `always` also turns on auto-push or auto-PR for the box in its home channel. The card is updated (`MessageUpdate`). **Response** `200` `{ "status": "allowed" | "denied" | "expired" }`; `409 already_decided` if it was decided.
+**Auth:** server owner. Body `{ "decision": "allow" | "deny" | "always" | "wildcard" }`. Decides a pending domain, push or pull request card (`system_event` `box_edge_request`). `allow` approves once (usable for 30 minutes) and, for a domain, adds it to the box's allowlist; `always` also turns on auto-push or auto-PR for the box in its home channel. `wildcard` (domain cards only) adds the card's `systemData.wildcard` instead, `*.` plus the host's registrable domain (`*.oaiusercontent.com`; [agent-boxes.md](agent-boxes.md) §4.2.2), and allows the box's other pending cards it covers; the server computes the entry from the stored host, so the body never names it. A host with no wider name to offer (`example.com`, `evil.github.io`) gets `400 no_wildcard`. The card is updated (`MessageUpdate`). **Response** `200` `{ "status": "allowed" | "denied" | "expired" }`; `409 already_decided` if it was decided.
 
 ### PUT /servers/:serverId/github-credential · GET · DELETE
 

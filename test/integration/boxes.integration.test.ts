@@ -173,6 +173,14 @@ describe('settings and actions', () => {
         for (const bad of [{ allowedDomains: ['*'] }, { allowedDomains: ['10.0.0.1'] }, { cpus: 0 }, { memoryMb: 100 }, { pids: 1 }, {}]) {
             expect((await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send(bad)).status, JSON.stringify(bad)).toBe(400);
         }
+        // A wildcard over a public suffix would reach everyone's sites under it
+        for (const wide of ['*.co.uk', '*.github.io', '*.herokuapp.com']) {
+            const res = await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send({ allowedDomains: ['api.anthropic.com', wide] });
+            expect(res.status, wide).toBe(400);
+            expect(res.body.error).toBe('invalid_domain');
+        }
+        // An operator's own domain is fine
+        expect((await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send({ allowedDomains: ['*.oaiusercontent.com', '*.evil.github.io'] })).status).toBe(200);
     });
 
     test('a changed repo list queues a rebuild (the box reads it at creation); same-name repos are refused', async () => {

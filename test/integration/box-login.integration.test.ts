@@ -29,6 +29,8 @@ async function makeBox(name: string, adapter: 'claude' | 'codex'): Promise<Box> 
 const ownerLogin = async (box: Box) => (await ctx.request.get(`/boxes/${box.id}/login`).set(owner.auth)).body.login;
 const boxState = async (box: Box) => (await ctx.db.query(`SELECT login_state FROM agent_boxes WHERE id = $1`, [box.id])).rows[0].login_state;
 const report = (box: Box, id: string, body: object) => ctx.request.post(`/agent-hosts/@me/box-login/${id}`).set(box.host).send(body);
+/** The box as Settings → Agents lists it (members may list boxes too). */
+const listed = async (box: Box) => (await ctx.request.get(`/servers/${serverId}/boxes`).set(member.auth)).body.boxes.find((x: any) => x.id === box.id);
 
 beforeAll(async () => { ctx = await setupTestApp(); });
 beforeEach(async () => {
@@ -181,6 +183,8 @@ it('a login blocked on a domain says which, while it runs and when it fails', as
     expect(await ownerLogin(box)).toMatchObject({ status: 'awaiting_code', blockedHosts: ['platform.claude.com'] });
     expect((await report(box, id, { status: 'failed', error: 'login_failed' })).status).toBe(200);
     expect(await ownerLogin(box)).toMatchObject({ status: 'failed', error: 'needs_domain', blockedHosts: ['platform.claude.com'] });
+    // The box list says so too: not "running" next to "login failed", but what to allow
+    expect(await listed(box)).toMatchObject({ loginState: 'failed', loginError: 'needs_domain', loginBlockedHosts: ['platform.claude.com'] });
     // Not the code, not the URL
     const row = (await ctx.db.query(`SELECT verification_url, user_code FROM box_login_requests WHERE id = $1`, [id])).rows[0];
     expect(row).toEqual({ verification_url: null, user_code: null });
@@ -193,6 +197,7 @@ it('a login blocked on a domain says which, while it runs and when it fails', as
     // A host code other than the CLI's own failure stays as it is
     expect((await report(box, id2, { status: 'failed', error: 'invalid_code' })).status).toBe(200);
     expect(await ownerLogin(box)).toMatchObject({ status: 'failed', error: 'invalid_code', blockedHosts: [] });
+    expect(await listed(box)).toMatchObject({ loginState: 'failed', loginError: 'invalid_code', loginBlockedHosts: [] });
 });
 
 it('only the CLI provider domains count as a login blocker', async () => {
