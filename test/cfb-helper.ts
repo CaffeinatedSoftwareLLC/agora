@@ -1,13 +1,13 @@
 /**
- * Builds small Microsoft compound files (OLE2 / CFB version 3, [MS-CFB]) for tests: the
+ * Builds small Microsoft compound files (OLE2 / CFB version 3 or 4, [MS-CFB]) for tests: the
  * container of legacy .xls, .doc, .ppt and .mpp files. Streams under 4096 bytes go into the
  * mini stream, as real writers do; larger ones get regular sectors.
  *
  * Layout: sector 0 is the FAT, then the directory, the mini FAT, the mini stream, then the
  * large streams. Tests that corrupt a file rely on sector 0 (FAT) and 1 (directory).
+ * Version 3 uses 512-byte sectors, version 4 4096-byte ones (the header fills a whole sector).
  */
 
-const SECTOR = 512;
 const END_OF_CHAIN = 0xfffffffe;
 const FREE = 0xffffffff;
 const FAT_SECTOR = 0xfffffffd;
@@ -15,7 +15,8 @@ const NO_STREAM = 0xffffffff;
 
 export interface CfbStream { name: string; data: Buffer }
 
-export function makeCfb(streams: CfbStream[]): Buffer {
+export function makeCfb(streams: CfbStream[], { version = 3 }: { version?: 3 | 4 } = {}): Buffer {
+    const SECTOR = version === 4 ? 4096 : 512;
     const sectorsFor = (n: number) => Math.ceil(n / SECTOR);
     const small = streams.filter(s => s.data.length < 4096);
     const large = streams.filter(s => s.data.length >= 4096);
@@ -59,9 +60,9 @@ export function makeCfb(streams: CfbStream[]): Buffer {
     const header = Buffer.alloc(SECTOR);
     Buffer.from('d0cf11e0a1b11ae1', 'hex').copy(header, 0);
     header.writeUInt16LE(0x3e, 0x18);
-    header.writeUInt16LE(3, 0x1a);
+    header.writeUInt16LE(version, 0x1a);
     header.writeUInt16LE(0xfffe, 0x1c);
-    header.writeUInt16LE(9, 0x1e);
+    header.writeUInt16LE(version === 4 ? 12 : 9, 0x1e);
     header.writeUInt16LE(6, 0x20);
     header.writeUInt32LE(1, 0x2c); // one FAT sector
     header.writeUInt32LE(dirStart, 0x30);
@@ -89,7 +90,7 @@ export function makeCfb(streams: CfbStream[]): Buffer {
         const start = s.data.length < 4096 ? miniStarts[small.indexOf(s)] : largeStarts[large.indexOf(s)];
         dir.push(entry(s.name, 2, start, s.data.length, i + 1 < streams.length ? i + 2 : NO_STREAM, NO_STREAM));
     });
-    while (dir.length < dirSectors * 4) dir.push(entry('', 0, 0, 0, NO_STREAM, NO_STREAM));
+    while (dir.length < dirSectors * (SECTOR / 128)) dir.push(entry('', 0, 0, 0, NO_STREAM, NO_STREAM));
 
     const pad = (b: Buffer, sectors: number) => { const out = Buffer.alloc(sectors * SECTOR); b.copy(out); return out; };
     const fatBuf = Buffer.alloc(SECTOR);

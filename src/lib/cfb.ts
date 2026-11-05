@@ -15,6 +15,12 @@ const FREE_SECTOR = 0xffffffff;
 const NO_STREAM = 0xffffffff;
 const HEADER_DIFAT_ENTRIES = 109;
 const DIR_ENTRY_SIZE = 128;
+/**
+ * The most entries read under the root. Office files have a handful (an .xls about five, a
+ * Project plan six); a file with more is refused rather than walked, so a hostile directory
+ * of hundreds of thousands of entries costs nothing.
+ */
+export const MAX_ROOT_ENTRIES = 4096;
 
 const TYPE_STORAGE = 1;
 const TYPE_STREAM = 2;
@@ -63,15 +69,18 @@ function open(buf: Buffer): CompoundFile | null {
     const sector = (n: number): Buffer | null => (n < sectorCount ? buf.subarray((n + 1) * sectorSize, (n + 2) * sectorSize) : null);
 
     // The allocation table (FAT) lives in the sectors the DIFAT lists: 109 in the header, the rest in a chain
+    // One FAT sector maps perSector sectors; a file claiming many more FAT sectors than it needs is broken
     const fatSectorCount = buf.readUInt32LE(0x2c);
-    if (fatSectorCount > sectorCount) return null;
+    if (fatSectorCount > Math.ceil(sectorCount / perSector) + 1) return null;
     const fatSectors: number[] = [];
     for (let i = 0; i < HEADER_DIFAT_ENTRIES && fatSectors.length < fatSectorCount; i++) {
         fatSectors.push(buf.readUInt32LE(0x4c + i * 4));
     }
     let difat = buf.readUInt32LE(0x44);
-    for (let hops = 0; fatSectors.length < fatSectorCount; hops++) {
-        if (hops >= sectorCount) return null;
+    const difatSeen = new Set<number>();
+    while (fatSectors.length < fatSectorCount) {
+        if (difatSeen.has(difat)) return null; // a DIFAT chain that loops
+        difatSeen.add(difat);
         const s = sector(difat);
         if (!s || s.length < sectorSize) return null;
         for (let i = 0; i < perSector - 1 && fatSectors.length < fatSectorCount; i++) fatSectors.push(s.readUInt32LE(i * 4));
@@ -125,7 +134,7 @@ function open(buf: Buffer): CompoundFile | null {
         const id = stack.pop()!;
         if (id === NO_STREAM || seen.has(id)) continue;
         seen.add(id);
-        if (seen.size > entryCount) return null;
+        if (seen.size > Math.min(entryCount, MAX_ROOT_ENTRIES)) return null;
         const raw = entryAt(id);
         if (!raw) return null;
         const entry = parse(raw);

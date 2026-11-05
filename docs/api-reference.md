@@ -1077,7 +1077,7 @@ Change file limits. Send only the keys you want to change. The change is recorde
 | Field | Type | Constraints |
 |---|---|---|
 | `files.max_size_bytes` | number | 1024 to 104857600 (100 MB) |
-| `files.allowed_extensions` | string[] | lowercase letters and digits only |
+| `files.allowed_extensions` | string[] | lowercase letters and digits only. An upload's content must still match its extension; see [content checks](storage-and-encryption.md) for types without magic bytes (`xls`, `doc`, `ppt`, `mpp`, `accdb`, `jmp`, `avif`, `drawio`). |
 | `files.retention_days` | integer or null | 1 to 3650; `null` keeps files forever |
 | `files.storage_quota_bytes` | integer or null | at least 1; `null` means no quota |
 | `files.exif_strip` | boolean | strip metadata from uploaded images |

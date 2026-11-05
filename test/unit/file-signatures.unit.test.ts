@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { validateFileType, SIGNATURE_FORMATS, FileValidationError } from '../../src/lib/file-validation';
-import { openCompoundFile } from '../../src/lib/cfb';
-import { prepareAvif } from '../../src/lib/file-store';
+import { validateFileType, SIGNATURE_FORMATS, FileValidationError, INLINE_SAFE_MIMES } from '../../src/lib/file-validation';
+import { openCompoundFile, MAX_ROOT_ENTRIES } from '../../src/lib/cfb';
+import { prepareAvif, AvifRefusedError } from '../../src/lib/file-store';
 import { makeCfb } from '../cfb-helper';
 
 /**
@@ -97,6 +97,16 @@ describe('each format is stored under its own type', () => {
         });
     });
 
+    it('none of these types is ever served inline', () => {
+        for (const ext of EXTS) expect(INLINE_SAFE_MIMES.has(SIGNATURE_FORMATS[ext].mime), ext).toBe(false);
+    });
+
+    it('an extension named like an Object property is not a type', async () => {
+        for (const ext of ['constructor', 'tostring', 'hasownproperty']) {
+            expect((await refusal(validateFileType(Buffer.from('hello'), ext, [ext]))).status).toBe(415);
+        }
+    });
+
     it('the extension still has to be allowed', async () => {
         const err = await refusal(validateFileType(fixture('poi-SampleSS.xls'), 'xls', ['xlsx', 'pdf']));
         expect([err.status, err.message]).toEqual([415, 'File type not allowed']);
@@ -122,9 +132,11 @@ describe('a renamed executable or script is refused under every one of these ext
 });
 
 describe('compound files: the right streams, not just the container', () => {
-    it('an Excel workbook built from scratch is an .xls', async () => {
-        expect((await validateFileType(makeCfb([{ name: 'Workbook', data: xlsStream() }]), 'xls', ALLOWED)).mime).toBe('application/vnd.ms-excel');
-        expect((await validateFileType(makeCfb([{ name: 'Workbook', data: xlsStream(9000) }]), 'xls', ALLOWED)).mime).toBe('application/vnd.ms-excel');
+    it.each([3, 4] as const)('an Excel workbook built from scratch is an .xls (compound file version %i)', async (version) => {
+        for (const size of [600, 9000]) {
+            const buf = makeCfb([{ name: 'Workbook', data: xlsStream(size) }], { version });
+            expect((await validateFileType(buf, 'xls', ALLOWED)).mime, `${size}-byte stream`).toBe('application/vnd.ms-excel');
+        }
     });
 
     it.each([
@@ -145,9 +157,13 @@ describe('compound files: the right streams, not just the container', () => {
         expect((await refusal(validateFileType(buf, 'mpp', ALLOWED))).status).toBe(415);
     });
 
-    it('a .ppt needs the CurrentUserAtom, not just the stream names', async () => {
-        const buf = makeCfb([{ name: 'Current User', data: Buffer.alloc(40) }, { name: 'PowerPoint Document', data: Buffer.alloc(100) }]);
-        expect((await refusal(validateFileType(buf, 'ppt', ALLOWED))).status).toBe(415);
+    it('a .ppt needs the CurrentUserAtom and a non-empty document stream, not just the stream names', async () => {
+        const user = Buffer.alloc(40);
+        user.writeUInt16LE(0x0ff6, 2);
+        const ppt = (userData: Buffer, doc: Buffer) => makeCfb([{ name: 'Current User', data: userData }, { name: 'PowerPoint Document', data: doc }]);
+        expect((await validateFileType(ppt(user, Buffer.alloc(100)), 'ppt', ALLOWED)).mime).toBe('application/vnd.ms-powerpoint');
+        expect((await refusal(validateFileType(ppt(Buffer.alloc(40), Buffer.alloc(100)), 'ppt', ALLOWED))).status).toBe(415);
+        expect((await refusal(validateFileType(ppt(user, Buffer.alloc(0)), 'ppt', ALLOWED))).status).toBe(415);
     });
 });
 
@@ -171,6 +187,16 @@ describe('a malformed compound file is refused, never loops or reads out of boun
         expect((await refusal(validateFileType(buf, 'xls', ALLOWED))).status).toBe(415);
     });
 
+    it(`a directory with more than ${MAX_ROOT_ENTRIES} entries under the root is refused without walking it`, async () => {
+        const streams = Array.from({ length: MAX_ROOT_ENTRIES + 1 }, (_, i) => ({ name: `s${i}`, data: Buffer.alloc(0) }));
+        const big = makeCfb([{ name: 'Workbook', data: xlsStream() }, ...streams], { version: 4 });
+        expect(openCompoundFile(big)).toBeNull();
+        expect((await refusal(validateFileType(big, 'xls', ALLOWED))).status).toBe(415);
+        // One fewer is a (strange but) readable file
+        const ok = makeCfb([{ name: 'Workbook', data: xlsStream() }, ...streams.slice(2)], { version: 4 });
+        expect(openCompoundFile(ok)?.root.size).toBe(MAX_ROOT_ENTRIES);
+    });
+
     it('a directory whose sibling links form a cycle is read once per entry', () => {
         const buf = workbook();
         buf.writeUInt32LE(1, 512 * 2 + 128 + 0x48); // entry 1's right sibling is itself
@@ -192,10 +218,12 @@ describe('Access, JMP, AVIF and draw.io', () => {
         expect((await refusal(validateFileType(buf, 'accdb', ALLOWED))).status).toBe(415);
     });
 
-    it('.jmp needs the 8-byte header, not just ff ff 00 00', async () => {
-        const jmp = Buffer.from(fixture('jmpreader-singlecolumnsinglerow.jmp'));
-        jmp[4] = 0x08;
-        expect((await refusal(validateFileType(jmp, 'jmp', ALLOWED))).status).toBe(415);
+    it('.jmp takes another format version, but not a header that is only ff ff 00 00', async () => {
+        const jmp = (at: number, value: number) => { const b = Buffer.from(fixture('jmpreader-singlecolumnsinglerow.jmp')); b.writeUInt32LE(value, at); return b; };
+        expect((await validateFileType(jmp(4, 8), 'jmp', ALLOWED)).mime).toBe('application/x-jmp');
+        for (const [at, value] of [[4, 0], [4, 0x01000000], [8, 0], [8, 0xffffffff], [0, 0xffff0000]]) {
+            expect((await refusal(validateFileType(jmp(at, value), 'jmp', ALLOWED))).status, `${value} at ${at}`).toBe(415);
+        }
     });
 
     it.each([
@@ -221,6 +249,8 @@ describe('Access, JMP, AVIF and draw.io', () => {
         ['invalid UTF-8', Buffer.concat([Buffer.from('<mxfile>'), Buffer.from([0xc3, 0x28]), Buffer.from('</mxfile>')])],
         ['a NUL byte late in the file', Buffer.concat([Buffer.from('<mxfile>'), Buffer.alloc(20000, 0x20), Buffer.from([0]), Buffer.from('</mxfile>')])],
         ['an unterminated comment', Buffer.from('<!-- <mxfile/>')],
+        ['a root element after 64 KB of comments', Buffer.from(`<!--${' '.repeat(70_000)}-->
+<mxfile/>`)],
     ])('.drawio refuses %s', async (_label, buf) => {
         expect((await refusal(validateFileType(buf, 'drawio', ALLOWED))).status).toBe(415);
     });
@@ -242,6 +272,12 @@ describe('prepareAvif: AVIF photos lose their EXIF like JPEGs do', () => {
         expect((await prepareAvif(clean, true)).buffer).toBe(clean);
         const withExif = await avifImage({ Copyright: 'x' });
         expect((await prepareAvif(withExif, false)).buffer).toBe(withExif);
+    });
+
+    it('an AVIF with EXIF that is too large to re-encode is refused, not stored with its metadata', async () => {
+        await expect(prepareAvif(await avifImage({ Copyright: 'x' }), true, 100)).rejects.toBeInstanceOf(AvifRefusedError);
+        const clean = await avifImage();
+        expect((await prepareAvif(clean, true, 100)).buffer).toBe(clean); // nothing to remove
     });
 
     it('a file with only an AVIF ftyp box cannot be read', async () => {
