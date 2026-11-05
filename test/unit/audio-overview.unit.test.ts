@@ -114,6 +114,41 @@ describe('formatTranscript', () => {
     });
 });
 
+describe('formatTranscript with long agent turns', () => {
+    // Cold review: replies longer than a third of the share used to lose the thread's start
+    it('every trimmed thread keeps its first reply, even when replies are long', () => {
+        const rows: TranscriptRow[] = [];
+        for (let t = 0; t < 40; t++) {
+            const p = `P${String(t).padStart(2, '0')}`;
+            rows.push({ id: p, username: 'ana', content: `topic ${t}` });
+            for (let r = 0; r < 30; r++) {
+                rows.push({ id: `${p}R${String(r).padStart(2, '0')}`, threadId: p, username: 'claude', content: `t${t} r${r} ${'w'.repeat(900)}` });
+            }
+        }
+        const t = formatTranscript(rows);
+        expect(t.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+        const kept = [...t.matchAll(/^ana: topic (\d+)$/gm)].map(m => Number(m[1]));
+        expect(kept.length).toBeGreaterThan(10);
+        for (const n of kept) {
+            expect(t).toContain(`${REPLY_PREFIX}claude: t${n} r0 `);   // the start
+            expect(t).toContain(`${REPLY_PREFIX}claude: t${n} r29 `);  // the latest reply
+        }
+    });
+
+    it('an old parent with a busy thread outlasts newer quiet messages', () => {
+        const rows: TranscriptRow[] = [{ id: 'A', username: 'agent', content: 'Old collab session' }];
+        for (let i = 0; i < 400; i++) rows.push({ id: `B${String(i).padStart(3, '0')}`, username: 'u', content: `chatter ${i} ${'c'.repeat(150)}` });
+        // Its replies came after all the chatter
+        for (let r = 0; r < 5; r++) rows.push({ id: `C${r}`, threadId: 'A', username: 'codex', content: `today ${r}` });
+        const t = formatTranscript(rows);
+        expect(t.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+        expect(t.startsWith('agent: Old collab session\n')).toBe(true);
+        expect(t).toContain(`${REPLY_PREFIX}codex: today 4`);
+        expect(t).not.toContain('chatter 0 ');
+        expect(t).toContain('chatter 399 ');
+    });
+});
+
 describe('fairShare', () => {
     it('lets small threads keep everything and splits the rest among the busy ones', () => {
         expect(fairShare([100, 200, 5000], 1000)).toBe(700);
