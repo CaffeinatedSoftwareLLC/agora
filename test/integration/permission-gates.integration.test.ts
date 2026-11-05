@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { Permissions, DEFAULT_EVERYONE_PERMS } from '../../src/permissions';
-import { OWNER_ONLY_ERROR } from '../../src/lib/direct-agents';
+import { DIRECTOR_ROLE_ERROR, OWNER_ONLY_ERROR } from '../../src/lib/direct-agents';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 
@@ -143,10 +143,28 @@ describe('Role hierarchy', () => {
         for (const field of [{ name: 'Muted' }, { color: '#123456' }, { position: 0 }, { permissions: Permissions.DirectAgents.toString() }]) {
             const res = await ctx.request.patch(`${base}/roles/${directors}`).set(w.admin.auth).send(field);
             expect(res.status, JSON.stringify(field)).toBe(403);
-            expect(res.body.error).toBe('Only the server owner can change a role that carries DirectAgents');
+            expect(res.body.error).toBe(DIRECTOR_ROLE_ERROR);
         }
         expect((await ctx.db.query('SELECT name FROM roles WHERE id = $1', [directors])).rows[0].name).toBe('Directors');
         expect((await ctx.request.patch(`${base}/roles/${directors}`).set(w.owner.auth).send({ color: '#123456' })).status).toBe(200);
+    });
+
+    it('@everyone carrying DirectAgents stays with Administrators, except for the bit itself', async () => {
+        const w = await roleWorld('rh7');
+        const path = `/servers/${w.serverId}/roles/${w.everyoneRoleId}`;
+        // "Everyone directs in #general", and on the server too
+        expect((await ctx.request.put(`/channels/${w.generalChannelId}/overrides/roles/${w.everyoneRoleId}`).set(w.owner.auth)
+            .send({ allow: Permissions.DirectAgents.toString(), deny: '0' })).status).toBe(200);
+        const withBit = DEFAULT_EVERYONE_PERMS | Permissions.DirectAgents;
+        expect((await ctx.request.patch(path).set(w.owner.auth).send({ permissions: withBit.toString() })).status).toBe(200);
+
+        const trimmed = withBit & ~Permissions.CreateInvites;
+        expect((await ctx.request.patch(path).set(w.admin.auth).send({ permissions: trimmed.toString() })).status).toBe(200);
+        expect((await ctx.request.patch(path).set(w.admin.auth).send({ color: '#abcdef' })).status).toBe(200);
+        const drop = await ctx.request.patch(path).set(w.admin.auth).send({ permissions: (trimmed & ~Permissions.DirectAgents).toString() });
+        expect(drop.status).toBe(403);
+        expect(drop.body.error).toBe(OWNER_ONLY_ERROR);
+        expect(await rolePerms(w.everyoneRoleId)).toBe(trimmed.toString());
     });
 
     it('the owner can manage Administrator roles', async () => {

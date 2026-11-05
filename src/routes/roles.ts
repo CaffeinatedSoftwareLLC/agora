@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { Permissions, computePermissions, KNOWN_PERMS_MASK } from '../permissions';
 import { loadAndComputePermissions } from './bots';
-import { isServerOwner, OWNER_ONLY_ERROR, roleCarriesDirectAgents, touchesDirectAgents } from '../lib/direct-agents';
+import { DIRECTOR_ROLE_ERROR, isServerOwner, OWNER_ONLY_ERROR, roleCarriesDirectAgents, touchesDirectAgents } from '../lib/direct-agents';
 import { loadChannelPermissions } from '../lib/channel-access';
 
 /** A permission bitmask from the API, or null if it isn't one or has unknown bits. */
@@ -17,8 +17,6 @@ async function directorRoleGuard(db: any, serverId: string, callerId: string, ro
     if (!await roleCarriesDirectAgents(db, roleId)) return null;
     return await isServerOwner(db, serverId, callerId) ? null : OWNER_ONLY_ERROR;
 }
-
-const DIRECTOR_ROLE_ERROR = 'Only the server owner can change a role that carries DirectAgents';
 
 /** DirectAgents changes are the owner's alone (src/lib/direct-agents.ts). */
 async function directorGuard(db: any, serverId: string, callerId: string, before: bigint, after: bigint): Promise<string | null> {
@@ -352,9 +350,13 @@ export async function roleRoutes(app: FastifyInstance) {
         const role = existing.rows[0];
 
         // A role that carries DirectAgents in any way stays with the owner: every field, not
-        // only its permissions. Its name, colour and place are how people tell who directs.
-        const directorRoleErr = await directorRoleGuard(db, serverId, userId, roleId);
-        if (directorRoleErr) return reply.status(403).send({ error: DIRECTOR_ROLE_ERROR });
+        // only its permissions. @everyone is the exception: it is every member's role, and the
+        // owner and Administrators manage it; adding or removing the bit is still the owner's
+        // (directorGuard below).
+        if (!role.is_everyone) {
+            const directorRoleErr = await directorRoleGuard(db, serverId, userId, roleId);
+            if (directorRoleErr) return reply.status(403).send({ error: DIRECTOR_ROLE_ERROR });
+        }
 
         // Cannot rename @everyone
         if (role.is_everyone && body.name && body.name !== role.name) {
