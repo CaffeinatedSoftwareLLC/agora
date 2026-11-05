@@ -110,9 +110,32 @@ describe('only the owner grants or removes DirectAgents', () => {
         expect((await directors()).map(d => d.username)).toEqual(['daowner']);
     });
 
-    it('lets an Administrator edit a director role without touching the bit', async () => {
-        const res = await ctx.request.patch(`/servers/${serverId}/roles/${directorRoleId}`).set(admin.auth).send({ name: 'Orchestrators' });
+    it('keeps every field of a director role with the owner (#246)', async () => {
+        const before = (await ctx.request.get(`/servers/${serverId}/roles`).set(owner.auth)).body.find((r: any) => r.id === directorRoleId);
+        for (const field of [{ name: 'Orchestrators' }, { color: '#ff0000' }, { hoist: true }, { mentionable: true }, { position: 0 }]) {
+            const res = await ctx.request.patch(`/servers/${serverId}/roles/${directorRoleId}`).set(admin.auth).send(field);
+            expect(res.status, JSON.stringify(field)).toBe(403);
+            expect(res.body.error).toMatch(/server owner/);
+        }
+        const after = (await ctx.request.get(`/servers/${serverId}/roles`).set(owner.auth)).body.find((r: any) => r.id === directorRoleId);
+        expect(after).toEqual(before);
+        // The owner still can
+        const res = await ctx.request.patch(`/servers/${serverId}/roles/${directorRoleId}`).set(owner.auth).send({ name: 'Orchestrators' });
         expect(res.status).toBe(200);
+        expect(res.body.name).toBe('Orchestrators');
+    });
+
+    it('keeps a role that carries the bit only in a channel override with the owner too', async () => {
+        const scoped = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth).send({ name: 'ScopedDirector', permissions: '0' });
+        expect(scoped.status).toBe(201);
+        // Before the override it is a plain role an Administrator may edit
+        expect((await ctx.request.patch(`/servers/${serverId}/roles/${scoped.body.id}`).set(admin.auth).send({ color: '#00ff00' })).status).toBe(200);
+        expect((await ctx.request.put(`/channels/${channelId}/overrides/roles/${scoped.body.id}`).set(owner.auth)
+            .send({ allow: DIRECT, deny: '0' })).status).toBe(200);
+        const res = await ctx.request.patch(`/servers/${serverId}/roles/${scoped.body.id}`).set(admin.auth).send({ name: 'NotADirector' });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toMatch(/server owner/);
+        expect((await ctx.request.delete(`/servers/${serverId}/roles/${scoped.body.id}`).set(owner.auth)).status).toBe(200);
     });
 
     it('refuses an override delete that would drop the bit', async () => {

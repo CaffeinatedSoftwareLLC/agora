@@ -170,8 +170,8 @@ async function listDirectors(db: any, channelId: string): Promise<Director[]> {
 
 /**
  * True when a role carries DirectAgents in any way: in its own permissions, or in a channel
- * override that allows or denies it. Assigning, unassigning or deleting such a role changes
- * who directs, so it is the owner's alone.
+ * override that allows or denies it. Assigning, unassigning, deleting or editing such a role
+ * changes who directs, or how people tell, so it is the owner's alone.
  */
 async function roleTouchesDirectAgents(db: any, roleId: string): Promise<boolean> {
     const bit = Permissions.DirectAgents.toString();
