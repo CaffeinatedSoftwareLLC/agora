@@ -43,7 +43,16 @@ NEW="$T/new"
 mkdir -p "$NEW/src/db/migrations" "$NEW/src/tools" "$NEW/box"
 cp -r "$ROOT/install" "$NEW/"
 printf '{\n  "name": "agora",\n  "version": "0.9.0"\n}\n' > "$NEW/package.json"
-printf 'services: {new: {}}\nnetworks: {sandbox: {internal: true, driver_opts: {com.docker.network.bridge.inhibit_ipv4: "true"}}}\n' > "$NEW/docker-compose.prod.yml"
+cat > "$NEW/docker-compose.prod.yml" <<'YML'
+services:
+  new: {}
+networks:
+  sandbox:
+    internal: true
+    # a mention of com.docker.network.bridge.inhibit_ipv4 in a comment doesn't count
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+YML
 printf 'FROM node:22-alpine\n' > "$NEW/Dockerfile"
 printf 'localhost\n' > "$NEW/Caddyfile"
 printf -- '-- core\n' > "$NEW/src/db/migrations/001_core.sql"
@@ -58,9 +67,11 @@ printf 'agora-api\n' > "$FAKE/images"
 : > "$FAKE/crypt_images"
 echo f > "$FAKE/regclass"
 # The old sandbox network, without inhibit_ipv4; a run container this install's runner left
-# (from before the agora.instance label), and a run of another install on the same engine
-printf 'agora_sandbox -\nagora2_sandbox -\n' > "$FAKE/sandbox_nets"
-printf 'agora-run-01jaaaaaaaaaaaaaaaaaaaaaaa \nagora2-run-01jbbbbbbbbbbbbbbbbbbbbbbb agora2\n' > "$FAKE/runs"
+# (from before the agora.instance label), a run of another install on the same engine, and an
+# unlabelled run of an older install (also named agora-run-*) on that install's own network
+printf 'agora_sandbox -\nagora2_sandbox -\nagora3_sandbox -\n' > "$FAKE/sandbox_nets"
+printf '%s\n' 'agora-run-01jaaaaaaaaaaaaaaaaaaaaaaa||agora_sandbox' 'agora2-run-01jbbbbbbbbbbbbbbbbbbbbbbb|agora2|agora2_sandbox' \
+    'agora-run-01jccccccccccccccccccccccc||agora3_sandbox' > "$FAKE/runs"
 
 # ─── Upgrade, run from the new release ───
 if bash "$NEW/install/upgrade.sh" --dir "$OLD" --passphrase-file "$T/pass" --non-interactive > "$T/up.log" 2>&1; then code=0; else code=$?; fi
@@ -97,9 +108,11 @@ check 'upgrade: the backup lets code runs finish (runner stop timeout 660 s)' ye
 check 'upgrade: runner drained, then cap-gateway removed, then the network, then up' yes \
     "$(yes_if '[ -n "$l_drain" ] && [ -n "$l_gw" ] && [ -n "$l_netrm" ] && [ "$l_drain" -lt "$l_gw" ] && [ "$l_gw" -lt "$l_netrm" ] && [ "$l_netrm" -lt "$l_up" ]')"
 check 'upgrade: the sandbox network now has inhibit_ipv4' 'agora_sandbox true' "$(grep '^agora_sandbox ' "$FAKE/sandbox_nets")"
-check "upgrade: this install's leftover run container is removed" 0 "$(grep -c '^agora-run-' "$FAKE/runs" || true)"
-check "upgrade: another install's run and network are left alone" 'agora2-run-01jbbbbbbbbbbbbbbbbbbbbbbb agora2|agora2_sandbox -' \
+check "upgrade: this install's leftover run container is removed" 0 "$(grep -c '^agora-run-01ja' "$FAKE/runs" || true)"
+check "upgrade: another install's run and network are left alone" 'agora2-run-01jbbbbbbbbbbbbbbbbbbbbbbb|agora2|agora2_sandbox|agora2_sandbox -' \
     "$(grep agora2 "$FAKE/runs")|$(grep '^agora2_sandbox ' "$FAKE/sandbox_nets")"
+check "upgrade: an older install's unlabelled agora-run-* on its own network is left alone" 1 "$(grep -c '^agora-run-01jc' "$FAKE/runs")"
+check 'upgrade: the runner is checked after the start' yes "$(yes_if "grep -q 'runner running' '$T/up.log'")"
 check 'upgrade: never a network other than its own removed' 0 "$(grep 'network rm' "$FAKE/log" | grep -vc 'network rm agora_sandbox$' || true)"
 
 # ─── Rollback, with the scripts now in the install ───
@@ -139,10 +152,26 @@ printf 'agora-sn_sandbox -\n' > "$FAKE/sandbox_nets"; printf 'stranger\n' > "$FA
 if bash "$SN/install/sandbox-network.sh" --dir "$SN" > "$T/sn2.log" 2>&1; then code=0; else code=$?; fi
 check 'sandbox-network.sh: refuses while another container is on the network' 1 "$code"
 check 'sandbox-network.sh: says which' yes "$(yes_if "grep -q 'stranger' '$T/sn2.log'")"
+check 'sandbox-network.sh: refuses before stopping anything' 0 "$(grep -c 'compose .* stop\|compose .* rm' "$FAKE/log" || true)"
 check 'sandbox-network.sh: the network is still there' 'agora-sn_sandbox -' "$(cat "$FAKE/sandbox_nets")"
 : > "$FAKE/sandbox_attached"; : > "$FAKE/log"
 if bash "$SN/install/sandbox-network.sh" --dir "$SN" > "$T/sn3.log" 2>&1; then code=0; else code=$?; fi
 check 'sandbox-network.sh: recreates the network once it is free' '0|agora-sn_sandbox true' "$code|$(cat "$FAKE/sandbox_nets")"
+
+# An upgrade that would have to recreate a network with a stranger on it refuses before the backup
+ST="$T/agora-st"
+mkdir -p "$ST/src/db/migrations"
+printf '{\n  "name": "agora",\n  "version": "0.3.0"\n}\n' > "$ST/package.json"
+printf 'services: {old: {}}\n' > "$ST/docker-compose.prod.yml"
+printf 'FROM node:22-alpine\n' > "$ST/Dockerfile"
+printf 'COMPOSE_PROJECT_NAME=agora-st\nAGORA_INSTANCE=agora-st\nDB_PASSWORD=x\n' > "$ST/.env.prod"
+printf '%s\n' postgres redis api runner cap-gateway > "$FAKE/running"
+printf 'agora-st_sandbox -\n' > "$FAKE/sandbox_nets"; printf 'stranger\n' > "$FAKE/sandbox_attached"; : > "$FAKE/log"
+if bash "$NEW/install/upgrade.sh" --dir "$ST" --passphrase-file "$T/pass" --non-interactive > "$T/st.log" 2>&1; then code=0; else code=$?; fi
+check 'upgrade with a stranger on the network: refused' 1 "$code"
+check 'upgrade with a stranger on the network: nothing stopped, nothing replaced' '0|0.3.0' \
+    "$(grep -c 'compose .* stop' "$FAKE/log" || true)|$(sed -n 's/.*"version": "\(.*\)".*/\1/p' "$ST/package.json")"
+: > "$FAKE/sandbox_attached"
 
 # ─── A legacy install in a custom folder, with neither COMPOSE_PROJECT_NAME nor AGORA_INSTANCE ───
 # Compose named its project after the folder (agora-prod); the upgrade must keep that name, or

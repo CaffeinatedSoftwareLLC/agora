@@ -29,7 +29,7 @@ export interface RunnerConfig {
     stopPollMs?: number;
     /** This install's name (AGORA_INSTANCE); labels its run containers. */
     instance?: string;
-    /** Name (substring) of the gateway container on the sandbox network; defaults to the capUrl hostname. */
+    /** Name of the gateway container on the sandbox network (a Compose replica suffix may follow); defaults to `<instance>-<capUrl hostname>`. */
     capContainer?: string;
 }
 
@@ -43,7 +43,8 @@ export interface RunnerConfig {
 async function resolveGatewayIp(sandbox: SandboxDocker, config: RunnerConfig): Promise<string | undefined> {
     const host = new URL(config.capUrl).hostname;
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return undefined;
-    const name = config.capContainer ?? host;
+    // Compose names it <project>-cap-gateway-<n>, and the project is the install (#209)
+    const name = config.capContainer ?? `${config.instance ?? 'agora'}-${host}`;
     let ip: string | null = null;
     try {
         ip = await sandbox.gatewayAddress(config.network, name);

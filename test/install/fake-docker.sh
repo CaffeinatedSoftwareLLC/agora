@@ -16,7 +16,7 @@
 #   projects        compose projects with containers (an `up` adds, a `down` removes);
 #                   pgdata  projects with a database volume (a `down -v` removes); dir_<p> its folder
 #   published       host ports some container publishes (running or not)
-#   runs            code-run containers: "<name> <agora.instance label or empty>" per line
+#   runs            code-run containers: "<name>|<agora.instance label or empty>|<network>" per line
 #   sandbox_nets    sandbox networks: "<name> <inhibit_ipv4 option or ->" per line; `compose up`
 #                   creates <project>_sandbox with the option its compose file declares
 #   sandbox_attached  containers on a sandbox network other than this install's (one name per line)
@@ -38,8 +38,8 @@ has() { grep -qx "$2" "$F/$1" 2>/dev/null; }
 add() { has "$1" "$2" || printf '%s\n' "$2" >> "$F/$1"; }
 del() { [ -f "$F/$1" ] && { grep -vx "$2" "$F/$1" > "$F/$1.tmp" || true; mv "$F/$1.tmp" "$F/$1"; }; return 0; }
 touch "$F/runs" "$F/sandbox_nets" "$F/sandbox_attached" "$F/running" "$F/boxes" "$F/boxes_running" "$F/volumes" "$F/images" "$F/crypt_images" "$F/services" "$F/networks" "$F/projects" "$F/pgdata" "$F/published"
-runs_on() { # runs_on <network>: run containers on <instance>_sandbox (no label: the default install's)
-    awk -v want="${1%_sandbox}" 'NF { i = ($2 == "" ? "agora" : $2); if (i == want) print $1 }' "$F/runs"
+runs_on() { # runs_on <network>: run containers attached to that network
+    awk -F'|' -v net="$1" '$3 == net { print $1 }' "$F/runs"
 }
 env_project() { # the project of the env file in these compose arguments
     local envf p
@@ -102,14 +102,20 @@ case "$1" in
     start) c=${*: -1}; add boxes_running "$c"; exit 0 ;;
     rm)
         hit=0
-        for a in "$@"; do grep -q "^$a " "$F/runs" 2>/dev/null && { grep -v "^$a " "$F/runs" > "$F/runs.tmp" || true; mv "$F/runs.tmp" "$F/runs"; hit=1; }; done
+        for a in "$@"; do grep -q "^$a|" "$F/runs" 2>/dev/null && { grep -v "^$a|" "$F/runs" > "$F/runs.tmp" || true; mv "$F/runs.tmp" "$F/runs"; hit=1; }; done
         [ "$hit" = 0 ] || exit 0
         c=${*: -1}
         if has running boxd; then echo "fake: boxd recreated $c" >> "$F/log"; exit 0; fi
         del boxes "$c"; del boxes_running "$c"; exit 0 ;;
     network)
         case "$2" in
-            ls) cat "$F/networks"; exit 0 ;;
+            ls)
+                case "$args" in
+                    *"name=^"*_sandbox*)
+                        n=$(printf '%s' "$args" | sed -n 's/.*name=^\([^ $]*\)\$.*/\1/p')
+                        grep "^$n " "$F/sandbox_nets" | cut -d' ' -f1; exit 0 ;;
+                esac
+                cat "$F/networks"; exit 0 ;;
             inspect)
                 n=${*: -1}
                 line=$(grep "^$n " "$F/sandbox_nets" 2>/dev/null) || exit 1

@@ -352,6 +352,8 @@ networks:
   sandbox:
     name: ${AGORA_INSTANCE:-agora}_sandbox
     internal: true
+    # inhibit_ipv4 covers IPv4 only: keep IPv6 off, whatever the daemon's defaults
+    enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.inhibit_ipv4: "true"
 

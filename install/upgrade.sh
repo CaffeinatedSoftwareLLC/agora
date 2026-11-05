@@ -92,6 +92,8 @@ if [ "$ROLLBACK" = 1 ]; then
     [ -n "$bundle" ] && [ -f "$bundle" ] || die "the backup taken before the upgrade (${bundle:-none}) is gone"
     cur="$DIR/.releases/$(tag_version "$OLD_VERSION")-rolled-back-$STAMP"
     INST=$(env_get "$ENV" AGORA_INSTANCE); INST=${INST:-agora}
+    # Before anything changes: the network must be free to go back to the previous release's settings
+    check_sandbox_network "$prev" "$INST"
     drain_code_runs "$DIR" "$INST"
     compose_in "$DIR" stop -t 60 >/dev/null || die "could not stop the stack"
     stash_release "$DIR" "$cur"
@@ -106,6 +108,7 @@ if [ "$ROLLBACK" = 1 ]; then
     if [ -z "$maint" ] || ! has_crypt_tool "$maint"; then maint=$(build_maintenance_image "$cur") || die "could not build the maintenance image"; fi
     compose_in "$DIR" build
     bash "$cur/install/restore.sh" "$bundle" --dir "$DIR" --yes --crypt-image "$maint" "${pass_args[@]}" "${ni_args[@]}"
+    verify_sandbox_network "$DIR" "$INST"
     printf 'rolled_back=%s\n' "$STAMP" >> "$STATE"
     FINISHED=1
     ok "rolled back to $(agora_version "$DIR")"
@@ -147,6 +150,9 @@ step upgrade.maintenance 'Building the maintenance image from the new release'
 MAINT=$(build_maintenance_image "$STAGE") || die "could not build the maintenance image from the new release"
 has_crypt_tool "$MAINT" || die "$MAINT has no backup tool"
 ok "$MAINT"
+# Before the backup stops anything: the sandbox network must be free to be recreated if needed
+INST=$(env_get "$ENV" AGORA_INSTANCE)
+check_sandbox_network "$STAGE" "$INST"
 
 if [ "$NO_BACKUP" = 1 ]; then
     warn "--no-backup: there is nothing to roll back to"
@@ -191,7 +197,6 @@ step upgrade.build 'Building the new images'
 compose_in "$DIR" build
 
 step upgrade.drain 'Letting code runs in progress finish'
-INST=$(env_get "$ENV" AGORA_INSTANCE)
 drain_code_runs "$DIR" "$INST"
 
 step upgrade.network 'Checking the sandbox network'
@@ -200,6 +205,7 @@ prepare_sandbox_network "$DIR" "$INST"
 step upgrade.start 'Starting the new release'
 compose_in "$DIR" up -d --remove-orphans
 wait_up
+verify_sandbox_network "$DIR" "$INST"
 FINISHED=1
 send_install_report ok null
 say ''

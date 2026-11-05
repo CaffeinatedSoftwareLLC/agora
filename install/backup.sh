@@ -118,10 +118,11 @@ while read -r c; do
         dk stop -t 30 "$c" >/dev/null || die "could not stop box container $c"
     fi
 done <<< "$boxes"
-# The runner finishes code runs in progress on SIGTERM (up to 10 minutes; stop_grace_period 11m),
-# and cap-gateway serves them until then
-if is_running api; then stop_svc api 30; fi
+# The runner first: it finishes code runs in progress on SIGTERM (up to 10 minutes;
+# stop_grace_period 11m) while the API keeps taking requests (new runs wait in the queue) and
+# cap-gateway serves the runs
 if is_running runner; then stop_svc runner 660; fi
+if is_running api; then stop_svc api 30; fi
 if is_running cap-gateway; then stop_svc cap-gateway 30; fi
 
 # Quiet means quiet: none of the writers and no box may still run

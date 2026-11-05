@@ -45,6 +45,7 @@ const TARGET = 'agora-neg-target';
 const HOST_LISTENER = 'agora-neg-host-listener';
 const OTHER_NETWORK = 'agora-neg-other_sandbox';
 const OTHER_RUN = 'agora-neg-other-run';
+const OPEN_NETWORK = 'agora-neg-open_sandbox';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let serverId: string;
@@ -123,7 +124,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
     docker(['rm', '-f', TARGET, HOST_LISTENER, OTHER_RUN], { ignoreErrors: true });
-    docker(['network', 'rm', OTHER_NETWORK], { ignoreErrors: true });
+    docker(['network', 'rm', OTHER_NETWORK, OPEN_NETWORK], { ignoreErrors: true });
     await gateway?.stop();
     await ctx.close();
 });
@@ -265,6 +266,14 @@ describe('spec §14: what a run cannot reach', () => {
         // Controls: the listener answers on the default bridge's gateway, and the other run answers on its own network
         expect(probe('bridge', check('host', bridgeGateway, port)), 'control: the host listener should answer on the default bridge gateway')
             .toEqual({ host: 'REACHED' });
+        // The gap itself, on this engine: an internal network made the old way (no inhibit_ipv4)
+        // lets a container reach the host on its gateway address. Without this the test below
+        // could pass on an engine whose firewall blocks it anyway, fix or no fix.
+        docker(['network', 'rm', OPEN_NETWORK], { ignoreErrors: true });
+        docker(['network', 'create', '--internal', OPEN_NETWORK]);
+        expect(probe(OPEN_NETWORK, check('host', networkGateway(OPEN_NETWORK), port), runtime),
+            'control: on an internal network without inhibit_ipv4 the host should answer on the gateway address').toEqual({ host: 'REACHED' });
+        docker(['network', 'rm', OPEN_NETWORK], { ignoreErrors: true });
         expect(probe(OTHER_NETWORK, check('other', otherIp, 8080)), "control: the other install's run should answer on its own network")
             .toEqual({ other: 'REACHED' });
 

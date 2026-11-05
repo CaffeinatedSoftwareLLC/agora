@@ -30,11 +30,13 @@ DIR=$(cd "${DIR:-$HERE/..}" && pwd)
 pick_docker || die "Docker isn't reachable"
 INSTANCE=$(install_instance "$DIR") || die "can't tell the install name of $DIR"
 
+check_sandbox_network "$DIR" "$INSTANCE"
 step sandbox.drain 'Letting code runs in progress finish'
 drain_code_runs "$DIR" "$INSTANCE"
 step sandbox.network 'Recreating the sandbox network'
 prepare_sandbox_network "$DIR" "$INSTANCE"
 step sandbox.start 'Starting the stack'
 compose_in "$DIR" up -d
+verify_sandbox_network "$DIR" "$INSTANCE"
 FINISHED=1
-ok "done; the runner checks the network when it starts (docker compose logs runner)"
+ok done

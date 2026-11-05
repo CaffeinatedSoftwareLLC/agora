@@ -88,8 +88,9 @@ async function main() {
 
     const shutdown = async () => {
         clearInterval(sweepTimer);
-        publisher.disconnect();
+        // Runs in progress finish first, and their results still reach the thread
         await worker.close();
+        publisher.disconnect();
         await db.end();
         process.exit(0);
     };

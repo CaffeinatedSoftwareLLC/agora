@@ -41,6 +41,22 @@ describe('runner socket proxy rules (#126)', () => {
     test('the container list is refused: the proxy cannot hold it to one install', () => {
         expect(allows(a, 'GET', '/v1.47/containers/json')).toBe(false);
         expect(allows(a, 'GET', '/containers/json')).toBe(false);
+        expect(allows(a, 'GET', '/containers/json/')).toBe(false);
+    });
+
+    test('encoded, doubled or odd paths to another install are refused', () => {
+        for (const p of [
+            `/containers/${other}%2Fjson`, `/containers/%2E%2E/${other}/json`, `/containers//${other}/json`,
+            `/containers/${own}/../${other}/json`, `/v1.47.1/containers/${own}/json`, `/containers/${own}/json/`,
+            `/images/agora%2F..%2F..%2Fcontainers%2F${other}/json`,
+        ]) expect(allows(a, 'GET', p), p).toBe(false);
+    });
+
+    test('create is the one call the proxy cannot hold to the install (the name is in the query): spec §6.2, T9', () => {
+        // Documented, not a pass: a compromised runner can create under any name and settings,
+        // but it can start, stop, inspect or remove only its own install's names
+        expect(allows(a, 'POST', '/v1.47/containers/create')).toBe(true);
+        expect(allows(a, 'POST', `/containers/${other}/start`)).toBe(false);
     });
 
     test('an image path cannot be walked over to another container', () => {
@@ -55,7 +71,7 @@ describe('runner socket proxy rules (#126)', () => {
         for (const [method, p] of [
             ['POST', `/containers/${own}/exec`], ['POST', `/containers/${own}/attach`], ['PUT', `/containers/${own}/archive`],
             ['GET', `/containers/${own}/archive`], ['POST', '/networks/create'], ['POST', '/networks/alpha_sandbox/connect'],
-            ['POST', '/volumes/create'], ['POST', '/images/create'], ['DELETE', '/networks/alpha_sandbox'], ['GET', '/containers/json?all=1'],
+            ['POST', '/volumes/create'], ['POST', '/images/create'], ['DELETE', '/networks/alpha_sandbox'], ['GET', '/networks'],
         ] as const) expect(allows(a, method, p), `${method} ${p}`).toBe(false);
     });
 

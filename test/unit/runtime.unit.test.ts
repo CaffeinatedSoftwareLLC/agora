@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveLimits, timeProfileFor, DEFAULT_LIMITS, HARD_CEILINGS } from '../../src/runtime/limits';
 import { buildContainerSpec, chunkCode, capHostPort, containerName, gatewayHostEntry, MAX_CODE_BYTES } from '../../src/runtime/container-spec';
-import { demuxLogs, sandboxNetworkProblem, INHIBIT_IPV4 } from '../../src/runtime/docker';
+import { demuxLogs, sandboxNetworkProblem, INHIBIT_IPV4, isGatewayName } from '../../src/runtime/docker';
 import { redact, statusFor, hashToken } from '../../src/runtime/runner';
 
 describe('limits', () => {
@@ -249,5 +249,23 @@ describe('sandbox network preflight (spec §6.1)', () => {
             expect(sandboxNetworkProblem({ Internal: true, Driver: 'bridge', Options }), JSON.stringify(Options)).toContain('reach the host');
         }
         expect(sandboxNetworkProblem({ Internal: true, Options: {} })).toContain('install/sandbox-network.sh');
+    });
+
+    it('refuses IPv6, which inhibit_ipv4 does not cover', () => {
+        expect(sandboxNetworkProblem({ Internal: true, Driver: 'bridge', EnableIPv6: true, Options: { [INHIBIT_IPV4]: 'true' } })).toContain('IPv6');
+    });
+});
+
+describe('gateway container name (§6.2)', () => {
+    it('matches the name, or it with a Compose replica suffix', () => {
+        expect(isGatewayName('agora-cap-gateway-1', 'agora-cap-gateway')).toBe(true);
+        expect(isGatewayName('/agora-cap-gateway-12', 'agora-cap-gateway')).toBe(true);
+        expect(isGatewayName('agora-test-cap-forwarder', 'agora-test-cap-forwarder')).toBe(true);
+    });
+
+    it("never another container whose name only contains it (another install's, say)", () => {
+        for (const name of ['agora2-cap-gateway-1', 'evil-agora-cap-gateway-1', 'agora-cap-gateway-1-run-01jabcdefghjkmnpqrstvwxyz0', 'agora-cap-gateway-x', 'agora-cap-gateway-']) {
+            expect(isGatewayName(name, 'agora-cap-gateway'), name).toBe(false);
+        }
     });
 });

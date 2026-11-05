@@ -72,10 +72,17 @@ export function demuxLogs(buf: Buffer, cap: number): Pick<RunOutcome, 'stdout' |
     };
 }
 
+/** `name` is the gateway container `wanted`, or it with a Compose replica suffix (`-1`). */
+export function isGatewayName(name: string, wanted: string): boolean {
+    const n = name.replace(/^\//, '');
+    return n === wanted || (n.startsWith(`${wanted}-`) && /^\d+$/.test(n.slice(wanted.length + 1)));
+}
+
 /** The parts of a network inspect the preflight checks. */
 export interface SandboxNetworkInfo {
     Internal?: boolean;
     Driver?: string;
+    EnableIPv6?: boolean;
     Options?: Record<string, string> | null;
 }
 
@@ -92,6 +99,8 @@ export const INHIBIT_IPV4 = 'com.docker.network.bridge.inhibit_ipv4';
  */
 export function sandboxNetworkProblem(info: SandboxNetworkInfo): string | null {
     if (!info.Internal) return 'must be internal (no external route)';
+    // inhibit_ipv4 covers IPv4 only; with IPv6 on, the host could hold an address on the bridge again
+    if (info.EnableIPv6) return 'must not have IPv6 enabled (enable_ipv6: false)';
     if ((info.Driver ?? 'bridge') === 'bridge' && info.Options?.[INHIBIT_IPV4] !== 'true') {
         return `lets runs reach the host on its gateway address (created without ${INHIBIT_IPV4}=true; `
             + 'recreate it with install/sandbox-network.sh, see docs/planning/sandbox-isolation-spec.md §6.1)';
@@ -126,15 +135,18 @@ export class SandboxDocker {
     }
 
     /**
-     * IPv4 of the capability gateway on the sandbox network, found by container name
-     * (e.g. `agora-cap-gateway-1` contains `cap-gateway`). Uses the network inspect
-     * endpoint the socket proxy already allows; it never inspects other containers.
-     * Looked up per run, so a restarted gateway with a new IP is picked up.
+     * IPv4 of the capability gateway on the sandbox network, found by container name: exactly
+     * `containerName`, or that name with Compose's replica suffix (`agora-cap-gateway` matches
+     * `agora-cap-gateway-1`). Not a substring: another container on the network (another
+     * install's, attached by a compromised runner of its own, §6.2) must not be taken for the
+     * gateway and be handed this install's run tokens. Uses the network inspect endpoint the
+     * socket proxy already allows; it never inspects other containers. Looked up per run, so a
+     * restarted gateway with a new IP is picked up.
      */
     async gatewayAddress(network: string, containerName: string): Promise<string | null> {
         const info = await this.docker.getNetwork(network).inspect() as { Containers?: Record<string, { Name?: string; IPv4Address?: string }> };
         for (const c of Object.values(info.Containers ?? {})) {
-            if (c.Name?.includes(containerName) && c.IPv4Address) return c.IPv4Address.split('/')[0];
+            if (c.Name && isGatewayName(c.Name, containerName) && c.IPv4Address) return c.IPv4Address.split('/')[0];
         }
         return null;
     }
