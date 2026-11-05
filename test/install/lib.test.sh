@@ -39,6 +39,12 @@ check 'env_get reads one key' abc "$(env_get "$T/env" AGORA_EDGE_SECRET)"
 check 'env_get ignores commented keys' '' "$(env_get "$T/env" B)"
 check 'hex64 is 64 hex characters' 1 "$(hex64 | grep -Ec '^[0-9a-f]{64}$')"
 check 'gen_password is 20 characters' 20 "$(gen_password | wc -c | tr -d ' ')"
+# Under the installer's own `set -euo pipefail` it must succeed every time (it used to die of SIGPIPE, exit 141)
+gp_fails=0
+for _ in $(seq 1 50); do
+    bash -c 'set -euo pipefail; . "$1/install/lib/common.sh"; p=$(gen_password); [ "${#p}" = 20 ] && [[ "$p" =~ ^[A-Za-z0-9]+$ ]]' _ "$ROOT" || gp_fails=$((gp_fails + 1))
+done
+check 'gen_password succeeds under pipefail, 20 alphanumerics, 50 runs' 0 "$gp_fails"
 
 # ─── Versions ───
 mkdir -p "$T/src/box"
