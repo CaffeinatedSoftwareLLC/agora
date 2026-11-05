@@ -5,9 +5,10 @@ import { generateBotToken } from '../auth/bot-tokens';
 import { Permissions, computePermissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { usernameTaken } from '../lib/usernames';
-import { checkChannelPermissions } from '../lib/channel-access';
+import { canViewChannel, checkChannelPermissions } from '../lib/channel-access';
 import { asService } from '../lib/agent-sessions';
-import { endTerminalSessionNow } from '../lib/terminal-sessions';
+import { endTerminalSessionNow, limitNotice, storeTerminalStatus, type LimitWarning } from '../lib/terminal-sessions';
+import { postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { agentPresence } from '../lib/agent-presence';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
@@ -840,6 +841,80 @@ export async function botRoutes(app: FastifyInstance) {
         request.pendingEvents ??= [];
         for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
         return reply.status(200).send({ ended: notices.map(n => n.event.sessionId) });
+    });
+
+    // POST /bots/@me/terminal-sessions/status { contextPercent?, usagePercent?, usageLabel?, note?, threadId? }
+    //   → 200 { sessions: [sessionId], warned: boolean }
+    // agora-mcp's agent_status tool (#230, docs/agent-sessions.md "Terminal sessions"): a terminal
+    // agent reports how much of its context window and plan/usage window it has used, and a short
+    // note. Stored on its live terminal sessions (omitted fields keep their value). The first time
+    // a session reaches 80% of either, one notice asks it to hand off: in `threadId` when the bot
+    // can see that thread, else in each channel of the sessions that crossed. Hosted sessions have
+    // no row here (their runs report tokens themselves): 409 no_terminal_session.
+    app.post('/bots/@me/terminal-sessions/status', {
+        schema: {
+            body: {
+                type: 'object',
+                additionalProperties: false,
+                anyOf: [{ required: ['contextPercent'] }, { required: ['usagePercent'] }, { required: ['note'] }],
+                properties: {
+                    contextPercent: { type: 'integer', minimum: 0, maximum: 100 },
+                    usagePercent: { type: 'integer', minimum: 0, maximum: 100 },
+                    usageLabel: { type: 'string', minLength: 1, maxLength: 60 },
+                    note: { type: 'string', minLength: 1, maxLength: 200 },
+                    threadId: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        if (!request.isBot) {
+            return reply.status(403).send({ error: 'This endpoint is for bots only' });
+        }
+        const db = request.dbClient!;
+        const botId = request.userId!.trim();
+        const b = request.body as { contextPercent?: number; usagePercent?: number; usageLabel?: string; note?: string; threadId?: string };
+        // Shown in the UI and in notices: one line, no control characters
+        const line = (text: string | undefined) => {
+            const clean = text?.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+            return clean ? clean : undefined;
+        };
+        const status = { contextPercent: b.contextPercent, usagePercent: b.usagePercent, usageLabel: line(b.usageLabel), note: line(b.note) };
+
+        // The thread is looked up as the bot (RLS), and must be in a channel it has access to
+        let thread: { id: string; channelId: string } | null = null;
+        if (b.threadId) {
+            const row = (await db.query(
+                'SELECT channel_id FROM messages WHERE id = $1 AND thread_id IS NULL AND deleted_at IS NULL', [b.threadId])).rows[0];
+            if (row && (await canViewChannel(db, row.channel_id.trim(), botId, true)).allowed) {
+                thread = { id: b.threadId, channelId: row.channel_id.trim() };
+            }
+        }
+
+        // agent_sessions is read-only to app_user; terminal rows are written as the table owner
+        const notices = await asService(db, async () => {
+            const { updated, warn } = await storeTerminalStatus(db, botId, status);
+            if (updated.length === 0) return null;
+            const out: Notice[] = [];
+            for (const id of updated) out.push(await sessionUpdate(db, id, false));
+            if (warn.length > 0) {
+                const name = (await db.query('SELECT username FROM users WHERE id = $1', [botId])).rows[0]?.username ?? 'This agent';
+                // The highest figures any warned session reported
+                const top = (pick: (w: LimitWarning) => number | null) => warn.reduce<number | null>((m, w) => {
+                    const v = pick(w); return v === null ? m : Math.max(m ?? v, v);
+                }, null);
+                const label = warn.find(w => w.usageLabel)?.usageLabel ?? null;
+                if (thread) {
+                    out.push(...await postSessionNotice(db, thread.channelId, thread.id, limitNotice(name, top(w => w.contextPercent), top(w => w.usagePercent), label)));
+                } else {
+                    for (const w of warn) out.push(await postNotice(db, w.channelId, limitNotice(name, w.contextPercent, w.usagePercent, w.usageLabel)));
+                }
+            }
+            return { out, updated, warned: warn.length > 0 };
+        });
+        if (!notices) return reply.status(409).send({ error: 'no_terminal_session' });
+        request.pendingEvents ??= [];
+        for (const n of notices.out) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
+        return reply.status(200).send({ sessions: notices.updated, warned: notices.warned });
     });
 
     // ─── Bot Cursor Management (bot auth) ───

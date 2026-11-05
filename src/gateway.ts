@@ -10,7 +10,7 @@ import { socketAccountError, visibleChannels, gatewayAccessRevision, revalidateH
 import { canViewChannel } from './lib/channel-access';
 import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
 import { agentPresence, type AgentPresencePayload } from './lib/agent-presence';
-import { attachTerminal, endTerminal, heartbeatTerminals, reattachTerminal, sweepStaleTerminals, terminalActivity, terminalGraceMs, HEARTBEAT_MS } from './lib/terminal-sessions';
+import { attachTerminal, cleanToolName, endTerminal, heartbeatTerminals, reattachTerminal, sweepStaleTerminals, terminalActivity, terminalGraceMs, terminalListening, HEARTBEAT_MS } from './lib/terminal-sessions';
 import type { Notice } from './lib/agent-runs';
 import { checkProvenance, recordRefusal, type ProvenanceCredential } from './lib/boxes/provenance';
 
@@ -296,26 +296,39 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     // stayed up (/clear keeps agora-mcp running): listening or working again
                     // starts a fresh one. Chained, so an Activity update lands on the new row.
                     let terminalQueue: Promise<unknown> = Promise.resolve();
+                    // Read when the queued write runs, so it is the bot's state in this process then
+                    const isListening = () => agentPresence.status(botId).status === 'listening';
                     const reopen = () => {
                         terminalQueue = terminalQueue.then(async () => {
                             if (!socket.connected) return;
-                            const reopened = await reattachTerminal(db, botId, channelIds, mode);
+                            const reopened = await reattachTerminal(db, botId, channelIds, mode, isListening());
                             if (!reopened) return;
                             emitNotices(reopened.notices);
                             if (socket.connected) socket.emit('TerminalSession', { sessions: reopened.attached });
                         }).catch(() => {});
                         return terminalQueue;
                     };
+                    // Listening or not, kept on the terminal sessions (#230): a session that is
+                    // neither listening nor working is idle, and its chip and nudges say so
+                    const syncListening = () => {
+                        terminalQueue = terminalQueue
+                            .then(() => terminalListening(db, botId, isListening()))
+                            .then(emitNotices).catch(() => {});
+                    };
                     socket.on('Listening', (data: { listening?: unknown }) => {
                         if (typeof data?.listening !== 'boolean') return;
                         broadcast(agentPresence.setListening(botId, socket.id, data.listening));
                         if (data.listening) void reopen();
+                        syncListening();
                     });
                     // Terminal session (#112): back from a short drop, or new
                     const pending = graceTimers.get(botId);
                     if (pending) { clearTimeout(pending); graceTimers.delete(botId); }
                     socket.on('disconnect', () => {
-                        broadcast(agentPresence.disconnect(botId, socket.id));
+                        const changed = agentPresence.disconnect(botId, socket.id);
+                        broadcast(changed);
+                        // A listening socket left while another stays: the bot may not be listening any more
+                        if (changed.length > 0 && agentPresence.status(botId).status !== 'offline') syncListening();
                         if (agentPresence.status(botId).status !== 'offline' || graceTimers.has(botId)) return;
                         const timer = setTimeout(() => {
                             graceTimers.delete(botId);
@@ -325,16 +338,18 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                         timer.unref();
                         graceTimers.set(botId, timer);
                     });
-                    // agora-mcp: working (calling tools) or idle, and the tool calls it saw
-                    socket.on('Activity', (data: { working?: unknown; toolCalls?: unknown }) => {
+                    // agora-mcp: working (calling tools) or idle, the tool calls it saw and the last tool
+                    socket.on('Activity', (data: { working?: unknown; toolCalls?: unknown; lastTool?: unknown }) => {
                         if (typeof data?.working !== 'boolean') return;
                         const calls = Number.isSafeInteger(data.toolCalls) && (data.toolCalls as number) >= 0 ? data.toolCalls as number : null;
+                        const lastTool = cleanToolName(data.lastTool);
                         const ready = data.working ? reopen() : terminalQueue;
-                        void ready.then(() => terminalActivity(db, botId, data.working as boolean, calls)).then(emitNotices).catch(() => {});
+                        // In the queue, so a Listening update that came later lands after this one
+                        terminalQueue = ready.then(() => terminalActivity(db, botId, data.working as boolean, calls, lastTool)).then(emitNotices).catch(() => {});
                     });
                     // Chat keeps working if this fails; the agent just shows no terminal session
                     terminalQueue = terminalQueue.then(async () => {
-                        const { attached, notices } = await attachTerminal(db, botId, channelIds, mode);
+                        const { attached, notices } = await attachTerminal(db, botId, channelIds, mode, isListening());
                         emitNotices(notices);
                         if (socket.connected) socket.emit('TerminalSession', { sessions: attached });
                     }).catch(() => { /* presence still works */ });

@@ -63,6 +63,8 @@ export interface EnvelopeMessage {
     systemEvent?: string;
     replyCount?: number;
     threadClosedAt?: string | null;
+    threadCloseReason?: string | null;
+    threadSuccessorId?: string | null;
     artifact?: { id: string; version: number; title: string; kind: string };
     attachments?: Array<{ id: string; name: string; mime?: string | null; width?: number | null; height?: number | null; deletedAt?: string | null }>;
 }
@@ -87,6 +89,13 @@ function formatAttachments(attachments: EnvelopeMessage['attachments']): string 
     return ` [attachments: ${items.join('; ')}]`;
 }
 
+/** "thread closed", "thread closed as done", "thread closed as superseded → 01H…" (#132). */
+export function closedThreadLabel(m: { threadCloseReason?: string | null; threadSuccessorId?: string | null }): string {
+    const reason = m.threadCloseReason ? ` as ${m.threadCloseReason}` : '';
+    const next = m.threadSuccessorId ? ` → continues in thread ${m.threadSuccessorId}` : '';
+    return `thread closed${reason}${next}`;
+}
+
 export function formatMessages(messages: EnvelopeMessage[]): string {
     if (messages.length === 0) return 'No messages.';
     return messages.map(m => {
@@ -95,7 +104,7 @@ export function formatMessages(messages: EnvelopeMessage[]): string {
         if (m.deletedAt) return `[${m.createdAt}] (${m.id}) ${author}: [deleted]`;
         let thread = '';
         if (m.replyCount && m.replyCount > 0) {
-            thread = m.threadClosedAt ? ` [thread closed: ${m.replyCount} replies]` : ` [thread: ${m.replyCount} replies]`;
+            thread = m.threadClosedAt ? ` [${closedThreadLabel(m)}: ${m.replyCount} replies]` : ` [thread: ${m.replyCount} replies]`;
         }
         const canvas = m.artifact
             ? ` [canvas: "${oneLine(m.artifact.title)}" v${m.artifact.version} (${m.artifact.kind}), artifact ${m.artifact.id}]`

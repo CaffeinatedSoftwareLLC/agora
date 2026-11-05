@@ -121,10 +121,44 @@ describe('ConsoleStrip', () => {
     expect(claude.compareDocumentPosition(codex) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(post).toHaveBeenCalledWith(`/channels/${CH}/agent-commands`, { command: 'sessions' });
 
+    fireEvent.click(screen.getByTestId('threads-toggle'));
     const thread = screen.getByRole('button', { name: /Open thread \(TURN, next: codex\): Plan the redesign, 4 replies/ });
     expect(within(thread).getByText('→ codex')).toBeTruthy();
     fireEvent.click(thread);
     expect(onOpenThread).toHaveBeenCalledWith('T1');
+  });
+
+  it('collapses the thread chips behind a count of every open thread, and pages in more when shown (#14, #18)', async () => {
+    post.mockResolvedValue({ sessions: [] });
+    const thread = (id: string, waits = false) => ({
+      id, content: `Thread ${id}`, authorId: null, authorUsername: null, channelId: CH, createdAt: '',
+      replyCount: 2, lastReplyAt: '2026-11-05T10:00:00.000Z', previewReplies: [],
+      ...(waits ? { waiting: { on: 'codex', for: null, since: '2026-11-05T10:00:00.000Z', messageId: id } } : {}),
+    });
+    const loadMoreThreads = vi.fn(async () => {});
+    useThreadStore.setState({
+      activeThreads: new Map([[CH, ['T1', 'T2', 'T3', 'T4', 'T5'].map((id, i) => thread(id, i === 0))]]),
+      threadTotals: new Map([[CH, 12]]), hasMoreThreads: new Map([[CH, true]]), loadMoreThreads,
+    });
+    render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
+
+    // Collapsed by default: one chip with the channel's total, not the 5 loaded
+    const toggle = screen.getByTestId('threads-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-label')).toBe('Active threads (12), 1 waiting on someone. Show them');
+    expect(within(toggle).getByText('12')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Open thread/ })).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getAllByRole('button', { name: /Open thread/ })).toHaveLength(5);
+    expect(localStorage.setItem).toHaveBeenCalledWith('agora.consoleStrip.threadsOpen', '1');
+    fireEvent.click(screen.getByRole('button', { name: 'Show more threads (7 more)' }));
+    expect(loadMoreThreads).toHaveBeenCalledWith(CH);
+
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('button', { name: /Open thread/ })).toBeNull();
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('agora.consoleStrip.threadsOpen', '0');
   });
 
   it('shows Sleeping and the reset time on a rate-limited agent chip (#147)', async () => {
@@ -151,6 +185,7 @@ describe('ConsoleStrip', () => {
       latestProtocol: { version: 1, mode: 'fix', state: 'TURN', yieldTo: 'codex', messageId: 'T3', authorUsername: 'claude' },
     }]]]), repliesByThread: new Map([['T1', [message({ id: 'T2', protocol: { version: 1, mode: 'fix', state: 'ACK' } })]]]) });
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
+    fireEvent.click(screen.getByTestId('threads-toggle'));
     expect(screen.getByRole('button', { name: /Open thread \(TURN, next: codex\)/ })).toBeTruthy();
     act(() => useThreadStore.getState().addReply({ ...message({ id: 'T4', protocol: { version: 1, mode: 'fix', state: 'DONE' } }), content: 'Done', threadId: 'T1' }));
     expect(screen.getByRole('button', { name: /Open thread \(DONE\)/ })).toBeTruthy();

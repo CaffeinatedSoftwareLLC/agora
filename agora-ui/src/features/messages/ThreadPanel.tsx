@@ -11,6 +11,7 @@ import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 import { ProtocolBadge } from './ProtocolBadge';
 import { latestProtocol } from './latestProtocol';
 import { threadWaiting } from './threadWaiting';
+import { closingNotice } from './closingNotice';
 import { ThreadWaitingBanner } from './ThreadWaitingBanner';
 import { ThreadOwnerBadge } from '../agents/HandoffCard';
 import { useThreadOwner } from '../agents/handoffs';
@@ -36,6 +37,7 @@ export function ThreadPanel() {
   const deleteReply = useThreadStore(s => s.deleteReply);
   const closeThreadRemote = useThreadStore(s => s.closeThreadRemote);
   const reopenThread = useThreadStore(s => s.reopenThread);
+  const openThread = useThreadStore(s => s.openThread);
   const activeThreads = useThreadStore(s => s.activeThreads);
   const loadOlder = useThreadStore(s => s.loadOlder);
   const loadReplies = useThreadStore(s => s.loadReplies);
@@ -149,6 +151,8 @@ export function ThreadPanel() {
   const parentMessage = channelMessages.find(m => m.id === openThreadId);
   const threadClosedAt = parentMessage?.threadClosedAt;
   const isClosed = !!threadClosedAt;
+  // How it ended and where the work went, from the closing notice (#132)
+  const closing = isClosed ? closingNotice(replies, threadClosedAt) : null;
   // Collab session state: latest protocol header across parent + replies
   const sessionProtocol = latestProtocol([...(parentMessage ? [parentMessage] : []), ...replies]);
   // Who the thread waits on, from the same messages (#327)
@@ -341,7 +345,20 @@ export function ThreadPanel() {
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
               <path d="M7 11V7a5 5 0 0110 0v4" />
             </svg>
-            Thread closed
+            {closing?.reason ? `Thread closed as ${closing.reason}` : 'Thread closed'}
+            {closing?.successorId && (closing.successorChannelId ?? openThreadChannelId) === openThreadChannelId && (
+              <button
+                type="button"
+                className="ml-1 underline underline-offset-2"
+                style={{ color: P.accent }}
+                onClick={() => openThread(openThreadChannelId, closing.successorId!)}
+              >
+                Open the thread it moved to
+              </button>
+            )}
+            {closing?.successorId && closing.successorChannelId && closing.successorChannelId !== openThreadChannelId && (
+              <span className="ml-1">· continues in thread {closing.successorId}</span>
+            )}
           </div>
         </div>
       ) : (

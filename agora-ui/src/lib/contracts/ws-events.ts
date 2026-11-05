@@ -113,6 +113,9 @@ export interface ThreadMetadataUpdatePayload {
   replyCount: number;
   lastReplyAt: string | null;
   threadClosedAt?: string | null;
+  /** On a close (#132): how the thread ended and the thread its work moved to. */
+  closeReason?: 'done' | 'blocked' | 'cancelled' | 'superseded' | null;
+  successorId?: string | null;
 }
 
 export interface ServerJoinPayload {

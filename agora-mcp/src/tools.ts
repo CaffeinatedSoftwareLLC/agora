@@ -58,6 +58,13 @@ export function formatProject(channelName: string, p: ProjectContext): string {
     return lines.join('\n');
 }
 
+/** "thread closed", "thread closed as done", "thread closed as superseded → 01H…" (#132). */
+export function closedThreadLabel(m: { threadCloseReason?: string | null; threadSuccessorId?: string | null }): string {
+    const reason = m.threadCloseReason ? ` as ${m.threadCloseReason}` : '';
+    const next = m.threadSuccessorId ? ` → continues in thread ${m.threadSuccessorId}` : '';
+    return `thread closed${reason}${next}`;
+}
+
 export function formatMessages(messages: Message[]): string {
     if (messages.length === 0) return 'No messages.';
     return messages.map(m => {
@@ -67,7 +74,7 @@ export function formatMessages(messages: Message[]): string {
         let thread = '';
         if (m.replyCount && m.replyCount > 0) {
             thread = m.threadClosedAt
-                ? ` [thread closed: ${m.replyCount} replies]`
+                ? ` [${closedThreadLabel(m)}: ${m.replyCount} replies]`
                 : ` [thread: ${m.replyCount} replies]`;
         }
         const canvas = m.artifact
@@ -92,11 +99,24 @@ export function formatAttachments(attachments: Attachment[] | undefined): string
     return ` [attachments: ${items.join('; ')}]`;
 }
 
-export function formatThreads(threads: ThreadSummary[]): string {
-    if (threads.length === 0) return 'No open threads.';
+export function formatThreads(threads: ThreadSummary[], closed = false): string {
+    if (threads.length === 0) return closed ? 'No closed threads.' : 'No open threads.';
     return threads.map(t => {
         const preview = oneLine(t.content || '').slice(0, 120);
-        return `(${t.id}) ${authorLabel(t)}: ${preview} — ${t.replyCount} replies, last ${t.lastReplyAt}${formatWaiting(t.waiting)}`;
+        if (t.threadClosedAt) {
+            const how = t.closeReason ? ` as ${t.closeReason}` : '';
+            const by = t.closedByUsername ? ` by ${oneLine(t.closedByUsername)}` : '';
+            const next = t.successorId ? `; the work continues in thread ${t.successorId}` : '';
+            return `(${t.id}) ${authorLabel(t)}: ${preview} — closed${how}${by} ${t.threadClosedAt}${next}`;
+        }
+        const p = t.latestProtocol;
+        const protocol = p ? ` — latest: STATE=${oneLine(p.state)}${p.authorUsername ? ` by ${oneLine(p.authorUsername)}` : ''}` : '';
+        // An older thread with a newer request for you at the top of the channel: that request,
+        // not this thread, is probably your current work (#132)
+        const newer = t.newerRequestId
+            ? ` — NOTE: a newer request for you (message ${t.newerRequestId}) came after this thread's last reply; read it before resuming this thread`
+            : '';
+        return `(${t.id}) ${authorLabel(t)}: ${preview} — ${t.replyCount} replies, last ${t.lastReplyAt}${protocol}${formatWaiting(t.waiting)}${newer}`;
     }).join('\n');
 }
 
@@ -794,19 +814,22 @@ export function registerTools(
 
     server.tool(
         'thread_list',
-        'List open threads in a channel, most recently active first.',
+        'List open threads in a channel, most recently active first, with each one\'s latest protocol state. '
+            + 'An open thread is not necessarily current work: a NOTE marks one with a newer request for you in the channel. '
+            + 'closed=true lists recently closed threads instead, with how each ended and where its work moved.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             limit: z.number().optional().describe('Max threads to return (default: 10, max: 10)'),
+            closed: z.boolean().optional().describe('List recently closed threads instead of open ones'),
         },
-        async ({ channel, limit }) => {
+        async ({ channel, limit, closed }) => {
             const ch = await resolveChannel(channel);
-            const threads = await api.listThreads(ch.id, { limit: limit || 10 });
+            const threads = await api.listThreads(ch.id, { limit: limit || 10, ...(closed ? { state: 'closed' as const } : {}) });
 
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `#${oneLine(ch.name)} — ${threads.length} open thread(s):\n\n${formatThreads(threads)}`,
+                    text: `#${oneLine(ch.name)} — ${threads.length} ${closed ? 'recently closed' : 'open'} thread(s):\n\n${formatThreads(threads, !!closed)}`,
                 }],
             };
         },
@@ -814,21 +837,28 @@ export function registerTools(
 
     server.tool(
         'thread_close',
-        'Close a thread (no further replies), or reopen it with reopen=true. Requires being the thread starter or having Manage Messages.',
+        'Close a thread (no further replies), or reopen it with reopen=true. Allowed for the thread\'s author, the agent that posted '
+            + 'the collaboration\'s START in it, and members with Manage Messages. Say how it ended with `reason`; when the work moved '
+            + 'to another thread, pass that thread as `successor` so nobody resumes this one.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             thread: z.string().describe('Thread parent message ID'),
             reopen: z.boolean().optional().describe('Reopen a closed thread instead of closing it'),
+            reason: z.enum(['done', 'blocked', 'cancelled', 'superseded']).optional()
+                .describe('How it ended: done (DONE), blocked (BLOCK), cancelled (acknowledged CANCEL), superseded (the work moved)'),
+            successor: z.string().optional().describe('Thread ID the work moved to (implies reason=superseded)'),
         },
-        async ({ channel, thread, reopen }) => {
+        async ({ channel, thread, reopen, reason, successor }) => {
             const ch = await resolveChannel(channel);
-            await api.setThreadClosed(ch.id, thread, !reopen);
+            const res = await api.setThreadClosed(ch.id, thread, !reopen, reopen ? undefined : { reason, successor });
             if (!reopen) turns.settle(ch.id, thread);
+            const how = !reopen && res?.closeReason ? ` as ${res.closeReason}` : '';
+            const next = !reopen && res?.successorId ? `; the work continues in thread ${res.successorId}` : '';
 
             return {
                 content: [{
                     type: 'text' as const,
-                    text: `${label(ch.name, thread)} ${reopen ? 'reopened' : 'closed'}`,
+                    text: `${label(ch.name, thread)} ${reopen ? 'reopened' : `closed${how}${next}`}`,
                 }],
             };
         },
@@ -1005,6 +1035,48 @@ export function registerTools(
             const ch = await resolveChannel(channel);
             const res = await explainCannotDirect(ch.name, () => api.agentCommand(ch.id, { command: 'end', profile }));
             return { content: [{ type: 'text' as const, text: `Session ended: ${res.session ? formatSession(res.session) : ''}` }] };
+        },
+    );
+
+    server.tool(
+        'agent_status',
+        'Report how much of your context window (and, if you know it, your plan or rate-limit usage window) you have used, for the people watching in Agora. '
+        + 'For an agent running in its own terminal: the session chip shows it, and at 80% Agora posts one notice that you should hand off. '
+        + 'Report at about 80% context, then hand off before the limit: post where the work stands and what is next, so a fresh session can continue. '
+        + 'Hosted sessions don\'t need this: their runs report token use themselves.',
+        {
+            context_percent: z.number().int().min(0).max(100).optional().describe('Share of your context window used, 0-100'),
+            usage_percent: z.number().int().min(0).max(100).optional().describe('Share of your plan or rate-limit window used, 0-100'),
+            usage_label: z.string().min(1).max(60).optional().describe('Which window usage_percent is, e.g. "5h window" or "weekly"'),
+            note: z.string().min(1).max(200).optional().describe('A short status line, e.g. "wrapping up the migration, handing off next"'),
+            thread: z.string().optional().describe('Thread parent message ID: where the hand-off notice goes (default: the channels you are connected to)'),
+        },
+        async ({ context_percent, usage_percent, usage_label, note, thread }) => {
+            if (context_percent === undefined && usage_percent === undefined && note === undefined) {
+                throw new Error('Report at least one of context_percent, usage_percent or note.');
+            }
+            let res;
+            try {
+                res = await api.reportStatus({
+                    ...(context_percent !== undefined ? { contextPercent: context_percent } : {}),
+                    ...(usage_percent !== undefined ? { usagePercent: usage_percent } : {}),
+                    ...(usage_label ? { usageLabel: usage_label } : {}),
+                    ...(note ? { note } : {}),
+                    ...(thread ? { threadId: thread } : {}),
+                });
+            } catch (error) {
+                if (error instanceof AgoraApiError && error.code === 'no_terminal_session') {
+                    throw new Error('No terminal session to report on: agent_status is for an agent connected from its own terminal with presence. Hosted sessions report token use on their own.');
+                }
+                throw error;
+            }
+            const parts = [
+                context_percent !== undefined ? `context ${context_percent}%` : null,
+                usage_percent !== undefined ? `usage ${usage_percent}%${usage_label ? ` (${oneLine(usage_label)})` : ''}` : null,
+                note ? `note "${oneLine(note)}"` : null,
+            ].filter(Boolean).join(', ');
+            return { content: [{ type: 'text' as const, text: `Status reported (${parts}) on ${res.sessions.length} terminal session${res.sessions.length === 1 ? '' : 's'}.`
+                + (res.warned ? ' Agora posted that you are near a limit: hand off now. Post where the work stands and what is next, then stop so a fresh session can take over.' : '') }] };
         },
     );
 

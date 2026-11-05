@@ -63,7 +63,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Fetch parent message
         const parent = await db.query(
-            'SELECT id, channel_id, thread_id, thread_closed_at, author_id FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT id, channel_id, thread_id, thread_closed_at, thread_successor_id, author_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
@@ -77,7 +77,12 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Reject replies to closed threads
         if (parent.rows[0].thread_closed_at !== null) {
-            return reply.status(409).send({ error: 'Thread is closed' });
+            // Where the work went, so the agent moves there instead of resuming it here (#132)
+            const successorId = parent.rows[0].thread_successor_id?.trim() || null;
+            return reply.status(409).send({
+                error: 'Thread is closed',
+                ...(successorId ? { successorId, message: `This thread is closed; the work continues in thread ${successorId}.` } : {}),
+            });
         }
 
         // Before the insert: a request that fails later still commits what it wrote
@@ -344,7 +349,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Verify parent exists in channel
         const parent = await db.query(
-            'SELECT thread_closed_at FROM messages WHERE id = $1 AND channel_id = $2',
+            'SELECT thread_closed_at, thread_close_reason, thread_successor_id FROM messages WHERE id = $1 AND channel_id = $2',
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
@@ -353,6 +358,9 @@ export async function threadRoutes(app: FastifyInstance) {
         // Open or closed, also for a thread with no replies yet (agora-mcp's Stop hook reads it;
         // the body stays the reply list every caller expects)
         reply.header('X-Agora-Thread-State', parent.rows[0].thread_closed_at ? 'closed' : 'open');
+        // How a closed thread ended and where its work went (#132)
+        if (parent.rows[0].thread_close_reason) reply.header('X-Agora-Thread-Close-Reason', parent.rows[0].thread_close_reason);
+        if (parent.rows[0].thread_successor_id) reply.header('X-Agora-Thread-Successor', parent.rows[0].thread_successor_id.trim());
 
         let limit = rawLimit ? parseInt(rawLimit, 10) : 50;
         if (isNaN(limit) || limit < 1) limit = 50;
@@ -428,33 +436,56 @@ export async function threadRoutes(app: FastifyInstance) {
         return reply.status(200).send(messages);
     });
 
-    // GET /channels/:id/threads?limit&before → 200 [ThreadSummary]
-    app.get('/channels/:id/threads', async (request, reply) => {
+    // GET /channels/:id/threads?limit&before&state → 200 [ThreadSummary], X-Total-Count: every match
+    // state=open (default): threads with replies that are not closed, most recently active first.
+    // state=closed: closed threads, most recently closed first, with why and where the work went (#132).
+    app.get('/channels/:id/threads', {
+        schema: { querystring: { type: 'object', properties: {
+            limit: { type: 'integer' },
+            before: { type: 'string', minLength: 1, maxLength: 64 },
+            state: { type: 'string', enum: ['open', 'closed'] },
+        } } },
+    }, async (request, reply) => {
         const { id: channelId } = request.params as any;
         const userId = request.userId;
-        const { limit: rawLimit, before } = request.query as any;
+        const { limit: rawLimit, before, state = 'open' } = request.query as any;
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, !!request.isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+            return reply.status(400).send({ error: 'before must be a timestamp' });
+        }
 
         let limit = rawLimit ? parseInt(rawLimit, 10) : 5;
         if (isNaN(limit) || limit < 1) limit = 5;
         if (limit > 10) limit = 10;
 
-        let query: string;
-        let params: any[];
+        const closed = state === 'closed';
+        // Only fixed SQL fragments enter the query; values stay parameterized.
+        const where = closed
+            ? 'p.channel_id = $1 AND p.thread_id IS NULL AND p.deleted_at IS NULL AND p.thread_closed_at IS NOT NULL'
+            : 'p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL AND p.thread_closed_at IS NULL';
+        const sortColumn = closed ? 'p.thread_closed_at' : 'p.last_reply_at';
+        const me = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? '';
+        const params: any[] = [channelId, userId, me];
+        if (before) params.push(before);
+        params.push(limit);
 
-        if (before) {
-            query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
+        const query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
                             p.created_at, p.edited_at, p.deleted_at, p.author_could_direct, p.system_event,
+                            p.thread_closed_at, p.thread_close_reason, p.thread_successor_id, cb.username AS closed_by_username,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
-                            latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
+                            latest.id AS protocol_message_id, latest.author_username AS protocol_author_username,
+                            newer.id AS newer_request_id,
+                            EXISTS (SELECT 1 FROM messages s WHERE (s.thread_id = p.id OR s.id = p.id) AND s.author_id = $2
+                                    AND s.protocol->>'state' = 'START' AND s.deleted_at IS NULL) AS started_here
                      FROM messages p
                      LEFT JOIN users u ON u.id = p.author_id
+                     LEFT JOIN users cb ON cb.id = p.thread_closed_by
                      LEFT JOIN LATERAL (
                          SELECT json_agg(sub ORDER BY sub.id ASC) AS replies
                          FROM (
@@ -479,53 +510,26 @@ export async function threadRoutes(app: FastifyInstance) {
                          ) c LEFT JOIN users cu ON cu.id = c.author_id
                          ORDER BY c.id DESC LIMIT 1
                      ) latest ON true
-                     WHERE p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL
-                       AND p.thread_closed_at IS NULL AND p.last_reply_at < $2
-                     ORDER BY p.last_reply_at DESC
-                     LIMIT $3`;
-            params = [channelId, before, limit];
-        } else {
-            query = `SELECT p.id, p.content, p.author_id, p.channel_id, p.reply_count, p.last_reply_at,
-                            p.created_at, p.edited_at, p.deleted_at, p.author_could_direct, p.system_event,
-                            u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            previews.replies AS preview_replies, latest.protocol AS latest_protocol,
-                            latest.id AS protocol_message_id, latest.author_username AS protocol_author_username
-                     FROM messages p
-                     LEFT JOIN users u ON u.id = p.author_id
                      LEFT JOIN LATERAL (
-                         SELECT json_agg(sub ORDER BY sub.id ASC) AS replies
-                         FROM (
-                             SELECT r.id, r.content, r.author_id,
-                                    ru.username AS author_username, ru.avatar_url AS author_avatar_url
-                             FROM messages r
-                             LEFT JOIN users ru ON ru.id = r.author_id
-                             WHERE r.thread_id = p.id AND r.deleted_at IS NULL
-                             ORDER BY r.id DESC
-                             LIMIT 2
-                         ) sub
-                     ) previews ON true
-                     LEFT JOIN LATERAL (
-                         -- Newest protocol reply via idx_messages_thread_replies, else the parent's own.
-                         SELECT c.id, c.protocol, cu.username AS author_username
-                         FROM (
-                             (SELECT r.id, r.protocol, r.author_id FROM messages r
-                              WHERE r.thread_id = p.id AND r.protocol IS NOT NULL AND r.deleted_at IS NULL
-                              ORDER BY r.id DESC LIMIT 1)
-                             UNION ALL
-                             SELECT p.id, p.protocol, p.author_id WHERE p.protocol IS NOT NULL
-                         ) c LEFT JOIN users cu ON cu.id = c.author_id
-                         ORDER BY c.id DESC LIMIT 1
-                     ) latest ON true
-                     WHERE p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL
-                       AND p.thread_closed_at IS NULL
-                     ORDER BY p.last_reply_at DESC
-                     LIMIT $2`;
-            params = [channelId, limit];
-        }
+                         -- A newer top-level message in this channel addressed to the caller (an @mention
+                         -- or a YIELD): the coordination may have moved on since this thread went quiet (#132)
+                         SELECT n.id FROM messages n
+                         WHERE n.channel_id = p.channel_id AND n.thread_id IS NULL AND n.deleted_at IS NULL
+                           AND n.id <> p.id AND n.created_at > p.last_reply_at AND n.author_id IS DISTINCT FROM $2
+                           AND (lower(n.protocol->>'yieldTo') = lower($3)
+                                OR EXISTS (SELECT 1 FROM message_mentions mm WHERE mm.message_id = n.id AND mm.user_id = $2))
+                         ORDER BY n.id DESC LIMIT 1
+                     ) newer ON ${closed ? 'false' : 'true'}
+                     WHERE ${where}${before ? ` AND ${sortColumn} < $4` : ''}
+                     ORDER BY ${sortColumn} DESC
+                     LIMIT $${params.length}`;
 
         const result = await db.query(query, params);
+        // The count shows every match, not the page loaded so far (#14)
+        const total = (await db.query(`SELECT COUNT(*)::int AS n FROM messages p WHERE ${where}`, [channelId])).rows[0].n;
+        reply.header('X-Total-Count', String(total));
 
-        // Compute canClose: author OR ManageMessages/Administrator
+        // canClose: the author, whoever STARTed a collaboration in it, or ManageMessages/Administrator
         const channelRow = await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId]);
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
         let hasManagePerms = false;
@@ -553,13 +557,20 @@ export async function threadRoutes(app: FastifyInstance) {
             lastReplyAt: row.last_reply_at,
             // Tells a system line (task card, subtask) from a deleted account's post: both have no author
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
-            canClose: hasManagePerms || (row.author_id?.trim() === userId.trim()),
+            canClose: hasManagePerms || (row.author_id?.trim() === userId.trim()) || !!row.started_here,
+            threadClosedAt: row.thread_closed_at ?? null,
+            // Why it ended and where the work went (#132); null on open threads
+            closeReason: row.thread_close_reason ?? null,
+            successorId: row.thread_successor_id?.trim() || null,
+            closedByUsername: row.closed_by_username ?? null,
+            // A newer request for the caller at the top of the channel: check it before resuming this one
+            newerRequestId: row.newer_request_id?.trim() || null,
             latestProtocol: row.latest_protocol ? {
                 ...row.latest_protocol, messageId: row.protocol_message_id.trim(),
                 authorUsername: row.protocol_author_username ?? null,
             } : null,
             // Who the thread waits on since its latest protocol message, and for what (#327)
-            waiting: waitingJson(row.latest_protocol, row.protocol_message_id, row.protocol_author_username),
+            waiting: closed ? null : waitingJson(row.latest_protocol, row.protocol_message_id, row.protocol_author_username),
             previewReplies: (row.preview_replies || []).map((r: any) => ({
                 id: r.id?.trim(),
                 content: r.content,
@@ -572,31 +583,46 @@ export async function threadRoutes(app: FastifyInstance) {
         return reply.status(200).send(threads);
     });
 
-    // PATCH /channels/:id/messages/:msgId/thread → 200 { id, threadClosedAt }
+    // PATCH /channels/:id/messages/:msgId/thread { closed, reason?, successor? } → 200 { id, threadClosedAt, closeReason, successorId }
+    // Who may close: the thread's author, an agent that posted the collaboration's START in it
+    // (it may run a protocol under someone else's message, #132), or Manage Messages/Administrator.
+    // `reason` says how it ended; `successor` names the thread the work moved to (reason defaults
+    // to superseded). Closing with either posts a notice in the thread, so its history says so.
     app.patch('/channels/:id/messages/:msgId/thread', {
         schema: {
             body: {
                 type: 'object',
                 required: ['closed'],
+                additionalProperties: false,
                 properties: {
                     closed: { type: 'boolean' },
+                    reason: { type: 'string', enum: ['done', 'blocked', 'cancelled', 'superseded'] },
+                    successor: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' },
                 },
             },
         },
     }, async (request, reply) => {
         const { id: channelId, msgId } = request.params as any;
         const userId = request.userId;
-        const { closed } = request.body as any;
+        const { closed, successor } = request.body as any;
+        let { reason } = request.body as any;
         const db = request.dbClient!;
 
         const access = await canViewChannel(db, channelId, userId, !!request.isBot);
         if (!access.allowed) {
             return reply.status(403).send({ error: 'Channel access denied' });
         }
+        if (!closed && (reason || successor)) {
+            return reply.status(400).send({ error: 'reason and successor apply only when closing' });
+        }
+        if (successor && reason && reason !== 'superseded') {
+            return reply.status(400).send({ error: 'A thread with a successor was superseded' });
+        }
+        if (successor) reason = 'superseded';
 
         // Fetch parent message (thread_id IS NULL ensures only parents)
         const parent = await db.query(
-            `SELECT id, author_id, reply_count, last_reply_at, thread_closed_at
+            `SELECT id, author_id, reply_count, last_reply_at, thread_closed_at, thread_close_reason, thread_successor_id
              FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL`,
             [msgId, channelId]
         );
@@ -611,54 +637,135 @@ export async function threadRoutes(app: FastifyInstance) {
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
 
         if (serverId) {
-            // Server channel: author OR ManageMessages OR Administrator
+            // Server channel: author, the collaboration's starter, ManageMessages or Administrator
             const isAuthor = parentRow.author_id?.trim() === userId.trim();
-            if (!isAuthor) {
+            const started = !isAuthor && (await db.query(
+                `SELECT 1 FROM messages WHERE thread_id = $1 AND author_id = $2 AND protocol->>'state' = 'START'
+                   AND deleted_at IS NULL LIMIT 1`,
+                [msgId, userId]
+            )).rows.length > 0;
+            if (!isAuthor && !started) {
                 const perms = await loadAndComputePermissions(db, userId, serverId);
                 const hasManagePerms = !!(perms & Permissions.ManageMessages) || !!(perms & Permissions.Administrator);
                 if (!hasManagePerms) {
-                    return reply.status(403).send({ error: 'Not authorized to close this thread' });
+                    return reply.status(403).send({
+                        error: 'Not authorized to close this thread',
+                        message: 'Only the thread\'s author, the agent that posted its START, or someone with Manage Messages can close it.',
+                    });
                 }
             }
         }
         // DM channels: any participant (membership already verified above)
 
-        // Idempotent: if already in desired state, return current state
+        let successorChannelId: string | null = null;
+        if (successor) {
+            if (successor === msgId.trim()) return reply.status(400).send({ error: 'A thread cannot succeed itself' });
+            // The successor is a top-level message in a channel the caller can see
+            const next = await db.query(
+                'SELECT channel_id FROM messages WHERE id = $1 AND thread_id IS NULL AND deleted_at IS NULL',
+                [successor]
+            );
+            const visible = next.rows[0] && (await canViewChannel(db, next.rows[0].channel_id.trim(), userId, !!request.isBot)).allowed;
+            if (!visible) return reply.status(400).send({ error: 'successor_not_found' });
+            successorChannelId = next.rows[0].channel_id.trim();
+        }
+
+        const state = (row: any) => ({
+            id: row.id.trim(),
+            threadClosedAt: row.thread_closed_at,
+            closeReason: row.thread_close_reason ?? null,
+            successorId: row.thread_successor_id?.trim() || null,
+        });
+
+        // Idempotent: already in the desired state with nothing new to record
         const alreadyClosed = parentRow.thread_closed_at !== null;
-        if (closed === alreadyClosed) {
-            return reply.status(200).send({
-                id: parentRow.id.trim(),
-                threadClosedAt: parentRow.thread_closed_at,
+        // A reason or successor not recorded yet (a repeat of the same close changes nothing)
+        const describes = closed && (
+            (!!reason && reason !== parentRow.thread_close_reason)
+            || (!!successor && successor !== parentRow.thread_successor_id?.trim()));
+        if (closed === alreadyClosed && !describes) {
+            return reply.status(200).send(state(parentRow));
+        }
+
+        // Close (or record why on an already closed thread), or reopen and forget why it closed
+        const result = closed
+            ? await db.query(
+                `UPDATE messages SET thread_closed_at = COALESCE(thread_closed_at, NOW()), thread_closed_by = $2,
+                     thread_close_reason = COALESCE($3, thread_close_reason),
+                     thread_successor_id = COALESCE($4, thread_successor_id)
+                 WHERE id = $1
+                 RETURNING id, thread_closed_at, thread_close_reason, thread_successor_id`,
+                [msgId, userId, reason ?? null, successor ?? null])
+            : await db.query(
+                `UPDATE messages SET thread_closed_at = NULL, thread_closed_by = NULL, thread_close_reason = NULL, thread_successor_id = NULL
+                 WHERE id = $1
+                 RETURNING id, thread_closed_at, thread_close_reason, thread_successor_id`,
+                [msgId]);
+
+        const updated = result.rows[0];
+        let replyCount = parentRow.reply_count;
+        let lastReplyAt = parentRow.last_reply_at;
+        request.pendingEvents = request.pendingEvents || [];
+
+        if (describes) {
+            // The thread's own history says how it ended and where the work went
+            const closer = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'someone';
+            const content = closedNotice(closer, updated.thread_close_reason, updated.thread_successor_id?.trim() || null);
+            const successorId = updated.thread_successor_id?.trim() || null;
+            if (successorId && !successorChannelId) {
+                successorChannelId = (await db.query('SELECT channel_id FROM messages WHERE id = $1', [successorId])).rows[0]?.channel_id?.trim() ?? null;
+            }
+            const systemData = { closedBy: userId.trim(), reason: updated.thread_close_reason, successorId, successorChannelId: successorId ? successorChannelId : null };
+            const noticeId = generateUlid();
+            const inserted = await db.query(
+                `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data, thread_id)
+                 VALUES ($1, $2, NULL, $3, 'thread_closed', $4, $5) RETURNING created_at`,
+                [noticeId, channelId, content, JSON.stringify(systemData), msgId]
+            );
+            const counts = await db.query(
+                `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW() WHERE id = $1
+                 RETURNING reply_count, last_reply_at`,
+                [msgId]
+            );
+            replyCount = counts.rows[0].reply_count;
+            lastReplyAt = counts.rows[0].last_reply_at;
+            request.pendingEvents.push({
+                room: `channel:${channelId.trim()}`,
+                event: 'Message',
+                data: {
+                    id: noticeId, content, authorId: null, authorUsername: null, authorBot: false,
+                    channelId: channelId.trim(), threadId: msgId.trim(), createdAt: inserted.rows[0].created_at,
+                    systemEvent: 'thread_closed', systemData, mentions: [], mentionsEveryone: false, attachments: [],
+                },
             });
         }
 
-        // Update
-        const result = await db.query(
-            `UPDATE messages SET thread_closed_at = ${closed ? 'NOW()' : 'NULL'}
-             WHERE id = $1
-             RETURNING id, thread_closed_at`,
-            [msgId]
-        );
-
-        const updated = result.rows[0];
-
         // Emit ThreadMetadataUpdate with threadClosedAt
-        request.pendingEvents = request.pendingEvents || [];
         request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ThreadMetadataUpdate',
             data: {
                 channelId: channelId.trim(),
                 messageId: updated.id.trim(),
-                replyCount: parentRow.reply_count,
-                lastReplyAt: parentRow.last_reply_at,
+                replyCount,
+                lastReplyAt,
                 threadClosedAt: updated.thread_closed_at,
+                closeReason: updated.thread_close_reason ?? null,
+                successorId: updated.thread_successor_id?.trim() || null,
             },
         });
 
-        return reply.status(200).send({
-            id: updated.id.trim(),
-            threadClosedAt: updated.thread_closed_at,
-        });
+        return reply.status(200).send(state(updated));
     });
+}
+
+const CLOSE_WORDS: Record<string, string> = {
+    done: 'as done', blocked: 'as blocked', cancelled: 'as cancelled', superseded: 'as superseded',
+};
+
+/** "Closed by codex as superseded. The work continues in thread 01H…; don't resume it here." */
+export function closedNotice(closer: string, reason: string | null, successorId: string | null): string {
+    const how = reason ? ` ${CLOSE_WORDS[reason]}` : '';
+    const next = successorId ? ` The work continues in thread ${successorId}; don't resume it here.` : '';
+    return `Closed by ${closer}${how}.${next}`;
 }

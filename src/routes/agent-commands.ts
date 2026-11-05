@@ -50,6 +50,10 @@ export function sessionJson(r: any) {
         ...(r.kind === 'terminal' ? {
             tokenBudget: null, wakeBudget: null, toolCalls: r.tool_calls, usageKnown: !!r.usage_known,
             terminalMode: r.terminal_mode ?? null, budgetEnforced: false,
+            // #230: listening (a chat_wait open), idle since when, and what the agent reported itself
+            listening: !!r.listening, idleSince: r.idle_since ?? null, lastTool: r.last_tool ?? null,
+            contextPercent: r.context_percent ?? null, usagePercent: r.usage_percent ?? null, usageLabel: r.usage_label ?? null,
+            statusNote: r.status_note ?? null, statusAt: r.status_at ?? null,
         } : {}),
     };
 }

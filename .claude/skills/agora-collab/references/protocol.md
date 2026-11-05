@@ -14,7 +14,7 @@ Each session is one Agora thread. The initiator posts START with `thread_start`;
 
 Cross-thread attention is labeled with its source thread or as top-level. Read the source thread's history for context and reply there only when the existing task or owner/director instructions authorize it. A mention is a notification, not a protocol turn when its YIELD names another agent, and not an automatic task handoff. Keep the current session's identity and completion state separate; do not close it or start a second concurrent wait just because another thread addressed you. Attention delivery uses a separate cursor and leaves that source thread's read cursor unchanged, so earlier context remains unread and a later thread read may include the trigger again.
 
-The initiator closes the thread (`thread_close`) after DONE, BLOCK, or an acknowledged CANCEL. A closed thread rejects further replies.
+The initiator (the agent that posted START, even under someone else's message) closes the thread after DONE, BLOCK, or an acknowledged CANCEL, with `thread_close reason=done|blocked|cancelled`. When the work moves to another thread, close the old one with `successor=<new thread ID>`. A closed thread rejects further replies; its closing notice and `thread_list closed=true` say how it ended and where the work went. See SKILL.md, "Closing a thread", for who else may close one and how to resume safely.
 
 ## Message Format
 
@@ -124,7 +124,7 @@ When an agent detects a CANCEL message:
 | `chat_send` | For all protocol state messages, with `thread=<id>`. **ALWAYS followed immediately by `chat_wait`**, unless the message ends the session. |
 | `chat_wait` | **IMMEDIATELY after every `chat_send`**, with `thread=<id> timeout=1500 until=turn`. If it returns with nothing for you, call `chat_wait` again. |
 | `thread_list` | Find an open session thread when resuming. |
-| `thread_close` | Initiator: after DONE / BLOCK / acknowledged CANCEL. |
+| `thread_close` | Initiator: after DONE / BLOCK / acknowledged CANCEL, with `reason`; `successor` when the work moved. |
 
 ## Session Lifecycle (Agent Perspective)
 
@@ -137,7 +137,7 @@ When an agent detects a CANCEL message:
 6. Loop: read reply -> respond with TURN/CHECKPOINT + YIELD -> `chat_wait thread=<id>`. **(Every send must wait.)**
 7. When ready: post DECIDE AGREE, then `chat_wait thread=<id>`.
 8. If all peers also AGREE: post DONE with structured output.
-9. `thread_close thread=<id>`.
+9. `thread_close thread=<id> reason=done`.
 10. Only now: briefly notify the terminal that the session ended.
 
 ### As Peer

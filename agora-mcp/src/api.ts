@@ -114,6 +114,9 @@ export interface Message {
     replyCount?: number;
     lastReplyAt?: string | null;
     threadClosedAt?: string | null;
+    /** How a closed thread ended and where its work went (#132). Older servers omit them. */
+    threadCloseReason?: string | null;
+    threadSuccessorId?: string | null;
     /** A canvas artifact this post carries (one version of it). */
     artifact?: ArtifactRef;
     /** Files attached to the post (pasted screenshots, shared documents). */
@@ -156,7 +159,18 @@ export interface ThreadSummary {
     systemEvent?: string;
     /** Who the thread waits on since its latest protocol message (#327). Older servers omit it. */
     waiting?: ThreadWaiting | null;
+    /** The newest protocol message in the thread. */
+    latestProtocol?: { state: string; yieldTo?: string; messageId: string; authorUsername: string | null } | null;
+    /** Closed threads (#132): when, how it ended, where its work went. Older servers omit them. */
+    threadClosedAt?: string | null;
+    closeReason?: ThreadCloseReason | null;
+    successorId?: string | null;
+    closedByUsername?: string | null;
+    /** A newer top-level message here addressed to you: the coordination may have moved on (#132). */
+    newerRequestId?: string | null;
 }
+
+export type ThreadCloseReason = 'done' | 'blocked' | 'cancelled' | 'superseded';
 
 export interface ThreadWaiting { on: string; for: string | null; since: string; messageId: string }
 
@@ -271,6 +285,15 @@ export interface ThreadCursor {
 }
 
 /** A non-2xx answer from Agora. `code` is the JSON body's `error`, when there is one. */
+/** What agent_status sends (POST /bots/@me/terminal-sessions/status). */
+export interface AgentStatusReport {
+    contextPercent?: number;
+    usagePercent?: number;
+    usageLabel?: string;
+    note?: string;
+    threadId?: string;
+}
+
 export class AgoraApiError extends Error {
     constructor(message: string, public status: number, public code: string | null, public body: any) {
         super(message);
@@ -488,6 +511,10 @@ export class AgoraApi {
     async startSubtask(channelId: string, body: SubtaskRequest): Promise<{ action: string; session: AgentSession }> {
         return this.request('POST', `/channels/${channelId}/subtasks`, body);
     }
+    /** agent_status (#230): context and usage-window use, stored on this bot's live terminal sessions. */
+    async reportStatus(body: AgentStatusReport): Promise<{ sessions: string[]; warned: boolean }> {
+        return this.request('POST', '/bots/@me/terminal-sessions/status', body);
+    }
     async fileReservation(channelId: string, body: {
         action: 'reserve' | 'renew' | 'release'; paths?: string[]; reservationId?: string;
         ttlSeconds?: number; reason?: string; threadId?: string; force?: boolean;
@@ -589,11 +616,12 @@ export class AgoraApi {
     /** Open threads in a channel, most recently active first. */
     async listThreads(
         channelId: string,
-        opts?: { limit?: number; before?: string },
+        opts?: { limit?: number; before?: string; state?: 'open' | 'closed' },
     ): Promise<ThreadSummary[]> {
         const params = new URLSearchParams();
         if (opts?.limit) params.set('limit', String(opts.limit));
         if (opts?.before) params.set('before', opts.before);
+        if (opts?.state === 'closed') params.set('state', 'closed');
         const qs = params.toString();
         return this.request('GET', `/channels/${channelId}/threads${qs ? `?${qs}` : ''}`);
     }
@@ -602,8 +630,13 @@ export class AgoraApi {
         channelId: string,
         threadId: string,
         closed: boolean,
-    ): Promise<{ id: string; threadClosedAt: string | null }> {
-        return this.request('PATCH', `/channels/${channelId}/messages/${threadId}/thread`, { closed });
+        opts?: { reason?: ThreadCloseReason; successor?: string },
+    ): Promise<{ id: string; threadClosedAt: string | null; closeReason?: ThreadCloseReason | null; successorId?: string | null }> {
+        return this.request('PATCH', `/channels/${channelId}/messages/${threadId}/thread`, {
+            closed,
+            ...(opts?.reason ? { reason: opts.reason } : {}),
+            ...(opts?.successor ? { successor: opts.successor } : {}),
+        });
     }
 
     async getThreadCursors(): Promise<ThreadCursor[]> {

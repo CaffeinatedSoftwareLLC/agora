@@ -11,8 +11,12 @@ import { postNotice, sessionUpdate, type Notice } from './agent-runs';
  *   create one.
  * - While it is live, the bot's hosted channel session in that channel takes no wakes
  *   (routeMessage, src/lib/agent-sessions.ts): one responder per bot.
- * - agora-mcp reports working/idle and the tool calls it saw (terminalActivity). Token use
- *   is unknown for most CLIs, and no budget applies: Agora can't stop a user's own CLI.
+ * - agora-mcp reports working/idle and the tool calls it saw (terminalActivity), and whether a
+ *   chat_wait is open (terminalListening). A session neither working nor listening is idle
+ *   (idle_since, #230): the chip says so, and handoff nudges don't count it as reached.
+ * - The agent may report its context and usage-window use itself (agent_status,
+ *   storeTerminalStatus); at 80% it gets one "hand off" notice. Token use is unknown for most
+ *   CLIs, and no budget applies: Agora can't stop a user's own CLI.
  * - When the last socket goes, the session ends after a grace period (endTerminal); a
  *   heartbeat keeps seen_at fresh and sweepStaleTerminals ends rows nobody heartbeats
  *   (another API process died, or this one restarted). Ending releases its reservations
@@ -78,7 +82,7 @@ export async function noticeStandby(c: PoolClient | any, channelId: string, botI
  * agora-mcp connected with presence: make (or keep) a live terminal session in each channel.
  * A session still in its grace period is reused, so a reconnect keeps its ID and reservations.
  */
-export async function attachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode): Promise<{ attached: Attached[]; notices: Notice[] }> {
+export async function attachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode, listening = mode === 'channel'): Promise<{ attached: Attached[]; notices: Notice[] }> {
     if (channelIds.length === 0) return { attached: [], notices: [] };
     return tx(pool, async (c) => {
         const attached: Attached[] = [];
@@ -88,9 +92,10 @@ export async function attachTerminal(pool: Pool, botId: string, channelIds: stri
             const channel = (await c.query('SELECT server_id FROM channels WHERE id = $1', [channelId])).rows[0];
             if (!channel) continue;
             const existing = (await c.query(
-                `UPDATE agent_sessions SET seen_at = NOW(), terminal_mode = $3, last_active_at = NOW()
+                `UPDATE agent_sessions SET seen_at = NOW(), terminal_mode = $3, last_active_at = NOW(), listening = $4,
+                     idle_since = CASE WHEN $4 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END
                  WHERE channel_id = $1 AND bot_id = $2 AND kind = 'terminal' AND state = 'live' RETURNING id`,
-                [channelId, botId, mode]
+                [channelId, botId, mode, listening]
             )).rows[0];
             let sessionId: string;
             if (existing) {
@@ -98,10 +103,10 @@ export async function attachTerminal(pool: Pool, botId: string, channelIds: stri
             } else {
                 sessionId = generateUlid();
                 const inserted = await c.query(
-                    `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, kind, started_by, terminal_mode, seen_at)
-                     VALUES ($1, $2, $3, $4, NULL, 'terminal', $5, $6, NOW())
+                    `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, kind, started_by, terminal_mode, seen_at, listening, idle_since)
+                     VALUES ($1, $2, $3, $4, NULL, 'terminal', $5, $6, NOW(), $7, CASE WHEN $7 THEN NULL ELSE NOW() END)
                      ON CONFLICT (channel_id, bot_id) WHERE state = 'live' AND kind = 'terminal' DO NOTHING RETURNING id`,
-                    [sessionId, channel.server_id, channelId, botId, owner, mode]
+                    [sessionId, channel.server_id, channelId, botId, owner, mode, listening]
                 );
                 if (!inserted.rows[0]) {
                     // Another socket of this bot attached first
@@ -119,19 +124,109 @@ export async function attachTerminal(pool: Pool, botId: string, channelIds: stri
     });
 }
 
-/** agora-mcp reported working/idle and its tool-call count. */
-export async function terminalActivity(pool: Pool, botId: string, working: boolean, toolCalls: number | null): Promise<Notice[]> {
+/**
+ * The tool name agora-mcp reports with Activity, as stored (#230): a short identifier only.
+ * Anything else becomes null, so the UI never shows raw text from the socket.
+ */
+export function cleanToolName(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const name = raw.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64);
+    return name.length > 0 ? name : null;
+}
+
+/**
+ * agora-mcp reported working/idle, its tool-call count and the last tool it called. A session
+ * that is neither working nor listening is idle from the first such report (idle_since).
+ */
+export async function terminalActivity(pool: Pool, botId: string, working: boolean, toolCalls: number | null, lastTool: string | null = null): Promise<Notice[]> {
     return tx(pool, async (c) => {
         const rows = await c.query(
             `UPDATE agent_sessions SET working = $2, tool_calls = GREATEST(tool_calls, COALESCE($3, tool_calls)),
-                 seen_at = NOW(), last_active_at = CASE WHEN $2 THEN NOW() ELSE last_active_at END
+                 seen_at = NOW(), last_active_at = CASE WHEN $2 THEN NOW() ELSE last_active_at END,
+                 idle_since = CASE WHEN $2 OR listening THEN NULL ELSE COALESCE(idle_since, NOW()) END,
+                 last_tool = COALESCE($4, last_tool)
              WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' RETURNING id`,
-            [botId, working, toolCalls]
+            [botId, working, toolCalls, lastTool]
         );
         const notices: Notice[] = [];
         for (const r of rows.rows) notices.push(await sessionUpdate(c, r.id.trim(), working));
         return notices;
     });
+}
+
+/**
+ * The bot's presence changed between listening (a chat_wait open, or a Claude Code Channel)
+ * and not (#230): keep it on its live terminal sessions, with idle_since. Rows already in that
+ * state are left alone, so a repeat posts no update.
+ */
+export async function terminalListening(pool: Pool, botId: string, listening: boolean): Promise<Notice[]> {
+    return tx(pool, async (c) => {
+        const rows = await c.query(
+            `UPDATE agent_sessions SET listening = $2, seen_at = NOW(),
+                 idle_since = CASE WHEN $2 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END
+             WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' AND listening <> $2 RETURNING id, working`,
+            [botId, listening]
+        );
+        const notices: Notice[] = [];
+        for (const r of rows.rows) notices.push(await sessionUpdate(c, r.id.trim(), !!r.working));
+        return notices;
+    });
+}
+
+/** What an agent reports about itself through agora-mcp's agent_status tool (#230). */
+export interface TerminalStatus {
+    contextPercent?: number;
+    usagePercent?: number;
+    usageLabel?: string;
+    note?: string;
+}
+
+/** At this share of its context or usage window, an agent should hand off. */
+export const LIMIT_WARN_PERCENT = 80;
+
+/** The one notice when a terminal agent reports it is near a limit. */
+export function limitNotice(bot: string, contextPercent: number | null, usagePercent: number | null, usageLabel: string | null): string {
+    const parts: string[] = [];
+    if (contextPercent !== null && contextPercent >= LIMIT_WARN_PERCENT) parts.push(`context at ${contextPercent}%`);
+    if (usagePercent !== null && usagePercent >= LIMIT_WARN_PERCENT) parts.push(`usage at ${usagePercent}%${usageLabel ? ` (${usageLabel})` : ''}`);
+    return `${bot} reports ${parts.join(' and ')}. It should hand off before it runs out: post where the work stands, `
+        + 'then continue in a fresh session.';
+}
+
+export interface LimitWarning {
+    sessionId: string; channelId: string;
+    contextPercent: number | null; usagePercent: number | null; usageLabel: string | null;
+}
+
+/**
+ * Store an agent_status report on the bot's live terminal sessions, in the caller's transaction
+ * as the table owner. Omitted fields keep their last value (a new usage percent without a label
+ * clears the old label). Returns the sessions it updated and the ones that reached
+ * LIMIT_WARN_PERCENT for the first time: their limit_warned_at is set here, so each warns once.
+ */
+export async function storeTerminalStatus(c: PoolClient | any, botId: string, status: TerminalStatus): Promise<{ updated: string[]; warn: LimitWarning[] }> {
+    const rows = (await c.query(
+        `UPDATE agent_sessions SET
+             context_percent = COALESCE($2, context_percent),
+             usage_percent = COALESCE($3, usage_percent),
+             usage_label = CASE WHEN $3::smallint IS NOT NULL OR $4::text IS NOT NULL THEN $4 ELSE usage_label END,
+             status_note = COALESCE($5, status_note),
+             status_at = NOW(), seen_at = NOW()
+         WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live'
+         RETURNING id, channel_id, context_percent, usage_percent, usage_label, limit_warned_at`,
+        [botId, status.contextPercent ?? null, status.usagePercent ?? null, status.usageLabel ?? null, status.note ?? null]
+    )).rows;
+    const warn: LimitWarning[] = [];
+    for (const r of rows) {
+        const near = (r.context_percent ?? -1) >= LIMIT_WARN_PERCENT || (r.usage_percent ?? -1) >= LIMIT_WARN_PERCENT;
+        if (!near || r.limit_warned_at) continue;
+        const marked = await c.query(
+            'UPDATE agent_sessions SET limit_warned_at = NOW() WHERE id = $1 AND limit_warned_at IS NULL RETURNING id', [r.id]);
+        if (marked.rows.length === 0) continue;
+        warn.push({ sessionId: r.id.trim(), channelId: r.channel_id.trim(), contextPercent: r.context_percent ?? null,
+            usagePercent: r.usage_percent ?? null, usageLabel: r.usage_label ?? null });
+    }
+    return { updated: rows.map((r: any) => r.id.trim()), warn };
 }
 
 /** Keep the bots this process holds sockets for from being swept. */
@@ -171,10 +266,10 @@ export function endTerminalSessionNow(c: PoolClient | any, botId: string): Promi
  * A still-connected presence socket reported Listening or Activity: if the bot has no live
  * terminal session (the SessionEnd hook ended it), attach one again. Null when one is live.
  */
-export async function reattachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode): Promise<{ attached: Attached[]; notices: Notice[] } | null> {
+export async function reattachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode, listening = mode === 'channel'): Promise<{ attached: Attached[]; notices: Notice[] } | null> {
     const live = await pool.query(`SELECT 1 FROM agent_sessions WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' LIMIT 1`, [botId]);
     if (live.rows.length > 0) return null;
-    return attachTerminal(pool, botId, channelIds, mode);
+    return attachTerminal(pool, botId, channelIds, mode, listening);
 }
 
 /** Presence dropped and the grace period passed: end the bot's terminal sessions. */

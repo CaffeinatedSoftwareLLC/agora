@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useThreadStore, type ThreadSummary } from './threadStore';
 import type { Message } from './messageStore';
 
-vi.mock('../lib/api', () => ({
-  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
-}));
+vi.mock('../lib/api', () => {
+  const get = vi.fn();
+  // The thread list reads X-Total-Count too; by default it answers through `get`, with no total
+  const getWithTotal = vi.fn(async (path: string) => ({ data: await get(path), total: null }));
+  return { api: { get, getWithTotal, post: vi.fn(), patch: vi.fn(), delete: vi.fn() } };
+});
 
 import { api } from '../lib/api';
 
@@ -287,5 +290,29 @@ describe('threadStore.sendReply vs its socket echo (#149)', () => {
     useThreadStore.getState().addReply(echo('reply-1', 'Reply check'));
     expect(copies('Reply check')).toHaveLength(1);
     expect(copies('Reply check')[0].pending).toBeUndefined();
+  });
+});
+
+describe('active thread total (#14)', () => {
+  it('keeps the server total, not the loaded page size, and updates it with each page', async () => {
+    const page = Array.from({ length: 5 }, (_, i) => summary({ id: `t-${i}`, lastReplyAt: `2026-10-20T12:0${9 - i}:00.000Z` }));
+    mockApi.getWithTotal.mockResolvedValueOnce({ data: page, total: 12 });
+    await useThreadStore.getState().loadActiveThreads('ch-1');
+    expect(useThreadStore.getState().activeThreads.get('ch-1')).toHaveLength(5);
+    expect(useThreadStore.getState().threadTotals.get('ch-1')).toBe(12);
+    expect(useThreadStore.getState().hasMoreThreads.get('ch-1')).toBe(true);
+
+    mockApi.getWithTotal.mockResolvedValueOnce({ data: [summary({ id: 't-5' })], total: 11 });
+    await useThreadStore.getState().loadMoreThreads('ch-1');
+    expect(mockApi.getWithTotal).toHaveBeenLastCalledWith(`/channels/ch-1/threads?limit=5&before=${encodeURIComponent('2026-10-20T12:05:00.000Z')}`);
+    expect(useThreadStore.getState().activeThreads.get('ch-1')).toHaveLength(6);
+    expect(useThreadStore.getState().threadTotals.get('ch-1')).toBe(11);
+  });
+
+  it('refetches when a loaded open thread is closed, so the total drops', async () => {
+    useThreadStore.setState({ activeThreads: new Map([['ch-1', [summary()]]]), threadTotals: new Map([['ch-1', 3]]) });
+    mockApi.getWithTotal.mockResolvedValueOnce({ data: [], total: 2 });
+    useThreadStore.getState().updateParentMetadata({ channelId: 'ch-1', messageId: 'parent-1', replyCount: 1, lastReplyAt: '2026-10-20T12:01:00.000Z', threadClosedAt: '2026-10-20T13:00:00.000Z' });
+    await vi.waitFor(() => expect(useThreadStore.getState().threadTotals.get('ch-1')).toBe(2));
   });
 });

@@ -302,7 +302,7 @@ export async function messageRoutes(app: FastifyInstance) {
         if (before) {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol, m.author_could_direct
+                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.thread_close_reason, m.thread_successor_id, m.protocol, m.author_could_direct
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.id < $2 AND m.thread_id IS NULL
@@ -312,7 +312,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else {
             query = `SELECT m.id, m.content, m.author_id, m.channel_id, m.edited_at, m.deleted_at, m.created_at,
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
-                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.protocol, m.author_could_direct
+                            m.system_event, m.system_data, m.reply_count, m.last_reply_at, m.thread_closed_at, m.thread_close_reason, m.thread_successor_id, m.protocol, m.author_could_direct
                      FROM messages m
                      LEFT JOIN users u ON u.id = m.author_id
                      WHERE m.channel_id = $1 AND m.thread_id IS NULL
@@ -372,7 +372,7 @@ export async function messageRoutes(app: FastifyInstance) {
             ...(row.system_event ? { systemEvent: row.system_event } : {}),
             ...(row.system_data ? { systemData: row.system_data } : {}),
             ...(row.protocol && !row.deleted_at ? { protocol: row.protocol } : {}),
-            ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at } : {}) } : {}),
+            ...(row.reply_count > 0 ? { replyCount: row.reply_count, lastReplyAt: row.last_reply_at, ...(row.thread_closed_at ? { threadClosedAt: row.thread_closed_at, threadCloseReason: row.thread_close_reason ?? null, threadSuccessorId: row.thread_successor_id?.trim() || null } : {}) } : {}),
         }));
 
         return reply.status(200).send(messages);

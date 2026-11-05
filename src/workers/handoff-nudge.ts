@@ -12,7 +12,9 @@ import { generateUlid, ulidFloor } from '../utils/ulid';
  * Agora posts one reminder in the thread that @mentions it, so its `chat_wait` wakes, and queues
  * it for the agent's live api_key hosted session. When the agent can't be reached that way (no
  * agora-mcp socket, no live terminal session, no hosted session Agora may wake), the bot's
- * owner gets a notification.
+ * owner gets a notification. A terminal session that is neither listening nor working (idle,
+ * #230: its CLI may have run out of context) does not count as reaching it: the reminder says
+ * "isn't listening (idle since …)" and the owner is told.
  *
  * A reminder is Agora's own post, so the wait behind it must be one Agora trusts:
  * - Written by the agent waited on itself, by another active, unpaused bot with access to the
@@ -213,11 +215,18 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
         if (!authority.get(protocolId)) return null;
     }
 
-    const listening = deps.isConnected?.(botId) || (await c.query(
-        `SELECT 1 FROM agent_sessions WHERE bot_id = $1 AND channel_id = $2 AND kind = 'terminal' AND state = 'live' LIMIT 1`,
-        [botId, channelId])).rows.length > 0;
+    // A live terminal session reaches the agent while it listens (a chat_wait open, or a Claude
+    // Code Channel) or works (#230). One that does neither is idle: its CLI may have stopped (its
+    // context ran out) while agora-mcp stays connected, so it counts as not reached.
+    const terminal = (await c.query(
+        `SELECT listening, working, idle_since FROM agent_sessions
+         WHERE bot_id = $1 AND channel_id = $2 AND kind = 'terminal' AND state = 'live' LIMIT 1`,
+        [botId, channelId])).rows[0];
+    const idle = terminal && !terminal.listening && !terminal.working;
+    const listening = terminal ? !idle : !!deps.isConnected?.(botId);
     const sessions = await reminderSessions(c, { channelId, threadId, botId });
     const reached = listening || sessions.length > 0;
+    const idleSince: Date | null = idle && terminal.idle_since ? new Date(terminal.idle_since) : null;
     const ownerId = row.bot_owner_id?.trim() || null;
     const tellOwner = !reached && !!ownerId && (await c.query(`SELECT 1 FROM messages n WHERE n.system_event = 'handoff_nudge'
             AND n.id >= $1 AND n.system_data->>'waitingOnId' = $2 AND (n.system_data->>'ownerTold')::boolean
@@ -228,8 +237,11 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
     const reason = waiting.for ? ` (for: ${plain(waiting.for)})` : '';
     const content = `@${name} this thread has waited on you for ${waited} min${reason}. `
         + 'If you owe the next step, post it now. If you are still waiting on something, post STATE=WAIT '
-        + `ending with [WAIT on=${name} for=<what>].${reached ? '' : ` Agora can't reach ${name} here${tellOwner ? ', so its owner was told' : ''}.`}`;
-    const data = { waitingOn: name, waitingOnId: botId, for: waiting.for, protocolMessageId: protocolId, minutes: waited, at: now, ownerTold: tellOwner };
+        + `ending with [WAIT on=${name} for=<what>].${reached ? '' : idle
+            ? ` ${name} isn't listening${idleSince ? ` (idle since ${utcTime(idleSince, now)})` : ''}${tellOwner ? ', so its owner was told' : ''}.`
+            : ` Agora can't reach ${name} here${tellOwner ? ', so its owner was told' : ''}.`}`;
+    const data = { waitingOn: name, waitingOnId: botId, for: waiting.for, protocolMessageId: protocolId, minutes: waited, at: now, ownerTold: tellOwner,
+        ...(idle && !reached ? { notListening: true, idleSince: idleSince?.toISOString() ?? null } : {}) };
 
     const id = generateUlid();
     const inserted = await c.query(`INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data, thread_id)
@@ -240,7 +252,9 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
     const parent = await c.query(`UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
         WHERE id = $1 RETURNING reply_count, last_reply_at, thread_closed_at`, [threadId]);
     const told = tellOwner && ownerId
-        ? await notify(c, { type: 'collab', recipients: [ownerId], channelId, threadId, label: ch => `${name} has kept a thread waiting in #${ch}` })
+        ? await notify(c, { type: 'collab', recipients: [ownerId], channelId, threadId, label: ch => idle
+            ? `${name} isn't listening, and a thread waits on it in #${ch}`
+            : `${name} has kept a thread waiting in #${ch}` })
         : [];
 
     const room = `channel:${channelId}`;
@@ -264,6 +278,13 @@ function needsAuthority(row: Candidate): boolean {
 
 function authorRow(row: Candidate) {
     return { id: row.id.trim(), author_id: row.author_id!.trim(), author_bot: !!row.author_bot, author_could_direct: row.author_could_direct };
+}
+
+/** "15:31 UTC", with the date in front when it is not the day of `now`. */
+export function utcTime(at: Date, now: number): string {
+    const iso = at.toISOString();
+    const sameDay = iso.slice(0, 10) === new Date(now).toISOString().slice(0, 10);
+    return `${sameDay ? '' : `${iso.slice(0, 10)} `}${iso.slice(11, 16)} UTC`;
 }
 
 /** Agent names and reasons are the agents' own text: no mentions or markup from them. */
