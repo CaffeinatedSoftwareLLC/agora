@@ -1,4 +1,5 @@
 import path from 'path';
+import { openCompoundFile } from './cfb';
 
 /**
  * Text formats have no magic bytes: a file with one of these extensions is stored under
@@ -49,6 +50,105 @@ export const OOXML_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 
 export const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
+export const AVIF_MIME = 'image/avif';
+
+/** The first stream bytes of an Office compound file, or null. Only the start is read. */
+function cfbStreamHead(buf: Buffer, stream: string, bytes: number): Buffer | null {
+    const cfb = openCompoundFile(buf);
+    const entry = cfb?.root.get(stream.toUpperCase());
+    return cfb && entry && entry.type === 2 ? cfb.head(entry, bytes) : null;
+}
+
+/** An Excel 5-2003 workbook: a Workbook (BIFF8) or Book (BIFF5) stream that opens with a BOF record. */
+function isXls(buf: Buffer): boolean {
+    const head = cfbStreamHead(buf, 'Workbook', 4) ?? cfbStreamHead(buf, 'Book', 4);
+    return head !== null && head.length === 4 && head.readUInt16LE(0) === 0x0809;
+}
+
+/** A Word 6-2003 document: a WordDocument stream that opens with the FIB's wIdent. */
+function isDoc(buf: Buffer): boolean {
+    const head = cfbStreamHead(buf, 'WordDocument', 2);
+    return head !== null && head.length === 2 && [0xa5ec, 0xa5dc].includes(head.readUInt16LE(0));
+}
+
+/** A PowerPoint 97-2003 deck: a PowerPoint Document stream, and a Current User stream holding a CurrentUserAtom. */
+function isPpt(buf: Buffer): boolean {
+    const user = cfbStreamHead(buf, 'Current User', 4);
+    return user !== null && user.length === 4 && user.readUInt16LE(2) === 0x0ff6
+        && cfbStreamHead(buf, 'PowerPoint Document', 1) !== null;
+}
+
+/** A Microsoft Project plan: its CompObj stream names the format, MSProject.MPP8 to MSProject.MPP14 (MPXJ reads it the same way). */
+function isMpp(buf: Buffer): boolean {
+    const compObj = cfbStreamHead(buf, '\u0001CompObj', 4096);
+    return compObj !== null && /MSProject\.MPP\d+\0/.test(compObj.toString('latin1'));
+}
+
+/** An Access 2007+ database: "Standard ACE DB" in its first page, and a format version from 2 (Access 2007) up. */
+function isAccdb(buf: Buffer): boolean {
+    if (buf.length < 4096 || buf.readUInt32LE(0) !== 0x100) return false;
+    const version = buf.readUInt32LE(0x14);
+    return buf.toString('latin1', 4, 20) === 'Standard ACE DB\0' && version >= 2 && version <= 0xff;
+}
+
+const JMP_MAGIC = Buffer.from('ffff000007000000', 'hex');
+
+/** A JMP data table. JMPReader.jl checks the first 4 bytes; every JMP 7+ table seen also has 07 00 00 00 next. */
+function isJmp(buf: Buffer): boolean {
+    return buf.length >= 64 && buf.subarray(0, 8).equals(JMP_MAGIC);
+}
+
+/**
+ * An AVIF image: an ISO-BMFF file whose leading ftyp box lists the avif (still) or avis
+ * (sequence) brand, as major or compatible brand. A HEIC photo lists heic/mif1 and fails.
+ */
+function isAvif(buf: Buffer): boolean {
+    if (buf.length < 16 || buf.toString('latin1', 4, 8) !== 'ftyp') return false;
+    const size = buf.readUInt32BE(0);
+    if (size < 16 || size > 4096 || size > buf.length || size % 4 !== 0) return false;
+    const brands = [buf.toString('latin1', 8, 12)];
+    for (let p = 16; p + 4 <= size; p += 4) brands.push(buf.toString('latin1', p, p + 4));
+    return brands.includes('avif') || brands.includes('avis');
+}
+
+/**
+ * A draw.io diagram: UTF-8 XML whose root element is <mxfile> or <mxGraphModel>, after an
+ * optional BOM, XML declaration and comments. A compressed diagram is still this XML; its
+ * <diagram> holds base64 deflated text.
+ */
+function isDrawio(buf: Buffer): boolean {
+    if (buf.includes(0x00)) return false;
+    let rest: string;
+    try {
+        rest = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(buf);
+    } catch {
+        return false; // not UTF-8 text
+    }
+    for (;;) {
+        rest = rest.replace(/^\s+/, '');
+        const end = rest.startsWith('<?xml') ? rest.indexOf('?>') + 2 : rest.startsWith('<!--') ? rest.indexOf('-->') + 3 : -1;
+        if (end <= 1) break;
+        rest = rest.slice(end);
+    }
+    return /^<(mxfile|mxGraphModel)[\s/>]/.test(rest);
+}
+
+/**
+ * Formats that file-type cannot name, or names only as their container: each extension's
+ * own content check, and the type its files are stored under. A file with one of these
+ * extensions is stored only when its content passes the check; the extension alone is never enough.
+ */
+export const SIGNATURE_FORMATS: Readonly<Record<string, { mime: string; matches: (buf: Buffer) => boolean }>> = {
+    xls: { mime: 'application/vnd.ms-excel', matches: isXls },
+    doc: { mime: 'application/msword', matches: isDoc },
+    ppt: { mime: 'application/vnd.ms-powerpoint', matches: isPpt },
+    mpp: { mime: 'application/vnd.ms-project', matches: isMpp },
+    accdb: { mime: 'application/x-msaccess', matches: isAccdb },
+    jmp: { mime: 'application/x-jmp', matches: isJmp },
+    avif: { mime: AVIF_MIME, matches: isAvif },
+    drawio: { mime: 'application/xml', matches: isDrawio },
+};
+
 export const INLINE_SAFE_MIMES = new Set([
     'image/jpeg', 'image/png', 'image/gif', 'image/webp',
     'audio/mpeg', 'audio/ogg', 'audio/wav',
@@ -97,6 +197,16 @@ export async function validateFileType(
     const { fileTypeFromBuffer } = await import('file-type');
 
     let detected = await fileTypeFromBuffer(buffer.subarray(0, 4100));
+
+    // Formats with their own content check: it alone decides, whatever file-type made of the bytes
+    const signature = Object.hasOwn(SIGNATURE_FORMATS, declaredExtension) ? SIGNATURE_FORMATS[declaredExtension] : undefined;
+    if (signature) {
+        if (!signature.matches(buffer)) {
+            throw new FileValidationError(415, 'File content does not match its extension', { detected: detected?.mime ?? null, expected: signature.mime });
+        }
+        return { mime: signature.mime, ext: declaredExtension };
+    }
+
     const ooxmlMime = OOXML_MIME_BY_EXTENSION[declaredExtension];
     // An Office file is a zip. file-type names the format only when [Content_Types].xml is
     // near the start; Google Docs exports put it last. Then the zip's own directory decides.

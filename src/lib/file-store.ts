@@ -4,7 +4,7 @@ import { generateUlid } from '../utils/ulid';
 import { storage, BUCKET_NAME } from './storage';
 import { BLOB_LEAF } from './storage-maintenance';
 import { encryptFile } from './encryption';
-import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES } from './file-validation';
+import { sanitizeFilename, validateFileType, FileValidationError, IMAGE_MIMES, AVIF_MIME } from './file-validation';
 import { enqueueFileTagging } from './file-tagging-queue';
 import { config } from '../config';
 
@@ -53,10 +53,18 @@ export async function readUploadPart(part: { toBuffer(): Promise<Buffer>; file: 
     return part.file.truncated ? null : buffer;
 }
 
-/** How many bytes an upload route should let multipart read: the admin setting (#157). */
+/**
+ * How many bytes an upload route should let multipart read: the admin setting (#157), plus one.
+ * The extra byte means a file the parser cuts off at this limit is always over the setting, so
+ * storeFile's own size check refuses it even if `truncated` is missed (#206).
+ */
 export async function uploadByteLimit(db: Queryable): Promise<number> {
-    const setting = Number(await getFileSetting(db, 'files.max_size_bytes'));
-    return Number.isSafeInteger(setting) && setting > 0 ? setting : MAX_FILE_SIZE_SETTING;
+    return readLimitFor(Number(await getFileSetting(db, 'files.max_size_bytes')));
+}
+
+/** The multipart read limit for a files.max_size_bytes value: one byte over it (see uploadByteLimit). */
+export function readLimitFor(maxSizeBytes: number): number {
+    return (Number.isSafeInteger(maxSizeBytes) && maxSizeBytes > 0 ? maxSizeBytes : MAX_FILE_SIZE_SETTING) + 1;
 }
 
 const DEFAULT_ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'txt', 'md', 'csv', 'json', 'zip', 'mp3', 'mp4', 'mov'];
@@ -64,6 +72,22 @@ const DEFAULT_ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 
 export async function getFileSetting(db: Queryable, key: string): Promise<any> {
     const res = await db.query('SELECT value FROM instance_settings WHERE key = $1', [key]);
     return res.rows[0]?.value;
+}
+
+/**
+ * Reads an AVIF's size and, when EXIF stripping is on and the file carries EXIF, XMP or IPTC
+ * metadata (a phone photo's location, say), re-encodes it without. One without metadata is kept
+ * byte for byte: AV1 encoding is slow. An animated AVIF is kept as is, like an animated GIF.
+ * Throws when sharp cannot read the file, so a fake AVIF that only has the right ftyp box is refused.
+ */
+export async function prepareAvif(buffer: Buffer, stripMetadata: boolean): Promise<{ buffer: Buffer; width?: number; height?: number }> {
+    const sharp = (await import('sharp')).default;
+    const image = sharp(buffer);
+    const metadata = await image.metadata();
+    if (metadata.format !== 'heif') throw new Error('not an AVIF image');
+    const hasMetadata = !!(metadata.exif || metadata.xmp || metadata.iptc);
+    const out = stripMetadata && hasMetadata && (metadata.pages ?? 1) === 1 ? await image.avif({ quality: 90 }).toBuffer() : buffer;
+    return { buffer: out, width: metadata.width, height: metadata.height };
 }
 
 export async function storeFile(
@@ -118,6 +142,12 @@ export async function storeFile(
                     processedBuffer = pages > 1 ? buffer : await image.gif().toBuffer(); // keep animated GIFs as-is
                 }
             }
+        } catch {
+            return { ok: false, status: 415, error: 'Image could not be read; it may be corrupt' };
+        }
+    } else if (detectedMime === AVIF_MIME) {
+        try {
+            ({ buffer: processedBuffer, width, height } = await prepareAvif(buffer, exifStripEnabled !== false));
         } catch {
             return { ok: false, status: 415, error: 'Image could not be read; it may be corrupt' };
         }
