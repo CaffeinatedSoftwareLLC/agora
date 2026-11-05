@@ -376,6 +376,41 @@ Describe 'Get-WslDistros' {
     }
 }
 
+Describe 'Get-LxssDistros (real registry, a temporary key)' {
+    # A fresh WSL leaves an Lxss key with no DefaultDistribution; strict mode must not throw
+    BeforeEach {
+        $script:lxss = "HKCU:\Software\AgoraInstallTests\Lxss-$([guid]::NewGuid().ToString('N'))"
+        New-Item -Path $script:lxss -Force | Out-Null
+    }
+    AfterEach { Remove-Item -Path (Split-Path $script:lxss) -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'an Lxss key with no DefaultDistribution and no distros gives an empty list' {
+        $d = & (Get-Module AgoraInstall) { param($k) Get-LxssDistros -Key $k } $script:lxss
+        @($d).Count | Should -Be 0
+    }
+
+    It 'skips a subkey without DistributionName and reads one without Version as WSL 2' {
+        New-Item -Path "$script:lxss\{a}" -Force | Out-Null
+        $b = New-Item -Path "$script:lxss\{b}" -Force
+        New-ItemProperty -Path $b.PSPath -Name DistributionName -Value 'Ubuntu' | Out-Null
+        $d = & (Get-Module AgoraInstall) { param($k) Get-LxssDistros -Key $k } $script:lxss
+        @($d).Count | Should -Be 1
+        $d[0].Name | Should -Be 'Ubuntu'
+        $d[0].Version | Should -Be 2
+        $d[0].Default | Should -BeFalse
+    }
+
+    It 'marks the default distro when DefaultDistribution is set' {
+        $b = New-Item -Path "$script:lxss\{b}" -Force
+        New-ItemProperty -Path $b.PSPath -Name DistributionName -Value 'Ubuntu' | Out-Null
+        New-ItemProperty -Path $b.PSPath -Name Version -Value 1 -PropertyType DWord | Out-Null
+        New-ItemProperty -Path $script:lxss -Name DefaultDistribution -Value '{b}' | Out-Null
+        $d = & (Get-Module AgoraInstall) { param($k) Get-LxssDistros -Key $k } $script:lxss
+        $d[0].Default | Should -BeTrue
+        $d[0].Version | Should -Be 1
+    }
+}
+
 Describe 'one Docker engine: probing distros' {
     It 'a running engine wins and no stopped distro is booted' {
         New-Fake -Distros @((D 'Work' 'Running'), (D 'Ubuntu' 'Stopped' -Default), (D 'Agora' 'Stopped')) -Engines @('Work', 'Ubuntu', 'Agora')
