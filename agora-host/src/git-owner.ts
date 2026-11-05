@@ -1,8 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
+import { lstat, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import { uptime } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const exec = promisify(execFile);
@@ -33,31 +33,52 @@ export const GATE_MARK = 'if (!started) process.exit(1)';
 const ownGates = new Set<string>(); // nonces of gates this process started that have not closed
 const gateNonce = (commandLine: string) => commandLine.match(/[0-9a-f]{32}(?=["'\s]*$)/)?.[0] ?? '';
 
+export interface ProcessEntry { name: string; commandLine: string | null }
+const nodeLike = (name: string) => /^node(js)?(\.exe)?$/i.test(name) || name.toLowerCase() === basename(process.execPath).toLowerCase();
+/**
+ * Nonces of live gates in a process list, minus this process's own. Fails closed: a Node process whose arguments
+ * could not be read might be a gate, so it throws instead of guessing.
+ */
+export function gatesIn(list: ProcessEntry[]): string[] {
+    const nonces: string[] = [];
+    for (const p of list) {
+        if (p.commandLine === null) { if (nodeLike(p.name)) throw new Error('git_gate_identity_unavailable'); continue; }
+        if (p.commandLine.includes(GATE_MARK)) nonces.push(gateNonce(p.commandLine));
+    }
+    return nonces.filter(n => !ownGates.has(n));
+}
+const gone = (e: any) => e?.code === 'ENOENT' || e?.code === 'ESRCH';
 /**
  * Nonces of live Git gates on this machine that this process did not start. Clock-free evidence: with none, no
- * owned Git writer from an earlier host can still run. Throws when the process list cannot be read.
+ * owned Git writer from an earlier host can still run. Throws when the process list cannot be read in full.
  */
 export async function foreignGitGates(): Promise<string[]> {
-    let lines: string[];
+    const list: ProcessEntry[] = [];
     if (process.platform === 'win32') {
         const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-        const script = `$ErrorActionPreference = 'Stop'; $m = $env:AGORA_GATE_MARK; @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($m) } | ForEach-Object { $_.CommandLine }) | ConvertTo-Json -Compress`;
-        const r = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 30000,
-            maxBuffer: 4 * 1024 * 1024, env: { ...process.env, AGORA_GATE_MARK: GATE_MARK } });
+        // CommandLine is null for a process this user cannot inspect; gatesIn() fails closed on a Node one.
+        const script = `$ErrorActionPreference = 'Stop'; @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID } | ForEach-Object { @{ name = [string]$_.Name; commandLine = $_.CommandLine } }) | ConvertTo-Json -Compress`;
+        const r = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 30000, maxBuffer: 32 * 1024 * 1024 });
         const value = JSON.parse(r.stdout.trim() || '[]');
-        lines = (Array.isArray(value) ? value : [value]).filter((v): v is string => typeof v === 'string');
+        for (const v of Array.isArray(value) ? value : [value])
+            list.push({ name: String(v?.name ?? ''), commandLine: typeof v?.commandLine === 'string' && v.commandLine ? v.commandLine : null });
     } else if (process.platform === 'linux') {
-        const { readdir } = await import('node:fs/promises');
-        lines = [];
         for (const pid of (await readdir('/proc')).filter(d => /^\d+$/.test(d) && d !== String(process.pid))) {
-            const command = await readFile(`/proc/${pid}/cmdline`, 'utf8').catch(() => '');
-            if (command.includes(GATE_MARK)) lines.push(command.split('\0').filter(Boolean).join(' '));
+            try {
+                const [name, command] = await Promise.all([readFile(`/proc/${pid}/comm`, 'utf8'), readFile(`/proc/${pid}/cmdline`, 'utf8')]);
+                // An empty cmdline is a kernel thread or an exited (zombie) process: neither runs Git.
+                list.push({ name: name.trim(), commandLine: command.split('\0').filter(Boolean).join(' ') });
+            } catch (e) { if (!gone(e)) throw e; }
         }
     } else {
-        const r = await exec('ps', ['-ww', '-axo', 'command='], { timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
-        lines = r.stdout.split('\n').filter(l => l.includes(GATE_MARK));
+        const r = await exec('ps', ['-ww', '-axo', 'command='], { timeout: 10000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
+        for (const line of r.stdout.split('\n').map(l => l.trim()).filter(Boolean)) {
+            // ps prints only the name, sometimes in parentheses, when it cannot read a process's arguments.
+            const bare = !/\s/.test(line);
+            list.push({ name: basename(line.split(/\s/)[0].replace(/^\(|\)$/g, '')), commandLine: bare ? null : line });
+        }
     }
-    return lines.map(gateNonce).filter(n => !ownGates.has(n));
+    return gatesIn(list);
 }
 let gateProbe: () => Promise<string[]> = foreignGitGates;
 /** Tests only: replace the process-list probe (no argument restores it). */

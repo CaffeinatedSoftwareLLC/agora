@@ -5,7 +5,7 @@ import { uptime } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { GATE_MARK, GitLockError, foreignGitGates, gitOwnerAlive, recoverGitLocks, registerGitWorkspace, setGitGateProbe, type GitOwner } from '../src/git-owner.js';
+import { GATE_MARK, GitLockError, foreignGitGates, gatesIn, gitOwnerAlive, recoverGitLocks, registerGitWorkspace, setGitGateProbe, type GitOwner } from '../src/git-owner.js';
 import { ensureWorkspace, git, recoverWorkspaceGitLocks, withGitSignal } from '../src/workspaces.js';
 import { executeReview } from '../src/review.js';
 import { claim, config, id, tempDir } from './helpers.js';
@@ -144,6 +144,16 @@ it('a clock jump alone cannot set a torn record aside: a live foreign Git gate, 
     setGitGateProbe(async () => { throw new Error('access denied'); });
     await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ detail: expect.stringContaining('could not be read') });
     expect(await readFile(s.record, 'utf8')).toBe(torn);
+});
+
+it('the gate list fails closed on a Node process whose arguments cannot be read', () => {
+    const nonce = 'fedcba9876543210fedcba9876543210';
+    const gate = { name: 'node.exe', commandLine: `"C:\\node.exe" -e "...${GATE_MARK}..." ${nonce}` };
+    expect(gatesIn([{ name: 'svchost.exe', commandLine: null }, { name: 'code.exe', commandLine: 'code .' }, gate])).toEqual([nonce]);
+    // Windows CIM: null CommandLine for a process this user cannot inspect; macOS ps: bare "(node)".
+    expect(() => gatesIn([{ name: 'node.exe', commandLine: null }])).toThrow('git_gate_identity_unavailable');
+    expect(() => gatesIn([{ name: 'node', commandLine: null }])).toThrow('git_gate_identity_unavailable');
+    expect(gatesIn([{ name: 'svchost.exe', commandLine: null }])).toEqual([]);
 });
 
 it('the gate probe sees a live gate from another process and drops it once it exits', async () => {
