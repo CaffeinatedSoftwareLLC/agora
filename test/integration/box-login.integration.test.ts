@@ -184,4 +184,30 @@ it('a login blocked on a domain says which, while it runs and when it fails', as
     // Not the code, not the URL
     const row = (await ctx.db.query(`SELECT verification_url, user_code FROM box_login_requests WHERE id = $1`, [id])).rows[0];
     expect(row).toEqual({ verification_url: null, user_code: null });
+
+    // A retry without allowing it: the card is older than this login, and still blocks it
+    const id2 = (await ctx.request.post(`/boxes/${box.id}/login`).set(owner.auth)).body.login.id;
+    expect((await ctx.request.get('/agent-hosts/@me/box-login').set(box.host)).status).toBe(200);
+    expect((await report(box, id2, { status: 'awaiting_code', verificationUrl: 'https://claude.ai/oauth/authorize?x=2' })).status).toBe(200);
+    expect((await ownerLogin(box)).blockedHosts).toEqual(['platform.claude.com']);
+    // A host code other than the CLI's own failure stays as it is
+    expect((await report(box, id2, { status: 'failed', error: 'invalid_code' })).status).toBe(200);
+    expect(await ownerLogin(box)).toMatchObject({ status: 'failed', error: 'invalid_code', blockedHosts: [] });
+});
+
+it('only the CLI provider domains count as a login blocker', async () => {
+    const box = await makeBox('delta3', 'claude');
+    const gen = Number((await ctx.db.query(`SELECT generation FROM agent_boxes WHERE id = $1`, [box.id])).rows[0].generation);
+    const client = await ctx.db.connect();
+    try {
+        await client.query('BEGIN');
+        await recordEdgeRequest(client, { boxId: box.id, generation: gen, kind: 'domain', subject: { host: 'example.com' } });
+        await client.query('COMMIT');
+    } finally { client.release(); }
+    const id = (await ctx.request.post(`/boxes/${box.id}/login`).set(owner.auth)).body.login.id;
+    expect((await ctx.request.get('/agent-hosts/@me/box-login').set(box.host)).status).toBe(200);
+    expect((await report(box, id, { status: 'awaiting_code', verificationUrl: 'https://claude.ai/oauth/authorize?x=3' })).status).toBe(200);
+    expect((await ownerLogin(box)).blockedHosts).toEqual([]);
+    expect((await report(box, id, { status: 'failed', error: 'login_failed' })).status).toBe(200);
+    expect((await ownerLogin(box)).error).toBe('login_failed');
 });

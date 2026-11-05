@@ -85,7 +85,7 @@ export function loginEnded(status: LoginStatus): boolean {
 export function loginStatusText(login: BoxLogin | null, adapter: Box['adapter']): string {
   if (!login) return 'Starting…';
   // The CLI is waiting on a domain the box isn't allowed to reach yet
-  if (login.blockedHosts?.length && login.status !== 'failed' && !loginEnded(login.status)) {
+  if (login.blockedHosts?.length && !loginEnded(login.status)) {
     return `Blocked: the login needs ${login.blockedHosts.join(', ')}. Allow it on the box's card in its channel, then log in again if this login fails.`;
   }
   switch (login.status) {

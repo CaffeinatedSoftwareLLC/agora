@@ -5,7 +5,7 @@ import { asService } from '../lib/agent-sessions';
 import { encryptString } from '../lib/encryption';
 import { config } from '../config';
 import { DOMAIN_ENTRY } from '../lib/boxes/contract';
-import { decideEdgeRequest, domainsRefusedSince, EdgeDecisionError } from '../lib/boxes/edge-requests';
+import { decideEdgeRequest, EdgeDecisionError, loginBlockedHosts } from '../lib/boxes/edge-requests';
 import { BOX_ADAPTERS, BoxError, REPO_PATTERN, boxAction, createBox, deleteBox, patchBox, purgeBox, restoreBox } from '../lib/boxes/service';
 
 /**
@@ -270,7 +270,10 @@ export async function boxRoutes(app: FastifyInstance) {
             await expireBoxLogins(db, box.id);
             const row = await db.query(`SELECT * FROM box_login_requests WHERE box_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [box.id]);
             const login = row.rows[0];
-            const blocked = login && !['succeeded', 'cancelled', 'expired'].includes(login.status) ? await domainsRefusedSince(db, box.id, login.created_at) : [];
+            // While it runs: what it is blocked on now. Once it failed on a domain: that, still,
+            // until the owner allows it. Other endings need no hint
+            const blocked = login && (!['succeeded', 'failed', 'cancelled', 'expired'].includes(login.status) || login.error === 'needs_domain')
+                ? await loginBlockedHosts(db, box.id, box.adapter) : [];
             return { status: 200, body: { login: login ? loginJson(login, blocked) : null } };
         }));
 

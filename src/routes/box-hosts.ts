@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { decryptString } from '../lib/encryption';
 import { config } from '../config';
 import { expireBoxLogins } from './boxes';
-import { domainsRefusedSince } from '../lib/boxes/edge-requests';
+import { loginBlockedHosts } from '../lib/boxes/edge-requests';
 
 /**
  * The box's agora-host side of a CLI login (docs/agent-boxes.md §8.2). Host token routes, for
@@ -121,8 +121,9 @@ export async function boxHostRoutes(app: FastifyInstance) {
         }
         // The login ended: what passed through Agora for it goes now. A failure while the edge was
         // refusing a domain is that, not a bare login_failed: the owner can allow it and retry
+        // Only the CLI's own failures are rewritten; the host's other codes (a bad code, a stop) stay
         let error = b.status === 'failed' ? (b.error ?? 'login_failed') : null;
-        if (error && (await domainsRefusedSince(db, box.boxId, login.created_at)).length > 0) error = 'needs_domain';
+        if ((error === 'login_failed' || error === 'login_timeout') && (await loginBlockedHosts(db, box.boxId, box.adapter)).length > 0) error = 'needs_domain';
         await db.query(`UPDATE box_login_requests SET status = $2, error = $3, ${CLEARED}, updated_at = NOW() WHERE id = $1`,
             [login.id, b.status, error]);
         await db.query(`UPDATE agent_boxes SET login_state = $2, updated_at = NOW() WHERE id = $1`,

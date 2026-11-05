@@ -151,18 +151,33 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
     return { id, created: true, events };
 }
 
+/** The domains each CLI's own sign-in and API live under (a login can only be blocked on these). */
+export const LOGIN_PROVIDER_DOMAINS: Record<string, string[]> = {
+    claude: ['anthropic.com', 'claude.ai', 'claude.com'],
+    codex: ['openai.com', 'chatgpt.com'],
+};
+
 /**
- * Domains the edge refused this box since `since` and that nobody has allowed: what a CLI login
- * was blocked on (docs/agent-boxes.md §8.2). Only host names, which the owner sees on cards anyway.
+ * The provider domains the edge refuses this box right now: a pending card (of any age: the edge
+ * keeps answering a repeat with the same card) or one the owner denied within the quiet period
+ * (the edge refuses those without a new card). That is what a CLI login waits on or failed on
+ * (docs/agent-boxes.md §8.2). Other refused domains, a package registry an agent run wanted,
+ * don't count. Only host names, which the owner sees on cards anyway.
  */
-export async function domainsRefusedSince(db: any, boxId: string, since: Date | string): Promise<string[]> {
+export async function loginBlockedHosts(db: any, boxId: string, adapter: string): Promise<string[]> {
+    const suffixes = LOGIN_PROVIDER_DOMAINS[adapter] ?? [];
+    if (suffixes.length === 0) return [];
     const r = await db.query(
         `SELECT DISTINCT subject->>'host' AS host FROM box_edge_requests
-         WHERE box_id = $1 AND kind = 'domain' AND status IN ('pending', 'denied') AND created_at >= $2
-         ORDER BY 1 LIMIT 10`,
-        [boxId, since]
+         WHERE box_id = $1 AND kind = 'domain'
+           AND ((status = 'pending' AND expires_at > NOW())
+             OR (status = 'denied' AND decided_at > NOW() - ($2 || ' hours')::interval))
+         ORDER BY 1 LIMIT 50`,
+        [boxId, String(DOMAIN_DENY_QUIET_HOURS)]
     );
-    return r.rows.map((x: any) => x.host).filter((h: unknown): h is string => typeof h === 'string');
+    return r.rows.map((x: any) => x.host)
+        .filter((h: unknown): h is string => typeof h === 'string' && suffixes.some(d => h === d || h.endsWith(`.${d}`)))
+        .slice(0, 10);
 }
 
 /** A domain the owner denied recently: no new card for it. */

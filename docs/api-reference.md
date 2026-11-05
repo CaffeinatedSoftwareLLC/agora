@@ -1472,7 +1472,7 @@ Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted
   "id": "01HYX...", "name": "alpha", "adapter": "claude", "auth": "subscription",
   "state": "creating", "desiredState": "running", "pendingAction": null, "generation": 0,
   "imageVersion": null, "loginState": "none", "homeChannelId": "01HYX...",
-  "allowedDomains": ["api.anthropic.com", "claude.ai", "console.anthropic.com", "statsig.anthropic.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
+  "allowedDomains": ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
   "repos": ["acme/web"], "cpus": 2, "memoryMb": 4096, "pids": 1024,
   "lastError": null, "lastSeenAt": null, "createdAt": "...", "deletedAt": null, "volumePurgeAfter": null,
   "policies": [{ "channelId": "01HYX...", "autoPush": true, "autoPr": false }]
@@ -1534,7 +1534,7 @@ Creates the bot (with access to the home channel), the box host (no usable token
 **Auth:** server owner for all four.
 
 - `POST /boxes/:boxId/login` → `201 { "login" }`: asks the box's agora-host to run the CLI's login. A login already open is cancelled. It lasts 10 minutes.
-- `GET /boxes/:boxId/login` → `200 { "login": { "id", "status", "verificationUrl", "userCode", "error", "expiresAt" } | null }`, the latest one. `status`: `requested`, `claimed`, `awaiting_user` (Codex: open `verificationUrl`, enter `userCode`), `awaiting_code` (Claude: open `verificationUrl`, paste the code it shows), `code_sent`, `succeeded`, `failed`, `expired`, `cancelled`.
+- `GET /boxes/:boxId/login` → `200 { "login": { "id", "status", "verificationUrl", "userCode", "error", "expiresAt", "blockedHosts" } | null }`, the latest one. `status`: `requested`, `claimed`, `awaiting_user` (Codex: open `verificationUrl`, enter `userCode`), `awaiting_code` (Claude: open `verificationUrl`, paste the code it shows), `code_sent`, `succeeded`, `failed`, `expired`, `cancelled`. `blockedHosts`: the CLI provider's domains the edge refuses this box right now (a pending card, or denied in the last 24 hours), while the login runs or after it failed on one; the login can't finish until the owner allows them. A login the CLI failed or timed out on while such a domain was blocked has `error: "needs_domain"`.
 - `POST /boxes/:boxId/login/code` `{ "code" }` → `200 { "login" }`: the code for a login in `awaiting_code` (`409 no_login_awaiting_code` otherwise). Stored encrypted until the host reads it, once.
 - `DELETE /boxes/:boxId/login` → `204`: cancel the open login.
 

@@ -14,8 +14,20 @@ const SERVER_CODE = /^[a-z][a-z0-9_]{0,59}$/;
 async function httpError(response: Response): Promise<HttpError> {
     let code: string | null = null;
     try {
-        const text = (await response.text()).slice(0, 2048);
-        const parsed = JSON.parse(text) as { error?: unknown };
+        // At most 2 KB of an error body, then the rest is dropped: a proxy's error page is no
+        // reason to buffer megabytes or wait for a slow body
+        let text = '';
+        const reader = response.body?.getReader();
+        if (reader) {
+            const decoder = new TextDecoder();
+            while (text.length < 2048) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                text += decoder.decode(value, { stream: true });
+            }
+            await reader.cancel().catch(() => {});
+        }
+        const parsed = JSON.parse(text.slice(0, 2048)) as { error?: unknown };
         if (typeof parsed?.error === 'string' && SERVER_CODE.test(parsed.error)) code = parsed.error;
     } catch { /* no JSON body */ }
     return new HttpError(response.status, code);
@@ -27,8 +39,10 @@ async function httpError(response: Response): Promise<HttpError> {
 export function errorCode(err: unknown): string {
     if (err instanceof HttpError) return `http_${err.status}${err.code ? `_${err.code}` : ''}`;
     const e = err as { name?: unknown; code?: unknown; cause?: { code?: unknown } } | null;
-    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'timeout';
-    const net = typeof e?.cause?.code === 'string' ? e.cause.code : typeof e?.code === 'string' ? e.code : null;
+    if (e && e.name === 'TimeoutError') return 'timeout';
+    if (e && e.name === 'AbortError') return 'aborted';
+    // fetch puts the socket's errno on its cause; a code on the error itself is something else
+    const net = typeof e?.cause?.code === 'string' ? e.cause.code : null;
     if (net && /^[A-Z][A-Z0-9_]{1,29}$/.test(net)) return `network_${net.toLowerCase()}`;
     if (err instanceof SyntaxError || (e && e.name === 'ZodError')) return 'bad_response';
     return 'error';
