@@ -258,7 +258,8 @@ export async function decideEdgeRequest(db: any, requestId: string, decision: Ed
         // The box's other waiting cards the wildcard now covers (the other regions) are answered too
         const others = await db.query(
             `SELECT id, subject->>'host' AS host FROM box_edge_requests
-             WHERE box_id = $1 AND kind = 'domain' AND status = 'pending' AND id <> $2 FOR UPDATE`,
+             WHERE box_id = $1 AND kind = 'domain' AND status = 'pending' AND id <> $2 AND expires_at > NOW()
+             ORDER BY id FOR UPDATE`,
             [row.box_id, requestId]
         );
         for (const o of others.rows) {
