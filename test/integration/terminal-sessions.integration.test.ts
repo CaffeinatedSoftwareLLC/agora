@@ -527,7 +527,7 @@ describe('listening, idle and agent_status (#230)', () => {
         const other = await agent('termstatusfar');
         const { sessionId } = await connectTerminal(other);
         // A channel the bot has no access to
-        const hidden = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: 'term-hidden', channelType: 0 });
+        const hidden = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: 'term-hidden', channelType: 3 });
         expect(hidden.status, JSON.stringify(hidden.body)).toBe(201);
         const parent = await ctx.request.post(`/channels/${hidden.body.id}/messages`).set(owner.auth).send({ content: 'private' });
         expect(parent.status).toBe(201);
