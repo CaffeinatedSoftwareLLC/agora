@@ -479,8 +479,10 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       void get().loadActiveThreads(data.channelId).catch(() => {});
       return;
     }
-    // A loaded open thread was closed: fetch again, so the total and the next thread are right (#14)
-    if (loaded && data.threadClosedAt && loaded.some((t) => t.id === data.messageId && !t.threadClosedAt)) {
+    // A thread closed (loaded or on a later page) or lost its last reply: fetch again, so the
+    // total and the threads shown are right (#14). A notice in an already closed thread changes neither.
+    const known = loaded?.find((t) => t.id === data.messageId);
+    if (loaded && ((data.threadClosedAt && !known?.threadClosedAt) || (data.replyCount === 0 && !!known))) {
       void get().loadActiveThreads(data.channelId).catch(() => {});
     }
     set((state) => {

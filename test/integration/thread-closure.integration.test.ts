@@ -70,6 +70,34 @@ describe('who can close a thread', () => {
         expect(closed.body.threadClosedAt).toBeTruthy();
     });
 
+    it('only the first, unedited START by an agent counts, and the starter cannot reopen or rewrite another closure', async () => {
+        const parent = await post('Owner announcement', owner.auth);
+        // An ordinary member forging a START gets nothing: only bots and directors start collaborations
+        await post(START, member.auth, parent.id);
+        expect((await close(parent.id, member.auth)).status).toBe(403);
+        expect((await list(member.auth)).body.find((t: any) => t.id === parent.id).canClose).toBe(false);
+
+        const second = await post('Claude topic', claude());
+        await post(START, codex(), second.id);
+        // A later START by another agent is not the collaboration's start
+        await post(START, gemini(), second.id);
+        expect((await close(second.id, gemini())).status).toBe(403);
+
+        // The owner closes it with a reason; the starter can't rewrite that closure or reopen it
+        expect((await close(second.id, owner.auth, { closed: true, reason: 'cancelled' })).status).toBe(200);
+        expect((await close(second.id, codex(), { closed: true, reason: 'done' })).status).toBe(403);
+        expect((await close(second.id, codex(), { closed: false })).status).toBe(403);
+        expect((await list(owner.auth, '?state=closed')).body.find((t: any) => t.id === second.id))
+            .toMatchObject({ closeReason: 'cancelled', closedByUsername: 'closeowner' });
+
+        // An edited START no longer counts (an old reply edited into a START gains nothing)
+        const third = await post('Another topic', claude());
+        const start = await post(START, codex(), third.id);
+        const edit = await ctx.request.patch(`/channels/${channelId}/messages/${start.id}`).set(codex()).send({ content: `${START}\n(edited)` });
+        expect(edit.status, JSON.stringify(edit.body)).toBe(200);
+        expect((await close(third.id, codex())).status).toBe(403);
+    });
+
     it('an ordinary member who did not start it still cannot close it', async () => {
         const parent = await post('Owner topic', owner.auth);
         await post('a reply', member.auth, parent.id);
@@ -128,6 +156,18 @@ describe('closing with a reason and a successor', () => {
         expect(head.headers['x-agora-thread-successor']).toBeUndefined();
     });
 
+    it('re-closing a superseded thread as done drops the old successor', async () => {
+        const old = await post('Plan', claude());
+        await post('reply', codex(), old.id);
+        const next = await post('Next plan', claude());
+        expect((await close(old.id, claude(), { closed: true, successor: next.id })).body.successorId).toBe(next.id);
+        const redone = await close(old.id, claude(), { closed: true, reason: 'done' });
+        expect(redone.body).toMatchObject({ closeReason: 'done', successorId: null });
+        const notices = (await ctx.request.get(`/channels/${channelId}/messages/${old.id}/replies`).set(owner.auth)).body
+            .filter((m: any) => m.systemEvent === 'thread_closed');
+        expect(notices.at(-1)).toMatchObject({ content: 'Closed by CloseClaude as done.', systemData: { successorId: null } });
+    });
+
     it('adds a reason to a thread that was closed without one', async () => {
         const parent = await post('Quick question', claude());
         await post('answer', codex(), parent.id);
@@ -150,15 +190,14 @@ describe('closing with a reason and a successor', () => {
         // A reply is not a thread
         const reply = await post('another reply', codex(), parent.id);
         expect((await close(parent.id, claude(), { closed: true, successor: reply.id })).body).toEqual({ error: 'successor_not_found' });
-        // A successor in a channel the caller can't see is not found either
-        // (a channel the bot was never added to)
+        // A successor must be in the same channel, so no other channel's IDs reach this one's members
+        // (here also a channel the bot was never added to)
         const hidden = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: `hidden-${generateUlid().toLowerCase()}`, channelType: 3 });
         expect(hidden.status).toBe(201);
         const hiddenMsg = await ctx.request.post(`/channels/${hidden.body.id}/messages`).set(owner.auth).send({ content: 'secret' });
         expect(hiddenMsg.status).toBe(201);
         expect((await close(parent.id, claude(), { closed: true, successor: hiddenMsg.body.id })).body).toEqual({ error: 'successor_not_found' });
-        // The owner can see it, so for the owner it is a valid successor (checked without closing here)
-        expect((await ctx.request.get(`/channels/${hidden.body.id}/messages`).set(claude())).status).toBe(403);
+        expect((await close(parent.id, owner.auth, { closed: true, successor: hiddenMsg.body.id })).body).toMatchObject({ error: 'successor_not_found' });
         // Nothing was closed by the refused calls
         expect((await list(owner.auth)).body.map((t: any) => t.id)).toContain(parent.id);
     });

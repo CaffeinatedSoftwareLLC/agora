@@ -183,12 +183,16 @@ async function approvalCard(runId: string) {
 const cardRow = async (id: string) =>
     (await ctx.db.query('SELECT content, system_data, edited_at FROM messages WHERE id = $1', [id])).rows[0];
 
-test('a suspension switches the approval card of a run awaiting approval to denied and emits the update after commit (#244)', async () => {
+test('a suspension switches the approval card of a run that has not started to denied and emits the update (#244)', async () => {
     const b = await bot('cardbot');
     const awaiting = await run(b.id, 'awaiting_approval');
     const card = await approvalCard(awaiting);
-    // A card a reviewer already decided keeps its state
-    const reviewed = await run(b.id, 'awaiting_approval');
+    // Approved, so queued: the suspension denies it, and its "Approved; running" card says so too
+    const approved = await run(b.id, 'queued');
+    const approvedCard = await approvalCard(approved);
+    await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"status":"approved"}' WHERE id = $1`, [approvedCard]);
+    // A run that already started keeps its card
+    const reviewed = await run(b.id, 'running');
     const reviewedCard = await approvalCard(reviewed);
     await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"status":"approved"}' WHERE id = $1`, [reviewedCard]);
 
@@ -209,6 +213,7 @@ test('a suspension switches the approval card of a run awaiting approval to deni
     expect(row.content).toBe(`Run ${awaiting}: Denied. The submitting bot or its owner was suspended.`);
     expect(row.edited_at).not.toBeNull();
     expect((await cardRow(reviewedCard)).system_data.status).toBe('approved');
+    expect((await cardRow(approvedCard)).system_data).toMatchObject({ status: 'denied', runId: approved });
 
     // Approving it now is still refused, and the card stays denied
     const reviewer = await ctx.request.post(`/runtime/runs/${awaiting}/approve`).set(owner.auth);

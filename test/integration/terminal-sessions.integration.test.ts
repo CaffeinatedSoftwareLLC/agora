@@ -448,16 +448,42 @@ describe('listening, idle and agent_status (#230)', () => {
         expect(await sessionRow(sessionId)).toMatchObject({ listening: true, idle_since: null });
     });
 
-    test('the listening update reaches people watching, like other session updates', async () => {
+    test('watchers see a listening flip as presence, not as a session reload', async () => {
         const { socket, sessionId } = await connectTerminal(claude);
         const watcher = io('http://localhost:4999', { transports: ['websocket'], reconnection: false, autoConnect: false, auth: { token: owner.token } });
         sockets.push(watcher);
         const ready = event(watcher, 'Ready');
         watcher.connect();
         await ready;
-        const update = event(watcher, 'AgentSessionUpdate', e => e.sessionId === sessionId);
+        const reloads: any[] = [];
+        watcher.on('AgentSessionUpdate', (e: any) => { if (e.sessionId === sessionId) reloads.push(e); });
+        const presence = event(watcher, 'AgentPresence', e => e.userId === claude.id && e.status === 'listening');
         socket.emit('Listening', { listening: true });
-        expect(await update).toMatchObject({ kind: 'terminal', state: 'live' });
+        await presence;
+        await until(async () => (await sessionRow(sessionId)).listening === true, 'listening stored');
+        socket.emit('Listening', { listening: false });
+        await until(async () => (await sessionRow(sessionId)).listening === false, 'not listening stored');
+        // Each wake flips twice; a session reload per flip would refetch every watcher's lists
+        expect(reloads).toEqual([]);
+    });
+
+    test('a fresh CLI on a session kept through the grace period starts without the old self-report', async () => {
+        const first = await connectTerminal(claude);
+        expect((await status(claude.auth, { contextPercent: 95, note: 'almost out' })).body.warned).toBe(true);
+        first.socket.disconnect();
+        const again = await connectTerminal(claude);
+        expect(again.sessionId).toBe(first.sessionId);
+        expect(await sessionRow(again.sessionId)).toMatchObject({ context_percent: null, status_note: null, limit_warned_at: null });
+        // So its own approach to the limit warns again
+        expect((await status(claude.auth, { contextPercent: 85 })).body.warned).toBe(true);
+    });
+
+    test('a report back under 80% re-arms the warning for the next window', async () => {
+        await connectTerminal(claude);
+        expect((await status(claude.auth, { usagePercent: 90, usageLabel: '5h window' })).body.warned).toBe(true);
+        expect((await status(claude.auth, { usagePercent: 92 })).body.warned).toBe(false);
+        expect((await status(claude.auth, { usagePercent: 5, usageLabel: '5h window' })).body.warned).toBe(false);
+        expect((await status(claude.auth, { usagePercent: 81, usageLabel: '5h window' })).body.warned).toBe(true);
     });
 
     test('agent_status stores what the agent reports, and warns once at 80%', async () => {

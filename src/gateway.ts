@@ -313,7 +313,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     const syncListening = () => {
                         terminalQueue = terminalQueue
                             .then(() => terminalListening(db, botId, isListening()))
-                            .then(emitNotices).catch(() => {});
+                            .catch(() => {});
                     };
                     socket.on('Listening', (data: { listening?: unknown }) => {
                         if (typeof data?.listening !== 'boolean') return;

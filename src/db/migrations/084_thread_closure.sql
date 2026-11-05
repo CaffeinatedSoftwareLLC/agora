@@ -11,6 +11,10 @@ ALTER TABLE messages
     ADD COLUMN thread_successor_id CHAR(26) REFERENCES messages(id) ON DELETE SET NULL,
     ADD COLUMN thread_closed_by CHAR(26) REFERENCES users(id) ON DELETE SET NULL;
 
+-- ON DELETE SET NULL looks these up when a message or a user is hard-deleted
+CREATE INDEX idx_messages_thread_successor ON messages (thread_successor_id) WHERE thread_successor_id IS NOT NULL;
+CREATE INDEX idx_messages_thread_closed_by ON messages (thread_closed_by) WHERE thread_closed_by IS NOT NULL;
+
 -- Recently closed threads, for thread discovery (GET /channels/:id/threads?state=closed)
 CREATE INDEX idx_messages_threads_closed ON messages (channel_id, thread_closed_at DESC)
     WHERE thread_closed_at IS NOT NULL AND thread_id IS NULL;

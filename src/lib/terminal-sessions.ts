@@ -92,8 +92,12 @@ export async function attachTerminal(pool: Pool, botId: string, channelIds: stri
             const channel = (await c.query('SELECT server_id FROM channels WHERE id = $1', [channelId])).rows[0];
             if (!channel) continue;
             const existing = (await c.query(
+                // A new socket on a row kept through the grace period may be a fresh CLI (a restart,
+                // /clear): what the old one reported about itself, and its one limit warning, go
                 `UPDATE agent_sessions SET seen_at = NOW(), terminal_mode = $3, last_active_at = NOW(), listening = $4,
-                     idle_since = CASE WHEN $4 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END
+                     idle_since = CASE WHEN $4 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END,
+                     context_percent = NULL, usage_percent = NULL, usage_label = NULL, status_note = NULL,
+                     status_at = NULL, limit_warned_at = NULL
                  WHERE channel_id = $1 AND bot_id = $2 AND kind = 'terminal' AND state = 'live' RETURNING id`,
                 [channelId, botId, mode, listening]
             )).rows[0];
@@ -159,18 +163,17 @@ export async function terminalActivity(pool: Pool, botId: string, working: boole
  * and not (#230): keep it on its live terminal sessions, with idle_since. Rows already in that
  * state are left alone, so a repeat posts no update.
  */
-export async function terminalListening(pool: Pool, botId: string, listening: boolean): Promise<Notice[]> {
-    return tx(pool, async (c) => {
-        const rows = await c.query(
-            `UPDATE agent_sessions SET listening = $2, seen_at = NOW(),
-                 idle_since = CASE WHEN $2 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END
-             WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' AND listening <> $2 RETURNING id, working`,
-            [botId, listening]
-        );
-        const notices: Notice[] = [];
-        for (const r of rows.rows) notices.push(await sessionUpdate(c, r.id.trim(), !!r.working));
-        return notices;
-    });
+export async function terminalListening(pool: Pool, botId: string, listening: boolean): Promise<string[]> {
+    // No AgentSessionUpdate: an mcp-mode agent flips twice per message it wakes on, and every
+    // update makes each watcher reload its session list. Watchers see listening through
+    // AgentPresence, and idle_since through the next session poll.
+    const rows = await pool.query(
+        `UPDATE agent_sessions SET listening = $2, seen_at = NOW(),
+             idle_since = CASE WHEN $2 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END
+         WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' AND listening <> $2 RETURNING id`,
+        [botId, listening]
+    );
+    return rows.rows.map((r: any) => r.id.trim());
 }
 
 /** What an agent reports about itself through agora-mcp's agent_status tool (#230). */
@@ -211,7 +214,11 @@ export async function storeTerminalStatus(c: PoolClient | any, botId: string, st
              usage_percent = COALESCE($3, usage_percent),
              usage_label = CASE WHEN $3::smallint IS NOT NULL OR $4::text IS NOT NULL THEN $4 ELSE usage_label END,
              status_note = COALESCE($5, status_note),
-             status_at = NOW(), seen_at = NOW()
+             status_at = NOW(), seen_at = NOW(),
+             -- Back under the line (a new usage window, a compacted context): the next approach warns again
+             limit_warned_at = CASE WHEN COALESCE($2::smallint, context_percent, 0) < ${LIMIT_WARN_PERCENT}
+                                     AND COALESCE($3::smallint, usage_percent, 0) < ${LIMIT_WARN_PERCENT}
+                                    THEN NULL ELSE limit_warned_at END
          WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live'
          RETURNING id, channel_id, context_percent, usage_percent, usage_label, limit_warned_at`,
         [botId, status.contextPercent ?? null, status.usagePercent ?? null, status.usageLabel ?? null, status.note ?? null]

@@ -238,7 +238,9 @@ async function remind(c: PoolClient, deps: HandoffNudgeDeps, row: Candidate, min
     const content = `@${name} this thread has waited on you for ${waited} min${reason}. `
         + 'If you owe the next step, post it now. If you are still waiting on something, post STATE=WAIT '
         + `ending with [WAIT on=${name} for=<what>].${reached ? '' : idle
-            ? ` ${name} isn't listening${idleSince ? ` (idle since ${utcTime(idleSince, now)})` : ''}${tellOwner ? ', so its owner was told' : ''}.`
+            // Agora sees only its own tools: an agent busy in its shell looks the same as one that stopped
+            ? ` ${name} isn't listening: no chat_wait and no Agora tool call${idleSince ? ` since ${utcTime(idleSince, now)}` : ''}. `
+                + `It may be busy outside Agora, or its session may have stopped${tellOwner ? '; its owner was told' : ''}.`
             : ` Agora can't reach ${name} here${tellOwner ? ', so its owner was told' : ''}.`}`;
     const data = { waitingOn: name, waitingOnId: botId, for: waiting.for, protocolMessageId: protocolId, minutes: waited, at: now, ownerTold: tellOwner,
         ...(idle && !reached ? { notListening: true, idleSince: idleSince?.toISOString() ?? null } : {}) };

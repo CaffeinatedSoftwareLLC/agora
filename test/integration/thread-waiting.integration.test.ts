@@ -180,7 +180,8 @@ describe('handoff nudges', () => {
         await run(later(16), [bots.WaitClaude.id]);
         const [nudge] = await nudgesIn(thread);
         const hhmm = idleSince.toISOString().slice(11, 16);
-        expect(nudge.content).toMatch(new RegExp(`WaitClaude isn't listening \\(idle since (\\d{4}-\\d\\d-\\d\\d )?${hhmm} UTC\\), so its owner was told\\.$`));
+        expect(nudge.content).toMatch(new RegExp(`WaitClaude isn't listening: no chat_wait and no Agora tool call since (\\d{4}-\\d\\d-\\d\\d )?${hhmm} UTC\\. `
+            + `It may be busy outside Agora, or its session may have stopped; its owner was told\\.$`));
         expect(nudge.content).not.toMatch(/can't reach/);
         expect(nudge.systemData).toEqual(expect.objectContaining({ ownerTold: true, notListening: true, idleSince: idleSince.toISOString() }));
         const told = await ctx.db.query('SELECT label FROM notifications WHERE user_id = $1 AND thread_id = $2', [owner.userId, thread]);

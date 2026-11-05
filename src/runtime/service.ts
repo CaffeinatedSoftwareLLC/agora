@@ -8,6 +8,7 @@ import { CAPABILITIES, type Capability } from '../ai/adapters';
 import { publishEvents, type BridgedEvent } from '../lib/event-bridge';
 import { postSystemMessage, updateSystemMessage } from '../gateway/post-message';
 import { inOwnTransaction, notifyApproval } from '../lib/notifications';
+import { denyApprovalCards } from '../lib/run-cards';
 import { RUNTIME_QUEUE } from './runner';
 import { resolveLimits, timeProfileFor, type RunLimits } from './limits';
 import { RulesDecider, type Decider, type Decision } from './decider';
@@ -256,6 +257,12 @@ export async function runtimeMaintenance(db: Pool): Promise<{ pruned: number; ex
         `UPDATE exec_runs SET status = 'denied', gate_reason = 'Approval window expired', finished_at = NOW()
          WHERE status = 'awaiting_approval' AND created_at < NOW() - INTERVAL '30 minutes' RETURNING id`
     );
+    // Their cards say DENIED instead of still offering Approve (#244); published after commit
+    if (exp.rows.length > 0) {
+        let events: BridgedEvent[] = [];
+        await inOwnTransaction(db, async c => { events = await denyApprovalCards(c, exp.rows.map((r: any) => r.id), 'Approval window expired'); });
+        if (events.length > 0) await publishEvents(runtimeRedis(), events).catch(() => { /* the card catches up on reload */ });
+    }
     return { pruned, expired: exp.rowCount ?? 0 };
 }
 

@@ -315,7 +315,7 @@ List open threads in a channel, most recently active first. Each thread shows it
 
 ### thread_close
 
-Close a thread so it accepts no further replies, or reopen it. Allowed for the thread's author, the agent that posted the collaboration's START in it, and members with Manage Messages. A `reason` or `successor` is recorded on the thread and posted as a notice in it; replies to it are then refused with the successor's ID.
+Close a thread so it accepts no further replies, or reopen it. Allowed for the thread's author, the agent that posted the collaboration's first START in it (close only), and members with Manage Messages. A `reason` or `successor` is recorded on the thread and posted as a notice in it; replies to it are then refused with the successor's ID.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -323,7 +323,7 @@ Close a thread so it accepts no further replies, or reopen it. Allowed for the t
 | thread | string | Yes | Thread parent message ID. |
 | reopen | boolean | No | Reopen a closed thread instead of closing it (clears its reason and successor). |
 | reason | string | No | `done`, `blocked`, `cancelled` or `superseded`. |
-| successor | string | No | Thread ID the work moved to. Implies `superseded`. |
+| successor | string | No | Thread ID the work moved to, in the same channel. Implies `superseded`. |
 
 ### file_search
 

@@ -469,8 +469,7 @@ export async function threadRoutes(app: FastifyInstance) {
             ? 'p.channel_id = $1 AND p.thread_id IS NULL AND p.deleted_at IS NULL AND p.thread_closed_at IS NOT NULL'
             : 'p.channel_id = $1 AND p.reply_count > 0 AND p.deleted_at IS NULL AND p.thread_closed_at IS NULL';
         const sortColumn = closed ? 'p.thread_closed_at' : 'p.last_reply_at';
-        const me = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? '';
-        const params: any[] = [channelId, userId, me];
+        const params: any[] = [channelId, userId];
         if (before) params.push(before);
         params.push(limit);
 
@@ -480,9 +479,7 @@ export async function threadRoutes(app: FastifyInstance) {
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
                             latest.id AS protocol_message_id, latest.author_username AS protocol_author_username,
-                            newer.id AS newer_request_id,
-                            EXISTS (SELECT 1 FROM messages s WHERE (s.thread_id = p.id OR s.id = p.id) AND s.author_id = $2
-                                    AND s.protocol->>'state' = 'START' AND s.deleted_at IS NULL) AS started_here
+                            starter.started_here
                      FROM messages p
                      LEFT JOIN users u ON u.id = p.author_id
                      LEFT JOIN users cb ON cb.id = p.thread_closed_by
@@ -511,16 +508,14 @@ export async function threadRoutes(app: FastifyInstance) {
                          ORDER BY c.id DESC LIMIT 1
                      ) latest ON true
                      LEFT JOIN LATERAL (
-                         -- A newer top-level message in this channel addressed to the caller (an @mention
-                         -- or a YIELD): the coordination may have moved on since this thread went quiet (#132)
-                         SELECT n.id FROM messages n
-                         WHERE n.channel_id = p.channel_id AND n.thread_id IS NULL AND n.deleted_at IS NULL
-                           AND n.id <> p.id AND n.created_at > p.last_reply_at AND n.author_id IS DISTINCT FROM $2
-                           AND (lower(n.protocol->>'yieldTo') = lower($3)
-                                OR EXISTS (SELECT 1 FROM message_mentions mm WHERE mm.message_id = n.id AND mm.user_id = $2))
-                         ORDER BY n.id DESC LIMIT 1
-                     ) newer ON ${closed ? 'false' : 'true'}
-                     WHERE ${where}${before ? ` AND ${sortColumn} < $4` : ''}
+                         -- The caller posted the collaboration's START in this thread (#132), see collabStarter
+                         SELECT (s.author_id = $2 AND s.edited_at IS NULL AND s.deleted_at IS NULL
+                                 AND (su.bot OR s.author_could_direct)) AS started_here
+                         FROM messages s JOIN users su ON su.id = s.author_id
+                         WHERE s.thread_id = p.id AND s.protocol->>'state' = 'START'
+                         ORDER BY s.id ASC LIMIT 1
+                     ) starter ON true
+                     WHERE ${where}${before ? ` AND ${sortColumn} < $3` : ''}
                      ORDER BY ${sortColumn} DESC
                      LIMIT $${params.length}`;
 
@@ -528,6 +523,9 @@ export async function threadRoutes(app: FastifyInstance) {
         // The count shows every match, not the page loaded so far (#14)
         const total = (await db.query(`SELECT COUNT(*)::int AS n FROM messages p WHERE ${where}`, [channelId])).rows[0].n;
         reply.header('X-Total-Count', String(total));
+        // The newest request for the caller at the top of the channel; an open thread that went
+        // quiet before it is probably not the caller's current work (#132)
+        const newer = closed ? null : await newestRequest(db, channelId, userId);
 
         // canClose: the author, whoever STARTed a collaboration in it, or ManageMessages/Administrator
         const channelRow = await db.query('SELECT server_id FROM channels WHERE id = $1', [channelId]);
@@ -564,7 +562,7 @@ export async function threadRoutes(app: FastifyInstance) {
             successorId: row.thread_successor_id?.trim() || null,
             closedByUsername: row.closed_by_username ?? null,
             // A newer request for the caller at the top of the channel: check it before resuming this one
-            newerRequestId: row.newer_request_id?.trim() || null,
+            newerRequestId: newer && newer.at > new Date(row.last_reply_at).getTime() ? newer.id : null,
             latestProtocol: row.latest_protocol ? {
                 ...row.latest_protocol, messageId: row.protocol_message_id.trim(),
                 authorUsername: row.protocol_author_username ?? null,
@@ -622,7 +620,7 @@ export async function threadRoutes(app: FastifyInstance) {
 
         // Fetch parent message (thread_id IS NULL ensures only parents)
         const parent = await db.query(
-            `SELECT id, author_id, reply_count, last_reply_at, thread_closed_at, thread_close_reason, thread_successor_id
+            `SELECT id, author_id, reply_count, last_reply_at, thread_closed_at, thread_close_reason, thread_successor_id, thread_closed_by
              FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL`,
             [msgId, channelId]
         );
@@ -637,20 +635,20 @@ export async function threadRoutes(app: FastifyInstance) {
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
 
         if (serverId) {
-            // Server channel: author, the collaboration's starter, ManageMessages or Administrator
+            // Server channel: author, ManageMessages or Administrator; or the collaboration's starter,
+            // who may close it and say why, but not reopen it or rewrite someone else's closure
             const isAuthor = parentRow.author_id?.trim() === userId.trim();
-            const started = !isAuthor && (await db.query(
-                `SELECT 1 FROM messages WHERE thread_id = $1 AND author_id = $2 AND protocol->>'state' = 'START'
-                   AND deleted_at IS NULL LIMIT 1`,
-                [msgId, userId]
-            )).rows.length > 0;
-            if (!isAuthor && !started) {
-                const perms = await loadAndComputePermissions(db, userId, serverId);
-                const hasManagePerms = !!(perms & Permissions.ManageMessages) || !!(perms & Permissions.Administrator);
-                if (!hasManagePerms) {
+            const perms = isAuthor ? 0n : await loadAndComputePermissions(db, userId, serverId);
+            const hasManagePerms = !!(perms & Permissions.ManageMessages) || !!(perms & Permissions.Administrator);
+            if (!isAuthor && !hasManagePerms) {
+                const starter = await collabStarter(db, msgId);
+                const closedBy = parentRow.thread_closed_by?.trim() ?? null;
+                const allowed = starter === userId.trim() && closed && (!parentRow.thread_closed_at || closedBy === userId.trim());
+                if (!allowed) {
                     return reply.status(403).send({
                         error: 'Not authorized to close this thread',
-                        message: 'Only the thread\'s author, the agent that posted its START, or someone with Manage Messages can close it.',
+                        message: 'Only the thread\'s author, the agent that posted its START, or someone with Manage Messages can close it. '
+                            + 'Only the author or Manage Messages can reopen it.',
                     });
                 }
             }
@@ -660,13 +658,13 @@ export async function threadRoutes(app: FastifyInstance) {
         let successorChannelId: string | null = null;
         if (successor) {
             if (successor === msgId.trim()) return reply.status(400).send({ error: 'A thread cannot succeed itself' });
-            // The successor is a top-level message in a channel the caller can see
+            // The successor is a top-level message in the same channel: everyone who sees this thread's
+            // pointer can open it, and no other channel's IDs reach this channel's members
             const next = await db.query(
-                'SELECT channel_id FROM messages WHERE id = $1 AND thread_id IS NULL AND deleted_at IS NULL',
-                [successor]
+                'SELECT channel_id FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL AND deleted_at IS NULL',
+                [successor, channelId]
             );
-            const visible = next.rows[0] && (await canViewChannel(db, next.rows[0].channel_id.trim(), userId, !!request.isBot)).allowed;
-            if (!visible) return reply.status(400).send({ error: 'successor_not_found' });
+            if (!next.rows[0]) return reply.status(400).send({ error: 'successor_not_found', message: 'The successor must be a thread in this channel.' });
             successorChannelId = next.rows[0].channel_id.trim();
         }
 
@@ -692,7 +690,9 @@ export async function threadRoutes(app: FastifyInstance) {
             ? await db.query(
                 `UPDATE messages SET thread_closed_at = COALESCE(thread_closed_at, NOW()), thread_closed_by = $2,
                      thread_close_reason = COALESCE($3, thread_close_reason),
-                     thread_successor_id = COALESCE($4, thread_successor_id)
+                     -- A reason other than superseded means the work did not move: drop an old successor
+                     thread_successor_id = CASE WHEN $3::text IS NOT NULL AND $3::text <> 'superseded' THEN NULL
+                                                ELSE COALESCE($4, thread_successor_id) END
                  WHERE id = $1
                  RETURNING id, thread_closed_at, thread_close_reason, thread_successor_id`,
                 [msgId, userId, reason ?? null, successor ?? null])
@@ -757,6 +757,51 @@ export async function threadRoutes(app: FastifyInstance) {
 
         return reply.status(200).send(state(updated));
     });
+}
+
+/**
+ * Who posted the collaboration's START in this thread, when it may close the thread (#132): the
+ * thread's first START reply, unedited and not deleted, by a bot or by someone who could direct
+ * agents. A later or edited START, or an ordinary member's, gives no right to close it.
+ */
+async function collabStarter(db: any, threadId: string): Promise<string | null> {
+    const row = (await db.query(
+        `SELECT s.author_id, s.edited_at, s.deleted_at, s.author_could_direct, su.bot
+         FROM messages s LEFT JOIN users su ON su.id = s.author_id
+         WHERE s.thread_id = $1 AND s.protocol->>'state' = 'START'
+         ORDER BY s.id ASC LIMIT 1`,
+        [threadId]
+    )).rows[0];
+    if (!row?.author_id || row.edited_at || row.deleted_at || !(row.bot || row.author_could_direct)) return null;
+    return row.author_id.trim();
+}
+
+/**
+ * The newest top-level message in the channel addressed to the caller (an @mention, or a YIELD to
+ * its username or a profile name it runs under), not written by the caller. Two indexed lookups
+ * per list request instead of a scan per listed thread.
+ */
+async function newestRequest(db: any, channelId: string, userId: string): Promise<{ id: string; at: number } | null> {
+    const names = (await db.query(
+        `SELECT lower(u.username) AS name FROM users u WHERE u.id = $1
+         UNION SELECT lower(p.name) FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id
+         WHERE s.bot_id = $1 AND s.channel_id = $2`,
+        [userId, channelId]
+    )).rows.map((r: any) => r.name);
+    const rows = (await db.query(
+        `(SELECT m.id, m.created_at FROM message_mentions mm JOIN messages m ON m.id = mm.message_id
+          WHERE mm.user_id = $2 AND m.channel_id = $1 AND m.thread_id IS NULL AND m.deleted_at IS NULL
+            AND m.author_id IS DISTINCT FROM $2
+          ORDER BY m.id DESC LIMIT 1)
+         UNION ALL
+         (SELECT m.id, m.created_at FROM messages m
+          WHERE m.channel_id = $1 AND lower(m.protocol->>'yieldTo') = ANY($3::text[]) AND m.thread_id IS NULL
+            AND m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $2
+          ORDER BY m.id DESC LIMIT 1)`,
+        [channelId, userId, names]
+    )).rows;
+    const newest = rows.sort((a: any, b: any) => String(b.id).localeCompare(String(a.id)))[0];
+    return newest ? { id: newest.id.trim(), at: new Date(newest.created_at).getTime() } : null;
 }
 
 const CLOSE_WORDS: Record<string, string> = {

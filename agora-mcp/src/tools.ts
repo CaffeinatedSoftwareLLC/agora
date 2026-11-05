@@ -819,7 +819,7 @@ export function registerTools(
             + 'closed=true lists recently closed threads instead, with how each ended and where its work moved.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
-            limit: z.number().optional().describe('Max threads to return (default: 10, max: 10)'),
+            limit: z.number().int().min(1).max(10).optional().describe('Max threads to return (default: 10, max: 10)'),
             closed: z.boolean().optional().describe('List recently closed threads instead of open ones'),
         },
         async ({ channel, limit, closed }) => {
@@ -846,7 +846,7 @@ export function registerTools(
             reopen: z.boolean().optional().describe('Reopen a closed thread instead of closing it'),
             reason: z.enum(['done', 'blocked', 'cancelled', 'superseded']).optional()
                 .describe('How it ended: done (DONE), blocked (BLOCK), cancelled (acknowledged CANCEL), superseded (the work moved)'),
-            successor: z.string().optional().describe('Thread ID the work moved to (implies reason=superseded)'),
+            successor: z.string().optional().describe('Thread ID in this channel the work moved to (implies reason=superseded)'),
         },
         async ({ channel, thread, reopen, reason, successor }) => {
             const ch = await resolveChannel(channel);

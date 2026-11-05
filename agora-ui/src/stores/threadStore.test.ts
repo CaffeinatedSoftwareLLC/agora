@@ -74,11 +74,11 @@ describe('threadStore.updateParentMetadata', () => {
     await vi.waitFor(() => expect(useThreadStore.getState().activeThreads.get('ch-1')).toHaveLength(1));
   });
 
-  it('does not fetch for a channel whose list was never loaded, or for a closed or emptied thread', () => {
+  it('does not fetch for a channel whose list was never loaded, or for an emptied thread it never listed', () => {
     useThreadStore.getState().updateParentMetadata({ channelId: 'ch-9', messageId: 'parent-1', replyCount: 1, lastReplyAt: null });
+    useThreadStore.getState().updateParentMetadata({ channelId: 'ch-9', messageId: 'parent-1', replyCount: 3, lastReplyAt: null, threadClosedAt: '2026-10-20T12:05:00.000Z' });
     useThreadStore.setState({ activeThreads: new Map([['ch-1', []]]) });
     useThreadStore.getState().updateParentMetadata({ channelId: 'ch-1', messageId: 'parent-1', replyCount: 0, lastReplyAt: null });
-    useThreadStore.getState().updateParentMetadata({ channelId: 'ch-1', messageId: 'parent-1', replyCount: 3, lastReplyAt: null, threadClosedAt: '2026-10-20T12:05:00.000Z' });
     expect(mockApi.get).not.toHaveBeenCalled();
   });
 });
@@ -307,6 +307,19 @@ describe('active thread total (#14)', () => {
     expect(mockApi.getWithTotal).toHaveBeenLastCalledWith(`/channels/ch-1/threads?limit=5&before=${encodeURIComponent('2026-10-20T12:05:00.000Z')}`);
     expect(useThreadStore.getState().activeThreads.get('ch-1')).toHaveLength(6);
     expect(useThreadStore.getState().threadTotals.get('ch-1')).toBe(11);
+  });
+
+  it('refetches when a thread on a later page is closed, but not for a notice in an already closed one', async () => {
+    useThreadStore.setState({ activeThreads: new Map([['ch-1', [summary()]]]), threadTotals: new Map([['ch-1', 9]]) });
+    mockApi.getWithTotal.mockResolvedValueOnce({ data: [summary()], total: 8 });
+    useThreadStore.getState().updateParentMetadata({ channelId: 'ch-1', messageId: 'not-loaded', replyCount: 3, lastReplyAt: '2026-10-20T12:01:00.000Z', threadClosedAt: '2026-10-20T13:00:00.000Z' });
+    await vi.waitFor(() => expect(useThreadStore.getState().threadTotals.get('ch-1')).toBe(8));
+    expect(mockApi.getWithTotal).toHaveBeenCalledTimes(1);
+
+    useThreadStore.setState({ activeThreads: new Map([['ch-1', [summary({ threadClosedAt: '2026-10-20T13:00:00.000Z' })]]]) });
+    useThreadStore.getState().updateParentMetadata({ channelId: 'ch-1', messageId: 'parent-1', replyCount: 2, lastReplyAt: '2026-10-20T13:00:00.000Z', threadClosedAt: '2026-10-20T13:00:00.000Z' });
+    await Promise.resolve();
+    expect(mockApi.getWithTotal).toHaveBeenCalledTimes(1);
   });
 
   it('refetches when a loaded open thread is closed, so the total drops', async () => {
