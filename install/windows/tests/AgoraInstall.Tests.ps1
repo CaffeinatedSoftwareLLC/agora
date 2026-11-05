@@ -338,6 +338,21 @@ bb415d824822c4b878125729af451a5d18fb13d1cf5cbed9a7393ad64ac6039e *ubuntu-24.04.5
     }
 }
 
+Describe 'ConvertTo-ResponseText' {
+    # Canonical serves SHA256SUMS with no Content-Type, so Windows PowerShell 5.1 hands back bytes
+    It 'decodes byte content as UTF-8 so the image list still matches' {
+        $line = 'bb415d824822c4b878125729af451a5d18fb13d1cf5cbed9a7393ad64ac6039e *ubuntu-24.04.5-wsl-amd64.wsl'
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$line`n")
+        $text = & (Get-Module AgoraInstall) { param($c) ConvertTo-ResponseText $c } $bytes
+        $text | Should -BeOfType [string]
+        (Select-UbuntuWslImage -Sha256Sums $text -Arch 'amd64').FileName | Should -Be 'ubuntu-24.04.5-wsl-amd64.wsl'
+    }
+
+    It 'leaves string content as it is' {
+        & (Get-Module AgoraInstall) { ConvertTo-ResponseText 'plain text' } | Should -Be 'plain text'
+    }
+}
+
 Describe 'Get-UbuntuWslImage' {
     It 'deletes a download whose SHA-256 differs and refuses it' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("agora-pester-" + [guid]::NewGuid())
