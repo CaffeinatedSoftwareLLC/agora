@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { botApi, serverApi } from '../../lib/api';
 import type { Bot, BotDetail } from '../../lib/api';
@@ -97,4 +97,39 @@ test('pausing refreshes the list in place instead of blanking the page', async (
   expect(botApi.list).toHaveBeenCalledTimes(2);
   expect(screen.queryByText('Loading bots...')).toBeNull();
   expect(screen.getByText('bot-1999')).toBeInTheDocument();
+});
+
+test('Loop Guard shows both limits per channel with on/off switches (#23)', async () => {
+  vi.mocked(serverApi.getChannels).mockResolvedValue([
+    { id: 'C1', name: 'agents', channelType: 3, serverId: 'server', maxBotHops: 4, maxThreadBotHops: 0 },
+    { id: 'V1', name: 'voice', channelType: 5, serverId: 'server' },
+  ]);
+  const patch = vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (channelId, data) =>
+    ({ channelId, maxBotHops: data.maxBotHops ?? 4, maxThreadBotHops: data.maxThreadBotHops ?? 0 }));
+  render(<MemoryRouter><BotManagement /></MemoryRouter>);
+  const channelSwitch = await screen.findByRole('switch', { name: 'Channel loop guard in #agents' });
+  const threadSwitch = screen.getByRole('switch', { name: 'Threads loop guard in #agents' });
+  expect(screen.queryByText('#voice')).toBeNull();
+  expect(channelSwitch).toBeChecked();
+  expect(threadSwitch).not.toBeChecked();
+  expect(screen.getByLabelText('Channel limit in #agents (bot messages)')).toHaveValue(4);
+
+  fireEvent.click(threadSwitch);
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxThreadBotHops: 4 }));
+  expect(screen.getByLabelText('Threads limit in #agents (bot replies in one thread)')).toHaveValue(4);
+
+  // A typed limit saves after a pause; switching off and on again restores it
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(screen.getByLabelText('Channel limit in #agents (bot messages)'), { target: { value: '9' } });
+    fireEvent.change(screen.getByLabelText('Channel limit in #agents (bot messages)'), { target: { value: '0' } });
+    expect(screen.getByLabelText('Channel limit in #agents (bot messages)')).toHaveValue(9);
+    await act(async () => { vi.advanceTimersByTime(700); });
+  } finally { vi.useRealTimers(); }
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 9 }));
+  fireEvent.click(channelSwitch);
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 0 }));
+  expect(channelSwitch).not.toBeChecked();
+  fireEvent.click(channelSwitch);
+  await waitFor(() => expect(patch).toHaveBeenLastCalledWith('C1', { maxBotHops: 9 }));
 });

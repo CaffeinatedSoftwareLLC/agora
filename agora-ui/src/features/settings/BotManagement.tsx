@@ -182,104 +182,136 @@ function BotList({
 
 // ─── Channel Loop Guard Settings ──────────────────────────────────────────
 
+type GuardField = 'maxBotHops' | 'maxThreadBotHops';
+type Limits = Record<GuardField, number>;
+/** The limit a guard gets when it is switched on with no earlier value to restore. */
+const GUARD_DEFAULT: Limits = { maxBotHops: 4, maxThreadBotHops: 4 };
+
+/**
+ * Both loop guards per channel (#23): the channel guard (top-level bot messages in a row)
+ * and the thread guard (bot replies in a row inside one thread). Each has an on/off switch;
+ * off is a limit of 0.
+ */
 function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [values, setValues] = useState<Record<string, number>>({});
+  const [values, setValues] = useState<Record<string, Limits>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState('');
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const abortControllers = useRef<Record<string, AbortController>>({});
+  // The last limit above 0, restored when a guard is switched back on
+  const lastOn = useRef<Record<string, number>>({});
+  const requestSeq = useRef<Record<string, number>>({});
 
   useEffect(() => {
     serverApi.getChannels(serverId).then((chs) => {
       const textChannels = chs.filter(c => c.channelType === 3);
       setChannels(textChannels);
-      const initial: Record<string, number> = {};
+      const initial: Record<string, Limits> = {};
       for (const ch of textChannels) {
-        initial[ch.id] = ch.maxBotHops ?? 4;
+        initial[ch.id] = { maxBotHops: ch.maxBotHops ?? 4, maxThreadBotHops: ch.maxThreadBotHops ?? 0 };
       }
       setValues(initial);
     }).catch(() => setError('Failed to load channels'));
   }, [serverId]);
 
-  // Cleanup debounce timers and abort controllers on unmount
+  // Clear pending debounced saves on unmount
   useEffect(() => {
     const timers = debounceTimers.current;
-    const controllers = abortControllers.current;
-    return () => {
-      for (const t of Object.values(timers)) clearTimeout(t);
-      for (const c of Object.values(controllers)) c.abort();
-    };
+    return () => { for (const t of Object.values(timers)) clearTimeout(t); };
   }, []);
 
-  function handleChange(channelId: string, raw: string) {
-    const num = parseInt(raw, 10);
-    if (isNaN(num) || num < 0) return;
-    setValues(prev => ({ ...prev, [channelId]: num }));
-
-    // Debounce save
-    if (debounceTimers.current[channelId]) {
-      clearTimeout(debounceTimers.current[channelId]);
-    }
-    debounceTimers.current[channelId] = setTimeout(() => {
-      save(channelId, num);
-    }, 600);
+  function set(channelId: string, field: GuardField, value: number, delay: number) {
+    const prev = values[channelId]?.[field];
+    if (prev && prev > 0) lastOn.current[`${channelId}:${field}`] = prev;
+    setValues(v => ({ ...v, [channelId]: { ...(v[channelId] ?? GUARD_DEFAULT), [field]: value } }));
+    const key = `${channelId}:${field}`;
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key]);
+    debounceTimers.current[key] = setTimeout(() => { void save(channelId, field, value); }, delay);
   }
 
-  async function save(channelId: string, maxBotHops: number) {
-    // Cancel any in-flight request for this channel
-    if (abortControllers.current[channelId]) {
-      abortControllers.current[channelId].abort();
-    }
-    const controller = new AbortController();
-    abortControllers.current[channelId] = controller;
+  function handleNumber(channelId: string, field: GuardField, raw: string) {
+    const num = parseInt(raw, 10);
+    // 0 would be "off": that is the switch's job, so the box keeps a limit while typing
+    if (isNaN(num) || num < 1 || num > 1000) return;
+    set(channelId, field, num, 600);
+  }
 
-    setSaving(channelId);
+  function handleToggle(channelId: string, field: GuardField, on: boolean) {
+    const restore = lastOn.current[`${channelId}:${field}`] ?? GUARD_DEFAULT[field];
+    set(channelId, field, on ? restore : 0, 0);
+  }
+
+  async function save(channelId: string, field: GuardField, value: number) {
+    const key = `${channelId}:${field}`;
+    const seq = (requestSeq.current[key] ?? 0) + 1;
+    requestSeq.current[key] = seq;
+    setSaving(key);
     setError('');
     try {
-      await botApi.updateChannelBotConfig(channelId, { maxBotHops });
-      if (!controller.signal.aborted) {
-        setSaving(null);
-      }
+      await botApi.updateChannelBotConfig(channelId, { [field]: value });
     } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(err instanceof ApiError ? err.code : 'Failed to save');
-        setSaving(null);
-      }
+      if (requestSeq.current[key] === seq) setError(err instanceof ApiError ? err.code : 'Failed to save');
+    } finally {
+      if (requestSeq.current[key] === seq) setSaving(s => (s === key ? null : s));
     }
   }
 
   if (channels.length === 0) return null;
 
+  const guard = (ch: Channel, field: GuardField, label: string, unit: string) => {
+    const value = values[ch.id]?.[field] ?? 0;
+    const on = value > 0;
+    const key = `${ch.id}:${field}`;
+    return (
+      <div className="flex items-center gap-2">
+        <label className="min-h-11 md:min-h-8 flex items-center gap-1.5 text-xs text-text-muted cursor-pointer">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={on}
+            onChange={e => handleToggle(ch.id, field, e.target.checked)}
+            aria-label={`${label} loop guard in #${ch.name}`}
+            className="accent-primary"
+          />
+          {label}
+        </label>
+        {on ? (
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            value={value}
+            onChange={e => handleNumber(ch.id, field, e.target.value)}
+            aria-label={`${label} limit in #${ch.name} (${unit})`}
+            title={`Pause after this many ${unit} in a row`}
+            className="min-h-11 md:min-h-8 w-16 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
+          />
+        ) : (
+          <span className="w-16 text-text-muted text-xs">Off</span>
+        )}
+        <span className="w-12 text-text-muted text-xs" aria-live="polite">{saving === key ? 'Saving…' : ''}</span>
+      </div>
+    );
+  };
+
   return (
     <section className="mb-6">
-      <h3 className="text-sm font-semibold text-text mb-2">Channel Loop Guard</h3>
+      <h3 className="text-sm font-semibold text-text mb-2">Loop Guard</h3>
       <p className="text-text-muted text-xs mb-3">
-        Max consecutive bot messages per channel before pausing. Set to 0 to disable.
+        Pauses agents after this many bot posts in a row with no human message. The channel guard counts top-level
+        messages; the thread guard counts replies inside each thread. A human message resets both, and the notice
+        it posts has Continue, Raise limit and Turn off buttons.
       </p>
-      {error && <p className="text-danger text-xs mb-2">{error}</p>}
+      {error && <p className="text-danger text-xs mb-2" role="alert">{error}</p>}
       <div className="flex flex-col gap-1">
         {channels.map((ch) => (
-          <div
-            key={ch.id}
-            className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-surface-hover"
-          >
-            <span className="text-text-muted">#</span>
-            <span className="text-text text-sm flex-1">{ch.name}</span>
-            <input
-              type="number"
-              min={0}
-              max={1000}
-              value={values[ch.id] ?? 4}
-              onChange={(e) => handleChange(ch.id, e.target.value)}
-              className="min-h-11 md:min-h-8 w-20 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
-            />
-            {values[ch.id] === 0 && (
-              <span className="text-text-muted text-xs">Disabled</span>
-            )}
-            {saving === ch.id && (
-              <span className="text-text-muted text-xs">Saving...</span>
-            )}
+          <div key={ch.id} className="flex flex-wrap items-center gap-x-6 gap-y-1 px-2 py-1.5 rounded hover:bg-surface-hover">
+            <span className="flex min-w-32 flex-1 items-center gap-1 text-sm">
+              <span className="text-text-muted">#</span>
+              <span className="text-text">{ch.name}</span>
+            </span>
+            {guard(ch, 'maxBotHops', 'Channel', 'bot messages')}
+            {guard(ch, 'maxThreadBotHops', 'Threads', 'bot replies in one thread')}
           </div>
         ))}
       </div>

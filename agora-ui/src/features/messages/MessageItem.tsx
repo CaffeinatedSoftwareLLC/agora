@@ -1,6 +1,7 @@
 import { useUIStore } from '../../stores/uiStore';
 import { Avatar } from '../../components/ui/Avatar';
 import { ProviderTermsNotice } from './ProviderTermsNotice';
+import { LoopGuardNotice } from './LoopGuardNotice';
 import { useState, useRef } from 'react';
 import type { Message } from '../../stores/messageStore';
 import { MessageActions } from './MessageActions';
@@ -143,6 +144,7 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   }
 
   if (message.systemEvent === 'provider_terms') return <ProviderTermsNotice content={message.content ?? ''} />;
+  if (message.systemEvent === 'loop_guard') return <LoopGuardNotice message={message} channelId={channelId} />;
 
   // Other system events (e.g. loop guard)
   if (message.systemEvent) {

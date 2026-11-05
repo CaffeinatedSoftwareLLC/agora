@@ -55,7 +55,7 @@ describe('system notice runs in MessageList', () => {
       msg('m1', 'hello'),
       msg('n1', 'Session standby', 'agent_session'),
       msg('n2', 'Session started', 'agent_session'),
-      msg('n3', 'Loop guard tripped', 'loop_guard'),
+      msg('n3', 'Agents may continue', 'loop_guard_resume'),
       msg('m2', 'bye'),
     ]);
     const { unmount } = render(<MessageList channelId="channel" channelName="general" />);
@@ -63,14 +63,14 @@ describe('system notice runs in MessageList', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.querySelector('svg')?.classList.contains('rotate-90')).toBe(false);
     expect(screen.queryByText('Session standby')).toBeNull();
-    expect(screen.queryByText('Loop guard tripped')).toBeNull();
+    expect(screen.queryByText('Agents may continue')).toBeNull();
     expect(screen.getByText('hello')).toBeTruthy();
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(toggle.querySelector('svg')?.classList.contains('rotate-90')).toBe(true);
     expect(screen.getByText('Session standby')).toBeTruthy();
-    expect(screen.getByText('Loop guard tripped')).toBeTruthy();
+    expect(screen.getByText('Agents may continue')).toBeTruthy();
     expect(JSON.parse(storage.data.get(expandedRunsKey('me'))!)).toEqual(['n1']);
 
     unmount();

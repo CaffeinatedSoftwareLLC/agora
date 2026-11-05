@@ -379,7 +379,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
             let channels: any[] = [];
             if (serverIds.length > 0) {
                 const channelsResult = await db.query(
-                    `SELECT id, name, channel_type, server_id
+                    `SELECT id, name, channel_type, server_id, max_bot_hops, max_thread_bot_hops
                      FROM channels
                      WHERE server_id = ANY($1)`,
                     [serverIds]
@@ -443,6 +443,9 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     name: c.name,
                     channelType: c.channel_type,
                     serverId: c.server_id ? c.server_id.trim() : null,
+                    // Loop guard limits, shown in the channel header (0 = off)
+                    maxBotHops: c.max_bot_hops ?? 4,
+                    maxThreadBotHops: c.max_thread_bot_hops ?? 0,
                 })),
                 unreads: unreadResult.rows.filter((r: any) => channelRoomIds.includes(r.channel_id.trim())).map((r: any) => ({
                     channelId: r.channel_id.trim(),

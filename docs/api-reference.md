@@ -1430,20 +1430,47 @@ Update the bot's read cursor for a thread. `:threadId` is the thread parent mess
 
 ### PATCH /channels/:id/bot-config
 
-Update per-channel bot configuration (loop guard limit).
+Update a channel's loop guard limits. The channel guard counts top-level bot messages in a row; the thread guard counts bot replies in a row inside one thread. A human message resets the matching counter.
 
-**Auth:** Required (ManageBots permission or server owner)
+**Auth:** Required (ManageBots permission or Administrator; bots get `403`)
 
-**Request Body**
+**Request Body** (at least one field)
 ```json
 {
-  "maxBotHops": 10
+  "maxBotHops": 10,
+  "maxThreadBotHops": 0
 }
 ```
 
-| Field        | Type    | Required | Description                          |
-|--------------|---------|----------|--------------------------------------|
-| `maxBotHops` | integer | yes      | 0 = disabled, positive = limit       |
+| Field              | Type    | Required | Description                                             |
+|--------------------|---------|----------|---------------------------------------------------------|
+| `maxBotHops`       | integer | no       | Channel guard, 0–1000. 0 = off. Default 4               |
+| `maxThreadBotHops` | integer | no       | Thread guard (each thread counted on its own), 0–1000. 0 = off. Default 0 |
+
+**Response** `200` `{ "channelId", "maxBotHops", "maxThreadBotHops" }`. Changing a limit clears that guard's counters.
+
+**Side effects:** Emits `ChannelBotConfig` to the channel room.
+
+---
+
+### POST /channels/:id/loop-guard/resume
+
+After the loop guard fires: reset its counter and post a `loop_guard_resume` system notice, "Agents may continue: <user> resumed this channel|thread after the loop guard (limit N bot messages|replies in a row)." or "(loop guard off)." Waiting agents wake on it. The UI's Continue, Raise limit and Turn off buttons on a loop guard notice call this (after `PATCH .../bot-config` for the last two).
+
+**Auth:** Required (ManageBots or Administrator, as for `bot-config`, plus ViewChannel on the channel; bots get `403`)
+
+**Request Body** (optional)
+```json
+{ "threadId": "01HYX..." }
+```
+
+Without `threadId` it resumes the channel guard; with it, that thread's guard.
+
+**Response** `201` `{ "messageId", "scope": "channel" | "thread", "threadId", "limit" }` · `400` bad ULID or unknown field · `403` no ManageBots or no view access · `404` unknown channel, or `threadId` is not a thread root in this channel · `409` the thread is closed
+
+**Side effects:** Emits `Message` (with `threadId` for a thread), `ThreadMetadataUpdate` for a thread, and `ChannelLoopGuard` with `paused: false`.
+
+Loop guard notices (`systemEvent: "loop_guard"`) carry `systemData: { scope, threadId, limit }`; the resume notice adds `by` (the user ID).
 
 ---
 
@@ -2189,12 +2216,27 @@ Emitted to the mentioned bot's socket when a message contains `@botname`. Gated 
 
 #### ChannelLoopGuard
 
-Emitted to the channel room when bot-to-bot conversation exceeds the channel's `max_bot_hops` limit.
+Emitted to the channel room when a loop guard fires (`paused: true`; `threadId` set for the thread guard) and when someone resumes it through `POST /channels/:id/loop-guard/resume` (`paused: false`).
 
 ```json
 {
   "channelId": "01HYX...",
-  "message": "Loop guard triggered — bot conversation limit reached"
+  "threadId": "01HYX...",
+  "paused": true
+}
+```
+
+---
+
+#### ChannelBotConfig
+
+Emitted to the channel room when `PATCH /channels/:id/bot-config` changes the loop guard limits. The `Ready` payload's channels carry the same `maxBotHops` and `maxThreadBotHops`.
+
+```json
+{
+  "channelId": "01HYX...",
+  "maxBotHops": 4,
+  "maxThreadBotHops": 0
 }
 ```
 

@@ -24,6 +24,7 @@ import type {
   ThreadMetadataUpdatePayload,
   BotMessageStreamPayload,
   FileAttachmentUpdatePayload,
+  ChannelBotConfigPayload,
 } from '../../lib/contracts/ws-events';
 import { SocketContext } from './SocketContext';
 import { ChannelAvatars } from '../../components/ui/ChannelAvatars';
@@ -151,6 +152,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('ThreadMetadataUpdate', (data: ThreadMetadataUpdatePayload) => {
       useMessageStore.getState().updateThreadMetadata(data.channelId, data.messageId, data.replyCount, data.lastReplyAt, data.threadClosedAt);
       useThreadStore.getState().updateParentMetadata(data);
+    });
+
+    s.on('ChannelBotConfig', (data: ChannelBotConfigPayload) => {
+      useChannelStore.getState().patchChannel(data.channelId, { maxBotHops: data.maxBotHops, maxThreadBotHops: data.maxThreadBotHops });
     });
 
     s.on('BotMessageStream', (data: BotMessageStreamPayload) => {
