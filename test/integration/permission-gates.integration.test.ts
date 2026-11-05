@@ -314,7 +314,7 @@ describe('SendMessages', () => {
 });
 
 describe('UploadFiles', () => {
-    const upload = (auth: object, channelId: string, name: string) => ctx.request.post('/files/upload').set(auth)
+    const upload = (auth: Record<string, string>, channelId: string, name: string) => ctx.request.post('/files/upload').set(auth)
         .field('channel_id', channelId).attach('file', Buffer.from('hello'), name);
     const storedIn = async (channelId: string) =>
         (await ctx.db.query('SELECT COUNT(*)::int AS n FROM files WHERE channel_id = $1', [channelId])).rows[0].n as number;
