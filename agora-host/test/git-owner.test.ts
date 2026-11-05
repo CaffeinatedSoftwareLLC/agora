@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdir, readFile, symlink, utimes, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { uptime } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -94,7 +95,7 @@ it('startup recovery clears recorded stale locks and preserves an unknown lock',
     await writeFile(lock, 'unknown');
     await recoverWorkspaceGitLocks(s.c, s.log);
     expect(await readFile(lock, 'utf8')).toBe('unknown');
-    expect(s.log).toHaveBeenCalledWith('stale_git_lock');
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^stale_git_lock wt-\w{10}\.json message=stale_git_lock detail=.*index\.lock/));
 });
 
 it('a workspace commit recovers a recorded stale lock and commits without changing the main checkout', async () => {
@@ -137,8 +138,19 @@ it('replaces a torn ownership record written before this boot instead of blockin
 it('keeps blocking on a torn ownership record written since this boot', async () => {
     const s = await fixture();
     await writeFile(s.record, torn);
-    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('invalid') });
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('not valid JSON') });
     expect(await readFile(s.record, 'utf8')).toBe(torn);
+    // Inside the margin before boot still counts as "since boot".
+    const nearBoot = new Date(Date.now() - uptime() * 1000 - 60 * 1000);
+    await utimes(s.record, nearBoot, nearBoot);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toThrow('stale_git_lock');
+});
+
+it('a well-formed record from another Node path keeps blocking even when written before this boot', async () => {
+    const s = await fixture(), other = JSON.stringify({ ...deadOwner, argv0: 'C:\\old\\node.exe' });
+    await writeFile(s.record, other); await utimes(s.record, beforeBoot, beforeBoot);
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('invalid') });
+    expect(await readFile(s.record, 'utf8')).toBe(other);
 });
 
 it('a torn record from before this boot never lets lock recovery clear a lock', async () => {

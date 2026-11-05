@@ -89,7 +89,8 @@ export async function ensureWorkspace(local: LocalProfile, claim: { session: Pic
 }
 // Workspace records only: wt-<10>.json, never the wt-<10>.git-process.json ownership record beside it.
 export const WORKSPACE_RECORD = /^wt-[0-9A-HJKMNP-TV-Z]{10}\.json$/;
-const invalidRecords = new Map<string, string>(), loggedFailures = new Map<string, string>();
+const invalidRecords = new Map<string, string>(), loggedFailures = new Map<string, { line: string; at: number }>();
+const RELOG_MS = 60 * 60 * 1000;
 /** A record that is not a JSON object is skipped, with one warning until the file changes. Its worktree is kept. */
 async function readRecord(path: string, file: string, log: (code: string) => void): Promise<Workspace | null> {
     const text = await readFile(path, 'utf8');
@@ -104,28 +105,39 @@ async function readRecord(path: string, file: string, log: (code: string) => voi
     }
     return null;
 }
-// Long opaque runs (tokens) are hidden; lowercase hex (SHAs) and paths stay readable.
-const opaque = (run: string) => /^[0-9a-f]+$/.test(run) || run.split(/[\\/]/).every(part => part.length < 32) ? run : '[redacted]';
+// A long path component, or any long run, that mixes letters and digits is a token; a 40-hex SHA stays readable.
+const opaque = (part: string) => part.length >= 32 && /\d/.test(part) && /[A-Za-z]/.test(part) && !/^[0-9a-f]{40}$/.test(part) ? '[redacted]' : part;
 export const redact = (text: string) => text.replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .replace(/\b(AgentHost|Bearer|Basic|token|secret|password|api[_-]?key|authorization)(["'\s:=]+)[^\s"',;]+/gi, '$1$2[redacted]')
+    .replace(/(authorization["']?\s*[:=]\s*["']?)(?:[A-Za-z]+\s+)?[^\s"',;)]+/gi, '$1[redacted]')
+    .replace(/\b(AgentHost|Bearer|Basic)\s+[^\s"',;)]+/g, '$1 [redacted]')
+    .replace(/(token|secret|password|passwd|api[_-]?key)(["'\s:=]+)[^\s"',;)]+/gi, '$1$2[redacted]')
     .replace(/\/\/[^/\s:@]+:[^/\s@]+@/g, '//[redacted]@')
-    .replace(/[A-Za-z0-9_\-.~+/\\]{32,}={0,2}/g, opaque);
+    .replace(/[A-Za-z0-9_\-.~+/\\=]{32,}/g, run => run.split(/([\\/])/).map(opaque).join(''));
 /** Code, first message line, lock detail and first stderr line, without tokens or control characters. */
 export function describeError(err: unknown): string {
-    const e = err as { code?: unknown; status?: unknown; detail?: unknown; stderr?: unknown } | null | undefined;
+    const e = err as { code?: unknown; status?: unknown; detail?: unknown; stderr?: unknown; cause?: { code?: unknown; message?: unknown };
+        issues?: Array<{ code?: unknown; path?: unknown[] }> } | null | undefined;
     const parts: string[] = [];
     const code = e?.code ?? e?.status;
     if (code !== undefined) parts.push(`code=${String(code)}`);
-    parts.push(`message=${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    // A ZodError's message is a JSON dump whose first line is "[": name the first issue instead.
+    const issue = Array.isArray(e?.issues) ? e.issues[0] : undefined;
+    const message = issue ? `invalid response: ${String(issue.code)} at ${(issue.path ?? []).map(String).join('.') || '(root)'}`
+        : err instanceof Error ? err.message.split('\n')[0] : String(err);
+    parts.push(`message=${message}`);
+    // fetch() puts the network error (ECONNREFUSED, ENOTFOUND, …) on cause.
+    if (e?.cause && (e.cause.code !== undefined || typeof e.cause.message === 'string'))
+        parts.push(`cause=${String(e.cause.code ?? String(e.cause.message).split('\n')[0])}`);
     if (typeof e?.detail === 'string') parts.push(`detail=${e.detail}`);
     const stderr = typeof e?.stderr === 'string' ? e.stderr.trim().split('\n')[0] : '';
     if (stderr) parts.push(`stderr=${stderr}`);
     return redact(parts.join(' ')).slice(0, 600);
 }
-/** The same failure for the same record is logged once, until it changes or that record next succeeds. */
-function logFailure(log: (code: string) => void, key: string, line: string) {
-    if (loggedFailures.get(key) === line) return;
-    loggedFailures.set(key, line); log(line);
+/** The same failure for the same record is logged once an hour, and again as soon as it changes or clears. */
+function logFailure(log: (code: string) => void, key: string, line: string, now = Date.now()) {
+    const last = loggedFailures.get(key);
+    if (last?.line === line && now - last.at < RELOG_MS) return;
+    loggedFailures.set(key, { line, at: now }); log(line);
 }
 /** Startup recovery never changes unknown locks, metadata mappings or common repository refs. */
 export async function recoverWorkspaceGitLocks(config: Config, log: (code: string) => void) {
@@ -141,7 +153,7 @@ export async function recoverWorkspaceGitLocks(config: Config, log: (code: strin
                 await validateWorkspace(w);
                 await registerWorkspaceGit(w, local, log);
             } catch (err) {
-                log(err instanceof Error && err.message === 'stale_git_lock' ? 'stale_git_lock' : `workspace_git_recovery_failed ${file} ${describeError(err)}`);
+                log(`${err instanceof Error && err.message === 'stale_git_lock' ? 'stale_git_lock' : 'workspace_git_recovery_failed'} ${file} ${describeError(err)}`);
             }
         }
     }
@@ -160,9 +172,9 @@ export async function reconcileWorkspaces(config: Config, api: HostApi, active: 
             try {
                 const w = await readRecord(path, file, log);
                 if (!w) continue;
-                if (w.profile !== profile) continue; // another profile sharing this stateDir
+                if (w.profile !== profile) continue; // another profile sharing this stateDir: its own pass reports it
                 step = 'check_record'; checkRecord(w, local, profile, w.sessionId);
-                if (active.has(w.sessionId)) continue;
+                if (active.has(w.sessionId)) { loggedFailures.delete(path); continue; }
                 step = 'workspace_states';
                 const states = await api.workspaceStates([w.sessionId]);
                 // The server confirms ended, host ownership and no claimed run.
@@ -185,7 +197,8 @@ export async function reconcileWorkspaces(config: Config, api: HostApi, active: 
                         // Replace, never rewrite in place: a torn write would lose the session's mapping.
                         w.warning = status; step = 'save_record';
                         const temp = `${path}.${randomUUID()}.tmp`;
-                        await writeSynced(temp, JSON.stringify(w), 'wx'); await rename(temp, path);
+                        await writeSynced(temp, JSON.stringify(w), 'wx');
+                        await rename(temp, path).catch(async e => { await unlink(temp).catch(() => {}); throw e; });
                     }
                     loggedFailures.delete(path);
                     log('dirty_workspace_kept'); continue;

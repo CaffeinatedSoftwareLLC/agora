@@ -25,6 +25,9 @@ export async function writeSynced(path: string, data: string, flag = 'w') {
 const BOOT_MARGIN_MS = 5 * 60 * 1000;
 const writtenBeforeBoot = (mtimeMs: number) => mtimeMs < Date.now() - uptime() * 1000 - BOOT_MARGIN_MS;
 const INVALID_RECORD = 'Git ownership record is invalid; locks retained.';
+// Unparseable only: a rename-replaced record cannot be torn while its writer runs. A well-formed record that
+// fails a field check (another Node path) may still name a live writer and keeps blocking.
+const TORN_RECORD = 'Git ownership record is not valid JSON (torn write?); locks retained.';
 
 /** Only recovery needs an OS probe. A reused PID cannot accidentally have this random nonce. */
 export async function gitOwnerAlive(owner: GitOwner): Promise<boolean> {
@@ -70,7 +73,7 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192n) throw new GitLockError('Git ownership record is not a small regular file; locks retained.');
     let o: GitOwner;
     try { o = JSON.parse(await readFile(w.record, 'utf8')); }
-    catch { throw new GitLockError(INVALID_RECORD); }
+    catch { throw new GitLockError(TORN_RECORD); }
     if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.pid) || o.pid <= 0 || typeof o.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(o.nonce)
         || o.argv0 !== process.execPath || typeof o.at !== 'string' || !Number.isFinite(Date.parse(o.at)))
         throw new GitLockError(INVALID_RECORD);
@@ -83,10 +86,10 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
  */
 async function previousOwner(w: GitWorkspace): Promise<GitOwner | null> {
     try { return await ownerOf(w); } catch (e) {
-        if (!(e instanceof GitLockError) || e.detail !== INVALID_RECORD) throw e;
+        if (!(e instanceof GitLockError) || e.detail !== TORN_RECORD) throw e;
         const stat = await statOrNull(w.record);
         if (!stat || !writtenBeforeBoot(Number(stat.mtimeMs))) throw e;
-        w.log(`git_owner_record_replaced ${w.record}: invalid and written before this boot`);
+        w.log(`git_owner_record_replaced ${w.record}: not valid JSON and written before this boot`);
         return null;
     }
 }
@@ -240,7 +243,7 @@ async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExec
         owner = { pid: child.pid, nonce, argv0: process.execPath, at: new Date().toISOString() };
         const temp = `${w.record}.${randomUUID()}.tmp`;
         await writeSynced(temp, JSON.stringify(owner), 'wx');
-        await rename(temp, w.record);
+        await rename(temp, w.record).catch(async e => { await unlink(temp).catch(() => {}); throw e; });
         if (closed || options.signal?.aborted || failure) throw new Error('Git operation aborted');
         started = true;
         child.send({ args, cwd });

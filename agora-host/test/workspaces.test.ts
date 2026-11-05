@@ -102,11 +102,12 @@ it('skips a record that is not JSON with one warning until it changes, and never
 });
 it('logs a reconcile failure once with record, step, code and message, never the token', async () => {
     const s = await setup(), w = await ensureWorkspace(s.local, s.delivery), log = vi.fn();
-    const token = 'AbC9xYz8wVu7tSr6qPo5nMl4kJi3hGf2eDc1';
-    s.api.workspaceStates.mockRejectedValue(Object.assign(new Error(`fetch failed\nAuthorization: AgentHost ${token}`), { code: 'ECONNREFUSED' }));
+    const token = `ah_${id(7)}.${'0123456789abcdef'.repeat(4)}`;
+    // fetch() reports the network error on cause; the token here stands in for any echo of the header.
+    s.api.workspaceStates.mockRejectedValue(Object.assign(new TypeError(`fetch failed (Authorization: AgentHost ${token})`), { cause: { code: 'ECONNREFUSED' } }));
     for (let i = 0; i < 3; i++) await reconcileWorkspaces(s.c, s.api, new Set(), log);
     expect(log).toHaveBeenCalledTimes(1);
-    expect(log.mock.calls[0][0]).toBe(`workspace_reconcile_failed wt-${w.sessionId.slice(-10)}.json step=workspace_states code=ECONNREFUSED message=fetch failed`);
+    expect(log.mock.calls[0][0]).toBe(`workspace_reconcile_failed wt-${w.sessionId.slice(-10)}.json step=workspace_states message=fetch failed (Authorization: [redacted]) cause=ECONNREFUSED`);
     s.api.workspaceStates.mockResolvedValueOnce([]);
     await reconcileWorkspaces(s.c, s.api, new Set(), log);
     await reconcileWorkspaces(s.c, s.api, new Set(), log);
@@ -120,6 +121,13 @@ it('describes errors without tokens or credentials but keeps SHAs and paths', ()
     expect(text).toContain(sha); expect(text).toContain(path);
     expect(text).toMatch(/^code=128 message=bad /); expect(text).toContain('detail=lock');
     for (const secret of ['user:pass', 'hunter2', 'Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk0LmNb', 's3cr3t-value', 'second line']) expect(text).not.toContain(secret);
+    const host = describeError(new Error(`Authorization: Basic dXNlcjpwYXNz; AgentHost ah_short access_token=abc refresh_token: "xyz"`));
+    for (const secret of ['dXNlcjpwYXNz', 'ah_short', 'abc', 'xyz']) expect(host).not.toContain(secret);
+    const long = 'C:\\repo\\test\\integration\\agent-host-lifecycle.integration.test.ts';
+    expect(describeError(new Error(`cannot read ${long}`))).toContain(long);
+    expect(describeError(new Error(`at C:\\tmp\\${'Ab1'.repeat(12)}\\x`))).toBe('message=at C:\\tmp\\[redacted]\\x');
+    const zod = Object.assign(new Error('[\n  {\n    "code": "invalid_type"'), { issues: [{ code: 'invalid_type', path: [0] }] });
+    expect(describeError(zod)).toBe('message=invalid response: invalid_type at 0');
 });
 it('normalizes Windows drive, case, separators and UNC roots without equating a child with its parent', () => {
     expect(samePath('C:\\Repo\\WT', 'c:/repo/wt/', 'win32')).toBe(true);
