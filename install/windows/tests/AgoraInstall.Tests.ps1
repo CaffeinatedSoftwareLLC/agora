@@ -368,6 +368,33 @@ Describe 'Get-UbuntuWslImage' {
     }
 }
 
+Describe 'Windows argument quoting for wsl.exe' {
+    # Invoke-LinuxInstaller hands wsl.exe one command line (Start-Process), so every argument
+    # must survive the Windows parsing rules exactly
+    It 'leaves plain arguments alone and quotes spaces, empties and quotes' {
+        & (Get-Module AgoraInstall) {
+            ConvertTo-WindowsArgument '--wsl' | Should -Be '--wsl'
+            ConvertTo-WindowsArgument '/mnt/c/Users/A B/agora' | Should -Be '"/mnt/c/Users/A B/agora"'
+            ConvertTo-WindowsArgument '' | Should -Be '""'
+            ConvertTo-WindowsArgument 'say "hi"' | Should -Be '"say \"hi\""'
+            ConvertTo-WindowsArgument 'C:\dir with space\' | Should -Be '"C:\dir with space\\"'
+        }
+    }
+
+    It 'round-trips through a real process unchanged' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        $values = @('-d', 'Agora', '/mnt/c/Users/A B/agora', '', 'say "hi"', 'C:\dir with space\', 'a\\b', 'tab	here')
+        $out = Join-Path ([System.IO.Path]::GetTempPath()) ("agora-args-" + [guid]::NewGuid() + '.json')
+        $line = & (Get-Module AgoraInstall) { param($v) Join-WindowsArguments $v } $values
+        $script = 'require(\"fs\").writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))'
+        try {
+            $p = Start-Process -FilePath 'node' -ArgumentList "-e `"$script`" `"$out`" $line" -NoNewWindow -Wait -PassThru
+            $p.ExitCode | Should -Be 0
+            $got = Get-Content $out -Raw | ConvertFrom-Json
+            @($got) | Should -Be $values
+        } finally { Remove-Item $out -ErrorAction SilentlyContinue }
+    }
+}
+
 Describe 'Get-WslDistros' {
     It 'takes names from wsl -l -q, running ones from --running, versions from the registry' {
         New-Fake -Distros @((D 'Ubuntu' 'Running' -Default), (D 'docker-desktop' 'Running'), (D 'Legacy' 'Stopped' 1))

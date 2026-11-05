@@ -389,8 +389,32 @@ function Invoke-LinuxInstaller {
     if ($AsRoot) { $wslArgs += @('-u', 'root') }
     $wslArgs += @('--exec', 'bash', "$SourceWsl/install/linux/install.sh") + $Arguments
     $env:WSL_UTF8 = '1'
-    & wsl.exe @wslArgs
-    return $LASTEXITCODE
+    # Not `& wsl.exe`: its stdout would become this function's output, so the user saw nothing
+    # until the end and the caller got every line plus the exit code, which never equals 0 and
+    # turned a finished install into "the Linux installer failed". Start-Process inherits the
+    # console (output and prompts appear as they happen) and gives one exit code.
+    $p = Start-Process -FilePath 'wsl.exe' -ArgumentList (Join-WindowsArguments $wslArgs) -NoNewWindow -Wait -PassThru
+    return [int]$p.ExitCode
+}
+
+function ConvertTo-WindowsArgument {
+    # One argument quoted by the Windows command-line rules (CommandLineToArgvW), so a path with
+    # a space, an empty value or a value with quotes reaches wsl.exe unchanged
+    param([string]$Value)
+    if ($Value -ne '' -and $Value -notmatch '[\s"]') { return $Value }
+    $out = '"'; $slashes = 0
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($ch -eq '\') { $slashes++; continue }
+        if ($ch -eq '"') { $out += ('\' * ($slashes * 2 + 1)) + '"' }
+        else { $out += ('\' * $slashes) + $ch }
+        $slashes = 0
+    }
+    return $out + ('\' * ($slashes * 2)) + '"'
+}
+
+function Join-WindowsArguments {
+    param([string[]]$Values)
+    return (($Values | ForEach-Object { ConvertTo-WindowsArgument $_ }) -join ' ')
 }
 
 function Send-InstallReport {
