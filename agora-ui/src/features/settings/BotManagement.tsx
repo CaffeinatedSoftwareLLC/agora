@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Avatar } from '../../components/ui/Avatar';
 import { useServerStore } from '../../stores/serverStore';
 import { botApi, serverApi, runtimeApi, ApiError } from '../../lib/api';
@@ -19,6 +20,8 @@ export function BotManagement() {
   const [showCreateBot, setShowCreateBot] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
 
   const fetchBots = useCallback(async (showLoading = true) => {
     if (!instanceServerId) return;
@@ -40,6 +43,17 @@ export function BotManagement() {
   }, [instanceServerId]);
 
   useEffect(() => { fetchBots(); }, [fetchBots]);
+
+  // A refresh after a change keeps the list (and its scroll position) on screen
+  const refresh = useCallback(() => { void fetchBots(false); }, [fetchBots]);
+  const toggle = useCallback((botId: string) => setExpandedBotId(cur => (cur === botId ? null : botId)), []);
+
+  // Newest first, so a bot you just created is at the top of a long list
+  const sorted = useMemo(() => [...bots].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [bots]);
+  const shown = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase();
+    return q ? sorted.filter(b => b.username.toLowerCase().includes(q)) : sorted;
+  }, [sorted, deferredQuery]);
 
   if (!instanceServerId) return null;
 
@@ -74,28 +88,94 @@ export function BotManagement() {
       {bots.length === 0 ? (
         <p className="text-text-muted">No bots yet. Create one to get started.</p>
       ) : (
-        <div className="flex flex-col gap-2">
-          {bots.map((bot) => (
-            <BotRow
-              key={bot.id}
-              bot={bot}
-              serverId={instanceServerId}
-              isExpanded={expandedBotId === bot.id}
-              onToggle={() => setExpandedBotId(expandedBotId === bot.id ? null : bot.id)}
-              onDeleted={fetchBots}
-              onPauseChanged={fetchBots}
+        <section>
+          <div className="flex flex-wrap items-center gap-3 mb-2">
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search bots"
+              aria-label="Search bots"
+              className="min-h-11 md:min-h-9 w-full max-w-xs px-3 py-1.5 rounded border border-border bg-surface text-text placeholder:text-text-muted/70 text-sm"
             />
-          ))}
-        </div>
+            <span className="text-text-muted text-xs" aria-live="polite">
+              {shown.length === bots.length ? `${bots.length} bots` : `${shown.length} of ${bots.length} bots`}
+            </span>
+          </div>
+          {shown.length === 0 ? (
+            <p className="text-text-muted text-sm">No bots match “{deferredQuery.trim()}”.</p>
+          ) : (
+            <BotList
+              bots={shown}
+              serverId={instanceServerId}
+              expandedBotId={expandedBotId}
+              onToggle={toggle}
+              onChanged={refresh}
+            />
+          )}
+        </section>
       )}
 
       <CreateBotModal
         serverId={instanceServerId}
         isOpen={showCreateBot}
         onClose={() => setShowCreateBot(false)}
-        onCreated={fetchBots}
+        onCreated={refresh}
       />
-      {showInvite && <CreateAgentInviteModal serverId={instanceServerId} onClose={() => setShowInvite(false)} onCreated={() => { void fetchBots(false); }} />}
+      {showInvite && <CreateAgentInviteModal serverId={instanceServerId} onClose={() => setShowInvite(false)} onCreated={refresh} />}
+    </div>
+  );
+}
+
+// ─── Bot List (virtualized) ───────────────────────────────────────────────
+
+/** Rendering every bot stalled the page at about 1,800 bots (#241): only the rows in view are mounted. */
+function BotList({
+  bots,
+  serverId,
+  expandedBotId,
+  onToggle,
+  onChanged,
+}: {
+  bots: Bot[];
+  serverId: string;
+  expandedBotId: string | null;
+  onToggle: (botId: string) => void;
+  onChanged: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: bots.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 60,
+    overscan: 8,
+    getItemKey: index => bots[index].id,
+  });
+
+  return (
+    <div ref={scrollRef} data-testid="bot-list" className="max-h-[70vh] overflow-y-auto overscroll-contain">
+      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map(item => {
+          const bot = bots[item.index];
+          return (
+            <div
+              key={item.key}
+              data-index={item.index}
+              ref={virtualizer.measureElement}
+              className="absolute left-0 top-0 w-full pb-2"
+              style={{ transform: `translateY(${item.start}px)` }}
+            >
+              <BotRow
+                bot={bot}
+                serverId={serverId}
+                isExpanded={expandedBotId === bot.id}
+                onToggle={onToggle}
+                onChanged={onChanged}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -209,20 +289,19 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
 
 // ─── Bot Row (expandable) ─────────────────────────────────────────────────
 
-function BotRow({
+// Memoized with stable callbacks: opening one bot re-renders that row, not the whole list
+const BotRow = memo(function BotRow({
   bot,
   serverId,
   isExpanded,
   onToggle,
-  onDeleted,
-  onPauseChanged,
+  onChanged,
 }: {
   bot: Bot;
   serverId: string;
   isExpanded: boolean;
-  onToggle: () => void;
-  onDeleted: () => void;
-  onPauseChanged: () => void;
+  onToggle: (botId: string) => void;
+  onChanged: () => void;
 }) {
   const [pausing, setPausing] = useState(false);
   const [pauseError, setPauseError] = useState('');
@@ -235,7 +314,7 @@ function BotRow({
     setPauseError('');
     try {
       await runtimeApi.setBotAccess(serverId, bot.id, access);
-      onPauseChanged();
+      onChanged();
     } catch (err) {
       setPauseError(err instanceof ApiError ? err.code : 'Failed to update code run access');
     } finally {
@@ -254,7 +333,7 @@ function BotRow({
         if (reason === null) return;
         await botApi.setPaused(serverId, bot.id, true, reason.trim() || undefined);
       }
-      onPauseChanged();
+      onChanged();
     } catch (err) {
       setPauseError(err instanceof ApiError ? err.code : 'Failed to update pause state');
     } finally {
@@ -266,7 +345,8 @@ function BotRow({
     <div className="border border-border rounded-lg overflow-hidden">
       <div className="flex items-center hover:bg-surface-hover">
       <button
-        onClick={onToggle}
+        onClick={() => onToggle(bot.id)}
+        aria-expanded={isExpanded}
         className="min-h-11 flex-1 flex items-center justify-between px-4 py-3 text-left"
       >
         <div>
@@ -316,11 +396,11 @@ function BotRow({
       </div>
       </div>
       {isExpanded && (
-        <BotDetailPanel botId={bot.id} serverId={serverId} onDeleted={onDeleted} />
+        <BotDetailPanel botId={bot.id} serverId={serverId} onDeleted={onChanged} />
       )}
     </div>
   );
-}
+});
 
 // ─── Bot Detail Panel ─────────────────────────────────────────────────────
 
