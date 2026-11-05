@@ -28,6 +28,40 @@ const INVALID_RECORD = 'Git ownership record is invalid; locks retained.';
 // Unparseable only: a rename-replaced record cannot be torn while its writer runs. A well-formed record that
 // fails a field check (another Node path) may still name a live writer and keeps blocking.
 const TORN_RECORD = 'Git ownership record is not valid JSON (torn write?); locks retained.';
+// Every gate since the first (fc1f35d) has this line, and Git runs only while its gate lives.
+export const GATE_MARK = 'if (!started) process.exit(1)';
+const ownGates = new Set<string>(); // nonces of gates this process started that have not closed
+const gateNonce = (commandLine: string) => commandLine.match(/[0-9a-f]{32}(?=["'\s]*$)/)?.[0] ?? '';
+
+/**
+ * Nonces of live Git gates on this machine that this process did not start. Clock-free evidence: with none, no
+ * owned Git writer from an earlier host can still run. Throws when the process list cannot be read.
+ */
+export async function foreignGitGates(): Promise<string[]> {
+    let lines: string[];
+    if (process.platform === 'win32') {
+        const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+        const script = `$ErrorActionPreference = 'Stop'; $m = $env:AGORA_GATE_MARK; @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($m) } | ForEach-Object { $_.CommandLine }) | ConvertTo-Json -Compress`;
+        const r = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 30000,
+            maxBuffer: 4 * 1024 * 1024, env: { ...process.env, AGORA_GATE_MARK: GATE_MARK } });
+        const value = JSON.parse(r.stdout.trim() || '[]');
+        lines = (Array.isArray(value) ? value : [value]).filter((v): v is string => typeof v === 'string');
+    } else if (process.platform === 'linux') {
+        const { readdir } = await import('node:fs/promises');
+        lines = [];
+        for (const pid of (await readdir('/proc')).filter(d => /^\d+$/.test(d) && d !== String(process.pid))) {
+            const command = await readFile(`/proc/${pid}/cmdline`, 'utf8').catch(() => '');
+            if (command.includes(GATE_MARK)) lines.push(command.split('\0').filter(Boolean).join(' '));
+        }
+    } else {
+        const r = await exec('ps', ['-ww', '-axo', 'command='], { timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
+        lines = r.stdout.split('\n').filter(l => l.includes(GATE_MARK));
+    }
+    return lines.map(gateNonce).filter(n => !ownGates.has(n));
+}
+let gateProbe: () => Promise<string[]> = foreignGitGates;
+/** Tests only: replace the process-list probe (no argument restores it). */
+export function setGitGateProbe(probe?: () => Promise<string[]>) { gateProbe = probe ?? foreignGitGates; }
 
 /** Only recovery needs an OS probe. A reused PID cannot accidentally have this random nonce. */
 export async function gitOwnerAlive(owner: GitOwner): Promise<boolean> {
@@ -72,7 +106,9 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
     if (!stat) return null;
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192n) throw new GitLockError('Git ownership record is not a small regular file; locks retained.');
     let o: GitOwner;
-    try { o = JSON.parse(await readFile(w.record, 'utf8')); }
+    // A read failure (EACCES, EBUSY) says nothing about the record; only a parse failure means torn.
+    const text = await readFile(w.record, 'utf8');
+    try { o = JSON.parse(text); }
     catch { throw new GitLockError(TORN_RECORD); }
     if (!o || typeof o !== 'object' || !Number.isSafeInteger(o.pid) || o.pid <= 0 || typeof o.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(o.nonce)
         || o.argv0 !== process.execPath || typeof o.at !== 'string' || !Number.isFinite(Date.parse(o.at)))
@@ -81,15 +117,19 @@ async function ownerOf(w: GitWorkspace): Promise<GitOwner | null> {
 }
 /**
  * The gate before a new owned Git run. A torn record (zero bytes after a power cut) would otherwise block every
- * run in the worktree forever. It is set aside only when last written before this boot: no process it could name
- * still runs. Lock recovery still treats it as unknown, so a lock beside it stays for its owner to check.
+ * run in the worktree forever. It is set aside only when it was last written before this boot AND no Git gate
+ * from another process is alive anywhere on the machine, so a clock jump alone cannot hide a live writer.
+ * Lock recovery still treats it as unknown, so a lock beside it stays for its owner to check.
  */
 async function previousOwner(w: GitWorkspace): Promise<GitOwner | null> {
     try { return await ownerOf(w); } catch (e) {
         if (!(e instanceof GitLockError) || e.detail !== TORN_RECORD) throw e;
         const stat = await statOrNull(w.record);
         if (!stat || !writtenBeforeBoot(Number(stat.mtimeMs))) throw e;
-        w.log(`git_owner_record_replaced ${w.record}: not valid JSON and written before this boot`);
+        let gates: string[];
+        try { gates = await gateProbe(); } catch { throw new GitLockError(`${TORN_RECORD} The process list could not be read to rule out a live Git gate.`); }
+        if (gates.length) throw new GitLockError(`${TORN_RECORD} Another Git gate is still running (${gates.length}).`);
+        w.log(`git_owner_record_replaced ${w.record}: not valid JSON, written before this boot, no other Git gate alive`);
         return null;
     }
 }
@@ -200,8 +240,11 @@ async function executeOwnedGit(w: GitWorkspace, args: string[], options: GitExec
             throw new GitLockError('Recorded Git process is still running in this worktree.');
         if (options.signal?.aborted) throw new Error('Git operation aborted');
         const nonce = randomUUID().replace(/-/g, '');
+        ownGates.add(nonce);
         child = spawn(process.execPath, ['-e', GATE, nonce], { cwd, env, windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+        child.on('close', () => ownGates.delete(nonce));
+        child.on('error', () => { if (!child?.pid) ownGates.delete(nonce); });
         let stdout = '', stderr = '', bytes = 0;
         let failure: Error | undefined;
         let rejectResult!: (error: Error) => void;

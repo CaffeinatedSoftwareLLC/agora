@@ -3,6 +3,7 @@ import { mkdir, readFile, utimes, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WORKSPACE_RECORD, describeError, ensureWorkspace, git, reconcileWorkspaces, samePath, workspaceHead } from '../src/workspaces.js';
 import { prepare } from '../src/adapters.js';
+import { setGitGateProbe } from '../src/git-owner.js';
 import { Scheduler } from '../src/scheduler.js';
 import { claim, config, tempDir, id, successful } from './helpers.js';
 
@@ -75,6 +76,7 @@ it('keeps dirty trees, posts filenames once, retries failed warnings and skips a
 });
 it('reconciles a dirty ended tree whose ownership record was torn before this boot (host log, 2026-11-04)', async () => {
     const s = await setup(), w = await ensureWorkspace(s.local, s.delivery), log = vi.fn();
+    setGitGateProbe(async () => []); cleanups.push(async () => setGitGateProbe()); // the live host may run gates meanwhile
     const record = join(s.local.stateDir, `wt-${w.sessionId.slice(-10)}.git-process.json`), past = new Date('2000-01-01T00:00:00Z');
     await writeFile(join(w.cwd, 'kept.txt'), 'keep');
     await writeFile(record, '\0'.repeat(134)); await utimes(record, past, past);

@@ -5,7 +5,7 @@ import { uptime } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { GitLockError, gitOwnerAlive, recoverGitLocks, registerGitWorkspace, type GitOwner } from '../src/git-owner.js';
+import { GATE_MARK, GitLockError, foreignGitGates, gitOwnerAlive, recoverGitLocks, registerGitWorkspace, setGitGateProbe, type GitOwner } from '../src/git-owner.js';
 import { ensureWorkspace, git, recoverWorkspaceGitLocks, withGitSignal } from '../src/workspaces.js';
 import { executeReview } from '../src/review.js';
 import { claim, config, id, tempDir } from './helpers.js';
@@ -129,11 +129,33 @@ const torn = '\0'.repeat(134), beforeBoot = new Date('2000-01-01T00:00:00Z');
 
 it('replaces a torn ownership record written before this boot instead of blocking the worktree forever', async () => {
     const s = await fixture();
+    setGitGateProbe(async () => []); cleanups.push(async () => setGitGateProbe());
     await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
     expect((await git(s.w.cwd, ['rev-parse', 'HEAD'])).trim()).toMatch(/^[0-9a-f]{40}$/);
     await expect(stat(s.record)).rejects.toThrow();
-    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^git_owner_record_replaced .*written before this boot$/));
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^git_owner_record_replaced .*no other Git gate alive$/));
 });
+
+it('a clock jump alone cannot set a torn record aside: a live foreign Git gate, or an unreadable process list, keeps it blocking', async () => {
+    const s = await fixture();
+    await writeFile(s.record, torn); await utimes(s.record, beforeBoot, beforeBoot);
+    setGitGateProbe(async () => ['0123456789abcdef0123456789abcdef']); cleanups.push(async () => setGitGateProbe());
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ message: 'stale_git_lock', detail: expect.stringContaining('Another Git gate is still running') });
+    setGitGateProbe(async () => { throw new Error('access denied'); });
+    await expect(git(s.w.cwd, ['rev-parse', 'HEAD'])).rejects.toMatchObject({ detail: expect.stringContaining('could not be read') });
+    expect(await readFile(s.record, 'utf8')).toBe(torn);
+});
+
+it('the gate probe sees a live gate from another process and drops it once it exits', async () => {
+    const nonce = randomUUID().replace(/-/g, '');
+    const child = spawn(process.execPath, ['-e', `setInterval(() => {}, 1000); // ${GATE_MARK}`, nonce], { windowsHide: true, stdio: 'ignore' });
+    const closed = once(child, 'close');
+    try {
+        await new Promise(r => setTimeout(r, 300));
+        expect(await foreignGitGates()).toContain(nonce);
+    } finally { child.kill(); await closed; }
+    expect(await foreignGitGates()).not.toContain(nonce);
+}, 60000);
 
 it('keeps blocking on a torn ownership record written since this boot', async () => {
     const s = await fixture();
