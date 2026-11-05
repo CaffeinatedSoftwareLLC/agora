@@ -124,8 +124,20 @@ function Get-InstallerState {
     return $h
 }
 
-function Get-RemoteText { param([string]$Url) (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 60).Content }
-function Save-RemoteFile { param([string]$Url, [string]$Path) Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -TimeoutSec 3600 }
+function ConvertTo-ResponseText {
+    # Windows PowerShell 5.1 returns Content as bytes when the server sends no text Content-Type
+    # (Canonical's SHA256SUMS has none); decode those as UTF-8
+    param($Content)
+    if ($Content -is [byte[]]) { return [System.Text.Encoding]::UTF8.GetString($Content) }
+    return [string]$Content
+}
+function Get-RemoteText { param([string]$Url) ConvertTo-ResponseText (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 60).Content }
+function Save-RemoteFile {
+    # Windows PowerShell 5.1's progress bar slows a large download many times over; hide it here only
+    param([string]$Url, [string]$Path)
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -TimeoutSec 3600
+}
 function Get-FileSha256 { param([string]$Path) (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant() }
 
 function Register-KeepAlive {
