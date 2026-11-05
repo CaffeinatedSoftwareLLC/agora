@@ -189,17 +189,23 @@ function Get-WslRunningNames {
     return , (ConvertFrom-WslText $r.Output)
 }
 
+function Get-RegValue($Item, [string]$Name) {
+    # Strict mode throws on a missing property; a fresh WSL has an Lxss key without DefaultDistribution
+    if ($null -eq $Item -or -not ($Item.PSObject.Properties.Name -contains $Name)) { return $null }
+    return $Item.$Name
+}
+
 function Get-LxssDistros {
     # Versions and the default distro from the registry, which (unlike `wsl -l -v`) isn't localized
-    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    param([string]$Key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss')
     $list = @()
-    if (-not (Test-Path $key)) { return , $list }
-    $default = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DefaultDistribution
-    foreach ($k in Get-ChildItem -Path $key -ErrorAction SilentlyContinue) {
+    if (-not (Test-Path $Key)) { return , $list }
+    $default = Get-RegValue (Get-ItemProperty -Path $Key -ErrorAction SilentlyContinue) 'DefaultDistribution'
+    foreach ($k in Get-ChildItem -Path $Key -ErrorAction SilentlyContinue) {
         $p = Get-ItemProperty -Path $k.PSPath -ErrorAction SilentlyContinue
-        if (-not $p -or -not $p.DistributionName) { continue }
+        if (-not (Get-RegValue $p 'DistributionName')) { continue }
         $v = 2
-        if ($p.PSObject.Properties.Name -contains 'Version') { $v = [int]$p.Version }
+        if ($null -ne (Get-RegValue $p 'Version')) { $v = [int]$p.Version }
         $list += [pscustomobject]@{ Name = [string]$p.DistributionName; Version = $v; Default = ($k.PSChildName -eq $default) }
     }
     return , $list
