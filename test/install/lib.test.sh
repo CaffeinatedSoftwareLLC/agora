@@ -106,5 +106,39 @@ check 'body_of drops it' '{"a":1}' "$(printf '{"a":1}\n201' | body_of)"
 # Telemetry is off until the person says yes: an exported TELEMETRY=on is not consent
 check 'telemetry ignores a TELEMETRY variable from the environment' off "$(TELEMETRY=on bash -c '. "$1/install/lib/common.sh"; printf %s "$TELEMETRY"' _ "$ROOT")"
 
+# ─── apt waits for the first-boot update instead of failing on the dpkg lock ───
+# (found on a clean Windows 11 VM: a new WSL distro's apt-get held the lock as gVisor installed)
+(
+    # shellcheck source=../../install/lib/docker.sh
+    . "$ROOT/install/lib/docker.sh"
+    mkdir -p "$T/aptbin"
+    printf '0\n' > "$T/apt-busy-left"
+    # pgrep reports apt busy for as many calls as apt-busy-left says, then idle
+    cat > "$T/aptbin/pgrep" <<EOF
+#!/bin/sh
+left=\$(cat "$T/apt-busy-left")
+[ "\$left" -gt 0 ] || exit 1
+echo \$((left - 1)) > "$T/apt-busy-left"; exit 0
+EOF
+    chmod +x "$T/aptbin/pgrep"
+    PATH="$T/aptbin:$PATH"
+    as_root() { printf '%s\n' "$*" >> "$T/apt.log"; }
+    sleep() { :; }
+    : > "$T/apt.log"
+    printf '3\n' > "$T/apt-busy-left"
+    apt_install runsc > "$T/apt.out"
+    check 'apt_install waits while apt or dpkg runs, then installs' 'yes' "$(grep -q 'install -y --no-install-recommends runsc' "$T/apt.log" && echo yes || echo no)"
+    check 'apt_install says why it waits' 'yes' "$(grep -q 'waiting for another apt' "$T/apt.out" && echo yes || echo no)"
+    check 'apt_install passes a dpkg lock timeout' 'yes' "$(grep -q 'DPkg::Lock::Timeout=' "$T/apt.log" && echo yes || echo no)"
+    : > "$T/apt.log"
+    apt_update > /dev/null
+    check 'apt_update runs apt-get update with the lock timeout' 'yes' "$(grep -q 'DPkg::Lock::Timeout=.* update -qq' "$T/apt.log" && echo yes || echo no)"
+    printf '999\n' > "$T/apt-busy-left"
+    if (APT_WAIT_SECONDS=10; wait_for_apt) > /dev/null 2>&1; then r=returned; else r=stopped; fi
+    check 'wait_for_apt stops with an error when apt never finishes' stopped "$r"
+    printf 'n=%s\nfailed=%s\n' "$n" "$failed" > "$T/apt.counts"
+)
+. "$T/apt.counts"
+
 printf '\n%d checks, %d failed\n' "$n" "$failed"
 [ "$failed" = 0 ]
