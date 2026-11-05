@@ -133,30 +133,34 @@ Privacy is part of the point of a box: the CLIs' telemetry, metrics, error-repor
 | Host | CLI | What it is | Switched off in the box by |
 |---|---|---|---|
 | `ab.chatgpt.com` | Codex | usage metrics (OpenTelemetry export, seen live on a fresh box) | `-c analytics.enabled=false` |
-| `sentry.io` (`o33249.ingest.us.sentry.io`) | Codex | feedback and crash reports | `-c feedback.enabled=false` |
-| `statsig.anthropic.com`, `statsig.com` | Claude Code | feature flags and events (older versions) | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
-| `datadoghq.com` (`http-intake.logs.us5.datadoghq.com`) | Claude Code | operational metrics | same |
+| `ingest.sentry.io`, `ingest.us.sentry.io`, `ingest.de.sentry.io` (`o33249.ingest.us.sentry.io`) | Codex | feedback and crash reports | `-c feedback.enabled=false` |
+| `statsig.anthropic.com` | Claude Code | feature flags and events (older versions) | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
+| `http-intake.logs.us5.datadoghq.com` | Claude Code | operational metrics | same |
 | `browser-intake-us5-datadoghq.com` | Claude Code | error reports | same |
+
+Only the ingest hosts are listed, never a vendor's whole domain: an agent working on a project that uses Sentry, Datadog or Statsig still reaches `sentry.io`, `api.datadoghq.com` or `api.statsig.com` (with a card).
 
 - **Each CLI works without them.** Both vendors document switching them off: Codex's `analytics.enabled`, `feedback.enabled` and `check_for_update_on_startup` settings (agora-host passes them as `-c` overrides to `codex exec`, `codex app-server` and `codex login` in a box; Codex type-checks the keys, so a renamed one fails loudly), and Claude Code's `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (telemetry, error reports, auto-updates, `/feedback`, release notes, feature flags). The box also sets `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL` (the marketplace is cloned from `github.com`, which a box reaches only through the git broker). The edge's refusal is the second layer, for a version that ignores a switch. *Verify live:* a fresh box of each CLI makes no telemetry request.
 - The owner can still let one through by adding its **exact** name in the box's settings. A wildcard never does: allowing `*.chatgpt.com` doesn't reach `ab.chatgpt.com`.
+- **The CLI switches are the control; the edge's refusal is a name check.** The edge sees only the CONNECT name (§4.2), so a process that tunnels to an allowed `chatgpt.com` and names `ab.chatgpt.com` inside TLS isn't stopped by it. That needs code in the box set on sending telemetry, which a stock CLI with these switches isn't.
 - Claude Code's WebFetch safety check goes to `api.anthropic.com` (on the list); boxes disallow `WebSearch` anyway (§8.1).
 
 #### 4.2.2 Wildcard approval
 
-A domain card can offer **Allow `*.<registrable domain>`**, so the three regions Codex asks for on a first start (`sdmntprwestus.oaiusercontent.com`, …) are one tap instead of three. The bound is computed by the server from the card's host (`wildcardFor`, `src/lib/boxes/domains.ts`), never taken from the client:
+A domain card can offer **Allow `*.<registrable domain>`**, so a service that spreads over several hosts (`eu.files.example.org`, `us.files.example.org`, …) is one tap instead of a card each. The bound is computed by the server from the card's host (`wildcardFor`, `src/lib/boxes/domains.ts`), never taken from the client:
 
-- It is `*.` plus the host's **registrable domain** by the Public Suffix List, private section included (`tldts`): `a.b.example.com` → `*.example.com`, `a.evil.github.io` → `*.evil.github.io`, `bucket.x.s3.amazonaws.com` → `*.x.s3.amazonaws.com`.
-- A host that is itself a private suffix has no registrable domain under the list: OpenAI lists `*.oaiusercontent.com`, so every region is one. Its bound is then the operator's registrable domain under the ICANN rules (`*.oaiusercontent.com`), provided that isn't a public suffix itself.
-- **Never a public suffix:** no `*.com`, `*.co.uk`, `*.github.io`, `*.herokuapp.com`. A host that is already its registrable domain (`example.com`, `evil.github.io`), an IP, or a name under a suffix the list doesn't know gets no wildcard button (`400 no_wildcard` if asked anyway).
-- Allowing it also answers the box's other pending cards it covers. The settings route refuses an owner-typed wildcard over a public suffix (`400 invalid_domain`).
+- It is `*.` plus the host's **registrable domain** by the Public Suffix List, private section included (`tldts`, pinned): `a.b.example.com` → `*.example.com`, `a.evil.github.io` → `*.evil.github.io`, `bucket.x.s3.amazonaws.com` → `*.x.s3.amazonaws.com`.
+- **It never covers someone else's suffix.** No `*.com`, `*.co.uk` or `*.github.io` (a public suffix), and no `*.amazonaws.com`, `*.windows.net` or `*.on.aws` either: those aren't suffixes themselves but have suffixes under them (`s3.amazonaws.com`, every S3 bucket). The check reads the list's own rule trie from the pinned tldts and fails closed (no wildcard at all) if it can't.
+- No button for a host that is already its registrable domain (`example.com`, `evil.github.io`), is a public suffix itself (`s3.amazonaws.com`, each `*.oaiusercontent.com` region), is an IP, or is under a suffix the list doesn't know (`400 no_wildcard` if asked anyway).
+- Allowing it also answers the box's other pending cards it covers. Decisions on one box run one at a time, so two wildcards tapped at once can't deadlock.
+- The settings route refuses an owner-typed wildcard that would cover someone else's suffix (`400 invalid_domain`), except the reviewed defaults: Codex's `*.oaiusercontent.com` (OpenAI lists each region as its own suffix, for its users' content; every region is OpenAI's) is on Codex boxes from the start and stays accepted. Migration 083 adds it to existing Codex boxes without a tap: a widening the owner did not approve one by one, called out in the change that ships it.
 
 #### 4.2.3 Unknown hosts during a login
 
 A CLI login can't be resumed after a refused request: Claude's login was refused `platform.claude.com` the moment its card was filed, so tapping Allow came too late (seen live 2026-11-04). So while a login is open for the box (§8.2), a request to **that CLI's own provider domains** (Claude: `anthropic.com`, `claude.ai`, `claude.com`; Codex: `openai.com`, `chatgpt.com` and their subdomains) waits for its card instead of being refused:
 
 - The edge files the card as usual, then holds the connection, looking every second, for at most **2 minutes**. Allow (or a wildcard that covers it) lets the request through; Deny, the card expiring, the login ending or the box closing the connection ends the wait with the usual `403`.
-- At most 4 requests per box wait at once; others are refused at once. Other domains are never held, login or not.
+- At most 4 requests per box wait at once; others are refused at once. Other domains are never held, login or not. Any process in the box can be held while a login is open (the edge can't tell the login command from the rest), only on those provider domains.
 - The login dialog says what it waits on (`Blocked: the login needs platform.claude.com …`); if the login fails anyway, its error is `needs_domain` and the box shows **login failed: allow X, then log in again** (§8.2).
 - Search: boxes get no open web. An agent searches through Agora (the assistant's search route, screened by the decision model where it's on) using its Agora tools, as today.
 

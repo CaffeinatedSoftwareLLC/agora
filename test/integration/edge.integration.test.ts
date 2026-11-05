@@ -733,22 +733,44 @@ describe('forward proxy: telemetry, wildcards and logins', () => {
         expect(await connect('ab.chatgpt.com:443')).not.toMatch(/^HTTP\/1.1 403/);
     });
 
-    it('a domain card offers the bounded wildcard; allowing it answers the other regions\' cards too', async () => {
-        await connect('sdmntprwestus.oaiusercontent.com:443');
-        await connect('sdmntpreastus.oaiusercontent.com:443');
+    it('a domain card offers the bounded wildcard; allowing it answers the other cards it covers', async () => {
+        await connect('eu.files.example.org:443');
+        await connect('us.files.example.org:443');
         const cards = await requests('domain');
         expect(cards).toHaveLength(2);
-        const card = published.find(e => e.event === 'Message' && (e as any).data?.systemData?.subject?.host === 'sdmntprwestus.oaiusercontent.com');
-        expect((card as any)?.data?.systemData?.wildcard).toBe('*.oaiusercontent.com');
+        const card = published.find(e => e.event === 'Message' && (e as any).data?.systemData?.subject?.host === 'eu.files.example.org');
+        expect((card as any)?.data?.systemData?.wildcard).toBe('*.example.org');
 
         await decide(cards[0].id, 'wildcard');
         expect((await requests('domain')).map(r => r.status)).toEqual(['allowed', 'allowed']);
         const box = (await ctx.db.query('SELECT allowed_domains FROM agent_boxes WHERE id = $1', [boxId])).rows[0];
-        expect(box.allowed_domains).toContain('*.oaiusercontent.com');
-        expect(box.allowed_domains).not.toContain('sdmntprwestus.oaiusercontent.com');
-        // A third region goes through without a card; the bare registrable domain doesn't
-        expect(await connect('sdmntprnorthus.oaiusercontent.com:443')).not.toMatch(/^HTTP\/1.1 403/);
-        expect(await connect('oaiusercontent.com:443')).toMatch(/^HTTP\/1.1 403/);
+        expect(box.allowed_domains).toContain('*.example.org');
+        expect(box.allowed_domains).not.toContain('eu.files.example.org');
+        // Another name under it goes through without a card; the bare registrable domain doesn't
+        expect(await connect('asia.files.example.org:443')).not.toMatch(/^HTTP\/1.1 403/);
+        expect(await connect('example.org:443')).toMatch(/^HTTP\/1.1 403/);
+    });
+
+    it('two wildcards decided at once on one box: no deadlock, one wins', async () => {
+        await connect('a.one.example.net:443');
+        await connect('b.one.example.net:443');
+        const [c1, c2] = await requests('domain');
+        const results = await Promise.allSettled([decide(c1.id, 'wildcard'), decide(c2.id, 'wildcard')]);
+        const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        // The second finds its card already answered by the first; never a deadlock (40P01)
+        for (const f of failed) expect(f.reason).toMatchObject({ status: 409, code: 'already_decided' });
+        expect(failed.length).toBeLessThanOrEqual(1);
+        expect((await requests('domain')).map(r => r.status)).toEqual(['allowed', 'allowed']);
+    });
+
+    it('no card offers a wildcard that covers other people\'s suffixes', async () => {
+        for (const host of ['sts.amazonaws.com', 'a.b.windows.net', 's3.amazonaws.com']) {
+            await connect(`${host}:443`);
+            const msg = published.find(e => e.event === 'Message' && (e as any).data?.systemData?.subject?.host === host);
+            expect((msg as any)?.data?.systemData?.wildcard, host).toBeNull();
+            const card = (await requests('domain')).find(r => r.subject.host === host)!;
+            await expect(decide(card.id, 'wildcard')).rejects.toMatchObject({ status: 400, code: 'no_wildcard' });
+        }
     });
 
     it('no wildcard for a registrable domain itself or a name under a public suffix', async () => {

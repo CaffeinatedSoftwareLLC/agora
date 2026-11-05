@@ -220,6 +220,12 @@ export class EdgeDecisionError extends Error {
  * The caller has checked the user is the server owner.
  */
 export async function decideEdgeRequest(db: any, requestId: string, decision: EdgeDecision, userId: string): Promise<{ status: EdgeStatus; events: BridgedEvent[] }> {
+    // One box's decisions run one at a time: a wildcard locks the box's other pending cards, so
+    // two wildcards decided at once on two of its cards would otherwise deadlock. A key of its
+    // own: recordEdgeRequest's lock is never taken here, so the two can't wait on each other
+    const owner = (await db.query('SELECT box_id FROM box_edge_requests WHERE id = $1', [requestId])).rows[0];
+    if (!owner) throw new EdgeDecisionError(404, 'not_found');
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended('box-edge-decisions:' || $1, 0))`, [owner.box_id]);
     const row = (await db.query(
         `SELECT r.id, r.box_id, r.kind, r.subject, r.status, r.expires_at < NOW() AS expired, b.home_channel_id
          FROM box_edge_requests r JOIN agent_boxes b ON b.id = r.box_id WHERE r.id = $1 FOR UPDATE OF r`,

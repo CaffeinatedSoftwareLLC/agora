@@ -174,7 +174,7 @@ describe('settings and actions', () => {
             expect((await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send(bad)).status, JSON.stringify(bad)).toBe(400);
         }
         // A wildcard over a public suffix would reach everyone's sites under it
-        for (const wide of ['*.co.uk', '*.github.io', '*.herokuapp.com']) {
+        for (const wide of ['*.co.uk', '*.github.io', '*.herokuapp.com', '*.amazonaws.com', '*.windows.net']) {
             const res = await ctx.request.patch(`/boxes/${box.id}`).set(owner.auth).send({ allowedDomains: ['api.anthropic.com', wide] });
             expect(res.status, wide).toBe(400);
             expect(res.body.error).toBe('invalid_domain');
