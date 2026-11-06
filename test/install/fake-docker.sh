@@ -16,6 +16,10 @@
 #   projects        compose projects with containers (an `up` adds, a `down` removes);
 #                   pgdata  projects with a database volume (a `down -v` removes); dir_<p> its folder
 #   published       host ports some container publishes (running or not)
+#   runs            code-run containers: "<name>|<agora.instance label or empty>|<network>" per line
+#   sandbox_nets    sandbox networks: "<name> <inhibit_ipv4 option or ->" per line; `compose up`
+#                   creates <project>_sandbox with the option its compose file declares
+#   sandbox_attached  containers on a sandbox network other than this install's (one name per line)
 # boxd, while in `running`, recreates a box container that is removed (its reconcile loop); a
 # network can't be removed while box-edge runs; a volume can't be removed while a container of
 # the same box exists. `compose build` refuses when box/VERSION and AGORA_BOX_VERSION differ, as
@@ -33,7 +37,10 @@ if [ -s "$F/fail_once" ] && printf '%s' "$args" | grep -Eq "$(cat "$F/fail_once"
 has() { grep -qx "$2" "$F/$1" 2>/dev/null; }
 add() { has "$1" "$2" || printf '%s\n' "$2" >> "$F/$1"; }
 del() { [ -f "$F/$1" ] && { grep -vx "$2" "$F/$1" > "$F/$1.tmp" || true; mv "$F/$1.tmp" "$F/$1"; }; return 0; }
-touch "$F/running" "$F/boxes" "$F/boxes_running" "$F/volumes" "$F/images" "$F/crypt_images" "$F/services" "$F/networks" "$F/projects" "$F/pgdata" "$F/published"
+touch "$F/runs" "$F/sandbox_nets" "$F/sandbox_attached" "$F/running" "$F/boxes" "$F/boxes_running" "$F/volumes" "$F/images" "$F/crypt_images" "$F/services" "$F/networks" "$F/projects" "$F/pgdata" "$F/published"
+runs_on() { # runs_on <network>: run containers attached to that network
+    awk -F'|' -v net="$1" '$3 == net { print $1 }' "$F/runs"
+}
 env_project() { # the project of the env file in these compose arguments
     local envf p
     envf=$(printf '%s\n' "$ORIG_ARGS" | sed -n 's/.*--env-file \([^ ]*\).*/\1/p')
@@ -82,6 +89,7 @@ case "$1" in
                 p=$(printf '%s' "$args" | sed -n 's/.*com.docker.compose.project=\([^ ]*\).*/\1/p')
                 cat "$F/dir_$p" 2>/dev/null; exit 0 ;;
             "ps -aq") [ -s "$F/published" ] && echo c0ffee; exit 0 ;;
+            *label=agora.managed=runtime*) cat "$F/runs"; exit 0 ;;
         esac
         # docker ps -a --filter label=org.agora.instance=I --format {{.Names}}
         cat "$F/boxes"; exit 0 ;;
@@ -93,13 +101,40 @@ case "$1" in
     stop) c=${*: -1}; del boxes_running "$c"; exit 0 ;;
     start) c=${*: -1}; add boxes_running "$c"; exit 0 ;;
     rm)
+        hit=0
+        for a in "$@"; do grep -q "^$a|" "$F/runs" 2>/dev/null && { grep -v "^$a|" "$F/runs" > "$F/runs.tmp" || true; mv "$F/runs.tmp" "$F/runs"; hit=1; }; done
+        [ "$hit" = 0 ] || exit 0
         c=${*: -1}
         if has running boxd; then echo "fake: boxd recreated $c" >> "$F/log"; exit 0; fi
         del boxes "$c"; del boxes_running "$c"; exit 0 ;;
     network)
         case "$2" in
-            ls) cat "$F/networks"; exit 0 ;;
-            rm) has running box-edge && { echo 'fake: network has active endpoints' >&2; exit 1; }; del networks "${*: -1}"; exit 0 ;;
+            ls)
+                case "$args" in
+                    *"name=^"*_sandbox*)
+                        n=$(printf '%s' "$args" | sed -n 's/.*name=^\([^ $]*\)\$.*/\1/p')
+                        grep "^$n " "$F/sandbox_nets" | cut -d' ' -f1; exit 0 ;;
+                esac
+                cat "$F/networks"; exit 0 ;;
+            inspect)
+                n=${*: -1}
+                line=$(grep "^$n " "$F/sandbox_nets" 2>/dev/null) || exit 1
+                case "$args" in
+                    *inhibit_ipv4*) o=${line#* }; [ "$o" = - ] && o='<no value>'; echo "$o" ;;
+                    *.Containers*)
+                        if has running cap-gateway; then printf '%s-cap-gateway-1 ' "${n%_sandbox}"; fi
+                        runs_on "$n" | tr '\n' ' '
+                        tr '\n' ' ' < "$F/sandbox_attached"; echo ;;
+                esac
+                exit 0 ;;
+            rm)
+                n=${*: -1}
+                if grep -q "^$n " "$F/sandbox_nets"; then
+                    { has running cap-gateway || [ -n "$(runs_on "$n")" ] || [ -s "$F/sandbox_attached" ]; } && { echo 'fake: network has active endpoints' >&2; exit 1; }
+                    grep -v "^$n " "$F/sandbox_nets" > "$F/sandbox_nets.tmp" || true; mv "$F/sandbox_nets.tmp" "$F/sandbox_nets"
+                    exit 0
+                fi
+                has running box-edge && { echo 'fake: network has active endpoints' >&2; exit 1; }; del networks "${*: -1}"; exit 0 ;;
         esac
         exit 0 ;;
     volume)
@@ -157,10 +192,15 @@ case "$1" in
                 if [ "${#svcs[@]}" -eq 0 ]; then : > "$F/running"; else for s in "${svcs[@]}"; do del running "$s"; done; fi
                 exit 0 ;;
             start) for s in "$@"; do add running "$s"; done; exit 0 ;;
+            rm) for s in "$@"; do case "$s" in -*) ;; *) del running "$s" ;; esac; done; exit 0 ;;
             up)
                 if printf '%s ' "$@" | grep -q 'postgres'; then add running postgres
                 else cp "$F/services" "$F/running"; fi
                 p=$(env_project); add projects "$p"; add pgdata "$p"; printf '%s\n' "$PWD" > "$F/dir_$p"
+                if ! grep -q "^${p}_sandbox " "$F/sandbox_nets"; then
+                    if grep -q inhibit_ipv4 "$PWD/docker-compose.prod.yml" 2>/dev/null; then o=true; else o=-; fi
+                    printf '%s %s\n' "${p}_sandbox" "$o" >> "$F/sandbox_nets"
+                fi
                 exit 0 ;;
             down)
                 : > "$F/running"

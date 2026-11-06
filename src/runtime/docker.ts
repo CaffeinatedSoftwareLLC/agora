@@ -72,6 +72,42 @@ export function demuxLogs(buf: Buffer, cap: number): Pick<RunOutcome, 'stdout' |
     };
 }
 
+/** `name` is the gateway container `wanted`, or it with a Compose replica suffix (`-1`). */
+export function isGatewayName(name: string, wanted: string): boolean {
+    const n = name.replace(/^\//, '');
+    return n === wanted || (n.startsWith(`${wanted}-`) && /^\d+$/.test(n.slice(wanted.length + 1)));
+}
+
+/** The parts of a network inspect the preflight checks. */
+export interface SandboxNetworkInfo {
+    Internal?: boolean;
+    Driver?: string;
+    EnableIPv6?: boolean;
+    Options?: Record<string, string> | null;
+}
+
+/** Docker's bridge option that leaves the host without an address on the network. */
+export const INHIBIT_IPV4 = 'com.docker.network.bridge.inhibit_ipv4';
+
+/**
+ * Why a network can't carry sandbox runs, or null when it can.
+ *
+ * Internal keeps traffic off the outside world, but the host itself still answers on the
+ * bridge's own address (its gateway): an sshd, a Docker API on 2375, anything listening on
+ * 0.0.0.0. With inhibit_ipv4 the bridge has no IPv4 address, so the host isn't on the sandbox
+ * network at all. Agent boxes found and closed the same gap (src/boxes/boxd/spec.ts networkSpec).
+ */
+export function sandboxNetworkProblem(info: SandboxNetworkInfo): string | null {
+    if (!info.Internal) return 'must be internal (no external route)';
+    // inhibit_ipv4 covers IPv4 only; with IPv6 on, the host could hold an address on the bridge again
+    if (info.EnableIPv6) return 'must not have IPv6 enabled (enable_ipv6: false)';
+    if ((info.Driver ?? 'bridge') === 'bridge' && info.Options?.[INHIBIT_IPV4] !== 'true') {
+        return `lets runs reach the host on its gateway address (created without ${INHIBIT_IPV4}=true; `
+            + 'recreate it with install/sandbox-network.sh, see docs/planning/sandbox-isolation-spec.md §6.1)';
+    }
+    return null;
+}
+
 export class SandboxDocker {
     constructor(private docker: Docker) {}
 
@@ -87,11 +123,10 @@ export class SandboxDocker {
             );
         }
 
-        const network = await this.docker.getNetwork(opts.network).inspect().catch(() => null) as { Internal?: boolean } | null;
+        const network = await this.docker.getNetwork(opts.network).inspect().catch(() => null) as SandboxNetworkInfo | null;
         if (!network) throw new Error(`Sandbox network "${opts.network}" does not exist`);
-        if (!network.Internal) {
-            throw new Error(`Sandbox network "${opts.network}" must be internal (no external route); refusing to run`);
-        }
+        const problem = sandboxNetworkProblem(network);
+        if (problem) throw new Error(`Sandbox network "${opts.network}" ${problem}; refusing to run`);
 
         const image = await this.docker.getImage(opts.image).inspect().catch(() => null);
         if (!image) throw new Error(`Sandbox image "${opts.image}" is not present on this host`);
@@ -100,15 +135,18 @@ export class SandboxDocker {
     }
 
     /**
-     * IPv4 of the capability gateway on the sandbox network, found by container name
-     * (e.g. `agora-cap-gateway-1` contains `cap-gateway`). Uses the network inspect
-     * endpoint the socket proxy already allows; it never inspects other containers.
-     * Looked up per run, so a restarted gateway with a new IP is picked up.
+     * IPv4 of the capability gateway on the sandbox network, found by container name: exactly
+     * `containerName`, or that name with Compose's replica suffix (`agora-cap-gateway` matches
+     * `agora-cap-gateway-1`). Not a substring: another container on the network (another
+     * install's, attached by a compromised runner of its own, §6.2) must not be taken for the
+     * gateway and be handed this install's run tokens. Uses the network inspect endpoint the
+     * socket proxy already allows; it never inspects other containers. Looked up per run, so a
+     * restarted gateway with a new IP is picked up.
      */
     async gatewayAddress(network: string, containerName: string): Promise<string | null> {
         const info = await this.docker.getNetwork(network).inspect() as { Containers?: Record<string, { Name?: string; IPv4Address?: string }> };
         for (const c of Object.values(info.Containers ?? {})) {
-            if (c.Name?.includes(containerName) && c.IPv4Address) return c.IPv4Address.split('/')[0];
+            if (c.Name && isGatewayName(c.Name, containerName) && c.IPv4Address) return c.IPv4Address.split('/')[0];
         }
         return null;
     }
@@ -116,8 +154,9 @@ export class SandboxDocker {
     /**
      * Create, start, wait (with deadline), collect logs, remove. Always removes the container.
      * Every call after create addresses the container by name: the socket proxy only
-     * allows container operations on `agora-run-*` names, so the runner can't inspect
-     * or touch other containers (e.g. read the database container's env).
+     * allows container operations on this install's `<instance>-run-*` names, so the runner
+     * can't inspect or touch other containers (e.g. read the database container's env) or
+     * another install's runs.
      */
     async run(spec: ContainerCreateOptions, opts: {
         timeoutMs: number;
@@ -169,25 +208,33 @@ export class SandboxDocker {
                 containerId: created.id,
             };
         } finally {
-            await container.remove({ force: true }).catch(() => { /* best effort */ });
+            // One retry; a container still left is removed at the runner's next start (removeRunContainers)
+            await container.remove({ force: true })
+                .catch(() => new Promise(r => setTimeout(r, 500)).then(() => container.remove({ force: true })))
+                .catch(() => { /* best effort */ });
         }
     }
 
     /**
-     * Remove this install's sandbox containers left behind (e.g. runner crashed mid-run).
-     * Another install on the same engine has its own `agora.instance` label, and its runs are
-     * left alone (#209). Containers from before the label existed count as the default install's.
+     * Remove this install's run containers left behind (the runner crashed mid-run, or a removal
+     * failed), by name. The runner can't list containers: the socket proxy refuses the list call,
+     * because it can't hold a list to one install's label (it filters paths, not query strings),
+     * and allows deletes only on this install's `<instance>-run-` names (#126). The names come
+     * from this install's own database (runner.ts runContainerCandidates). A name that is
+     * already gone is skipped; one that can't be removed is reported in `failed`.
      */
-    async removeOrphans(instance = 'agora'): Promise<number> {
-        const containers = await this.docker.listContainers({ all: true, filters: { label: ['agora.managed=runtime'] } });
+    async removeRunContainers(names: readonly string[]): Promise<{ removed: number; failed: { name: string; error: string }[] }> {
         let removed = 0;
-        for (const c of containers) {
-            const name = c.Names?.[0]?.replace(/^\//, '');
-            if (!name?.startsWith('agora-run-')) continue;
-            if ((c.Labels?.['agora.instance'] ?? 'agora') !== instance) continue;
-            await this.docker.getContainer(name).remove({ force: true }).catch(() => { /* ignore */ });
-            removed++;
+        const failed: { name: string; error: string }[] = [];
+        for (const name of names) {
+            try {
+                await this.docker.getContainer(name).remove({ force: true });
+                removed++;
+            } catch (err) {
+                if ((err as { statusCode?: number }).statusCode === 404) continue;
+                failed.push({ name, error: err instanceof Error ? err.message : String(err) });
+            }
         }
-        return removed;
+        return { removed, failed };
     }
 }
