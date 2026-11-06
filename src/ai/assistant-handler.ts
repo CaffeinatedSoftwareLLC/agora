@@ -501,7 +501,7 @@ const OWN_OVERVIEW_PATTERNS = ['\u{1F399}%', '⚠%audio overview%'];
 /**
  * The conversation an overview covers (#40), oldest first: in a thread, its parent and replies;
  * in a channel, the 300 most recently active top-level messages (newest, or with the newest
- * thread replies) plus the replies in their threads. A long thread loads its first and most
+ * thread replies, open or closed) plus the replies in their threads. A long thread loads its first and most
  * recent replies; formatTranscript fits it all in the budget.
  * Left out: deleted messages, system notices, placeholders, the request, and this bot's own
  * overview messages (progress, results, errors). A deleted thread parent still lets a thread
@@ -521,7 +521,7 @@ async function overviewRows(db: Pool, ctx: { channelId: string; threadId?: strin
                 ORDER BY m.id DESC LIMIT $7)
                UNION ALL
                (SELECT m.id, ${activity} AS active FROM messages m
-                WHERE m.channel_id = $1 AND m.reply_count > 0 AND m.thread_closed_at IS NULL AND m.thread_id IS NULL AND ${keep('m')}
+                WHERE m.channel_id = $1 AND m.reply_count > 0 AND m.thread_id IS NULL AND ${keep('m')}
                 ORDER BY m.last_reply_at DESC LIMIT $7)
            ), parents AS (SELECT id FROM candidates GROUP BY id ORDER BY MAX(active) DESC LIMIT $7)`;
     const res = await db.query(
