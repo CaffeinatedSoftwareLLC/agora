@@ -230,19 +230,22 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
     }).catch(() => setError('Failed to load channels'));
   }, [serverId]);
 
-  // Leaving the page sends a change still waiting out its debounce instead of dropping it
+  // enqueue only touches refs and state setters, so the first render's copy stays valid for the unmount flush
+  const enqueueOnLeave = useRef(enqueue);
+
+  // Leaving the page sends a change still waiting out its debounce instead of dropping it,
+  // behind any save of that field still in flight so the older one cannot land last
   useEffect(() => {
     mounted.current = true;
     const waiting = pending.current;
+    const flush = enqueueOnLeave.current;
     return () => {
       mounted.current = false;
       for (const [key, p] of Object.entries(waiting)) {
         clearTimeout(p.timer);
         delete waiting[key];
         const [channelId, field] = key.split(':') as [string, GuardField];
-        void botApi.updateChannelBotConfig(channelId, { [field]: p.value })
-          .then(({ maxBotHops, maxThreadBotHops }) => useChannelStore.getState().patchChannel(channelId, { maxBotHops, maxThreadBotHops }))
-          .catch(() => {});
+        flush(channelId, field, p.value);
       }
     };
   }, []);
@@ -260,9 +263,15 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
     if (pending.current[key]) clearTimeout(pending.current[key].timer);
     const timer = setTimeout(() => {
       delete pending.current[key];
-      queues.current[key] = (queues.current[key] ?? Promise.resolve()).then(() => save(channelId, field, value));
+      enqueue(channelId, field, value);
     }, delay);
     pending.current[key] = { timer, value };
+  }
+
+  /** Queues a save behind any earlier save of the same field (save never rejects). */
+  function enqueue(channelId: string, field: GuardField, value: number) {
+    const key = `${channelId}:${field}`;
+    queues.current[key] = (queues.current[key] ?? Promise.resolve()).then(() => save(channelId, field, value));
   }
 
   function handleNumber(channelId: string, field: GuardField, raw: string) {

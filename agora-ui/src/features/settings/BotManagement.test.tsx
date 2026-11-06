@@ -163,8 +163,30 @@ describe('Loop Guard saves', () => {
     await screen.findByLabelText('Channel limit in #agents (bot messages)');
     fireEvent.change(limit(), { target: { value: '7' } });
     unmount();
-    expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 7 });
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 7 }));
     await waitFor(() => expect(useChannelStore.getState().channels.get('C1')?.maxBotHops).toBe(7));
+  });
+
+  it('sends a change still in its debounce after the save in flight when the page closes', async () => {
+    const calls: number[] = [];
+    let release: (() => void) | undefined;
+    vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (_c, data) => {
+      calls.push(data.maxBotHops!);
+      if (calls.length === 1) await new Promise<void>(r => { release = r; });
+      return { channelId: 'C1', maxBotHops: data.maxBotHops!, maxThreadBotHops: 0 };
+    });
+    const { unmount } = render(<MemoryRouter><BotManagement /></MemoryRouter>);
+    await screen.findByLabelText('Channel limit in #agents (bot messages)');
+    fireEvent.change(limit(), { target: { value: '7' } });
+    await waitFor(() => expect(calls).toEqual([7]), { timeout: 2000 });
+    // 9 is still in its 600 ms debounce when the page closes
+    fireEvent.change(limit(), { target: { value: '9' } });
+    unmount();
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(calls).toEqual([7]);
+    release!();
+    await waitFor(() => expect(calls).toEqual([7, 9]));
+    await waitFor(() => expect(useChannelStore.getState().channels.get('C1')?.maxBotHops).toBe(9));
   });
 
   it('shows the saved value again when a save fails', async () => {
