@@ -2,7 +2,7 @@
 #   docker build -f box/Dockerfile --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION) .
 #   docker build -f box/Dockerfile --target test --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION)-test .
 # Targets: "box" (the default, last stage) has the pinned CLIs of every box adapter (Claude
-# Code, Codex, opencode); "test" has fake CLIs (box/fake) for the isolation and clean-install
+# Code, Codex, opencode, oh-my-pi); "test" has fake CLIs (box/fake) for the isolation and clean-install
 # tests. The pins are also in the box adapter registry (src/lib/boxes/adapters.ts,
 # agora-host/src/box-adapters.ts); test/unit/box-adapters.unit.test.ts checks they agree.
 # A change to this file, the pinned CLIs or the in-box scripts bumps box/VERSION.
@@ -66,14 +66,18 @@ RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/f
  && ln -s /opt/agora/fake/claude.mjs /opt/agora/bin/claude \
  && ln -s /opt/agora/fake/codex.mjs /opt/agora/bin/codex \
  && ln -s /opt/agora/fake/opencode.mjs /opt/agora/bin/opencode
+COPY box/fake/fake-omp.mjs /opt/agora/fake/omp.mjs
+RUN chmod 0755 /opt/agora/fake/omp.mjs && ln -s /opt/agora/fake/omp.mjs /opt/agora/bin/omp
 USER 1000:1000
 
-# ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x and Codex 0.163.x; opencode
-# is checked by its ACP protocol version). One ARG and one install block per box adapter.
+# ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x, Codex 0.163.x and omp
+# 18.17.x; opencode is checked by its ACP protocol version). One ARG and one install block per
+# box adapter.
 FROM base AS box
 ARG CLAUDE_CODE_VERSION=2.1.311
 ARG CODEX_VERSION=0.163.0
 ARG OPENCODE_VERSION=1.18.34
+ARG OMP_VERSION=18.17.0
 # HOME=/root: nothing the install or the version checks write may land in the agent's home
 RUN export HOME=/root \
  && npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
@@ -91,5 +95,20 @@ RUN export HOME=/root \
  && ln -s /usr/local/bin/opencode /opt/agora/bin/opencode \
  && /opt/agora/bin/opencode --version \
  && rm -rf /root/.npm /root/.config/opencode /root/.local/share/opencode /root/.local/state/opencode /root/.cache/opencode
+# oh-my-pi (MIT): the standalone binary from the GitHub release, checked against the release's
+# SHA256SUMS.txt (it releases every few days, so the version and both sums move together, as in
+# the box adapter registry). --version writes ~/.omp, which goes with the rest of /root.
+RUN export HOME=/root \
+ && case "$(dpkg --print-architecture)" in \
+      amd64) arch=x64; sum=a4ce6001ab1012ca835f4184d675437531bd1ac477a7ba8424ed0b5476e9e4cb ;; \
+      arm64) arch=arm64; sum=a9423fd7a69d869bf514931226b21d4ff55474225f574e2911fec457fc470e68 ;; \
+      *) echo "oh-my-pi has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL --retry 3 -o /usr/local/bin/omp "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/omp-linux-${arch}" \
+ && echo "${sum}  /usr/local/bin/omp" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/omp \
+ && ln -s /usr/local/bin/omp /opt/agora/bin/omp \
+ && /opt/agora/bin/omp --version \
+ && rm -rf /root/.omp
 RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
 USER 1000:1000

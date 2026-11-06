@@ -73,6 +73,9 @@ export const BOX_ADAPTER_OPTIONS: readonly BoxAdapterOption[] = [
   { value: 'codex', label: 'Codex', auth: ['subscription', 'api_key'], keyLabel: 'OpenAI API key' },
   { value: 'opencode', label: 'opencode', auth: ['api_key'], keyLabel: 'OpenRouter API key',
     model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
+  // oh-my-pi: an OpenRouter key only, never one of its subscription logins
+  { value: 'omp', label: 'oh-my-pi', auth: ['api_key'], keyLabel: 'OpenRouter API key',
+    model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
 ];
 
 export const ADAPTER_LABEL: Record<string, string> = Object.fromEntries(BOX_ADAPTER_OPTIONS.map(o => [o.value, o.label]));

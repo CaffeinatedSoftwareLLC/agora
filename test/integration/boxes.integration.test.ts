@@ -123,6 +123,28 @@ describe('create and list', () => {
         expect((await ctx.db.query(`SELECT 1 FROM box_login_requests WHERE box_id = $1`, [res.body.box.id])).rows).toHaveLength(0);
     });
 
+    test('omp (oh-my-pi): an OpenRouter key and a model, never a subscription; OpenRouter alone allowed; nothing to log in', async () => {
+        expect((await createBox({ name: 'pi', adapter: 'omp', model: 'qwen/qwen3-coder' })).body).toEqual({ error: 'api_key_required' });
+        expect((await createBox({ name: 'pi', adapter: 'omp', auth: 'subscription', model: 'qwen/qwen3-coder' })).body)
+            .toMatchObject({ error: 'auth_not_supported' });
+        expect((await createBox({ name: 'pi', adapter: 'omp', auth: 'api_key', apiKey: 'sk-or-test-1234567890' })).body)
+            .toMatchObject({ error: 'model_required' });
+        expect((await createBox({ name: 'pi', adapter: 'omp', apiKey: 'sk-or-test-1234567890', model: 'qwen/qwen3-coder:online' })).body)
+            .toMatchObject({ error: 'model_not_allowed' });
+        const res = await createBox({ name: 'pi', adapter: 'omp', apiKey: 'sk-or-test-1234567890', model: 'qwen/qwen3-coder' });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        expect(res.body.box).toMatchObject({ adapter: 'omp', auth: 'api_key', loginState: 'none' });
+        // No Anthropic host: omp's Claude login (and its Claude-compatible identity) stays out
+        expect(res.body.box.allowedDomains).toEqual(['openrouter.ai', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        const row = (await ctx.db.query(
+            `SELECT b.api_key_env, p.api_key_env AS profile_env, p.auth_mode, p.adapter FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id WHERE b.id = $1`,
+            [res.body.box.id])).rows[0];
+        expect(row).toMatchObject({ api_key_env: 'OPENROUTER_API_KEY', profile_env: 'OPENROUTER_API_KEY', auth_mode: 'api_key', adapter: 'omp' });
+        const login = await ctx.request.post(`/boxes/${res.body.box.id}/login`).set(owner.auth);
+        expect(login.status).toBe(409);
+        expect(login.body).toEqual({ error: 'login_not_supported' });
+    });
+
     test('names are unique across users, bots and profiles; channels and repos are checked', async () => {
         expect((await createBox()).status).toBe(201);
         expect((await createBox()).status).toBe(409);
