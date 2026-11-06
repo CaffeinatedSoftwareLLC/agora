@@ -219,6 +219,75 @@ describe('accept', () => {
         expect(await rows(sa)).toEqual([]);
     });
 
+    it('after the handoff, an @mention moves the thread on from the new owner', async () => {
+        const sa = await start(a), sb = await start(b), sc = await start(c); await drain();
+        const t = await thread();
+        const send = async (auth: object, content: string) => {
+            const res = await ctx.request.post(`/channels/${channel}/messages/${t}/replies`).set(auth).send({ content });
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+            return res.body.id as string;
+        };
+        const rows = async (sessionId: string, messageId: string) => (await ctx.db.query(
+            'SELECT reason FROM agent_inbox WHERE session_id = $1 AND message_id = $2', [sessionId, messageId])).rows.map(x => x.reason);
+        await send(owner.auth, '@hoa take this');
+        await drain();
+        await send(a.auth, 'half done, handing over');
+        const o = await offerOk(a, { threadId: t, to: 'hob', summary: 'Take it' });
+        expect((await answer(b.auth, o.id, 'accept')).status).toBe(200);
+        await drain();
+
+        // The owner switches to hoc after the acceptance: hoc is the one now, not the owner
+        await send(owner.auth, '@hoc can you review what hob has?');
+        await drain();
+        await send(c.auth, 'reviewed: two nits');
+        const r = await send(owner.auth, 'fix the nits then');
+        expect(await rows(sc, r)).toEqual(['direct']);
+        expect(await rows(sb, r)).toEqual([]);
+        expect(await rows(sa, r)).toEqual([]);
+    });
+
+    it('the sender\'s closing post after the acceptance doesn\'t take the thread back', async () => {
+        const sa = await start(a), sb = await start(b); await drain();
+        const t = await thread();
+        const send = async (auth: object, content: string) => {
+            const res = await ctx.request.post(`/channels/${channel}/messages/${t}/replies`).set(auth).send({ content });
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+            return res.body.id as string;
+        };
+        await send(owner.auth, '@hoa take this');
+        await drain();
+        const o = await offerOk(a, { threadId: t, to: 'hob', summary: 'Take it' });
+        expect((await answer(b.auth, o.id, 'accept')).status).toBe(200);
+        await drain();
+        // hoa's run ends after the acceptance and posts its wrap-up
+        await send(a.auth, 'handed to hob; my part is pushed');
+        const r = await send(owner.auth, 'status?');
+        const rows = async (sessionId: string) => (await ctx.db.query(
+            'SELECT reason FROM agent_inbox WHERE session_id = $1 AND message_id = $2', [sessionId, r])).rows.map(x => x.reason);
+        expect(await rows(sb)).toEqual(['direct']);
+        expect(await rows(sa)).toEqual([]);
+    });
+
+    it('after the handoff, without a live owner nobody wakes, not the sender who posted before it', async () => {
+        await start(a); await start(b); await drain();
+        const t2 = await thread();
+        const send2 = async (auth: object, content: string) => {
+            const res = await ctx.request.post(`/channels/${channel}/messages/${t2}/replies`).set(auth).send({ content });
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+            return res.body.id as string;
+        };
+        await send2(owner.auth, '@hoa take this one too');
+        await drain();
+        await send2(a.auth, 'started, handing over');
+        const o2 = await offerOk(a, { threadId: t2, to: 'hob', summary: 'Take it too' });
+        expect((await answer(b.auth, o2.id, 'accept')).status).toBe(200);
+        await drain();
+        await end(b);
+        const plain = await send2(owner.auth, 'status?');
+        const woken = await ctx.db.query('SELECT 1 FROM agent_inbox WHERE message_id = $1', [plain]);
+        expect(woken.rows).toEqual([]);
+    });
+
     it('is idempotent and race-safe: concurrent accepts give one owner and one notice', async () => {
         await start(a); await start(b); await drain();
         const t = await thread();
