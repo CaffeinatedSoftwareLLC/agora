@@ -20,6 +20,13 @@ import { noticeStandby } from './terminal-sessions';
  * - in any other thread (#120), a reply from someone who can direct that @mentions an agent
  *   wakes that agent's channel session with the thread as its destination ('direct'); in a
  *   bound thread this adds only agents that aren't participants.
+ * - a follow-up: in a thread that is neither a collaboration thread nor a task card's or
+ *   subtask's, a reply from a person who can direct that @mentions no bot wakes the agent
+ *   the thread is "with" ('direct', destination that thread). That is the agent of the latest
+ *   of these, in the thread or its parent: its own post (a bot with a session in this
+ *   channel), or an @mention of it by a person who could direct. One agent at most; none (and
+ *   no notice) when it has no live channel session here, is on standby, or the latest message
+ *   names two.
  * - an @mention of a known agent by a person who can direct that wakes nothing (no live
  *   session here) gets a short notice saying why, where the mention was posted.
  * - opt-in lurkers hear otherwise unrouted channel posts and thread replies, except
@@ -364,6 +371,56 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
     await addInbox(db, permitted(targets, 'direct', ctx), msg.messageId, null, 'direct');
 }
 
+/** Does the message @mention any bot (other than its author)? Then it is addressed, not a follow-up. */
+async function mentionsBot(db: any, mentioned: Set<string>, authorId: string): Promise<boolean> {
+    const ids = [...mentioned].filter(id => id !== authorId);
+    if (ids.length === 0) return false;
+    return (await db.query(`SELECT 1 FROM users WHERE id = ANY($1) AND bot = true LIMIT 1`, [ids])).rows.length > 0;
+}
+
+/**
+ * The agent an ordinary thread is "with", for a reply that @mentions no agent: the latest of
+ * a post by an agent of this channel (a bot with a session here, live or not) and an @mention
+ * of one by a person who could direct, in the thread or its parent. Its live channel session
+ * when it has one that isn't on standby (`sessions` excludes those); otherwise nobody, without
+ * a notice, since a plain reply addresses no one. Nobody either when the latest message names
+ * two agents, or in a collaboration thread (open or closed) or a task card's or subtask's thread.
+ */
+async function followUpTarget(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string): Promise<LiveSession | undefined> {
+    const threadId = msg.threadId!;
+    const special = await db.query(
+        `SELECT 1 FROM agent_session_threads WHERE thread_id = $1
+         UNION ALL
+         SELECT 1 FROM agent_sessions WHERE channel_id = $2 AND thread_id = $1
+         LIMIT 1`,
+        [threadId, msg.channelId]
+    );
+    if (special.rows.length > 0) return undefined;
+    const events = await db.query(
+        `WITH agents AS (SELECT DISTINCT bot_id FROM agent_sessions WHERE channel_id = $2),
+         thread AS (
+             SELECT m.id, m.author_id, m.author_could_direct FROM messages m
+             WHERE (m.thread_id = $1 OR m.id = $1) AND m.id <> $3 AND m.deleted_at IS NULL
+         )
+         SELECT t.id, t.author_id AS bot_id FROM thread t JOIN agents a ON a.bot_id = t.author_id
+         UNION ALL
+         SELECT t.id, mm.user_id FROM thread t
+         JOIN users u ON u.id = t.author_id AND u.bot = false
+         JOIN message_mentions mm ON mm.message_id = t.id
+         JOIN agents a ON a.bot_id = mm.user_id
+         WHERE t.author_could_direct
+         ORDER BY id DESC
+         LIMIT 10`,
+        [threadId, msg.channelId, msg.messageId]
+    );
+    if (events.rows.length === 0) return undefined;
+    const latest = events.rows[0].id;
+    const bots = new Set<string>(events.rows.filter((r: any) => r.id === latest).map((r: any) => r.bot_id.trim()));
+    if (bots.size !== 1) return undefined;
+    const [botId] = bots;
+    return botId === authorId ? undefined : sessions.find(s => s.botId === botId);
+}
+
 async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSession[], authorId: string, ctx: RouteContext): Promise<void> {
     const threadId = msg.threadId!;
     // A task card's or subtask's own thread: someone who can direct speaks to its agent
@@ -390,7 +447,15 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
         // As at the top level: a person without DirectAgents @mentions a plan-owned agent; say why nothing happens
         for (const s of addressed) if (s.subscription) ctx.refused.set(s.id, s);
     }
-    if (!bound) return;
+    if (!bound) {
+        // A follow-up: a person who can direct replies without @mentioning any agent; the agent
+        // the thread is with answers. Agents' replies never do this (no bot-to-bot chains).
+        if (msg.couldDirect && ctx.authorHuman && scoped.length === 0 && !await mentionsBot(db, mentioned, authorId)) {
+            const target = await followUpTarget(db, msg, sessions, authorId);
+            if (target) await addInbox(db, permitted([target], 'direct', ctx), msg.messageId, threadId, 'direct');
+        }
+        return;
+    }
 
     const participants = sessions.filter(s => boundIds.has(s.id));
     const author = participants.find(s => s.botId === authorId);
