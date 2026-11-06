@@ -548,14 +548,55 @@ describe('thread follow-ups: a reply without a mention goes to the agent the thr
         expect(await inbox(sc)).toEqual([]);
     });
 
-    it('wakes only the latest of two agents that posted', async () => {
+    it('wakes only the latest of two agents that posted; a deleted post doesn\'t count', async () => {
         const sx = await startSession(codex);
         const sc = await startSession(claude);
         const parent = await post(codex.auth, 'PR is up');
+        await reply(owner.auth, parent.id, '@claude review it please');
         await reply(claude.auth, parent.id, 'I reviewed it: one nit');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
         const r = await reply(owner.auth, parent.id, 'go ahead and fix the nit');
         expect(await ids(sc)).toEqual([r.id]);
         expect(await ids(sx)).toEqual([]);
+
+        // codex (it wrote the parent) posts last, then deletes it: claude is the one again
+        const late = await reply(codex.auth, parent.id, 'I can fix it instead');
+        const del = await ctx.request.delete(`/channels/${channelId}/messages/${late.id}`).set(codex.auth);
+        expect([200, 204], JSON.stringify(del.body)).toContain(del.status);
+        const again = await reply(owner.auth, parent.id, 'claude, go on');
+        expect(await ids(sc)).toContain(again.id);
+        expect(await ids(sx)).toEqual([]);
+    });
+
+    it('a lurker\'s interjection doesn\'t take the thread: the agent being talked to wakes', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        await ctx.db.query(`UPDATE agent_sessions SET lurk_mode = 'balanced' WHERE id = $1`, [sc]);
+        const parent = await post(owner.auth, '@codex build the relay');
+        await reply(codex.auth, parent.id, 'on it');
+        await reply(claude.auth, parent.id, 'careful: the relay needs TLS');
+        const r = await reply(owner.auth, parent.id, 'good point, add TLS');
+        expect(await threadRows(sx)).toContainEqual({ message_id: r.id, thread_id: parent.id, reason: 'direct' });
+        // The lurker still hears it passively, never as 'direct'
+        expect((await threadRows(sc)).filter(x => x.message_id === r.id).map(x => x.reason)).toEqual(['lurk']);
+    });
+
+    it('a reply that @mentions a person is addressed to them, and one naming two agents wakes nobody after', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(owner.auth, '@codex build the relay');
+        await reply(codex.auth, parent.id, 'done');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const toPerson = await reply(owner.auth, parent.id, '@asmember can you check this?');
+        expect(toPerson.mentions).toEqual([member.userId]);
+        expect(await inbox(sx)).toEqual([]);
+
+        const both = await reply(owner.auth, parent.id, '@codex @claude compare notes');
+        expect(await ids(sx)).toEqual([both.id]);
+        expect(await ids(sc)).toEqual([both.id]);
+        const plain = await reply(owner.auth, parent.id, 'well?');
+        expect(await ids(sx)).not.toContain(plain.id);
+        expect(await ids(sc)).not.toContain(plain.id);
     });
 
     it('an @mention by the owner moves the thread to that agent', async () => {
@@ -622,6 +663,7 @@ describe('thread follow-ups: a reply without a mention goes to the agent the thr
             `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, kind, terminal_mode) VALUES ($1, $2, $3, $4, 'terminal', 'mcp')`,
             [terminal, serverId, channelId, codex.botId]);
         const parent = await post(claude.auth, 'PR is up');
+        await reply(owner.auth, parent.id, '@codex take the review');
         await reply(codex.auth, parent.id, 'I will take the review');
         const since = generateUlid();
         await reply(owner.auth, parent.id, 'go ahead');
@@ -635,6 +677,7 @@ describe('thread follow-ups: a reply without a mention goes to the agent the thr
         const sc = await startSession(claude);
         const parent = await post(claude.auth, 'PR is up');
         const helperSession = await startSession(helper);
+        await reply(owner.auth, parent.id, '@helper can you help?');
         await reply(helper.auth, parent.id, 'I can help');
         await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [helperSession]);
         const since = generateUlid();
