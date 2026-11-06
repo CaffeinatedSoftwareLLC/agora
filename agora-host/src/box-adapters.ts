@@ -163,7 +163,7 @@ export const BOX_ADAPTERS = {
         // but the web tools (adapters.ts devinConfig), so what it still asks reaches the host, which
         // allows it unless it is a web tool or a fetch (Devin's search and fetch may run on Devin's
         // side, around the edge; a box fetches through its edge with curl)
-        yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpDeny: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch'], kinds: ['fetch'] } },
+        yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpDeny: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch', 'read_url', 'read_url_content'], kinds: ['fetch'] } },
         // XDG_CONFIG_HOME is <state>/config (adapters.ts): Devin's global rules file and user config
         state: {
             rulesFile: 'config/devin/AGENTS.md',

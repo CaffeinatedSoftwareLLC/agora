@@ -215,7 +215,7 @@ describe('Devin in a box', () => {
         for (const host of ['server.codeium.com', 'api.devin.ai', 'app.devin.ai']) expect(isTelemetryHost(host), host).toBe(false);
         expect(HOST_ADAPTERS.devin).toMatchObject({ acpArgs: ['acp'], authModes: ['subscription'],
             login: { args: ['auth', 'login', '--force-manual-token-flow'], hosts: ['devin.ai', 'windsurf.com'], kind: 'paste' }, noProxy: [],
-            yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpDeny: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch'], kinds: ['fetch'] } },
+            yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpDeny: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch', 'read_url', 'read_url_content'], kinds: ['fetch'] } },
             state: { rulesFile: 'config/devin/AGENTS.md' } });
         // The settings file the login reads: no update, no imports of other tools' config
         const settings = JSON.parse(HOST_ADAPTERS.devin.state.files['config/devin/config.json']);

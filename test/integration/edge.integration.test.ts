@@ -239,9 +239,11 @@ beforeAll(async () => {
         // Listeners on 127.0.0.1: every connection is this box
         identify: async () => edge.directory.byId(boxId), directoryTtlMs: 0,
         resolve: async () => ['93.184.216.34'], subnets: () => [],
-        dial: () => net.connect({ host: '127.0.0.1', port: 9 }),
-        // A login's request waits for its card this long, looking this often
-        loginHoldMs: 1500, loginHoldPollMs: 50,
+        // Upstream connections go nowhere, unless a test points them at its own server
+        dial: () => net.connect({ host: '127.0.0.1', port: dialPort }),
+        // A login's request waits for its card this long, looking this often; a connection let
+        // through only for a login checks this often that the login is still open
+        loginHoldMs: 1500, loginHoldPollMs: 50, loginOnlyPollMs: 100,
     });
     await edge.start({ agora: 0, proxy: 0, host: '127.0.0.1' });
     edgePort = (edge.agora.address() as AddressInfo).port;
@@ -681,6 +683,8 @@ describe('forward proxy', () => {
     });
 });
 
+let dialPort = 9;
+
 describe('forward proxy: telemetry, wildcards and logins', () => {
     const setAllowlist = (domains: string[]) => ctx.db.query('UPDATE agent_boxes SET allowed_domains = $2 WHERE id = $1', [boxId, domains]);
     function connect(authority: string): Promise<string> {
@@ -827,6 +831,38 @@ describe('forward proxy: telemetry, wildcards and logins', () => {
             const box = (await ctx.db.query('SELECT allowed_domains FROM agent_boxes WHERE id = $1', [boxId])).rows[0];
             expect(box.allowed_domains).toEqual(['allowed.example.com']);
         } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET adapter = 'claude' WHERE id = $1`, [profile]);
+        }
+    });
+
+    it('a tunnel let through only for a login is closed when the login ends', async () => {
+        const profile = (await ctx.db.query('SELECT profile_id FROM agent_boxes WHERE id = $1', [boxId])).rows[0].profile_id;
+        await ctx.db.query(`UPDATE agent_profiles SET adapter = 'devin' WHERE id = $1`, [profile]);
+        // An upstream that keeps every connection open
+        const held: net.Socket[] = [];
+        const upstream = net.createServer(s => { held.push(s); s.on('error', () => {}); });
+        await new Promise<void>(r => upstream.listen(0, '127.0.0.1', r));
+        dialPort = (upstream.address() as AddressInfo).port;
+        try {
+            await openLogin();
+            const s = net.connect(proxyPort, '127.0.0.1', () => s.write('CONNECT app.devin.ai:443 HTTP/1.1\r\nHost: app.devin.ai:443\r\n\r\n'));
+            let buf = '';
+            const closed = new Promise<number>(resolve => s.on('close', () => resolve(Date.now())));
+            s.on('data', d => { buf += d.toString(); });
+            s.on('error', () => {});
+            for (let i = 0; i < 100 && !buf.includes('\r\n\r\n'); i++) await new Promise(r => setTimeout(r, 20));
+            expect(buf).toMatch(/^HTTP\/1.1 200/);
+            // Still open while the login is
+            await new Promise(r => setTimeout(r, 400));
+            expect(s.destroyed).toBe(false);
+            // The login finishes: the tunnel goes within a poll or two
+            const ended = Date.now();
+            await ctx.db.query(`UPDATE box_login_requests SET status = 'succeeded' WHERE box_id = $1`, [boxId]);
+            expect(await closed - ended).toBeLessThan(2000);
+        } finally {
+            dialPort = 9;
+            for (const h of held) h.destroy();
+            await new Promise<void>(r => upstream.close(() => r()));
             await ctx.db.query(`UPDATE agent_profiles SET adapter = 'claude' WHERE id = $1`, [profile]);
         }
     });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join, win32 } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { childEnv, DEVIN_PROJECT_CONFIG, devinConfig, devinDirs, devinProjectConfig, prepare, verifyProfile, type Launch } from '../src/adapters.js';
+import { childEnv, gitConfigExists, userGitConfig, DEVIN_PROJECT_CONFIG, devinConfig, devinDirs, devinProjectConfig, prepare, verifyProfile, type Launch } from '../src/adapters.js';
 import { ACP_FATAL, type AcpPlan } from '../src/acp/session.js';
 import { boxConfig, boxMode } from '../src/box.js';
 import { configSchema, loadConfig } from '../src/config.js';
@@ -22,7 +22,7 @@ import { claim, config, id, tempDir } from './helpers.js';
 const unix = process.platform !== 'win32';
 const FAKE_ACP = fileURLToPath(new URL('../../box/fake/fake-acp.mjs', import.meta.url));
 const cleanups: Array<() => Promise<void>> = [];
-const saved = { marker: boxMode.marker, env: { ...process.env } };
+const saved = { marker: boxMode.marker, env: { ...process.env }, gitConfigCheck: gitConfigExists.check };
 let marker: string;
 beforeEach(async () => {
     const t = await tempDir(); cleanups.push(t.cleanup);
@@ -129,12 +129,19 @@ describe('devin child environment', () => {
     });
     it('Windows: a profile folder of its own, HOME in it too (Devin ignores XDG and APPDATA alone there); git keeps the user\'s identity', () => {
         const p = { ...devin('/srv/repo').profiles.builder, stateDir: 'C:\\state\\devin' };
+        const files = new Set(['C:\\Users\\me\\.gitconfig']);
+        gitConfigExists.check = path => files.has(path);
+        cleanups.push(async () => { gitConfigExists.check = saved.gitConfigCheck; });
         const env = childEnv(p, { Path: 'C:\\Windows', USERPROFILE: 'C:\\Users\\me', APPDATA: 'C:\\Users\\me\\AppData\\Roaming',
-            LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local', WINDSURF_API_KEY: 'secret', GIT_CONFIG_GLOBAL: 'C:\\elsewhere' }, 'win32');
+            LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local', WINDSURF_API_KEY: 'secret', GIT_CONFIG_GLOBAL: 'C:\\elsewhere', HOME: '/c/Users/me' }, 'win32');
         expect(env).toMatchObject({ HOME: 'C:\\state\\devin\\home', USERPROFILE: 'C:\\state\\devin\\home', APPDATA: 'C:\\state\\devin\\home\\AppData\\Roaming',
             LOCALAPPDATA: 'C:\\state\\devin\\home\\AppData\\Local', GIT_CONFIG_GLOBAL: 'C:\\Users\\me\\.gitconfig' });
-        // A HOME the user set wins for git's identity
-        expect(childEnv(p, { USERPROFILE: 'C:\\Users\\me', HOME: 'D:\\home\\me' }, 'win32').GIT_CONFIG_GLOBAL).toBe('D:\\home\\me\\.gitconfig');
+        // From the user's profile folder, never a Git Bash HOME; git's XDG file when only that exists; none without either
+        files.clear(); files.add('C:\\Users\\me\\.config\\git\\config');
+        expect(childEnv(p, { USERPROFILE: 'C:\\Users\\me', HOME: '/c/Users/me' }, 'win32').GIT_CONFIG_GLOBAL).toBe('C:\\Users\\me\\.config\\git\\config');
+        files.clear();
+        expect(childEnv(p, { USERPROFILE: 'C:\\Users\\me' }, 'win32').GIT_CONFIG_GLOBAL).toBeUndefined();
+        expect(userGitConfig('/c/Users/me', { check: () => true })).toBeNull();
         expect(env.WINDSURF_API_KEY).toBeUndefined();
         expect(Object.keys(env).filter(k => k.toUpperCase() === 'APPDATA')).toEqual(['APPDATA']);
         expect(devinDirs('C:\\state\\devin', 'win32').USERPROFILE).toBe(win32.join('C:\\state\\devin', 'home'));
@@ -295,7 +302,7 @@ describe('devin in a box', () => {
         launch = await prepare(c, delivery()); cleanups.push(launch.cleanup);
         expect(launch.args).toEqual(['--config', launch.args[1], 'acp']);
         expect(launch.acp).toMatchObject({ sessionMode: 'accept-edits', allowAll: true,
-            allowAllExcept: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch'], kinds: ['fetch'] } });
+            allowAllExcept: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch', 'read_url', 'read_url_content'], kinds: ['fetch'] } });
         expect(await readFile(launch.args[1], 'utf8')).toBe(devinConfig(true, c.profiles.builder.approvedTools));
         expect(launch.env).toMatchObject({ HTTPS_PROXY: 'http://edge:3128', https_proxy: 'http://edge:3128', NO_PROXY: 'edge' });
         await logIn(c.profiles.builder.stateDir);

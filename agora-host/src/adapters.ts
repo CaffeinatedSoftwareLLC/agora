@@ -188,6 +188,19 @@ export async function repoFreePath(env: NodeJS.ProcessEnv, roots: string[], plat
     env[key] = kept.join(sep);
     return env;
 }
+/** Tests replace this; agora-host otherwise asks the file system. */
+export const gitConfigExists = { check: (path: string) => existsSync(path) };
+/**
+ * The user's global git config on Windows: `%USERPROFILE%\.gitconfig`, or git's XDG location
+ * `%USERPROFILE%\.config\git\config` when only that exists. Null when the user has neither (or
+ * no profile folder is known): git then runs without one.
+ */
+export function userGitConfig(userProfile: string | undefined, files: { check(path: string): boolean } = gitConfigExists): string | null {
+    // A drive or UNC path only: `/c/Users/...` (a Git Bash HOME) is rooted but not a Windows profile folder
+    if (!userProfile || !/^(?:[A-Za-z]:[\\/]|\\\\)/.test(userProfile)) return null;
+    for (const path of [win32.join(userProfile, '.gitconfig'), win32.join(userProfile, '.config', 'git', 'config')]) if (files.check(path)) return path;
+    return null;
+}
 /** Set a variable, replacing it under any spelling (Windows variable names ignore case). */
 function setVar(env: NodeJS.ProcessEnv, name: string, value: string) {
     for (const key of Object.keys(env)) if (key.toUpperCase() === name.toUpperCase()) delete env[key];
@@ -205,9 +218,11 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     } else if (profile.adapter === 'devin') {
         // Devin's config, MCP servers, login and sessions: the user's own stay out of hosted runs.
         // On Windows its home is in the state directory too; git still finds the user's identity
+        // (from the user's own profile folder, read before it is redirected: a HOME set by Git Bash
+        // can be /c/Users/...)
         if (platform === 'win32') {
-            const home = getVar(env, 'HOME') ?? getVar(env, 'USERPROFILE');
-            if (home) setVar(env, 'GIT_CONFIG_GLOBAL', win32.join(home, '.gitconfig'));
+            const gitconfig = userGitConfig(getVar(env, 'USERPROFILE'), gitConfigExists);
+            if (gitconfig) setVar(env, 'GIT_CONFIG_GLOBAL', gitconfig);
         }
         for (const [name, dir] of Object.entries(devinDirs(profile.stateDir, platform))) setVar(env, name, dir);
     } else if (profile.adapter === 'omp') Object.assign(env, ompEnv(profile, source));
