@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { setupTestApp, authedUser, createServer, cleanDatabase } from '../helpers';
 import { internalBus } from '../../src/ai/internal-bus';
+import { generateUlid } from '../../src/utils/ulid';
 
 /**
  * WBS 5.1: "@assistant make an audio overview of this thread" through the real
@@ -200,6 +201,88 @@ describe('audio overview', () => {
         const reply = await finalReply(threadId);
         expect(reply.content).toBe('⚠️ Couldn\'t make an audio overview: The chat model did not return a usable two-host script');
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // #40: a channel overview covers thread replies, grouped under their parent
+    test('a channel overview includes thread replies under their parent, without deleted ones', async () => {
+        const fetchMock = mockGemini();
+        const parent = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Storage refactor: S3 next?' });
+        expect(parent.status).toBe(201);
+        const kept = await ctx.request.post(`/channels/${channelId}/messages/${parent.body.id}/replies`).set(owner.auth).send({ content: 'Yes, behind STORAGE_DRIVER.' });
+        const gone = await ctx.request.post(`/channels/${channelId}/messages/${parent.body.id}/replies`).set(owner.auth).send({ content: 'Retracted idea about FTP.' });
+        expect(kept.status).toBe(201);
+        expect(gone.status).toBe(201);
+        await ctx.db.query('UPDATE messages SET deleted_at = NOW() WHERE id = $1', [gone.body.id]);
+        const later = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Unrelated: lunch at noon.' });
+        expect(later.status).toBe(201);
+
+        const before = new Set((await ctx.db.query('SELECT id FROM messages WHERE channel_id = $1 AND author_id = $2 AND thread_id IS NULL', [channelId, botId])).rows.map(r => r.id.trim()));
+        await askForOverview(undefined, `<@${botId}> audio overview of this channel`);
+        let reply: { id: string; content: string } | undefined;
+        await waitFor(async () => {
+            const res = await ctx.db.query(
+                "SELECT id, content FROM messages WHERE channel_id = $1 AND author_id = $2 AND thread_id IS NULL AND content NOT LIKE '🎙️ Writing%' AND content NOT LIKE '🎙️ Recording%'",
+                [channelId, botId]
+            );
+            const row = res.rows.find(r => !before.has(r.id.trim()));
+            if (row) reply = { id: row.id.trim(), content: row.content };
+            return !!reply;
+        });
+        expect(reply!.content.startsWith('🎙️ **Audio overview** of this channel')).toBe(true);
+
+        const prompt: string = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).contents[0].parts[0].text;
+        expect(prompt).toContain('aoowner: Storage refactor: S3 next?\n  [thread] aoowner: Yes, behind STORAGE_DRIVER.\n');
+        expect(prompt).toContain('aoowner: Unrelated: lunch at noon.');
+        expect(prompt).not.toContain('Retracted idea about FTP');
+        // Earlier threads in the channel are covered too, and the request itself is not in the transcript
+        expect(prompt).toContain('  [thread] aoowner: Only if QA signs off. Ben owes migration notes.');
+        expect(prompt.split('The listener asked:')[0]).not.toContain('audio overview of this channel');
+    });
+
+    test('a closed thread under an old parent is still covered while its replies are recent', async () => {
+        const fetchMock = mockGemini();
+        const parent = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Old question: which queue library?' });
+        expect(parent.status).toBe(201);
+        // Push the parent out of the newest OVERVIEW_MAX_MESSAGES top-level messages
+        const filler = Array.from({ length: 310 }, (_, i) => [generateUlid(), `Filler message ${i}`]);
+        await ctx.db.query(
+            `INSERT INTO messages (id, channel_id, author_id, content)
+             SELECT f.id, $1, $2, f.content FROM unnest($3::text[], $4::text[]) AS f(id, content)`,
+            [channelId, owner.userId, filler.map(f => f[0]), filler.map(f => f[1])]
+        );
+        const decided = await ctx.request.post(`/channels/${channelId}/messages/${parent.body.id}/replies`).set(owner.auth).send({ content: 'Decision: BullMQ, closing this.' });
+        expect(decided.status).toBe(201);
+        const closed = await ctx.request.patch(`/channels/${channelId}/messages/${parent.body.id}/thread`).set(owner.auth).send({ closed: true });
+        expect(closed.status).toBe(200);
+        expect(closed.body.threadClosedAt).toBeTruthy();
+
+        const before = new Set((await ctx.db.query('SELECT id FROM messages WHERE channel_id = $1 AND author_id = $2 AND thread_id IS NULL', [channelId, botId])).rows.map(r => r.id.trim()));
+        await askForOverview(undefined, `<@${botId}> audio overview of this channel`);
+        await waitFor(async () => {
+            const res = await ctx.db.query(
+                "SELECT id FROM messages WHERE channel_id = $1 AND author_id = $2 AND thread_id IS NULL AND content NOT LIKE '🎙️ Writing%' AND content NOT LIKE '🎙️ Recording%'",
+                [channelId, botId]
+            );
+            return res.rows.some(r => !before.has(r.id.trim()));
+        });
+
+        const prompt: string = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).contents[0].parts[0].text;
+        expect(prompt).toContain('aoowner: Old question: which queue library?\n  [thread] aoowner: Decision: BullMQ, closing this.');
+        expect(prompt).toContain('aoowner: Filler message 309');
+    });
+
+    test('a thread overview still covers only that thread', async () => {
+        const other = await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'Other topic: office plants' });
+        await ctx.request.post(`/channels/${channelId}/messages/${other.body.id}/replies`).set(owner.auth).send({ content: 'Water the ficus.' });
+        const fetchMock = mockGemini();
+        const threadId = await newThread();
+        await askForOverview(threadId);
+        await finalReply(threadId);
+        const prompt: string = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).contents[0].parts[0].text;
+        expect(prompt).toContain('aoowner: Release plan: ship Friday?\n  [thread] aoowner: Only if QA signs off. Ben owes migration notes.');
+        expect(prompt).not.toContain('office plants');
+        expect(prompt).not.toContain('Water the ficus');
+        expect(prompt).not.toContain('Storage refactor');
     });
 
     test('an ordinary mention still gets a normal chat reply', async () => {

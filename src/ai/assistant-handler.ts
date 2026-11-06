@@ -6,7 +6,7 @@ import { streamCompletion, ConversationMessage } from './providers';
 import { resolveRoute, checkBudget, recordUsage, type BudgetResult, type ResolvedRoute } from './routing';
 import { generateUlid } from '../utils/ulid';
 import { storeFile, type StoredFile } from '../lib/file-store';
-import { createAudioOverview, overviewMessage, stripMentions, OVERVIEW_MAX_MESSAGES, type TranscriptRow } from './audio-overview';
+import { createAudioOverview, overviewMessage, stripMentions, OVERVIEW_MAX_MESSAGES, OVERVIEW_THREAD_HEAD, OVERVIEW_THREAD_TAIL, type TranscriptRow } from './audio-overview';
 import { screeningPrecheck, screenSearchResult } from './search-screening';
 import { postSystemMessage } from '../gateway/post-message';
 import type { SearchCitation, SearchResult } from './adapters';
@@ -89,7 +89,7 @@ async function handleMention(db: Pool, io: Server, event: AssistantMentionEvent)
     const intent = await routeMention(db, { serverId, channelId, messageId, botId, author, content: event.content });
     if (intent === 'audio_overview') {
         // "@assistant make an audio overview of this thread" (WBS 5.1)
-        await handleAudioOverview(db, io, { serverId, channelId, threadId, botId, author, content: event.content });
+        await handleAudioOverview(db, io, { serverId, channelId, threadId, botId, author, messageId, content: event.content });
         return;
     }
     if (intent === 'search') {
@@ -495,35 +495,60 @@ async function writeSearchAnswer(
     });
 }
 
-/** The conversation an overview covers: the whole thread, or the channel's recent top-level messages. */
-async function overviewRows(db: Pool, channelId: string, threadId: string | undefined, exclude: string): Promise<TranscriptRow[]> {
-    if (threadId) {
-        const res = await db.query(
-            `SELECT username, content FROM (
-                 SELECT m.id, u.username, m.content FROM messages m JOIN users u ON u.id = m.author_id
-                 WHERE (m.id = $1 OR m.thread_id = $1) AND m.deleted_at IS NULL AND m.id <> $2
-                 ORDER BY m.id DESC LIMIT $3
-             ) t ORDER BY id`,
-            [threadId, exclude, OVERVIEW_MAX_MESSAGES]
-        );
-        return res.rows;
-    }
+/** This bot's own overview messages: progress and results start with the microphone, failures with the warning sign. */
+const OWN_OVERVIEW_PATTERNS = ['\u{1F399}%', '⚠%audio overview%'];
+
+/**
+ * The conversation an overview covers (#40), oldest first: in a thread, its parent and replies;
+ * in a channel, the 300 most recently active top-level messages (newest, or with the newest
+ * thread replies, open or closed) plus the replies in their threads. A long thread loads its first and most
+ * recent replies; formatTranscript fits it all in the budget.
+ * Left out: deleted messages, system notices, placeholders, the request, and this bot's own
+ * overview messages (progress, results, errors). A deleted thread parent still lets a thread
+ * overview cover its replies.
+ */
+async function overviewRows(db: Pool, ctx: { channelId: string; threadId?: string; botId: string; exclude: string[] }): Promise<TranscriptRow[]> {
+    // $1 channel, $2 excluded ids, $3/$4 replies kept from a thread's start/end, $5 bot, $6 own-message patterns, $7 scope
+    const keep = (a: string) => `${a}.deleted_at IS NULL AND ${a}.author_id IS NOT NULL AND ${a}.content <> '...'
+        AND NOT (${a}.id = ANY($2::bpchar[]))
+        AND NOT (${a}.author_id = $5::bpchar AND ${a}.content LIKE ANY($6::text[]))`;
+    const activity = `GREATEST(m.created_at, COALESCE(m.last_reply_at, m.created_at))`;
+    const parents = ctx.threadId
+        ? `parents AS (SELECT m.id FROM messages m WHERE m.id = $7::bpchar AND m.channel_id = $1 AND m.thread_id IS NULL)`
+        : `candidates AS (
+               (SELECT m.id, ${activity} AS active FROM messages m
+                WHERE m.channel_id = $1 AND m.thread_id IS NULL AND ${keep('m')}
+                ORDER BY m.id DESC LIMIT $7)
+               UNION ALL
+               (SELECT m.id, ${activity} AS active FROM messages m
+                WHERE m.channel_id = $1 AND m.reply_count > 0 AND m.thread_id IS NULL AND ${keep('m')}
+                ORDER BY m.last_reply_at DESC LIMIT $7)
+           ), parents AS (SELECT id FROM candidates GROUP BY id ORDER BY MAX(active) DESC LIMIT $7)`;
     const res = await db.query(
-        `SELECT username, content FROM (
-             SELECT m.id, u.username, m.content FROM messages m JOIN users u ON u.id = m.author_id
-             WHERE m.channel_id = $1 AND m.thread_id IS NULL AND m.deleted_at IS NULL AND m.id <> $2
-             ORDER BY m.id DESC LIMIT $3
-         ) t ORDER BY id`,
-        [channelId, exclude, OVERVIEW_MAX_MESSAGES]
+        `WITH ${parents}, replies AS (
+             SELECT r.id,
+                    ROW_NUMBER() OVER (PARTITION BY r.thread_id ORDER BY r.id) AS from_start,
+                    ROW_NUMBER() OVER (PARTITION BY r.thread_id ORDER BY r.id DESC) AS from_end
+             FROM messages r
+             WHERE r.channel_id = $1 AND r.thread_id IN (SELECT id FROM parents) AND ${keep('r')}
+         )
+         SELECT m.id, m.thread_id, u.username, m.content
+         FROM (SELECT id FROM parents UNION ALL SELECT id FROM replies WHERE from_start <= $3 OR from_end <= $4) k
+         JOIN messages m ON m.id = k.id
+         JOIN users u ON u.id = m.author_id
+         WHERE m.deleted_at IS NULL
+         ORDER BY m.id`,
+        [ctx.channelId, ctx.exclude, OVERVIEW_THREAD_HEAD, OVERVIEW_THREAD_TAIL, ctx.botId, OWN_OVERVIEW_PATTERNS,
+            ctx.threadId ?? OVERVIEW_MAX_MESSAGES]
     );
-    return res.rows;
+    return res.rows.map(r => ({ id: r.id.trim(), threadId: r.thread_id?.trim() || null, username: r.username, content: r.content }));
 }
 
 async function handleAudioOverview(
     db: Pool, io: Server,
-    ctx: { serverId: string; channelId: string; threadId?: string; botId: string; author: { id: string }; content: string },
+    ctx: { serverId: string; channelId: string; threadId?: string; botId: string; author: { id: string }; messageId: string; content: string },
 ): Promise<void> {
-    const { serverId, channelId, threadId, botId, author, content } = ctx;
+    const { serverId, channelId, threadId, botId, author, messageId, content } = ctx;
     const placeholder = await createPlaceholder(db, io, { channelId, botId, threadId }, '🎙️ Writing an audio overview script…');
     const setContent = async (text: string, streaming: boolean, attachments?: object[]) => {
         await db.query('UPDATE messages SET content = $1 WHERE id = $2', [text, placeholder.id]);
@@ -531,7 +556,7 @@ async function handleAudioOverview(
     };
 
     try {
-        const rows = await overviewRows(db, channelId, threadId, placeholder.id);
+        const rows = await overviewRows(db, { channelId, threadId, botId, exclude: [placeholder.id, messageId] });
         const result = await createAudioOverview(db, {
             serverId, channelId, botId, requesterId: author.id, request: content, rows,
             onProgress: (status) => setContent(status, true),

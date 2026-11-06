@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
     isAudioOverviewRequest, formatTranscript, parseScript, overviewMessage, formatClock, scriptRequest,
     MAX_SCRIPT_CHARS, OVERVIEW_SPEAKERS, overviewSpeakers,
+    fairShare, MAX_LINE_CHARS, MAX_TRANSCRIPT_CHARS, THREAD_FLOOR_CHARS, REPLY_PREFIX, type TranscriptRow,
 } from '../../src/ai/audio-overview';
 
 /** WBS 5.1: audio overview intent, transcript, and script handling. */
@@ -36,6 +37,124 @@ describe('formatTranscript', () => {
         expect(t.length).toBeLessThanOrEqual(60_000);
         expect(t.endsWith(`message 1999 ${'x'.repeat(50)}`)).toBe(true);
         expect(t).not.toContain('message 0 ');
+    });
+
+    // #40: channel overviews include thread replies, grouped under their parent
+    it('groups thread replies under their parent, even when other messages came in between', () => {
+        expect(formatTranscript([
+            { id: 'P1', username: 'ana', content: 'Release plan: ship Friday?' },
+            { id: 'P2', username: 'carl', content: 'Lunch?' },
+            { id: 'R1', threadId: 'P1', username: 'ben', content: 'Only if QA signs off.' },
+            { id: 'R2', threadId: 'P1', username: 'ana', content: 'OK, Friday pending QA.' },
+        ])).toBe([
+            'ana: Release plan: ship Friday?',
+            `${REPLY_PREFIX}ben: Only if QA signs off.`,
+            `${REPLY_PREFIX}ana: OK, Friday pending QA.`,
+            'carl: Lunch?',
+        ].join('\n'));
+    });
+
+    it('keeps replies whose parent is not in the rows together, under a stand-in line', () => {
+        expect(formatTranscript([
+            { id: 'R1', threadId: 'GONE', username: 'ben', content: 'Still here.' },
+            { id: 'P2', username: 'carl', content: 'Hi.' },
+        ])).toBe(`(a message that is not shown)\n${REPLY_PREFIX}ben: Still here.\ncarl: Hi.`);
+    });
+
+    it('puts each message on one line and cuts very long messages', () => {
+        const t = formatTranscript([
+            { id: 'P1', username: 'ana', content: 'line one\n\n  line two' },
+            { id: 'R1', threadId: 'P1', username: 'bot', content: 'y'.repeat(MAX_LINE_CHARS * 3) },
+        ]);
+        const [first, second] = t.split('\n');
+        expect(first).toBe('ana: line one line two');
+        expect(second).toBe(`${REPLY_PREFIX}bot: ${'y'.repeat(MAX_LINE_CHARS)}…`);
+    });
+
+    it('one noisy thread keeps its start and its latest replies, and does not crowd out the rest', () => {
+        const rows: TranscriptRow[] = [{ id: 'A', username: 'agent', content: 'Collab session: refactor storage' }];
+        for (let i = 0; i < 2000; i++) {
+            rows.push({ id: `A${String(i).padStart(4, '0')}`, threadId: 'A', username: i % 2 ? 'codex' : 'claude', content: `turn ${i} ${'z'.repeat(200)}` });
+        }
+        for (let t = 0; t < 5; t++) {
+            rows.push({ id: `T${t}`, username: 'ana', content: `topic ${t}` });
+            for (let r = 0; r < 3; r++) rows.push({ id: `T${t}R${r}`, threadId: `T${t}`, username: 'ben', content: `topic ${t} reply ${r}` });
+        }
+        const t = formatTranscript(rows);
+        expect(t.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+        expect(t.startsWith('agent: Collab session: refactor storage\n')).toBe(true);
+        expect(t).toContain(`claude: turn 0 `);            // the thread's start
+        expect(t).toContain(`codex: turn 1999 `);          // and its most recent reply
+        expect(t).toMatch(/\[thread\] … \d+ replies skipped …/);
+        for (let n = 0; n < 5; n++) {                      // every quiet thread is whole
+            for (let r = 0; r < 3; r++) expect(t).toContain(`${REPLY_PREFIX}ben: topic ${n} reply ${r}`);
+        }
+        // The noisy thread still used most of the room the quiet ones left
+        expect(t.length).toBeGreaterThan(MAX_TRANSCRIPT_CHARS * 0.9);
+    });
+
+    it('drops the oldest top-level messages before any kept thread falls below its floor', () => {
+        const rows: TranscriptRow[] = [];
+        for (let t = 0; t < 60; t++) {
+            rows.push({ id: `P${String(t).padStart(2, '0')}`, username: 'ana', content: `topic ${t}` });
+            for (let r = 0; r < 40; r++) {
+                rows.push({ id: `P${String(t).padStart(2, '0')}R${String(r).padStart(2, '0')}`, threadId: `P${String(t).padStart(2, '0')}`, username: 'ben', content: `t${t} r${r} ${'q'.repeat(100)}` });
+            }
+        }
+        const t = formatTranscript(rows);
+        expect(t.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+        expect(t).toContain('ana: topic 59');
+        expect(t).not.toContain('ana: topic 0\n');
+        // Each kept thread has at least the floor's worth of replies
+        const blocks = t.split(/\n(?=ana: )/);
+        for (const block of blocks) {
+            const replies = block.split('\n').slice(1).join('\n');
+            expect(replies.length).toBeGreaterThanOrEqual(THREAD_FLOOR_CHARS - 200);
+        }
+    });
+});
+
+describe('formatTranscript with long agent turns', () => {
+    // Cold review: replies longer than a third of the share used to lose the thread's start
+    it('every trimmed thread keeps its first reply, even when replies are long', () => {
+        const rows: TranscriptRow[] = [];
+        for (let t = 0; t < 40; t++) {
+            const p = `P${String(t).padStart(2, '0')}`;
+            rows.push({ id: p, username: 'ana', content: `topic ${t}` });
+            for (let r = 0; r < 30; r++) {
+                rows.push({ id: `${p}R${String(r).padStart(2, '0')}`, threadId: p, username: 'claude', content: `t${t} r${r} ${'w'.repeat(900)}` });
+            }
+        }
+        const t = formatTranscript(rows);
+        expect(t.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+        const kept = [...t.matchAll(/^ana: topic (\d+)$/gm)].map(m => Number(m[1]));
+        expect(kept.length).toBeGreaterThan(10);
+        for (const n of kept) {
+            expect(t).toContain(`${REPLY_PREFIX}claude: t${n} r0 `);   // the start
+            expect(t).toContain(`${REPLY_PREFIX}claude: t${n} r29 `);  // the latest reply
+        }
+    });
+
+    it('an old parent with a busy thread outlasts newer quiet messages', () => {
+        const rows: TranscriptRow[] = [{ id: 'A', username: 'agent', content: 'Old collab session' }];
+        for (let i = 0; i < 400; i++) rows.push({ id: `B${String(i).padStart(3, '0')}`, username: 'u', content: `chatter ${i} ${'c'.repeat(150)}` });
+        // Its replies came after all the chatter
+        for (let r = 0; r < 5; r++) rows.push({ id: `C${r}`, threadId: 'A', username: 'codex', content: `today ${r}` });
+        const t = formatTranscript(rows);
+        expect(t.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+        expect(t.startsWith('agent: Old collab session\n')).toBe(true);
+        expect(t).toContain(`${REPLY_PREFIX}codex: today 4`);
+        expect(t).not.toContain('chatter 0 ');
+        expect(t).toContain('chatter 399 ');
+    });
+});
+
+describe('fairShare', () => {
+    it('lets small threads keep everything and splits the rest among the busy ones', () => {
+        expect(fairShare([100, 200, 5000], 1000)).toBe(700);
+        expect(fairShare([100, 5000, 5000], 1000)).toBe(450);
+        expect(fairShare([100, 200], 1000)).toBe(Infinity);
+        expect(fairShare([0, 0], 10)).toBe(Infinity);
     });
 });
 
