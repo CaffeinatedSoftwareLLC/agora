@@ -12,6 +12,7 @@
 // permission config it was given and the answers it got in <state dir>/.fake-last-call.json,
 // so isolation tests can check what the CLI saw. The state dir is the parent of XDG_CONFIG_HOME
 // (agora-host points opencode's XDG directories into the profile's state directory).
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -84,7 +85,7 @@ createInterface({ input: process.stdin }).on('line', line => {
             return reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [{ id: 'opencode-login', name: 'Login', type: 'terminal' }],
                 agentInfo: { name: 'OpenCode', version: VERSION } });
         case 'session/new': case 'session/load': {
-            const sessionId = method === 'session/new' ? `ses${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}` : params?.sessionId;
+            const sessionId = method === 'session/new' ? `ses${randomUUID().replace(/-/g, "").slice(0, 16)}` : params?.sessionId;
             const env = Object.fromEntries((params?.mcpServers?.[0]?.env ?? []).map(e => [e.name, e.value]));
             sessions.set(sessionId, { env });
             return reply(id, method === 'session/new' ? { sessionId, configOptions } : { configOptions });
