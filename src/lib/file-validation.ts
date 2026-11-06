@@ -1,4 +1,5 @@
 import path from 'path';
+import { openCompoundFile } from './cfb';
 
 /**
  * Text formats have no magic bytes: a file with one of these extensions is stored under
@@ -49,6 +50,125 @@ export const OOXML_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 
 export const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
+export const AVIF_MIME = 'image/avif';
+
+/**
+ * Opens a compound file once and reads the first bytes of the named streams under its root
+ * (null for one that is missing or not a stream). Null when the file is not a readable compound file.
+ */
+function cfbStreams<K extends string>(buf: Buffer, wanted: Record<K, number>): Record<K, Buffer | null> | null {
+    const cfb = openCompoundFile(buf);
+    if (!cfb) return null;
+    const out = {} as Record<K, Buffer | null>;
+    for (const name of Object.keys(wanted) as K[]) {
+        const entry = cfb.root.get(name.toUpperCase());
+        out[name] = entry && entry.type === 2 ? cfb.head(entry, wanted[name]) : null;
+    }
+    return out;
+}
+
+/** An Excel 5-2003 workbook: a Workbook (BIFF8) or Book (BIFF5) stream that opens with a BOF record. */
+function isXls(buf: Buffer): boolean {
+    const s = cfbStreams(buf, { Workbook: 4, Book: 4 });
+    const head = s?.Workbook ?? s?.Book;
+    return !!head && head.length === 4 && head.readUInt16LE(0) === 0x0809;
+}
+
+/** A Word 6-2003 document: a WordDocument stream that opens with the FIB's wIdent. */
+function isDoc(buf: Buffer): boolean {
+    const head = cfbStreams(buf, { WordDocument: 2 })?.WordDocument;
+    return !!head && head.length === 2 && [0xa5ec, 0xa5dc].includes(head.readUInt16LE(0));
+}
+
+/** A PowerPoint 97-2003 deck: a Current User stream holding a CurrentUserAtom, and a PowerPoint Document stream with at least one record header. */
+function isPpt(buf: Buffer): boolean {
+    const s = cfbStreams(buf, { 'Current User': 4, 'PowerPoint Document': 8 });
+    const user = s?.['Current User'];
+    return !!user && user.length === 4 && user.readUInt16LE(2) === 0x0ff6 && s?.['PowerPoint Document']?.length === 8;
+}
+
+/** A Microsoft Project plan: its CompObj stream names the format, MSProject.MPP8 to MSProject.MPP14 (MPXJ reads it the same way). */
+function isMpp(buf: Buffer): boolean {
+    const compObj = cfbStreams(buf, { '\u0001CompObj': 4096 })?.['\u0001CompObj'];
+    return !!compObj && /MSProject\.MPP\d+\0/.test(compObj.toString('latin1'));
+}
+
+/** An Access 2007+ database: "Standard ACE DB" in its first page, and a format version from 2 (Access 2007) up. */
+function isAccdb(buf: Buffer): boolean {
+    if (buf.length < 4096 || buf.readUInt32LE(0) !== 0x100) return false;
+    const version = buf.readUInt32LE(0x14);
+    return buf.toString('latin1', 4, 20) === 'Standard ACE DB\0' && version >= 2 && version <= 0xff;
+}
+
+/**
+ * A JMP data table: ff ff 00 00, then format version words (JMPReader.jl reads 7 and 4 from
+ * current JMP). Any small version is taken, so an older or newer JMP table still uploads.
+ */
+function isJmp(buf: Buffer): boolean {
+    if (buf.length < 64 || buf.readUInt32LE(0) !== 0x0000ffff) return false;
+    const major = buf.readUInt32LE(4), minor = buf.readUInt32LE(8);
+    return major >= 1 && major <= 0xff && minor >= 1 && minor <= 0xff;
+}
+
+/**
+ * An AVIF image: an ISO-BMFF file whose leading ftyp box lists the avif (still) or avis
+ * (sequence) brand, as major or compatible brand. A HEIC photo lists heic/mif1 and fails.
+ * storeFile also has sharp read it (prepareAvif), which refuses a non-AV1 HEIF.
+ */
+function isAvif(buf: Buffer): boolean {
+    if (buf.length < 16 || buf.toString('latin1', 4, 8) !== 'ftyp') return false;
+    const size = buf.readUInt32BE(0);
+    if (size < 16 || size > 4096 || size > buf.length || size % 4 !== 0) return false;
+    const brands = [buf.toString('latin1', 8, 12)];
+    for (let p = 16; p + 4 <= size; p += 4) brands.push(buf.toString('latin1', p, p + 4));
+    return brands.includes('avif') || brands.includes('avis');
+}
+
+/** How far into a .drawio file its root element may start (after the BOM, declaration and comments). */
+const DRAWIO_PROLOG_CHARS = 64 * 1024;
+
+/**
+ * A draw.io diagram: UTF-8 text with no NUL bytes, whose root element is <mxfile> or
+ * <mxGraphModel>, after an optional BOM, XML declaration and comments within the first 64 KB.
+ * A compressed diagram is still this XML; its <diagram> holds base64 deflated text.
+ */
+function isDrawio(buf: Buffer): boolean {
+    if (buf.includes(0x00)) return false;
+    let text: string;
+    try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(buf); // drops a leading BOM
+    } catch {
+        return false; // not UTF-8 text
+    }
+    const head = text.slice(0, DRAWIO_PROLOG_CHARS);
+    let i = 0;
+    for (;;) {
+        while (i < head.length && /\s/.test(head[i])) i++;
+        const close = head.startsWith('<?xml', i) ? '?>' : head.startsWith('<!--', i) ? '-->' : null;
+        if (!close) break;
+        const end = head.indexOf(close, i + 4);
+        if (end < 0) return false;
+        i = end + close.length;
+    }
+    return /^<(mxfile|mxGraphModel)[\s/>]/.test(head.slice(i, i + 14));
+}
+
+/**
+ * Formats that file-type cannot name, or names only as their container: each extension's
+ * own content check, and the type its files are stored under. A file with one of these
+ * extensions is stored only when its content passes the check; the extension alone is never enough.
+ */
+export const SIGNATURE_FORMATS: Readonly<Record<string, { mime: string; matches: (buf: Buffer) => boolean }>> = {
+    xls: { mime: 'application/vnd.ms-excel', matches: isXls },
+    doc: { mime: 'application/msword', matches: isDoc },
+    ppt: { mime: 'application/vnd.ms-powerpoint', matches: isPpt },
+    mpp: { mime: 'application/vnd.ms-project', matches: isMpp },
+    accdb: { mime: 'application/x-msaccess', matches: isAccdb },
+    jmp: { mime: 'application/x-jmp', matches: isJmp },
+    avif: { mime: AVIF_MIME, matches: isAvif },
+    drawio: { mime: 'application/xml', matches: isDrawio },
+};
+
 export const INLINE_SAFE_MIMES = new Set([
     'image/jpeg', 'image/png', 'image/gif', 'image/webp',
     'audio/mpeg', 'audio/ogg', 'audio/wav',
@@ -97,7 +217,17 @@ export async function validateFileType(
     const { fileTypeFromBuffer } = await import('file-type');
 
     let detected = await fileTypeFromBuffer(buffer.subarray(0, 4100));
-    const ooxmlMime = OOXML_MIME_BY_EXTENSION[declaredExtension];
+
+    // Formats with their own content check: it alone decides, whatever file-type made of the bytes
+    const signature = Object.hasOwn(SIGNATURE_FORMATS, declaredExtension) ? SIGNATURE_FORMATS[declaredExtension] : undefined;
+    if (signature) {
+        if (!signature.matches(buffer)) {
+            throw new FileValidationError(415, 'File content does not match its extension', { detected: detected?.mime ?? null, expected: signature.mime });
+        }
+        return { mime: signature.mime, ext: declaredExtension };
+    }
+
+    const ooxmlMime = Object.hasOwn(OOXML_MIME_BY_EXTENSION, declaredExtension) ? OOXML_MIME_BY_EXTENSION[declaredExtension] : undefined;
     // An Office file is a zip. file-type names the format only when [Content_Types].xml is
     // near the start; Google Docs exports put it last. Then the zip's own directory decides.
     if (ooxmlMime && detected?.mime === 'application/zip') {
@@ -105,7 +235,7 @@ export async function validateFileType(
         if (kind) detected = { mime: OOXML_MIME_BY_EXTENSION[kind], ext: kind } as typeof detected;
     }
 
-    const textMime = TEXT_MIME_BY_EXTENSION[declaredExtension];
+    const textMime = Object.hasOwn(TEXT_MIME_BY_EXTENSION, declaredExtension) ? TEXT_MIME_BY_EXTENSION[declaredExtension] : undefined;
     // Plain text formats have no magic bytes. The one text signature file-type knows is an
     // XML declaration, which an .xml, .html or .txt file may well start with.
     if (textMime && (!detected || detected.mime === 'application/xml')) {

@@ -4,8 +4,28 @@
 
 APT_PREREQS='ca-certificates curl gnupg'
 
+# A fresh Ubuntu (a new WSL distro especially) runs apt's daily update or unattended-upgrades
+# on first boot; wait for it instead of failing on the dpkg lock
+APT_WAIT_SECONDS=${APT_WAIT_SECONDS:-600}
+apt_busy() { pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null 2>&1; }
+wait_for_apt() {
+    local waited=0
+    apt_busy || return 0
+    info "waiting for another apt or dpkg process (often the first-boot update) to finish"
+    while apt_busy; do
+        [ "$waited" -ge "$APT_WAIT_SECONDS" ] && die "another apt or dpkg process is still running after ${APT_WAIT_SECONDS}s. Wait for it to finish (ps -C apt-get,dpkg,unattended-upgr) and run the installer again."
+        sleep 5; waited=$((waited + 5))
+    done
+}
+
+apt_update() {
+    wait_for_apt
+    as_root apt-get -o DPkg::Lock::Timeout="$APT_WAIT_SECONDS" update -qq
+}
+
 apt_install() {
-    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+    wait_for_apt
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout="$APT_WAIT_SECONDS" install -y --no-install-recommends "$@"
 }
 
 ensure_prereqs() {
@@ -14,7 +34,7 @@ ensure_prereqs() {
     [ -e /etc/ssl/certs/ca-certificates.crt ] || missing+=(ca-certificates)
     [ "${#missing[@]}" -eq 0 ] && return 0
     info "installing $APT_PREREQS"
-    as_root apt-get update -qq
+    apt_update
     # shellcheck disable=SC2086
     apt_install $APT_PREREQS
 }
@@ -42,7 +62,7 @@ install_docker_engine() {
     as_root chmod a+r /etc/apt/keyrings/docker.asc
     printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$arch" "$id" "$codename" \
         | as_root tee /etc/apt/sources.list.d/docker.list > /dev/null
-    as_root apt-get update -qq
+    apt_update
     apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     if [ -d /run/systemd/system ]; then as_root systemctl enable --now docker >/dev/null
     else as_root service docker start >/dev/null; fi
@@ -70,7 +90,7 @@ install_gvisor() {
         curl -fsSL https://gvisor.dev/archive.key | as_root gpg --batch --yes --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
         printf 'deb [arch=%s signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main\n' "$arch" \
             | as_root tee /etc/apt/sources.list.d/gvisor.list > /dev/null
-        as_root apt-get update -qq
+        apt_update
         apt_install runsc
     fi
     if ! runsc_registered; then

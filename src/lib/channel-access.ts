@@ -95,12 +95,14 @@ export async function canViewChannel(db: any, channelId: string, userId: string,
 }
 
 /**
- * The channel bits an upload needs (POST /files/upload). People need UploadFiles and
- * SendMessages. A bot's gate is its explicit channel access, as for posting (see
+ * The channel bits an upload needs (POST /files/upload). People need ViewChannel,
+ * UploadFiles and SendMessages: nobody uploads into a channel they can't see. A bot's gate is its explicit channel access, as for posting (see
  * canPostInChannel), plus UploadFiles; SendMessages and ViewChannel don't apply to it.
  */
 export function uploadPermissions(isBot: boolean): bigint {
-    return isBot ? Permissions.UploadFiles : Permissions.UploadFiles | Permissions.SendMessages;
+    return isBot
+        ? Permissions.UploadFiles
+        : Permissions.ViewChannel | Permissions.UploadFiles | Permissions.SendMessages;
 }
 
 /**

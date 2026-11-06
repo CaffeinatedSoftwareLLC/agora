@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { readUploadPart } from '../../src/lib/file-store';
+import { readUploadPart, readLimitFor, MAX_FILE_SIZE_SETTING } from '../../src/lib/file-store';
 
 // @fastify/multipart's toBuffer() can return a file cut to exactly the size limit without
 // throwing (it checks `truncated` only between chunks). readUploadPart must refuse those.
@@ -26,5 +26,19 @@ describe('readUploadPart', () => {
     test('errors from toBuffer still propagate (e.g. RequestFileTooLargeError)', async () => {
         const failing = { toBuffer: async () => { throw new Error('too large'); }, file: { truncated: true } };
         await expect(readUploadPart(failing)).rejects.toThrow('too large');
+    });
+});
+
+// #206: a 4 MB upload got 201 under a 3 MB setting. Multipart read exactly 3 MB and the size
+// check (`length > setting`) let it through. Reading one byte past the setting means a file cut
+// off at the read limit is always over the setting, whether or not `truncated` is seen.
+describe('readLimitFor', () => {
+    test('one byte past the setting', () => {
+        expect(readLimitFor(3 * 1024 * 1024)).toBe(3 * 1024 * 1024 + 1);
+        expect(readLimitFor(1024)).toBe(1025);
+    });
+
+    test('no usable setting: one byte past the largest value the settings API accepts', () => {
+        for (const bad of [NaN, 0, -5, 1.5, Number.MAX_SAFE_INTEGER + 2]) expect(readLimitFor(bad)).toBe(MAX_FILE_SIZE_SETTING + 1);
     });
 });

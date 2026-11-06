@@ -105,7 +105,7 @@ export async function fileRoutes(app: FastifyInstance) {
             return reply.status(400).send({ error: 'channel_id is required' });
         }
 
-        // People need UploadFiles + SendMessages; a bot needs its channel access + UploadFiles
+        // People need ViewChannel + UploadFiles + SendMessages; a bot needs its channel access + UploadFiles
         const permCheck = await checkFilePermissions(db, channelId, userId, uploadPermissions(!!request.isBot), { isBot: request.isBot });
         if (!permCheck.allowed) {
             return reply.status(permCheck.status!).send({ error: permCheck.error });

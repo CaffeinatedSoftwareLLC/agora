@@ -3,7 +3,7 @@ import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
 import { boxApi, type Box, type BoxAction, type BoxPatch } from './api';
 import {
-  ADAPTER_LABEL, INPUT, LIMITS, LOGIN_LABEL, TOUCH, boxError, daysLeft, domainProblem, normalizeDomain, parseRepos,
+  ADAPTER_LABEL, INPUT, LIMITS, LOGIN_LABEL, TOUCH, boxError, daysLeft, domainProblem, loginHint, normalizeDomain, parseRepos,
   resourceProblem, stateChip,
 } from './boxRules';
 import { LoginDialog } from './LoginDialog';
@@ -21,6 +21,7 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState<'login' | 'reset' | null>(null);
   const chip = stateChip(box);
+  const hint = loginHint(box);
   const deleted = !!box.deletedAt || box.desiredState === 'deleted';
   const home = channels.find(c => c.id === box.homeChannelId);
 
@@ -58,11 +59,17 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
         <span className="text-xs text-text-muted">{ADAPTER_LABEL[box.adapter] ?? box.adapter}</span>
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none ${chip.tone}`} data-testid="box-state">{chip.label}</span>
         <span className="text-xs text-text-muted">{box.imageVersion != null ? `image v${box.imageVersion}` : 'no image yet'}</span>
-        <span className="text-xs text-text-muted">
-          · {box.auth === 'api_key' ? 'API key' : LOGIN_LABEL[box.loginState] ?? box.loginState}
-        </span>
+        {/* The chip already says the login state when that is what's wrong */}
+        {!chip.login && (
+          <span className="text-xs text-text-muted">
+            · {box.auth === 'api_key' ? 'API key' : LOGIN_LABEL[box.loginState] ?? box.loginState}
+          </span>
+        )}
         {home && <span className="text-xs text-text-muted">· #{home.name}</span>}
       </div>
+      {hint && !deleted && (
+        <p className={`mt-1 break-words text-xs ${box.loginState === 'failed' ? 'text-danger' : 'text-warn'}`} data-testid="box-login-hint">{hint}</p>
+      )}
       {box.lastError && !deleted && (
         <p className="mt-1 break-words text-xs text-danger" data-testid="box-error">Last error: {box.lastError}</p>
       )}

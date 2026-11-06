@@ -84,6 +84,15 @@ describe('yeet flags', () => {
         expect(launch.args).not.toContain('--dangerously-skip-permissions');
         expect(launch.sandbox).toBeUndefined();
         expect(launch.args.at(-1)).toBe('-');
+        // Its metrics, feedback reports and update check are off (ab.chatgpt.com, Sentry)
+        for (const key of ['analytics.enabled=false', 'feedback.enabled=false', 'check_for_update_on_startup=false']) {
+            expect(launch.args[launch.args.indexOf(key) - 1]).toBe('-c');
+        }
+    });
+    it('Codex on a machine keeps its own settings for metrics and updates', async () => {
+        const { c, delivery } = await setup('codex');
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(launch.args).not.toContain('analytics.enabled=false');
     });
     it('Claude in a box: no permission prompts, every tool but WebSearch, no allow list', async () => {
         enterBox();
@@ -112,6 +121,15 @@ describe('child environment in a box', () => {
         boxMode.marker = join(marker, '..', 'missing');
         expect(childEnv(c.profiles.builder, source).HTTPS_PROXY).toBeUndefined();
         expect(proxyVars({ HTTPS_PROXY: 'http://edge:3128\nX: y' })).toEqual({});
+    });
+    it('turns Claude Code non-essential traffic off in a box, so no telemetry host needs a card', async () => {
+        const { c } = await setup('claude');
+        const source = { PATH: '/usr/bin', HOME: '/home/agent', ...proxies, AGORA_HOST_IN_BOX: '1' };
+        boxMode.marker = marker;
+        expect(childEnv(c.profiles.builder, source)).toMatchObject({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1',
+            CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1' });
+        boxMode.marker = join(marker, '..', 'missing');
+        expect(childEnv(c.profiles.builder, source).CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
     });
     it('never gives the CLI the host token; the bot token only as agora-host passes it for agora-mcp', async () => {
         enterBox();

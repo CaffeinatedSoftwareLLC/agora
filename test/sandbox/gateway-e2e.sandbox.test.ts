@@ -9,6 +9,8 @@ import { processRun, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits } from '../../src/runtime/limits';
 import { buildCapGateway } from '../../src/gateway/cap-gateway';
 import { startForwarder, FORWARDER } from './gateway-harness';
+// The install whose socket proxy the suite runs against: run containers are named after it (#126)
+import { INSTANCE } from './host-docker';
 
 /**
  * WBS 3.4 end to end: agent code in a real sandbox → cap-gateway (real service) →
@@ -16,7 +18,7 @@ import { startForwarder, FORWARDER } from './gateway-harness';
  */
 
 const IMAGE = process.env.AGORA_SANDBOX_IMAGE ?? 'agora/sandbox-deno:dev';
-const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? 'agora_sandbox';
+const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? `${INSTANCE}_sandbox`;
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let gw: Awaited<ReturnType<typeof buildCapGateway>>;
@@ -63,7 +65,7 @@ beforeAll(async () => {
 
     const sandbox = new SandboxDocker(dockerFromEnv(process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375'));
     const { runtime } = await sandbox.preflight({ image: IMAGE, network: NETWORK, requireGvisor: false });
-    deps = { db: ctx.db, sandbox, config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER } };
+    deps = { db: ctx.db, sandbox, config: { image: IMAGE, network: NETWORK, runtime, instance: INSTANCE, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER } };
 });
 
 afterAll(async () => {

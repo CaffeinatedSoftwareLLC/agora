@@ -48,6 +48,24 @@ describe('box list', () => {
     expect(screen.getByTestId('github-credential')).toHaveTextContent('@octocat');
   });
 
+  it('says a running box cannot log in, and which domain to allow, instead of "running"', async () => {
+    boxes = [
+      box({ id: 'A'.repeat(26), name: 'blocked', loginState: 'failed', loginError: 'needs_domain', loginBlockedHosts: ['platform.claude.com'] }),
+      box({ id: 'C'.repeat(26), name: 'badcode', loginState: 'failed', loginError: 'login_failed' }),
+      box({ id: 'D'.repeat(26), name: 'fresh', loginState: 'none' }),
+      box({ id: 'E'.repeat(26), name: 'waiting', loginState: 'pending', loginBlockedHosts: ['auth.openai.com'] }),
+    ];
+    renderSection();
+    const blocked = await screen.findByTestId('box-blocked');
+    expect(within(blocked).getByTestId('box-state')).toHaveTextContent('login failed');
+    expect(within(blocked).getByTestId('box-state')).not.toHaveTextContent('running');
+    expect(within(blocked).getByTestId('box-login-hint')).toHaveTextContent("Login failed: allow platform.claude.com on the box's card, then log in again.");
+    expect(within(screen.getByTestId('box-badcode')).getByTestId('box-login-hint')).toHaveTextContent('Login failed (login_failed): log in again.');
+    expect(within(screen.getByTestId('box-fresh')).getByTestId('box-state')).toHaveTextContent('not logged in');
+    expect(within(screen.getByTestId('box-fresh')).queryByTestId('box-login-hint')).toBeNull();
+    expect(within(screen.getByTestId('box-waiting')).getByTestId('box-login-hint')).toHaveTextContent('The login is waiting: allow auth.openai.com');
+  });
+
   it('shows a failed box with its last error, and pending actions', async () => {
     boxes = [
       box({ id: 'F'.repeat(26), name: 'broken', state: 'failed', lastError: 'five failed starts in ten minutes', loginState: 'none' }),

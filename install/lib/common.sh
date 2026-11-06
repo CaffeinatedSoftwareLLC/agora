@@ -144,8 +144,14 @@ box_version() { tr -dc '0-9' < "$1/box/VERSION" 2>/dev/null || printf '1'; }
 
 hex64() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
 
-# A password for the first admin: 20 characters from [A-Za-z0-9]
-gen_password() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20; }
+# A password for the first admin: 20 characters from [A-Za-z0-9]. A bounded read: with
+# `tr < /dev/urandom | head -c 20`, head closes the pipe while tr still writes, tr dies of
+# SIGPIPE and, under pipefail, the whole install stopped at admin.password with exit 141.
+gen_password() {
+    local chars
+    chars=$(head -c 256 /dev/urandom | base64 | LC_ALL=C tr -dc 'A-Za-z0-9')
+    printf '%s' "${chars:0:20}"
+}
 
 port_free() {
     if have ss; then

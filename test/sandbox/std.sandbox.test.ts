@@ -5,11 +5,13 @@ import { dockerFromEnv, SandboxDocker } from '../../src/runtime/docker';
 import { processRun, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits } from '../../src/runtime/limits';
 import { startGatewayHarness, FORWARDER, type RecordedRequest } from './gateway-harness';
+// The install whose socket proxy the suite runs against: run containers are named after it (#126)
+import { INSTANCE } from './host-docker';
 
 /** WBS 3.3: agora:std inside a real sandbox, talking to a fake gateway. */
 
 const IMAGE = process.env.AGORA_SANDBOX_IMAGE ?? 'agora/sandbox-deno:dev';
-const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? 'agora_sandbox';
+const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? `${INSTANCE}_sandbox`;
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let serverId: string;
@@ -47,7 +49,7 @@ beforeAll(async () => {
     deps = {
         db: ctx.db,
         sandbox,
-        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER },
+        config: { image: IMAGE, network: NETWORK, runtime, instance: INSTANCE, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER },
     };
     gateway = await startGatewayHarness(NETWORK, respond);
 });
