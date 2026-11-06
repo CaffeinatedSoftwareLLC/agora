@@ -503,7 +503,8 @@ tool call it is for, so the host answers it only when exactly one call of that t
 waiting (and answers each call once), and reads the paths from that call (an edit's from
 omp's own `File:` lines), together with the absolute locations omp resolved itself. A path
 omp would rewrite or split before resolving it (a leading `@`, `:`, `~` or `!`, quotes, `;`,
-`,` or whitespace, a `..` segment, `file:` or another scheme, and on Windows `/c/...` and
+`,` or whitespace, a `..` segment, `file:` or another scheme, a drive path (`C:...`) or any
+backslash on every platform, `{` or `}` in a search root or glob, and on Windows `/c/...` and
 `/mnt/c/...`) is refused rather than followed. So is a prompt with a reason line (omp's
 restricted folders: its own settings, home and the run's overlay), parallel calls, or
 anything else it can't check. A refusal only costs the agent a retry. It never picks "for

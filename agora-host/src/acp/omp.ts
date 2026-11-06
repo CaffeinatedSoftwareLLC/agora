@@ -147,6 +147,10 @@ const NOT_A_FILE = /^(?:[A-Za-z][A-Za-z0-9+.-]+:|[A-Za-z]:(?![\\/]))/;
  * part. Any of them, or a `..` segment anywhere, and the host doesn't try to follow it.
  */
 const REWRITTEN = /^[@:~!]|[\s;,"'`]|(?:^|[\\/])\.\.(?:[\\/]|$)/;
+/** A Windows drive path or any backslash: refused on every platform (plainPath). */
+const WINDOWS_PATH = /^[A-Za-z]:|\\/;
+/** Brace expansion in a search root or glob pattern (`{..}`, `{../..}`) gets past the `..` check. */
+const BRACES = /[{}]/;
 /** On Windows omp maps `/c/...` and `/mnt/c/...` to `C:\...`. */
 const DRIVE_ALIAS = /^[\\/](?:mnt[\\/])?[A-Za-z](?:[\\/]|$)/;
 /** `[path#ABCD]`, omp's hashline header around a write or edit target. */
@@ -167,6 +171,9 @@ export function plainPath(value: unknown, platform = process.platform): string |
     if (header) p = header[1];
     // `…` is omp's mark for a path it shortened in a prompt
     if (!p || NOT_A_FILE.test(p) || REWRITTEN.test(p) || p.includes('…')) return null;
+    // A drive path or a backslash on every platform: on WSL omp maps C:\... to /mnt/c/..., and an
+    // edit's File: lines are the payload's own paths, with no resolved location beside them
+    if (WINDOWS_PATH.test(p)) return null;
     if (platform === 'win32' && DRIVE_ALIAS.test(p)) return null;
     return p;
 }
@@ -229,7 +236,9 @@ function judgeApproval(message: string, pending: OmpCall[]): OmpVerdict {
             if (input.path !== undefined) roots.push(input.path);
             if (Array.isArray(input.paths)) roots.push(...input.paths);
             const pattern = typeof input.pattern === 'string' ? input.pattern : '';
-            if ((tool === 'glob' || tool === 'find') && (isAbsolute(pattern) || REWRITTEN.test(pattern) || NOT_A_FILE.test(pattern))) return { deny: `Denied ${tool}: a pattern the host can't check` };
+            if ((tool === 'glob' || tool === 'find') && (isAbsolute(pattern) || REWRITTEN.test(pattern) || NOT_A_FILE.test(pattern) || WINDOWS_PATH.test(pattern) || BRACES.test(pattern)))
+                return { deny: `Denied ${tool}: a pattern the host can't check` };
+            if (roots.some(r => typeof r === 'string' && BRACES.test(r))) return { deny: `Denied ${tool}: a path the host can't check` };
             const paths = roots.map(r => plainPath(r));
             if (paths.some(p => p === null)) return { deny: `Denied ${tool}: a path the host can't check` };
             return { call: { kind: 'search', name: 'Grep', locations: [...(paths.length ? paths as string[] : ['.']), ...own] } };

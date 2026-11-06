@@ -95,12 +95,15 @@ describe('omp profiles', () => {
         const source = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, OPENROUTER_API_KEY_OMP: 'sk-or-omp', OPENROUTER_API_KEY: 'sk-or-other',
             ANTHROPIC_API_KEY: 'sk-ant', ANTHROPIC_OAUTH_TOKEN: 'oat', CLAUDE_CODE_OAUTH_TOKEN: 'cc', OPENAI_API_KEY: 'sk-oa', OPENAI_CODEX_OAUTH_TOKEN: 'cx',
             COPILOT_GITHUB_TOKEN: 'gh', CURSOR_ACCESS_TOKEN: 'cu', DEVIN_API_KEY: 'dv', WINDSURF_API_KEY: 'ws', AGORA_HOST_TOKEN: HOST_TOKEN, OMP_PROFILE: 'evil',
-            PI_CONFIG_DIR: '.evil', OMP_AUTH_BROKER_URL: 'https://broker.example' };
+            PI_CONFIG_DIR: '.evil', OMP_AUTH_BROKER_URL: 'https://broker.example',
+            // omp maps C:\... paths to /mnt/c/... when it sees these (WSL)
+            WSL_DISTRO_NAME: 'Ubuntu', WSL_INTEROP: '/run/WSL/1_interop' };
         const env = childEnv(p, source);
         // Only this agent's own OpenRouter key, under the one name omp reads
         expect(env.OPENROUTER_API_KEY).toBe('sk-or-omp');
         for (const name of ['OPENROUTER_API_KEY_OMP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'OPENAI_CODEX_OAUTH_TOKEN',
-            'COPILOT_GITHUB_TOKEN', 'CURSOR_ACCESS_TOKEN', 'DEVIN_API_KEY', 'WINDSURF_API_KEY', 'AGORA_HOST_TOKEN', 'OMP_PROFILE', 'PI_CONFIG_DIR', 'OMP_AUTH_BROKER_URL'])
+            'COPILOT_GITHUB_TOKEN', 'CURSOR_ACCESS_TOKEN', 'DEVIN_API_KEY', 'WINDSURF_API_KEY', 'AGORA_HOST_TOKEN', 'OMP_PROFILE', 'PI_CONFIG_DIR', 'OMP_AUTH_BROKER_URL',
+            'WSL_DISTRO_NAME', 'WSL_INTEROP'])
             expect(env[name], name).toBeUndefined();
         // Its own agent folder and home in the state directory: never ~/.omp, ~/.env or a login saved there
         expect(env).toMatchObject({ PI_CODING_AGENT_DIR: join(p.stateDir, 'agent'), HOME: join(p.stateDir, 'home'), USERPROFILE: join(p.stateDir, 'home'),
@@ -270,8 +273,15 @@ describe('omp approval prompts on a machine', () => {
             { calls: [{ name: 'read', title: 'read: a.txt;/etc/passwd', kind: 'read', rawInput: { path: 'a.txt;/etc/passwd' } }], elicit: { message: 'Allow tool: read' } },
             { calls: [{ name: 'grep', title: 'grep: x', kind: 'search', rawInput: { pattern: 'x', path: 'src /etc' } }], elicit: { message: 'Allow tool: grep' } },
             { calls: [{ name: 'glob', title: 'glob: @/etc/*', kind: 'search', rawInput: { pattern: '@/etc/*' } }], elicit: { message: 'Allow tool: glob' } },
+            // Brace expansion gets past a `..` check: refused in patterns and roots
+            { calls: [{ name: 'glob', title: 'glob: {..}/*', kind: 'search', rawInput: { pattern: '{..}/x/*' } }], elicit: { message: 'Allow tool: glob' } },
+            { calls: [{ name: 'grep', title: 'grep: x', kind: 'search', rawInput: { pattern: 'x', path: '{../..}' } }], elicit: { message: 'Allow tool: grep' } },
+            // A drive path in an edit's File: line (the payload's own path): refused on every platform
+            { calls: [{ name: 'edit', title: 'edit', kind: 'edit', rawInput: { input: '*** Add File: C:\\Users\\u\\profile.ps1' } }], elicit: { message: 'Allow tool: edit\nFile: C:\\Users\\u\\profile.ps1' } },
+            // ...and a plain search inside the worktree is still fine
+            { calls: [{ name: 'glob', title: 'glob: src/*.ts', kind: 'search', rawInput: { pattern: 'src/*.ts' } }], elicit: { message: 'Allow tool: glob' } },
         ], ['Edit', 'Read', 'Grep']);
-        expect(answers).toEqual(['Approve', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny']);
+        expect(answers).toEqual(['Approve', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Approve']);
     });
 
     it('asks for Edit when it has no rule, and never picks a remembered choice', async () => {
@@ -317,6 +327,7 @@ describe('omp approval helpers', () => {
         for (const bad of ['https://x.example', 'xd://lsp/x', 'artifact://1', 'file:///etc/passwd', 'file:a', '~/.ssh/id_rsa', 'C:evil', 'a\nb', '', 42, null, 'x'.repeat(5000),
             // What omp rewrites or splits before it resolves a path (resolveToCwd / expandPath)
             '@/home/u/.bashrc', '@~/.bashrc', '@C:\\Users\\u\\x', ':/etc/passwd', ':~/x', ':./a', ':../a', '"/etc/passwd"', "'a.txt'", '!a',
+            'C:\\Users\\u\\profile.ps1', 'C:/Users/u/x', 'c:x', 'src\\a.ts', '\\\\server\\share\\x',
             '/home/u/.ssh/id_rsa;../wt/a.txt', 'a.txt,/etc/passwd', 'a.txt /etc/passwd', 'a\t/etc/passwd', '../a', 'src/../../a', 'src\\..\\a', '..', '[@/etc/passwd#1A2B]', '[../a]'])
             expect(plainPath(bad), String(bad)).toBeNull();
         // On Windows omp maps /c/... and /mnt/c/... to C:\...
