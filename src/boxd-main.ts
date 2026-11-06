@@ -15,6 +15,7 @@ import { Reconciler } from './boxes/boxd/reconcile';
 import { DbBoxStore } from './boxes/boxd/store';
 import { parsePools } from './boxes/boxd/subnets';
 import { BOX_IMAGE_VERSION } from './boxes/boxd/version';
+import { retryWhileUnavailable } from './lib/startup-retry';
 
 export const PASS_INTERVAL_MS = 15_000;
 export const HEARTBEAT_KEY = 'agora:boxd:heartbeat';
@@ -62,14 +63,16 @@ async function main() {
     const edgeContainer = process.env.AGORA_EDGE_CONTAINER || `${instance}-box-edge-1`;
 
     const docker = new BoxDocker(boxDockerFromEnv());
-    const { runtime, imageVersion } = await preflight(docker, { image, insecureDev });
+    // After a reboot Docker starts boxd beside its socket proxy and Postgres (depends_on doesn't
+    // apply then): wait for them instead of exiting and being restarted
+    const { runtime, imageVersion } = await retryWhileUnavailable('boxd', () => preflight(docker, { image, insecureDev }));
     if (runtime !== 'runsc') {
         console.warn('\n  ⚠️  BOXES RUNNING WITHOUT gVISOR (AGORA_BOX_INSECURE_DEV=1).');
         console.warn('     Boxed agents share the host kernel. Never use this in production.\n');
     }
 
     const db = new Pool({ connectionString: config.dbUrl, max: 4 });
-    const lock = await holdLock(db);
+    const lock = await retryWhileUnavailable('boxd', () => holdLock(db));
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
     const store = new DbBoxStore(db, config.encryptionKey, events => publishEvents(redis, events));
     const reconciler = new Reconciler({

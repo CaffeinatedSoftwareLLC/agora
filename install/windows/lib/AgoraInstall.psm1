@@ -29,6 +29,16 @@ Send one anonymous report when this install finishes? It contains only:
 
 No names, addresses, IPs or IDs are kept. [y/N]
 '@
+# `wsl --status` passes with the Virtual Machine Platform feature off; every distro start then fails
+# with HCS_E_HYPERV_NOT_INSTALLED (seen on a clean Windows 11 VM, 2026-11-05)
+$script:VmpOffHelp = 'Virtual Machine Platform is turned off, so WSL 2 cannot start a distro (WSL reports HCS_E_HYPERV_NOT_INSTALLED). To turn it on, run wsl --install --no-distribution as administrator, restart Windows, then run this installer again.'
+$script:VirtualizationHelp = 'If it still fails after the restart, turn on virtualization (Intel VT-x, or AMD-V/SVM) in the firmware (BIOS/UEFI) settings; in a virtual machine, turn on nested virtualization for it.'
+# The least memory WSL may use for Agora. The Linux installer needs 4 GB free inside WSL, and the
+# distro's kernel, systemd and Docker already hold part of WSL's limit before it checks, so a
+# 4 GB limit always fails and 5 GB barely passes; 6 GB passes with room for the stack's
+# containers and a box. WSL's default is half of the PC's memory: 4 GB on an 8 GB PC (3.2 GB in the
+# 2026-11-05 test VM), too little.
+$script:WslMemoryFloorGB = 6
 
 # --- Thin wrappers (mocked in tests) ---
 
@@ -157,6 +167,49 @@ function Get-KeepAliveTaskName { param([string]$Distro) "WSL $Distro keep-alive 
 
 function Open-Browser { param([string]$Url) Start-Process $Url }
 
+function Get-VmPlatformState {
+    # 'enabled', 'disabled' or 'unknown'. Win32_OptionalFeature answers without administrator
+    # rights (Get-WindowsOptionalFeature needs them, so it is only the fallback when elevated).
+    # InstallState: 1 enabled, 2 disabled, 3 absent, 4 unknown.
+    try {
+        $f = Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name='VirtualMachinePlatform'" -ErrorAction Stop
+        if ($f) {
+            switch ([int]$f.InstallState) { 1 { return 'enabled' } 2 { return 'disabled' } 3 { return 'disabled' } }
+        }
+    } catch { }
+    try {
+        $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($admin) {
+            $f = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction Stop
+            if ("$($f.State)" -eq 'Enabled') { return 'enabled' }
+            if ("$($f.State)" -like 'Disabled*') { return 'disabled' }
+        }
+    } catch { }
+    return 'unknown'
+}
+
+function Get-WslConfigPath { Join-Path $env:USERPROFILE '.wslconfig' }
+
+function Read-WslConfig {
+    # $null when there is no .wslconfig
+    $path = Get-WslConfigPath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    return [string](Get-Content -LiteralPath $path -Raw)
+}
+
+function Save-WslConfig {
+    # Backs up an existing .wslconfig next to it, then writes UTF-8 without a BOM. Returns the backup's path.
+    param([string]$Text)
+    $path = Get-WslConfigPath
+    $backup = $null
+    if (Test-Path -LiteralPath $path) {
+        $backup = "$path.agora-backup-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+        Copy-Item -LiteralPath $path -Destination $backup -Force
+    }
+    [System.IO.File]::WriteAllText($path, $Text, (New-Object System.Text.UTF8Encoding $false))
+    return $backup
+}
+
 # --- Decisions (pure, or only through the wrappers above) ---
 
 function Test-Preflight {
@@ -174,6 +227,121 @@ function Test-WslInstalled {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return $false }
     $r = Invoke-Wsl '--status'
     return ($r.ExitCode -eq 0)
+}
+
+function Test-HyperVMissingError {
+    # WSL's error when Virtual Machine Platform (or virtualization in the firmware) is off
+    param([string]$Text)
+    return ($Text -match 'HCS_E_HYPERV_NOT_INSTALLED|Virtual Machine Platform')
+}
+
+function ConvertFrom-WslMemorySize {
+    # A .wslconfig size ("6GB", "8192MB", "4G", "512 mb", or bytes without a unit) in GB; $null if it isn't one
+    param([string]$Value)
+    $m = [regex]::Match($Value.Trim(), '^(\d+(?:\.\d+)?)\s*([KMGT]?)B?$', 'IgnoreCase')
+    if (-not $m.Success) { return $null }
+    $n = [double]::Parse($m.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    $div = switch ($m.Groups[2].Value.ToUpperInvariant()) { 'K' { 1MB } 'M' { 1KB } 'G' { 1 } 'T' { 1 / 1KB } default { 1GB } }
+    return $n / $div
+}
+
+function Get-WslConfigSection {
+    # The line range of the [wsl2] section: Header is its line index (-1 if none), End the first line after it
+    param([string[]]$Lines)
+    $header = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^\s*\[\s*wsl2\s*\]\s*$') { $header = $i; break }
+    }
+    $end = $Lines.Count
+    if ($header -ge 0) {
+        for ($i = $header + 1; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^\s*\[') { $end = $i; break } }
+    }
+    [pscustomobject]@{ Header = $header; End = $end }
+}
+
+function Get-WslConfigMemory {
+    # The [wsl2] memory= value of a .wslconfig in GB, or $null when it sets none (WSL then uses its default)
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    $lines = @($Text -split "`r?`n")
+    $s = Get-WslConfigSection -Lines $lines
+    if ($s.Header -lt 0) { return $null }
+    $value = $null
+    for ($i = $s.Header + 1; $i -lt $s.End; $i++) {
+        $m = [regex]::Match($lines[$i], '^\s*memory\s*=\s*([^#;]*)', 'IgnoreCase')
+        if ($m.Success) { $value = $m.Groups[1].Value }
+    }
+    if ($null -eq $value) { return $null }
+    return (ConvertFrom-WslMemorySize $value)
+}
+
+function Set-WslConfigMemory {
+    # The .wslconfig text with [wsl2] memory set; every other line kept as it was
+    param([string]$Text, [string]$Memory)
+    $line = "memory=$Memory"
+    if (-not $Text) { return "[wsl2]`r`n$line`r`n" }
+    $lines = [System.Collections.ArrayList]@($Text -split "`r?`n")
+    $s = Get-WslConfigSection -Lines $lines
+    if ($s.Header -lt 0) {
+        while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.RemoveAt($lines.Count - 1) }
+        [void]$lines.Add(''); [void]$lines.Add('[wsl2]'); [void]$lines.Add($line)
+    } else {
+        $found = $false
+        for ($i = $s.Header + 1; $i -lt $s.End; $i++) {
+            if ($lines[$i] -match '^\s*memory\s*=') {
+                if ($found) { $lines.RemoveAt($i); $i--; $s.End-- } else { $lines[$i] = $line; $found = $true }
+            }
+        }
+        if (-not $found) { $lines.Insert($s.Header + 1, $line) }
+    }
+    $out = ($lines -join "`r`n")
+    if (-not $out.EndsWith("`r`n")) { $out += "`r`n" }
+    return $out
+}
+
+function Get-WslMemoryLimit {
+    # How much memory WSL may use: [wsl2] memory= in .wslconfig, else WSL's default of half the PC's
+    param($Info, [string]$ConfigText)
+    $set = Get-WslConfigMemory -Text $ConfigText
+    if ($null -ne $set) { return [pscustomobject]@{ GB = [math]::Round($set, 1); Source = 'wslconfig' } }
+    return [pscustomobject]@{ GB = [math]::Round($Info.MemoryGB / 2, 1); Source = 'default' }
+}
+
+function Invoke-WslMemoryCheck {
+    # Raises WSL's memory limit to the floor only with consent; without a terminal it only advises
+    param([hashtable]$Options, $Info)
+    $text = Read-WslConfig
+    $limit = Get-WslMemoryLimit -Info $Info -ConfigText $text
+    $floor = $script:WslMemoryFloorGB
+    if ($limit.GB -ge $floor) { Write-Ok "WSL may use up to $($limit.GB) GB of memory"; return 'ok' }
+    $path = Get-WslConfigPath
+    $why = if ($limit.Source -eq 'wslconfig') { "set in $path" } else { "WSL's default: half of this PC's $($Info.MemoryGB) GB" }
+    Write-Host "  WSL may use only $($limit.GB) GB of memory ($why). Agora needs at least $floor GB there: the Linux installer wants 4 GB free inside WSL, and the distro and Docker use part of the limit first."
+    $write = $false
+    if (-not $Options.NonInteractive) {
+        $write = (Read-Answer -Prompt "Set memory=$($floor)GB under [wsl2] in $path (other settings are kept, the current file is backed up first)? [y/N]" -Default 'n') -match '^(y|yes)$'
+    }
+    if (-not $write) {
+        Write-Host "  To raise it yourself: put these lines in $path (or set memory= in its [wsl2] section), then run wsl --shutdown, which stops every running WSL distro:"
+        Write-Host '    [wsl2]'
+        Write-Host "    memory=$($floor)GB"
+        Write-Host '  Carrying on; if the Linux installer then reports too little free memory, do that and run this installer again.'
+        return 'advised'
+    }
+    $backup = Save-WslConfig -Text (Set-WslConfigMemory -Text $text -Memory "$($floor)GB")
+    Write-Ok "set memory=$($floor)GB in $path$(if ($backup) { " (backup: $backup)" })"
+    # WSL reads .wslconfig when its VM starts. With no distro running the next start uses it.
+    # Not @(...): the function returns its list as one object, which @() would wrap again
+    $running = Get-WslRunningNames
+    if ($running.Count -eq 0) { return 'written' }
+    $restart = (Read-Answer -Prompt "The new limit applies once WSL restarts. Run wsl --shutdown now? It stops every running WSL distro ($($running -join ', ')), Docker Desktop's included; they start again when next used. [y/N]" -Default 'n') -match '^(y|yes)$'
+    if ($restart) {
+        Invoke-Wsl '--shutdown' | Out-Null
+        Write-Ok 'WSL restarted with the new limit'
+        return 'restarted'
+    }
+    Write-Host '  The new limit applies after wsl --shutdown or a restart of Windows. Until then the Linux installer may report too little free memory.'
+    return 'written'
 }
 
 function ConvertFrom-WslText {
@@ -333,7 +501,11 @@ function Import-AgoraDistro {
     # A distro named Agora from Canonical's image, with systemd on and root as its user
     param([string]$ImagePath, [string]$InstallRoot)
     $r = Invoke-Wsl '--import' $script:DistroName $InstallRoot $ImagePath '--version' '2'
-    if ($r.ExitCode -ne 0) { throw "wsl --import failed: $($r.Output -join ' ')" }
+    if ($r.ExitCode -ne 0) {
+        $said = $r.Output -join ' '
+        if (Test-HyperVMissingError $said) { throw "wsl --import failed. $($script:VmpOffHelp) $($script:VirtualizationHelp) (WSL said: $said)" }
+        throw "wsl --import failed: $said"
+    }
     # printf, not a here-string: the text reaches sh as one argument with \n escapes
     $setup = "printf '[boot]\nsystemd=true\n[user]\ndefault=root\n' > /etc/wsl.conf && date -u +%Y-%m-%dT%H:%M:%SZ > $($script:DistroMarker)"
     $r = Invoke-Wsl '-d' $script:DistroName '-u' 'root' '--exec' 'sh' '-c' $setup
@@ -503,14 +675,25 @@ function Invoke-AgoraInstall {
 
         $step = 'win.wsl'
         Write-Step $step 'WSL'
-        if (-not (Test-WslInstalled)) {
-            if ($Options.Resume) { throw 'WSL is still not available after the reboot; run wsl --install --no-distribution yourself, then this installer again' }
+        $wslOk = Test-WslInstalled
+        # `wsl --status` passes with Virtual Machine Platform off, so ask Windows too. 'unknown'
+        # carries on: the import then recognises WSL's error.
+        $vmpOff = $wslOk -and ((Get-VmPlatformState) -eq 'disabled')
+        if (-not $wslOk -or $vmpOff) {
+            if ($Options.Resume) {
+                if ($vmpOff) { throw "Virtual Machine Platform is still off after the reboot. $($script:VmpOffHelp) $($script:VirtualizationHelp)" }
+                throw 'WSL is still not available after the reboot; run wsl --install --no-distribution yourself, then this installer again'
+            }
             $consent = $Options.NonInteractive -and $Options.ContainsKey('AllowWslInstall') -and $Options.AllowWslInstall
             if (-not $consent -and -not $Options.NonInteractive) {
-                $consent = (Read-Answer -Prompt 'WSL is not installed. Install it now (needs administrator rights once, then a restart)? [y/N]' -Default 'n') -match '^(y|yes)$'
+                $question = if ($vmpOff) {
+                    'WSL is installed but Virtual Machine Platform, which WSL 2 needs, is turned off. Turn it on now with wsl --install --no-distribution (needs administrator rights once, then a restart)? [y/N]'
+                } else { 'WSL is not installed. Install it now (needs administrator rights once, then a restart)? [y/N]' }
+                $consent = (Read-Answer -Prompt $question -Default 'n') -match '^(y|yes)$'
             }
             if (-not $consent) {
-                Write-Host '  Not installing WSL. To install it yourself: wsl --install --no-distribution (as administrator), restart, then run this installer again.'
+                if ($vmpOff) { Write-Host "  Not changing Windows features. $($script:VmpOffHelp) $($script:VirtualizationHelp)" }
+                else { Write-Host '  Not installing WSL. To install it yourself: wsl --install --no-distribution (as administrator), restart, then run this installer again.' }
                 return [pscustomobject]@{ Status = 'stopped'; Step = $step; Distro = $null; Url = $null }
             }
             $code = Start-WslInstall
@@ -530,6 +713,10 @@ function Invoke-AgoraInstall {
             return [pscustomobject]@{ Status = 'needs-reboot'; Step = $step; Distro = $null; Url = $null }
         }
         Write-Ok 'WSL is installed'
+
+        $step = 'win.memory'
+        Write-Step $step 'Memory WSL may use'
+        Invoke-WslMemoryCheck -Options $Options -Info $info | Out-Null
 
         $step = 'win.distro'
         Write-Step $step 'One Docker engine: looking for a WSL distro that already has one'

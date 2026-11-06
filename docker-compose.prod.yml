@@ -158,9 +158,13 @@ services:
       AGORA_BOX_INSECURE_DEV: ${AGORA_BOX_INSECURE_DEV:-}
       # Compose names it <project>-box-edge-1; the project is the instance (setup-env sets both)
       AGORA_EDGE_CONTAINER: ${AGORA_INSTANCE:-agora}-box-edge-1
+    # On `compose up`. After a reboot Docker restarts containers without this order, so boxd
+    # also waits for its dependencies itself (src/lib/startup-retry.ts)
     depends_on:
       migrate:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       box-socket-proxy:
@@ -191,9 +195,13 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    # On `compose up`. After a reboot Docker restarts containers without this order, so the
+    # edge also waits for Postgres itself (src/lib/startup-retry.ts)
     depends_on:
       migrate:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       api:
