@@ -27,6 +27,10 @@ BeforeAll {
             Telemetry = [System.Collections.ArrayList]@()
             LinuxArgs = $null
             State = @{}
+            Vmp = 'enabled'
+            ImportError = $null
+            WslConfig = $null
+            Saved = [System.Collections.ArrayList]@()
         }
         foreach ($a in $Answers) { $global:AgoraFake.Answers.Enqueue($a) }
     }
@@ -38,6 +42,10 @@ BeforeAll {
         Mock -ModuleName AgoraInstall Get-InstallerState { $global:AgoraFake.State }
         Mock -ModuleName AgoraInstall Save-InstallerState { $global:AgoraFake.State = $State }
         Mock -ModuleName AgoraInstall Test-DockerDesktopInstalled { $false }
+        Mock -ModuleName AgoraInstall Get-VmPlatformState { $global:AgoraFake.Vmp }
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { 'C:\Users\fake\.wslconfig' }
+        Mock -ModuleName AgoraInstall Read-WslConfig { $global:AgoraFake.WslConfig }
+        Mock -ModuleName AgoraInstall Save-WslConfig { $global:AgoraFake.WslConfig = $Text; [void]$global:AgoraFake.Saved.Add($Text); 'C:\Users\fake\.wslconfig.agora-backup-1' }
         Mock -ModuleName AgoraInstall Read-Answer {
             [void]$global:AgoraFake.Prompts.Add($Prompt)
             if ($global:AgoraFake.Answers.Count -gt 0) { return $global:AgoraFake.Answers.Dequeue() }
@@ -56,8 +64,11 @@ BeforeAll {
                 if ($f.Utf16) { $names = @($names | ForEach-Object { ([char]0xFEFF) + (($_.ToCharArray() | ForEach-Object { "$_`0" }) -join '') }) }
                 return [pscustomobject]@{ ExitCode = 0; Output = $names }
             }
-            if ($first -eq '--import') { [void]$f.Distros.Add((D $Arguments[1])); return [pscustomobject]@{ ExitCode = 0; Output = @() } }
-            if ($first -eq '--terminate') { return [pscustomobject]@{ ExitCode = 0; Output = @() } }
+            if ($first -eq '--import') {
+                if ($f.ImportError) { return [pscustomobject]@{ ExitCode = 1; Output = @($f.ImportError) } }
+                [void]$f.Distros.Add((D $Arguments[1])); return [pscustomobject]@{ ExitCode = 0; Output = @() }
+            }
+            if ($first -eq '--terminate' -or $first -eq '--shutdown') { return [pscustomobject]@{ ExitCode = 0; Output = @() } }
             if ($first -eq '-d') {
                 $name = $Arguments[1]
                 $script = $Arguments[-1]
@@ -185,6 +196,282 @@ Describe 'WSL missing' {
         $r.Status | Should -Be 'needs-reboot'
         Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 1 -Exactly
         Should -Invoke -ModuleName AgoraInstall Restart-Machine -Times 0
+    }
+}
+
+Describe 'Virtual Machine Platform off (wsl --status still passes)' {
+    BeforeEach { New-Fake -Wsl $true; Set-Mocks; $global:AgoraFake.Vmp = 'disabled' }
+
+    It 'stops before any distro work and says what to run, changing nothing without consent' {
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Status | Should -Be 'stopped'
+        $r.Step | Should -Be 'win.wsl'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
+        Should -Invoke -ModuleName AgoraInstall Register-ResumeAfterReboot -Times 0
+        @(Imported).Count | Should -Be 0
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '-d *' }).Count | Should -Be 0
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*Virtual Machine Platform is turned off*wsl --install --no-distribution*restart*VT-x*' }
+    }
+
+    It 'asks, then turns it on through wsl --install --no-distribution and resumes after the restart' {
+        New-Fake -Wsl $true -Answers @('n', 'y', 'n')   # telemetry no, turn it on yes, restart no
+        $global:AgoraFake.Vmp = 'disabled'
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = '' })
+        $r.Status | Should -Be 'needs-reboot'
+        $global:AgoraFake.Prompts[1] | Should -BeLike '*Virtual Machine Platform*turned off*'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 1 -Exactly
+        Should -Invoke -ModuleName AgoraInstall Register-ResumeAfterReboot -Times 1 -Exactly
+        Should -Invoke -ModuleName AgoraInstall Restart-Machine -Times 0
+    }
+
+    It 'still off after the reboot: says what to do next (dism, firmware) instead of offering the same step' {
+        $r = Invoke-AgoraInstall -Options (Opt @{ Resume = $true })
+        $r.Status | Should -Be 'failed'
+        $r.Step | Should -Be 'win.wsl'
+        $r.Error | Should -Match 'still off after the restart'
+        $r.Error | Should -Match 'dism\.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart'
+        $r.Error | Should -Match 'VT-x'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
+    }
+
+    It 'started again by hand after that restart: the same advice, no second wsl --install' {
+        New-Fake -Wsl $true -Answers @('n', 'y')
+        Set-Mocks
+        $global:AgoraFake.Vmp = 'disabled'
+        $global:AgoraFake.State = @{ Telemetry = 'off'; Phase = 'after-wsl'; Distro = $null; CreatedDistro = $false }
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'failed'
+        $r.Error | Should -Match 'dism\.exe'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
+        @($global:AgoraFake.Prompts | Where-Object { $_ -like '*Virtual Machine Platform*' }).Count | Should -Be 0
+    }
+
+    It 'reported off while a WSL 2 distro runs: the platform works, so it carries on' {
+        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @('Ubuntu')
+        Set-Mocks
+        $global:AgoraFake.Vmp = 'disabled'
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Status | Should -Be 'done'
+        $r.Distro | Should -Be 'Ubuntu'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
+    }
+
+    It 'state unknown: carries on, and an import failing with HCS_E_HYPERV_NOT_INSTALLED gets the same advice' {
+        $global:AgoraFake.Vmp = 'unknown'
+        $global:AgoraFake.ImportError = 'WSL2 is not supported with your current machine configuration. Error code: Wsl/Service/RegisterDistro/CreateVm/HCS/HCS_E_HYPERV_NOT_INSTALLED'
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Status | Should -Be 'failed'
+        $r.Step | Should -Be 'win.import'
+        $r.Error | Should -Match 'Virtual Machine Platform is turned off'
+        $r.Error | Should -Match 'wsl --install --no-distribution'
+        $r.Error | Should -Match 'HCS_E_HYPERV_NOT_INSTALLED'
+    }
+
+    It 'any other import failure keeps its own message' {
+        $global:AgoraFake.Vmp = 'enabled'
+        $global:AgoraFake.ImportError = 'The file is not a valid tar archive.'
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Error | Should -Be 'wsl --import failed: The file is not a valid tar archive.'
+    }
+}
+
+Describe 'WSL memory limit' {
+    BeforeEach {
+        New-Fake -Wsl $true
+        Set-Mocks
+        Mock -ModuleName AgoraInstall Get-SystemInfo { [pscustomobject]@{ Build = 22631; Caption = 'Windows 11 Home'; Version = '10.0.22631'; MemoryGB = 8; Virtualization = $true; Arch = 'AMD64' } }
+    }
+
+    It 'enough memory: no question, no file written' {
+        Mock -ModuleName AgoraInstall Get-SystemInfo { [pscustomobject]@{ Build = 22631; Caption = 'Windows 11 Pro'; Version = '10.0.22631'; MemoryGB = 16; Virtualization = $true; Arch = 'AMD64' } }
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        @($global:AgoraFake.Prompts | Where-Object { $_ -like '*memory=*' }).Count | Should -Be 0
+        Should -Invoke -ModuleName AgoraInstall Save-WslConfig -Times 0
+    }
+
+    It 'non-interactive on an 8 GB PC: prints the .wslconfig lines, never writes, never shuts WSL down' {
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Status | Should -Be 'done'
+        Should -Invoke -ModuleName AgoraInstall Save-WslConfig -Times 0
+        @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 0
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*only 4 GB*half of this PC*8 GB*' }
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -eq '    memory=6GB' }
+    }
+
+    It 'declined: advice only' {
+        New-Fake -Wsl $true -Answers @('n')
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        $global:AgoraFake.Prompts[0] | Should -BeLike '*memory=6GB*[[]wsl2]*backed up*[[]y/N]'
+        Should -Invoke -ModuleName AgoraInstall Save-WslConfig -Times 0
+    }
+
+    It 'accepted with no distro running: writes the file and shuts the idle WSL VM down without asking' {
+        New-Fake -Wsl $true -Answers @('y')
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        $global:AgoraFake.Saved.Count | Should -Be 1
+        $global:AgoraFake.Saved[0] | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
+        @($global:AgoraFake.Prompts | Where-Object { $_ -like '*wsl --shutdown*' }).Count | Should -Be 0
+        @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 1
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*WSL shut down*' }
+        Should -Invoke -ModuleName AgoraInstall Write-Host -Times 0 -ParameterFilter { "$Object" -like '*restarted*' }
+    }
+
+    It 'a 12 GB PC (Windows reports 11.7 GB, WSL gets 5.9) is not flagged' {
+        Mock -ModuleName AgoraInstall Get-SystemInfo { [pscustomobject]@{ Build = 22631; Caption = 'Windows 11 Home'; Version = '10.0.22631'; MemoryGB = 11.7; Virtualization = $true; Arch = 'AMD64' } }
+        New-Fake -Wsl $true
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        $global:AgoraFake.Prompts.Count | Should -Be 0
+    }
+
+    It 'a .wslconfig it cannot write: prints the manual advice and carries on' {
+        New-Fake -Wsl $true -Answers @('y')
+        Mock -ModuleName AgoraInstall Save-WslConfig { throw [System.UnauthorizedAccessException]::new("Access to the path is denied.") }
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*Could not read or change*Access to the path is denied*' }
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -eq '    memory=6GB' }
+        @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 0
+    }
+
+    It 'accepted while distros run: asks before wsl --shutdown, and runs it only on yes' {
+        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @('Ubuntu') -Answers @('y', 'n')
+        $global:AgoraFake.WslConfig = "[wsl2]`r`nmemory=3GB`r`n"
+        Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' }) | Out-Null
+        $global:AgoraFake.Prompts[1] | Should -BeLike '*wsl --shutdown*Ubuntu*'
+        @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 0
+
+        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @('Ubuntu') -Answers @('y', 'y')
+        $global:AgoraFake.WslConfig = "[wsl2]`r`nmemory=3GB`r`n"
+        Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' }) | Out-Null
+        @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 1
+        $global:AgoraFake.WslConfig | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
+    }
+
+    It 'a .wslconfig limit wins over the default, in either direction' {
+        Mock -ModuleName AgoraInstall Get-SystemInfo { [pscustomobject]@{ Build = 22631; Caption = 'Windows 11 Pro'; Version = '10.0.22631'; MemoryGB = 32; Virtualization = $true; Arch = 'AMD64' } }
+        $global:AgoraFake.WslConfig = "[wsl2]`nmemory=4096MB`n"
+        Invoke-AgoraInstall -Options (Opt) | Out-Null
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*only 4 GB*set in C:\Users\fake\.wslconfig*' }
+        $limit = & (Get-Module AgoraInstall) { Get-WslMemoryLimit -Info ([pscustomobject]@{ MemoryGB = 8 }) -ConfigText "[wsl2]`nmemory=7GB" }
+        $limit.GB | Should -Be 7
+        $limit.Source | Should -Be 'wslconfig'
+    }
+}
+
+Describe '.wslconfig parsing and editing' {
+    It 'reads sizes in every unit WSL takes' {
+        & (Get-Module AgoraInstall) {
+            ConvertFrom-WslMemorySize '6GB' | Should -Be 6
+            ConvertFrom-WslMemorySize '8192MB' | Should -Be 8
+            ConvertFrom-WslMemorySize '4g' | Should -Be 4
+            ConvertFrom-WslMemorySize ' 512 mb ' | Should -Be 0.5
+            ConvertFrom-WslMemorySize '1TB' | Should -Be 1024
+            ConvertFrom-WslMemorySize '2147483648' | Should -Be 2
+            ConvertFrom-WslMemorySize 'lots' | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'reads memory only from the [wsl2] section, ignoring comments' {
+        & (Get-Module AgoraInstall) {
+            Get-WslConfigMemory -Text "[experimental]`nmemory=12GB`n" | Should -BeNullOrEmpty
+            Get-WslConfigMemory -Text "[wsl2]`n# memory=12GB`nprocessors=4`n" | Should -BeNullOrEmpty
+            Get-WslConfigMemory -Text "[WSL2]`r`n  memory = 5GB  # five`r`n[experimental]`r`nmemory=1GB" | Should -Be 5
+            Get-WslConfigMemory -Text '' | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'keeps every other line when it sets memory' {
+        & (Get-Module AgoraInstall) {
+            $text = "# mine`r`n[wsl2]`r`nprocessors=4`r`nmemory=3GB`r`nswap=0`r`n`r`n[experimental]`r`nautoMemoryReclaim=gradual`r`n"
+            Set-WslConfigMemory -Text $text -Memory '6GB' | Should -Be "# mine`r`n[wsl2]`r`nprocessors=4`r`nmemory=6GB`r`nswap=0`r`n`r`n[experimental]`r`nautoMemoryReclaim=gradual`r`n"
+            # No memory line yet: added right under [wsl2]
+            Set-WslConfigMemory -Text "[wsl2]`nprocessors=4`n" -Memory '6GB' | Should -Be "[wsl2]`r`nmemory=6GB`r`nprocessors=4`r`n"
+            # No [wsl2] section: appended, other sections untouched
+            Set-WslConfigMemory -Text "[experimental]`nsparseVhd=true" -Memory '6GB' | Should -Be "[experimental]`r`nsparseVhd=true`r`n`r`n[wsl2]`r`nmemory=6GB`r`n"
+            # Two memory lines (WSL takes the last): one left
+            Set-WslConfigMemory -Text "[wsl2]`nmemory=2GB`nmemory=3GB`n" -Memory '6GB' | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
+        }
+    }
+
+    It 'Save-WslConfig backs up the existing file before writing, without a BOM' {
+        $path = Join-Path $TestDrive '.wslconfig'
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
+        Set-Content -LiteralPath $path -Value "[wsl2]`r`nmemory=3GB" -NoNewline
+        $backup = & (Get-Module AgoraInstall) { Save-WslConfig -Text "[wsl2]`r`nmemory=6GB`r`n" }
+        $backup | Should -BeLike "$path.agora-backup-*"
+        Get-Content -LiteralPath $backup -Raw | Should -Be "[wsl2]`r`nmemory=3GB"
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $bytes[0] | Should -Be ([byte][char]'[')
+        & (Get-Module AgoraInstall) { Read-WslConfig } | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
+    }
+
+    It 'keeps non-ASCII UTF-8 lines intact through read, edit and write' {
+        $path = Join-Path $TestDrive 'utf8\.wslconfig'
+        New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
+        $line = 'kernel=C:\\Users\\Jos' + [char]0xE9 + '\\kernel'
+        [System.IO.File]::WriteAllText($path, "[wsl2]`r`n$line`r`nmemory=3GB`r`n", (New-Object System.Text.UTF8Encoding $false))
+        & (Get-Module AgoraInstall) {
+            $t = Read-WslConfig
+            Save-WslConfig -Text (Set-WslConfigMemory -Text $t -Memory '6GB') | Out-Null
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $hex = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ' '
+        $hex | Should -Match 'C3 A9'
+        $hex | Should -Not -Match 'C3 83 C2 A9'
+        [System.IO.File]::ReadAllText($path) | Should -Be "[wsl2]`r`n$line`r`nmemory=6GB`r`n"
+    }
+
+    It 'Save-WslConfig writes a hidden .wslconfig and keeps it hidden' {
+        $path = Join-Path $TestDrive 'hidden\.wslconfig'
+        New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
+        Set-Content -LiteralPath $path -Value '[wsl2]' -NoNewline
+        (Get-Item -LiteralPath $path -Force).Attributes = 'Hidden'
+        & (Get-Module AgoraInstall) { Save-WslConfig -Text "[wsl2]`r`nmemory=6GB`r`n" } | Out-Null
+        [System.IO.File]::ReadAllText($path) | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
+        ((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::Hidden) | Should -Not -Be 0
+    }
+
+    It 'Save-WslConfig with no existing file makes no backup' {
+        $path = Join-Path $TestDrive 'fresh\.wslconfig'
+        New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
+        & (Get-Module AgoraInstall) { Save-WslConfig -Text "[wsl2]`r`nmemory=6GB`r`n" } | Should -BeNullOrEmpty
+        Test-Path $path | Should -BeTrue
+    }
+}
+
+Describe 'Get-VmPlatformState' {
+    It 'maps Win32_OptionalFeature InstallState 1, 2, 3 and 4' {
+        Mock -ModuleName AgoraInstall Get-WindowsOptionalFeature { throw 'not elevated' }
+        foreach ($case in @(@(1, 'enabled'), @(2, 'disabled'), @(3, 'disabled'), @(4, 'unknown'))) {
+            $global:AgoraCimState = $case[0]
+            Mock -ModuleName AgoraInstall Get-CimInstance { [pscustomobject]@{ Name = 'VirtualMachinePlatform'; InstallState = $global:AgoraCimState } }
+            Get-VmPlatformState | Should -Be $case[1]
+        }
+        Should -Invoke -ModuleName AgoraInstall Get-CimInstance -ParameterFilter { $ClassName -eq 'Win32_OptionalFeature' -and $Filter -like "*VirtualMachinePlatform*" }
+        Remove-Variable -Name AgoraCimState -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'unknown when the query fails' {
+        Mock -ModuleName AgoraInstall Get-CimInstance { throw 'WMI is broken' }
+        Mock -ModuleName AgoraInstall Get-WindowsOptionalFeature { throw 'not elevated' }
+        Get-VmPlatformState | Should -Be 'unknown'
+    }
+}
+
+Describe 'Test-Preflight memory' {
+    It 'accepts an "8 GB" PC that reports 7.8 GB and refuses 6 GB' {
+        $ok = [pscustomobject]@{ Build = 22631; MemoryGB = 7.8; Virtualization = $true; Arch = 'AMD64' }
+        $problems = Test-Preflight -Info $ok
+        $problems.Count | Should -Be 0
+        $low = [pscustomobject]@{ Build = 22631; MemoryGB = 6; Virtualization = $true; Arch = 'AMD64' }
+        (Test-Preflight -Info $low) -join ' ' | Should -Match '8 GB'
     }
 }
 

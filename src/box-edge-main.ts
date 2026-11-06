@@ -9,6 +9,7 @@ import Redis from 'ioredis';
 import { config } from './config';
 import { EDGE_AGORA_PORT, EDGE_PROXY_PORT, instanceName } from './lib/boxes/contract';
 import { verifyEncryptionKeyAtStartup } from './lib/key-fingerprint';
+import { retryWhileUnavailable } from './lib/startup-retry';
 import { createEdge } from './boxes/edge/server';
 import { GITHUB_API_BASE, GITHUB_BASE } from './boxes/edge/upstream';
 
@@ -18,8 +19,10 @@ async function main() {
     const instance = instanceName();
     const db = new Pool({ connectionString: config.dbUrl, max: 20 });
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
-    // The edge decrypts the owner's GitHub token: it must hold the instance's key
-    await verifyEncryptionKeyAtStartup(db, config.encryptionKey);
+    // The edge decrypts the owner's GitHub token: it must hold the instance's key. After a reboot
+    // Docker starts the edge beside Postgres (depends_on doesn't apply), so wait for it here
+    // instead of exiting and being restarted.
+    await retryWhileUnavailable('Box edge', () => verifyEncryptionKeyAtStartup(db, config.encryptionKey));
 
     const edge = createEdge({
         db, redis, encryptionKey: config.encryptionKey, edgeSecret: secret,

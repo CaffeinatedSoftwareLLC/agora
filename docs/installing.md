@@ -23,7 +23,8 @@ macOS has no installer yet: see [Local stack on macOS](getting-started.md#local-
 
 What it does:
 
-- Installs WSL if needed (`wsl --install --no-distribution`; no Microsoft Store).
+- Installs WSL if needed (`wsl --install --no-distribution`; no Microsoft Store). The same goes for the Virtual Machine Platform feature WSL 2 needs, which `wsl --status` doesn't check: if it is off, the installer asks before turning it on that way (then a restart). If WSL still reports `HCS_E_HYPERV_NOT_INSTALLED` after that, turn on virtualization (Intel VT-x or AMD-V/SVM) in the firmware settings.
+- Checks how much memory WSL may use. WSL's default is half of the PC's memory, which on an 8 GB PC is too little; Agora needs 6 GB. The installer offers to set `memory=6GB` under `[wsl2]` in `%USERPROFILE%\.wslconfig` (it keeps your other settings and backs the file up first), and asks before running `wsl --shutdown` to apply it. With `-NonInteractive` it only prints what to change.
 - **Uses the one Docker engine you already have in WSL**, if a WSL distro runs Docker Engine: it asks, then installs Agora there. It never starts a second engine. Otherwise it creates a WSL distro called `Agora` from Canonical's Ubuntu 24.04 image (downloaded from releases.ubuntu.com and checked against Canonical's SHA-256 list).
 - Docker Desktop can stay installed; the installer doesn't use or change it. If its WSL integration is on for the distro Agora uses, turn it off there (Docker Desktop → Settings → Resources → WSL integration).
 - Runs the Linux installer inside the distro (below).
