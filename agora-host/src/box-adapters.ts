@@ -44,9 +44,10 @@ export interface BoxAdapterRuntime {
      * Yeet mode (§8.1): the box is the sandbox. `args` turn the CLI's own sandbox and permission
      * prompts off; `noOpenWeb` turns off tools that reach the open web around the edge (a
      * provider-side web search). `acpAllowAll`: an ACP agent's permission requests are all
-     * allowed (its own config is also set to allow, see adapters.ts opencodeConfig).
+     * allowed (its own config is also set to allow, see adapters.ts opencodeConfig). `acpMode`:
+     * the ACP session mode a turn switches to first (Devin's "bypass": no prompts at all).
      */
-    yeet: { args: readonly string[]; noOpenWeb: readonly string[]; acpAllowAll: boolean };
+    yeet: { args: readonly string[]; noOpenWeb: readonly string[]; acpAllowAll: boolean; acpMode?: string };
     /**
      * The box rules (/opt/agora/AGENTS.md) as the CLI's global instructions file, and settings
      * files written once if absent; both relative to the profile's state directory.
@@ -116,6 +117,35 @@ export const BOX_ADAPTERS = {
         yeet: { args: [], noOpenWeb: [], acpAllowAll: true },
         // XDG_CONFIG_HOME is <state>/config (adapters.ts): opencode's global rules file
         state: { rulesFile: 'config/opencode/AGENTS.md', files: {} },
+    },
+    devin: {
+        executable: '/opt/agora/bin/devin',
+        version: '3000.11.234',
+        protocol: 'acp',
+        acpArgs: ['acp'],
+        // The owner's own Devin login, relayed into the box (Cognition's terms: account holder only)
+        authModes: ['subscription'],
+        // Never set by boxd (no api_key mode): the variable `devin acp` would read an account token from
+        apiKeyEnv: 'WINDSURF_API_KEY',
+        // `devin auth login` opens a browser on a localhost redirect; this flow prints the sign-in
+        // URL on app.devin.ai and reads the code the owner pastes back (checked on 3000.11.234)
+        login: { args: ['auth', 'login', '--force-manual-token-flow'], hosts: ['devin.ai'], kind: 'paste' },
+        // No switches for these: auto-update and every config import are off in the config each run
+        // gets (adapters.ts devinConfig) and in the settings file below, which the login reads. Its
+        // feature flags, Sentry reports and update checks are refused at the edge (the server half)
+        quiet: { env: {}, args: [] },
+        noProxy: [],
+        // The session starts in Devin's "Code" mode; a box turn switches it to "bypass" and allows
+        // whatever it still asks. Web search is denied in its config (adapters.ts devinConfig)
+        yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpMode: 'bypass' },
+        // XDG_CONFIG_HOME is <state>/config (adapters.ts): Devin's global rules file and user config
+        state: {
+            rulesFile: 'config/devin/AGENTS.md',
+            files: {
+                'config/devin/config.json': '{\n  "auto_update": false,\n  "read_config_from": { "agents_standard": false, "cursor": false, "windsurf": false, "claude": false, '
+                    + '"copilot": false, "opencode": false, "zed": false, "cloud": false }\n}\n',
+            },
+        },
     },
 } as const satisfies Record<string, BoxAdapterRuntime>;
 

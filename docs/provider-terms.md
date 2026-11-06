@@ -12,6 +12,7 @@ This is a summary for operators, not legal advice. Read the sources below, and c
 - **Codex on your ChatGPT plan, the sanctioned way:** OpenAI offers open-source apps *Sign in with ChatGPT* with plan usage. A Codex agent on `"auth": "siwc"` runs on the plan of the person who connected it, and only that person can wake it. Local and self-hosted use only; a paid or hosted Agora needs OpenAI's approval. See [codex-chatgpt-plan.md](codex-chatgpt-plan.md).
 - **Gemini / Antigravity:** API key only for anything Agora drives. Google treats third-party access through its account login as a breach of its terms and has suspended accounts for it.
 - **opencode (OpenRouter):** API key only. Agora runs opencode over ACP on an OpenRouter key and never on an opencode login or OpenCode Zen.
+- **Devin (Cognition):** your own Devin login only, owner-only. Cognition's terms allow headless use by the account holder and forbid giving anyone else access to the account, so a Devin agent is a `subscription` profile that only you can wake, on a machine or in a box. See [Devin](#devin).
 - Agora never reads, stores or relays a CLI's login files or OAuth tokens, and never offers "Sign in with Claude" or "Sign in with Google". OpenAI's **Sign in with ChatGPT** is the one sanctioned way for other people on a shared Agora to use *their own* ChatGPT plan; Agora offers it on the agent host with its own OAuth registration, and those tokens stay on the host ([codex-chatgpt-plan.md](codex-chatgpt-plan.md)).
 
 ## Bring your own session, and Sign in with ChatGPT
@@ -97,6 +98,21 @@ An `opencode` profile must use `"auth": "api_key"` with an OpenRouter key (`OPEN
 
 **In an agent box** the same rules hold. A box of adapter `opencode` signs in only with the OpenRouter key the owner enters when creating it (Settings → Agents → Create box), and needs its OpenRouter model ID; a subscription is refused (`400 auth_not_supported`) and the box has no Log in (`409 login_not_supported`). The key is stored encrypted for that box alone and set by boxd as `OPENROUTER_API_KEY` in the box's environment, from where agora-host passes it to opencode only, as for API-key Claude and Codex boxes ([agent-boxes.md](agent-boxes.md) §3.2). The edge lets the box reach `openrouter.ai` and opencode's model catalog (`models.opencode.ai`); anything else, OpenCode Zen included, only once the owner allows it on a card.
 
+## Devin
+
+A `devin` profile runs Devin's own ACP server (`devin acp`, the official `devin` binary) with `"protocol": "acp"` and `"auth": "subscription"`; the host refuses anything else, an API key included. Devin's account token (`WINDSURF_API_KEY`, which `devin acp` would also read) is the account holder's own credential, not a key for other people's use, so the host never passes it and Agora never stores it. Like a Claude or Codex subscription agent, a Devin agent wakes only for the server owner: the owner's messages and commands, and hand-offs in sessions the owner started.
+
+What the terms say (Cognition Platform Terms of Service and Acceptable Use Policy, both last updated 2026-06-30): access is for "you and your Authorized Users", for internal business purposes, and may not be made available to anyone else (ToS §2.1, §2.3(iv)); "You may not provide any other user access to your account or account credentials" (AUP). Neither forbids automated or headless use, and Cognition ships ACP and a non-interactive mode for it. The competing-products clause (§2.3(iii)) is a business question for the operator, not an adapter setting.
+
+What the host does on a machine (agora-host README, "Devin"):
+
+- The profile logs in once with `agora-host devin login --profile <name> --config <file>`, which runs `devin auth login` with the profile's own Devin folders: the XDG directories in its `stateDir` on Linux and macOS, a home folder of its own in the `stateDir` on Windows (where Devin ignores XDG and `APPDATA` alone). The host never reads that login.
+- Every run gets its own Devin config (`devin --config <file> acp`) with nothing imported from other tools: by default Devin loads Claude Code's, Cursor's, Windsurf's, opencode's, Zed's and Copilot's MCP servers, rules, skills and hooks (it started the user's own Claude Code MCP servers when tried), and Devin Cloud's.
+- Every tool asks, and the host answers from the agent's rules; a denial is an approval card, as for the other ACP agents.
+- A worktree with a `.devin` folder is refused: Devin runs the hooks there at session start without asking.
+
+**In an agent box** the same sign-in rule holds. A box of adapter `devin` signs in only with the owner's own Devin login, through Log in (`devin auth login --force-manual-token-flow`: the sign-in link on `app.devin.ai` and the code Devin shows, relayed through Agora for the length of the login; the login itself stays in the box's home folder); an API key is refused (`400 auth_not_supported`).
+
 ## Branding
 
 Agora says it "runs Claude Code / Codex / Gemini" in plain text and uses no look-alike names or logos. Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.
@@ -120,6 +136,14 @@ their auth.json for model requests. Sign in with ChatGPT is the sanctioned route
 for other people to use their own ChatGPT plan through a shared Agora; Agora's
 eligibility and the exact flow still need confirmation. Watch authentication, non-interactive mode,
 SIWC and consumer terms; changes may affect hosted wakes and per-user billing.
+
+## Cognition
+
+Devin hosted automation runs only on the account holder's own Devin login, owner-only.
+Never share one person's Devin account or credentials with other users, never store or
+relay the Devin token, and never let other members wake a Devin agent. Watch the Platform
+Terms of Service, the Acceptable Use Policy and the Devin CLI docs (authentication, ACP,
+headless use); changes may affect hosted wakes and the competing-products clause.
 
 ## Google
 

@@ -60,6 +60,8 @@ export function resourceProblem(key: keyof typeof LIMITS, value: string): string
  * (src/lib/boxes/adapters.ts; test/unit/box-adapters.unit.test.ts checks this list against it).
  * `auth`: how it may sign in, first the default. `keyLabel`: the API key field's label.
  * `model`: a model ID the box must be created with, when the CLI has no usable default.
+ * `login`: how its Log in finishes (a code to paste back, or a device code to enter on the
+ * provider's page) and whose page it is; none for an API-key-only CLI.
  */
 export interface BoxAdapterOption {
   value: BoxAdapter;
@@ -67,15 +69,20 @@ export interface BoxAdapterOption {
   auth: readonly BoxAuth[];
   keyLabel: string;
   model?: { label: string; placeholder: string };
+  login?: { kind: 'paste' | 'device'; provider: string };
 }
 export const BOX_ADAPTER_OPTIONS: readonly BoxAdapterOption[] = [
-  { value: 'claude', label: 'Claude Code', auth: ['subscription', 'api_key'], keyLabel: 'Anthropic API key' },
-  { value: 'codex', label: 'Codex', auth: ['subscription', 'api_key'], keyLabel: 'OpenAI API key' },
+  { value: 'claude', label: 'Claude Code', auth: ['subscription', 'api_key'], keyLabel: 'Anthropic API key', login: { kind: 'paste', provider: 'Anthropic' } },
+  { value: 'codex', label: 'Codex', auth: ['subscription', 'api_key'], keyLabel: 'OpenAI API key', login: { kind: 'device', provider: 'OpenAI' } },
   { value: 'opencode', label: 'opencode', auth: ['api_key'], keyLabel: 'OpenRouter API key',
     model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
+  // Your own Devin login only (Cognition's terms: the account holder); no API key mode
+  { value: 'devin', label: 'Devin', auth: ['subscription'], keyLabel: 'Devin API key', login: { kind: 'paste', provider: 'Devin' } },
 ];
 
 export const ADAPTER_LABEL: Record<string, string> = Object.fromEntries(BOX_ADAPTER_OPTIONS.map(o => [o.value, o.label]));
+/** How an adapter's Log in finishes, or undefined when it has none. */
+export const adapterLogin = (adapter: string) => BOX_ADAPTER_OPTIONS.find(o => o.value === adapter)?.login;
 
 /** A model ID as the server and agora-host accept it (src/lib/boxes/service.ts MODEL_PATTERN). */
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
@@ -146,10 +153,13 @@ export function loginStatusText(login: BoxLogin | null, adapter: Box['adapter'])
   switch (login.status) {
     case 'requested': return 'Waiting for the box to pick up the login. The box must be running.';
     case 'claimed': return `The box is starting ${ADAPTER_LABEL[adapter] ?? adapter}'s login…`;
-    case 'awaiting_user': return adapter === 'codex'
-      ? 'Open the link, sign in to OpenAI and enter the code below.'
-      : 'Open the link and sign in to Anthropic.';
-    case 'awaiting_code': return 'Open the link, sign in to Anthropic, then paste the code Anthropic shows.';
+    case 'awaiting_user': return adapterLogin(adapter)?.kind === 'device'
+      ? `Open the link, sign in to ${adapterLogin(adapter)!.provider} and enter the code below.`
+      : `Open the link and sign in to ${adapterLogin(adapter)?.provider ?? 'the provider'}.`;
+    case 'awaiting_code': {
+      const provider = adapterLogin(adapter)?.provider ?? 'the provider';
+      return `Open the link, sign in to ${provider}, then paste the code ${provider} shows.`;
+    }
     case 'code_sent': return 'Code sent. Waiting for the CLI to finish…';
     case 'succeeded': return 'Logged in. The login is saved in the box\'s home folder only.';
     case 'failed': return login.error === 'needs_domain' && login.blockedHosts?.length
@@ -175,6 +185,7 @@ export function safeUrl(url: string | null | undefined): string | null {
 const LOGIN_HOSTS: Record<string, string[]> = {
   claude: ['claude.ai', 'claude.com', 'anthropic.com'],
   codex: ['openai.com', 'chatgpt.com'],
+  devin: ['devin.ai'],
 };
 
 /** A sign-in link to show the owner: https, on the CLI's provider's own hosts; else nothing. */

@@ -21,8 +21,12 @@ export interface BoxTelemetryHost {
 export interface BoxAdapterSpec {
     /** Shown on cards and in Settings → Agents. */
     label: string;
-    /** The pinned CLI in the box image: npm package, version and the box/Dockerfile ARG that holds it. */
-    image: { npm: string; version: string; versionArg: string };
+    /**
+     * The pinned CLI in the box image: its version and the box/Dockerfile ARG that holds it, and
+     * where it comes from: an npm package, or a release tarball (`url` as box/Dockerfile spells
+     * it, `${target}` the CPU) with its sha256 per CPU, each in the Dockerfile ARG named here.
+     */
+    image: { version: string; versionArg: string; npm?: string; tarball?: { url: string; sha256: Readonly<Record<string, string>> } };
     /** How agora-host drives it: the CLI's own headless mode, or the Agent Client Protocol. */
     protocol: 'cli' | 'acp';
     /**
@@ -102,6 +106,42 @@ export const BOX_ADAPTER_REGISTRY = {
         loginDomains: [],
         telemetry: [
             { domain: 'opncd.ai', what: 'session sharing (off: `share: "disabled"`, `OPENCODE_DISABLE_SHARE`)' },
+        ],
+    },
+    devin: {
+        label: 'Devin',
+        // Cognition's release tarball (it is not on npm), checked against its sha256 for each CPU
+        // (static.devin.ai/cli/3000.11.234/manifest.json; the x86_64 one also checked by hand)
+        image: {
+            version: '3000.11.234', versionArg: 'DEVIN_VERSION',
+            tarball: {
+                url: 'https://static.devin.ai/cli/${DEVIN_VERSION}/devin-${DEVIN_VERSION}-${target}-unknown-linux.tar.gz',
+                sha256: {
+                    DEVIN_SHA256_X86_64: '201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a',
+                    DEVIN_SHA256_AARCH64: '438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e',
+                },
+            },
+        },
+        protocol: 'acp',
+        // The owner's own Devin login only (docs/provider-terms.md "Devin": Cognition lets only the
+        // account holder use an account), relayed into the box with Devin's paste-the-code flow
+        authModes: ['subscription'],
+        // Never set by boxd: with no api_key mode there is no key. `devin acp` would read an
+        // account token from it, so it is named here and nowhere else.
+        apiKeyEnv: 'WINDSURF_API_KEY',
+        modelRequired: false,
+        // Checked against the pinned binary through a logging proxy, with no login (2026-11-06):
+        // Devin's API and web app (its sign-in), and the Windsurf/Codeium server its credentials
+        // name as the API server (contacted at every start and by the login). Model traffic after
+        // a login may need more: verify live.
+        allowlist: ['api.devin.ai', 'app.devin.ai', 'server.codeium.com'],
+        loginDomains: ['devin.ai'],
+        telemetry: [
+            { domain: 'unleash.codeium.com', what: 'feature flags, fetched at start (Devin keeps its defaults without them)' },
+            { domain: 'ingest.us.sentry.io', what: 'error reports, sent at every session end (`o4507463137361920.ingest.us.sentry.io`)' },
+            { domain: 'codeium-i5.sentry.io', what: 'error reports (named in the binary)' },
+            { domain: 'static.devin.ai', what: 'update checks and downloads (`auto_update: false`; the CLI is pinned in the image)' },
+            { domain: 'cli.devin.ai', what: 'the install script (updates)' },
         ],
     },
 } as const satisfies Record<string, BoxAdapterSpec>;

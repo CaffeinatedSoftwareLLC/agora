@@ -15,12 +15,15 @@ import type { Claim } from './types.js';
  *   through its account login a breach. Gemini is hosted only over ACP with an API key.
  * - opencode runs only over ACP with an API key: it has no account login of its own to host,
  *   and its fallback (OpenCode Zen) would send the work to a provider the owner didn't pick.
+ * - Devin runs only over ACP (`devin acp`, the official CLI's own ACP server) on the owner's
+ *   own Devin login: Cognition's terms let only the account holder use the account, so a Devin
+ *   profile is `subscription`, owner-only. Its token is never passed in the environment.
  * - The host never reads, copies or relays a CLI's own login files or OAuth tokens.
  */
 
 export const TERMS_DOC = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/provider-terms.md';
 
-export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode';
+export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode' | 'devin';
 
 /** The environment variables each CLI reads its API key from. */
 export const API_KEY_ENVS: Record<Adapter, string[]> = {
@@ -29,6 +32,8 @@ export const API_KEY_ENVS: Record<Adapter, string[]> = {
     gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
     // or OPENROUTER_API_KEY_<NAME>, one key per agent (apiKeyEnvAllowed)
     opencode: ['OPENROUTER_API_KEY'],
+    // None: Devin signs in only with the owner's own account (DEVIN_SUBSCRIPTION_ONLY)
+    devin: [],
 };
 
 /**
@@ -59,6 +64,11 @@ export const GEMINI_NOT_HOSTED =
 
 export const OPENCODE_ACP_ONLY =
     'opencode is hosted only over ACP with an API key: set "protocol": "acp", "acpArgs": ["acp"], "auth": "api_key" and "apiKeyEnv": "OPENROUTER_API_KEY" (agora-host README, "opencode and OpenRouter").';
+
+export const DEVIN_SUBSCRIPTION_ONLY =
+    'Devin is hosted only over ACP on the owner\'s own Devin login: set "protocol": "acp", "acpArgs": ["acp"] and "auth": "subscription", '
+    + 'and log the profile in once with `agora-host devin login --profile <name> --config <file>`. Cognition\'s terms let only the account holder '
+    + `use a Devin account, so only the owner can wake it. See ${TERMS_DOC}`;
 
 /**
  * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An

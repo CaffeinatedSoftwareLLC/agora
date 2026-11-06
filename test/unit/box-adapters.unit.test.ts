@@ -7,6 +7,7 @@ import { isTelemetryHost, TELEMETRY_DOMAINS, wildcardTooWide } from '../../src/l
 import { LOGIN_PROVIDER_DOMAINS } from '../../src/lib/boxes/edge-requests';
 import { API_KEY_ENV } from '../../src/lib/boxes/service';
 import { validApiKeyEnv } from '../../src/boxes/boxd/spec';
+import { LOGIN_HOSTS, loginUrlAllowed } from '../../src/routes/box-hosts';
 // The in-box half of the registry has no imports, so the server's tests can read it as it is
 import { BOX_ADAPTERS as HOST_ADAPTERS } from '../../agora-host/src/box-adapters';
 
@@ -80,8 +81,20 @@ describe('box/Dockerfile installs and links every adapter', () => {
     for (const [name, spec] of Object.entries(BOX_ADAPTER_REGISTRY)) {
         it(`${name}: the pinned version in the box stage, a fake CLI in the test stage`, () => {
             const box = stage('box');
+            const image: { npm?: string; tarball?: { url: string; sha256: Readonly<Record<string, string>> } } = spec.image;
             expect(box).toContain(`ARG ${spec.image.versionArg}=${spec.image.version}\n`);
-            expect(box).toContain(`"${spec.image.npm}@\${${spec.image.versionArg}}"`);
+            // From npm, or a release tarball checked against its pinned sha256 for each CPU
+            expect(!!image.npm !== !!image.tarball).toBe(true);
+            if (image.npm) expect(box).toContain(`"${image.npm}@\${${spec.image.versionArg}}"`);
+            if (image.tarball) {
+                expect(box).toContain(`"${image.tarball.url}"`);
+                expect(image.tarball.url).toContain(`\${${spec.image.versionArg}}`);
+                for (const [arg, sum] of Object.entries(image.tarball.sha256)) {
+                    expect(sum).toMatch(/^[0-9a-f]{64}$/);
+                    expect(box).toContain(`ARG ${arg}=${sum}\n`);
+                }
+                expect(box).toContain('sha256sum -c -');
+            }
             expect(box).toMatch(new RegExp(`ln -s \\S+ /opt/agora/bin/${name}\\b`));
             expect(box).toContain(`/opt/agora/bin/${name} --version`);
             expect(stage('test')).toMatch(new RegExp(`ln -s /opt/agora/fake/${name}\\.mjs /opt/agora/bin/${name}\\b`));
@@ -156,6 +169,35 @@ describe('claude and codex resolve to what they were before the registry', () =>
             yeet: { args: ['--dangerously-bypass-approvals-and-sandbox'], noOpenWeb: ['-c', 'web_search="disabled"'], acpAllowAll: false },
             state: { rulesFile: 'AGENTS.md', files: {} },
         });
+    });
+});
+
+describe('Devin in a box', () => {
+    it('the owner\'s own login only, Devin\'s hosts allowed, flags, error reports and updates refused', () => {
+        expect(BOX_ADAPTER_REGISTRY.devin).toMatchObject({ label: 'Devin', protocol: 'acp', authModes: ['subscription'], modelRequired: false, loginDomains: ['devin.ai'] });
+        expect(boxHasLogin('devin')).toBe(true);
+        expect(defaultAllowlist('devin')).toEqual(['api.devin.ai', 'app.devin.ai', 'server.codeium.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        expect(LOGIN_PROVIDER_DOMAINS.devin).toEqual(['devin.ai']);
+        // Seen through a logging proxy (no login): unleash at start, Sentry at every session end
+        for (const host of ['unleash.codeium.com', 'o4507463137361920.ingest.us.sentry.io', 'codeium-i5.sentry.io', 'static.devin.ai', 'cli.devin.ai'])
+            expect(isTelemetryHost(host), host).toBe(true);
+        for (const host of ['server.codeium.com', 'api.devin.ai', 'app.devin.ai']) expect(isTelemetryHost(host), host).toBe(false);
+        expect(HOST_ADAPTERS.devin).toMatchObject({ acpArgs: ['acp'], authModes: ['subscription'],
+            login: { args: ['auth', 'login', '--force-manual-token-flow'], hosts: ['devin.ai'], kind: 'paste' }, noProxy: [],
+            yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpMode: 'bypass' }, state: { rulesFile: 'config/devin/AGENTS.md' } });
+        // The settings file the login reads: no update, no imports of other tools' config
+        const settings = JSON.parse(HOST_ADAPTERS.devin.state.files['config/devin/config.json']);
+        expect(settings.auto_update).toBe(false);
+        expect(Object.values(settings.read_config_from).every(v => v === false)).toBe(true);
+        expect(Object.keys(settings.read_config_from).sort()).toEqual(['agents_standard', 'claude', 'cloud', 'copilot', 'cursor', 'opencode', 'windsurf', 'zed']);
+    });
+    it('the server sends the owner only to Devin\'s own sign-in page', () => {
+        expect(loginUrlAllowed('devin', 'https://app.devin.ai/auth/cli/continue?state=x&prompt=select_account')).toBe(true);
+        expect(loginUrlAllowed('devin', 'https://devin.ai.evil.example/auth')).toBe(false);
+        expect(loginUrlAllowed('devin', 'http://app.devin.ai/auth')).toBe(false);
+        // Every adapter with a login has its sign-in hosts on the server's list, covering the relay's
+        for (const [name, host] of Object.entries(HOST_ADAPTERS))
+            for (const h of host.login?.hosts ?? []) expect(LOGIN_HOSTS[name]?.some(d => h === d || h.endsWith(`.${d}`)), `${name} ${h}`).toBe(true);
     });
 });
 

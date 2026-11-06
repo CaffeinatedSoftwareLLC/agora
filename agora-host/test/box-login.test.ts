@@ -12,6 +12,7 @@ import { config, id, tempDir } from './helpers.js';
 
 const unix = process.platform !== 'win32';
 const FAKE_CLI = fileURLToPath(new URL('../../box/fake/fake-cli.mjs', import.meta.url));
+const FAKE_ACP = fileURLToPath(new URL('../../box/fake/fake-acp.mjs', import.meta.url));
 const cleanups: Array<() => Promise<void>> = [];
 const saved = { marker: boxMode.marker, flag: process.env.AGORA_HOST_IN_BOX };
 afterEach(async () => {
@@ -152,6 +153,24 @@ describe.skipIf(!unix)('box login relay (fake CLIs)', () => {
         expect(call.envNames).toContain('CLAUDE_CONFIG_DIR');
         onlyCodes(logs);
     });
+    it('Devin (an ACP CLI with its own login): reports app.devin.ai, writes the pasted code, then success', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const c = config(t.dir);
+        const exe = join(t.dir, 'devin.mjs'); await copyFile(FAKE_ACP, exe); await chmod(exe, 0o755);
+        const state = join(t.dir, 'state', 'box-one');
+        c.profiles['box-one'] = { ...c.profiles.builder, adapter: 'devin', protocol: 'acp', acpArgs: ['acp'], executable: exe, stateDir: state, auth: 'subscription' };
+        const { api, reports } = fakeApi([null, 'devin-code-123']); const logs: string[] = [];
+        await handleBoxLogin(c, api, { id: id(1), adapter: 'devin', profile: 'box-one' }, options(logs));
+        expect(reports[0]).toEqual({ status: 'awaiting_code', verificationUrl: 'https://app.devin.ai/auth/cli/continue?state=fake-state&prompt=select_account' });
+        expect(reports[1]).toEqual({ status: 'succeeded' });
+        // Devin's login lands in the profile's own XDG data directory, never the user's
+        expect(existsSync(join(state, 'data', 'devin', 'credentials.toml'))).toBe(true);
+        const call = JSON.parse(await readFile(join(state, '.fake-last-call.json'), 'utf8'));
+        expect(call.args).toEqual(['auth', 'login', '--force-manual-token-flow']);
+        expect(call.envNames).toEqual(expect.arrayContaining(['XDG_CONFIG_HOME', 'XDG_DATA_HOME']));
+        for (const secret of ['AGORA_HOST_TOKEN', 'AGORA_BOT_TOKEN', 'WINDSURF_API_KEY']) expect(call.envNames).not.toContain(secret);
+        expect(logs).toEqual(['box_login_started', 'box_login_succeeded']); onlyCodes(logs);
+    });
     it('Claude: a wrong code fails the login', async () => {
         const { c } = await boxProfile('claude');
         const { api, reports } = fakeApi(['wrong']); const logs: string[] = [];
@@ -204,6 +223,15 @@ describe('box login requests', () => {
         await handleBoxLogin(c, api, { id: id(1), adapter: 'codex', profile: 'box-one' }, options(logs));
         expect(reports.map(r => r.error)).toEqual(['profile_unavailable', 'profile_unavailable', 'login_not_supported']);
     });
+    it('refuses a profile that runs the CLI another way than the registry (Claude over ACP is not the official CLI)', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const c = config(t.dir);
+        c.profiles['box-one'] = { ...c.profiles.builder, adapter: 'claude', protocol: 'acp', acpArgs: ['x'], auth: 'subscription', executable: join(t.dir, 'never-run') };
+        const { api, reports } = fakeApi(); const logs: string[] = [];
+        await handleBoxLogin(c, api, { id: id(1), adapter: 'claude', profile: 'box-one' }, options(logs));
+        expect(reports).toEqual([{ status: 'failed', error: 'login_not_supported' }]);
+        expect(existsSync(c.profiles['box-one'].stateDir)).toBe(false);
+    });
     it('refuses an API-key-only box adapter (opencode) without starting anything', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);
         const c = config(t.dir);
@@ -222,6 +250,7 @@ describe('box login requests', () => {
         expect(loginArgs('codex')).toEqual(['-c', 'analytics.enabled=false', '-c', 'feedback.enabled=false', '-c', 'check_for_update_on_startup=false', 'login', '--device-auth']);
         expect(loginArgs('claude')).toEqual(['auth', 'login', '--claudeai']);
         expect(loginArgs('opencode')).toBeNull();
+        expect(loginArgs('devin')).toEqual(['auth', 'login', '--force-manual-token-flow']);
         expect(loginArgs('gemini')).toBeNull();
     });
     it('a claimed request for any box adapter parses, so the refusal reaches Agora', async () => {
