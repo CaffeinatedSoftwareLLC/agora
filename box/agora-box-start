@@ -33,18 +33,12 @@ mkdir -p "$HOME/work" "$state" "$HOME/.local/bin" "$HOME/.npm-global" "$HOME/.ve
 chmod 700 "$HOME/.agora" "$state"
 
 # Box rules for the agent: ~/AGENTS.md and ~/CLAUDE.md (Claude reads parent folders of its
-# worktree), and the CLI's own global instructions file in its state directory
+# worktree), and the CLI's own global instructions file and settings in its state directory
+# (the box adapter registry says where: agora-host/src/box-adapters.ts)
 link() { [ -e "$2" ] || [ -L "$2" ] || ln -s "$1" "$2"; }
 link /opt/agora/AGENTS.md "$HOME/AGENTS.md"
 link /opt/agora/AGENTS.md "$HOME/CLAUDE.md"
-case "$adapter" in
-    codex) link /opt/agora/AGENTS.md "$state/AGENTS.md" ;;
-    claude)
-        link /opt/agora/AGENTS.md "$state/CLAUDE.md"
-        # The CLI is pinned in the image; it must not try to update itself (§6)
-        [ -e "$state/settings.json" ] || printf '{\n  "env": { "DISABLE_AUTOUPDATER": "1" }\n}\n' > "$state/settings.json"
-        ;;
-esac
+node "$HOST" box-config --state || { log "could not prepare the $adapter state directory"; exit 64; }
 
 # Installs go under the home folder: the root filesystem is read-only
 [ -e "$HOME/.npmrc" ] || printf 'prefix=%s/.npm-global\n' "$HOME" > "$HOME/.npmrc"

@@ -5,6 +5,7 @@ import { asService } from '../lib/agent-sessions';
 import { encryptString } from '../lib/encryption';
 import { config } from '../config';
 import { DOMAIN_ENTRY } from '../lib/boxes/contract';
+import { boxHasLogin } from '../lib/boxes/adapters';
 import { decideEdgeRequest, EdgeDecisionError, loginBlockedHosts } from '../lib/boxes/edge-requests';
 import { BOX_ADAPTERS, BoxError, REPO_PATTERN, boxAction, createBox, deleteBox, patchBox, purgeBox, restoreBox } from '../lib/boxes/service';
 
@@ -273,6 +274,8 @@ export async function boxRoutes(app: FastifyInstance) {
     app.post('/boxes/:boxId/login', { schema: { params: { type: 'object', properties: { boxId: ID } } } },
         async (request, reply) => owned(request, reply, true, async (db, box) => {
             if (box.desired_state === 'deleted') throw new BoxError(409, 'box_deleted');
+            // An API-key-only CLI (opencode) has no login of its own to relay (adapters.ts)
+            if (!boxHasLogin(box.adapter)) throw new BoxError(409, 'login_not_supported');
             await db.query(
                 `UPDATE box_login_requests SET status = 'cancelled', verification_url = NULL, user_code = NULL,
                         pasted_code_enc = NULL, pasted_code_iv = NULL, pasted_code_tag = NULL, updated_at = NOW()

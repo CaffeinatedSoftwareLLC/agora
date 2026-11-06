@@ -194,6 +194,26 @@ describe('create box', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  it('creates an opencode box with an OpenRouter key and its model, never a subscription', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ box: box({ name: 'qwen', adapter: 'opencode', auth: 'api_key' }) });
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'qwen' } });
+    fireEvent.change(within(dialog).getByLabelText('CLI'), { target: { value: 'opencode' } });
+    // An API key is its only sign-in: the subscription choice is gone and API key is picked
+    expect(within(dialog).queryByLabelText(/^Subscription/)).toBeNull();
+    expect(within(dialog).getByLabelText(/^API key/)).toBeChecked();
+    const submit = within(dialog).getByRole('button', { name: 'Create box' });
+    fireEvent.change(within(dialog).getByLabelText(/^OpenRouter API key/), { target: { value: 'sk-or-test' } });
+    expect(dialog).toHaveTextContent('Enter the model ID.');
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(/^OpenRouter model ID/), { target: { value: ' qwen/qwen3-coder ' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/boxes', {
+      name: 'qwen', adapter: 'opencode', auth: 'api_key', apiKey: 'sk-or-test', homeChannelId: 'C1', model: 'qwen/qwen3-coder',
+    }));
+  });
+
   it('offers Log in straight after creating a subscription box', async () => {
     vi.spyOn(api, 'post').mockImplementation(async (path: string) => (path === '/servers/S/boxes'
       ? { box: box({ id: 'N'.repeat(26), name: 'fresh', loginState: 'none' }) }

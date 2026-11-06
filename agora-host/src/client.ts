@@ -4,6 +4,7 @@ import { claimSchema, type BoxLoginReport, type BoxLoginRequest, type Claim, typ
 import type { ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import { REPO, type GithubCommand, type GithubResult } from './github.js';
+import { BOX_ADAPTER_NAMES } from './box-adapters.js';
 
 export class HttpError extends Error {
     /** The server's own error code (`{ "error": "box_token_outside_box" }`), when it is one. */
@@ -223,7 +224,7 @@ export class Client implements HostApi {
     async claimBoxLogin(signal?: AbortSignal): Promise<BoxLoginRequest | null> {
         const data = await this.request('GET', 'box-login', undefined, signal);
         if (data === null) return null;
-        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), adapter: z.enum(['claude', 'codex']),
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), adapter: z.enum(BOX_ADAPTER_NAMES),
             profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/) }).parse(data);
     }
     /** A login's state. The URL and code are the owner's to see; the host never logs them. */

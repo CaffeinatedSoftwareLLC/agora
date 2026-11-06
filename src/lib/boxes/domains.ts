@@ -1,4 +1,5 @@
 import { parse } from 'tldts';
+import { BOX_ADAPTER_REGISTRY } from './adapters';
 import { DOMAIN_ENTRY, PROVIDER_DOMAINS } from './contract';
 
 /**
@@ -8,22 +9,16 @@ import { DOMAIN_ENTRY, PROVIDER_DOMAINS } from './contract';
  */
 
 /**
- * Telemetry, metrics and error-report hosts of the CLIs a box runs. Each CLI works without them
+ * Telemetry, metrics and error-report hosts of the CLIs a box runs, from each adapter's entry in
+ * the box adapter registry (adapters.ts). Each CLI works without them
  * (its vendor documents switching them off, and the box does: agora-host's childEnv and box
  * arguments), so the edge refuses them without an approval card. A name here covers its
  * subdomains. Only the ingest hosts are listed, never a vendor's whole domain: an agent working
  * on a project that uses Sentry or Datadog still reaches their APIs (with a card). The owner can
  * let one through by adding its exact name to the box's allowlist; a wildcard never does.
  */
-export const TELEMETRY_DOMAINS: readonly { domain: string; cli: string; what: string }[] = [
-    { domain: 'ab.chatgpt.com', cli: 'Codex', what: 'usage metrics (OpenTelemetry export; `analytics.enabled`)' },
-    { domain: 'ingest.sentry.io', cli: 'Codex', what: 'feedback and crash reports' },
-    { domain: 'ingest.us.sentry.io', cli: 'Codex', what: 'feedback and crash reports (`o33249.ingest.us.sentry.io`)' },
-    { domain: 'ingest.de.sentry.io', cli: 'Codex', what: 'feedback and crash reports' },
-    { domain: 'statsig.anthropic.com', cli: 'Claude Code', what: 'feature flags and events (older versions)' },
-    { domain: 'http-intake.logs.us5.datadoghq.com', cli: 'Claude Code', what: 'operational metrics' },
-    { domain: 'browser-intake-us5-datadoghq.com', cli: 'Claude Code', what: 'error reports' },
-];
+export const TELEMETRY_DOMAINS: readonly { domain: string; cli: string; what: string }[] = Object.values(BOX_ADAPTER_REGISTRY)
+    .flatMap(spec => spec.telemetry.map(t => ({ domain: t.domain, cli: spec.label, what: t.what })));
 
 const under = (host: string, domain: string) => host === domain || host.endsWith(`.${domain}`);
 

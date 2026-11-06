@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, posix } from 'node:path';
+import { chmod, lstat, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, posix } from 'node:path';
 import { z } from 'zod';
 import { configSchema } from './config.js';
+import { BOX_ADAPTER_NAMES, BOX_ADAPTERS, type BoxAdapterName } from './box-adapters.js';
 import { HostConfigError } from './terms.js';
 
 /**
@@ -36,25 +37,16 @@ export function proxyVars(source: NodeJS.ProcessEnv = process.env): NodeJS.Proce
 
 /**
  * Codex's non-essential traffic, off in a box (docs/agent-boxes.md §4.2.1): usage metrics to
- * ab.chatgpt.com, feedback reports to Sentry, and the update check. Codex works without them;
- * the edge refuses those hosts anyway, and each refusal would cost a request. Root-level `-c`
- * overrides, accepted by `codex exec`, `codex app-server` and `codex login` alike (Codex
- * type-checks them, so a renamed key fails loudly).
+ * ab.chatgpt.com, feedback reports to Sentry, and the update check. From the box adapter
+ * registry (box-adapters.ts); also passed to `codex app-server` and `codex login` in a box.
  */
-export const CODEX_BOX_QUIET = ['-c', 'analytics.enabled=false', '-c', 'feedback.enabled=false', '-c', 'check_for_update_on_startup=false'] as const;
+export const CODEX_BOX_QUIET = BOX_ADAPTERS.codex.quiet.args;
 
-/** Claude Code's equivalent, as environment variables (code.claude.com/docs/en/network-config). */
-export const CLAUDE_BOX_QUIET = {
-    // Telemetry, error reports, auto-updates, /feedback, release notes and feature flags
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-    DISABLE_AUTOUPDATER: '1',
-    // The official plugin marketplace is cloned from github.com, which a box reaches only
-    // through the git broker: every start would make a card
-    CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
-} as const;
+/** Claude Code's equivalent, as environment variables (box-adapters.ts). */
+export const CLAUDE_BOX_QUIET = BOX_ADAPTERS.claude.quiet.env;
 
 /** The pinned CLIs in the box image (box/Dockerfile links them here). */
-export const BOX_CLI = { claude: '/opt/agora/bin/claude', codex: '/opt/agora/bin/codex' } as const;
+export const BOX_CLI = Object.fromEntries(BOX_ADAPTER_NAMES.map(a => [a, BOX_ADAPTERS[a].executable])) as { [A in BoxAdapterName]: string };
 export const BOX_MCP = '/opt/agora/agora-mcp/dist/index.js';
 export const BOX_HOME = '/home/agent';
 
@@ -67,7 +59,7 @@ const repo = z.string().max(141).refine(s => {
 }, 'repo');
 const boxProfile = z.object({
     name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
-    adapter: z.enum(['claude', 'codex']),
+    adapter: z.enum(BOX_ADAPTER_NAMES),
     auth: z.enum(['subscription', 'api_key']),
     apiKeyEnv: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/).nullable().default(null),
     workdirAlias: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/).default('work'),
@@ -84,6 +76,8 @@ export function readBoxProfile(env: NodeJS.ProcessEnv): BoxProfile {
     const p = parsed.data;
     if (p.auth === 'api_key' && !p.apiKeyEnv) throw new HostConfigError('AGORA_BOX_PROFILE: auth "api_key" needs apiKeyEnv');
     if (p.auth !== 'api_key' && p.apiKeyEnv) throw new HostConfigError('AGORA_BOX_PROFILE: apiKeyEnv is only used with auth "api_key"');
+    if (!(BOX_ADAPTERS[p.adapter].authModes as readonly string[]).includes(p.auth))
+        throw new HostConfigError(`AGORA_BOX_PROFILE: ${p.adapter} in a box signs in with ${BOX_ADAPTERS[p.adapter].authModes.join(' or ')}`);
     return p;
 }
 
@@ -132,6 +126,8 @@ export function boxConfig(env: NodeJS.ProcessEnv, paths: BoxPaths = { home: BOX_
         profiles: {
             [profile.name]: {
                 adapter: profile.adapter, executable: BOX_CLI[profile.adapter], workdir, workdirAlias: profile.workdirAlias,
+                // An ACP agent (opencode) is started with its registry arguments
+                ...(BOX_ADAPTERS[profile.adapter].protocol === 'acp' ? { protocol: 'acp' as const, acpArgs: [...BOX_ADAPTERS[profile.adapter].acpArgs] } : {}),
                 stateDir: posix.join(paths.home, '.agora', 'state', profile.name), auth: profile.auth,
                 ...(profile.auth === 'api_key' ? { apiKeyEnv: profile.apiKeyEnv! } : {}),
                 // HTTPS_PROXY/HTTP_PROXY/NO_PROXY reach the CLI (§4.2); honoured only in box mode
@@ -146,9 +142,34 @@ export function boxConfig(env: NodeJS.ProcessEnv, paths: BoxPaths = { home: BOX_
     return config;
 }
 
+/** The box rules every CLI reads (box/AGENTS.md in the image). */
+export const BOX_RULES = '/opt/agora/AGENTS.md';
+
 /**
- * agora-host box-config --repos | --out <file> [--home <dir>]
+ * The profile's state directory as its CLI expects it in a box (box-adapters.ts `state`): the
+ * box rules linked as the CLI's global instructions file, and its settings files, each made only
+ * when nothing is there yet (the home folder is kept across rebuilds; an owner's edit stays).
+ */
+export async function prepareBoxState(env: NodeJS.ProcessEnv, home = BOX_HOME, rules = BOX_RULES): Promise<void> {
+    const profile = readBoxProfile(env);
+    const { state } = BOX_ADAPTERS[profile.adapter];
+    const dir = join(home, '.agora', 'state', profile.name);
+    const absent = async (path: string) => { try { await lstat(path); return false; } catch { return true; } };
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const rulesFile = join(dir, state.rulesFile);
+    await mkdir(dirname(rulesFile), { recursive: true, mode: 0o700 });
+    if (await absent(rulesFile)) await symlink(rules, rulesFile);
+    for (const [name, content] of Object.entries(state.files) as [string, string][]) {
+        const file = join(dir, name);
+        await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+        if (await absent(file)) await writeFile(file, content, { mode: 0o600, flag: 'wx' });
+    }
+}
+
+/**
+ * agora-host box-config --repos | --state | --out <file> [--home <dir>]
  * --repos: check the environment and print the attached repos, one `owner/repo` per line.
+ * --state: prepare the profile's state directory for its CLI (prepareBoxState).
  * --out: write the host config (mode 0600) for agora-host --config.
  */
 export async function boxConfigCommand(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
@@ -160,8 +181,13 @@ export async function boxConfigCommand(args: string[], env: NodeJS.ProcessEnv = 
             for (const r of readBoxProfile(env).repos) process.stdout.write(`${r}\n`);
             return 0;
         }
+        if (args.includes('--state')) {
+            boxConfig(env, { home, exists: () => false });
+            await prepareBoxState(env, home);
+            return 0;
+        }
         const out = flag('--out');
-        if (!out || !isAbsolute(out)) { console.error('Usage: agora-host box-config --repos | --out <absolute-file> [--home <dir>]'); return 2; }
+        if (!out || !isAbsolute(out)) { console.error('Usage: agora-host box-config --repos | --state | --out <absolute-file> [--home <dir>]'); return 2; }
         const config = boxConfig(env, { home });
         await writeFile(out, JSON.stringify(config, null, 2), { mode: 0o600 });
         await chmod(out, 0o600);

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Checkpoint, ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import type { GithubCommand, GithubResult } from './github.js';
+import type { BoxAdapterName } from './box-adapters.js';
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 const seconds = z.number().finite().positive().max(86400);
@@ -139,7 +140,7 @@ export interface HostApi {
     /** The code the owner pasted for a Claude login, once; null until there is one. */
     boxLoginCode?(id: string, signal?: AbortSignal): Promise<string | null>;
 }
-export interface BoxLoginRequest { id: string; adapter: 'claude' | 'codex'; profile: string }
+export interface BoxLoginRequest { id: string; adapter: BoxAdapterName; profile: string }
 export type BoxLoginStatus = 'awaiting_user' | 'awaiting_code' | 'succeeded' | 'failed';
 export interface BoxLoginReport { status: BoxLoginStatus; verificationUrl?: string; userCode?: string; error?: string }
 export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv: string | null; runApproval: boolean }

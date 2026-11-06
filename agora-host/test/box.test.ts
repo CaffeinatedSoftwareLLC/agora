@@ -118,6 +118,8 @@ describe('child environment in a box', () => {
         expect(env).toMatchObject({ ...proxies, https_proxy: 'http://edge:3128', http_proxy: 'http://edge:3128', no_proxy: 'edge' });
         expect(env.OTHER).toBeUndefined(); expect(env.AGORA_HOST_IN_BOX).toBeUndefined();
         expect(childEnv({ ...c.profiles.builder, proxyEnv: false }, source).HTTPS_PROXY).toBeUndefined();
+        // Only an adapter with a local server of its own adds to NO_PROXY (box-adapters.ts noProxy)
+        expect(env.NO_PROXY).toBe('edge');
         boxMode.marker = join(marker, '..', 'missing');
         expect(childEnv(c.profiles.builder, source).HTTPS_PROXY).toBeUndefined();
         expect(proxyVars({ HTTPS_PROXY: 'http://edge:3128\nX: y' })).toEqual({});
@@ -248,4 +250,95 @@ describe.skipIf(!unix)('fake CLIs from box/fake', () => {
             expect(call.envNames).toContain('AGORA_BOT_TOKEN');
         });
     }
+});
+
+// ─── opencode, the first ACP box adapter (box-adapters.ts) ───
+
+const FAKE_ACP = fileURLToPath(new URL('../../box/fake/fake-acp.mjs', import.meta.url));
+async function opencodeSetup(executable = process.execPath) {
+    const dir = await repo();
+    const base = config(dir);
+    const c = configSchema.parse({ ...base, profiles: { builder: { adapter: 'opencode', executable, workdir: dir, workdirAlias: 'agora',
+        stateDir: join(dir, 'state'), approvedTools: ['chat_history', 'chat_send'], proxyEnv: true } } });
+    const delivery = claim();
+    Object.assign(delivery.profile, { adapter: 'opencode', model: 'qwen/qwen3-coder', effort: null, authMode: 'api_key' });
+    process.env.OPENROUTER_API_KEY = 'sk-or-box-secret';
+    return { c, delivery, dir };
+}
+
+describe('opencode in a box', () => {
+    const profile = (p: object = {}) => JSON.stringify({ name: 'qwen', adapter: 'opencode', auth: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY', workdirAlias: 'work', repos: [], ...p });
+    const env = (p: object = {}) => ({ AGORA_INSTANCE_URL: 'http://edge:8080', AGORA_HOST_TOKEN: HOST_TOKEN, AGORA_BOT_ID: id(5),
+        AGORA_BOT_TOKEN: BOX_BOT_TOKEN, AGORA_BOX_PROFILE: profile(p) });
+    it('box config: the pinned CLI over ACP on its OpenRouter key; a subscription is refused', () => {
+        const c = boxConfig(env(), { home: '/home/agent', exists: () => false });
+        expect(c.profiles.qwen).toEqual({ adapter: 'opencode', executable: '/opt/agora/bin/opencode', workdir: '/home/agent/scratch', workdirAlias: 'work',
+            protocol: 'acp', acpArgs: ['acp'], stateDir: '/home/agent/.agora/state/qwen', auth: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY', proxyEnv: true });
+        expect(configSchema.safeParse(c).success).toBe(true);
+        expect(() => boxConfig(env({ auth: 'subscription', apiKeyEnv: null }), { home: '/home/agent', exists: () => false }))
+            .toThrow('AGORA_BOX_PROFILE: opencode in a box signs in with api_key');
+    });
+    it('yeet: every tool allowed but web search, every permission request allowed, quiet; never on a machine', async () => {
+        const { c, delivery } = await opencodeSetup();
+        Object.assign(process.env, { HTTPS_PROXY: 'http://edge:3128', NO_PROXY: 'edge' });
+        // On a machine (flag set, no marker): opencode asks and the host answers from the rules
+        process.env.AGORA_HOST_IN_BOX = '1'; boxMode.marker = join(marker, '..', 'missing');
+        let launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(launch.acp!.allowAll).toBeUndefined();
+        expect(JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT!).permission).toEqual({ '*': 'ask', todowrite: 'allow', todoread: 'allow' });
+        expect(launch.env.OPENCODE_DISABLE_DEFAULT_PLUGINS).toBeUndefined();
+        expect(launch.env.HTTPS_PROXY).toBeUndefined();
+        enterBox();
+        launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(launch.acp!.allowAll).toBe(true);
+        expect(launch.args).toEqual(['acp']);
+        const inline = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT!);
+        expect(inline).toMatchObject({ model: 'openrouter/qwen/qwen3-coder', enabled_providers: ['openrouter'], share: 'disabled', autoupdate: false,
+            permission: { '*': 'allow', websearch: 'deny', codesearch: 'deny' } });
+        expect(launch.env).toMatchObject({ OPENROUTER_API_KEY: 'sk-or-box-secret', OPENCODE_DISABLE_DEFAULT_PLUGINS: '1', OPENCODE_DISABLE_AUTOUPDATE: '1',
+            OPENCODE_DISABLE_SHARE: '1', HTTPS_PROXY: 'http://edge:3128', https_proxy: 'http://edge:3128' });
+        // opencode's own server on 127.0.0.1 stays off the edge's proxy (its session/new fails otherwise)
+        expect(launch.env.NO_PROXY).toBe('edge,localhost,127.0.0.1,::1');
+        expect(launch.env.no_proxy).toBe('edge,localhost,127.0.0.1,::1');
+        expect(launch.env.AGORA_HOST_TOKEN).toBeUndefined();
+    });
+    it.skipIf(!unix)('box-config --state links each CLI\'s rules file and writes its settings once', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const { readlink } = await import('node:fs/promises');
+        for (const [adapter, auth, key] of [['claude', 'subscription', null], ['codex', 'subscription', null], ['opencode', 'api_key', 'OPENROUTER_API_KEY']] as const) {
+            const e = env({ name: `box-${adapter}`, adapter, auth, apiKeyEnv: key });
+            expect(await boxConfigCommand(['--state', '--home', t.dir], e)).toBe(0);
+            const state = join(t.dir, '.agora', 'state', `box-${adapter}`);
+            const rules = { claude: 'CLAUDE.md', codex: 'AGENTS.md', opencode: join('config', 'opencode', 'AGENTS.md') }[adapter];
+            expect(await readlink(join(state, rules))).toBe('/opt/agora/AGENTS.md');
+            if (adapter === 'claude') {
+                expect(await readFile(join(state, 'settings.json'), 'utf8')).toBe('{\n  "env": { "DISABLE_AUTOUPDATER": "1" }\n}\n');
+                expect((await stat(join(state, 'settings.json'))).mode & 0o777).toBe(0o600);
+                // An owner's edit is kept at the next start
+                await writeFile(join(state, 'settings.json'), '{}');
+                expect(await boxConfigCommand(['--state', '--home', t.dir], e)).toBe(0);
+                expect(await readFile(join(state, 'settings.json'), 'utf8')).toBe('{}');
+            }
+        }
+    });
+    it.skipIf(!unix)('the fake opencode from box/fake runs a turn as agora-host drives it in a box', async () => {
+        const bin = await tempDir(); cleanups.push(bin.cleanup);
+        const exe = join(bin.dir, 'opencode.mjs'); await copyFile(FAKE_ACP, exe); await chmod(exe, 0o755);
+        enterBox();
+        process.env.AGORA_HOST_TOKEN = HOST_TOKEN;
+        const { c, delivery } = await opencodeSetup(exe);
+        await mkdir(c.profiles.builder.stateDir, { recursive: true });
+        expect(await verifyProfile(c.profiles.builder)).toBe('acp/1 1.18.34');
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        const result = await new ProcessRunner().start(launch).result;
+        expect(result).toMatchObject({ success: true, summary: 'fake opencode turn', tokensUsed: 15 });
+        const call = JSON.parse(await readFile(join(c.profiles.builder.stateDir, '.fake-last-call.json'), 'utf8'));
+        expect(call.args).toEqual(['acp']);
+        // Its permission request was allowed: the box is the sandbox
+        expect(call.answers).toEqual(['once']);
+        expect(call.permission).toEqual({ '*': 'allow', websearch: 'deny', codesearch: 'deny' });
+        expect(call.envNames).toContain('OPENROUTER_API_KEY');
+        expect(call.envNames).not.toContain('AGORA_HOST_TOKEN');
+        expect(call.envNames).not.toContain('AGORA_HOST_IN_BOX');
+    });
 });

@@ -3,7 +3,7 @@ import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promise
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { boxLoginLoop, handleBoxLogin, parsePrompt, plainText, type BoxLoginOptions } from '../src/box-login.js';
+import { boxLoginLoop, handleBoxLogin, loginArgs, parsePrompt, plainText, type BoxLoginOptions } from '../src/box-login.js';
 import { boxMode } from '../src/box.js';
 import { Client, HttpError } from '../src/client.js';
 import type { Config } from '../src/config.js';
@@ -203,6 +203,31 @@ describe('box login requests', () => {
         await handleBoxLogin(c, api, { id: id(1), adapter: 'claude', profile: 'builder' }, options(logs));
         await handleBoxLogin(c, api, { id: id(1), adapter: 'codex', profile: 'box-one' }, options(logs));
         expect(reports.map(r => r.error)).toEqual(['profile_unavailable', 'profile_unavailable', 'login_not_supported']);
+    });
+    it('refuses an API-key-only box adapter (opencode) without starting anything', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const c = config(t.dir);
+        c.profiles.qwen = { ...c.profiles.builder, adapter: 'opencode', protocol: 'acp', acpArgs: ['acp'], auth: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY',
+            executable: join(t.dir, 'never-run') };
+        const { api, reports } = fakeApi(); const logs: string[] = [];
+        await handleBoxLogin(c, api, { id: id(1), adapter: 'opencode', profile: 'qwen' }, options(logs));
+        expect(reports).toEqual([{ status: 'failed', error: 'login_not_supported' }]);
+        expect(logs).toEqual(['box_login_not_supported']);
+        // Nothing was spawned, and no state directory was made for a login
+        expect(existsSync(c.profiles.qwen.stateDir)).toBe(false);
+        // Its login has no prompt to find, whatever it printed
+        expect(parsePrompt('opencode', CODEX_OUTPUT)).toBeNull();
+    });
+    it('login commands are the registry\'s, after the quiet switches (as before the registry)', () => {
+        expect(loginArgs('codex')).toEqual(['-c', 'analytics.enabled=false', '-c', 'feedback.enabled=false', '-c', 'check_for_update_on_startup=false', 'login', '--device-auth']);
+        expect(loginArgs('claude')).toEqual(['auth', 'login', '--claudeai']);
+        expect(loginArgs('opencode')).toBeNull();
+        expect(loginArgs('gemini')).toBeNull();
+    });
+    it('a claimed request for any box adapter parses, so the refusal reaches Agora', async () => {
+        const fetcher = (async () => new Response(JSON.stringify({ id: id(1), adapter: 'opencode', profile: 'qwen' }), { status: 200 })) as unknown as typeof fetch;
+        const client = new Client('http://edge:8080/', 'ah_host.secret', fetcher, undefined, 1);
+        expect(await client.claimBoxLogin()).toEqual({ id: id(1), adapter: 'opencode', profile: 'qwen' });
     });
     it('polls only in box mode', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);

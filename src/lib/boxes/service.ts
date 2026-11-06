@@ -4,6 +4,7 @@ import { hashPassword } from '../../auth/passwords';
 import { usernameTaken } from '../usernames';
 import { encryptString } from '../encryption';
 import { config } from '../../config';
+import { BOX_ADAPTER_REGISTRY, type BoxAdapter } from './adapters';
 import { defaultAllowlist } from './contract';
 import { wildcardTooWide } from './domains';
 
@@ -20,10 +21,12 @@ export class BoxError extends Error {
     constructor(public status: number, public code: string, public detail?: string) { super(code); }
 }
 
-export const BOX_ADAPTERS = ['claude', 'codex'] as const;
-export type BoxAdapter = typeof BOX_ADAPTERS[number];
+/** The CLIs a box can run: the box adapter registry (adapters.ts) is the only list. */
+export { BOX_ADAPTERS, type BoxAdapter } from './adapters';
 /** The variable the box's CLI reads its key from (agora-host src/adapters.ts: codex reads only CODEX_API_KEY). */
-export const API_KEY_ENV: Record<BoxAdapter, string> = { claude: 'ANTHROPIC_API_KEY', codex: 'CODEX_API_KEY' };
+export const API_KEY_ENV = Object.fromEntries(
+    Object.entries(BOX_ADAPTER_REGISTRY).map(([adapter, spec]) => [adapter, spec.apiKeyEnv])
+) as Record<BoxAdapter, string>;
 /** A deleted box's home volume is kept this long (§9.6). */
 export const DELETE_GRACE_DAYS = 7;
 export const REPO_PATTERN = '^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$';
@@ -77,7 +80,12 @@ export interface CreateBoxInput {
 
 /** The box's bot, host, profile, box row and repos, in the caller's transaction. Returns the box ID. */
 export async function createBox(db: any, input: CreateBoxInput): Promise<string> {
-    const auth = input.auth ?? 'subscription';
+    const spec = BOX_ADAPTER_REGISTRY[input.adapter];
+    if (!spec) throw new BoxError(400, 'unsupported_adapter');
+    // The adapter's first sign-in mode is its default: subscription where it has a login to relay
+    const auth = input.auth ?? spec.authModes[0];
+    if (!(spec.authModes as readonly string[]).includes(auth)) throw new BoxError(400, 'auth_not_supported', `${spec.label} in a box signs in with ${spec.authModes.join(' or ')}`);
+    if (spec.modelRequired && !input.model) throw new BoxError(400, 'model_required', `${spec.label} needs a model`);
     if (auth === 'api_key' && !input.apiKey) throw new BoxError(400, 'api_key_required');
     if (auth !== 'api_key' && input.apiKey) throw new BoxError(400, 'api_key_needs_api_key_auth');
     await requireChannel(db, input.serverId, input.homeChannelId);

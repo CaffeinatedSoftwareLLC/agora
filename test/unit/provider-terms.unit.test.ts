@@ -40,8 +40,8 @@ describe('provider terms', () => {
             .map(f => f.slice(ROOT.length + 1).replace(/\\/g, '/'))
             .filter(f => !f.startsWith('agora-host/src/siwc/'))
             // A box's default allowlist names the domain so the box's own codex CLI can sign
-            // itself in (docs/agent-boxes.md §4.2, §8.2); Agora runs no OAuth flow there
-            .filter(f => f !== 'src/lib/boxes/contract.ts');
+            // itself in (docs/agent-boxes.md §4.2, §8.2; the box adapter registry); Agora runs no OAuth flow there
+            .filter(f => f !== 'src/lib/boxes/adapters.ts');
         expect(hits).toEqual([]);
     });
 
