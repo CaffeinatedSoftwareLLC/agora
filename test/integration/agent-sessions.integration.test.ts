@@ -507,6 +507,213 @@ describe('thread and case-insensitive mentions (#120)', () => {
     });
 });
 
+describe('thread follow-ups: a reply without a mention goes to the agent the thread is with', () => {
+    let helper: Agent;
+    beforeAll(async () => { helper = await makeAgent('helper', 'claude'); });
+
+    async function threadRows(sessionId: string) {
+        const rows = await ctx.db.query(`SELECT message_id, thread_id, reason FROM agent_inbox WHERE session_id = $1 ORDER BY id`, [sessionId]);
+        return rows.rows.map((r: any) => ({ message_id: r.message_id.trim(), thread_id: r.thread_id?.trim() ?? null, reason: r.reason }));
+    }
+    async function noticesSince(since: string): Promise<string[]> {
+        const rows = await ctx.db.query(
+            `SELECT content FROM messages WHERE channel_id = $1 AND author_id IS NULL AND system_event = 'agent_session' AND id > $2 ORDER BY id`,
+            [channelId, since]);
+        return rows.rows.map((r: any) => r.content);
+    }
+    const ids = async (sessionId: string) => (await inbox(sessionId)).map(r => r.message_id);
+
+    it('wakes the agent that last posted in the thread, with the thread as destination', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(owner.auth, '@codex look at the failing build');
+        await reply(codex.auth, parent.id, 'auth.spec.ts fails on a stale fixture');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const since = generateUlid();
+        const r = await reply(owner.auth, parent.id, 'fix it please');
+        expect(await threadRows(sx)).toEqual([{ message_id: r.id, thread_id: parent.id, reason: 'direct' }]);
+        expect(await inbox(sc)).toEqual([]);
+        expect(await noticesSince(since)).toEqual([]);
+        const c = await claim();
+        expect(c.body.session.id).toBe(sx);
+        expect(c.body.inbox).toEqual([expect.objectContaining({ messageId: r.id, threadId: parent.id, reason: 'direct' })]);
+    });
+
+    it('counts the parent: an agent that opened the thread is the one it is with', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(codex.auth, 'Opened the PR, details in this thread');
+        const r = await reply(owner.auth, parent.id, 'looks good, merge it');
+        expect(await ids(sx)).toEqual([r.id]);
+        expect(await inbox(sc)).toEqual([]);
+    });
+
+    it('wakes only the latest of two agents that posted; a deleted post doesn\'t count', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(codex.auth, 'PR is up');
+        await reply(owner.auth, parent.id, '@claude review it please');
+        await reply(claude.auth, parent.id, 'I reviewed it: one nit');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const r = await reply(owner.auth, parent.id, 'go ahead and fix the nit');
+        expect(await ids(sc)).toEqual([r.id]);
+        expect(await ids(sx)).toEqual([]);
+
+        // codex (it wrote the parent) posts last, then deletes it: claude is the one again
+        const late = await reply(codex.auth, parent.id, 'I can fix it instead');
+        const del = await ctx.request.delete(`/channels/${channelId}/messages/${late.id}`).set(codex.auth);
+        expect([200, 204], JSON.stringify(del.body)).toContain(del.status);
+        const again = await reply(owner.auth, parent.id, 'claude, go on');
+        expect(await ids(sc)).toContain(again.id);
+        expect(await ids(sx)).toEqual([]);
+    });
+
+    it('a lurker\'s interjection doesn\'t take the thread: the agent being talked to wakes', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        await ctx.db.query(`UPDATE agent_sessions SET lurk_mode = 'balanced' WHERE id = $1`, [sc]);
+        const parent = await post(owner.auth, '@codex build the relay');
+        await reply(codex.auth, parent.id, 'on it');
+        await reply(claude.auth, parent.id, 'careful: the relay needs TLS');
+        const r = await reply(owner.auth, parent.id, 'good point, add TLS');
+        expect(await threadRows(sx)).toContainEqual({ message_id: r.id, thread_id: parent.id, reason: 'direct' });
+        // The lurker still hears it passively, never as 'direct'
+        expect((await threadRows(sc)).filter(x => x.message_id === r.id).map(x => x.reason)).toEqual(['lurk']);
+    });
+
+    it('a reply that @mentions a person is addressed to them, and one naming two agents wakes nobody after', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(owner.auth, '@codex build the relay');
+        await reply(codex.auth, parent.id, 'done');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const toPerson = await reply(owner.auth, parent.id, '@asmember can you check this?');
+        expect(toPerson.mentions).toEqual([member.userId]);
+        expect(await inbox(sx)).toEqual([]);
+
+        const both = await reply(owner.auth, parent.id, '@codex @claude compare notes');
+        expect(await ids(sx)).toEqual([both.id]);
+        expect(await ids(sc)).toEqual([both.id]);
+        const plain = await reply(owner.auth, parent.id, 'well?');
+        expect(await ids(sx)).not.toContain(plain.id);
+        expect(await ids(sc)).not.toContain(plain.id);
+    });
+
+    it('an @mention by the owner moves the thread to that agent', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(owner.auth, '@codex build the relay');
+        await reply(codex.auth, parent.id, 'done, branch relay-1');
+        const handover = await reply(owner.auth, parent.id, '@claude review this please');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const r = await reply(owner.auth, parent.id, 'and check the tests too');
+        expect(await ids(sc)).toEqual([r.id]);
+        expect(await ids(sx)).toEqual([]);
+        expect(handover.id).toBeTruthy();
+    });
+
+    it('a reply that @mentions an agent wakes only that agent, as before', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(codex.auth, 'PR is up');
+        await reply(claude.auth, parent.id, 'reviewed');
+        const r = await reply(owner.auth, parent.id, '@codex address the review');
+        expect(await ids(sx)).toEqual([r.id]);
+        expect(await ids(sc)).toEqual([]);
+        // A mention of any other bot is an address too: nobody it is with wakes
+        const o = await reply(owner.auth, parent.id, '@outsider what do you think?');
+        expect(await ids(sx)).not.toContain(o.id);
+        expect(await ids(sc)).not.toContain(o.id);
+    });
+
+    it('agents\' and other bots\' replies, and a member\'s, wake nobody', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(codex.auth, 'PR is up');
+        await reply(claude.auth, parent.id, 'nice');
+        await reply(outsider.auth, parent.id, 'ping');
+        await reply(member.auth, parent.id, 'what about the docs?');
+        expect(await inbox(sx)).toEqual([]);
+        expect(await inbox(sc)).toEqual([]);
+    });
+
+    it('a bound collaboration thread keeps its rules, open or closed', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const sh = await startSession(helper);
+        const start = await post(claude.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [claude, codex]\ntask: x');
+        await reply(helper.auth, start.id, 'an aside from a non-participant');
+        const d = await reply(owner.auth, start.id, 'both of you: focus on tests');
+        // Participants hear the director as before; the non-participant that posted last does not
+        expect(await ids(sx)).toContain(d.id);
+        expect(await ids(sc)).toContain(d.id);
+        expect(await ids(sh)).toEqual([]);
+        await reply(claude.auth, start.id, '[AGORA/v1 MODE=plan STATE=DONE]\nfinished');
+        const after = await reply(owner.auth, start.id, 'thanks, one more thing');
+        expect(await ids(sx)).not.toContain(after.id);
+        expect(await ids(sc)).not.toContain(after.id);
+        expect(await ids(sh)).toEqual([]);
+    });
+
+    it('an agent on standby (live terminal session) is not woken, and nobody else is', async () => {
+        const sx = await startSession(codex);
+        const sc = await startSession(claude);
+        const terminal = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, kind, terminal_mode) VALUES ($1, $2, $3, $4, 'terminal', 'mcp')`,
+            [terminal, serverId, channelId, codex.botId]);
+        const parent = await post(claude.auth, 'PR is up');
+        await reply(owner.auth, parent.id, '@codex take the review');
+        await reply(codex.auth, parent.id, 'I will take the review');
+        const since = generateUlid();
+        await reply(owner.auth, parent.id, 'go ahead');
+        expect(await inbox(sx)).toEqual([]);
+        expect(await inbox(sc)).toEqual([]);
+        expect(await noticesSince(since)).toEqual([]);
+    });
+
+    it('wakes nobody when the agent it is with has no live session, or no agent was ever in the thread', async () => {
+        await startSession(codex);
+        const sc = await startSession(claude);
+        const parent = await post(claude.auth, 'PR is up');
+        const helperSession = await startSession(helper);
+        await reply(owner.auth, parent.id, '@helper can you help?');
+        await reply(helper.auth, parent.id, 'I can help');
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [helperSession]);
+        const since = generateUlid();
+        const r = await reply(owner.auth, parent.id, 'helper, go');
+        expect(await ids(sc)).not.toContain(r.id);
+        expect(await noticesSince(since)).toEqual([]);
+
+        const plain = await post(member.auth, 'a question for the humans');
+        await reply(member.auth, plain.id, 'an answer');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const q = await reply(owner.auth, plain.id, 'agreed');
+        const rows = await ctx.db.query('SELECT 1 FROM agent_inbox WHERE message_id = $1', [q.id]);
+        expect(rows.rows).toEqual([]);
+        expect(await noticesSince(since)).toEqual([]);
+    });
+
+    it('a task card\'s thread: its own session takes the reply, not the channel session that posted there', async () => {
+        const channelSession = await startSession(codex);
+        const parent = await post(owner.auth, 'card thread');
+        const scopedId = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, thread_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [scopedId, serverId, channelId, claude.botId, claude.profileId, owner.userId, parent.id]);
+        await reply(codex.auth, parent.id, 'a note from the channel session');
+        await ctx.db.query('TRUNCATE agent_inbox CASCADE');
+        const r = await reply(owner.auth, parent.id, 'carry on');
+        expect(await ids(scopedId)).toEqual([r.id]);
+        expect(await inbox(channelSession)).toEqual([]);
+        // Once the card's session ended it is still the card's thread: no follow-up
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [scopedId]);
+        const later = await reply(owner.auth, parent.id, 'anyone?');
+        expect(await ids(channelSession)).not.toContain(later.id);
+    });
+});
+
 describe('commands (S4)', () => {
     const cmd = (auth: object, body: object) => ctx.request.post(`/channels/${channelId}/agent-commands`).set(auth).send(body);
 

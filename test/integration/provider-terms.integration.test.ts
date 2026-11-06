@@ -241,6 +241,29 @@ describe('subscription profiles: thread mentions (#120)', () => {
         const mine = await reply(owner.auth, parent.id, '@Alpha check the PR');
         expect(await inbox(s)).toEqual([{ message_id: mine.id, reason: 'direct' }]);
     });
+
+    it("a follow-up without a mention: the owner's wakes it; a director's and a member's are silent, with no notice", async () => {
+        const s = await startSession(alpha);
+        const parent = await post(alpha.auth, 'Opened the PR, details here');
+        const since = mark();
+        await reply(director.auth, parent.id, 'merge it');
+        await reply(member.auth, parent.id, 'nice work');
+        expect(await inbox(s)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+        const mine = await reply(owner.auth, parent.id, 'merge it');
+        expect(await inbox(s)).toEqual([{ message_id: mine.id, reason: 'direct' }]);
+    });
+
+    it("a follow-up from a director wakes an API-key agent on a box host", async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(alpha, 'api_key');
+        const s = await startSession(alpha, director.userId);
+        const parent = await post(alpha.auth, 'Opened the PR, details here');
+        const since = mark();
+        const r = await reply(director.auth, parent.id, 'merge it');
+        expect(await inbox(s)).toEqual([{ message_id: r.id, reason: 'direct' }]);
+        expect(await notices(since)).toEqual([]);
+    });
 });
 
 describe('subscription profiles: commands', () => {
