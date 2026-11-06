@@ -6,6 +6,11 @@ import { freshChannel, makeBot, scrubText, uniq } from '../lib/helpers';
 
 /** A bot's expandable row on /settings/bots. */
 const botRow = (page: Page, name: string) => page.locator('div.rounded-lg.overflow-hidden').filter({ has: page.getByText(name, { exact: true }) });
+/** The list is virtualized (#241): search first, so the row is mounted however many bots the instance has. */
+async function findBot(page: Page, name: string) {
+    await page.getByLabel('Search bots').fill(name);
+    return botRow(page, name);
+}
 
 async function openBots(page: Page) {
     await page.goto('/settings/bots');
@@ -36,7 +41,7 @@ test.describe('bots, tokens and agent invites', () => {
         expect(mine, 'one bot created').toHaveLength(1);
         const botId: string = mine[0].id;
 
-        const row = botRow(page, name);
+        const row = await findBot(page, name);
         await row.getByRole('button').filter({ has: page.getByText(name, { exact: true }) }).click();
         // The token is on screen from this click on: failure evidence keeps no PNG and is scrubbed
         sensitive.begin();
@@ -68,7 +73,7 @@ test.describe('bots, tokens and agent invites', () => {
 
         await page.reload();
         await expect(page.getByRole('heading', { name: 'Bot Management' })).toBeVisible({ timeout: 15_000 });
-        const row2 = botRow(page, name);
+        const row2 = await findBot(page, name);
         await row2.getByRole('button').filter({ has: page.getByText(name, { exact: true }) }).click();
         const tokenRow = row2.getByText('Unnamed');
         await expect(tokenRow).toBeVisible();
@@ -150,7 +155,7 @@ test.describe('bots, tokens and agent invites', () => {
         expect(before.status).toBe(201);
 
         await openBots(page);
-        const row = botRow(page, name);
+        const row = await findBot(page, name);
         page.once('dialog', d => { expect(d.type()).toBe('prompt'); void d.accept('e2e pause'); });
         const pauseRes = page.waitForResponse(r => r.request().method() === 'PATCH' && new URL(r.url()).pathname === `/servers/${seed.serverId}/bots/${bot.botId}/pause`);
         await row.getByRole('button', { name: 'Pause', exact: true }).click();

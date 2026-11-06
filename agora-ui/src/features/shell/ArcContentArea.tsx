@@ -7,6 +7,7 @@ import { TypingIndicator } from '../live/TypingIndicator';
 import { RunActivity } from '../agents/RunActivity';
 import { ConsoleStrip } from '../agents/ConsoleStrip';
 import { usePalette } from '../../theme';
+import { LoopGuardBadge } from './LoopGuardBadge';
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export function ArcContentArea() {
           role="img"
           aria-label={connectionStatus}
         />
+        <LoopGuardBadge channel={channel} />
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-1 shrink-0">

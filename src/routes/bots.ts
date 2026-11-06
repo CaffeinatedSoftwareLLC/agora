@@ -12,6 +12,7 @@ import { agentPresence } from '../lib/agent-presence';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+const ULID_PATTERN = '^[0-9A-HJKMNP-TV-Z]{26}$';
 
 function isValidAvatarUrl(value: string): boolean {
     if (value.length > AVATAR_URL_MAX_LENGTH) return false;
@@ -756,11 +757,106 @@ export async function botRoutes(app: FastifyInstance) {
             }
         } catch { /* Redis failure is non-fatal */ }
 
-        return reply.status(200).send({
+        const config = {
             channelId: channelId.trim(),
             maxBotHops: result.rows[0].max_bot_hops,
             maxThreadBotHops: result.rows[0].max_thread_bot_hops,
+        };
+        // Channel headers and loop-guard notices show the limits live
+        request.pendingEvents ??= [];
+        request.pendingEvents.push({ room: `channel:${config.channelId}`, event: 'ChannelBotConfig', data: config });
+        return reply.status(200).send(config);
+    });
+
+    // POST /channels/:id/loop-guard/resume → 201 { messageId, scope, threadId, limit }
+    // After the loop guard fires: reset its counter and post a notice that wakes the
+    // waiting agents. Same permission as changing the limit, plus sight of the channel.
+    app.post('/channels/:id/loop-guard/resume', {
+        preHandler: [requireManageBotsForChannelConfig],
+        schema: {
+            params: { type: 'object', required: ['id'], properties: { id: { type: 'string', pattern: ULID_PATTERN } } },
+            // No body at all (Fastify passes null) means the channel guard
+            body: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: { threadId: { type: 'string', pattern: ULID_PATTERN } },
+            },
+        },
+    }, async (request, reply) => {
+        const { id: channelId } = request.params as { id: string };
+        const { threadId } = (request.body ?? {}) as { threadId?: string };
+        const userId = request.userId;
+        const db = request.dbClient!;
+
+        // Channel overrides count too: ManageBots denied here, or the channel hidden, refuses
+        const view = await checkChannelPermissions(db, channelId, userId, Permissions.ViewChannel | Permissions.ManageBots);
+        if (!view.allowed) return reply.status(view.status!).send({ error: view.error });
+
+        if (threadId) {
+            const parent = await db.query(
+                'SELECT thread_id, thread_closed_at, deleted_at FROM messages WHERE id = $1 AND channel_id = $2',
+                [threadId, channelId]
+            );
+            const row = parent.rows[0];
+            if (!row || row.thread_id !== null || row.deleted_at) return reply.status(404).send({ error: 'thread_not_found' });
+            if (row.thread_closed_at !== null) return reply.status(409).send({ error: 'Thread is closed' });
+        }
+
+        const limits = (await db.query('SELECT max_bot_hops, max_thread_bot_hops FROM channels WHERE id = $1', [channelId])).rows[0];
+        const scope = threadId ? 'thread' : 'channel';
+        const limit: number = threadId ? (limits.max_thread_bot_hops ?? 0) : (limits.max_bot_hops ?? 4);
+
+        // Same keys as the guards in messages.ts and threads.ts
+        try {
+            await getRedis().del(threadId ? `loopguard:${channelId.trim()}:${threadId}` : `loopguard:${channelId}`);
+        } catch { /* Redis failure is non-fatal */ }
+
+        const username = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'An admin';
+        // Not "Loop guard: ...": agents read a line starting that way as the stop signal
+        const content = `Agents may continue: ${username} resumed ${threadId ? 'this thread' : 'this channel'} after the loop guard`
+            + (limit > 0 ? ` (limit ${limit} bot ${threadId ? 'replies' : 'messages'} in a row).` : ' (loop guard off).');
+        const systemData = { scope, threadId: threadId ?? null, limit, by: userId.trim() };
+        const messageId = generateUlid();
+        await db.query(
+            `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data, thread_id)
+             VALUES ($1, $2, NULL, $3, 'loop_guard_resume', $4, $5)`,
+            [messageId, channelId, content, JSON.stringify(systemData), threadId ?? null]
+        );
+
+        const room = `channel:${channelId.trim()}`;
+        request.pendingEvents ??= [];
+        request.pendingEvents.push({
+            room,
+            event: 'Message',
+            data: {
+                id: messageId, content, authorId: null, authorUsername: null,
+                channelId: channelId.trim(), createdAt: new Date().toISOString(),
+                ...(threadId ? { threadId } : {}),
+                systemEvent: 'loop_guard_resume', systemData,
+            },
         });
+        if (threadId) {
+            const meta = await db.query(
+                `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
+                 WHERE id = $1 RETURNING reply_count, last_reply_at`,
+                [threadId]
+            );
+            request.pendingEvents.push({
+                room,
+                event: 'ThreadMetadataUpdate',
+                data: {
+                    channelId: channelId.trim(), messageId: threadId,
+                    replyCount: meta.rows[0].reply_count, lastReplyAt: meta.rows[0].last_reply_at, threadClosedAt: null,
+                },
+            });
+        }
+        request.pendingEvents.push({
+            room,
+            event: 'ChannelLoopGuard',
+            data: { channelId: channelId.trim(), ...(threadId ? { threadId } : {}), paused: false },
+        });
+
+        return reply.status(201).send({ messageId, scope, threadId: threadId ?? null, limit });
     });
 
     // ─── Bot Self-Info (bot auth) ───
