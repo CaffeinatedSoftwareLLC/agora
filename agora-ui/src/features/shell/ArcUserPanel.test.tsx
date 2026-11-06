@@ -61,6 +61,19 @@ it('adds Instance admin for an instance admin and opens /admin', async () => {
   expect(screen.getByText('admin page')).toBeTruthy();
 });
 
+it('gives Instance admin its own icon, never the server-settings gear (#11)', async () => {
+  useAuthStore.setState({ user: { id: 'u1', username: 'Espresso', isInstanceAdmin: true } });
+  renderPanel();
+  await userEvent.click(trigger());
+  const icons = screen.getAllByRole('menuitem').map(item => item.querySelector('svg')?.innerHTML ?? '');
+  expect(icons.every(Boolean)).toBe(true);
+  expect(new Set(icons).size).toBe(icons.length);
+  // The gear in the channel sidebar header is a centre circle of radius 3 inside a cog path
+  const admin = screen.getByRole('menuitem', { name: 'Instance admin' }).querySelector('svg')!;
+  expect(admin.querySelector('circle[r="3"]')).toBeNull();
+  expect(admin.innerHTML).not.toContain('M19.4 15');
+});
+
 it('Account & security opens /account', async () => {
   renderPanel();
   await userEvent.click(trigger());

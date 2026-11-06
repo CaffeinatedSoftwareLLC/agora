@@ -136,10 +136,12 @@ export async function threadRoutes(app: FastifyInstance) {
                     await redis.del(guardKey);
                     const sysId = generateUlid();
                     const sysContent = `Loop guard: ${maxThreadBotHops} consecutive bot replies in this thread. Human input required to continue.`;
+                    // The notice's Continue / Raise limit / Turn off controls read the scope and limit
+                    const guardData = { scope: 'thread', threadId: msgId.trim(), limit: maxThreadBotHops };
                     await db.query(
-                        `INSERT INTO messages (id, channel_id, author_id, content, system_event, thread_id)
-                         VALUES ($1, $2, NULL, $3, 'loop_guard', $4)`,
-                        [sysId, channelId, sysContent, msgId]
+                        `INSERT INTO messages (id, channel_id, author_id, content, system_event, thread_id, system_data)
+                         VALUES ($1, $2, NULL, $3, 'loop_guard', $4, $5)`,
+                        [sysId, channelId, sysContent, msgId, JSON.stringify(guardData)]
                     );
                     const guardParent = await db.query(
                         `UPDATE messages SET reply_count = reply_count + 1, last_reply_at = NOW()
@@ -159,6 +161,7 @@ export async function threadRoutes(app: FastifyInstance) {
                             createdAt: new Date().toISOString(),
                             threadId: msgId.trim(),
                             systemEvent: 'loop_guard',
+                            systemData: guardData,
                         },
                     });
                     request.pendingEvents.push({

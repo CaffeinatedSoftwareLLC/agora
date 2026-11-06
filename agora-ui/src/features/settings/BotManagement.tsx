@@ -1,7 +1,9 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import { Avatar } from '../../components/ui/Avatar';
 import { useServerStore } from '../../stores/serverStore';
+import { useChannelStore } from '../../stores/channelStore';
 import { botApi, serverApi, runtimeApi, ApiError } from '../../lib/api';
 import type { Bot, BotDetail, BotToken, RuntimeAccess } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
@@ -19,6 +21,8 @@ export function BotManagement() {
   const [showCreateBot, setShowCreateBot] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
 
   const fetchBots = useCallback(async (showLoading = true) => {
     if (!instanceServerId) return;
@@ -40,6 +44,17 @@ export function BotManagement() {
   }, [instanceServerId]);
 
   useEffect(() => { fetchBots(); }, [fetchBots]);
+
+  // A refresh after a change keeps the list (and its scroll position) on screen
+  const refresh = useCallback(() => { void fetchBots(false); }, [fetchBots]);
+  const toggle = useCallback((botId: string) => setExpandedBotId(cur => (cur === botId ? null : botId)), []);
+
+  // Newest first, so a bot you just created is at the top of a long list
+  const sorted = useMemo(() => [...bots].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [bots]);
+  const shown = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase();
+    return q ? sorted.filter(b => b.username.toLowerCase().includes(q)) : sorted;
+  }, [sorted, deferredQuery]);
 
   if (!instanceServerId) return null;
 
@@ -74,132 +89,285 @@ export function BotManagement() {
       {bots.length === 0 ? (
         <p className="text-text-muted">No bots yet. Create one to get started.</p>
       ) : (
-        <div className="flex flex-col gap-2">
-          {bots.map((bot) => (
-            <BotRow
-              key={bot.id}
-              bot={bot}
-              serverId={instanceServerId}
-              isExpanded={expandedBotId === bot.id}
-              onToggle={() => setExpandedBotId(expandedBotId === bot.id ? null : bot.id)}
-              onDeleted={fetchBots}
-              onPauseChanged={fetchBots}
+        <section>
+          <div className="flex flex-wrap items-center gap-3 mb-2">
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search bots"
+              aria-label="Search bots"
+              className="min-h-11 md:min-h-9 w-full max-w-xs px-3 py-1.5 rounded border border-border bg-surface text-text placeholder:text-text-muted/70 text-sm"
             />
-          ))}
-        </div>
+            <span className="text-text-muted text-xs" aria-live="polite">
+              {shown.length === bots.length ? `${bots.length} bots` : `${shown.length} of ${bots.length} bots`}
+            </span>
+          </div>
+          {shown.length === 0 ? (
+            <p className="text-text-muted text-sm">No bots match “{deferredQuery.trim()}”.</p>
+          ) : (
+            <BotList
+              bots={shown}
+              serverId={instanceServerId}
+              expandedBotId={expandedBotId}
+              onToggle={toggle}
+              onChanged={refresh}
+            />
+          )}
+        </section>
       )}
 
       <CreateBotModal
         serverId={instanceServerId}
         isOpen={showCreateBot}
         onClose={() => setShowCreateBot(false)}
-        onCreated={fetchBots}
+        onCreated={refresh}
       />
-      {showInvite && <CreateAgentInviteModal serverId={instanceServerId} onClose={() => setShowInvite(false)} onCreated={() => { void fetchBots(false); }} />}
+      {showInvite && <CreateAgentInviteModal serverId={instanceServerId} onClose={() => setShowInvite(false)} onCreated={refresh} />}
+    </div>
+  );
+}
+
+// ─── Bot List (virtualized) ───────────────────────────────────────────────
+
+/** Rendering every bot stalled the page at about 1,800 bots (#241): only the rows in view are mounted. */
+function BotList({
+  bots,
+  serverId,
+  expandedBotId,
+  onToggle,
+  onChanged,
+}: {
+  bots: Bot[];
+  serverId: string;
+  expandedBotId: string | null;
+  onToggle: (botId: string) => void;
+  onChanged: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const expandedIndex = expandedBotId ? bots.findIndex(b => b.id === expandedBotId) : -1;
+  // This component is not compiled by the React Compiler; the virtualizer is read during render only
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: bots.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 60,
+    overscan: 8,
+    getItemKey: index => bots[index].id,
+    // The open bot stays mounted while scrolled away, so its panel (a half-made token, an error) survives
+    rangeExtractor: range => {
+      const indexes = defaultRangeExtractor(range);
+      return expandedIndex < 0 || indexes.includes(expandedIndex) ? indexes : [...indexes, expandedIndex].sort((a, b) => a - b);
+    },
+  });
+
+  return (
+    <div ref={scrollRef} data-testid="bot-list" className="max-h-[70vh] overflow-y-auto overscroll-contain">
+      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map(item => {
+          const bot = bots[item.index];
+          return (
+            <div
+              key={item.key}
+              data-index={item.index}
+              ref={virtualizer.measureElement}
+              className="absolute left-0 top-0 w-full pb-2"
+              style={{ transform: `translateY(${item.start}px)` }}
+            >
+              <BotRow
+                bot={bot}
+                serverId={serverId}
+                isExpanded={expandedBotId === bot.id}
+                onToggle={onToggle}
+                onChanged={onChanged}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 // ─── Channel Loop Guard Settings ──────────────────────────────────────────
 
+type GuardField = 'maxBotHops' | 'maxThreadBotHops';
+type Limits = Record<GuardField, number>;
+/** The limit a guard gets when it is switched on with no earlier value to restore. */
+const GUARD_DEFAULT: Limits = { maxBotHops: 4, maxThreadBotHops: 4 };
+
+/**
+ * Both loop guards per channel (#23): the channel guard (top-level bot messages in a row)
+ * and the thread guard (bot replies in a row inside one thread). Each has an on/off switch;
+ * off is a limit of 0.
+ */
 function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [values, setValues] = useState<Record<string, number>>({});
-  const [saving, setSaving] = useState<string | null>(null);
+  // Limits as loaded or last confirmed by a save here
+  const [loaded, setLoaded] = useState<Record<string, Limits>>({});
+  // Edits not yet confirmed by the server, by `${channelId}:${field}`
+  const [dirty, setDirty] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
-  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const abortControllers = useRef<Record<string, AbortController>>({});
+  // A change made elsewhere (a notice's Raise limit or Turn off) arrives as ChannelBotConfig
+  const live = useChannelStore(s => s.channels);
+  const pending = useRef<Record<string, { timer: ReturnType<typeof setTimeout>; value: number }>>({});
+  // Saves of one field go out one at a time, in order, so the last change made wins
+  const queues = useRef<Record<string, Promise<void>>>({});
+  // The last limit above 0, restored when a guard is switched back on
+  const lastOn = useRef<Record<string, number>>({});
+  const mounted = useRef(true);
 
   useEffect(() => {
     serverApi.getChannels(serverId).then((chs) => {
       const textChannels = chs.filter(c => c.channelType === 3);
       setChannels(textChannels);
-      const initial: Record<string, number> = {};
+      const initial: Record<string, Limits> = {};
       for (const ch of textChannels) {
-        initial[ch.id] = ch.maxBotHops ?? 4;
+        initial[ch.id] = { maxBotHops: ch.maxBotHops ?? 4, maxThreadBotHops: ch.maxThreadBotHops ?? 0 };
       }
-      setValues(initial);
+      setLoaded(initial);
     }).catch(() => setError('Failed to load channels'));
   }, [serverId]);
 
-  // Cleanup debounce timers and abort controllers on unmount
+  // enqueue only touches refs and state setters, so the first render's copy stays valid for the unmount flush
+  const enqueueOnLeave = useRef(enqueue);
+
+  // Leaving the page sends a change still waiting out its debounce instead of dropping it,
+  // behind any save of that field still in flight so the older one cannot land last
   useEffect(() => {
-    const timers = debounceTimers.current;
-    const controllers = abortControllers.current;
+    mounted.current = true;
+    const waiting = pending.current;
+    const flush = enqueueOnLeave.current;
     return () => {
-      for (const t of Object.values(timers)) clearTimeout(t);
-      for (const c of Object.values(controllers)) c.abort();
+      mounted.current = false;
+      for (const [key, p] of Object.entries(waiting)) {
+        clearTimeout(p.timer);
+        delete waiting[key];
+        const [channelId, field] = key.split(':') as [string, GuardField];
+        flush(channelId, field, p.value);
+      }
     };
   }, []);
 
-  function handleChange(channelId: string, raw: string) {
-    const num = parseInt(raw, 10);
-    if (isNaN(num) || num < 0) return;
-    setValues(prev => ({ ...prev, [channelId]: num }));
+  const shown = (channelId: string, field: GuardField): number => {
+    const key = `${channelId}:${field}`;
+    return dirty[key] ?? live.get(channelId)?.[field] ?? loaded[channelId]?.[field] ?? GUARD_DEFAULT[field];
+  };
 
-    // Debounce save
-    if (debounceTimers.current[channelId]) {
-      clearTimeout(debounceTimers.current[channelId]);
-    }
-    debounceTimers.current[channelId] = setTimeout(() => {
-      save(channelId, num);
-    }, 600);
+  function change(channelId: string, field: GuardField, value: number, delay: number) {
+    const key = `${channelId}:${field}`;
+    const prev = shown(channelId, field);
+    if (prev > 0) lastOn.current[key] = prev;
+    setDirty(d => ({ ...d, [key]: value }));
+    if (pending.current[key]) clearTimeout(pending.current[key].timer);
+    const timer = setTimeout(() => {
+      delete pending.current[key];
+      enqueue(channelId, field, value);
+    }, delay);
+    pending.current[key] = { timer, value };
   }
 
-  async function save(channelId: string, maxBotHops: number) {
-    // Cancel any in-flight request for this channel
-    if (abortControllers.current[channelId]) {
-      abortControllers.current[channelId].abort();
-    }
-    const controller = new AbortController();
-    abortControllers.current[channelId] = controller;
+  /** Queues a save behind any earlier save of the same field (save never rejects). */
+  function enqueue(channelId: string, field: GuardField, value: number) {
+    const key = `${channelId}:${field}`;
+    queues.current[key] = (queues.current[key] ?? Promise.resolve()).then(() => save(channelId, field, value));
+  }
 
-    setSaving(channelId);
-    setError('');
+  function handleNumber(channelId: string, field: GuardField, raw: string) {
+    const num = parseInt(raw, 10);
+    // 0 would be "off": that is the switch's job, so the box keeps a limit while typing
+    if (isNaN(num) || num < 1 || num > 1000) return;
+    change(channelId, field, num, 600);
+  }
+
+  function handleToggle(channelId: string, field: GuardField, on: boolean) {
+    const restore = lastOn.current[`${channelId}:${field}`] ?? GUARD_DEFAULT[field];
+    change(channelId, field, on ? restore : 0, 0);
+  }
+
+  async function save(channelId: string, field: GuardField, value: number) {
+    const key = `${channelId}:${field}`;
+    if (mounted.current) { setSaving(s => ({ ...s, [key]: true })); setError(''); }
+    // Only the latest edit clears the dirty value; an older save finishing must not
+    const settle = (d: Record<string, number>) => {
+      if (d[key] !== value || pending.current[key]) return d;
+      const next = { ...d };
+      delete next[key];
+      return next;
+    };
     try {
-      await botApi.updateChannelBotConfig(channelId, { maxBotHops });
-      if (!controller.signal.aborted) {
-        setSaving(null);
-      }
+      const config = await botApi.updateChannelBotConfig(channelId, { [field]: value });
+      useChannelStore.getState().patchChannel(channelId, { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops });
+      if (!mounted.current) return;
+      setLoaded(l => ({ ...l, [channelId]: { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops } }));
+      setDirty(settle);
     } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(err instanceof ApiError ? err.code : 'Failed to save');
-        setSaving(null);
-      }
+      if (!mounted.current) return;
+      // Show what the server still has, not the value that failed
+      setDirty(settle);
+      setError(err instanceof ApiError ? err.code : 'Failed to save');
+    } finally {
+      if (mounted.current) setSaving(s => ({ ...s, [key]: false }));
     }
   }
 
   if (channels.length === 0) return null;
 
+  const guard = (ch: Channel, field: GuardField, label: string, unit: string) => {
+    const value = shown(ch.id, field);
+    const on = value > 0;
+    const key = `${ch.id}:${field}`;
+    return (
+      <div className="flex items-center gap-2">
+        <label className="min-h-11 md:min-h-8 flex items-center gap-1.5 text-xs text-text-muted cursor-pointer">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={on}
+            onChange={e => handleToggle(ch.id, field, e.target.checked)}
+            aria-label={`${label} loop guard in #${ch.name}`}
+            className="accent-primary"
+          />
+          {label}
+        </label>
+        {on ? (
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            value={value}
+            onChange={e => handleNumber(ch.id, field, e.target.value)}
+            aria-label={`${label} limit in #${ch.name} (${unit})`}
+            title={`Pause after this many ${unit} in a row`}
+            className="min-h-11 md:min-h-8 w-16 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
+          />
+        ) : (
+          <span className="w-16 text-text-muted text-xs">Off</span>
+        )}
+        <span className="w-12 text-text-muted text-xs" aria-live="polite">{saving[key] ? 'Saving…' : ''}</span>
+      </div>
+    );
+  };
+
   return (
     <section className="mb-6">
-      <h3 className="text-sm font-semibold text-text mb-2">Channel Loop Guard</h3>
+      <h3 className="text-sm font-semibold text-text mb-2">Loop Guard</h3>
       <p className="text-text-muted text-xs mb-3">
-        Max consecutive bot messages per channel before pausing. Set to 0 to disable.
+        Pauses agents after this many bot posts in a row with no human message. The channel guard counts top-level
+        messages; the thread guard counts replies inside each thread. A human message resets both, and the notice
+        it posts has Continue, Raise limit and Turn off buttons.
       </p>
-      {error && <p className="text-danger text-xs mb-2">{error}</p>}
+      {error && <p className="text-danger text-xs mb-2" role="alert">{error}</p>}
       <div className="flex flex-col gap-1">
         {channels.map((ch) => (
-          <div
-            key={ch.id}
-            className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-surface-hover"
-          >
-            <span className="text-text-muted">#</span>
-            <span className="text-text text-sm flex-1">{ch.name}</span>
-            <input
-              type="number"
-              min={0}
-              max={1000}
-              value={values[ch.id] ?? 4}
-              onChange={(e) => handleChange(ch.id, e.target.value)}
-              className="min-h-11 md:min-h-8 w-20 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
-            />
-            {values[ch.id] === 0 && (
-              <span className="text-text-muted text-xs">Disabled</span>
-            )}
-            {saving === ch.id && (
-              <span className="text-text-muted text-xs">Saving...</span>
-            )}
+          <div key={ch.id} className="flex flex-wrap items-center gap-x-6 gap-y-1 px-2 py-1.5 rounded hover:bg-surface-hover">
+            <span className="flex min-w-32 flex-1 items-center gap-1 text-sm">
+              <span className="text-text-muted">#</span>
+              <span className="text-text">{ch.name}</span>
+            </span>
+            {guard(ch, 'maxBotHops', 'Channel', 'bot messages')}
+            {guard(ch, 'maxThreadBotHops', 'Threads', 'bot replies in one thread')}
           </div>
         ))}
       </div>
@@ -209,20 +377,19 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
 
 // ─── Bot Row (expandable) ─────────────────────────────────────────────────
 
-function BotRow({
+// Memoized with stable callbacks: opening one bot re-renders that row, not the whole list
+const BotRow = memo(function BotRow({
   bot,
   serverId,
   isExpanded,
   onToggle,
-  onDeleted,
-  onPauseChanged,
+  onChanged,
 }: {
   bot: Bot;
   serverId: string;
   isExpanded: boolean;
-  onToggle: () => void;
-  onDeleted: () => void;
-  onPauseChanged: () => void;
+  onToggle: (botId: string) => void;
+  onChanged: () => void;
 }) {
   const [pausing, setPausing] = useState(false);
   const [pauseError, setPauseError] = useState('');
@@ -235,7 +402,7 @@ function BotRow({
     setPauseError('');
     try {
       await runtimeApi.setBotAccess(serverId, bot.id, access);
-      onPauseChanged();
+      onChanged();
     } catch (err) {
       setPauseError(err instanceof ApiError ? err.code : 'Failed to update code run access');
     } finally {
@@ -254,7 +421,7 @@ function BotRow({
         if (reason === null) return;
         await botApi.setPaused(serverId, bot.id, true, reason.trim() || undefined);
       }
-      onPauseChanged();
+      onChanged();
     } catch (err) {
       setPauseError(err instanceof ApiError ? err.code : 'Failed to update pause state');
     } finally {
@@ -266,7 +433,8 @@ function BotRow({
     <div className="border border-border rounded-lg overflow-hidden">
       <div className="flex items-center hover:bg-surface-hover">
       <button
-        onClick={onToggle}
+        onClick={() => onToggle(bot.id)}
+        aria-expanded={isExpanded}
         className="min-h-11 flex-1 flex items-center justify-between px-4 py-3 text-left"
       >
         <div>
@@ -316,11 +484,11 @@ function BotRow({
       </div>
       </div>
       {isExpanded && (
-        <BotDetailPanel botId={bot.id} serverId={serverId} onDeleted={onDeleted} />
+        <BotDetailPanel botId={bot.id} serverId={serverId} onDeleted={onChanged} />
       )}
     </div>
   );
-}
+});
 
 // ─── Bot Detail Panel ─────────────────────────────────────────────────────
 

@@ -118,6 +118,13 @@ export interface ThreadMetadataUpdatePayload {
   successorId?: string | null;
 }
 
+/** A channel's loop guard limits changed (0 = off). */
+export interface ChannelBotConfigPayload {
+  channelId: string;
+  maxBotHops: number;
+  maxThreadBotHops: number;
+}
+
 export interface ServerJoinPayload {
   server: Server;
   channels: Channel[];

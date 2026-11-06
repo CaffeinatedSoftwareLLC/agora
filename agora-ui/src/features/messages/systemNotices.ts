@@ -13,6 +13,8 @@ const CARD_EVENTS = new Set([
   'task_card',
   'subtask',
   'provider_terms',
+  // Carries Continue / Raise limit / Turn off controls (#23); folding it would hide them
+  'loop_guard',
 ]);
 
 /** True for messages MessageItem renders as a plain one-line notice. */

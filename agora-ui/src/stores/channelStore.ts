@@ -8,6 +8,8 @@ interface ChannelState {
   setActiveChannel: (id: string | null) => void;
   addChannel: (channel: Channel) => void;
   addChannels: (channels: Channel[]) => void;
+  /** Merge fields into a known channel; unknown ids are ignored. */
+  patchChannel: (id: string, patch: Partial<Channel>) => void;
   removeChannelsByServer: (serverId: string) => void;
   byServer: (serverId: string) => Channel[];
   clear: () => void;
@@ -28,6 +30,13 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
   addChannels: (channels) => set((state) => {
     const next = new Map(state.channels);
     for (const c of channels) next.set(c.id, c);
+    return { channels: next };
+  }),
+  patchChannel: (id, patch) => set((state) => {
+    const current = state.channels.get(id);
+    if (!current) return state;
+    const next = new Map(state.channels);
+    next.set(id, { ...current, ...patch });
     return { channels: next };
   }),
   removeChannelsByServer: (serverId) => set((state) => {

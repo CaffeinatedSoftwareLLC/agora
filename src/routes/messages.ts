@@ -121,11 +121,14 @@ export async function messageRoutes(app: FastifyInstance) {
 
                     // Create system message
                     const sysId = generateUlid();
+                    // The notice's Continue / Raise limit / Turn off controls read the scope and limit
+                    const guardData = { scope: 'channel', threadId: null, limit: maxBotHops };
                     await db.query(
-                        `INSERT INTO messages (id, channel_id, author_id, content, system_event)
-                         VALUES ($1, $2, NULL, $3, 'loop_guard')`,
+                        `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data)
+                         VALUES ($1, $2, NULL, $3, 'loop_guard', $4)`,
                         [sysId, channelId,
-                         `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`]
+                         `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`,
+                         JSON.stringify(guardData)]
                     );
 
                     request.pendingEvents ??= [];
@@ -140,6 +143,7 @@ export async function messageRoutes(app: FastifyInstance) {
                             channelId: channelId.trim(),
                             createdAt: new Date().toISOString(),
                             systemEvent: 'loop_guard',
+                            systemData: guardData,
                         },
                     });
                     request.pendingEvents.push({

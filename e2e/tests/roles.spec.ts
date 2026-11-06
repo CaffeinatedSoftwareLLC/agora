@@ -158,6 +158,7 @@ test.describe('roles, permissions and directors', () => {
 
         await page.goto('/settings/bots');
         await expect(page.getByRole('heading', { name: 'Bot Management' })).toBeVisible({ timeout: 15_000 });
+        await page.getByLabel('Search bots').fill(bot.name);
         await page.getByRole('button').filter({ has: page.getByText(bot.name, { exact: true }) }).click();
         const access = page.locator('label').filter({ has: page.getByText(agentsName, { exact: true }) });
         await expect(access.getByRole('checkbox').first()).toBeChecked();
@@ -178,6 +179,7 @@ test.describe('roles, permissions and directors', () => {
         expect((Array.isArray(gen) ? gen : gen.directors).some((x: any) => x.userId === bot.botId), 'not a director in #general').toBe(false);
         // Still ticked after a reload
         await page.reload();
+        await page.getByLabel('Search bots').fill(bot.name);
         await page.getByRole('button').filter({ has: page.getByText(bot.name, { exact: true }) }).click();
         await expect(page.locator('label').filter({ has: page.getByText(agentsName, { exact: true }) })
             .locator('span').filter({ hasText: 'can direct agents' }).getByRole('checkbox')).toBeChecked();

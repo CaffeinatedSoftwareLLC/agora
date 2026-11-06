@@ -150,7 +150,7 @@ When an agent detects a CANCEL message:
 
 ### Halts
 - **"This bot is paused"** from any tool: an admin stopped you. End the loop, don't retry, tell the user in the terminal.
-- **`[SYSTEM] Loop guard`** in the thread: stop posting and `chat_wait thread=<id>` until a human replies.
+- **`[SYSTEM] Loop guard`** in the thread: stop posting and `chat_wait thread=<id>` until a human replies or a `[SYSTEM] Agents may continue` notice arrives.
 
 ## User Participation
 

@@ -9,12 +9,12 @@ const m = (id: string, systemEvent?: string) => ({ id, systemEvent });
 describe('isPlainNotice', () => {
   it('accepts session notices and generic system events', () => {
     expect(isPlainNotice(m('a', 'agent_session'))).toBe(true);
-    expect(isPlainNotice(m('a', 'loop_guard'))).toBe(true);
+    expect(isPlainNotice(m('a', 'loop_guard_resume'))).toBe(true);
   });
   it('rejects normal messages and interactive cards', () => {
     expect(isPlainNotice(m('a'))).toBe(false);
     for (const ev of ['runtime_search', 'runtime_report', 'runtime_result', 'agent_tool_approval', 'agent_run_approval',
-      'agent_permission_relay', 'task_card', 'subtask', 'provider_terms']) {
+      'agent_permission_relay', 'task_card', 'subtask', 'provider_terms', 'loop_guard']) {
       expect(isPlainNotice(m('a', ev))).toBe(false);
     }
   });
@@ -22,7 +22,7 @@ describe('isPlainNotice', () => {
 
 describe('computeNoticeRuns', () => {
   it('groups 2+ consecutive plain notices keyed by the first id', () => {
-    const runs = computeNoticeRuns([m('1'), m('2', 'agent_session'), m('3', 'loop_guard'), m('4', 'agent_session'), m('5')]);
+    const runs = computeNoticeRuns([m('1'), m('2', 'agent_session'), m('3', 'loop_guard_resume'), m('4', 'agent_session'), m('5')]);
     expect(runs[0]).toBeNull();
     expect(runs[1]).toEqual({ key: '2', size: 3, position: 0 });
     expect(runs[2]).toEqual({ key: '2', size: 3, position: 1 });

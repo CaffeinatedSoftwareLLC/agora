@@ -197,6 +197,12 @@ export interface CreateTokenResponse {
   name: string | null;
 }
 
+export interface ChannelBotConfig {
+  channelId: string;
+  maxBotHops: number;
+  maxThreadBotHops: number;
+}
+
 export const botApi = {
   channelAgents: (channelId: string, options: { all?: boolean; query?: string; after?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
@@ -250,8 +256,14 @@ export const botApi = {
   setCanDirect: (channelId: string, botId: string, canDirect: boolean) =>
     api.put<{ botId: string; channelId: string; canDirect: boolean }>(`/channels/${channelId}/bots/${botId}/direct`, { canDirect }),
 
-  updateChannelBotConfig: (channelId: string, data: { maxBotHops: number }) =>
-    api.patch<{ channelId: string; maxBotHops: number }>(`/channels/${channelId}/bot-config`, data),
+  /** Loop guard limits; 0 turns a guard off. Needs ManageBots. */
+  updateChannelBotConfig: (channelId: string, data: { maxBotHops?: number; maxThreadBotHops?: number }) =>
+    api.patch<ChannelBotConfig>(`/channels/${channelId}/bot-config`, data),
+
+  /** After the loop guard fires: reset its counter and post a notice that wakes the agents. Needs ManageBots. */
+  resumeLoopGuard: (channelId: string, threadId?: string) =>
+    api.post<{ messageId: string; scope: 'channel' | 'thread'; threadId: string | null; limit: number }>(
+      `/channels/${channelId}/loop-guard/resume`, threadId ? { threadId } : {}),
 };
 
 // ─── AI Config API ───
