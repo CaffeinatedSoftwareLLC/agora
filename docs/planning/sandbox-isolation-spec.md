@@ -110,7 +110,7 @@ Each threat must be stopped by **at least two independent layers** (see §13).
 |---|---|---|
 | L1 Kernel boundary | **gVisor `runsc`**: a user-space kernel intercepts syscalls, so the host kernel attack surface is a small, audited subset | container escape through kernel bugs |
 | L2 Container hardening | non-root UID, `--cap-drop=ALL`, `no-new-privileges`, read-only rootfs, tmpfs scratch, default seccomp, no host mounts, no Docker socket | privilege escalation, persistence, host filesystem access |
-| L3 Network | `agora_sandbox` is `internal: true` (no gateway to the outside); the only other member is `cap-gateway`; no published ports | exfiltration, lateral movement, SSRF from sandbox |
+| L3 Network | `agora_sandbox` is `internal: true` (no gateway to the outside) and the host has no address on it (`inhibit_ipv4`, §6.1); the only other member is `cap-gateway`; no published ports | exfiltration, lateral movement, SSRF from sandbox |
 | L4 Credentials | per-run token only; env scrubbed; no provider keys, no Agora secrets | secret theft |
 | L5 Resource limits | cgroup CPU/memory/PIDs, wall clock, output caps, per-run call caps, route budgets | exhaustion, cost abuse |
 | L6 Deno permissions | `--allow-net=cap-gateway:8080` (hostname only; the gateway's raw IP is refused), no read/write outside scratch, no env/run/ffi/sys, remote imports denied | defense-in-depth only: blocks accidental reach and most scripts |
@@ -179,6 +179,55 @@ Notes:
   - gVisor's netstack.
   - Run tokens are unique per run, and the gateway rejects any cross-run access.
 - **Stricter option (deferred):** a per-run network that the gateway is attached to for the run's lifetime. Tracked as a hardening follow-up (§18).
+
+### 6.1 The host is not on the sandbox network *(added 2026-11-05)*
+
+`internal: true` keeps traffic off the outside world, but on a Linux bridge the host itself still holds the network's gateway address (`.1`), and the internal-network firewall rules only drop traffic to other subnets. So a run could reach any host service that listens on all addresses (an sshd, a Docker API on 2375, a dev server) at that address. Agent boxes found this under gVisor in CI (a box reached the runner's sshd on the gateway address) and closed it on their own networks (PR #338, `src/boxes/boxd/spec.ts` `networkSpec`). The sandbox network had the same gap.
+
+**The fix, the same as the boxes':** the sandbox network is created with `com.docker.network.bridge.inhibit_ipv4=true` (`driver_opts` in `docker-compose.prod.yml`). The bridge then has no IPv4 address, so the host has no IPv4 address on the network. The runs and `cap-gateway` still reach each other over the bridge, which is all a run needs. `inhibit_ipv4` covers IPv4 only, so the network also sets `enable_ipv6: false`, whatever the daemon's defaults. The runner's preflight (`sandboxNetworkProblem` in `src/runtime/docker.ts`) refuses to start on a sandbox network without `inhibit_ipv4`, with IPv6 enabled, or that isn't internal. The dev and test networks are created with the same option (`docker-compose.yml`, `scripts/test-sandbox-gvisor.sh`).
+
+Not verified: whether the bridge's IPv6 link-local address (`fe80::`) answers a run on a host whose kernel gives bridges one. Docker turns IPv6 off inside containers on IPv4-only networks, and the run's own Deno permissions allow only `cap-gateway:8080`, but no test probes it yet (§18).
+
+The negative suite (`test/sandbox/negative.sandbox.test.ts`, "the host is not on the sandbox network…") checks this on the engine it runs on. A container on an internal network made the old way reaches a host listener on the gateway address, which is the control. From the sandbox network, the same listener can't be reached on the gateway address or on the default bridge's, and neither can another install's run on its own network.
+
+**Existing installs.** Docker can't change a network's options in place, and it refuses to remove a network that still has containers on it. Compose doesn't reliably recreate a network whose options changed. Without the steps below, the runner of an upgraded install would refuse to start. `install/upgrade.sh` therefore does the following (`install/lib/sandbox-net.sh`):
+
+0. **Before the backup stops anything:** if the network will have to be recreated and a container that isn't this install's (neither its `cap-gateway` nor its code runs) is attached, the upgrade refuses and names the containers. Nothing has changed at that point.
+1. **Drain code runs** (`upgrade.drain`), after building the new release. Stop the runner with an 11-minute timeout. On SIGTERM it takes no new jobs and finishes the runs in progress (the longest is 10 minutes, §8.1). Runs submitted meanwhile stay `queued` in the database and the queue, and the new runner takes them. The runner's `stop_grace_period` is now 11 minutes, so any `compose stop` or recreate drains the same way. `install/backup.sh` (which the upgrade calls first) stops the runner first, with the same timeout, while the API keeps taking requests. Any of this install's run containers still there afterwards are removed: those labelled with its `agora.instance`, and unlabelled ones (from before the label) only if they are on its own sandbox network. Their results were already lost, and the next runner start marks the runs as interrupted. Another install's runs, including an older install's unlabelled `agora-run-*` on its own network, are left alone.
+2. **Recreate the network** (`upgrade.network`), only if its options differ from what the release in the folder declares. Check again that nothing else is attached; if something is, stop and name it. At that point the runner is stopped, and the message says to run `install/sandbox-network.sh` once the container is disconnected. Otherwise remove the `cap-gateway` container (stateless; `compose up` makes it again) and the network.
+3. `compose up` creates the network from the release's compose file and starts `cap-gateway` and the runner on it. The upgrade then checks that the network has the settings the release declares (or fails, naming `install/sandbox-network.sh`) and warns if the runner isn't running.
+
+**No code run is lost:** a run in progress finishes before the network goes (step 1), and a queued run waits for the new runner. A run is cut off only if it outlasts the drain timeout, and no run can (the wall-clock ceiling is 10 minutes).
+
+**Rollback** (`upgrade.sh --rollback`) runs step 0 against the previous release before anything changes, drains runs the same way, puts the previous release back, and then runs step 2 against *that* release's compose file. An older release declares no option, so the network is recreated without it and the old runner starts on it. The exposure is back for as long as the old release runs. That is the old release's behaviour, and the rollback restores its database backup anyway.
+
+**Installs updated some other way** (git pull and `compose up`): the runner refuses to start and its log names `install/sandbox-network.sh`, which does steps 1–3 on its own.
+
+### 6.2 One install's runs are out of another's reach (#126) *(added 2026-11-05)*
+
+Two installs can share one Docker engine (#209). Before #126 every install named its run containers `agora-run-<runId>`, and each runner's socket proxy allowed every such name. On startup, each runner force-removed every `agora-run-*` container it could list. A second install starting up could kill the first install's runs. #209 made the runner's own cleanup skip other installs' `agora.instance` labels, but that relied on the runner cooperating: the proxy still let any runner list, inspect, kill and remove every install's runs.
+
+The socket proxy now enforces the boundary:
+
+- **Run containers are named `<instance>-run-<runId>`** (`containerName` in `src/runtime/container-spec.ts`; the default install keeps `agora-run-`). Install names are `[a-z0-9][a-z0-9_-]{0,62}` and the run part is exactly 26 characters, so one install's name pattern never matches another's.
+- **The proxy allows per-container calls only on its own install's names** (`containers/${AGORA_INSTANCE}-run-[0-9a-z]{26}/…` in `docker-compose.prod.yml`). A container ID doesn't match the pattern, so it's refused too.
+- **The runner can't list containers.** The proxy (`wollomatic/socket-proxy`) matches the request path only, never the query string. A rule allowing `containers/json` would allow every install's containers, whatever label filter the runner sends. So the list endpoint is not allowed at all. The runner finds its leftovers in its own database instead (`runContainerCandidates`: runs still `running`, and runs finished in the last 24 hours that had a container) and removes them by name (`removeRunContainers`). A name that is already gone is skipped.
+- Image inspect paths are limited to image-reference characters, with each segment starting with a letter or digit, so a `..` segment can't walk an image path over to another container's inspect.
+- The runner finds its gateway on the sandbox network by exact name, `<instance>-cap-gateway` plus Compose's replica suffix, not by substring (`isGatewayName`). Another container on the network can't be taken for the gateway and handed this install's run tokens.
+
+The runner's leftover cleanup misses a container whose run never recorded a `container_id` and whose removal failed twice, and anything older than 24 hours. It never removes another install's containers: the names come from its own database, with its own prefix, and the proxy refuses any other.
+
+**During a mixed-version period** the boundary holds only for installs running this release. An install on an older release still has the old proxy rules: it can list every container and touch every `agora-run-*`, which includes the default install's runs. Upgrade every install on a shared engine.
+
+Tests: `test/unit/socket-proxy-rules.unit.test.ts` reads the production rules from `docker-compose.prod.yml` and checks own, foreign, ID, list and traversal paths. `test/sandbox/proxy.sandbox.test.ts` starts two installs' proxies with those rules on one engine and checks that install B's proxy refuses to list, inspect, kill or remove install A's runs.
+
+**What this doesn't cover (T9 still applies).** The proxy filters paths, not bodies (apart from rejecting bind mounts and `VolumesFrom`), and `containers/create` has a fixed path with the name in the query. A *compromised* runner can still create a container with any other settings, name it after its own install and start it. Such a container could:
+- join another install's sandbox network, or another run's network namespace (`NetworkMode: container:<name>`);
+- share its PID namespace (`PidMode: container:<name>`);
+- mount a named volume such as another install's database volume (`Mounts` of type `volume`);
+- be privileged.
+
+That is the T9 residual risk, for one install and across installs alike. A runner doing what its code says can no longer touch another install's runs, and a bug in its cleanup can't either. Closing the rest needs a filter on create bodies (name prefix, `runsc`, this install's network, no namespace sharing, no mounts) in front of the proxy (§18).
 
 ## 7. Credentials
 
@@ -348,7 +397,7 @@ Posted messages reach clients through a Redis pub/sub **event bridge**. The API 
 | T6 | **Resource exhaustion** | fork bomb, memory, CPU spin, disk fill, log flood | L5 PIDs/mem/CPU, wall clock, tmpfs size, log driver none, output caps, concurrency caps | noisy neighbor up to the configured concurrency; accepted | fork bomb contained; `while(true)` killed at deadline; 1 GB write fails at 64 MB; 10 MB stdout truncated |
 | T7 | **Cost abuse** | loop calling paid capabilities | per-run call cap, route daily budgets (Phase 1), non-chat routes default off, tripwire auto-pause | budget up to the configured limit; by design | the 21st call is rejected; an exhausted budget rejects calls |
 | T8 | **Gate bypass** | calling the runner/queue directly, self-approval, replaying an approval | only `api` enqueues (Redis is on `agora_core`); the runner re-checks the run is `queued` with gate fields set; the submitter can't approve; approvals expire | Redis compromise, already a core compromise | a bot approving its own run gets 403; a job for an unapproved run is refused by the runner |
-| T9 | **Runner compromise → host** | malicious job payload exploiting the runner | the job carries only `runId`; the container spec comes from constants; **Docker socket proxy** (`wollomatic/socket-proxy`) allows only: `_ping`/`info`, container create, start/wait/kill/inspect/logs/delete **on `agora-run-*` names only**, container list, inspect of the sandbox network and images. No exec, no attach, no inspect of other containers (so no reading the DB container's env), no image/volume/network writes, and **bind mounts rejected on create** (verified in 3.2) | a proxy that allows container create can still create a privileged container if the runner itself is compromised. The runner stays tiny and reviewed. Rootless Docker is a hardening option (§18) | a job payload with extra fields is ignored; the runner never passes user strings into Docker API flags |
+| T9 | **Runner compromise → host** | malicious job payload exploiting the runner | the job carries only `runId`; the container spec comes from constants; **Docker socket proxy** (`wollomatic/socket-proxy`) allows only: `_ping`/`info`, container create, start/wait/kill/inspect/logs/delete **on this install's `<instance>-run-*` names only**, inspect of the sandbox network and images; no container list, so a runner running its own code can't see or touch another install's runs (§6.2, #126 *(amended 2026-11-05)*). No exec, no attach, no inspect of other containers (so no reading the DB container's env), no image/volume/network writes, and **bind mounts rejected on create** (verified in 3.2) | a proxy that allows container create can still create a privileged container if the runner itself is compromised. The runner stays tiny and reviewed. Rootless Docker is a hardening option (§18) | a job payload with extra fields is ignored; the runner never passes user strings into Docker API flags |
 | T10 | **Malicious artifacts** | HTML/SVG XSS, polyglots, oversize files | magic-byte validation, extension allowlist, HTML/SVG as attachments with `nosniff`, size limits | a file that's harmful when opened locally; users are warned via file type | an HTML artifact is served as an attachment; a mismatched magic number is rejected |
 | T11 | **Decider manipulation** | comments saying "safe", prompt injection | comments stripped, deciders can't loosen limits, default human approval, sandbox is the real boundary | an `auto_run` verdict for a harmful-but-contained run; contained by L1–L6 | a run with a comment-only difference gets the same decision; auto-run limits equal approved-run limits |
 | T12 | **Queue flooding** | many submissions | queued-runs-per-server cap, bot rate limits, loop guard | none significant | the 21st queued submission gets 429 |
@@ -435,6 +484,8 @@ docker run --rm --runtime=runsc hello-world
 **Hardening backlog** (not blocking v1)
 - A per-run Docker network (removes the shared-bridge residual in T5).
 - Rootless Docker for the sandbox daemon (reduces the T9 blast radius).
+- A filter on `containers/create` bodies in front of the runner's socket proxy: the name must be this install's `<instance>-run-<id>`, `Runtime` runsc, `NetworkMode` this install's sandbox network, no `container:` namespace modes, no mounts, not privileged (§6.2; T9 across installs).
+- A negative probe of the sandbox bridge's IPv6 link-local address (§6.1).
 - A seccomp profile tighter than the default, on top of gVisor.
 - Firecracker backend behind the runner interface for hosts with KVM.
 - A sandboxed HTML artifact viewer (iframe `sandbox` + separate origin).

@@ -6,6 +6,7 @@
  * instance-lifetime passwords from .env.e2e and create their own run-tagged channels/agents,
  * so runs never share mutable fixtures.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { chromium, type FullConfig } from '@playwright/test';
 import { Api } from './lib/api';
@@ -28,7 +29,8 @@ async function loginBearer(api: Api, login: string, password: string): Promise<s
 export default async function globalSetup(_config: FullConfig) {
     const env = e2eEnv();
     const run = runId();
-    const tag = Math.random().toString(16).slice(2, 6);
+    // Always four hex digits: a shorter tag could prefix-match another run's names (#246)
+    const tag = crypto.randomBytes(2).toString('hex');
     fs.mkdirSync(SECRETS_DIR, { recursive: true });
     fs.mkdirSync(artifactsDir(), { recursive: true });
     if (!selfTest()) throw new Error('leak scanner self-test failed');

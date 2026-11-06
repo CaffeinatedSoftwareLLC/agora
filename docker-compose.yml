@@ -42,6 +42,7 @@ services:
   # Docker API for the sandbox runner (npm run runner), restricted to the calls it
   # makes (sandbox-isolation-spec §3, T9). Container operations are limited to
   # agora-run-* names; bind mounts are rejected. Published on localhost only.
+  # The network it serves: docker network create --internal -o com.docker.network.bridge.inhibit_ipv4=true agora_sandbox
   socket-proxy:
     image: wollomatic/socket-proxy:1.13.1
     profiles: ["sandbox"]
@@ -60,7 +61,8 @@ services:
       - "-allowfrom=0.0.0.0/0"
       - "-allowbindmountfrom=/nonexistent-agora-no-bind-mounts"
       - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
-      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/agora_sandbox[a-z0-9_]*|images/.+/json)"
+      # Same rules as docker-compose.prod.yml for the default install name, and no container list (#126)
+      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/agora_sandbox[a-z0-9_]*|images/[0-9A-Za-z][0-9A-Za-z._:@-]*(/[0-9A-Za-z][0-9A-Za-z._:@-]*)*/json)"
       - "-allowPOST=(/v1\\.[0-9]+)?/containers/(create|agora-run-[0-9a-z]{26}/(start|wait|kill))"
       - "-allowDELETE=(/v1\\.[0-9]+)?/containers/agora-run-[0-9a-z]{26}"
 

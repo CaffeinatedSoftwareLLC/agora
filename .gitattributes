@@ -4,3 +4,4 @@ e2e/fixtures/* binary
 box/** text eol=lf
 install/** text eol=lf
 install/windows/*.ps1 text eol=crlf
+test/fixtures/files/* binary

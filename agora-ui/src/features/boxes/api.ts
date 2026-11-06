@@ -38,6 +38,10 @@ export interface Box {
   deletedAt: string | null;
   volumePurgeAfter: string | null;
   policies: BoxPolicy[];
+  /** Why the last login failed, while the box's login state is failed (older servers leave it out) */
+  loginError?: string | null;
+  /** What the login waits on or failed on: domains the edge refuses the box until they're allowed */
+  loginBlockedHosts?: string[];
 }
 
 export interface CreateBoxBody {
@@ -67,11 +71,14 @@ export interface BoxLogin {
   userCode: string | null;
   error: string | null;
   expiresAt: string | null;
+  /** Domains the box was refused while this login ran (older servers leave it out) */
+  blockedHosts?: string[];
 }
 
 export interface GithubCredential { set: boolean; accountLogin: string | null; setAt: string | null }
 
-export type EdgeDecision = 'allow' | 'deny' | 'always';
+/** `wildcard`: allow the domain card's `*.<registrable domain>` (the server picks the entry) */
+export type EdgeDecision = 'allow' | 'deny' | 'always' | 'wildcard';
 
 export const boxApi = {
   list: (serverId: string) => api.get<{ boxes: Box[] }>(`/servers/${serverId}/boxes`),

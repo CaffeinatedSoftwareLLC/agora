@@ -6,7 +6,46 @@ import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import { REPO, type GithubCommand, type GithubResult } from './github.js';
 
 export class HttpError extends Error {
-    constructor(public readonly status: number) { super(`host_http_${status}`); }
+    /** The server's own error code (`{ "error": "box_token_outside_box" }`), when it is one. */
+    constructor(public readonly status: number, public readonly code: string | null = null) { super(`host_http_${status}`); }
+}
+/** A server error code is a short snake_case word; anything else (a message, a URL) is dropped. */
+const SERVER_CODE = /^[a-z][a-z0-9_]{0,59}$/;
+async function httpError(response: Response): Promise<HttpError> {
+    let code: string | null = null;
+    try {
+        // At most 2 KB of an error body, then the rest is dropped: a proxy's error page is no
+        // reason to buffer megabytes or wait for a slow body
+        let text = '';
+        const reader = response.body?.getReader();
+        if (reader) {
+            const decoder = new TextDecoder();
+            while (text.length < 2048) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                text += decoder.decode(value, { stream: true });
+            }
+            await reader.cancel().catch(() => {});
+        }
+        const parsed = JSON.parse(text.slice(0, 2048)) as { error?: unknown };
+        if (typeof parsed?.error === 'string' && SERVER_CODE.test(parsed.error)) code = parsed.error;
+    } catch { /* no JSON body */ }
+    return new HttpError(response.status, code);
+}
+/**
+ * A short, fixed-vocabulary code for why a call failed, for the host's logs: the HTTP status and
+ * the server's code, a timeout, or the network error's name. Never a URL, a message or a body.
+ */
+export function errorCode(err: unknown): string {
+    if (err instanceof HttpError) return `http_${err.status}${err.code ? `_${err.code}` : ''}`;
+    const e = err as { name?: unknown; code?: unknown; cause?: { code?: unknown } } | null;
+    if (e && e.name === 'TimeoutError') return 'timeout';
+    if (e && e.name === 'AbortError') return 'aborted';
+    // fetch puts the socket's errno on its cause; a code on the error itself is something else
+    const net = typeof e?.cause?.code === 'string' ? e.cause.code : null;
+    if (net && /^[A-Z][A-Z0-9_]{1,29}$/.test(net)) return `network_${net.toLowerCase()}`;
+    if (err instanceof SyntaxError || (e && e.name === 'ZodError')) return 'bad_response';
+    return 'error';
 }
 export const fatalAuth = (err: unknown) => err instanceof HttpError && (err.status === 401 || err.status === 403);
 export const fenced = (err: unknown) => err instanceof HttpError && (err.status === 409 || err.status === 404);
@@ -31,7 +70,7 @@ export class Client implements HostApi {
             redirect: 'error', body: body === undefined ? undefined : JSON.stringify(body),
             signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         });
-        if (!response.ok) { await response.body?.cancel(); throw new HttpError(response.status); }
+        if (!response.ok) throw await httpError(response);
         if (response.status === 204) return null;
         // Content is capped while streaming, rather than after an unbounded allocation.
         let data = ''; const decoder = new TextDecoder();

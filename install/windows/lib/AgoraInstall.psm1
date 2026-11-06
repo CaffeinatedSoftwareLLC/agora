@@ -124,8 +124,20 @@ function Get-InstallerState {
     return $h
 }
 
-function Get-RemoteText { param([string]$Url) (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 60).Content }
-function Save-RemoteFile { param([string]$Url, [string]$Path) Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -TimeoutSec 3600 }
+function ConvertTo-ResponseText {
+    # Windows PowerShell 5.1 returns Content as bytes when the server sends no text Content-Type
+    # (Canonical's SHA256SUMS has none); decode those as UTF-8
+    param($Content)
+    if ($Content -is [byte[]]) { return [System.Text.Encoding]::UTF8.GetString($Content) }
+    return [string]$Content
+}
+function Get-RemoteText { param([string]$Url) ConvertTo-ResponseText (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 60).Content }
+function Save-RemoteFile {
+    # Windows PowerShell 5.1's progress bar slows a large download many times over; hide it here only
+    param([string]$Url, [string]$Path)
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -TimeoutSec 3600
+}
 function Get-FileSha256 { param([string]$Path) (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant() }
 
 function Register-KeepAlive {
@@ -377,8 +389,32 @@ function Invoke-LinuxInstaller {
     if ($AsRoot) { $wslArgs += @('-u', 'root') }
     $wslArgs += @('--exec', 'bash', "$SourceWsl/install/linux/install.sh") + $Arguments
     $env:WSL_UTF8 = '1'
-    & wsl.exe @wslArgs
-    return $LASTEXITCODE
+    # Not `& wsl.exe`: its stdout would become this function's output, so the user saw nothing
+    # until the end and the caller got every line plus the exit code, which never equals 0 and
+    # turned a finished install into "the Linux installer failed". Start-Process inherits the
+    # console (output and prompts appear as they happen) and gives one exit code.
+    $p = Start-Process -FilePath 'wsl.exe' -ArgumentList (Join-WindowsArguments $wslArgs) -NoNewWindow -Wait -PassThru
+    return [int]$p.ExitCode
+}
+
+function ConvertTo-WindowsArgument {
+    # One argument quoted by the Windows command-line rules (CommandLineToArgvW), so a path with
+    # a space, an empty value or a value with quotes reaches wsl.exe unchanged
+    param([string]$Value)
+    if ($Value -ne '' -and $Value -notmatch '[\s"]') { return $Value }
+    $out = '"'; $slashes = 0
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($ch -eq '\') { $slashes++; continue }
+        if ($ch -eq '"') { $out += ('\' * ($slashes * 2 + 1)) + '"' }
+        else { $out += ('\' * $slashes) + $ch }
+        $slashes = 0
+    }
+    return $out + ('\' * ($slashes * 2)) + '"'
+}
+
+function Join-WindowsArguments {
+    param([string[]]$Values)
+    return (($Values | ForEach-Object { ConvertTo-WindowsArgument $_ }) -join ' ')
 }
 
 function Send-InstallReport {
