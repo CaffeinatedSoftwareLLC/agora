@@ -1,8 +1,10 @@
 # Agora agent box image (docs/agent-boxes.md §6). Build context = the repo root:
 #   docker build -f box/Dockerfile --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION) .
 #   docker build -f box/Dockerfile --target test --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION)-test .
-# Targets: "box" (the default, last stage) has the pinned Claude Code and Codex CLIs; "test"
-# has fake CLIs (box/fake) for the isolation and clean-install tests.
+# Targets: "box" (the default, last stage) has the pinned CLIs of every box adapter (Claude
+# Code, Codex, opencode); "test" has fake CLIs (box/fake) for the isolation and clean-install
+# tests. The pins are also in the box adapter registry (src/lib/boxes/adapters.ts,
+# agora-host/src/box-adapters.ts); test/unit/box-adapters.unit.test.ts checks they agree.
 # A change to this file, the pinned CLIs or the in-box scripts bumps box/VERSION.
 # Runs with a read-only root, tmpfs /tmp and /run/agora, and /home/agent as a volume.
 
@@ -55,19 +57,23 @@ LABEL org.agora.box.version=${BOX_VERSION}
 WORKDIR /home/agent
 ENTRYPOINT ["tini", "--", "/opt/agora/agora-box-start"]
 
-# ---- test: fake CLIs that answer agora-host's headless modes and the login relay
+# ---- test: fake CLIs that answer agora-host's headless modes, ACP and the login relay
 FROM base AS test
 COPY box/fake/fake-cli.mjs /opt/agora/fake/claude.mjs
 COPY box/fake/fake-cli.mjs /opt/agora/fake/codex.mjs
-RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs \
+COPY box/fake/fake-acp.mjs /opt/agora/fake/opencode.mjs
+RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/fake/opencode.mjs \
  && ln -s /opt/agora/fake/claude.mjs /opt/agora/bin/claude \
- && ln -s /opt/agora/fake/codex.mjs /opt/agora/bin/codex
+ && ln -s /opt/agora/fake/codex.mjs /opt/agora/bin/codex \
+ && ln -s /opt/agora/fake/opencode.mjs /opt/agora/bin/opencode
 USER 1000:1000
 
-# ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x and Codex 0.163.x)
+# ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x and Codex 0.163.x; opencode
+# is checked by its ACP protocol version). One ARG and one install block per box adapter.
 FROM base AS box
 ARG CLAUDE_CODE_VERSION=2.1.311
 ARG CODEX_VERSION=0.163.0
+ARG OPENCODE_VERSION=1.18.34
 # HOME=/root: nothing the install or the version checks write may land in the agent's home
 RUN export HOME=/root \
  && npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
@@ -75,6 +81,15 @@ RUN export HOME=/root \
  && ln -s /usr/local/bin/claude /opt/agora/bin/claude \
  && ln -s /usr/local/bin/codex /opt/agora/bin/codex \
  && /opt/agora/bin/claude --version && /opt/agora/bin/codex --version \
- && rm -rf /root/.npm /root/.claude /root/.claude.json /root/.codex \
- && test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
+ && rm -rf /root/.npm /root/.claude /root/.claude.json /root/.codex
+# opencode (MIT): its postinstall links the native binary for this machine's CPU (glibc, AVX2 or
+# baseline) into opencode-ai/bin; the other platform packages are then dropped (about 550 MB)
+RUN export HOME=/root \
+ && npm install -g --no-audit --no-fund "opencode-ai@${OPENCODE_VERSION}" \
+ && npm cache clean --force \
+ && rm -rf /usr/local/lib/node_modules/opencode-ai/node_modules \
+ && ln -s /usr/local/bin/opencode /opt/agora/bin/opencode \
+ && /opt/agora/bin/opencode --version \
+ && rm -rf /root/.npm /root/.config/opencode /root/.local/share/opencode /root/.local/state/opencode /root/.cache/opencode
+RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
 USER 1000:1000

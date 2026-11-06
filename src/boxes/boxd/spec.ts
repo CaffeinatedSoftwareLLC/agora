@@ -1,4 +1,5 @@
 import type { ContainerCreateOptions } from 'dockerode';
+import type { BoxAdapter } from '../../lib/boxes/adapters';
 import {
     BOX_HOME, BOX_UID, EDGE_AGORA_PORT, EDGE_HOSTNAME, EDGE_PROXY_PORT,
     LABEL_BOX, LABEL_BOX_GENERATION, LABEL_BOX_VERSION, LABEL_INSTANCE,
@@ -32,7 +33,7 @@ export interface BoxLimits { cpus: number; memoryMb: number; pids: number }
 
 export interface BoxProfileEnv {
     name: string;
-    adapter: 'claude' | 'codex';
+    adapter: BoxAdapter;
     auth: 'subscription' | 'api_key';
     apiKeyEnv: string | null;
     workdirAlias: 'work';

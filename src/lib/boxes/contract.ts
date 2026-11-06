@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { BOX_ADAPTER_REGISTRY } from './adapters';
 
 /**
  * The fixed parts of the agent box contract (docs/agent-boxes.md), shared by the API,
@@ -42,19 +43,15 @@ export const BOX_HOST_OFFSET = 3;
 /** The pool boxd takes /28s from, unless AGORA_BOX_SUBNETS says otherwise. */
 export const DEFAULT_BOX_SUBNETS = '10.213.0.0/16';
 
-/** Default allowlist per adapter (§4.2); github.com is deliberately absent (git goes through the broker). */
-export const PROVIDER_DOMAINS: Record<string, string[]> = {
-    // Checked against the pinned CLIs' binaries (2026-11-04): claude 2.1.x calls the API at
-    // api.anthropic.com and exchanges its login code at platform.claude.com/v1/oauth/token; codex
-    // 0.163 signs in at auth.openai.com and talks to chatgpt.com/backend-api and api.openai.com.
-    // Codex also fetches content from regional *.oaiusercontent.com hosts on its first start
-    // (seen live 2026-11-04: three regions, one card each). Telemetry hosts are left out and
-    // refused without a card (domains.ts): the box also turns the CLIs' non-essential traffic off.
-    claude: ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'console.anthropic.com'],
-    codex: ['api.openai.com', 'chatgpt.com', 'auth.openai.com', '*.oaiusercontent.com'],
-    gemini: ['generativelanguage.googleapis.com'],
-    opencode: ['openrouter.ai'],
-};
+/**
+ * Default allowlist per adapter (§4.2), from the box adapter registry (adapters.ts), where each
+ * adapter's hosts are checked against its pinned CLI. github.com is deliberately absent (git
+ * goes through the broker). Telemetry hosts are left out and refused without a card
+ * (domains.ts): the box also turns the CLIs' non-essential traffic off.
+ */
+export const PROVIDER_DOMAINS: Record<string, string[]> = Object.fromEntries(
+    Object.entries(BOX_ADAPTER_REGISTRY).map(([adapter, spec]) => [adapter, [...spec.allowlist]])
+);
 export const REGISTRY_DOMAINS = ['registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org'];
 export function defaultAllowlist(adapter: string): string[] {
     return [...(PROVIDER_DOMAINS[adapter] ?? []), ...REGISTRY_DOMAINS];

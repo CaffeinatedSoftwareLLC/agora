@@ -50,6 +50,9 @@ describe('opencode agents', () => {
         const changed = await ctx.request.patch(`/servers/${serverId}/agent-profiles/${profileId}`).set(owner.auth).send({ model: 'openrouter/qwen/qwen3-coder' });
         expect(changed.status).toBe(200);
         expect(changed.body.model).toBe('openrouter/qwen/qwen3-coder');
+        // A model agora-host's claim schema refuses would never wake: refused here instead
+        for (const model of ['qwen/qwen3-coder ', 'qwen qwen3', '-qwen'])
+            expect((await ctx.request.patch(`/servers/${serverId}/agent-profiles/${profileId}`).set(owner.auth).send({ model })).status, model).toBe(400);
 
         // The one-step create applies the same rule
         expect((await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)

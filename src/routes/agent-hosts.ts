@@ -14,6 +14,7 @@ import { checkpointSchema } from '../lib/agent-checkpoints';
 import { attachProjectDocs, verificationSchema } from '../lib/channel-projects';
 import { storage } from '../lib/storage';
 import { config } from '../config';
+import { MODEL_PATTERN } from '../lib/boxes/service';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -83,7 +84,8 @@ const profileFields = {
     hostId: ID,
     // gemini and opencode: hosted over ACP with an API key only (agora-host src/acp/)
     adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode'] },
-    model: { type: ['string', 'null'], minLength: 1, maxLength: 64 },
+    // As agora-host's claim schema accepts it (src/lib/boxes/service.ts MODEL_PATTERN): anything else never wakes
+    model: { type: ['string', 'null'], minLength: 1, maxLength: 64, pattern: MODEL_PATTERN },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
     workdirAlias: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 64 },
     workspaceId: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' },

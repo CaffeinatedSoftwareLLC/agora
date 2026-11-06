@@ -17,7 +17,8 @@ import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
 import { sessionPorts } from './preview.js';
 import { probeAcp, SESSION_ID, type AcpPlan } from './acp/session.js';
 import { geminiPolicy } from './acp/permissions.js';
-import { CLAUDE_BOX_QUIET, CODEX_BOX_QUIET, inBox, proxyVars } from './box.js';
+import { CODEX_BOX_QUIET, inBox, proxyVars } from './box.js';
+import { BOX_ADAPTERS, boxAdapter } from './box-adapters.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -131,7 +132,14 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
         Object.assign(env, proxyVars(source));
         // In a box only the allowlisted hosts answer: no telemetry, error reports or update checks
         // to be blocked (each would be an approval card), and the CLI is pinned in the image anyway
-        if (profile.adapter === 'claude') Object.assign(env, CLAUDE_BOX_QUIET);
+        // (each adapter's switches: box-adapters.ts `quiet.env`)
+        const box = boxAdapter(profile.adapter);
+        Object.assign(env, box?.quiet.env ?? {});
+        // Its own local server stays off the proxy (box-adapters.ts `noProxy`)
+        if (box?.noProxy.length) {
+            const noProxy = [...new Set([...(env.NO_PROXY ?? '').split(','), ...box.noProxy].map(h => h.trim()).filter(Boolean))].join(',');
+            env.NO_PROXY = noProxy; env.no_proxy = noProxy;
+        }
     }
     return env;
 }
@@ -144,9 +152,18 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
         env: childEnv(profile), cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096,
     });
     const version = /(\d+)\.(\d+)\.(\d+)/.exec(stdout);
-    const tested = version && (profile.adapter === 'codex' ? version[1] === '0' && version[2] === '163' : version[1] === '2' && version[2] === '1');
-    if (!version || (!tested && !profile.allowUntestedVersion)) throw new Error('unsupported_cli_version');
+    if (!version || (!testedCliVersion(profile.adapter, version[0]) && !profile.allowUntestedVersion)) throw new Error('unsupported_cli_version');
     return version[0];
+}
+
+/**
+ * The CLI versions this host was tested with: Codex 0.163.x, Claude Code 2.1.x. The box image's
+ * pins (box-adapters.ts) must pass it; agora-host/test/box.test.ts checks that they do.
+ */
+export function testedCliVersion(adapter: string, version: string): boolean {
+    const v = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    if (!v) return false;
+    return adapter === 'codex' ? v[1] === '0' && v[2] === '163' : adapter === 'claude' ? v[1] === '2' && v[2] === '1' : false;
 }
 
 /**
@@ -176,10 +193,16 @@ export function opencodeModel(model: string, provider: string): string {
  * provider or to OpenCode Zen; the profile's model is also the small model (titles), so every
  * call is billed to the model the owner picked. Every tool asks, and acp/session.ts answers
  * from the claim's rules, except its own to-do list, which touches nothing outside the session.
+ *
+ * `boxed` (yeet mode in an agent box, box-adapters.ts): the box is the sandbox, so every tool is
+ * allowed without asking, except web and code search (Exa): they would go through the edge like
+ * anything else, but a box has no open web and searches through Agora, so they are off as Claude's
+ * WebSearch is. The real way around the edge is a provider-side search model (OpenRouter
+ * `:online`), refused for box agents in prepare() and by Agora.
  */
-export function opencodeConfig(model: string, provider: string): string {
+export function opencodeConfig(model: string, provider: string, boxed = false): string {
     return JSON.stringify({ model, small_model: model, enabled_providers: [provider], share: 'disabled', autoupdate: false,
-        permission: { '*': 'ask', todowrite: 'allow', todoread: 'allow' } });
+        permission: boxed ? { '*': 'allow', websearch: 'deny', codesearch: 'deny' } : { '*': 'ask', todowrite: 'allow', todoread: 'allow' } });
 }
 
 /** `prompt` replaces the wake prompt: a verify fix turn resuming the same conversation (verify.ts). */
@@ -213,6 +236,9 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
         if (model === null) throw new Error('opencode_model_required');
         model = opencodeModel(model, provider);
     }
+    // In a box, no OpenRouter `:online` model: it searches the web on the provider's side, which
+    // the edge never sees (Agora refuses one at box creation too)
+    if (inBox() && model !== null && /:online$/i.test(model)) throw new Error('box_model_not_allowed');
     // ACP session IDs are the agent's own; the CLIs use UUIDs
     const nativeId = acp ? SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
@@ -230,12 +256,18 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     // Presets and allowed tools come with every claim (#73): no restart after an edit
     const rules = [...claim.profile.allowedTools, ...claim.run.grantedTools];
     const perms = resolvePermissions(local.sandbox, claim.profile.toolPresets, rules, config.presets);
+    // Box mode (box.ts, docs/agent-boxes.md §8.1): the box is the sandbox, so the CLI runs with
+    // its own sandbox and permission prompts off (box-adapters.ts `yeet`). Both the box flag and
+    // the image's marker file are needed; never on a machine.
+    const yeet = inBox();
+    const box = yeet ? boxAdapter(local.adapter) : null;
+    const allowAll = !!box?.yeet.acpAllowAll && acp;
     try {
         // This session's own preview ports: the only ones browser_preview will load
         const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([...active, claim.session.id])) : undefined;
         const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,
             ...(ports ? { AGORA_PREVIEW_PORTS: `${ports.first}-${ports.last}` } : {}),
-            ...(provider && model ? { OPENCODE_CONFIG_CONTENT: opencodeConfig(model, provider) } : {}) };
+            ...(provider && model ? { OPENCODE_CONFIG_CONTENT: opencodeConfig(model, provider, allowAll) } : {}) };
         // A PATH entry inside the worktree or repository would let a file the agent wrote win a
         // bare-name lookup over the trusted program (acp/permissions.ts executableTrust)
         await repoFreePath(env, [workspace.cwd, workspace.workdir, local.workdir]);
@@ -250,16 +282,16 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 prompt: prompt ?? wakePrompt(claim, ports, workspace.branch, handoffs), nativeSessionId: claim.session.nativeSessionId, model, effort, rules: acpRules,
                 mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
                 authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
+                ...(allowAll ? { allowAll: true } : {}),
             };
-            let args = local.acpArgs;
+            // In a box, after the ACP arguments: the adapter's yeet and quiet arguments (box-adapters.ts)
+            let args = box ? [...local.acpArgs, ...box.yeet.args, ...box.quiet.args] : local.acpArgs;
             const policy = local.adapter === 'gemini' ? geminiPolicy(acpRules) : '';
             if (policy) { await writeFile(paths[3], policy, { mode: 0o600 }); args = [...args, '--policy', paths[3]]; }
             return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: '', cleanup,
                 lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
         }
         if (local.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
-        // Bypass flags need both the box flag and the image's marker file (box.ts)
-        const yeet = inBox();
         await writeFile(paths[0], JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
         await writeFile(paths[2], JSON.stringify(resultSchema), { mode: 0o600 });
         let args: string[];
@@ -292,7 +324,8 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             // Box mode (box.ts, docs/agent-boxes.md §8.1): the box is the sandbox, so Codex runs
             // with its own sandbox and approvals off. Presets don't apply inside a box; web search
             // stays off because a box has no open web (§4.2). Never on a machine.
-            const policy = yeet ? ['--dangerously-bypass-approvals-and-sandbox', '-c', `mcp_servers=${mcp}`, '-c', 'web_search="disabled"', ...CODEX_BOX_QUIET]
+            const codexBox = BOX_ADAPTERS.codex;
+            const policy = yeet ? [...codexBox.yeet.args, '-c', `mcp_servers=${mcp}`, ...codexBox.yeet.noOpenWeb, ...codexBox.quiet.args]
                 : ['-s', perms.codex.sandbox, '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`,
                     ...(perms.codex.network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
                     ...(perms.codex.webSearch ? ['-c', 'web_search="live"'] : []),
@@ -306,7 +339,8 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             const allowed = [...new Set([...local.approvedTools.map(t => `mcp__agora__${t}`), ...perms.claude])];
             // Box mode: no permission prompts and every tool but WebSearch, which would reach the
             // open web around the edge (docs/agent-boxes.md §4.2, §8.1). Never on a machine.
-            const policy = yeet ? ['--dangerously-skip-permissions', '--disallowedTools', 'WebSearch']
+            const claudeBox = BOX_ADAPTERS.claude;
+            const policy = yeet ? [...claudeBox.yeet.args, ...claudeBox.yeet.noOpenWeb, ...claudeBox.quiet.args]
                 : ['--permission-mode', 'manual', '--permission-prompts', 'none'];
             args = ['-p', '--output-format', 'stream-json', '--verbose', ...policy,
                 '--strict-mcp-config', '--mcp-config', paths[0],

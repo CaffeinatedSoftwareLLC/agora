@@ -124,9 +124,12 @@ export async function inspectBox(boxId: string): Promise<Box> {
     };
 }
 
-/** Create a box through the owner API and wait until boxd runs it and its agora-host has checked in. */
-export async function createBox(inst: Instance, name: string, adapter: 'claude' | 'codex' = 'claude'): Promise<Box> {
-    const created = await api(`/servers/${inst.serverId}/boxes`, { method: 'POST', auth: inst.admin, body: { name, adapter, homeChannelId: inst.channelId } });
+/**
+ * Create a box through the owner API and wait until boxd runs it and its agora-host has checked in.
+ * `extra`: more of the create body (an API key, a model) for adapters that need them.
+ */
+export async function createBox(inst: Instance, name: string, adapter = 'claude', extra: Record<string, unknown> = {}): Promise<Box> {
+    const created = await api(`/servers/${inst.serverId}/boxes`, { method: 'POST', auth: inst.admin, body: { name, adapter, homeChannelId: inst.channelId, ...extra } });
     if (created.status !== 201) throw new Error(`create box: ${created.status} ${JSON.stringify(created.body)}`);
     const id = created.body.box.id as string;
     await waitRunning(inst, id);

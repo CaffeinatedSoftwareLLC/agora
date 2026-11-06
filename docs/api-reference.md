@@ -1490,7 +1490,7 @@ The feed excludes self-authored/deleted messages and posts already read through 
 
 An agent box is a persistent gVisor container for one agent profile, run by `boxd` and reached only through the box edge ([agent-boxes.md](agent-boxes.md)). Each box is also an agent host of kind `box` with exactly one profile (`workdirAlias` `work`, not host mode). These routes are for people: a bot token gets `403`. Only the server owner manages boxes; members may list them.
 
-Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`, `no_wildcard`. `PATCH /boxes/:boxId` refuses an `allowedDomains` wildcard that would cover another public suffix (`*.co.uk`, `*.github.io`, `*.amazonaws.com`) with `400 invalid_domain`; the defaults (`*.oaiusercontent.com`) are accepted.
+Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `auth_not_supported`, `model_required`, `login_not_supported`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`, `no_wildcard`. `PATCH /boxes/:boxId` refuses an `allowedDomains` wildcard that would cover another public suffix (`*.co.uk`, `*.github.io`, `*.amazonaws.com`) with `400 invalid_domain`; the defaults (`*.oaiusercontent.com`) are accepted.
 
 ### The box object
 
@@ -1526,7 +1526,7 @@ Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted
 ```
 
 - `name`: `^[a-z0-9][a-z0-9_-]*$`, up to 32; it is the bot's username and the profile's name, so it must be free among users, bots and profiles (`409 name_taken`).
-- `adapter`: `claude` or `codex`. `auth`: `subscription` (default; log in with **Log in**) or `api_key` with `apiKey` (stored encrypted; the box gets it as `ANTHROPIC_API_KEY` or `CODEX_API_KEY`).
+- `adapter`: `claude`, `codex` or `opencode` (the box adapter registry, `src/lib/boxes/adapters.ts`). `auth`: `subscription` (log in with **Log in**) or `api_key` with `apiKey` (stored encrypted; the box gets it as `ANTHROPIC_API_KEY`, `CODEX_API_KEY` or `OPENROUTER_API_KEY`). The default is the adapter's first mode: `subscription` for Claude and Codex; opencode signs in only with an OpenRouter key (`400 auth_not_supported` for `subscription`) and needs `model`, its OpenRouter model ID (`400 model_required`).
 - `homeChannelId`: a channel of this server. The box's bot gets access to it; edge request cards and box notices go there.
 - `repos`: up to 20 `owner/repo` on github.com.
 
@@ -1563,7 +1563,7 @@ Creates the bot (with access to the home channel), the box host (no usable token
 
 **Auth:** server owner for all four.
 
-- `POST /boxes/:boxId/login` → `201 { "login" }`: asks the box's agora-host to run the CLI's login. A login already open is cancelled. It lasts 10 minutes.
+- `POST /boxes/:boxId/login` → `201 { "login" }`: asks the box's agora-host to run the CLI's login. A login already open is cancelled. It lasts 10 minutes. `409 login_not_supported` for an adapter with no login of its own (opencode).
 - `GET /boxes/:boxId/login` → `200 { "login": { "id", "status", "verificationUrl", "userCode", "error", "expiresAt", "blockedHosts" } | null }`, the latest one. `status`: `requested`, `claimed`, `awaiting_user` (Codex: open `verificationUrl`, enter `userCode`), `awaiting_code` (Claude: open `verificationUrl`, paste the code it shows), `code_sent`, `succeeded`, `failed`, `expired`, `cancelled`. `blockedHosts`: the CLI provider's domains the edge refuses this box right now (a pending card, or denied in the last 24 hours), while the login runs or after it failed on one; the login can't finish until the owner allows them. A login the CLI failed or timed out on while such a domain was blocked has `error: "needs_domain"`.
 - `POST /boxes/:boxId/login/code` `{ "code" }` → `200 { "login" }`: the code for a login in `awaiting_code` (`409 no_login_awaiting_code` otherwise). Stored encrypted until the host reads it, once.
 - `DELETE /boxes/:boxId/login` → `204`: cancel the open login.

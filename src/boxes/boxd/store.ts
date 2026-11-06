@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { BoxAdapter } from '../../lib/boxes/adapters';
 import { decryptString } from '../../lib/encryption';
 import type { BridgedEvent } from '../../lib/event-bridge';
 import { rotateBoxTokens, type BoxTokens } from '../../lib/boxes/tokens';
@@ -17,7 +18,7 @@ export type PendingAction = 'restart' | 'rebuild' | 'reset';
 export interface BoxRow {
     id: string;
     name: string;
-    adapter: 'claude' | 'codex';
+    adapter: BoxAdapter;
     auth: 'subscription' | 'api_key';
     profileId: string;
     hostId: string;

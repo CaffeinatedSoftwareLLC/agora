@@ -15,7 +15,7 @@ async function main() {
     if (process.argv[2] === 'siwc') { process.exitCode = await siwcCommand(process.argv.slice(3)); return; }
     // agora-host autostart <enable|disable|status> --config <file>: start the host at login (README: Start automatically)
     if (process.argv[2] === 'autostart') { process.exitCode = await autostartCommand(process.argv.slice(3)); return; }
-    // agora-host box-config --repos | --out <file>: the agent box entrypoint's config (box.ts)
+    // agora-host box-config --repos | --state | --out <file>: the agent box entrypoint's config (box.ts)
     if (process.argv[2] === 'box-config') { process.exitCode = await boxConfigCommand(process.argv.slice(3)); return; }
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
     const config = await loadConfig(process.argv[3]);
@@ -24,8 +24,9 @@ async function main() {
         const via = profile.protocol === 'acp' ? ` over ACP (${version})` : '';
         console.log(`Verified ${profile.adapter}${via}; hard token cap unavailable; using lease, timeout and server session budget.`);
         console.log(describeAuth(name, profile));
-        // opencode on OpenRouter: the key's credit limit is the spend cap (openrouter.ts)
-        const credit = await creditLine(name, profile);
+        // opencode on OpenRouter: the key's credit limit is the spend cap (openrouter.ts). Not in a
+        // box: agora-host's own requests reach only the edge, and the CLI's go through its proxy
+        const credit = inBox() ? null : await creditLine(name, profile);
         if (credit) console.log(credit);
     }
     if (inBox()) console.log('Agent box: the CLI runs without its own sandbox or permission prompts; the box and its edge are the boundary.');

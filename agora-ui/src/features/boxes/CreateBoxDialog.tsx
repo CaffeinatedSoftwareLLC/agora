@@ -3,12 +3,13 @@ import type { Channel } from '../../lib/contracts/server';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { boxApi, type Box, type BoxAdapter, type BoxAuth } from './api';
-import { BOX_NAME, INPUT, TOUCH, boxError, parseRepos } from './boxRules';
+import { BOX_ADAPTER_OPTIONS, BOX_NAME, INPUT, TOUCH, boxError, modelProblem, parseRepos } from './boxRules';
 
 /**
  * Create a box (docs/agent-boxes.md §9): the server creates its bot, host, profile and box row;
  * boxd then builds the container. A subscription box needs Log in next; an API key box starts
- * with the key, which is stored encrypted and given only to that box.
+ * with the key, which is stored encrypted and given only to that box. The CLI list, its sign-in
+ * modes and whether it needs a model come from BOX_ADAPTER_OPTIONS (boxRules.ts).
  */
 export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
   serverId: string; channels: Channel[]; onClose: () => void; onCreated: (box: Box) => void;
@@ -17,20 +18,32 @@ export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
   const [adapter, setAdapter] = useState<BoxAdapter>('claude');
   const [auth, setAuth] = useState<BoxAuth>('subscription');
   const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState('');
   const [homeChannelId, setHomeChannelId] = useState(channels[0]?.id ?? '');
   const [reposText, setReposText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const option = BOX_ADAPTER_OPTIONS.find(o => o.value === adapter) ?? BOX_ADAPTER_OPTIONS[0];
+  const pickAdapter = (value: BoxAdapter) => {
+    setAdapter(value);
+    // Another CLI starts from its own default sign-in, and a key typed for the last one is dropped:
+    // an OpenRouter key must never be sent as an Anthropic one
+    const next = BOX_ADAPTER_OPTIONS.find(o => o.value === value);
+    if (next) setAuth(next.auth[0]);
+    setApiKey('');
+  };
+  const cleanModel = model.trim();
   const cleanName = name.trim().toLowerCase();
   const { repos, bad } = parseRepos(reposText);
   const problems = {
     name: !cleanName ? null : BOX_NAME.test(cleanName) ? null : 'Letters, digits, - and _; start with a letter or digit; at most 32.',
     apiKey: auth === 'api_key' && !apiKey.trim() ? 'Enter the API key.' : null,
+    model: !option.model ? null : modelProblem(cleanModel),
     channel: homeChannelId ? null : 'Pick the channel the box works in.',
     repos: bad.length ? `Not owner/repo: ${bad.join(', ')}` : null,
   };
-  const valid = !!cleanName && !problems.name && !problems.apiKey && !problems.channel && !problems.repos;
+  const valid = !!cleanName && !problems.name && !problems.apiKey && !problems.model && !problems.channel && !problems.repos;
 
   const submit = async () => {
     if (!valid) return;
@@ -41,6 +54,7 @@ export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
         name: cleanName, adapter, auth, homeChannelId,
         ...(auth === 'api_key' ? { apiKey: apiKey.trim() } : {}),
         ...(repos.length ? { repos } : {}),
+        ...(option.model ? { model: cleanModel } : {}),
       });
       setApiKey('');
       onCreated(res.box);
@@ -61,25 +75,34 @@ export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
         </label>
 
         <label className="flex flex-col gap-1 text-text-muted">CLI
-          <select className={INPUT} value={adapter} onChange={e => setAdapter(e.target.value as BoxAdapter)}>
-            <option value="claude">Claude Code</option>
-            <option value="codex">Codex</option>
+          <select className={INPUT} value={adapter} onChange={e => pickAdapter(e.target.value as BoxAdapter)}>
+            {BOX_ADAPTER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </label>
 
+        {option.model && (
+          <label className="flex flex-col gap-1 text-text-muted">{option.model.label}
+            <input className={`${INPUT} font-mono`} value={model} maxLength={64} placeholder={option.model.placeholder}
+              autoCapitalize="none" autoComplete="off" spellCheck={false} onChange={e => setModel(e.target.value)} aria-invalid={!!problems.model} />
+            {problems.model && <span className="text-xs text-danger">{problems.model}</span>}
+          </label>
+        )}
+
         <fieldset className="flex flex-col gap-1">
           <legend className="mb-1 text-text-muted">Signs in with</legend>
-          <label className="flex min-h-11 md:min-h-8 items-center gap-2 text-text">
-            <input type="radio" name="box-auth" checked={auth === 'subscription'} onChange={() => setAuth('subscription')} />
-            Subscription <span className="text-xs text-text-muted">your own login; only you can wake it</span>
-          </label>
+          {option.auth.includes('subscription') && (
+            <label className="flex min-h-11 md:min-h-8 items-center gap-2 text-text">
+              <input type="radio" name="box-auth" checked={auth === 'subscription'} onChange={() => setAuth('subscription')} />
+              Subscription <span className="text-xs text-text-muted">your own login; only you can wake it</span>
+            </label>
+          )}
           <label className="flex min-h-11 md:min-h-8 items-center gap-2 text-text">
             <input type="radio" name="box-auth" checked={auth === 'api_key'} onChange={() => setAuth('api_key')} />
             API key <span className="text-xs text-text-muted">stored encrypted, given only to this box</span>
           </label>
         </fieldset>
         {auth === 'api_key' && (
-          <label className="flex flex-col gap-1 text-text-muted">{adapter === 'claude' ? 'Anthropic' : 'OpenAI'} API key
+          <label className="flex flex-col gap-1 text-text-muted">{option.keyLabel}
             <input className={`${INPUT} font-mono`} type="password" value={apiKey} autoComplete="off" spellCheck={false}
               onChange={e => setApiKey(e.target.value)} aria-invalid={!!problems.apiKey} />
             {problems.apiKey && <span className="text-xs text-danger">{problems.apiKey}</span>}

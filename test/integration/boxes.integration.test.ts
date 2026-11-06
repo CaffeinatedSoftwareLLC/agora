@@ -91,6 +91,38 @@ describe('create and list', () => {
         expect(decryptString(row.api_key_enc, config.encryptionKey, row.api_key_iv, row.api_key_tag)).toBe('sk-test-1234567890');
     });
 
+    test('opencode: an OpenRouter key and a model, never a subscription; nothing to log in', async () => {
+        // API key only (box adapter registry): its default sign-in, a subscription is refused
+        expect((await createBox({ name: 'qwen', adapter: 'opencode', model: 'qwen/qwen3-coder' })).body).toEqual({ error: 'api_key_required' });
+        expect((await createBox({ name: 'qwen', adapter: 'opencode', auth: 'subscription', model: 'qwen/qwen3-coder' })).body)
+            .toMatchObject({ error: 'auth_not_supported' });
+        expect((await createBox({ name: 'qwen', adapter: 'opencode', auth: 'api_key', apiKey: 'sk-or-test-1234567890' })).body)
+            .toMatchObject({ error: 'model_required' });
+        // A model agora-host can't claim with would never wake, and the box's profile can't be edited
+        for (const model of ['qwen/qwen3-coder ', 'qwen qwen3', '/qwen'])
+            expect((await createBox({ name: 'qwen', adapter: 'opencode', apiKey: 'sk-or-test-1234567890', model })).status, model).toBe(400);
+        // An :online model searches the web on OpenRouter's side, around the edge
+        for (const model of ['qwen/qwen3-coder:online', 'openrouter/qwen/qwen3-coder:ONLINE'])
+            expect((await createBox({ name: 'qwen', adapter: 'opencode', apiKey: 'sk-or-test-1234567890', model })).body, model)
+                .toMatchObject({ error: 'model_not_allowed' });
+        expect((await createBox({ name: 'gpt', adapter: 'codex', model: 'gpt-x:online' })).body).toMatchObject({ error: 'model_not_allowed' });
+        const res = await createBox({ name: 'qwen', adapter: 'opencode', apiKey: 'sk-or-test-1234567890', model: 'qwen/qwen3-coder' });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        expect(res.body.box).toMatchObject({ adapter: 'opencode', auth: 'api_key', loginState: 'none' });
+        expect(res.body.box.allowedDomains).toEqual(['openrouter.ai', 'models.opencode.ai', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        expect(JSON.stringify(res.body)).not.toContain('sk-or-test');
+        const row = (await ctx.db.query(
+            `SELECT b.api_key_env, b.api_key_enc, b.api_key_iv, b.api_key_tag, p.api_key_env AS profile_env, p.auth_mode, p.model
+             FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id WHERE b.id = $1`, [res.body.box.id])).rows[0];
+        expect(row).toMatchObject({ api_key_env: 'OPENROUTER_API_KEY', profile_env: 'OPENROUTER_API_KEY', auth_mode: 'api_key', model: 'qwen/qwen3-coder' });
+        expect(decryptString(row.api_key_enc, config.encryptionKey, row.api_key_iv, row.api_key_tag)).toBe('sk-or-test-1234567890');
+        // opencode has no login of its own: Log in is refused, and no request is left for the box's host
+        const login = await ctx.request.post(`/boxes/${res.body.box.id}/login`).set(owner.auth);
+        expect(login.status).toBe(409);
+        expect(login.body).toEqual({ error: 'login_not_supported' });
+        expect((await ctx.db.query(`SELECT 1 FROM box_login_requests WHERE box_id = $1`, [res.body.box.id])).rows).toHaveLength(0);
+    });
+
     test('names are unique across users, bots and profiles; channels and repos are checked', async () => {
         expect((await createBox()).status).toBe(201);
         expect((await createBox()).status).toBe(409);

@@ -3,6 +3,7 @@ import { generateUlid } from '../../utils/ulid';
 import { postSystemMessage, updateSystemMessage } from '../../gateway/post-message';
 import type { BridgedEvent } from '../event-bridge';
 import { notify } from '../notifications';
+import { BOX_ADAPTER_REGISTRY } from './adapters';
 import { DOMAIN_ENTRY, domainAllowed } from './contract';
 import { wildcardFor } from './domains';
 
@@ -155,11 +156,14 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
     return { id, created: true, events };
 }
 
-/** The domains each CLI's own sign-in and API live under (a login can only be blocked on these). */
-export const LOGIN_PROVIDER_DOMAINS: Record<string, string[]> = {
-    claude: ['anthropic.com', 'claude.ai', 'claude.com'],
-    codex: ['openai.com', 'chatgpt.com'],
-};
+/**
+ * The domains each CLI's own sign-in and API live under (a login can only be blocked on these),
+ * from the box adapter registry. An adapter without a login has none.
+ */
+export const LOGIN_PROVIDER_DOMAINS: Record<string, string[]> = Object.fromEntries(
+    Object.entries(BOX_ADAPTER_REGISTRY).filter(([, spec]) => spec.loginDomains.length > 0)
+        .map(([adapter, spec]) => [adapter, [...spec.loginDomains]])
+);
 
 /**
  * The provider domains the edge refuses this box right now: a pending card (of any age: the edge

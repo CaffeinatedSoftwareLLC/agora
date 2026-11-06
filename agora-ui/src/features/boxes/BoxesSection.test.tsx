@@ -179,19 +179,51 @@ describe('create box', () => {
     expect(submit).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText(/^Anthropic API key/), { target: { value: 'sk-ant-test' } });
     expect(submit).toBeEnabled();
+    // Another CLI starts from its own default sign-in and never carries the key over
+    fireEvent.change(within(dialog).getByLabelText('CLI'), { target: { value: 'codex' } });
+    expect(within(dialog).getByLabelText(/^Subscription/)).toBeChecked();
+    fireEvent.click(within(dialog).getByLabelText(/^API key/));
+    expect(within(dialog).getByLabelText(/^OpenAI API key/)).toHaveValue('');
+    fireEvent.change(within(dialog).getByLabelText(/^OpenAI API key/), { target: { value: 'sk-openai-test' } });
 
     fireEvent.change(within(dialog).getByLabelText(/GitHub repositories/), { target: { value: 'octo/app\nnot a repo' } });
     expect(dialog).toHaveTextContent('Not owner/repo');
     expect(submit).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText(/GitHub repositories/), { target: { value: 'octo/app\nhttps://github.com/octo/lib.git' } });
     fireEvent.change(within(dialog).getByLabelText(/^Home channel/), { target: { value: 'C2' } });
-    fireEvent.change(within(dialog).getByLabelText('CLI'), { target: { value: 'codex' } });
     expect(within(dialog).getByLabelText('OpenAI API key')).toBeInTheDocument();
     fireEvent.click(submit);
     await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/boxes', {
-      name: 'reviewer', adapter: 'codex', auth: 'api_key', apiKey: 'sk-ant-test', homeChannelId: 'C2', repos: ['octo/app', 'octo/lib'],
+      name: 'reviewer', adapter: 'codex', auth: 'api_key', apiKey: 'sk-openai-test', homeChannelId: 'C2', repos: ['octo/app', 'octo/lib'],
     }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('creates an opencode box with an OpenRouter key and its model, never a subscription', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ box: box({ name: 'qwen', adapter: 'opencode', auth: 'api_key' }) });
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'qwen' } });
+    fireEvent.change(within(dialog).getByLabelText('CLI'), { target: { value: 'opencode' } });
+    // An API key is its only sign-in: the subscription choice is gone and API key is picked
+    expect(within(dialog).queryByLabelText(/^Subscription/)).toBeNull();
+    expect(within(dialog).getByLabelText(/^API key/)).toBeChecked();
+    const submit = within(dialog).getByRole('button', { name: 'Create box' });
+    fireEvent.change(within(dialog).getByLabelText(/^OpenRouter API key/), { target: { value: 'sk-or-test' } });
+    expect(dialog).toHaveTextContent('Enter the model ID.');
+    expect(submit).toBeDisabled();
+    // What agora-host can't claim with, and an :online model (web search around the edge), are refused
+    fireEvent.change(within(dialog).getByLabelText(/^OpenRouter model ID/), { target: { value: 'qwen qwen3' } });
+    expect(dialog).toHaveTextContent('Letters, digits and');
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(/^OpenRouter model ID/), { target: { value: 'qwen/qwen3-coder:online' } });
+    expect(dialog).toHaveTextContent("can't use an :online model");
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(/^OpenRouter model ID/), { target: { value: ' qwen/qwen3-coder ' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/boxes', {
+      name: 'qwen', adapter: 'opencode', auth: 'api_key', apiKey: 'sk-or-test', homeChannelId: 'C1', model: 'qwen/qwen3-coder',
+    }));
   });
 
   it('offers Log in straight after creating a subscription box', async () => {

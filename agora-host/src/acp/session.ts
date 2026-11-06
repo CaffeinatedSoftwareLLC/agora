@@ -42,6 +42,11 @@ export interface AcpPlan {
     rules: string[];
     /** The API-key `authenticate` method to call first; null: never authenticate. */
     authMethod: string | null;
+    /**
+     * Yeet mode in an agent box (box-adapters.ts `yeet.acpAllowAll`): every permission request is
+     * allowed, as the boxed CLIs run without prompts. Never set on a machine.
+     */
+    allowAll?: boolean;
     /** Bound for setup requests; the prompt itself is bounded by the run timeout. */
     rpcTimeoutMs?: number;
 }
@@ -227,6 +232,8 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (!p.success) throw new RpcError(-32602, 'Invalid params');
         if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
         const call = track(p.data.toolCall) ?? {};
+        // In a box the box is the sandbox: nothing is denied (adapters.ts prepare sets it only there)
+        if (plan.allowAll) return { outcome: outcome(p.data.options, true) };
         const place = await locationsInside(call, launch.cwd, { rules, env: launch.env, roots: launch.workspace ? [launch.workspace.workdir] : [] });
         const allow = place === 'ok' && allowedCall(call, rules);
         if (!allow) {

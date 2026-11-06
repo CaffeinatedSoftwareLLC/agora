@@ -1,5 +1,5 @@
 import { ApiError } from '../../lib/api';
-import type { Box, BoxLogin, LoginStatus } from './api';
+import type { Box, BoxAdapter, BoxAuth, BoxLogin, LoginStatus } from './api';
 
 /**
  * Client-side checks that mirror the server's (src/lib/boxes/contract.ts, the box routes'
@@ -55,7 +55,40 @@ export function resourceProblem(key: keyof typeof LIMITS, value: string): string
   return null;
 }
 
-export const ADAPTER_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' };
+/**
+ * The CLIs the Create box dialog offers, one per entry in the server's box adapter registry
+ * (src/lib/boxes/adapters.ts; test/unit/box-adapters.unit.test.ts checks this list against it).
+ * `auth`: how it may sign in, first the default. `keyLabel`: the API key field's label.
+ * `model`: a model ID the box must be created with, when the CLI has no usable default.
+ */
+export interface BoxAdapterOption {
+  value: BoxAdapter;
+  label: string;
+  auth: readonly BoxAuth[];
+  keyLabel: string;
+  model?: { label: string; placeholder: string };
+}
+export const BOX_ADAPTER_OPTIONS: readonly BoxAdapterOption[] = [
+  { value: 'claude', label: 'Claude Code', auth: ['subscription', 'api_key'], keyLabel: 'Anthropic API key' },
+  { value: 'codex', label: 'Codex', auth: ['subscription', 'api_key'], keyLabel: 'OpenAI API key' },
+  { value: 'opencode', label: 'opencode', auth: ['api_key'], keyLabel: 'OpenRouter API key',
+    model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
+];
+
+export const ADAPTER_LABEL: Record<string, string> = Object.fromEntries(BOX_ADAPTER_OPTIONS.map(o => [o.value, o.label]));
+
+/** A model ID as the server and agora-host accept it (src/lib/boxes/service.ts MODEL_PATTERN). */
+export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
+/** Why a box's model ID can't be used, or null when it can. */
+export function modelProblem(model: string): string | null {
+  if (!model) return 'Enter the model ID.';
+  if (model.length > 64) return 'At most 64 characters.';
+  if (!MODEL_ID.test(model)) return 'Letters, digits and . _ : / - only, starting with a letter or digit.';
+  // OpenRouter's :online variants search the web on the provider's side, around the box's edge
+  if (/:online$/i.test(model)) return 'A box can\'t use an :online model: it searches the web around the box\'s edge.';
+  return null;
+}
 
 /** The state chip: what the box is doing, including an owner action boxd hasn't done yet. */
 export function stateChip(box: Box): { label: string; tone: string; login?: boolean } {
@@ -169,6 +202,10 @@ const BOX_ERRORS: Record<string, string> = {
   not_restorable: 'This box can no longer be restored.',
   api_key_required: 'Enter the API key.',
   api_key_needs_api_key_auth: 'An API key is only used with API key sign-in.',
+  auth_not_supported: 'This CLI can\'t sign in that way in a box.',
+  model_required: 'Enter the model ID.',
+  model_not_allowed: 'A box can\'t use an :online model: it searches the web around the box\'s edge.',
+  login_not_supported: 'This box signs in with its API key; there is nothing to log in.',
   unknown_channel: 'That channel is not on this server.',
   login_active: 'A login is already in progress.',
   no_login_awaiting_code: 'The login is not waiting for a code. Start it again.',

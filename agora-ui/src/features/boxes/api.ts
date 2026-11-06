@@ -5,7 +5,8 @@ import { api } from '../../lib/api';
  * boxes; everything else is the server owner's, and the server enforces that.
  */
 
-export type BoxAdapter = 'claude' | 'codex';
+/** The CLIs a box can run (the server's box adapter registry, src/lib/boxes/adapters.ts). */
+export type BoxAdapter = 'claude' | 'codex' | 'opencode';
 export type BoxAuth = 'subscription' | 'api_key';
 export type BoxState = 'creating' | 'running' | 'stopped' | 'failed' | 'deleted';
 export type BoxDesiredState = 'running' | 'stopped' | 'deleted';
@@ -51,6 +52,8 @@ export interface CreateBoxBody {
   apiKey?: string;
   homeChannelId: string;
   repos?: string[];
+  /** Required for an adapter whose BOX_ADAPTER_OPTIONS entry says so (opencode's OpenRouter model ID) */
+  model?: string;
 }
 
 export interface BoxPatch {

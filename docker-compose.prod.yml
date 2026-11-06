@@ -107,8 +107,8 @@ services:
       # `box` (real CLIs) by default; `test` has fake CLIs for the clean-install test
       target: ${AGORA_BOX_TARGET:-box}
       args:
-        BOX_VERSION: ${AGORA_BOX_VERSION:-1}
-    image: agora/box:${AGORA_BOX_VERSION:-1}${AGORA_BOX_TAG_SUFFIX:-}
+        BOX_VERSION: ${AGORA_BOX_VERSION:-2}
+    image: agora/box:${AGORA_BOX_VERSION:-2}${AGORA_BOX_TAG_SUFFIX:-}
     entrypoint: ["true"]
     network_mode: none
     restart: "no"
@@ -153,7 +153,7 @@ services:
       AGORA_ENCRYPTION_KEY: ${AGORA_ENCRYPTION_KEY:?Set AGORA_ENCRYPTION_KEY in .env.prod}
       AGORA_INSTANCE: ${AGORA_INSTANCE:-agora}
       AGORA_BOX_DOCKER_HOST: http://box-socket-proxy:2375
-      AGORA_BOX_IMAGE: agora/box:${AGORA_BOX_VERSION:-1}${AGORA_BOX_TAG_SUFFIX:-}
+      AGORA_BOX_IMAGE: agora/box:${AGORA_BOX_VERSION:-2}${AGORA_BOX_TAG_SUFFIX:-}
       AGORA_BOX_SUBNETS: ${AGORA_BOX_SUBNETS:-10.213.0.0/16}
       AGORA_BOX_INSECURE_DEV: ${AGORA_BOX_INSECURE_DEV:-}
       # Compose names it <project>-box-edge-1; the project is the instance (setup-env sets both)
