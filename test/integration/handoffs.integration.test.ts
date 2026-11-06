@@ -246,6 +246,28 @@ describe('accept', () => {
         expect(await rows(sa, r)).toEqual([]);
     });
 
+    it('the sender\'s closing post after the acceptance doesn\'t take the thread back', async () => {
+        const sa = await start(a), sb = await start(b); await drain();
+        const t = await thread();
+        const send = async (auth: object, content: string) => {
+            const res = await ctx.request.post(`/channels/${channel}/messages/${t}/replies`).set(auth).send({ content });
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+            return res.body.id as string;
+        };
+        await send(owner.auth, '@hoa take this');
+        await drain();
+        const o = await offerOk(a, { threadId: t, to: 'hob', summary: 'Take it' });
+        expect((await answer(b.auth, o.id, 'accept')).status).toBe(200);
+        await drain();
+        // hoa's run ends after the acceptance and posts its wrap-up
+        await send(a.auth, 'handed to hob; my part is pushed');
+        const r = await send(owner.auth, 'status?');
+        const rows = async (sessionId: string) => (await ctx.db.query(
+            'SELECT reason FROM agent_inbox WHERE session_id = $1 AND message_id = $2', [sessionId, r])).rows.map(x => x.reason);
+        expect(await rows(sb)).toEqual(['direct']);
+        expect(await rows(sa)).toEqual([]);
+    });
+
     it('after the handoff, without a live owner nobody wakes, not the sender who posted before it', async () => {
         await start(a); await start(b); await drain();
         const t2 = await thread();

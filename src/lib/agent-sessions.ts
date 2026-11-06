@@ -409,7 +409,7 @@ async function followUpTarget(db: any, msg: RoutedMessage, sessions: LiveSession
     const agents: string[] = (await db.query(
         `SELECT DISTINCT bot_id FROM agent_sessions WHERE channel_id = $1`, [msg.channelId]
     )).rows.map((r: any) => r.bot_id);
-    const latest = agents.length > 0 ? await latestEvent(db, msg, agents, floor) : undefined;
+    const latest = agents.length > 0 ? await latestEvent(db, msg, agents, floor, ownerBot) : undefined;
     // Nothing since the handoff (or no event at all): the owner, or nobody
     const botId = latest ?? ownerBot;
     return botId ? sessions.find(s => s.botId === botId) : undefined;
@@ -422,7 +422,7 @@ const WALK_BATCH = 20;
  * through the thread's index (replies, then the parent) and checking only those, from `floor`
  * (a ULID; '' for the whole thread). Undefined when there is none, or the latest names two agents.
  */
-async function latestEvent(db: any, msg: RoutedMessage, agents: string[], floor: string): Promise<string | undefined> {
+async function latestEvent(db: any, msg: RoutedMessage, agents: string[], floor: string, ownerBot: string | undefined): Promise<string | undefined> {
     const threadId = msg.threadId!;
     // Candidates: posts by agents (not handoff cards), and directors' messages that @mention one
     const candidates = (scope: string, before: string | null) => db.query(
@@ -436,22 +436,26 @@ async function latestEvent(db: any, msg: RoutedMessage, agents: string[], floor:
          LIMIT ${WALK_BATCH}`,
         [threadId, msg.messageId, agents, floor, before]
     );
-    // Was this agent addressed in the thread? Point lookups for the one bot
+    // Was this agent addressed in the thread? Point lookups for the one bot. After a handoff
+    // (`floor` set) the owner is, and others only by what happened since: a wake there other
+    // than a lurk, or a director's @mention. The sender, whose run may finish after the
+    // acceptance, doesn't take the thread back.
     const checked = new Map<string, boolean>();
     const addressed = async (botId: string): Promise<boolean> => {
+        if (botId === ownerBot) return true;
         if (!checked.has(botId)) {
             const r = await db.query(
-                `SELECT EXISTS (SELECT 1 FROM messages p WHERE p.id = $1 AND p.author_id = $3)
+                `SELECT ($4::text = '' AND EXISTS (SELECT 1 FROM messages p WHERE p.id = $1 AND p.author_id = $3))
                      OR EXISTS (SELECT 1 FROM agent_inbox i JOIN agent_sessions s ON s.id = i.session_id
-                                WHERE i.thread_id = $1 AND s.bot_id = $3 AND i.reason <> 'lurk')
-                     OR EXISTS (SELECT 1 FROM agent_sessions s JOIN agent_inbox i ON i.session_id = s.id AND i.message_id = $1
-                                WHERE s.channel_id = $2 AND s.bot_id = $3 AND i.reason <> 'lurk')
+                                WHERE i.thread_id = $1 AND s.bot_id = $3 AND i.reason <> 'lurk' AND i.message_id >= $4)
+                     OR ($4::text = '' AND EXISTS (SELECT 1 FROM agent_sessions s JOIN agent_inbox i ON i.session_id = s.id AND i.message_id = $1
+                                                    WHERE s.channel_id = $2 AND s.bot_id = $3 AND i.reason <> 'lurk'))
                      OR EXISTS (SELECT 1 FROM message_mentions dm
                                 JOIN messages d ON d.id = dm.message_id
                                 JOIN users du ON du.id = d.author_id AND NOT du.bot
-                                WHERE dm.user_id = $3 AND (d.thread_id = $1 OR d.id = $1)
+                                WHERE dm.user_id = $3 AND (d.thread_id = $1 OR d.id = $1) AND d.id >= $4
                                   AND d.author_could_direct AND d.deleted_at IS NULL) AS addressed`,
-                [threadId, msg.channelId, botId]
+                [threadId, msg.channelId, botId, floor]
             );
             checked.set(botId, r.rows[0].addressed);
         }
