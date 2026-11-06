@@ -34,6 +34,25 @@ export function proxyVars(source: NodeJS.ProcessEnv = process.env): NodeJS.Proce
     return env;
 }
 
+/**
+ * Codex's non-essential traffic, off in a box (docs/agent-boxes.md §4.2.1): usage metrics to
+ * ab.chatgpt.com, feedback reports to Sentry, and the update check. Codex works without them;
+ * the edge refuses those hosts anyway, and each refusal would cost a request. Root-level `-c`
+ * overrides, accepted by `codex exec`, `codex app-server` and `codex login` alike (Codex
+ * type-checks them, so a renamed key fails loudly).
+ */
+export const CODEX_BOX_QUIET = ['-c', 'analytics.enabled=false', '-c', 'feedback.enabled=false', '-c', 'check_for_update_on_startup=false'] as const;
+
+/** Claude Code's equivalent, as environment variables (code.claude.com/docs/en/network-config). */
+export const CLAUDE_BOX_QUIET = {
+    // Telemetry, error reports, auto-updates, /feedback, release notes and feature flags
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    DISABLE_AUTOUPDATER: '1',
+    // The official plugin marketplace is cloned from github.com, which a box reaches only
+    // through the git broker: every start would make a card
+    CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
+} as const;
+
 /** The pinned CLIs in the box image (box/Dockerfile links them here). */
 export const BOX_CLI = { claude: '/opt/agora/bin/claude', codex: '/opt/agora/bin/codex' } as const;
 export const BOX_MCP = '/opt/agora/agora-mcp/dist/index.js';

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from './config.js';
 import { verifyProfile } from './adapters.js';
-import { Client } from './client.js';
+import { Client, errorCode } from './client.js';
 import { ProcessRunner } from './process.js';
 import { Scheduler } from './scheduler.js';
 import { describeAuth, HostConfigError, profileReport } from './terms.js';
@@ -31,7 +31,7 @@ async function main() {
     if (inBox()) console.log('Agent box: the CLI runs without its own sandbox or permission prompts; the box and its edge are the boundary.');
     const client = new Client(config.instance, config.hostToken);
     // Agora applies the subscription rule from this report; the host enforces it too
-    try { await client.reportProfiles(profileReport(config.profiles)); } catch { console.error('profile_report_failed'); }
+    try { await client.reportProfiles(profileReport(config.profiles)); } catch (err) { console.error(`profile_report_failed ${errorCode(err)}`); }
     const scheduler = new Scheduler(config, client, new ProcessRunner(), { log: code => console.error(code) });
     process.once('SIGINT', () => { void scheduler.stop(); });
     process.once('SIGTERM', () => { void scheduler.stop(); });

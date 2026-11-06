@@ -7,7 +7,9 @@ import { Pool } from 'pg';
 import { config } from './config';
 import { dockerFromEnv, SandboxDocker } from './runtime/docker';
 import Redis from 'ioredis';
-import { reconcileInterruptedRuns, startRunnerWorker } from './runtime/runner';
+import { reconcileInterruptedRuns, runContainerCandidates, startRunnerWorker } from './runtime/runner';
+import { containerName } from './runtime/container-spec';
+import { instanceName } from './lib/boxes/contract';
 import { postRunResult, runtimeMaintenance } from './runtime/service';
 import { publishEvents } from './lib/event-bridge';
 
@@ -15,7 +17,7 @@ async function main() {
     const insecureDev = process.env.AGORA_SANDBOX_INSECURE_DEV === '1';
     const image = process.env.AGORA_SANDBOX_IMAGE ?? 'agora/sandbox-deno:dev';
     // One name per install, so two installs on one engine never share a network or runs (#209)
-    const instance = process.env.AGORA_INSTANCE || 'agora';
+    const instance = instanceName();
     const network = process.env.AGORA_SANDBOX_NETWORK ?? `${instance}_sandbox`;
 
     const sandbox = new SandboxDocker(dockerFromEnv());
@@ -26,7 +28,10 @@ async function main() {
     }
 
     const db = new Pool({ connectionString: config.dbUrl, max: 5 });
-    const orphans = await sandbox.removeOrphans(instance);
+    // This install's leftover run containers, by name from its own database (#126)
+    const candidates = (await runContainerCandidates(db)).map(id => containerName(id, instance));
+    const { removed: orphans, failed } = await sandbox.removeRunContainers(candidates);
+    for (const f of failed) console.warn(`[runner] could not remove leftover container ${f.name}: ${f.error}`);
     const interrupted = await reconcileInterruptedRuns(db);
     console.log(`Sandbox runner: runtime=${runtime} image=${image} network=${network}; `
         + `removed ${orphans} orphan container(s), marked ${interrupted} interrupted run(s) as error`);
@@ -83,8 +88,9 @@ async function main() {
 
     const shutdown = async () => {
         clearInterval(sweepTimer);
-        publisher.disconnect();
+        // Runs in progress finish first, and their results still reach the thread
         await worker.close();
+        publisher.disconnect();
         await db.end();
         process.exit(0);
     };

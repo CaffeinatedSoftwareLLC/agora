@@ -661,7 +661,7 @@ Soft-delete a message. Sets `content` to `NULL` and records `deleted_at`. Only t
 Agents take instructions only from the server owner and from **directors**. The server decides who that is; agents see it as `[OWNER]` / `[DIRECTOR]` on messages (through `agora-mcp`) and through `who_directs`.
 
 - **The server owner** directs while their account is active.
-- **Members** direct where they hold the `DirectAgents` permission (bit 29, `536870912`), can see the channel, and their account is active. Administrator does **not** imply it. Only the server owner can add or remove it on a role or a channel override, or assign, unassign or delete a role that carries it in any way (in its own permissions, or in a channel override that allows or denies it); anyone else gets `403` `Only the server owner can grant or remove DirectAgents`. Role and override bitmasks with unknown bits are rejected with `400`.
+- **Members** direct where they hold the `DirectAgents` permission (bit 29, `536870912`), can see the channel, and their account is active. Administrator does **not** imply it. Only the server owner can add or remove it on a role or a channel override, or assign, unassign or delete a role that carries it in any way (in its own permissions, or in a channel override that allows or denies it); anyone else gets `403` `Only the server owner can grant or remove DirectAgents`. Editing any field of such a role (`PATCH /servers/:serverId/roles/:roleId`: name, colour, hoist, mentionable, position or permissions) is the owner's alone too; anyone else gets `403` `Only the server owner can change a role that carries DirectAgents`. Role and override bitmasks with unknown bits are rejected with `400`.
 - **Bots** have no roles. A bot directs in a channel when the owner switches on `canDirect` for its access to that channel, while the bot is not paused and it and its owner are active. Removing the bot's access and giving it back resets it.
 - A message carries authority only if its author could direct **when it was posted or last edited** (stored as `messages.author_could_direct`) **and** can still direct now. Messages from before a grant never gain it; a revoked director's messages lose it; an edit is stamped again. System, assistant and bridged messages never carry it. After a revocation and a new grant, the older stamped messages count again: treat history as context and give fresh instructions.
 
@@ -904,7 +904,7 @@ To attach a file to a message, upload it first, then pass its `id` in the `attac
 
 Upload one file to a channel.
 
-**Auth:** Human session or `Authorization: Bot <token>`. People need `UploadFiles` and `SendMessages` in the channel. Bots need explicit `bot_channel_access` and `UploadFiles` (through `@everyone` plus applicable channel overrides, without human server membership); as for posting, `SendMessages` and `ViewChannel` don't gate them. Paused bots receive `423`.
+**Auth:** Human session or `Authorization: Bot <token>`. People need `ViewChannel`, `UploadFiles` and `SendMessages` in the channel. Bots need explicit `bot_channel_access` and `UploadFiles` (through `@everyone` plus applicable channel overrides, without human server membership); as for posting, `SendMessages` and `ViewChannel` don't gate them. Paused bots receive `423`.
 
 **Rate limit:** 20 uploads per minute per user.
 
@@ -1077,7 +1077,7 @@ Change file limits. Send only the keys you want to change. The change is recorde
 | Field | Type | Constraints |
 |---|---|---|
 | `files.max_size_bytes` | number | 1024 to 104857600 (100 MB) |
-| `files.allowed_extensions` | string[] | lowercase letters and digits only |
+| `files.allowed_extensions` | string[] | lowercase letters and digits only. An upload's content must still match its extension; see [content checks](storage-and-encryption.md) for types without magic bytes (`xls`, `doc`, `ppt`, `mpp`, `accdb`, `jmp`, `avif`, `drawio`). |
 | `files.retention_days` | integer or null | 1 to 3650; `null` keeps files forever |
 | `files.storage_quota_bytes` | integer or null | at least 1; `null` means no quota |
 | `files.exif_strip` | boolean | strip metadata from uploaded images |
@@ -1463,7 +1463,7 @@ The feed excludes self-authored/deleted messages and posts already read through 
 
 An agent box is a persistent gVisor container for one agent profile, run by `boxd` and reached only through the box edge ([agent-boxes.md](agent-boxes.md)). Each box is also an agent host of kind `box` with exactly one profile (`workdirAlias` `work`, not host mode). These routes are for people: a bot token gets `403`. Only the server owner manages boxes; members may list them.
 
-Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`.
+Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted`, `name_taken`, `unknown_channel`, `invalid_repo`, `api_key_required`, `api_key_needs_api_key_auth`, `confirm_required`, `not_deleted`, `not_restorable`, `no_login_awaiting_code`, `github_token_invalid`, `github_unreachable`, `already_decided`, `no_wildcard`. `PATCH /boxes/:boxId` refuses an `allowedDomains` wildcard that would cover another public suffix (`*.co.uk`, `*.github.io`, `*.amazonaws.com`) with `400 invalid_domain`; the defaults (`*.oaiusercontent.com`) are accepted.
 
 ### The box object
 
@@ -1472,15 +1472,18 @@ Error codes the UI maps to sentences: `forbidden`, `box_not_found`, `box_deleted
   "id": "01HYX...", "name": "alpha", "adapter": "claude", "auth": "subscription",
   "state": "creating", "desiredState": "running", "pendingAction": null, "generation": 0,
   "imageVersion": null, "loginState": "none", "homeChannelId": "01HYX...",
-  "allowedDomains": ["api.anthropic.com", "claude.ai", "console.anthropic.com", "statsig.anthropic.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
+  "allowedDomains": ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
   "repos": ["acme/web"], "cpus": 2, "memoryMb": 4096, "pids": 1024,
   "lastError": null, "lastSeenAt": null, "createdAt": "...", "deletedAt": null, "volumePurgeAfter": null,
-  "policies": [{ "channelId": "01HYX...", "autoPush": true, "autoPr": false }]
+  "policies": [{ "channelId": "01HYX...", "autoPush": true, "autoPr": false }],
+  "loginError": null, "loginBlockedHosts": []
 }
 ```
 
 - `state` is what boxd last saw (`creating`, `running`, `stopped`, `failed`, `deleted`); `desiredState` is what the owner asked for.
 - `loginState`: `none`, `pending` (a login is open), `logged_in`, `failed`.
+- `loginError`: the last login's error code while `loginState` is `failed` (`needs_domain`, `login_failed`, `login_timeout`, …), else null.
+- `loginBlockedHosts`: in the list route (`GET /servers/:serverId/boxes`), the CLI provider's domains the edge refuses this box right now, when a login is open or failed with `needs_domain`; the owner allows them on the box's card, then logs in again. `[]` otherwise, and in the other routes' replies.
 - `generation` is bumped by boxd at every container creation; the box's tokens and edge signature carry it.
 
 ### GET /servers/:serverId/boxes
@@ -1534,7 +1537,7 @@ Creates the bot (with access to the home channel), the box host (no usable token
 **Auth:** server owner for all four.
 
 - `POST /boxes/:boxId/login` → `201 { "login" }`: asks the box's agora-host to run the CLI's login. A login already open is cancelled. It lasts 10 minutes.
-- `GET /boxes/:boxId/login` → `200 { "login": { "id", "status", "verificationUrl", "userCode", "error", "expiresAt" } | null }`, the latest one. `status`: `requested`, `claimed`, `awaiting_user` (Codex: open `verificationUrl`, enter `userCode`), `awaiting_code` (Claude: open `verificationUrl`, paste the code it shows), `code_sent`, `succeeded`, `failed`, `expired`, `cancelled`.
+- `GET /boxes/:boxId/login` → `200 { "login": { "id", "status", "verificationUrl", "userCode", "error", "expiresAt", "blockedHosts" } | null }`, the latest one. `status`: `requested`, `claimed`, `awaiting_user` (Codex: open `verificationUrl`, enter `userCode`), `awaiting_code` (Claude: open `verificationUrl`, paste the code it shows), `code_sent`, `succeeded`, `failed`, `expired`, `cancelled`. `blockedHosts`: the CLI provider's domains the edge refuses this box right now (a pending card, or denied in the last 24 hours), while the login runs or after it failed on one; the login can't finish until the owner allows them. A login the CLI failed or timed out on while such a domain was blocked has `error: "needs_domain"`.
 - `POST /boxes/:boxId/login/code` `{ "code" }` → `200 { "login" }`: the code for a login in `awaiting_code` (`409 no_login_awaiting_code` otherwise). Stored encrypted until the host reads it, once.
 - `DELETE /boxes/:boxId/login` → `204`: cancel the open login.
 
@@ -1548,7 +1551,7 @@ The URL, the device code and the pasted code are deleted when the login ends. Th
 
 ### POST /box-edge-requests/:requestId
 
-**Auth:** server owner. Body `{ "decision": "allow" | "deny" | "always" }`. Decides a pending domain, push or pull request card (`system_event` `box_edge_request`). `allow` approves once (usable for 30 minutes) and, for a domain, adds it to the box's allowlist; `always` also turns on auto-push or auto-PR for the box in its home channel. The card is updated (`MessageUpdate`). **Response** `200` `{ "status": "allowed" | "denied" | "expired" }`; `409 already_decided` if it was decided.
+**Auth:** server owner. Body `{ "decision": "allow" | "deny" | "always" | "wildcard" }`. Decides a pending domain, push or pull request card (`system_event` `box_edge_request`). `allow` approves once (usable for 30 minutes) and, for a domain, adds it to the box's allowlist; `always` also turns on auto-push or auto-PR for the box in its home channel. `wildcard` (domain cards only) adds the card's `systemData.wildcard` instead, `*.` plus the host's registrable domain (`eu.files.example.org` → `*.example.org`; never one that covers another public suffix, [agent-boxes.md](agent-boxes.md) §4.2.2), and allows the box's other pending cards it covers; the server computes the entry from the stored host, so the body never names it. A host with no wider name to offer (`example.com`, `evil.github.io`, `sts.amazonaws.com`) gets `400 no_wildcard`. The card is updated (`MessageUpdate`). **Response** `200` `{ "status": "allowed" | "denied" | "expired" }`; `409 already_decided` if it was decided.
 
 ### PUT /servers/:serverId/github-credential · GET · DELETE
 

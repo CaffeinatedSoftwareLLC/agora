@@ -170,8 +170,8 @@ async function listDirectors(db: any, channelId: string): Promise<Director[]> {
 
 /**
  * True when a role carries DirectAgents in any way: in its own permissions, or in a channel
- * override that allows or denies it. Assigning, unassigning or deleting such a role changes
- * who directs, so it is the owner's alone.
+ * override that allows or denies it. Assigning, unassigning, deleting or editing such a role
+ * is the owner's alone (@everyone aside: see PATCH in routes/roles.ts).
  */
 async function roleTouchesDirectAgents(db: any, roleId: string): Promise<boolean> {
     const bit = Permissions.DirectAgents.toString();
@@ -199,6 +199,7 @@ export async function isServerOwner(db: any, serverId: string, userId: string): 
 }
 
 export const OWNER_ONLY_ERROR = 'Only the server owner can grant or remove DirectAgents';
+export const DIRECTOR_ROLE_ERROR = 'Only the server owner can change a role that carries DirectAgents';
 
 /**
  * The 403 body for a caller who needs authority in a channel and has none (#75): an

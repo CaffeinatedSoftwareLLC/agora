@@ -58,12 +58,18 @@ export function resourceProblem(key: keyof typeof LIMITS, value: string): string
 export const ADAPTER_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' };
 
 /** The state chip: what the box is doing, including an owner action boxd hasn't done yet. */
-export function stateChip(box: Box): { label: string; tone: string } {
+export function stateChip(box: Box): { label: string; tone: string; login?: boolean } {
   if (box.deletedAt || box.desiredState === 'deleted') return { label: 'deleted', tone: 'bg-surface text-text-muted' };
   if (box.pendingAction) return { label: `${box.pendingAction} pending`, tone: 'bg-warn/20 text-warn' };
   if (box.state === 'failed') return { label: 'failed', tone: 'bg-danger/20 text-danger' };
   if (box.state === 'running' && box.desiredState === 'stopped') return { label: 'stopping', tone: 'bg-warn/20 text-warn' };
   if (box.state === 'stopped' && box.desiredState === 'running') return { label: 'starting', tone: 'bg-warn/20 text-warn' };
+  // A running box whose CLI isn't logged in can't answer anyone: say that, not "running"
+  if (box.state === 'running' && box.auth === 'subscription' && box.loginState !== 'logged_in') {
+    if (box.loginState === 'failed') return { label: 'login failed', tone: 'bg-danger/20 text-danger', login: true };
+    if (box.loginState === 'pending') return { label: 'logging in', tone: 'bg-warn/20 text-warn', login: true };
+    return { label: 'not logged in', tone: 'bg-warn/20 text-warn', login: true };
+  }
   if (box.state === 'running') return { label: 'running', tone: 'bg-online/20 text-online' };
   if (box.state === 'creating') return { label: 'creating', tone: 'bg-warn/20 text-warn' };
   return { label: box.state, tone: 'bg-surface text-text-muted' };
@@ -76,6 +82,22 @@ export const LOGIN_LABEL: Record<Box['loginState'], string> = {
   failed: 'login failed',
 };
 
+/**
+ * What the owner does next about a box's login, or null: the domains to allow on the box's card
+ * when the edge is refusing its login, else "log in again" after a failure.
+ */
+export function loginHint(box: Box): string | null {
+  if (box.auth !== 'subscription' || box.deletedAt) return null;
+  const hosts = box.loginBlockedHosts ?? [];
+  if (box.loginState === 'failed') {
+    return hosts.length
+      ? `Login failed: allow ${hosts.join(', ')} on the box's card, then log in again.`
+      : `Login failed${box.loginError ? ` (${box.loginError})` : ''}: log in again.`;
+  }
+  if (box.loginState === 'pending' && hosts.length) return `The login is waiting: allow ${hosts.join(', ')} on the box's card.`;
+  return null;
+}
+
 /** Whether a login has ended (nothing more to poll). */
 export function loginEnded(status: LoginStatus): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'expired' || status === 'cancelled';
@@ -84,6 +106,10 @@ export function loginEnded(status: LoginStatus): boolean {
 /** A sentence for the login dialog. */
 export function loginStatusText(login: BoxLogin | null, adapter: Box['adapter']): string {
   if (!login) return 'Starting…';
+  // The CLI is waiting on a domain the box isn't allowed to reach yet
+  if (login.blockedHosts?.length && !loginEnded(login.status)) {
+    return `Blocked: the login needs ${login.blockedHosts.join(', ')}. Allow it on the box's card in its channel; the login waits up to 2 minutes for it, then log in again if it fails.`;
+  }
   switch (login.status) {
     case 'requested': return 'Waiting for the box to pick up the login. The box must be running.';
     case 'claimed': return `The box is starting ${ADAPTER_LABEL[adapter] ?? adapter}'s login…`;
@@ -93,7 +119,9 @@ export function loginStatusText(login: BoxLogin | null, adapter: Box['adapter'])
     case 'awaiting_code': return 'Open the link, sign in to Anthropic, then paste the code Anthropic shows.';
     case 'code_sent': return 'Code sent. Waiting for the CLI to finish…';
     case 'succeeded': return 'Logged in. The login is saved in the box\'s home folder only.';
-    case 'failed': return `Login failed${login.error ? `: ${login.error}` : '.'}`;
+    case 'failed': return login.error === 'needs_domain' && login.blockedHosts?.length
+      ? `Login failed: the box was blocked from ${login.blockedHosts.join(', ')}. Allow it on the box's card, then log in again.`
+      : `Login failed${login.error ? `: ${login.error}` : '.'}`;
     case 'expired': return 'The login expired. Start again.';
     case 'cancelled': return 'Login cancelled.';
   }
@@ -149,6 +177,7 @@ const BOX_ERRORS: Record<string, string> = {
   invalid_domain: 'One of the domains is not allowed.',
   invalid_repo: 'One of the repositories is not owner/repo.',
   already_decided: 'Someone already answered this.',
+  no_wildcard: 'This domain has no wider name that can be allowed. Allow it on its own.',
   expired: 'This request expired.',
   not_found: 'Not found. It may have been removed.',
   report_too_large: 'The report is too large to send.',

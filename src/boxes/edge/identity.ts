@@ -14,6 +14,8 @@ export interface EdgeBox {
     subnet: string | null;
     allowedDomains: string[];
     homeChannelId: string | null;
+    /** The box's CLI (agent_profiles.adapter): which provider domains a login may wait on. */
+    adapter?: string | null;
 }
 
 export type Identify = (localAddress: string, remoteAddress: string) => Promise<EdgeBox | null>;
@@ -80,12 +82,14 @@ export class BoxDirectory {
 
     private async load(): Promise<EdgeBox[]> {
         const res = await this.db.query(
-            `SELECT id, server_id, generation, subnet, allowed_domains, home_channel_id FROM agent_boxes
-             WHERE deleted_at IS NULL AND desired_state <> 'deleted'`
+            `SELECT b.id, b.server_id, b.generation, b.subnet, b.allowed_domains, b.home_channel_id, p.adapter
+             FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id
+             WHERE b.deleted_at IS NULL AND b.desired_state <> 'deleted'`
         );
         this.rows = res.rows.map(r => ({
             id: r.id.trim(), serverId: r.server_id.trim(), generation: Number(r.generation), subnet: r.subnet,
             allowedDomains: r.allowed_domains ?? [], homeChannelId: r.home_channel_id?.trim() ?? null,
+            adapter: r.adapter ?? null,
         }));
         this.loadedAt = Date.now();
         return this.rows;

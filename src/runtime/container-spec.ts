@@ -54,8 +54,20 @@ export function gatewayHostEntry(capUrl: string, gatewayIp: string | undefined):
 /** The install name when AGORA_INSTANCE isn't set; existing installs keep it. */
 export const DEFAULT_INSTANCE = 'agora';
 
-export function containerName(runId: string): string {
-    return `agora-run-${runId.trim().toLowerCase()}`;
+/** An install name as Compose and the socket proxy rules accept it (src/lib/boxes/contract.ts instanceName). */
+const INSTANCE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+const RUN_ID = /^[0-9a-z]{26}$/;
+
+/**
+ * `<instance>-run-<runId>`. The socket proxy allows container calls only on its own install's
+ * prefix (docker-compose.prod.yml), so one install can't inspect, stop or remove another's runs
+ * (#126). The default install keeps the `agora-run-` names it always had.
+ */
+export function containerName(runId: string, instance: string = DEFAULT_INSTANCE): string {
+    if (!INSTANCE.test(instance)) throw new Error(`Invalid install name "${instance}"`);
+    const id = runId.trim().toLowerCase();
+    if (!RUN_ID.test(id)) throw new Error('Invalid run id');
+    return `${instance}-run-${id}`;
 }
 
 export function chunkCode(code: string): string[] {
@@ -110,7 +122,7 @@ export function buildContainerSpec(input: ContainerSpecInput): ContainerCreateOp
     const memoryBytes = limits.memoryMb * 1024 * 1024;
 
     return {
-        name: containerName(input.runId),
+        name: containerName(input.runId, input.instance ?? DEFAULT_INSTANCE),
         Image: input.image,
         Cmd: denoArgs(input),
         Env: env,

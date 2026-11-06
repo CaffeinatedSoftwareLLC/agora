@@ -5,7 +5,7 @@ import { asService } from '../lib/agent-sessions';
 import { encryptString } from '../lib/encryption';
 import { config } from '../config';
 import { DOMAIN_ENTRY } from '../lib/boxes/contract';
-import { decideEdgeRequest, EdgeDecisionError } from '../lib/boxes/edge-requests';
+import { decideEdgeRequest, EdgeDecisionError, loginBlockedHosts } from '../lib/boxes/edge-requests';
 import { BOX_ADAPTERS, BoxError, REPO_PATTERN, boxAction, createBox, deleteBox, patchBox, purgeBox, restoreBox } from '../lib/boxes/service';
 
 /**
@@ -25,12 +25,18 @@ export const LOGIN_TTL_MINUTES = 10;
 const OPEN_LOGIN = `('requested', 'claimed', 'awaiting_user', 'awaiting_code', 'code_sent')`;
 
 const BOX_SELECT = `SELECT b.*, p.name, p.adapter, p.auth_mode, p.bot_id,
+        (SELECT l.error FROM box_login_requests l WHERE l.box_id = b.id ORDER BY l.created_at DESC, l.id DESC LIMIT 1) AS login_error,
         COALESCE((SELECT array_agg(r.owner || '/' || r.repo ORDER BY r.owner, r.repo) FROM box_repos r WHERE r.box_id = b.id), '{}') AS repos,
         COALESCE((SELECT json_agg(json_build_object('channelId', btrim(pp.channel_id), 'autoPush', pp.auto_push, 'autoPr', pp.auto_pr) ORDER BY pp.channel_id)
                   FROM box_push_policies pp WHERE pp.box_id = b.id), '[]') AS policies
     FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id`;
 
-export function boxJson(r: any) {
+/**
+ * A box as the API shows it. `loginError` is why its last login failed (when it did);
+ * `loginBlockedHosts`, what the login needs allowed first (loginBlockedHosts), so a box that runs
+ * but can't log in says so instead of only "running".
+ */
+export function boxJson(r: any, loginBlocked: string[] = []) {
     return {
         id: r.id.trim(), name: r.name, adapter: r.adapter, auth: r.auth_mode, state: r.state, desiredState: r.desired_state,
         pendingAction: r.pending_action ?? null, generation: r.generation, imageVersion: r.image_version ?? null,
@@ -38,13 +44,30 @@ export function boxJson(r: any) {
         repos: r.repos ?? [], cpus: Number(r.cpus), memoryMb: r.memory_mb, pids: r.pids,
         lastError: r.last_error ?? null, lastSeenAt: r.last_seen_at ?? null, createdAt: r.created_at,
         deletedAt: r.deleted_at ?? null, volumePurgeAfter: r.volume_purge_after ?? null, policies: r.policies ?? [],
+        loginError: r.login_state === 'failed' ? (r.login_error ?? null) : null,
+        loginBlockedHosts: loginBlocked,
     };
 }
 
-function loginJson(r: any) {
+/** The hosts a box's login waits on or failed on: only asked when that is the box's state. */
+async function boxLoginBlocked(db: any, r: any): Promise<string[]> {
+    const waiting = r.login_state === 'pending' || (r.login_state === 'failed' && r.login_error === 'needs_domain');
+    return waiting ? loginBlockedHosts(db, r.id.trim(), r.adapter) : [];
+}
+
+/** Rows to JSON, with each failed or running login's blocked hosts. */
+export async function boxesJson(db: any, rows: any[]): Promise<any[]> {
+    const out = [];
+    for (const r of rows) out.push(boxJson(r, await boxLoginBlocked(db, r)));
+    return out;
+}
+
+function loginJson(r: any, blockedHosts: string[] = []) {
     return {
         id: r.id.trim(), status: r.status, verificationUrl: r.verification_url ?? null, userCode: r.user_code ?? null,
         error: r.error ?? null, expiresAt: r.expires_at,
+        // Domains the box was refused while this login ran: what it waits on, or failed on
+        blockedHosts,
     };
 }
 
@@ -117,8 +140,11 @@ export async function boxRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
         const member = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [serverId, userId]);
         if (member.rows.length === 0) return reply.status(403).send({ error: 'forbidden' });
-        const rows = await asService(db, () => db.query(`${BOX_SELECT} WHERE b.server_id = $1 ORDER BY b.created_at`, [serverId]));
-        return reply.send({ boxes: rows.rows.map(boxJson) });
+        const boxes = await asService(db, async () => {
+            const rows = await db.query(`${BOX_SELECT} WHERE b.server_id = $1 ORDER BY b.created_at`, [serverId]);
+            return boxesJson(db, rows.rows);
+        });
+        return reply.send({ boxes });
     });
 
     // POST /servers/:serverId/boxes → 201 { box }
@@ -267,7 +293,12 @@ export async function boxRoutes(app: FastifyInstance) {
         async (request, reply) => owned(request, reply, false, async (db, box) => {
             await expireBoxLogins(db, box.id);
             const row = await db.query(`SELECT * FROM box_login_requests WHERE box_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [box.id]);
-            return { status: 200, body: { login: row.rows[0] ? loginJson(row.rows[0]) : null } };
+            const login = row.rows[0];
+            // While it runs: what it is blocked on now. Once it failed on a domain: that, still,
+            // until the owner allows it. Other endings need no hint
+            const blocked = login && (!['succeeded', 'failed', 'cancelled', 'expired'].includes(login.status) || login.error === 'needs_domain')
+                ? await loginBlockedHosts(db, box.id, box.adapter) : [];
+            return { status: 200, body: { login: login ? loginJson(login, blocked) : null } };
         }));
 
     // POST /boxes/:boxId/login/code { code } → { login }: the code Anthropic showed (Claude only)
@@ -312,7 +343,7 @@ export async function boxRoutes(app: FastifyInstance) {
         schema: {
             params: { type: 'object', properties: { requestId: ID } },
             body: { type: 'object', required: ['decision'], additionalProperties: false,
-                properties: { decision: { type: 'string', enum: ['allow', 'deny', 'always'] } } },
+                properties: { decision: { type: 'string', enum: ['allow', 'deny', 'always', 'wildcard'] } } },
         },
     }, async (request, reply) => {
         const userId = person(request, reply);

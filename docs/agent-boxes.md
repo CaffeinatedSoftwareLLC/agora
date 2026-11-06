@@ -116,13 +116,52 @@ Rules:
 
 - The box's CLI, `git`, `npm`, `pip` and `curl` use `HTTPS_PROXY`/`HTTP_PROXY=http://edge:3128` (`NO_PROXY=edge`). Node's own `fetch` in agora-host and agora-mcp doesn't use a proxy, and doesn't need one: they only talk to `edge`.
 - The edge allows `CONNECT host:port` (port 443, or 80 for plain HTTP requests) when `host` matches the box's allowlist: exact names or `*.example.com` suffixes, no IPs, no wildcard-all.
-- **Default allowlist**, set when the box is created:
-  - the adapter's provider: Claude `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `statsig.anthropic.com`; Codex `api.openai.com`, `chatgpt.com`, `auth.openai.com`,
+- **Default allowlist**, set when the box is created, so a fresh box starts without a burst of cards:
+  - the adapter's provider: Claude `api.anthropic.com`, `platform.claude.com` (where `claude auth login` exchanges its code), `claude.ai`, `console.anthropic.com`; Codex `api.openai.com`, `chatgpt.com` (its ChatGPT-plan backend), `auth.openai.com` (sign-in) and `*.oaiusercontent.com` (content it fetches from regional hosts on its first start). Checked against Anthropic's network docs and the pinned CLIs' binaries, and against the cards the live boxes made (2026-11-04),
   - package registries: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`.
+  - Existing boxes got the additions by migration (082 `platform.claude.com`, 083 `*.oaiusercontent.com`).
+- **Telemetry is off and blocked** (§4.2.1).
 - `github.com` is **not** on it: git goes through the git broker (§5.1), which is the only path with credentials.
 - **SSRF guard, pinned:** the edge resolves `host` once, refuses the request if **any** answer is private, loopback, link-local, multicast, reserved, CGNAT, an IPv4-mapped or NAT64 IPv6 address, or inside one of the engine's Docker networks (the existing `src/lib/url-guard.ts` rules plus those), and then dials **the validated address itself**, never the name again. A retry repeats the whole check. So a name that answers differently between check and connect (DNS rebinding) can't reach `postgres` or another box.
 - **What the allowlist controls:** the CONNECT authority (host and port). TLS stays end to end and the edge doesn't see inside it, so on shared infrastructure (a CDN that serves many sites) the name the client sends inside TLS can differ from the allowed one. The allowlist is a reach limit, not proof of which site the box talked to. Allowed domains (the provider, the registries) also remain outbound data paths; the allowlist narrows exfiltration, it doesn't prevent it.
-- **Unknown domain:** the edge answers `403` with `X-Agora-Edge-Request: <requestId>` and a one-line body (`domain example.com needs the owner's approval; request <id> was sent`). It records a pending `domain` edge request (deduplicated per box and domain while pending) and posts the card. **Allow** adds the domain to that box's allowlist; **Deny** keeps it out and suppresses new cards for that domain for 24 hours. The agent retries after approval; nothing is held open.
+- **Unknown domain:** the edge answers `403` with `X-Agora-Edge-Request: <requestId>` and a one-line body (`domain example.com needs the owner's approval; request <id> was sent`). It records a pending `domain` edge request (deduplicated per box and domain while pending) and posts the card. **Allow** adds the domain to that box's allowlist; **Allow `*.example.com`** adds its bounded wildcard (§4.2.2); **Deny** keeps it out and suppresses new cards for that domain for 24 hours. The agent retries after approval; nothing is held open, except during a login (§4.2.3).
+
+#### 4.2.1 Telemetry hosts
+
+Privacy is part of the point of a box: the CLIs' telemetry, metrics, error-report and experiment hosts are not on any allowlist, and the edge refuses them with a `403` and **no card** (`domain ab.chatgpt.com sends telemetry, which boxes don't send`). The list is `TELEMETRY_DOMAINS` in `src/lib/boxes/domains.ts`; a name covers its subdomains.
+
+| Host | CLI | What it is | Switched off in the box by |
+|---|---|---|---|
+| `ab.chatgpt.com` | Codex | usage metrics (OpenTelemetry export, seen live on a fresh box) | `-c analytics.enabled=false` |
+| `ingest.sentry.io`, `ingest.us.sentry.io`, `ingest.de.sentry.io` (`o33249.ingest.us.sentry.io`) | Codex | feedback and crash reports | `-c feedback.enabled=false` |
+| `statsig.anthropic.com` | Claude Code | feature flags and events (older versions) | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
+| `http-intake.logs.us5.datadoghq.com` | Claude Code | operational metrics | same |
+| `browser-intake-us5-datadoghq.com` | Claude Code | error reports | same |
+
+Only the ingest hosts are listed, never a vendor's whole domain: an agent working on a project that uses Sentry, Datadog or Statsig still reaches `sentry.io`, `api.datadoghq.com` or `api.statsig.com` (with a card).
+
+- **Each CLI works without them.** Both vendors document switching them off: Codex's `analytics.enabled`, `feedback.enabled` and `check_for_update_on_startup` settings (agora-host passes them as `-c` overrides to `codex exec`, `codex app-server` and `codex login` in a box; Codex type-checks the keys, so a renamed one fails loudly), and Claude Code's `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (telemetry, error reports, auto-updates, `/feedback`, release notes, feature flags). The box also sets `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL` (the marketplace is cloned from `github.com`, which a box reaches only through the git broker). The edge's refusal is the second layer, for a version that ignores a switch. *Verify live:* a fresh box of each CLI makes no telemetry request.
+- The owner can still let one through by adding its **exact** name in the box's settings. A wildcard never does: allowing `*.chatgpt.com` doesn't reach `ab.chatgpt.com`.
+- **The CLI switches are the control; the edge's refusal is a name check.** The edge sees only the CONNECT name (§4.2), so a process that tunnels to an allowed `chatgpt.com` and names `ab.chatgpt.com` inside TLS isn't stopped by it. That needs code in the box set on sending telemetry, which a stock CLI with these switches isn't.
+- Claude Code's WebFetch safety check goes to `api.anthropic.com` (on the list); boxes disallow `WebSearch` anyway (§8.1).
+
+#### 4.2.2 Wildcard approval
+
+A domain card can offer **Allow `*.<registrable domain>`**, so a service that spreads over several hosts (`eu.files.example.org`, `us.files.example.org`, …) is one tap instead of a card each. The bound is computed by the server from the card's host (`wildcardFor`, `src/lib/boxes/domains.ts`), never taken from the client:
+
+- It is `*.` plus the host's **registrable domain** by the Public Suffix List, private section included (`tldts`, pinned): `a.b.example.com` → `*.example.com`, `a.evil.github.io` → `*.evil.github.io`, `bucket.x.s3.amazonaws.com` → `*.x.s3.amazonaws.com`.
+- **It never covers someone else's suffix.** No `*.com`, `*.co.uk` or `*.github.io` (a public suffix), and no `*.amazonaws.com`, `*.windows.net` or `*.on.aws` either: those aren't suffixes themselves but have suffixes under them (`s3.amazonaws.com`, every S3 bucket). The check reads the list's own rule trie from the pinned tldts and fails closed (no wildcard at all) if it can't.
+- No button for a host that is already its registrable domain (`example.com`, `evil.github.io`), is a public suffix itself (`s3.amazonaws.com`, each `*.oaiusercontent.com` region), is an IP, or is under a suffix the list doesn't know (`400 no_wildcard` if asked anyway).
+- Allowing it also answers the box's other pending cards it covers. Decisions on one box run one at a time, so two wildcards tapped at once can't deadlock.
+- The settings route refuses an owner-typed wildcard that would cover someone else's suffix (`400 invalid_domain`), except the reviewed defaults: Codex's `*.oaiusercontent.com` (OpenAI lists each region as its own suffix, for its users' content; every region is OpenAI's) is on Codex boxes from the start and stays accepted. Migration 083 adds it to existing Codex boxes without a tap: a widening the owner did not approve one by one, called out in the change that ships it.
+
+#### 4.2.3 Unknown hosts during a login
+
+A CLI login can't be resumed after a refused request: Claude's login was refused `platform.claude.com` the moment its card was filed, so tapping Allow came too late (seen live 2026-11-04). So while a login is open for the box (§8.2), a request to **that CLI's own provider domains** (Claude: `anthropic.com`, `claude.ai`, `claude.com`; Codex: `openai.com`, `chatgpt.com` and their subdomains) waits for its card instead of being refused:
+
+- The edge files the card as usual, then holds the connection, looking every second, for at most **2 minutes**. Allow (or a wildcard that covers it) lets the request through; Deny, the card expiring, the login ending or the box closing the connection ends the wait with the usual `403`.
+- At most 4 requests per box wait at once; others are refused at once. Other domains are never held, login or not. Any process in the box can be held while a login is open (the edge can't tell the login command from the rest), only on those provider domains.
+- The login dialog says what it waits on (`Blocked: the login needs platform.claude.com …`); if the login fails anyway, its error is `needs_domain` and the box shows **login failed: allow X, then log in again** (§8.2).
 - Search: boxes get no open web. An agent searches through Agora (the assistant's search route, screened by the decision model where it's on) using its Agora tools, as today.
 
 ### 4.3 Edge requests and approvals
@@ -246,6 +285,7 @@ The owner presses **Log in** on the box in Settings → Agents (or on the box's 
 - The URL, the device code and the pasted code pass through Agora only for the length of the login (10 minutes), are never logged and are deleted when it ends.
 - The login is stored **only in the box's home volume**. It is never on the host and never in Agora's database; backups carry it only inside the encrypted bundle (§9.4).
 - `auth: "subscription"` boxes stay owner-only, as today: only the owner's messages wake them, only the owner can press Log in.
+- **Status, honestly.** A running box whose CLI isn't logged in can't answer anyone, so Settings → Agents shows its login state in place of "running": **not logged in**, **logging in**, or **login failed** with the next step (`Login failed: allow platform.claude.com on the box's card, then log in again.` when the edge refused a provider domain, else `Login failed (<error>): log in again.`).
 - *Verify live:* both commands in a box with a real account. CI checks the relay with fake CLIs that print the same prompts.
 
 ## 9. Lifecycle
@@ -387,7 +427,7 @@ At install the installer asks once, default **no**:
 | B4 | Box A uses B's token (copied somehow) | edge signature + box binding in the API, both directions (§4.1) | from A with B's real token: every REST call and the WebSocket handshake get `403 token_not_for_this_box`; B's token used directly against the published API port (no edge) gets `403 box_token_outside_box`; both are in the bot's audit trail |
 | B5 | Box A gets B's token from the Agora API | tokens are hashes at rest and never returned; bots can't list other bots' tokens or boxes | with A's token: box, bot and host endpoints for B are 403; no response contains token material |
 | B6 | Old tokens after rebuild | rotation in the rebuild transaction | A's pre-rebuild bot and host tokens are 401 after rebuild; B1–B5 repeated after `docker restart` of both boxes and after rebuild |
-| B7 | Reaching what it shouldn't, outside or inside | allowlist; pinned SSRF guard; no DNS. Narrows, doesn't prevent, exfiltration: allowed domains are data paths (§4.2) | CONNECT to an unlisted domain → 403 and a pending request; to an IP literal → 403; an allowed name whose DNS answer changes to a private address between lookups → refused; direct connection to a public IP (no proxy) fails |
+| B7 | Reaching what it shouldn't, outside or inside | allowlist; pinned SSRF guard; no DNS; telemetry refused; wildcards bounded to a registrable domain. Narrows, doesn't prevent, exfiltration: allowed domains are data paths (§4.2) | CONNECT to an unlisted domain → 403 and a pending request; to an IP literal → 403; an allowed name whose DNS answer changes to a private address between lookups → refused; direct connection to a public IP (no proxy) fails; a telemetry host → 403 and no card, also under an allowed wildcard; no card offers or the settings route accepts a wildcard over a public suffix |
 | B8 | Push or PR without approval, or replayed | git and PR brokers; token only at the edge; exact, single-use approvals (§5.2, §5.3) | the push tests in §5.2; a PR whose head moved or whose title changed after approval is refused; a retried PR returns the same PR; traversal and encoded-separator paths are 404; no GitHub token inside the box |
 | B9 | Box escapes to the host | gVisor, read-only root, no capabilities | the box reports a `-gvisor` kernel; `mount`, raw sockets, `ptrace` of PID 1 fail |
 | B10 | boxd touches another install's boxes | instance-named proxy allowlist (not for create: §7.2) | boxd of instance `agora` gets 403 starting, inspecting, exec'ing or deleting `agora2-box-*` |

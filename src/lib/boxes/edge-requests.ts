@@ -3,7 +3,8 @@ import { generateUlid } from '../../utils/ulid';
 import { postSystemMessage, updateSystemMessage } from '../../gateway/post-message';
 import type { BridgedEvent } from '../event-bridge';
 import { notify } from '../notifications';
-import { DOMAIN_ENTRY } from './contract';
+import { DOMAIN_ENTRY, domainAllowed } from './contract';
+import { wildcardFor } from './domains';
 
 /**
  * Edge requests (docs/agent-boxes.md §4.3): a domain, a push or a PR waiting on the server
@@ -16,7 +17,8 @@ import { DOMAIN_ENTRY } from './contract';
 
 export type EdgeKind = 'domain' | 'push' | 'pr';
 export type EdgeStatus = 'pending' | 'allowed' | 'denied' | 'expired' | 'in_flight' | 'used' | 'unknown' | 'changed';
-export type EdgeDecision = 'allow' | 'deny' | 'always';
+/** `wildcard`: a domain card's "Allow *.example.com" (domains.ts wildcardFor bounds it). */
+export type EdgeDecision = 'allow' | 'deny' | 'always' | 'wildcard';
 
 /** How long a card waits for the owner, and how long an allowed approval stays usable. */
 export const PENDING_TTL_HOURS = 24;
@@ -85,6 +87,8 @@ export function edgeCard(row: { id: string; box_id: string; kind: EdgeKind; subj
             summary: what, subject: row.subject,
             // "Always" sets auto-allow for this box in the home channel (push, PR) or allows the domain
             canAlways: row.kind !== 'domain',
+            // A domain card can also allow its registrable domain's subdomains, never a public suffix
+            ...(row.kind === 'domain' ? { wildcard: wildcardFor((row.subject as DomainSubject).host) } : {}),
         },
     };
 }
@@ -151,6 +155,35 @@ export async function recordEdgeRequest(db: any, input: { boxId: string; generat
     return { id, created: true, events };
 }
 
+/** The domains each CLI's own sign-in and API live under (a login can only be blocked on these). */
+export const LOGIN_PROVIDER_DOMAINS: Record<string, string[]> = {
+    claude: ['anthropic.com', 'claude.ai', 'claude.com'],
+    codex: ['openai.com', 'chatgpt.com'],
+};
+
+/**
+ * The provider domains the edge refuses this box right now: a pending card (of any age: the edge
+ * keeps answering a repeat with the same card) or one the owner denied within the quiet period
+ * (the edge refuses those without a new card). That is what a CLI login waits on or failed on
+ * (docs/agent-boxes.md §8.2). Other refused domains, a package registry an agent run wanted,
+ * don't count. Only host names, which the owner sees on cards anyway.
+ */
+export async function loginBlockedHosts(db: any, boxId: string, adapter: string): Promise<string[]> {
+    const suffixes = LOGIN_PROVIDER_DOMAINS[adapter] ?? [];
+    if (suffixes.length === 0) return [];
+    const r = await db.query(
+        `SELECT DISTINCT subject->>'host' AS host FROM box_edge_requests
+         WHERE box_id = $1 AND kind = 'domain'
+           AND ((status = 'pending' AND expires_at > NOW())
+             OR (status = 'denied' AND decided_at > NOW() - ($2 || ' hours')::interval))
+         ORDER BY 1 LIMIT 50`,
+        [boxId, String(DOMAIN_DENY_QUIET_HOURS)]
+    );
+    return r.rows.map((x: any) => x.host)
+        .filter((h: unknown): h is string => typeof h === 'string' && suffixes.some(d => h === d || h.endsWith(`.${d}`)))
+        .slice(0, 10);
+}
+
 /** A domain the owner denied recently: no new card for it. */
 export async function domainRecentlyDenied(db: any, boxId: string, host: string): Promise<boolean> {
     const r = await db.query(
@@ -181,9 +214,18 @@ export class EdgeDecisionError extends Error {
  * The owner decides a pending request. allow → allowed (usable for ALLOWED_TTL_MINUTES);
  * deny → denied; always → allowed, and for push/pr the home channel's auto-allow is turned on
  * for this box; for a domain, allow and always both add it to the box's allowlist.
+ * wildcard (domains only) → allowed, and `*.<registrable domain>` goes on the allowlist instead
+ * (wildcardFor, recomputed here from the stored host: the client never names the entry); the
+ * box's other pending cards it covers are allowed with it.
  * The caller has checked the user is the server owner.
  */
 export async function decideEdgeRequest(db: any, requestId: string, decision: EdgeDecision, userId: string): Promise<{ status: EdgeStatus; events: BridgedEvent[] }> {
+    // One box's decisions run one at a time: a wildcard locks the box's other pending cards, so
+    // two wildcards decided at once on two of its cards would otherwise deadlock. A key of its
+    // own: recordEdgeRequest's lock is never taken here, so the two can't wait on each other
+    const owner = (await db.query('SELECT box_id FROM box_edge_requests WHERE id = $1', [requestId])).rows[0];
+    if (!owner) throw new EdgeDecisionError(404, 'not_found');
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended('box-edge-decisions:' || $1, 0))`, [owner.box_id]);
     const row = (await db.query(
         `SELECT r.id, r.box_id, r.kind, r.subject, r.status, r.expires_at < NOW() AS expired, b.home_channel_id
          FROM box_edge_requests r JOIN agent_boxes b ON b.id = r.box_id WHERE r.id = $1 FOR UPDATE OF r`,
@@ -191,6 +233,8 @@ export async function decideEdgeRequest(db: any, requestId: string, decision: Ed
     )).rows[0];
     if (!row) throw new EdgeDecisionError(404, 'not_found');
     if (row.status !== 'pending') throw new EdgeDecisionError(409, 'already_decided');
+    const wildcard = decision === 'wildcard' && row.kind === 'domain' ? wildcardFor((row.subject as DomainSubject).host) : null;
+    if (decision === 'wildcard' && !wildcard) throw new EdgeDecisionError(400, 'no_wildcard');
     if (row.expired) {
         await db.query(`UPDATE box_edge_requests SET status = 'expired', updated_at = NOW() WHERE id = $1`, [requestId]);
         return { status: 'expired', events: await refreshCard(db, requestId) };
@@ -202,12 +246,31 @@ export async function decideEdgeRequest(db: any, requestId: string, decision: Ed
          WHERE id = $1`,
         [requestId, status, userId, String(ALLOWED_TTL_MINUTES)]
     );
+    const events: BridgedEvent[] = [];
     if (status === 'allowed' && row.kind === 'domain') {
         await db.query(
             `UPDATE agent_boxes SET allowed_domains = array_append(allowed_domains, $2), updated_at = NOW()
              WHERE id = $1 AND NOT ($2 = ANY(allowed_domains))`,
-            [row.box_id, (row.subject as DomainSubject).host]
+            [row.box_id, wildcard ?? (row.subject as DomainSubject).host]
         );
+    }
+    if (wildcard) {
+        // The box's other waiting cards the wildcard now covers (the other regions) are answered too
+        const others = await db.query(
+            `SELECT id, subject->>'host' AS host FROM box_edge_requests
+             WHERE box_id = $1 AND kind = 'domain' AND status = 'pending' AND id <> $2 AND expires_at > NOW()
+             ORDER BY id FOR UPDATE`,
+            [row.box_id, requestId]
+        );
+        for (const o of others.rows) {
+            if (typeof o.host !== 'string' || !domainAllowed(o.host, [wildcard])) continue;
+            await db.query(
+                `UPDATE box_edge_requests SET status = 'allowed', decided_by = $2, decided_at = NOW(), updated_at = NOW(),
+                        expires_at = NOW() + ($3 || ' minutes')::interval WHERE id = $1`,
+                [o.id, userId, String(ALLOWED_TTL_MINUTES)]
+            );
+            events.push(...await refreshCard(db, o.id));
+        }
     }
     if (decision === 'always' && row.kind !== 'domain' && row.home_channel_id) {
         const column = row.kind === 'push' ? 'auto_push' : 'auto_pr';
@@ -220,9 +283,10 @@ export async function decideEdgeRequest(db: any, requestId: string, decision: Ed
     const serverId = (await db.query('SELECT server_id FROM agent_boxes WHERE id = $1', [row.box_id])).rows[0].server_id;
     await db.query(
         `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes) VALUES ($1, $2, $3, $4, 'box_edge_request', $5, $6)`,
-        [generateUlid(), serverId, userId, status === 'denied' ? 'box_edge_deny' : 'box_edge_allow', requestId, JSON.stringify({ kind: row.kind, decision })]
+        [generateUlid(), serverId, userId, status === 'denied' ? 'box_edge_deny' : 'box_edge_allow', requestId,
+            JSON.stringify({ kind: row.kind, decision, ...(wildcard ? { entry: wildcard } : {}) })]
     );
-    return { status, events: await refreshCard(db, requestId) };
+    return { status, events: [...await refreshCard(db, requestId), ...events] };
 }
 
 /** Expire pending cards and allowed approvals past their time. Run by the edge every minute. */
