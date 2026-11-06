@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import type { LocalProfile } from './config.js';
-import { opencodeProvider } from './terms.js';
+import { opencodeProvider, OPENROUTER_ADAPTERS } from './terms.js';
 
 /**
- * The spend cap for an opencode agent is its OpenRouter key's own credit limit: OpenRouter
+ * The spend cap for an opencode or omp agent is its OpenRouter key's own credit limit: OpenRouter
  * refuses requests once it is used up (acp/session.ts reports that as credit_exhausted). At
  * start the host reads the limit from `GET /api/v1/key` for the start-up log. The key goes
  * only to openrouter.ai, in the Authorization header; nothing from the reply but the numbers
@@ -19,7 +19,7 @@ const usd = (n: number) => `$${n.toFixed(2)}`;
 /** One start-up log line about the profile's OpenRouter credit limit, or null when it has no OpenRouter key. */
 export async function creditLine(name: string, profile: LocalProfile, env: NodeJS.ProcessEnv = process.env,
                                  fetcher: typeof fetch = fetch, timeoutMs = 10000): Promise<string | null> {
-    if (profile.adapter !== 'opencode' || profile.auth !== 'api_key' || opencodeProvider(profile.apiKeyEnv)?.provider !== 'openrouter') return null;
+    if (!OPENROUTER_ADAPTERS.has(profile.adapter) || profile.auth !== 'api_key' || opencodeProvider(profile.apiKeyEnv)?.provider !== 'openrouter') return null;
     const key = env[profile.apiKeyEnv!]?.trim();
     if (!key) return null;
     try {

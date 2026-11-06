@@ -7,6 +7,7 @@ import { oneLine } from '../envelope.js';
 import { parseReset, RATE_LIMIT_TEXT } from '../signals.js';
 import type { Progress, RateLimit, Result } from '../types.js';
 import { allowedCall, locationsInside, outcome, reportable, ruleForCall, type ToolCallInfo } from './permissions.js';
+import { approveChoice, ompApproval, ompRuleName, type OmpCall } from './omp.js';
 import { AUTH_REQUIRED, Connection, METHOD_NOT_FOUND, RpcError } from './rpc.js';
 
 /**
@@ -49,6 +50,14 @@ export interface AcpPlan {
     allowAll?: boolean;
     /** Bound for setup requests; the prompt itself is bounded by the run timeout. */
     rpcTimeoutMs?: number;
+    /**
+     * Approval prompts that come as ACP form elicitations (`elicitation/create`) rather than
+     * permission requests: "omp" (acp/omp.ts). The host then advertises form elicitation and
+     * answers those prompts from the rules; any other elicitation is declined.
+     */
+    elicitation?: 'omp';
+    /** Where the agent process starts, when not the worktree (omp: its own home folder, acp/omp.ts). */
+    spawnCwd?: string;
 }
 
 /** Errors a retry can't fix: configuration, login, agent support or a key out of credit. */
@@ -88,16 +97,16 @@ const modelsSchema = z.object({
 const permissionSchema = z.object({ sessionId: z.string(), toolCall: z.object({ toolCallId: z.string() }).passthrough(),
     options: z.array(z.object({ optionId: z.string(), kind: z.string() }).passthrough()) });
 
-const initParams = {
+const initParams = (elicitation = false) => ({
     protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, ...(elicitation ? { elicitation: { form: {} } } : {}) },
     clientInfo: { name: 'agora-host', title: 'Agora host', version: HOST_VERSION },
-};
+});
 
 interface Agent { child: ChildProcessWithoutNullStreams; conn: Connection; closed(): boolean; failed(): boolean; closedEvent: Promise<void> }
-function spawnAgent(launch: Pick<Launch, 'executable' | 'args' | 'cwd' | 'env'>, handlers: ConstructorParameters<typeof Connection>[2]): Agent {
+function spawnAgent(launch: Pick<Launch, 'executable' | 'args' | 'cwd' | 'env'>, handlers: ConstructorParameters<typeof Connection>[2], spawnCwd?: string): Agent {
     const child = spawn(launch.executable, launch.args, {
-        cwd: launch.cwd, env: launch.env, shell: false, windowsHide: true,
+        cwd: spawnCwd ?? launch.cwd, env: launch.env, shell: false, windowsHide: true,
         detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
     });
     let closed = false, failed = false, notifyClose!: () => void;
@@ -177,7 +186,7 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
     const plan = launch.acp;
     const timeout = plan.rpcTimeoutMs ?? RPC_TIMEOUT_MS;
     const rules = new Set(plan.rules);
-    const calls = new Map<string, ToolCallInfo & { status?: string; diffs?: string[] }>();
+    const calls = new Map<string, OmpCall & { diffs?: string[] }>();
     const denied: string[] = [];
     const changed = new Set<string>();
     let sessionId: string | null = null, stopping = false;
@@ -194,6 +203,8 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (typeof u?.toolCallId !== 'string') return null;
         const call = calls.get(u.toolCallId) ?? {};
         for (const key of ['kind', 'title', 'name', 'status'] as const) if (typeof u[key] === 'string') call[key] = u[key];
+        // omp names its tools in lowercase (`bash`, `write`, `mcp__agora_chat_send`): rules use Bash, Edit, mcp__agora__chat_send (omp.ts)
+        if (plan.elicitation === 'omp' && typeof u.name === 'string') { call.agentName = u.name; call.name = ompRuleName(u.name); }
         // opencode's permission request repeats the call with empty locations and raw input; what
         // an earlier update of the same call said stays (and an absent path still fails closed)
         if (Array.isArray(u.locations) && u.locations.length) call.locations = u.locations.map((l: any) => l?.path).filter((x: unknown): x is string => typeof x === 'string').slice(0, 50);
@@ -227,13 +238,8 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
                 return;
         }
     };
-    const permission = async (params: unknown) => {
-        const p = permissionSchema.safeParse(params);
-        if (!p.success) throw new RpcError(-32602, 'Invalid params');
-        if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
-        const call = track(p.data.toolCall) ?? {};
-        // In a box the box is the sandbox: nothing is denied (adapters.ts prepare sets it only there)
-        if (plan.allowAll) return { outcome: outcome(p.data.options, true) };
+    /** Whether the claim's rules allow this call; a denial sets the progress line and the denied rule. */
+    const judge = async (call: ToolCallInfo): Promise<boolean> => {
         const place = await locationsInside(call, launch.cwd, { rules, env: launch.env, roots: launch.workspace ? [launch.workspace.workdir] : [] });
         const allow = place === 'ok' && allowedCall(call, rules);
         if (!allow) {
@@ -248,16 +254,44 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
                 step = `Denied ${reportable(rule) ? rule.slice(0, 80) : 'a tool call'}`;
             }
         }
-        return { outcome: outcome(p.data.options, allow) };
+        return allow;
+    };
+    const permission = async (params: unknown) => {
+        const p = permissionSchema.safeParse(params);
+        if (!p.success) throw new RpcError(-32602, 'Invalid params');
+        if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
+        const call = track(p.data.toolCall) ?? {};
+        // In a box the box is the sandbox: nothing is denied (adapters.ts prepare sets it only there)
+        if (plan.allowAll) return { outcome: outcome(p.data.options, true) };
+        return { outcome: outcome(p.data.options, await judge(call)) };
+    };
+    /**
+     * An approval prompt as a form elicitation (plan.elicitation): a select whose choices include
+     * Approve and Deny. Only the one-time Approve is ever picked, as for permission requests;
+     * any other form (a question, a confirmation) is declined.
+     */
+    const elicit = async (params: any) => {
+        const choices = params?.requestedSchema?.properties?.value?.enum;
+        if (!plan.elicitation || stopping || params?.sessionId !== sessionId || params?.mode !== 'form' || typeof params?.message !== 'string'
+            || !Array.isArray(choices) || !choices.includes('Deny')) return { action: 'decline' };
+        const answer = (value: string) => ({ action: 'accept', content: { value } });
+        const approve = approveChoice(choices);
+        if (!approve) return answer('Deny');
+        if (plan.allowAll) return answer(approve);
+        const pending = [...calls.values()].filter(c => c.status === 'pending');
+        const verdict = ompApproval(params.message.slice(0, 64 * 1024), pending);
+        if ('deny' in verdict) { step = verdict.deny; return answer('Deny'); }
+        return answer(await judge(verdict.call) ? approve : 'Deny');
     };
 
     const agent = spawnAgent(launch, {
         request: async (method, params) => {
             if (method === 'session/request_permission') return permission(params);
+            if (method === 'elicitation/create') return elicit(params);
             throw new RpcError(METHOD_NOT_FOUND, 'Method not found');
         },
         notification: (method, params) => { if (method === 'session/update') update(params); },
-    });
+    }, plan.spawnCwd);
     const { child, conn } = agent;
     let killed: Promise<void> | undefined;
     const kill = (): Promise<void> => {
@@ -273,7 +307,7 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
     const result = (async (): Promise<Result> => {
         let failure: AcpFailure | null = null, stopReason: string | null = null, tokensUsed: number | null = null;
         try {
-            const init = initSchema.parse(await conn.request('initialize', initParams, timeout));
+            const init = initSchema.parse(await conn.request('initialize', initParams(!!plan.elicitation), timeout));
             if (init.protocolVersion !== PROTOCOL_VERSION) throw new AcpFailure('acp_protocol_unsupported');
             if (plan.authMethod) {
                 // codex-acp types its key methods "env_var"; a "terminal" method is an interactive login
@@ -343,13 +377,13 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
 }
 
 /** Start the agent, check it speaks ACP v1, and stop it. No session, no model call. */
-export async function probeAcp(launch: Pick<Launch, 'executable' | 'args' | 'cwd' | 'env'>, timeoutMs = 15000): Promise<string> {
+export async function probeAcp(launch: Pick<Launch, 'executable' | 'args' | 'cwd' | 'env'> & { spawnCwd?: string }, timeoutMs = 15000): Promise<string> {
     const agent = spawnAgent(launch, {
         request: async () => { throw new RpcError(METHOD_NOT_FOUND, 'Method not found'); },
         notification: () => {},
-    });
+    }, launch.spawnCwd);
     try {
-        const init = initSchema.parse(await agent.conn.request('initialize', initParams, timeoutMs));
+        const init = initSchema.parse(await agent.conn.request('initialize', initParams(), timeoutMs));
         if (init.protocolVersion !== PROTOCOL_VERSION) throw new Error('unsupported_acp_version');
         return init.agentInfo?.version ? `acp/${PROTOCOL_VERSION} ${oneLine(init.agentInfo.version)}` : `acp/${PROTOCOL_VERSION}`;
     } catch (err) {

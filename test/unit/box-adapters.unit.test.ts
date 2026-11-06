@@ -80,8 +80,15 @@ describe('box/Dockerfile installs and links every adapter', () => {
     for (const [name, spec] of Object.entries(BOX_ADAPTER_REGISTRY)) {
         it(`${name}: the pinned version in the box stage, a fake CLI in the test stage`, () => {
             const box = stage('box');
-            expect(box).toContain(`ARG ${spec.image.versionArg}=${spec.image.version}\n`);
-            expect(box).toContain(`"${spec.image.npm}@\${${spec.image.versionArg}}"`);
+            const image: { version: string; versionArg: string; npm?: string; binary?: { url: string; sha256: Record<string, string> } } = spec.image;
+            expect(box).toContain(`ARG ${image.versionArg}=${image.version}\n`);
+            if (image.npm) expect(box).toContain(`"${image.npm}@\${${image.versionArg}}"`);
+            else {
+                // A release binary: its URL with the version ARG, and each CPU's sha256 checked
+                expect(box).toContain(image.binary!.url.replace('{version}', `\${${image.versionArg}}`).replace('{arch}', '${arch}'));
+                for (const sum of Object.values(image.binary!.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+                expect(box).toContain('sha256sum -c -');
+            }
             expect(box).toMatch(new RegExp(`ln -s \\S+ /opt/agora/bin/${name}\\b`));
             expect(box).toContain(`/opt/agora/bin/${name} --version`);
             expect(stage('test')).toMatch(new RegExp(`ln -s /opt/agora/fake/${name}\\.mjs /opt/agora/bin/${name}\\b`));
@@ -156,6 +163,24 @@ describe('claude and codex resolve to what they were before the registry', () =>
             yeet: { args: ['--dangerously-bypass-approvals-and-sandbox'], noOpenWeb: ['-c', 'web_search="disabled"'], acpAllowAll: false },
             state: { rulesFile: 'AGENTS.md', files: {} },
         });
+    });
+});
+
+describe('oh-my-pi in a box', () => {
+    it('an OpenRouter key only, its model required, OpenRouter alone allowed, the Stencil hosts refused', () => {
+        expect(BOX_ADAPTER_REGISTRY.omp).toMatchObject({ protocol: 'acp', authModes: ['api_key'], apiKeyEnv: 'OPENROUTER_API_KEY', modelRequired: true, loginDomains: [] });
+        expect(boxHasLogin('omp')).toBe(false);
+        expect(defaultAllowlist('omp')).toEqual(['openrouter.ai', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        // Never an Anthropic host: omp's subscription login and its Claude-compatible identity stay out
+        expect(defaultAllowlist('omp').some(d => /anthropic|claude/.test(d))).toBe(false);
+        expect(LOGIN_PROVIDER_DOMAINS.omp).toBeUndefined();
+        expect(isTelemetryHost('build.stencil.so')).toBe(true);
+        expect(isTelemetryHost('cloud.stencil.so')).toBe(true);
+        expect(isTelemetryHost('catalog.stencil.so')).toBe(true);
+        expect(isTelemetryHost('stencil.so')).toBe(false);
+        expect(HOST_ADAPTERS.omp).toMatchObject({ acpArgs: ['acp'], login: null, noProxy: [], yeet: { args: ['--yolo'], noOpenWeb: [], acpAllowAll: true },
+            quiet: { env: { OTEL_SDK_DISABLED: 'true' }, args: [] }, state: { rulesFile: 'agent/AGENTS.md', files: {} } });
+        expect(BOX_ADAPTER_REGISTRY.omp.image).toMatchObject({ version: '18.17.0', versionArg: 'OMP_VERSION' });
     });
 });
 

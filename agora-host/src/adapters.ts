@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, writeFile, unlink, rmdir } from 'node:fs/promises';
 import { join, posix, win32 } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -9,7 +10,7 @@ import { ensureWorkspace, type Workspace } from './workspaces.js';
 import { handoffNotes } from './handoff.js';
 import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, OPENCODE_ACP_ONLY, opencodeProvider, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
+import { ACP_API_KEY_METHODS, checkTerms, GEMINI_NOT_HOSTED, HostConfigError, OMP_ACP_ONLY, OPENCODE_ACP_ONLY, opencodeProvider, OPENROUTER_ADAPTERS, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
 import { accessToken, type AccessToken } from './siwc/session.js';
 import { SiwcError } from './siwc/oauth.js';
 import { DEFAULT_DIR } from './siwc/store.js';
@@ -17,6 +18,7 @@ import { PROVIDER_ARGS, type AppServerPlan } from './siwc/appserver.js';
 import { sessionPorts } from './preview.js';
 import { probeAcp, SESSION_ID, type AcpPlan } from './acp/session.js';
 import { geminiPolicy } from './acp/permissions.js';
+import { OMP_HOST_APPROVAL, ompArgs, ompDirs, ompModel, ompSettings } from './acp/omp.js';
 import { CODEX_BOX_QUIET, inBox, proxyVars } from './box.js';
 import { BOX_ADAPTERS, boxAdapter } from './box-adapters.js';
 
@@ -108,7 +110,8 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     if (profile.adapter === 'opencode') {
         for (const [name, dir] of Object.entries(OPENCODE_DIRS)) env[name] = join(profile.stateDir, dir);
         for (const name of OPENCODE_FLAGS) env[name] = '1';
-    } else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
+    } else if (profile.adapter === 'omp') Object.assign(env, ompEnv(profile, source));
+    else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
     // A profile's stateDir can be the user's own CLI folder (Codex runs often share it), so the
     // user's agora-mcp hooks may be configured there. They must never act in a hosted run: Stop
     // would keep a headless run going (docs/claude-code-hooks.md). Codex hands hooks the
@@ -122,9 +125,9 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     // configured name: its `openai-api-key` / `codex-api-key` methods each read their own (terms.ts).
     if (profile.auth === 'api_key' && profile.apiKeyEnv) {
         const key = source[profile.apiKeyEnv];
-        // opencode reads only OPENROUTER_API_KEY, whichever OPENROUTER_API_KEY_<NAME> holds this agent's key
+        // opencode and omp read only OPENROUTER_API_KEY, whichever OPENROUTER_API_KEY_<NAME> holds this agent's key
         const name = profile.adapter === 'codex' && profile.protocol !== 'acp' ? 'CODEX_API_KEY'
-            : profile.adapter === 'opencode' ? opencodeProvider(profile.apiKeyEnv)?.env ?? profile.apiKeyEnv : profile.apiKeyEnv;
+            : OPENROUTER_ADAPTERS.has(profile.adapter) ? opencodeProvider(profile.apiKeyEnv)?.env ?? profile.apiKeyEnv : profile.apiKeyEnv;
         if (key) env[name] = key;
     }
     // In an agent box the CLI reaches allowed domains only through the edge's proxy (box.ts)
@@ -143,7 +146,41 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
     }
     return env;
 }
+/**
+ * oh-my-pi's folders and switches (acp/omp.ts): its agent folder (settings, sessions, the
+ * agent.db that would hold a login) in the profile's state directory, and on a machine a home
+ * folder there too, so omp never reads the user's ~/.env, ~/.omp or a login saved there. Git
+ * still finds the user's identity (~/.gitconfig). In a box the box's home stays (its git
+ * identity and npm prefix); it holds nothing but what the box made.
+ */
+function ompEnv(profile: LocalProfile, source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const dirs = ompDirs(profile.stateDir);
+    const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: dirs.agent, OTEL_SDK_DISABLED: 'true', PI_NO_TITLE: '1' };
+    if (!inBox(source)) {
+        const home = source.HOME ?? source.USERPROFILE;
+        const gitconfig = home ? join(home, '.gitconfig') : null;
+        if (gitconfig && existsSync(gitconfig)) env.GIT_CONFIG_GLOBAL = gitconfig;
+        env.HOME = dirs.home; env.USERPROFILE = dirs.home;
+    }
+    return env;
+}
+
+/** The switches the start-up probe runs omp with, as every run gets them (acp/omp.ts). */
+export function ompProbeArgs(profile: LocalProfile, boxed = inBox()): string[] {
+    return [...profile.acpArgs, ...(boxed ? ['--yolo'] : OMP_HOST_APPROVAL), '--no-extensions', '--no-skills', '--no-rules'];
+}
+
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
+    if (profile.adapter === 'omp') {
+        // omp is pinned (it releases every few days): its version is checked as well as ACP's,
+        // started outside the worktree as every run is (acp/omp.ts)
+        const dirs = ompDirs(profile.stateDir);
+        await mkdir(dirs.home, { recursive: true, mode: 0o700 }); await mkdir(dirs.agent, { recursive: true, mode: 0o700 });
+        const probe = await probeAcp({ executable: profile.executable, args: ompProbeArgs(profile), cwd: profile.workdir, spawnCwd: dirs.home, env: childEnv(profile) });
+        const version = probe.split(' ')[1] ?? '';
+        if (!testedCliVersion('omp', version) && !profile.allowUntestedVersion) throw new Error('unsupported_cli_version');
+        return probe;
+    }
     // ACP: the protocol version is the gate, not the CLI's version string
     if (profile.protocol === 'acp') return probeAcp({ executable: profile.executable, args: profile.acpArgs, cwd: profile.workdir, env: childEnv(profile) });
     if (profile.adapter === 'gemini') throw new HostConfigError(GEMINI_NOT_HOSTED);
@@ -157,13 +194,15 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
 }
 
 /**
- * The CLI versions this host was tested with: Codex 0.163.x, Claude Code 2.1.x. The box image's
+ * The CLI versions this host was tested with: Codex 0.163.x, Claude Code 2.1.x, oh-my-pi 18.17.x
+ * (it releases every few days; checked from its ACP agentInfo, verifyProfile). The box image's
  * pins (box-adapters.ts) must pass it; agora-host/test/box.test.ts checks that they do.
  */
 export function testedCliVersion(adapter: string, version: string): boolean {
     const v = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
     if (!v) return false;
-    return adapter === 'codex' ? v[1] === '0' && v[2] === '163' : adapter === 'claude' ? v[1] === '2' && v[2] === '1' : false;
+    return adapter === 'codex' ? v[1] === '0' && v[2] === '163' : adapter === 'claude' ? v[1] === '2' && v[2] === '1'
+        : adapter === 'omp' ? v[1] === '18' && v[2] === '17' : false;
 }
 
 /**
@@ -236,6 +275,12 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
         if (model === null) throw new Error('opencode_model_required');
         model = opencodeModel(model, provider);
     }
+    // omp has OpenRouter only (acp/omp.ts), so its model is an OpenRouter model, named
+    if (local.adapter === 'omp') {
+        if (opencodeProvider(local.apiKeyEnv)?.provider !== 'openrouter') throw new HostConfigError(OMP_ACP_ONLY);
+        if (model === null) throw new Error('omp_model_required');
+        model = ompModel(model);
+    }
     // In a box, no OpenRouter `:online` model: it searches the web on the provider's side, which
     // the edge never sees (Agora refuses one at box creation too)
     if (inBox() && model !== null && /:online$/i.test(model)) throw new Error('box_model_not_allowed');
@@ -247,7 +292,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     // Handoff offers: is the sender's pinned commit here, and how to apply it (handoff.ts)
     const handoffs = await handoffNotes(claim, workspace.cwd);
     const dir = await mkdtemp(join(local.stateDir, 'run-'));
-    const paths = ['mcp.json', 'mcp.toml', 'schema.json', 'policy.toml'].map(p => join(dir, p));
+    const paths = ['mcp.json', 'mcp.toml', 'schema.json', 'policy.toml', 'omp.yml'].map(p => join(dir, p));
     const cleanup = async () => {
         // Only remove these known files and the empty directory we created; no recursive deletion.
         await Promise.all(paths.map(p => unlink(p).catch(() => {})));
@@ -288,6 +333,18 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             let args = box ? [...local.acpArgs, ...box.yeet.args, ...box.quiet.args] : local.acpArgs;
             const policy = local.adapter === 'gemini' ? geminiPolicy(acpRules) : '';
             if (policy) { await writeFile(paths[3], policy, { mode: 0o600 }); args = [...args, '--policy', paths[3]]; }
+            if (local.adapter === 'omp') {
+                // Its settings overlay for this run and its switches (acp/omp.ts). On a machine its
+                // approval prompts come as elicitations the host answers. It starts in its own home
+                // folder (a restricted folder), so the worktree's .env is never read.
+                const own = ompDirs(local.stateDir);
+                await mkdir(own.home, { recursive: true, mode: 0o700 });
+                await writeFile(paths[4], JSON.stringify(ompSettings({ boxed: !!box, restricted: [own.agent, own.home, dir] })), { mode: 0o600 });
+                args = [...local.acpArgs, ...ompArgs({ approval: box ? [...box.yeet.args, ...box.quiet.args] : OMP_HOST_APPROVAL, settingsFile: paths[4], model: model!,
+                    ...(box ? { rulesFile: join(local.stateDir, box.state.rulesFile) } : {}) })];
+                acpPlan.spawnCwd = own.home;
+                if (!box) acpPlan.elicitation = 'omp';
+            }
             return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: '', cleanup,
                 lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };
         }

@@ -21,8 +21,13 @@ export interface BoxTelemetryHost {
 export interface BoxAdapterSpec {
     /** Shown on cards and in Settings → Agents. */
     label: string;
-    /** The pinned CLI in the box image: npm package, version and the box/Dockerfile ARG that holds it. */
-    image: { npm: string; version: string; versionArg: string };
+    /**
+     * The pinned CLI in the box image: its version and the box/Dockerfile ARG that holds it, and
+     * where it comes from: an npm package, or a release binary (`{version}` and `{arch}` in its
+     * URL) checked against its sha256 for each CPU the image is built for.
+     */
+    image: { version: string; versionArg: string }
+        & ({ npm: string } | { binary: { url: string; sha256: { amd64: string; arm64: string } } });
     /** How agora-host drives it: the CLI's own headless mode, or the Agent Client Protocol. */
     protocol: 'cli' | 'acp';
     /**
@@ -102,6 +107,38 @@ export const BOX_ADAPTER_REGISTRY = {
         loginDomains: [],
         telemetry: [
             { domain: 'opncd.ai', what: 'session sharing (off: `share: "disabled"`, `OPENCODE_DISABLE_SHARE`)' },
+        ],
+    },
+    omp: {
+        label: 'oh-my-pi',
+        // The standalone binary from the GitHub release (MIT); omp releases every few days, so it
+        // is pinned by version and sha256 (SHA256SUMS.txt of the release)
+        image: {
+            version: '18.17.0', versionArg: 'OMP_VERSION',
+            binary: {
+                url: 'https://github.com/can1357/oh-my-pi/releases/download/v{version}/omp-linux-{arch}',
+                sha256: {
+                    amd64: 'a4ce6001ab1012ca835f4184d675437531bd1ac477a7ba8424ed0b5476e9e4cb',
+                    arm64: 'a9423fd7a69d869bf514931226b21d4ff55474225f574e2911fec457fc470e68',
+                },
+            },
+        },
+        protocol: 'acp',
+        // An OpenRouter key only (docs/provider-terms.md): omp's subscription logins are never used
+        authModes: ['api_key'],
+        apiKeyEnv: 'OPENROUTER_API_KEY',
+        modelRequired: true,
+        // Checked against the pinned binary (omp 18.17.0, 2026-11-06, through a logging proxy,
+        // a fake key): with only OpenRouter enabled it reaches openrouter.ai/api/v1 and
+        // catalog.stencil.so (model metadata, refused below; the turn runs without it). No
+        // Anthropic host: omp's Claude-compatible identity is for its Anthropic provider, which
+        // is disabled
+        allowlist: ['openrouter.ai'],
+        loginDomains: [],
+        telemetry: [
+            { domain: 'build.stencil.so', what: 'update checks and downloads (interactive mode and `omp update` only; `update.auto: false`)' },
+            { domain: 'cloud.stencil.so', what: 'Spotlight experiment (off: `spotlight.experiment.enabled: false`)' },
+            { domain: 'catalog.stencil.so', what: 'model metadata (models.dev), fetched at start; omp runs without it' },
         ],
     },
 } as const satisfies Record<string, BoxAdapterSpec>;
