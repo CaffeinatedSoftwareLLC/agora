@@ -16,6 +16,8 @@ import { boxError } from './boxRules';
 interface EdgeRequestData {
   requestId?: string; boxId?: string; boxName?: string; kind?: 'domain' | 'push' | 'pr';
   status?: string; summary?: string; canAlways?: boolean;
+  /** A domain card's bounded wildcard (`*.oaiusercontent.com`), computed by the server; null when none */
+  wildcard?: string | null;
 }
 
 const EDGE_STATUS: Record<string, { label: string; tone: string }> = {
@@ -73,6 +75,11 @@ export function EdgeRequestCard({ message }: { message: Message }) {
       {open && canDecide && (
         <div className="mt-2 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
           <Button onClick={() => void decide('allow')} loading={busy === 'allow'} disabled={busy !== null} className={TOUCH}>Allow</Button>
+          {data.kind === 'domain' && data.wildcard && (
+            <Button variant="secondary" onClick={() => void decide('wildcard')} loading={busy === 'wildcard'} disabled={busy !== null} className={TOUCH}>
+              Allow {data.wildcard}
+            </Button>
+          )}
           {data.canAlways && (
             <Button variant="secondary" onClick={() => void decide('always')} loading={busy === 'always'} disabled={busy !== null} className={TOUCH}>
               Always allow from this box here

@@ -5,6 +5,7 @@ import { usernameTaken } from '../usernames';
 import { encryptString } from '../encryption';
 import { config } from '../../config';
 import { defaultAllowlist } from './contract';
+import { wildcardTooWide } from './domains';
 
 /**
  * Box rows from the owner API (docs/agent-boxes.md §8, §9). Everything here runs as the table
@@ -136,6 +137,9 @@ export async function patchBox(db: any, box: { id: string; server_id: string; bo
         await grantChannel(db, box.bot_id, patch.homeChannelId, userId);
     }
     const domains = patch.allowedDomains ? [...new Set(patch.allowedDomains.map(d => d.toLowerCase()))] : null;
+    // A wildcard over a public suffix (`*.co.uk`, `*.github.io`) would reach everyone's sites
+    const wide = domains?.find(wildcardTooWide);
+    if (wide) throw new BoxError(400, 'invalid_domain', `${wide} covers a public suffix; use *.<your domain>`);
     await db.query(
         `UPDATE agent_boxes SET
             allowed_domains = COALESCE($2, allowed_domains),

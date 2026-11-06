@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import type { Config, LocalProfile } from './config.js';
 import { childEnv } from './adapters.js';
-import { inBox } from './box.js';
-import { fatalAuth, HttpError } from './client.js';
+import { CODEX_BOX_QUIET, inBox } from './box.js';
+import { errorCode, fatalAuth, HttpError } from './client.js';
 import { killTree } from './process.js';
 import type { BoxLoginReport, BoxLoginRequest, HostApi } from './types.js';
 
@@ -14,7 +14,8 @@ import type { BoxLoginReport, BoxLoginRequest, HostApi } from './types.js';
  * the code the owner pastes back. The URL, the codes and the CLI's output are never logged.
  */
 
-const CLI_ARGS = { codex: ['login', '--device-auth'], claude: ['auth', 'login', '--claudeai'] } as const;
+// A box login: Codex's non-essential traffic is off for it too (box.ts)
+const CLI_ARGS = { codex: [...CODEX_BOX_QUIET, 'login', '--device-auth'], claude: ['auth', 'login', '--claudeai'] } as const;
 /** Where each CLI's sign-in page may be; anything else in its output is not relayed. */
 const LOGIN_HOSTS = { codex: ['openai.com', 'chatgpt.com'], claude: ['claude.ai', 'claude.com', 'anthropic.com'] } as const;
 const MAX_OUTPUT = 64 * 1024;
@@ -86,7 +87,7 @@ export async function handleBoxLogin(config: Config, api: HostApi, req: BoxLogin
         // the proxy variables; never the host or bot token
         child = spawn(local.executable, [...CLI_ARGS[adapter]], { cwd: local.stateDir, env: childEnv(local), shell: false,
             windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch { o.log('box_login_failed'); await refuse('login_spawn_failed'); return; }
+    } catch (err) { o.log(`box_login_failed login_spawn_failed ${errorCode(err)}`); await refuse('login_spawn_failed'); return; }
     let output = ''; let isClosed = false; let spawnFailed = false;
     let notifyClose!: () => void;
     const closedEvent = new Promise<void>(resolve => { notifyClose = resolve; });
@@ -112,11 +113,13 @@ export async function handleBoxLogin(config: Config, api: HostApi, req: BoxLogin
         wake = done; o.signal.addEventListener('abort', done, { once: true });
         void exit.then(done);
     });
+    let detail = '';
     const finish = async (body: BoxLoginReport) => {
         await kill();
         // The host may be stopping: the last report gets its own short deadline
-        try { await report(body, AbortSignal.timeout(5000)); } catch (err) { if (!closed(err)) o.log('box_login_report_failed'); }
-        o.log(body.status === 'succeeded' ? 'box_login_succeeded' : 'box_login_failed');
+        try { await report(body, AbortSignal.timeout(5000)); } catch (err) { if (!closed(err)) o.log(`box_login_report_failed ${errorCode(err)}`); }
+        // The reason is the host's own fixed code (and the CLI's exit status), never its output
+        o.log(body.status === 'succeeded' ? 'box_login_succeeded' : `box_login_failed ${body.error ?? 'unknown'}${detail ? ` ${detail}` : ''}`);
     };
     try {
         // 1. Wait for the prompt
@@ -147,6 +150,7 @@ export async function handleBoxLogin(config: Config, api: HostApi, req: BoxLogin
         if (o.signal.aborted) { await finish({ status: 'failed', error: 'host_stopped' }); return; }
         if (!isClosed) { await finish({ status: 'failed', error: 'login_timeout' }); return; }
         const code = await exit;
+        if (code !== 0) detail = `exit_${typeof code === 'number' ? code : 'signal'}`;
         await finish(code === 0 ? { status: 'succeeded' } : { status: 'failed', error: 'login_failed' });
     } catch (err) {
         await kill();
@@ -154,6 +158,7 @@ export async function handleBoxLogin(config: Config, api: HostApi, req: BoxLogin
         if (closed(err)) { o.log('box_login_closed'); return; }
         if (fatalAuth(err)) throw err;
         if (o.signal.aborted) { await finish({ status: 'failed', error: 'host_stopped' }); return; }
+        detail = errorCode(err);
         await finish({ status: 'failed', error: 'login_relay_failed' });
     } finally {
         output = '';
@@ -170,10 +175,10 @@ export async function boxLoginLoop(config: Config, api: HostApi, o: BoxLoginOpti
             await handleBoxLogin(config, api, req, o);
         } catch (err) {
             if (o.stopping()) return;
-            if (fatalAuth(err)) { o.log('host_auth_rejected'); return; }
+            if (fatalAuth(err)) { o.log(`host_auth_rejected ${errorCode(err)}`); return; }
             // A server without box logins: stop polling, runs keep working
             if (err instanceof HttpError && err.status === 404) { o.log('box_login_unsupported'); return; }
-            o.log('box_login_request_failed');
+            o.log(`box_login_request_failed ${errorCode(err)}`);
             await o.pause(3000);
         }
     }

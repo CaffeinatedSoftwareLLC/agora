@@ -240,6 +240,8 @@ beforeAll(async () => {
         identify: async () => edge.directory.byId(boxId), directoryTtlMs: 0,
         resolve: async () => ['93.184.216.34'], subnets: () => [],
         dial: () => net.connect({ host: '127.0.0.1', port: 9 }),
+        // A login's request waits for its card this long, looking this often
+        loginHoldMs: 1500, loginHoldPollMs: 50,
     });
     await edge.start({ agora: 0, proxy: 0, host: '127.0.0.1' });
     edgePort = (edge.agora.address() as AddressInfo).port;
@@ -676,6 +678,143 @@ describe('forward proxy', () => {
         expect(await connect('10.213.0.3:443')).toMatch(/^HTTP\/1.1 403/);
         expect(await connect('[::1]:443')).toMatch(/^HTTP\/1.1 403/);
         expect(await requests('domain')).toHaveLength(0);
+    });
+});
+
+describe('forward proxy: telemetry, wildcards and logins', () => {
+    const setAllowlist = (domains: string[]) => ctx.db.query('UPDATE agent_boxes SET allowed_domains = $2 WHERE id = $1', [boxId, domains]);
+    function connect(authority: string): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const s = net.connect(proxyPort, '127.0.0.1', () => s.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`));
+            let buf = '';
+            s.on('data', d => { buf += d.toString(); });
+            s.on('close', () => resolve(buf));
+            s.on('error', reject);
+        });
+    }
+    async function openLogin() {
+        await ctx.db.query(
+            `INSERT INTO box_login_requests (id, box_id, status, expires_at) VALUES ($1, $2, 'code_sent', NOW() + interval '10 minutes')`,
+            [generateUlid(), boxId]
+        );
+    }
+    async function waitForCard(host: string) {
+        for (let i = 0; i < 100; i++) {
+            const r = (await requests('domain')).find(x => x.subject.host === host);
+            if (r) return r;
+            await new Promise(res => setTimeout(res, 20));
+        }
+        throw new Error(`no card for ${host}`);
+    }
+    beforeEach(async () => {
+        await setAllowlist(['allowed.example.com']);
+        await ctx.db.query('DELETE FROM box_login_requests WHERE box_id = $1', [boxId]);
+    });
+    afterAll(async () => {
+        await setAllowlist(['allowed.example.com']);
+        await ctx.db.query('DELETE FROM box_login_requests WHERE box_id = $1', [boxId]);
+    });
+
+    it('telemetry hosts are refused without a card, even under an allowed wildcard', async () => {
+        await setAllowlist(['allowed.example.com', '*.chatgpt.com']);
+        for (const host of ['ab.chatgpt.com', 'o33249.ingest.us.sentry.io', 'http-intake.logs.us5.datadoghq.com', 'statsig.anthropic.com']) {
+            const out = await connect(`${host}:443`);
+            expect(out).toMatch(/^HTTP\/1.1 403/);
+            expect(out).toContain(`domain ${host} sends telemetry`);
+        }
+        expect(await requests('domain')).toHaveLength(0);
+        expect(published).toHaveLength(0);
+        // The wildcard still covers the provider's other hosts
+        expect(await connect('files.chatgpt.com:443')).not.toMatch(/^HTTP\/1.1 403/);
+    });
+
+    it('a telemetry host the owner listed by its exact name goes through', async () => {
+        await setAllowlist(['allowed.example.com', 'ab.chatgpt.com']);
+        expect(await connect('ab.chatgpt.com:443')).not.toMatch(/^HTTP\/1.1 403/);
+    });
+
+    it('a domain card offers the bounded wildcard; allowing it answers the other cards it covers', async () => {
+        await connect('eu.files.example.org:443');
+        await connect('us.files.example.org:443');
+        const cards = await requests('domain');
+        expect(cards).toHaveLength(2);
+        const card = published.find(e => e.event === 'Message' && (e as any).data?.systemData?.subject?.host === 'eu.files.example.org');
+        expect((card as any)?.data?.systemData?.wildcard).toBe('*.example.org');
+
+        await decide(cards[0].id, 'wildcard');
+        expect((await requests('domain')).map(r => r.status)).toEqual(['allowed', 'allowed']);
+        const box = (await ctx.db.query('SELECT allowed_domains FROM agent_boxes WHERE id = $1', [boxId])).rows[0];
+        expect(box.allowed_domains).toContain('*.example.org');
+        expect(box.allowed_domains).not.toContain('eu.files.example.org');
+        // Another name under it goes through without a card; the bare registrable domain doesn't
+        expect(await connect('asia.files.example.org:443')).not.toMatch(/^HTTP\/1.1 403/);
+        expect(await connect('example.org:443')).toMatch(/^HTTP\/1.1 403/);
+    });
+
+    it('two wildcards decided at once on one box: no deadlock, one wins', async () => {
+        await connect('a.one.example.net:443');
+        await connect('b.one.example.net:443');
+        const [c1, c2] = await requests('domain');
+        const results = await Promise.allSettled([decide(c1.id, 'wildcard'), decide(c2.id, 'wildcard')]);
+        const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        // The second finds its card already answered by the first; never a deadlock (40P01)
+        for (const f of failed) expect(f.reason).toMatchObject({ status: 409, code: 'already_decided' });
+        expect(failed.length).toBeLessThanOrEqual(1);
+        expect((await requests('domain')).map(r => r.status)).toEqual(['allowed', 'allowed']);
+    });
+
+    it('no card offers a wildcard that covers other people\'s suffixes', async () => {
+        for (const host of ['sts.amazonaws.com', 'a.b.windows.net', 's3.amazonaws.com']) {
+            await connect(`${host}:443`);
+            const msg = published.find(e => e.event === 'Message' && (e as any).data?.systemData?.subject?.host === host);
+            expect((msg as any)?.data?.systemData?.wildcard, host).toBeNull();
+            const card = (await requests('domain')).find(r => r.subject.host === host)!;
+            await expect(decide(card.id, 'wildcard')).rejects.toMatchObject({ status: 400, code: 'no_wildcard' });
+        }
+    });
+
+    it('no wildcard for a registrable domain itself or a name under a public suffix', async () => {
+        for (const host of ['example.org', 'evil.github.io']) {
+            await connect(`${host}:443`);
+            const card = (await requests('domain')).find(r => r.subject.host === host)!;
+            await expect(decide(card.id, 'wildcard')).rejects.toMatchObject({ status: 400, code: 'no_wildcard' });
+            expect((await requests('domain')).find(r => r.id === card.id)!.status).toBe('pending');
+        }
+        const box = (await ctx.db.query('SELECT allowed_domains FROM agent_boxes WHERE id = $1', [boxId])).rows[0];
+        expect(box.allowed_domains).toEqual(['allowed.example.com']);
+    });
+
+    it('during a login, the CLI provider\'s domain waits for its card and goes through once allowed', async () => {
+        await openLogin();
+        const pending = connect('platform.claude.com:443');
+        const card = await waitForCard('platform.claude.com');
+        await decide(card.id, 'allow');
+        expect(await pending).not.toMatch(/^HTTP\/1.1 403/);
+    });
+
+    it('during a login, a denied card ends the wait with a 403', async () => {
+        await openLogin();
+        const pending = connect('sso.claude.com:443');
+        const card = await waitForCard('sso.claude.com');
+        await decide(card.id, 'deny');
+        expect(await pending).toMatch(/^HTTP\/1.1 403/);
+    });
+
+    it('the wait is bounded, and only a login\'s own provider domains wait', async () => {
+        await openLogin();
+        const started = Date.now();
+        expect(await connect('platform.claude.com:443')).toMatch(/^HTTP\/1.1 403/);
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+        // Another site is refused at once, login or not
+        const quick = Date.now();
+        expect(await connect('elsewhere.example.org:443')).toMatch(/^HTTP\/1.1 403/);
+        expect(Date.now() - quick).toBeLessThan(1000);
+    });
+
+    it('without a login, a provider domain is refused at once', async () => {
+        const started = Date.now();
+        expect(await connect('platform.claude.com:443')).toMatch(/^HTTP\/1.1 403/);
+        expect(Date.now() - started).toBeLessThan(1000);
     });
 });
 
