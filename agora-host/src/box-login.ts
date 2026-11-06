@@ -11,8 +11,8 @@ import type { BoxLoginReport, BoxLoginRequest, HostApi } from './types.js';
 /**
  * Log a CLI in inside its box (docs/agent-boxes.md §8.2). The owner presses Log in; this
  * host claims the request, runs the CLI's own login with the profile's state directory and
- * relays what the owner needs: Codex's device URL and code, or Claude's sign-in URL and then
- * the code the owner pastes back. The URL, the codes and the CLI's output are never logged.
+ * relays what the owner needs: Codex's device URL and code, or Claude's (or Devin's) sign-in URL
+ * and then the code the owner pastes back. The URL, the codes and the CLI's output are never logged.
  */
 
 /**
@@ -71,8 +71,12 @@ export function parsePrompt(adapter: string, raw: string): { url: string; code: 
     return code ? { url, code: code[1] } : null;
 }
 
-/** A pasted code goes to the CLI's input as one line: printable characters only. */
-const PASTED_CODE = /^[\x21-\x7e]{1,512}$/;
+/**
+ * A pasted code goes to the CLI's input as one line: printable characters only. Up to 4096: Devin's
+ * paste flow takes the authorization code or, for some deployments, a whole token from its
+ * sign-in page, whose length isn't documented.
+ */
+const PASTED_CODE = /^[\x21-\x7e]{1,4096}$/;
 const closed = (err: unknown) => err instanceof HttpError && (err.status === 404 || err.status === 409);
 
 /** Handle one login request; exported for tests. */
@@ -82,11 +86,13 @@ export async function handleBoxLogin(config: Config, api: HostApi, req: BoxLogin
     const refuse = async (error: string) => { try { await report({ status: 'failed', error }); } catch (err) { if (!closed(err)) throw err; } };
     const local: LocalProfile | undefined = config.profiles[req.profile];
     if (!local || local.adapter !== req.adapter) { o.log('box_login_profile_unavailable'); await refuse('profile_unavailable'); return; }
-    // An API-key profile has nothing to log in; ACP agents aren't the official CLI (terms.ts); an
-    // adapter with no login in the box registry (opencode: an API key only) has none to relay
+    // An API-key profile has nothing to log in; an adapter with no login in the box registry
+    // (opencode: an API key only) has none to relay. The profile must run the CLI the way the
+    // registry does: an ACP wrapper around Claude or Codex isn't the official CLI (terms.ts),
+    // while Devin's ACP server is the official devin binary itself
     const spec: BoxAdapterRuntime | null = boxAdapter(local.adapter);
     const args = loginArgs(local.adapter);
-    if (local.auth !== 'subscription' || local.protocol !== 'cli' || !spec?.login || !args) {
+    if (local.auth !== 'subscription' || !spec?.login || !args || local.protocol !== spec.protocol) {
         o.log('box_login_not_supported'); await refuse('login_not_supported'); return;
     }
     const adapter = local.adapter;
@@ -95,7 +101,7 @@ export async function handleBoxLogin(config: Config, api: HostApi, req: BoxLogin
     o.log('box_login_started');
     let child: ChildProcess;
     try {
-        // childEnv: the OS allowlist, the state directory (CODEX_HOME / CLAUDE_CONFIG_DIR) and
+        // childEnv: the OS allowlist, the state directory (CODEX_HOME / CLAUDE_CONFIG_DIR / Devin's XDG dirs) and
         // the proxy variables; never the host or bot token
         child = spawn(local.executable, args, { cwd: local.stateDir, env: childEnv(local), shell: false,
             windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });

@@ -41,6 +41,7 @@ export class ProcessRunner implements Runner {
         if (adapter === 'gemini') throw new Error('gemini_requires_acp');
         if (adapter === 'opencode') throw new Error('opencode_requires_acp');
         if (adapter === 'omp') throw new Error('omp_requires_acp');
+        if (adapter === 'devin') throw new Error('devin_requires_acp');
         const child = spawn(launch.executable, launch.args, {
             cwd: launch.cwd, env: launch.env, shell: false, windowsHide: true,
             detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],

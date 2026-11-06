@@ -82,8 +82,8 @@ const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
     botId: ID,
     hostId: ID,
-    // gemini, opencode and omp: hosted over ACP with an API key only (agora-host src/acp/)
-    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp'] },
+    // gemini, opencode and omp: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/)
+    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin'] },
     // As agora-host's claim schema accepts it (src/lib/boxes/service.ts MODEL_PATTERN): anything else never wakes
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64, pattern: MODEL_PATTERN },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
@@ -496,6 +496,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
             if (p.authMode === 'api_key' && !p.apiKeyEnv) return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
             // Sign in with ChatGPT drives Codex app-server (docs/codex-chatgpt-plan.md)
             if (p.authMode === 'siwc' && p.adapter !== 'codex') return reply.status(400).send({ error: 'siwc is only for codex profiles' });
+            // A Devin account is its holder's own (docs/provider-terms.md "Devin"): no API key mode
+            if (p.adapter === 'devin' && p.authMode !== 'subscription') return reply.status(400).send({ error: 'devin runs only on the owner\'s own Devin login' });
             const row = await db.query(
                 `UPDATE agent_profiles SET auth_mode = $4, api_key_env = $5, run_approval = $6, auth_reported_at = NOW()
                  WHERE host_id = $1 AND server_id = $2 AND name = $3 AND adapter = $7 RETURNING id`,

@@ -44,6 +44,7 @@ export interface EdgeOptions {
     /** Tests: how long and how often a login's request waits for its card (forward-proxy.ts). */
     loginHoldMs?: number;
     loginHoldPollMs?: number;
+    loginOnlyPollMs?: number;
 }
 
 export interface Edge {
@@ -148,7 +149,7 @@ export function createEdge(opts: EdgeOptions): Edge {
     });
 
     const proxy = createForwardProxy({ deps, identify, resolve: opts.resolve, subnets: opts.subnets, dial: opts.dial, track,
-        loginHoldMs: opts.loginHoldMs, loginHoldPollMs: opts.loginHoldPollMs });
+        loginHoldMs: opts.loginHoldMs, loginHoldPollMs: opts.loginHoldPollMs, loginOnlyPollMs: opts.loginOnlyPollMs });
 
     let expiry: NodeJS.Timeout | null = null;
     let heartbeat: NodeJS.Timeout | null = null;

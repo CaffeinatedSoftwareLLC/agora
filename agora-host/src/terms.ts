@@ -19,12 +19,15 @@ import type { Claim } from './types.js';
  *   subscriptions (Claude Pro/Max, ChatGPT, Copilot, Cursor, Devin...); Anthropic forbids
  *   third-party harnesses on Claude.ai credentials and the others are unverified, so the host
  *   never offers one and disables every omp model provider but OpenRouter (acp/omp.ts).
+ * - Devin runs only over ACP (`devin acp`, the official CLI's own ACP server) on the owner's
+ *   own Devin login: Cognition's terms let only the account holder use the account, so a Devin
+ *   profile is `subscription`, owner-only. Its token is never passed in the environment.
  * - The host never reads, copies or relays a CLI's own login files or OAuth tokens.
  */
 
 export const TERMS_DOC = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/provider-terms.md';
 
-export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp';
+export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
 
 /** The environment variables each CLI reads its API key from. */
 export const API_KEY_ENVS: Record<Adapter, string[]> = {
@@ -34,6 +37,8 @@ export const API_KEY_ENVS: Record<Adapter, string[]> = {
     // or OPENROUTER_API_KEY_<NAME>, one key per agent (apiKeyEnvAllowed)
     opencode: ['OPENROUTER_API_KEY'],
     omp: ['OPENROUTER_API_KEY'],
+    // None: Devin signs in only with the owner's own account (DEVIN_SUBSCRIPTION_ONLY)
+    devin: [],
 };
 
 /**
@@ -70,6 +75,16 @@ export const OMP_ACP_ONLY =
 
 export const OPENCODE_ACP_ONLY =
     'opencode is hosted only over ACP with an API key: set "protocol": "acp", "acpArgs": ["acp"], "auth": "api_key" and "apiKeyEnv": "OPENROUTER_API_KEY" (agora-host README, "opencode and OpenRouter").';
+
+export const DEVIN_SUBSCRIPTION_ONLY =
+    'Devin is hosted only over ACP on the owner\'s own Devin login: set "protocol": "acp", "acpArgs": ["acp"] and "auth": "subscription", '
+    + 'and log the profile in once with `agora-host devin login --profile <name> --config <file>`. Cognition\'s terms let only the account holder '
+    + `use a Devin account, so only the owner can wake it. See ${TERMS_DOC}`;
+
+export const DEVIN_HOST_UNVERIFIED =
+    'A devin profile on this machine needs "allowUnverifiedApprovals": true. On a machine every Devin tool call must come to agora-host '
+    + 'for approval, and that it does for file edits (which Devin\'s Code mode lets through by itself) has not been seen with a logged-in Devin yet; '
+    + 'until it has, running Devin unboxed is the owner\'s explicit choice. A Devin agent in a box needs no opt-in. See the agora-host README, "Devin".';
 
 /**
  * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An

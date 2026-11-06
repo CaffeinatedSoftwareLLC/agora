@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { BOX_ADAPTER_REGISTRY, BOX_ADAPTERS, boxAdapterSpec, boxHasLogin, type BoxAdapterSpec } from '../../src/lib/boxes/adapters';
 import { defaultAllowlist, DOMAIN_ENTRY, PROVIDER_DOMAINS, REGISTRY_DOMAINS } from '../../src/lib/boxes/contract';
 import { isTelemetryHost, TELEMETRY_DOMAINS, wildcardTooWide } from '../../src/lib/boxes/domains';
-import { LOGIN_PROVIDER_DOMAINS } from '../../src/lib/boxes/edge-requests';
+import { LOGIN_ONLY_HOSTS, LOGIN_PROVIDER_DOMAINS } from '../../src/lib/boxes/edge-requests';
 import { API_KEY_ENV } from '../../src/lib/boxes/service';
 import { validApiKeyEnv } from '../../src/boxes/boxd/spec';
+import { LOGIN_HOSTS, loginUrlAllowed } from '../../src/routes/box-hosts';
 // The in-box half of the registry has no imports, so the server's tests can read it as it is
 import { BOX_ADAPTERS as HOST_ADAPTERS } from '../../agora-host/src/box-adapters';
 
@@ -64,6 +65,12 @@ describe('each entry is sound', () => {
             // boxd sets the key under this name; it must pass boxd's own check
             expect(validApiKeyEnv(spec.apiKeyEnv)).toBe(true);
             expect(defaultAllowlist(name)).toEqual([...spec.allowlist, ...REGISTRY_DOMAINS]);
+            // A login-only host is never on the allowlist, and is one of its sign-in domains
+            for (const h of spec.loginOnly) {
+                expect(DOMAIN_ENTRY.test(h) && !h.startsWith('*.'), h).toBe(true);
+                expect(defaultAllowlist(name)).not.toContain(h);
+                expect(spec.loginDomains.some(d => h === d || h.endsWith(`.${d}`)), h).toBe(true);
+            }
         });
     }
 });
@@ -91,9 +98,10 @@ describe('box/Dockerfile installs and links every adapter', () => {
                 for (const sum of Object.values(image.binary.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
                 expect(box).toContain('sha256sum -c -');
             } else {
-                // One release archive, checked against its sha256 before it is unpacked
+                // One release archive per CPU, each with its own sha256, checked before it is unpacked
                 expect(box).toContain(url(image.tarball.url));
-                expect(box).toContain(image.tarball.sha256);
+                for (const sum of Object.values(image.tarball.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+                expect(box).toMatch(/tar -xzf/);
                 expect(box).toContain('sha256sum -c -');
             }
             expect(box).toMatch(new RegExp(`ln -s \\S+ /opt/agora/bin/${name}\\b`));
@@ -188,6 +196,41 @@ describe('oh-my-pi in a box', () => {
         expect(HOST_ADAPTERS.omp).toMatchObject({ acpArgs: ['acp'], login: null, noProxy: [], yeet: { args: ['--yolo'], noOpenWeb: [], acpAllowAll: true },
             quiet: { env: { OTEL_SDK_DISABLED: 'true' }, args: [] }, state: { rulesFile: 'agent/AGENTS.md', files: {} } });
         expect(BOX_ADAPTER_REGISTRY.omp.image).toMatchObject({ version: '18.17.0', versionArg: 'OMP_VERSION' });
+    });
+});
+
+describe('Devin in a box', () => {
+    it('the owner\'s own login only, Devin\'s provider seam allowed, flags, error reports and updates refused', () => {
+        expect(BOX_ADAPTER_REGISTRY.devin).toMatchObject({ label: 'Devin', protocol: 'acp', authModes: ['subscription'], modelRequired: false,
+            loginDomains: ['devin.ai', 'windsurf.com'], loginOnly: ['app.devin.ai'] });
+        expect(BOX_ADAPTER_REGISTRY.devin.image).toMatchObject({ version: '3000.11.234', versionArg: 'DEVIN_VERSION' });
+        expect(boxHasLogin('devin')).toBe(true);
+        // Only the provider seam stays open; its sign-in host is reachable only while a login is open
+        expect(defaultAllowlist('devin')).toEqual(['server.codeium.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        expect(LOGIN_PROVIDER_DOMAINS.devin).toEqual(['devin.ai', 'windsurf.com']);
+        expect(LOGIN_ONLY_HOSTS.devin).toEqual(['app.devin.ai']);
+        // Seen through a logging proxy (no login): unleash at start, Sentry at every session end
+        for (const host of ['unleash.codeium.com', 'o4507463137361920.ingest.us.sentry.io', 'codeium-i5.sentry.io', 'static.devin.ai', 'cli.devin.ai'])
+            expect(isTelemetryHost(host), host).toBe(true);
+        for (const host of ['server.codeium.com', 'api.devin.ai', 'app.devin.ai']) expect(isTelemetryHost(host), host).toBe(false);
+        expect(HOST_ADAPTERS.devin).toMatchObject({ acpArgs: ['acp'], authModes: ['subscription'],
+            login: { args: ['auth', 'login', '--force-manual-token-flow'], hosts: ['devin.ai', 'windsurf.com'], kind: 'paste' }, noProxy: [],
+            yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpDeny: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch', 'read_url', 'read_url_content'], kinds: ['fetch'] } },
+            state: { rulesFile: 'config/devin/AGENTS.md' } });
+        // The settings file the login reads: no update, no imports of other tools' config
+        const settings = JSON.parse(HOST_ADAPTERS.devin.state.files['config/devin/config.json']);
+        expect(settings.auto_update).toBe(false);
+        expect(Object.values(settings.read_config_from).every(v => v === false)).toBe(true);
+        expect(Object.keys(settings.read_config_from).sort()).toEqual(['agents_standard', 'claude', 'cloud', 'copilot', 'cursor', 'opencode', 'windsurf', 'zed']);
+    });
+    it('the server sends the owner only to Devin\'s own sign-in page', () => {
+        expect(loginUrlAllowed('devin', 'https://app.devin.ai/auth/cli/continue?state=x&prompt=select_account')).toBe(true);
+        expect(loginUrlAllowed('devin', 'https://windsurf.com/devin/account/login?redirect_uri=chisel-show-auth-token&state=5')).toBe(true);
+        expect(loginUrlAllowed('devin', 'https://devin.ai.evil.example/auth')).toBe(false);
+        expect(loginUrlAllowed('devin', 'http://app.devin.ai/auth')).toBe(false);
+        // Every adapter with a login has its sign-in hosts on the server's list, covering the relay's
+        for (const [name, host] of Object.entries(HOST_ADAPTERS))
+            for (const h of host.login?.hosts ?? []) expect(LOGIN_HOSTS[name]?.some(d => h === d || h.endsWith(`.${d}`)), `${name} ${h}`).toBe(true);
     });
 });
 

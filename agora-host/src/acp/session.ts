@@ -12,11 +12,12 @@ import { AUTH_REQUIRED, Connection, METHOD_NOT_FOUND, RpcError } from './rpc.js'
 
 /**
  * One Agora turn with an Agent Client Protocol agent (agentclientprotocol.com):
- * `gemini --acp`, claude-code-acp, codex-acp, `opencode acp` or any other agent that speaks ACP v1.
+ * `gemini --acp`, claude-code-acp, codex-acp, `opencode acp`, `devin acp` or any other agent that speaks ACP v1.
  *
  * `initialize` → (`authenticate`, API-key profiles only) → `session/new`, or
- * `session/resume` / `session/load` with the stored session ID → model and effort through
- * `session/set_config_option` (or legacy `session/set_model`) → one `session/prompt`.
+ * `session/resume` / `session/load` with the stored session ID → the session mode, model and
+ * effort through `session/set_config_option` (or legacy `session/set_mode` / `session/set_model`)
+ * → one `session/prompt`.
  * The host advertises no file system or terminal capability, so the agent uses its own
  * tools in the session worktree, and every
  * tool call it may not run alone comes back as `session/request_permission`
@@ -50,6 +51,14 @@ export interface AcpPlan {
      * allowed, as the boxed CLIs run without prompts. Never set on a machine.
      */
     allowAll?: boolean;
+    /** Under allowAll, the requests still refused: tool names (or titles) and ACP tool kinds. */
+    allowAllExcept?: { names: string[]; kinds: string[] };
+    /**
+     * The session mode the turn runs in (Devin: "accept-edits" on a machine, "bypass" in a box),
+     * set before the prompt, also on a resumed session, whose saved mode could be another one. An
+     * agent that offers modes but not this one fails the run; one with no modes runs as it is.
+     */
+    sessionMode?: string;
     /** Bound for setup requests; the prompt itself is bounded by the run timeout. */
     rpcTimeoutMs?: number;
     /**
@@ -64,7 +73,7 @@ export interface AcpPlan {
 
 /** Errors a retry can't fix: configuration, login, agent support or a key out of credit. */
 export const ACP_FATAL = new Set(['acp_protocol_unsupported', 'acp_auth_required', 'acp_api_key_auth_unavailable', 'native_resume_unsupported', 'acp_model_unavailable',
-    'credit_exhausted']);
+    'acp_mode_unavailable', 'credit_exhausted']);
 
 /**
  * The provider refused the request because the API key has no credit left. opencode passes only
@@ -92,6 +101,10 @@ const initSchema = z.object({
 }).passthrough();
 const optionSchema = z.object({ id: z.string(), type: z.string().optional(), category: z.string().nullish(), currentValue: z.unknown().optional(),
     options: z.array(z.unknown()).catch([]).default([]) }).passthrough();
+const modesSchema = z.object({
+    availableModes: z.array(z.object({ id: z.string().min(1).max(100) }).passthrough()).catch([]).default([]),
+    currentModeId: z.string().nullish(),
+}).nullish().catch(null);
 const modelsSchema = z.object({
     availableModels: z.array(z.object({ modelId: z.string().min(1).max(200), name: z.string().optional() }).passthrough()).catch([]).default([]),
     currentModelId: z.string().nullish(),
@@ -184,6 +197,18 @@ function classify(err: unknown): AcpFailure {
     return new AcpFailure(/^(?:acp_[a-z_]+|spawn_failed)$/.test(code) ? code : 'acp_request_failed');
 }
 
+/**
+ * Under allowAll (a box), whether the adapter still refuses this request (box-adapters.ts
+ * acpDeny): a tool named in its list, a call of a listed ACP kind, or anything that reads as a
+ * web search or fetch.
+ */
+export function refusedInBox(call: ToolCallInfo, except: AcpPlan['allowAllExcept']): boolean {
+    if (!except) return false;
+    const names = [call.name, call.title].filter((n): n is string => typeof n === 'string').map(n => n.trim().toLowerCase());
+    return (!!call.kind && except.kinds.includes(call.kind)) || names.some(n => except.names.includes(n))
+        || ['WebSearch', 'WebFetch'].includes((ruleForCall(call) ?? '').replace(/\(.*$/, ''));
+}
+
 export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
     const plan = launch.acp;
     const timeout = plan.rpcTimeoutMs ?? RPC_TIMEOUT_MS;
@@ -266,7 +291,12 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
         const call = track(p.data.toolCall) ?? {};
         // In a box the box is the sandbox: nothing is denied (adapters.ts prepare sets it only there)
-        if (plan.allowAll) return { outcome: outcome(p.data.options, true) };
+        // but the adapter's exceptions, tools that would reach the open web around the edge
+        if (plan.allowAll) {
+            const refused = refusedInBox(call, plan.allowAllExcept);
+            if (refused) step = 'Denied a web tool: a box reaches the web only through its edge';
+            return { outcome: outcome(p.data.options, !refused) };
+        }
         return { outcome: outcome(p.data.options, await judge(call)) };
     };
     /**
@@ -336,6 +366,19 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
                 sessionId = z.string().regex(SESSION_ID).parse(opened?.sessionId);
             }
             const options = z.array(optionSchema).catch([]).parse(opened?.configOptions ?? []);
+            if (plan.sessionMode) {
+                // A mode configOption (Devin 3000.11 sends both shapes) takes precedence over legacy modes
+                const option = options.find(o => o.category === 'mode');
+                const legacy = modesSchema.parse(opened?.modes);
+                if (option) {
+                    const value = pick(option, plan.sessionMode);
+                    if (!value) throw new AcpFailure('acp_mode_unavailable');
+                    if (value !== option.currentValue) await conn.request('session/set_config_option', { sessionId, configId: option.id, value }, timeout);
+                } else if (legacy?.availableModes.length) {
+                    if (!legacy.availableModes.some(m => m.id === plan.sessionMode)) throw new AcpFailure('acp_mode_unavailable');
+                    if (legacy.currentModeId !== plan.sessionMode) await conn.request('session/set_mode', { sessionId, modeId: plan.sessionMode }, timeout);
+                }
+            }
             if (plan.model) {
                 const option = options.find(o => o.category === 'model');
                 // Gemini 0.62 advertises the ACP session-model API, without configOptions.

@@ -63,6 +63,24 @@ it('Claude: shows the sign-in link and sends the pasted code', async () => {
   await waitFor(() => expect(screen.getByTestId('login-status')).toHaveTextContent('Login failed: invalid code'));
 });
 
+it('Devin: shows the app.devin.ai link and sends the pasted code', async () => {
+  const url = 'https://app.devin.ai/auth/cli/continue?state=s1&prompt=select_account';
+  polls = [login({ status: 'awaiting_code', verificationUrl: url })];
+  render(<LoginDialog box={box('devin')} onClose={vi.fn()} pollMs={5} />);
+  expect(await screen.findByRole('link')).toHaveAttribute('href', url);
+  expect(screen.getByTestId('login-status')).toHaveTextContent('Open the link, sign in to Devin, then paste the code Devin shows.');
+  fireEvent.change(screen.getByLabelText('Code from Devin'), { target: { value: 'devin-code' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send code' }));
+  await waitFor(() => expect(post).toHaveBeenCalledWith(`/boxes/${ID}/login/code`, { code: 'devin-code' }));
+});
+
+it('Devin: a link that is not on devin.ai is shown as text, not as a link', async () => {
+  polls = [login({ status: 'awaiting_code', verificationUrl: 'https://devin.ai.evil.example/auth' })];
+  render(<LoginDialog box={box('devin')} onClose={vi.fn()} pollMs={5} />);
+  await waitFor(() => expect(screen.getByText('https://devin.ai.evil.example/auth')).toBeInTheDocument());
+  expect(screen.queryByRole('link')).toBeNull();
+});
+
 it('says which domain blocked the login, while it runs and when it fails', async () => {
   polls = [login({ status: 'code_sent', blockedHosts: ['platform.claude.com'] })];
   render(<LoginDialog box={box('claude')} onClose={vi.fn()} pollMs={5} />);

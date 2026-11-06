@@ -7,7 +7,7 @@ import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from '
 import { reconcileWorkspaces, recoverWorkspaceGitLocks, workspaceHead } from './workspaces.js';
 import { GitLockError } from './git-owner.js';
 import { attachRunImages } from './images.js';
-import { NON_RETRYABLE, TermsRefusal } from './terms.js';
+import { HostConfigError, NON_RETRYABLE, TermsRefusal } from './terms.js';
 import { planLoop } from './siwc/requests.js';
 import { boxLoginLoop } from './box-login.js';
 import { ACP_FATAL } from './acp/session.js';
@@ -128,8 +128,11 @@ export class Scheduler {
             }
         } catch (err) {
             // A provider-terms refusal is reported by its own code and never retried
-            result = { ...empty, error: err instanceof TermsRefusal ? err.code : 'host_launch_failed' };
+            result = { ...empty, error: err instanceof TermsRefusal ? err.code : 'host_launch_failed',
+                // A HostConfigError's message is fixed text (e.g. a Devin worktree with .devin/), safe to show
+                ...(err instanceof HostConfigError ? { errorMessage: err.message } : {}) };
             if (err instanceof TermsRefusal) this.log(err.code);
+            if (err instanceof HostConfigError) this.log('host_config_refused');
             // Every preview range belongs to a running session: never take one away, refuse this run
             if (err instanceof Error && err.message === 'preview_ports_exhausted') this.log('preview_ports_exhausted');
             if (err instanceof Error && err.message === 'process_tree_kill_failed') {

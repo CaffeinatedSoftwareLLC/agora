@@ -2,7 +2,7 @@
 #   docker build -f box/Dockerfile --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION) .
 #   docker build -f box/Dockerfile --target test --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION)-test .
 # Targets: "box" (the default, last stage) has the pinned CLIs of every box adapter (Claude
-# Code, Codex, opencode, oh-my-pi); "test" has fake CLIs (box/fake) for the isolation and clean-install
+# Code, Codex, opencode, oh-my-pi, Devin); "test" has fake CLIs (box/fake) for the isolation and clean-install
 # tests. The pins are also in the box adapter registry (src/lib/boxes/adapters.ts,
 # agora-host/src/box-adapters.ts); test/unit/box-adapters.unit.test.ts checks they agree.
 # A change to this file, the pinned CLIs or the in-box scripts bumps box/VERSION.
@@ -62,22 +62,25 @@ FROM base AS test
 COPY box/fake/fake-cli.mjs /opt/agora/fake/claude.mjs
 COPY box/fake/fake-cli.mjs /opt/agora/fake/codex.mjs
 COPY box/fake/fake-acp.mjs /opt/agora/fake/opencode.mjs
-RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/fake/opencode.mjs \
+COPY box/fake/fake-acp.mjs /opt/agora/fake/devin.mjs
+RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/fake/opencode.mjs /opt/agora/fake/devin.mjs \
  && ln -s /opt/agora/fake/claude.mjs /opt/agora/bin/claude \
  && ln -s /opt/agora/fake/codex.mjs /opt/agora/bin/codex \
- && ln -s /opt/agora/fake/opencode.mjs /opt/agora/bin/opencode
+ && ln -s /opt/agora/fake/opencode.mjs /opt/agora/bin/opencode \
+ && ln -s /opt/agora/fake/devin.mjs /opt/agora/bin/devin
 COPY box/fake/fake-omp.mjs /opt/agora/fake/omp.mjs
 RUN chmod 0755 /opt/agora/fake/omp.mjs && ln -s /opt/agora/fake/omp.mjs /opt/agora/bin/omp
 USER 1000:1000
 
-# ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x, Codex 0.163.x and omp
-# 18.17.x; opencode is checked by its ACP protocol version). One ARG and one install block per
+# ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x, Codex 0.163.x, omp
+# 18.17.x and Devin 3000.11.x; opencode is checked by its ACP protocol version). One ARG and one install block per
 # box adapter.
 FROM base AS box
 ARG CLAUDE_CODE_VERSION=2.1.311
 ARG CODEX_VERSION=0.163.0
 ARG OPENCODE_VERSION=1.18.34
 ARG OMP_VERSION=18.17.0
+ARG DEVIN_VERSION=3000.11.234
 # HOME=/root: nothing the install or the version checks write may land in the agent's home
 RUN export HOME=/root \
  && npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
@@ -110,5 +113,26 @@ RUN export HOME=/root \
  && ln -s /usr/local/bin/omp /opt/agora/bin/omp \
  && /opt/agora/bin/omp --version \
  && rm -rf /root/.omp
+# Devin CLI (Cognition; not on npm): the release tarball for this machine's CPU, checked against
+# its pinned sha256 (static.devin.ai/cli/<version>/manifest.json; the version and both sums move
+# together, as in the box adapter registry). A static binary (about 210 MB); only bin/devin is
+# kept, not its bundled docs. `devin setup` (the installer's interactive wizard) is never run, and
+# the CLI never updates itself in a box: auto_update is off in its config and static.devin.ai is
+# refused at the edge.
+RUN export HOME=/root \
+ && case "$(dpkg --print-architecture)" in \
+      amd64) arch=x86_64; sum=201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a ;; \
+      arm64) arch=aarch64; sum=438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e ;; \
+      *) echo "Devin has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL --retry 3 --proto '=https' -o /tmp/devin.tar.gz "https://static.devin.ai/cli/${DEVIN_VERSION}/devin-${DEVIN_VERSION}-${arch}-unknown-linux.tar.gz" \
+ && echo "${sum}  /tmp/devin.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/devin \
+ && tar -xzf /tmp/devin.tar.gz -C /opt/devin bin/devin \
+ && rm /tmp/devin.tar.gz \
+ && chown -R root:root /opt/devin && chmod 0755 /opt/devin/bin/devin \
+ && ln -s /opt/devin/bin/devin /opt/agora/bin/devin \
+ && /opt/agora/bin/devin --version \
+ && rm -rf /root/.config/devin /root/.local/share/devin /root/.cache/devin
 RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
 USER 1000:1000

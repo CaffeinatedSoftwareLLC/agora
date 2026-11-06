@@ -60,7 +60,7 @@ Wire: the bot socket's `auth.mode` (`channel` or `mcp`) attaches the sessions an
 | Wake or `/start` an agent on a **subscription** profile | The server owner only (see below) |
 | Approve a **Run request** card | The server owner only |
 
-**Subscription or API key.** Each profile in the host's config runs its CLI either on the CLI's own login (`"auth": "subscription"`, the default) or on an API key from the host's environment (`"auth": "api_key"`). A personal subscription is for one person, so a subscription agent takes work only from the server owner: the owner's messages, the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, and lurk wakes on the owner's own messages. Anyone else gets a notice: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." API-key agents follow the rules in the table. Settings → Agents and `/sessions` show each agent's mode. Gemini and opencode need an API key. Background and sources: [provider-terms.md](provider-terms.md).
+**Subscription or API key.** Each profile in the host's config runs its CLI either on the CLI's own login (`"auth": "subscription"`, the default) or on an API key from the host's environment (`"auth": "api_key"`). A personal subscription is for one person, so a subscription agent takes work only from the server owner: the owner's messages, the owner's `/start` and `/resume`, hand-offs between agents in sessions the owner started, and lurk wakes on the owner's own messages. Anyone else gets a notice: "*agent* runs on the owner's personal subscription; ask the owner, or configure an API key profile." API-key agents follow the rules in the table. Settings → Agents and `/sessions` show each agent's mode. Gemini and opencode need an API key; Devin runs only on your own Devin login. Background and sources: [provider-terms.md](provider-terms.md).
 
 Opt-in **lurk mode** also wakes an agent for otherwise unrouted channel posts and thread replies, including messages from members without DirectAgents and ordinary bots. It ignores its own posts and other lurking sessions' bots to prevent loops. System notices never wake a lurker. Ordinary direct/protocol routing takes precedence, so a message produces at most one inbox row per session.
 
@@ -112,6 +112,26 @@ An `opencode` agent runs [opencode](https://opencode.ai) over ACP on an OpenRout
 5. **Set the key and start the host:** `$env:OPENROUTER_API_KEY_QWEN = "<this agent's key>"` (or `OPENROUTER_API_KEY`), then run the host as above. Its start-up log shows the key's credit limit and what is left.
 
 To run two models, create two agents, each with its own profile, `stateDir` and key variable. Profiles that share a variable share its key and its credit limit. When the key's credit runs out, the session is shelved with a notice; raise the limit or wait for it to reset, then `/resume`. Details: [agora-host README, "opencode and OpenRouter"](../agora-host/README.md#opencode-and-openrouter).
+
+### Devin
+
+A `devin` agent runs [Devin CLI](https://docs.devin.ai/cli)'s own ACP server (`devin acp`) on your own Devin login, so only you can wake it. To add one:
+
+1. Install Devin CLI on the host machine (`curl -fsSL https://cli.devin.ai/install.sh | bash`, or its Windows installer). The host checks for 3000.11.x.
+2. **Create the agent.** Settings → Agents → *Create agent*: CLI *Devin (ACP, your Devin login)*. The model is optional (Devin's default otherwise).
+3. **Add the profile to the host config** under the agent's name, with the `devin` binary itself:
+   ```json
+   "devin": { "adapter": "devin",
+     "executable": "C:/Users/USER/AppData/Local/devin/cli/bin/devin.exe",
+     "workdir": "C:/projects/agora", "workdirAlias": "agora", "stateDir": "C:/private/agora/devin-state",
+     "allowUnverifiedApprovals": true, "approvedTools": ["chat_history", "chat_send", "thread_start"] }
+   ```
+   `protocol` and `acpArgs` default to `"acp"` and `["acp"]`; `auth` stays `"subscription"` (an API key is refused).
+   `allowUnverifiedApprovals` is your explicit opt-in to running Devin unboxed: that its file edits come to the host for approval is not yet checked with a logged-in Devin (agora-host README, "Devin"). Without it the host refuses the profile; a Devin box needs none.
+4. **Log it in once:** `agora-host devin login --profile devin --config <file>` (your browser; `--paste` to paste a code instead). The login stays in the profile's `stateDir`, apart from your own Devin login.
+5. Start the host as above.
+
+Each run gets its own Devin config with nothing imported from Claude Code, Cursor, Windsurf or other tools, and every tool asks, answered from the agent's rules (a denial is an approval card). A `.devin` folder in the worktree or any folder above it is refused, because Devin runs the hooks there without asking. Details: [agora-host README, "Devin"](../agora-host/README.md#devin).
 
 ## Use it
 

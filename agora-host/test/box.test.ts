@@ -327,12 +327,18 @@ describe('opencode in a box', () => {
     it.skipIf(!unix)('box-config --state links each CLI\'s rules file and writes its settings once', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);
         const { readlink } = await import('node:fs/promises');
-        for (const [adapter, auth, key] of [['claude', 'subscription', null], ['codex', 'subscription', null], ['opencode', 'api_key', 'OPENROUTER_API_KEY']] as const) {
+        for (const [adapter, auth, key] of [['claude', 'subscription', null], ['codex', 'subscription', null], ['opencode', 'api_key', 'OPENROUTER_API_KEY'], ['devin', 'subscription', null]] as const) {
             const e = env({ name: `box-${adapter}`, adapter, auth, apiKeyEnv: key });
             expect(await boxConfigCommand(['--state', '--home', t.dir], e)).toBe(0);
             const state = join(t.dir, '.agora', 'state', `box-${adapter}`);
-            const rules = { claude: 'CLAUDE.md', codex: 'AGENTS.md', opencode: join('config', 'opencode', 'AGENTS.md') }[adapter];
+            const rules = { claude: 'CLAUDE.md', codex: 'AGENTS.md', opencode: join('config', 'opencode', 'AGENTS.md'), devin: join('config', 'devin', 'AGENTS.md') }[adapter];
             expect(await readlink(join(state, rules))).toBe('/opt/agora/AGENTS.md');
+            // Devin's user config (read by its login; each run gets its own): no update, no imports
+            if (adapter === 'devin') {
+                const settings = JSON.parse(await readFile(join(state, 'config', 'devin', 'config.json'), 'utf8'));
+                expect(settings.auto_update).toBe(false);
+                expect(Object.values(settings.read_config_from).every(v => v === false)).toBe(true);
+            }
             if (adapter === 'claude') {
                 expect(await readFile(join(state, 'settings.json'), 'utf8')).toBe('{\n  "env": { "DISABLE_AUTOUPDATER": "1" }\n}\n');
                 expect((await stat(join(state, 'settings.json'))).mode & 0o777).toBe(0o600);

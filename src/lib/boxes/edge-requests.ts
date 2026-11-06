@@ -165,6 +165,24 @@ export const LOGIN_PROVIDER_DOMAINS: Record<string, string[]> = Object.fromEntri
         .map(([adapter, spec]) => [adapter, [...spec.loginDomains]])
 );
 
+/** Hosts each CLI reaches only during its own login (registry `loginOnly`), exact names. */
+export const LOGIN_ONLY_HOSTS: Record<string, string[]> = Object.fromEntries(
+    Object.entries(BOX_ADAPTER_REGISTRY).filter(([, spec]) => spec.loginOnly.length > 0)
+        .map(([adapter, spec]) => [adapter, [...spec.loginOnly]])
+);
+
+/** The login statuses during which the CLI's login command runs (src/routes/boxes.ts OPEN_LOGIN). */
+export const OPEN_LOGIN_STATUSES = ['requested', 'claimed', 'awaiting_user', 'awaiting_code', 'code_sent'];
+
+/** Whether the owner's login for this box is open right now. */
+export async function boxLoginOpen(db: any, boxId: string): Promise<boolean> {
+    const r = await db.query(
+        `SELECT 1 FROM box_login_requests WHERE box_id = $1 AND status = ANY($2::text[]) AND expires_at > NOW() LIMIT 1`,
+        [boxId, OPEN_LOGIN_STATUSES]
+    );
+    return r.rows.length > 0;
+}
+
 /**
  * The provider domains the edge refuses this box right now: a pending card (of any age: the edge
  * keeps answering a repeat with the same card) or one the owner denied within the quiet period

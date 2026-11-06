@@ -9,6 +9,7 @@ import { siwcCommand } from './siwc/cli.js';
 import { autostartCommand } from './autostart.js';
 import { creditLine } from './openrouter.js';
 import { boxConfigCommand, inBox } from './box.js';
+import { devinCommand } from './devin.js';
 
 async function main() {
     // agora-host siwc <login|status|logout> --profile <name> --config <file> (docs/codex-chatgpt-plan.md)
@@ -17,6 +18,8 @@ async function main() {
     if (process.argv[2] === 'autostart') { process.exitCode = await autostartCommand(process.argv.slice(3)); return; }
     // agora-host box-config --repos | --state | --out <file>: the agent box entrypoint's config (box.ts)
     if (process.argv[2] === 'box-config') { process.exitCode = await boxConfigCommand(process.argv.slice(3)); return; }
+    // agora-host devin login --profile <name> --config <file> [--paste]: a Devin profile's own login (devin.ts)
+    if (process.argv[2] === 'devin') { process.exitCode = await devinCommand(process.argv.slice(3)); return; }
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
     const config = await loadConfig(process.argv[3]);
     for (const [name, profile] of Object.entries(config.profiles)) {
@@ -42,6 +45,6 @@ main().catch(err => {
     // Never print raw config, API responses, CLI output or exceptions containing credentials.
     // A HostConfigError's message is fixed text (provider terms, missing key variable names).
     if (err instanceof HostConfigError) console.error(err.message);
-    console.error('Host failed. Check local config, executable versions and CLI login. Usage: agora-host --config <absolute-file> | agora-host autostart <enable|disable|status> --config <absolute-file> | agora-host siwc <login|status|logout> --profile <name> --config <absolute-file>');
+    console.error('Host failed. Check local config, executable versions and CLI login. Usage: agora-host --config <absolute-file> | agora-host autostart <enable|disable|status> --config <absolute-file> | agora-host siwc <login|status|logout> --profile <name> --config <absolute-file> | agora-host devin login --profile <name> --config <absolute-file>');
     process.exitCode = 1;
 });

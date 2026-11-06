@@ -44,9 +44,11 @@ export interface BoxAdapterRuntime {
      * Yeet mode (§8.1): the box is the sandbox. `args` turn the CLI's own sandbox and permission
      * prompts off; `noOpenWeb` turns off tools that reach the open web around the edge (a
      * provider-side web search). `acpAllowAll`: an ACP agent's permission requests are all
-     * allowed (its own config is also set to allow, see adapters.ts opencodeConfig).
+     * allowed (its own config is also set to allow, see adapters.ts opencodeConfig). `acpDeny`:
+     * requests the host still refuses under acpAllowAll, by tool name or ACP tool kind (Devin's
+     * web tools, which may run on Devin's side, around the edge).
      */
-    yeet: { args: readonly string[]; noOpenWeb: readonly string[]; acpAllowAll: boolean };
+    yeet: { args: readonly string[]; noOpenWeb: readonly string[]; acpAllowAll: boolean; acpDeny?: { names: readonly string[]; kinds: readonly string[] } };
     /**
      * The box rules (/opt/agora/AGENTS.md) as the CLI's global instructions file, and settings
      * files written once if absent; both relative to the profile's state directory.
@@ -138,6 +140,38 @@ export const BOX_ADAPTERS = {
         // PI_CODING_AGENT_DIR is <state>/agent (adapters.ts); the host passes this file to omp
         // with --append-system-prompt, as omp's own discovery is off
         state: { rulesFile: 'agent/AGENTS.md', files: {} },
+    },
+    devin: {
+        executable: '/opt/agora/bin/devin',
+        version: '3000.11.234',
+        protocol: 'acp',
+        acpArgs: ['acp'],
+        // The owner's own Devin login, relayed into the box (Cognition's terms: account holder only)
+        authModes: ['subscription'],
+        // Never set by boxd (no api_key mode): the variable `devin acp` would read an account token from
+        apiKeyEnv: 'WINDSURF_API_KEY',
+        // `devin auth login` opens a browser on a localhost redirect; this flow prints the sign-in
+        // URL on app.devin.ai and reads the code the owner pastes back (checked on 3000.11.234)
+        // (on app.devin.ai; it prints a windsurf.com sign-in link when it can't resolve its deployment)
+        login: { args: ['auth', 'login', '--force-manual-token-flow'], hosts: ['devin.ai', 'windsurf.com'], kind: 'paste' },
+        // No switches for these: auto-update and every config import are off in the config each run
+        // gets (adapters.ts devinConfig) and in the settings file below, which the login reads. Its
+        // feature flags, Sentry reports and update checks are refused at the edge (the server half)
+        quiet: { env: {}, args: [] },
+        noProxy: [],
+        // Not bypass: the session stays in Devin's "Code" mode with every tool allowed in its config
+        // but the web tools (adapters.ts devinConfig), so what it still asks reaches the host, which
+        // allows it unless it is a web tool or a fetch (Devin's search and fetch may run on Devin's
+        // side, around the edge; a box fetches through its edge with curl)
+        yeet: { args: [], noOpenWeb: [], acpAllowAll: true, acpDeny: { names: ['web_search', 'websearch', 'search_web', 'webfetch', 'web_fetch', 'read_url', 'read_url_content'], kinds: ['fetch'] } },
+        // XDG_CONFIG_HOME is <state>/config (adapters.ts): Devin's global rules file and user config
+        state: {
+            rulesFile: 'config/devin/AGENTS.md',
+            files: {
+                'config/devin/config.json': '{\n  "auto_update": false,\n  "read_config_from": { "agents_standard": false, "cursor": false, "windsurf": false, "claude": false, '
+                    + '"copilot": false, "opencode": false, "zed": false, "cloud": false }\n}\n',
+            },
+        },
     },
 } as const satisfies Record<string, BoxAdapterRuntime>;
 

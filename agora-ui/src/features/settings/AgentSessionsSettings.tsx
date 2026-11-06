@@ -19,7 +19,7 @@ import { BoxModeBadge } from '../boxes/BoxModeBadge';
 /** kind 'box': the agora-host inside a box (docs/agent-boxes.md §8.1); listed under Boxes, not here. */
 interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null; kind?: 'machine' | 'box' }
 interface Profile {
-  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp';
+  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
@@ -226,6 +226,8 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
                 <option value="opencode">opencode (ACP, OpenRouter key)</option>
                 {/* omp acp on an OpenRouter key only; every write, command and Agora tool asks on a machine */}
                 <option value="omp">oh-my-pi (ACP, OpenRouter key)</option>
+                {/* devin acp on the owner's own Devin login; only the owner can wake it */}
+                <option value="devin">Devin (ACP, your Devin login)</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-text-muted">Host

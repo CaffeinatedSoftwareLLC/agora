@@ -23,12 +23,13 @@ export interface BoxTelemetryHost {
  * writes its ARG there) and `{arch}` the release's name for the image's CPU.
  * - `npm`: the package, installed at the pinned version.
  * - `binary`: one release file per CPU, checked against its sha256 (amd64 and arm64).
- * - `tarball`: one release archive (x86_64 only), checked against its sha256 and unpacked.
+ * - `tarball`: one release archive per CPU, checked against its sha256 (amd64 and arm64) and
+ *   unpacked (Devin).
  */
 export type BoxImageSource =
     | { npm: string }
     | { binary: { url: string; sha256: { amd64: string; arm64: string } } }
-    | { tarball: { url: string; sha256: string } };
+    | { tarball: { url: string; sha256: { amd64: string; arm64: string } } };
 
 export interface BoxAdapterSpec {
     /** Shown on cards and in Settings → Agents. */
@@ -57,6 +58,12 @@ export interface BoxAdapterSpec {
      * request to these for the owner's card instead of refusing it (§4.2.3). Empty without a login.
      */
     loginDomains: readonly string[];
+    /**
+     * Hosts the CLI needs only to sign in (exact names, never on the allowlist): the edge lets the
+     * box reach them without a card while the owner's login for this box is open, and treats them
+     * as any unknown domain otherwise (§4.2.3).
+     */
+    loginOnly: readonly string[];
     /** Telemetry, metrics, error-report and share hosts the edge refuses without a card (§4.2.1). */
     telemetry: readonly BoxTelemetryHost[];
 }
@@ -73,6 +80,7 @@ export const BOX_ADAPTER_REGISTRY = {
         // login code exchanged at platform.claude.com/v1/oauth/token
         allowlist: ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'console.anthropic.com'],
         loginDomains: ['anthropic.com', 'claude.ai', 'claude.com'],
+        loginOnly: [],
         telemetry: [
             { domain: 'statsig.anthropic.com', what: 'feature flags and events (older versions)' },
             { domain: 'http-intake.logs.us5.datadoghq.com', what: 'operational metrics' },
@@ -92,6 +100,7 @@ export const BOX_ADAPTER_REGISTRY = {
         // start (seen live 2026-11-04: three regions, one card each)
         allowlist: ['api.openai.com', 'chatgpt.com', 'auth.openai.com', '*.oaiusercontent.com'],
         loginDomains: ['openai.com', 'chatgpt.com'],
+        loginOnly: [],
         telemetry: [
             { domain: 'ab.chatgpt.com', what: 'usage metrics (OpenTelemetry export; `analytics.enabled`)' },
             { domain: 'ingest.sentry.io', what: 'feedback and crash reports' },
@@ -112,6 +121,7 @@ export const BOX_ADAPTER_REGISTRY = {
         // (models.opencode.ai; OPENCODE_DISABLE_MODELS_FETCH would leave it no OpenRouter models)
         allowlist: ['openrouter.ai', 'models.opencode.ai'],
         loginDomains: [],
+        loginOnly: [],
         telemetry: [
             { domain: 'opncd.ai', what: 'session sharing (off: `share: "disabled"`, `OPENCODE_DISABLE_SHARE`)' },
         ],
@@ -142,10 +152,52 @@ export const BOX_ADAPTER_REGISTRY = {
         // is disabled
         allowlist: ['openrouter.ai'],
         loginDomains: [],
+        loginOnly: [],
         telemetry: [
             { domain: 'build.stencil.so', what: 'update checks and downloads (interactive mode and `omp update` only; `update.auto: false`)' },
             { domain: 'cloud.stencil.so', what: 'Spotlight experiment (off: `spotlight.experiment.enabled: false`)' },
             { domain: 'catalog.stencil.so', what: 'model metadata (models.dev), fetched at start; omp runs without it' },
+        ],
+    },
+    devin: {
+        label: 'Devin',
+        // Cognition's release tarball (it is not on npm), one per CPU, checked against its sha256
+        // (static.devin.ai/cli/3000.11.234/manifest.json; the x86_64 one also checked by hand)
+        image: {
+            version: '3000.11.234', versionArg: 'DEVIN_VERSION',
+            tarball: {
+                url: 'https://static.devin.ai/cli/{version}/devin-{version}-{arch}-unknown-linux.tar.gz',
+                sha256: {
+                    amd64: '201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a',
+                    arm64: '438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e',
+                },
+            },
+        },
+        protocol: 'acp',
+        // The owner's own Devin login only (docs/provider-terms.md "Devin": Cognition lets only the
+        // account holder use an account), relayed into the box with Devin's paste-the-code flow
+        authModes: ['subscription'],
+        // Never set by boxd: with no api_key mode there is no key. `devin acp` would read an
+        // account token from it, so it is named here and nowhere else.
+        apiKeyEnv: 'WINDSURF_API_KEY',
+        modelRequired: false,
+        // Checked against the pinned binary through a logging proxy, with no login (2026-11-06): the
+        // Windsurf/Codeium server its credentials name as the API server, contacted at every start
+        // and by the login. It is Devin's provider seam: model calls and its own analytics go to the
+        // same host and can't be told apart at the edge. api.devin.ai was never contacted, so it is
+        // not listed; app.devin.ai is only the sign-in (loginOnly). Model traffic after a login may
+        // need more: verify live.
+        allowlist: ['server.codeium.com'],
+        // The paste login's link is on app.devin.ai, or on windsurf.com when the CLI can't resolve
+        // its deployment (seen offline)
+        loginDomains: ['devin.ai', 'windsurf.com'],
+        loginOnly: ['app.devin.ai'],
+        telemetry: [
+            { domain: 'unleash.codeium.com', what: 'feature flags, fetched at start (Devin keeps its defaults without them)' },
+            { domain: 'ingest.us.sentry.io', what: 'error reports, sent at every session end (`o4507463137361920.ingest.us.sentry.io`)' },
+            { domain: 'codeium-i5.sentry.io', what: 'error reports (named in the binary)' },
+            { domain: 'static.devin.ai', what: 'update checks and downloads (`auto_update: false`; the CLI is pinned in the image)' },
+            { domain: 'cli.devin.ai', what: 'the install script (updates)' },
         ],
     },
 } as const satisfies Record<string, BoxAdapterSpec>;

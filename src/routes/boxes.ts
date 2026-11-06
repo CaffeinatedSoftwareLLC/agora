@@ -310,7 +310,8 @@ export async function boxRoutes(app: FastifyInstance) {
         schema: {
             params: { type: 'object', properties: { boxId: ID } },
             body: { type: 'object', required: ['code'], additionalProperties: false,
-                properties: { code: { type: 'string', minLength: 1, maxLength: 512, pattern: '^[\\x21-\\x7e]+$' } } },
+                // Up to 4096: Devin's paste flow can take a whole token, whose length isn't documented
+                properties: { code: { type: 'string', minLength: 1, maxLength: 4096, pattern: '^[\\x21-\\x7e]+$' } } },
         },
     }, async (request, reply) => owned(request, reply, true, async (db, box) => {
         await expireBoxLogins(db, box.id);

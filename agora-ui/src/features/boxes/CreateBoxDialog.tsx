@@ -96,10 +96,13 @@ export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
               Subscription <span className="text-xs text-text-muted">your own login; only you can wake it</span>
             </label>
           )}
-          <label className="flex min-h-11 md:min-h-8 items-center gap-2 text-text">
-            <input type="radio" name="box-auth" checked={auth === 'api_key'} onChange={() => setAuth('api_key')} />
-            API key <span className="text-xs text-text-muted">stored encrypted, given only to this box</span>
-          </label>
+          {/* Devin has no API key mode: a Devin account is its holder's own */}
+          {option.auth.includes('api_key') && (
+            <label className="flex min-h-11 md:min-h-8 items-center gap-2 text-text">
+              <input type="radio" name="box-auth" checked={auth === 'api_key'} onChange={() => setAuth('api_key')} />
+              API key <span className="text-xs text-text-muted">stored encrypted, given only to this box</span>
+            </label>
+          )}
         </fieldset>
         {auth === 'api_key' && (
           <label className="flex flex-col gap-1 text-text-muted">{option.keyLabel}

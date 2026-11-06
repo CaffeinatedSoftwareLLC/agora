@@ -3,12 +3,12 @@ import { ApiError } from '../../lib/api';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { boxApi, type Box, type BoxLogin } from './api';
-import { ADAPTER_LABEL, INPUT, TOUCH, boxError, loginEnded, loginStatusText, loginUrl } from './boxRules';
+import { ADAPTER_LABEL, INPUT, TOUCH, adapterLogin, boxError, loginEnded, loginStatusText, loginUrl } from './boxRules';
 
 /**
  * Logging a box's CLI in (docs/agent-boxes.md §8.2). Agora records a login request, the box's
  * agora-host runs the CLI's own login and reports what it printed: Codex a verification URL and
- * a one-time code, Claude Code a sign-in URL and then a code to paste back. The dialog polls the
+ * a one-time code, Claude Code and Devin a sign-in URL and then a code to paste back. The dialog polls the
  * request until it ends; Cancel (or closing the dialog) cancels it on the server.
  */
 export function LoginDialog({ box, onClose, pollMs = 2000 }: { box: Box; onClose: (changed: boolean) => void; pollMs?: number }) {
@@ -51,7 +51,9 @@ export function LoginDialog({ box, onClose, pollMs = 2000 }: { box: Box; onClose
 
   const ended = !!login && loginEnded(login.status);
   const url = loginUrl(box.adapter, login?.verificationUrl);
-  const wantsCode = box.adapter === 'claude' && !sent && (login?.status === 'awaiting_code' || login?.status === 'awaiting_user');
+  // A paste login (Claude Code, Devin) finishes with the code the provider's page shows
+  const provider = adapterLogin(box.adapter);
+  const wantsCode = provider?.kind === 'paste' && !sent && (login?.status === 'awaiting_code' || login?.status === 'awaiting_user');
 
   const close = async () => {
     const current = loginRef.current;
@@ -111,7 +113,7 @@ export function LoginDialog({ box, onClose, pollMs = 2000 }: { box: Box; onClose
         {wantsCode && (
           <form className="flex flex-col gap-2 md:flex-row" onSubmit={e => { e.preventDefault(); void sendCode(); }}>
             <input className={`${INPUT} font-mono`} value={code} onChange={e => setCode(e.target.value)} autoComplete="off" spellCheck={false}
-              placeholder="Paste the code Anthropic shows" aria-label="Code from Anthropic" maxLength={500} />
+              placeholder={`Paste the code ${provider?.provider} shows`} aria-label={`Code from ${provider?.provider}`} maxLength={4096} />
             <Button type="submit" disabled={!code.trim()} loading={sending} className={TOUCH}>Send code</Button>
           </form>
         )}

@@ -226,6 +226,22 @@ describe('create box', () => {
     }));
   });
 
+  it('creates a Devin box on the owner\'s own login only: no API key choice, Log in next', async () => {
+    const post = vi.spyOn(api, 'post').mockImplementation(async (path: string) => (path === '/servers/S/boxes'
+      ? { box: box({ id: 'D'.repeat(26), name: 'devin', adapter: 'devin', loginState: 'none' }) }
+      : { login: { id: 'L', status: 'requested', verificationUrl: null, userCode: null, error: null, expiresAt: null } }) as never);
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'devin' } });
+    // Start from API key on Claude: Devin can't use it, so the choice goes back to its subscription
+    fireEvent.click(within(dialog).getByLabelText(/^API key/));
+    fireEvent.change(within(dialog).getByLabelText('CLI'), { target: { value: 'devin' } });
+    expect(within(dialog).queryByLabelText(/^API key/)).toBeNull();
+    expect(within(dialog).getByLabelText(/^Subscription/)).toBeChecked();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create box' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/servers/S/boxes', { name: 'devin', adapter: 'devin', auth: 'subscription', homeChannelId: 'C1' }));
+    expect(await screen.findByRole('dialog', { name: 'Log in Devin in devin' })).toBeInTheDocument();
+  });
+
   it('offers Log in straight after creating a subscription box', async () => {
     vi.spyOn(api, 'post').mockImplementation(async (path: string) => (path === '/servers/S/boxes'
       ? { box: box({ id: 'N'.repeat(26), name: 'fresh', loginState: 'none' }) }

@@ -2,7 +2,7 @@ import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerRespon
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { DOMAIN_ENTRY, domainAllowed } from '../../lib/boxes/contract';
-import { domainRecentlyDenied, LOGIN_PROVIDER_DOMAINS } from '../../lib/boxes/edge-requests';
+import { boxLoginOpen, domainRecentlyDenied, LOGIN_ONLY_HOSTS, LOGIN_PROVIDER_DOMAINS, OPEN_LOGIN_STATUSES } from '../../lib/boxes/edge-requests';
 import { isTelemetryHost } from '../../lib/boxes/domains';
 import { frameBody, requestApproval, sendText, TOO_MANY_WAITING, type EdgeDeps } from './common';
 import type { EdgeBox, Identify } from './identity';
@@ -30,6 +30,8 @@ export interface ForwardProxyOptions {
     /** Tests: a shorter login hold and poll. */
     loginHoldMs?: number;
     loginHoldPollMs?: number;
+    /** How often a connection let through only for a login checks that the login is still open. */
+    loginOnlyPollMs?: number;
 }
 
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -37,12 +39,29 @@ const CONNECT_TIMEOUT_MS = 10_000;
 export const LOGIN_HOLD_MS = 120_000;
 const LOGIN_HOLD_POLL_MS = 1000;
 const MAX_HOLDS_PER_BOX = 4;
-/** The login statuses during which the CLI's login command runs (src/routes/boxes.ts OPEN_LOGIN). */
-const OPEN_LOGIN = ['requested', 'claimed', 'awaiting_user', 'awaiting_code', 'code_sent'];
+const OPEN_LOGIN = OPEN_LOGIN_STATUSES;
 const TUNNEL_IDLE_MS = 10 * 60 * 1000;
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
-type Verdict = { ok: true; address: string } | { ok: false; status: number; text: string; headers?: Record<string, string> };
+/** `loginOnly`: let through only because the owner's login is open; it ends when the login does. */
+type Verdict = { ok: true; address: string; loginOnly?: boolean } | { ok: false; status: number; text: string; headers?: Record<string, string> };
+
+const LOGIN_ONLY_POLL_MS = 2000;
+/**
+ * A connection admitted only for a login (registry `loginOnly`) lives no longer than that login:
+ * the edge looks every few seconds and calls `end` once the login is no longer open (finished,
+ * cancelled or expired). Returns the function that stops looking.
+ */
+function untilLoginCloses(opts: ForwardProxyOptions, box: EdgeBox, end: () => void): () => void {
+    let stopped = false;
+    const timer = setInterval(() => {
+        void boxLoginOpen(opts.deps.db, box.id).then(open => {
+            if (!open && !stopped) { stopped = true; clearInterval(timer); end(); }
+        }).catch(() => { /* a failed look is retried at the next tick */ });
+    }, opts.loginOnlyPollMs ?? LOGIN_ONLY_POLL_MS);
+    timer.unref?.();
+    return () => { stopped = true; clearInterval(timer); };
+}
 
 /** A host name a box may ask for: a plain DNS name, lowercase, no trailing dot, never an IP. */
 export function normalizeHost(raw: string): { host: string } | { error: 'ip' | 'invalid' } {
@@ -115,7 +134,11 @@ async function decide(opts: ForwardProxyOptions, box: EdgeBox, rawHost: string, 
     }
     // The directory is a few seconds old; before refusing, read the allowlist itself, so a
     // retry right after the owner allows a domain goes through instead of making a new card
-    if (!domainAllowed(host, box.allowedDomains) && !domainAllowed(host, await currentAllowlist(opts, box))) {
+    // A host the box CLI needs only to sign in (Devin's app.devin.ai): no card while the owner's
+    // login for this box is open; any other time it is an unknown domain like the rest
+    const allowed = domainAllowed(host, box.allowedDomains) || domainAllowed(host, await currentAllowlist(opts, box));
+    const loginOnly = !allowed && (LOGIN_ONLY_HOSTS[box.adapter ?? ''] ?? []).includes(host) && await boxLoginOpen(opts.deps.db, box.id);
+    if (!allowed && !loginOnly) {
         if (await domainRecentlyDenied(opts.deps.db, box.id, host)) {
             return { ok: false, status: 403, text: `domain ${host} was denied by the owner` };
         }
@@ -131,7 +154,7 @@ async function decide(opts: ForwardProxyOptions, box: EdgeBox, rawHost: string, 
             ? { ok: false, status: 403, text: `domain ${host} resolves to an address a box can't reach` }
             : { ok: false, status: 502, text: `domain ${host} could not be resolved` };
     }
-    return { ok: true, address: pin.address };
+    return { ok: true, address: pin.address, ...(loginOnly ? { loginOnly: true } : {}) };
 }
 
 function rawReply(socket: Duplex, status: number, text: string, headers: Record<string, string> = {}) {
@@ -175,8 +198,10 @@ export function createForwardProxy(opts: ForwardProxyOptions): http.Server {
                 if (upstream.connecting || !upstream.remoteAddress) rawReply(socket, 502, 'connection failed');
                 else socket.destroy();
             });
-            socket.on('close', () => upstream.destroy());
-            upstream.on('close', () => socket.destroy());
+            // A tunnel let through only for a login is closed when the login ends
+            const stop = verdict.loginOnly ? untilLoginCloses(opts, box, () => { upstream.destroy(); socket.destroy(); }) : () => {};
+            socket.on('close', () => { stop(); upstream.destroy(); });
+            upstream.on('close', () => { stop(); socket.destroy(); });
         })().catch(err => {
             log.warn({ err: (err as Error).message }, 'CONNECT failed');
             rawReply(socket, 500, 'edge error');
@@ -240,5 +265,9 @@ async function plainHttp(opts: ForwardProxyOptions, dial: Dial, req: IncomingMes
         if (!res.headersSent) sendText(res, 502, 'upstream unreachable');
         else res.destroy();
     });
+    if (verdict.loginOnly) {
+        const stop = untilLoginCloses(opts, box, () => { upReq.destroy(); res.destroy(); });
+        res.on('close', stop);
+    }
     req.pipe(upReq);
 }
