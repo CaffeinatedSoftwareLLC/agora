@@ -1,6 +1,6 @@
 import { test, expect, apis, openChannel, storageStateFor } from '../lib/fixtures';
 import { snap } from '../lib/snap';
-import { freshChannel, rowWith } from '../lib/helpers';
+import { freshChannel, revealThreadChips, rowWith, threadChip } from '../lib/helpers';
 import type { WebSocketRoute } from '@playwright/test';
 
 test.describe('chat, mentions, threads @smoke', () => {
@@ -77,9 +77,11 @@ test.describe('chat, mentions, threads @smoke', () => {
         await snap(page, ti, 'UI-01.thread-wake', '01-wake-notice', 'A thread panel beside the channel with a reply and a system notice saying the agent has no live session',
             { ready: notice });
         // Active-threads bar lists the new thread (live, then after reload)
-        const chip = page.getByRole('toolbar', { name: 'Agents and active threads' }).getByRole('button', { name: new RegExp('^Open thread.*' + root.content) });
+        const chip = threadChip(page, root.content);
+        await revealThreadChips(page, chip, 5_000);
         await expect.soft(chip, 'new thread appears in the active-threads bar without a reload').toBeVisible({ timeout: 5_000 });
         await page.reload();
+        await revealThreadChips(page, chip);
         await expect(chip).toBeVisible();
         await chip.click();
         await expect(panel.getByRole('heading', { name: /Thread/ })).toBeVisible();
