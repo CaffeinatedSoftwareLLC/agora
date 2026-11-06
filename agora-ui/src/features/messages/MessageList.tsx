@@ -13,7 +13,7 @@ import { shouldGroup, estimateMessageHeight, computePrependShift, computeScrollC
 import { isHiddenInRun } from './systemNotices';
 import { computeMessageRuns, resizeChangedRunRows } from './messageRuns';
 import { AgentMessageRunToggle, AgentRunCollapse } from './AgentMessageRun';
-import { useExpandedNoticeRuns } from './useExpandedNoticeRuns';
+import { isRunOpen, useExpandedNoticeRuns } from './useExpandedNoticeRuns';
 
 interface MessageListProps {
   channelId: string;
@@ -81,6 +81,11 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     run ? run.position === run.size - 1 : false, run?.defaultExpanded, run?.noticeOnly,
     run?.position === 0 ? run.aliases : undefined])), [runRows]);
   const prevRunRowsRef = useRef(runRows);
+  const unmeasuredRef = useRef(new Set<string>());
+  const renderedHeight = (id: string): number | undefined => {
+    const node = virtualizer.elementsCache.get(id);
+    return node?.isConnected ? node.offsetHeight : undefined;
+  };
   useLayoutEffect(() => {
     const prev = prevExpandedRef.current;
     const previousRows = prevRunRowsRef.current;
@@ -89,18 +94,36 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     prevRunRowsRef.current = runRows;
     if (prev === expandedKeys && previousRows === runRows) return;
     const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)).map(key => key.replace(/^collapsed:/, '')));
-    // Read rendered rows from the DOM; only rows that are not rendered get an estimate.
-    // Many role changes (an alias or a default added to an open run) leave a row's height
-    // as it was, so no ResizeObserver callback would replace an estimate and the rows below
-    // would be drawn over it. A row that does change size is also not re-measured while a
-    // smooth scroll runs far from it. (The virtualizer's measureElement without a
-    // ResizeObserver entry returns the cached size, so it cannot be used here.)
-    resizeChangedRunRows(virtualizer, previousRows, runRows, changed, (index, id) => {
-      const node = virtualizer.elementsCache.get(id);
-      return node?.isConnected ? node.offsetHeight : estimateAt(index);
+    // Read rendered rows from the DOM. Many role changes (an alias or a default added to an
+    // open run) leave a row's height as it was, so no ResizeObserver callback would replace
+    // an estimate and the rows below would be drawn over it. A row that does change size is
+    // also not re-measured while a smooth scroll runs far from it. (The virtualizer's
+    // measureElement without a ResizeObserver entry returns the cached size, so it cannot
+    // be used here.) Rows that are not rendered keep their measured size unless what they
+    // render changed; those get an estimate and are measured when they mount.
+    resizeChangedRunRows(virtualizer, previousRows, runRows, changed, {
+      measure: (_index, id) => renderedHeight(id),
+      estimate: (index, id) => { unmeasuredRef.current.add(id); return estimateAt(index); },
+      wasExpanded: run => isRunOpen(prev, run.key, run.aliases, run.defaultExpanded),
+      isExpanded: run => isRunOpen(expandedKeys, run.key, run.aliases, run.defaultExpanded),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedKeys, runLayout]);
+
+  // A row given an estimate while offscreen is measured when it mounts: the virtualizer's
+  // own mount measurement returns that cached estimate, and its first ResizeObserver
+  // callback is dropped during a smooth scroll far from the row.
+  useLayoutEffect(() => {
+    const pending = unmeasuredRef.current;
+    if (pending.size === 0) return;
+    for (const item of virtualizer.getVirtualItems()) {
+      const id = String(item.key);
+      const height = pending.has(id) ? renderedHeight(id) : undefined;
+      if (height === undefined) continue;
+      pending.delete(id);
+      virtualizer.resizeItem(item.index, height);
+    }
+  });
 
   // Load messages on channel change
   useEffect(() => {
@@ -112,6 +135,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     initialLoadRef.current = true;
     nearBottomRef.current = true;
     pendingCorrectionRef.current = null;
+    unmeasuredRef.current.clear();
     lastAckRef.current = null;
   }, [channelId, loadMessages]);
 
