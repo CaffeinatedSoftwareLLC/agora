@@ -31,6 +31,8 @@ export const PROTOCOL_VERSION = 1;
 const HOST_VERSION = '0.1.0';
 const RPC_TIMEOUT_MS = 60000;
 const MAX_TEXT = 64 * 1024;
+/** Tool calls the host keeps track of in one turn. */
+const MAX_CALLS = 5000;
 
 export interface AcpServer { name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }
 export interface AcpPlan {
@@ -187,6 +189,8 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
     const timeout = plan.rpcTimeoutMs ?? RPC_TIMEOUT_MS;
     const rules = new Set(plan.rules);
     const calls = new Map<string, OmpCall & { diffs?: string[] }>();
+    /** Calls an elicitation was matched to (plan.elicitation): never matched again. */
+    const answered = new Set<string>();
     const denied: string[] = [];
     const changed = new Set<string>();
     let sessionId: string | null = null, stopping = false;
@@ -211,7 +215,7 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         const emptyObject = typeof u.rawInput === 'object' && u.rawInput !== null && !Array.isArray(u.rawInput) && !Object.keys(u.rawInput).length;
         if (u.rawInput !== undefined && u.rawInput !== null && !emptyObject) call.rawInput = u.rawInput;
         if (Array.isArray(u.content)) call.diffs = u.content.filter((c: any) => c?.type === 'diff').map((c: any) => inside(c.path)).filter(Boolean);
-        if (calls.size < 5000) calls.set(u.toolCallId, call);
+        if (calls.size < MAX_CALLS) calls.set(u.toolCallId, call);
         if (typeof u.title === 'string') step = u.title;
         return call;
     };
@@ -278,8 +282,12 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         const approve = approveChoice(choices);
         if (!approve) return answer('Deny');
         if (plan.allowAll) return answer(approve);
-        const pending = [...calls.values()].filter(c => c.status === 'pending');
+        // Past the tracking bound the host no longer knows every waiting call: nothing is approved
+        if (calls.size >= MAX_CALLS) { step = 'Denied a tool call'; return answer('Deny'); }
+        const pending = [...calls].filter(([id, c]) => c.status === 'pending' && !answered.has(id)).map(([id, c]) => ({ ...c, id }));
         const verdict = ompApproval(params.message.slice(0, 64 * 1024), pending);
+        // A call is answered once: a later prompt can never be matched to it again
+        if (verdict.id) answered.add(verdict.id);
         if ('deny' in verdict) { step = verdict.deny; return answer('Deny'); }
         return answer(await judge(verdict.call) ? approve : 'Deny');
     };

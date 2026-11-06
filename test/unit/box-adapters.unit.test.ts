@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BOX_ADAPTER_REGISTRY, BOX_ADAPTERS, boxAdapterSpec, boxHasLogin } from '../../src/lib/boxes/adapters';
+import { BOX_ADAPTER_REGISTRY, BOX_ADAPTERS, boxAdapterSpec, boxHasLogin, type BoxAdapterSpec } from '../../src/lib/boxes/adapters';
 import { defaultAllowlist, DOMAIN_ENTRY, PROVIDER_DOMAINS, REGISTRY_DOMAINS } from '../../src/lib/boxes/contract';
 import { isTelemetryHost, TELEMETRY_DOMAINS, wildcardTooWide } from '../../src/lib/boxes/domains';
 import { LOGIN_PROVIDER_DOMAINS } from '../../src/lib/boxes/edge-requests';
@@ -80,13 +80,20 @@ describe('box/Dockerfile installs and links every adapter', () => {
     for (const [name, spec] of Object.entries(BOX_ADAPTER_REGISTRY)) {
         it(`${name}: the pinned version in the box stage, a fake CLI in the test stage`, () => {
             const box = stage('box');
-            const image: { version: string; versionArg: string; npm?: string; binary?: { url: string; sha256: Record<string, string> } } = spec.image;
+            const image = spec.image as BoxAdapterSpec['image'];
             expect(box).toContain(`ARG ${image.versionArg}=${image.version}\n`);
-            if (image.npm) expect(box).toContain(`"${image.npm}@\${${image.versionArg}}"`);
-            else {
-                // A release binary: its URL with the version ARG, and each CPU's sha256 checked
-                expect(box).toContain(image.binary!.url.replace('{version}', `\${${image.versionArg}}`).replace('{arch}', '${arch}'));
-                for (const sum of Object.values(image.binary!.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+            // A URL as the Dockerfile writes it: the version ARG and the `arch` variable
+            const url = (u: string) => u.replaceAll('{version}', `\${${image.versionArg}}`).replaceAll('{arch}', '${arch}');
+            if ('npm' in image) expect(box).toContain(`"${image.npm}@\${${image.versionArg}}"`);
+            else if ('binary' in image) {
+                // One release binary per CPU, each with its own sha256, checked before it is used
+                expect(box).toContain(url(image.binary.url));
+                for (const sum of Object.values(image.binary.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+                expect(box).toContain('sha256sum -c -');
+            } else {
+                // One release archive, checked against its sha256 before it is unpacked
+                expect(box).toContain(url(image.tarball.url));
+                expect(box).toContain(image.tarball.sha256);
                 expect(box).toContain('sha256sum -c -');
             }
             expect(box).toMatch(new RegExp(`ln -s \\S+ /opt/agora/bin/${name}\\b`));

@@ -449,7 +449,7 @@ wake it again.
 ### oh-my-pi
 
 An `omp` profile runs [oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT; `omp acp`,
-tested with 18.17.x) on an OpenRouter key, like opencode: `protocol` defaults to `"acp"`,
+tested with 18.17.0) on an OpenRouter key, like opencode: `protocol` defaults to `"acp"`,
 `acpArgs` to `["acp"]` (and may be nothing else), `auth` to `"api_key"` and `apiKeyEnv` to
 `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_<NAME>`, passed to omp as
 `OPENROUTER_API_KEY`). The agent needs its OpenRouter model ID in Settings → Agents;
@@ -465,8 +465,8 @@ tested with 18.17.x) on an OpenRouter key, like opencode: `protocol` defaults to
 Use the release binary (`omp-windows-x64.exe`, `omp-linux-x64`, ... from
 [the release](https://github.com/can1357/oh-my-pi/releases/tag/v18.17.0), checked against its
 `SHA256SUMS.txt`). omp releases every few days: the host checks the version omp reports over
-ACP at start and refuses anything but 18.17.x unless the profile sets
-`"allowUntestedVersion": true`.
+ACP at start and refuses anything but 18.17.0 (the provider, discovery-source and tool lists
+the host passes are that version's) unless the profile sets `"allowUntestedVersion": true`.
 
 **What the host sets.** omp's default approval mode is yolo and it reads a lot from the
 worktree, so every run gets fixed switches and a settings overlay (`--config`, which
@@ -475,14 +475,18 @@ outranks the worktree's own `.omp/` settings; `src/acp/omp.ts`):
 - `--approval-mode always-ask` on a machine (`--yolo` only in a box), `--no-extensions
   --no-skills --no-rules --no-title`, and the profile's model for every model role
   (`--model`, `--smol`, `--slow`, `--plan`), so nothing falls back to another model.
+- On a machine only the tools the host can judge: `--tools read,bash,edit,write,grep,glob,find,todo`
+  (Agora's MCP tools come on top), and `--no-lsp` with LSP off in the settings: omp would
+  otherwise start language servers from the worktree's own `lsp.json` and `node_modules/.bin`
+  after a write. `task`, `lsp`, `github` (your gh login), `eval`, `debug`, checkpoints and the
+  rest are also denied by name.
 - Every model provider but OpenRouter disabled, and every config discovery source (the
   worktree's `.omp/`, `.claude/`, `.codex/`, `.cursor/`, ... settings, hooks, custom tools,
   extensions, plugins, rules and MCP servers) disabled; only the worktree's `AGENTS.md` is
   read. omp starts in its own home folder in the state directory, so the worktree's `.env` is never loaded.
 - No update check or install, OTLP export, auto-QA reports, Spotlight or Exa search;
   `bash.direnv: off`; Agora's tools as ordinary tools (`tools.xdev: false`).
-- `web_search`, `browser` and `computer` denied in every mode; on a machine also `task`
-  (omp runs subagents without prompts).
+- `web_search`, `browser` and `computer` denied in every mode.
 - `PI_CODING_AGENT_DIR` (settings, sessions, `agent.db`) and, on a machine, `HOME` /
   `USERPROFILE` in the profile's `stateDir`, so your own `~/.omp`, `~/.env` and any login
   saved there stay out. Git still finds your identity through `GIT_CONFIG_GLOBAL`
@@ -496,17 +500,24 @@ elicitation for omp only and answers both from the claim's rules, as for other A
 file tools only inside the worktree, URL reads never, `mcp__agora_<tool>` as
 `mcp__agora__<tool>`, a denied rule as an approval card. An elicitation doesn't say which
 tool call it is for, so the host answers it only when exactly one call of that tool is
-waiting, and reads the paths from that call (an edit's from omp's own `File:` lines); a
-prompt with a reason line (omp's restricted folders: its own settings, home and the run's
-overlay), parallel calls or anything it can't check is refused. A refusal only costs the
-agent a retry. It never picks "for this session" or "always" choices.
+waiting (and answers each call once), and reads the paths from that call (an edit's from
+omp's own `File:` lines), together with the absolute locations omp resolved itself. A path
+omp would rewrite or split before resolving it (a leading `@`, `:`, `~` or `!`, quotes, `;`,
+`,` or whitespace, a `..` segment, `file:` or another scheme, and on Windows `/c/...` and
+`/mnt/c/...`) is refused rather than followed. So is a prompt with a reason line (omp's
+restricted folders: its own settings, home and the run's overlay), parallel calls, or
+anything else it can't check. A refusal only costs the agent a retry. It never picks "for
+this session" or "always" choices.
 
 **Checked against** the real omp 18.17.0 Linux binary driven by this host's `prepare()` and
 ACP runner, with a loopback mock of OpenRouter's Responses API and a hostile worktree
 (`.env`, `.omp/config.yml` allowing every tool, extensions, custom tools, hooks, Claude
-hooks, `.mcp.json`): a write inside the worktree and an Agora tool approved, a write outside
-it, a write to omp's own settings, an unapproved shell command, reads outside the worktree
-and a URL read refused, `task` and `web_search` blocked, nothing from the worktree run.
+hooks, `.mcp.json`, `lsp.json`, `.omp/lsp.json`, a `node_modules/.bin` language server):
+writes inside the worktree and an Agora tool approved; a write outside it, an `@`-prefixed
+write, a write to omp's own settings, an unapproved shell command, reads outside the
+worktree, a `;` path list and a URL read refused; `task`, `lsp`, `github` and `web_search`
+not there; nothing from the worktree run. Without `--no-lsp` the same writes started all
+three of the worktree's language servers.
 
 ## Execution and recovery
 

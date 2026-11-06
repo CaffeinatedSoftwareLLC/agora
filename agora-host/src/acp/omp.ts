@@ -20,9 +20,10 @@ import type { ToolCallInfo } from './permissions.js';
  * - **On a machine** (host mode): `--approval-mode always-ask`. Shell commands, deletes and
  *   moves come as `session/request_permission`; writes, edits, reads, searches and Agora tools
  *   as `elicitation/create` prompts (`Allow tool: <name>`), which acp/session.ts answers from
- *   the claim's rules through ompApproval() below. omp's state directory is a restricted folder,
- *   so the agent can't rewrite its own settings. Subagents (`task`, which run without prompts)
- *   are denied.
+ *   the claim's rules through ompApproval() below. omp's own folders and the run's are
+ *   restricted folders, so the agent can't rewrite its own settings. Only the tools the host can
+ *   judge exist (`--tools`, OMP_HOST_TOOLS), and no language server starts (`--no-lsp`: omp
+ *   would run the worktree's own lsp.json and node_modules/.bin servers after a write).
  * - **In a box**: `--yolo`; the box is the sandbox (docs/agent-boxes.md §8.1).
  */
 
@@ -42,8 +43,16 @@ const DISCOVERY_SOURCES = ['agent-plugins', 'agents', 'claude', 'claude-md', 'cl
     'github', 'mcp-json', 'native', 'omp-plugins', 'opencode', 'skillshare', 'ssh-json', 'vscode', 'windsurf'] as const;
 /** Tools that reach around the box edge or the host's approvals, denied in every mode. */
 const DENIED_TOOLS = ['web_search', 'browser', 'computer'] as const;
-/** On a machine also subagents: omp runs them without prompts. */
-const HOST_DENIED_TOOLS = ['task'] as const;
+/**
+ * On a machine omp gets only the tools the host can judge (`--tools`, an allowlist; Agora's MCP
+ * tools come on top): its shell, file and search tools and its to-do list. Everything else is
+ * also denied by name, in case a tool slips past the list: subagents (`task`, which run without
+ * prompts), LSP (language servers from the repository's own config and node_modules), `github`
+ * (the user's gh login), `eval`, `debug`, checkpoints and the rest.
+ */
+export const OMP_HOST_TOOLS = ['read', 'bash', 'edit', 'write', 'grep', 'glob', 'find', 'todo'] as const;
+const HOST_DENIED_TOOLS = ['task', 'lsp', 'github', 'debug', 'eval', 'checkpoint', 'rewind', 'ssh', 'ida', 'learn', 'manage_skill', 'memory_edit',
+    'security_scan', 'ask', 'vibe_spawn', 'vibe_send', 'vibe_kill', 'vibe_list', 'vibe_wait', 'image_gen', 'tts', 'irc'] as const;
 /** Read-tier tools omp would run without asking; on a machine they ask, so paths are checked. */
 const HOST_PROMPTED_TOOLS = ['read', 'grep', 'glob', 'find', 'ast_grep'] as const;
 
@@ -71,6 +80,9 @@ export function ompSettings(o: { boxed: boolean; restricted: string[] }): Record
         mcp: { enableProjectConfig: false },
         // A repository's .envrc stays out of the agent's shell
         bash: { direnv: 'off' },
+        // On a machine no language servers: their config (lsp.json in the worktree) and binaries
+        // (node_modules/.bin, .venv) can be the repository's own, and omp starts them after writes
+        ...(o.boxed ? {} : { lsp: { enabled: false, diagnosticsOnWrite: false, diagnosticsOnEdit: false, formatOnWrite: false } }),
         tools: {
             approvalMode: o.boxed ? 'yolo' : 'always-ask',
             // MCP tools (Agora's) as ordinary tools, not behind xd:// device paths
@@ -86,8 +98,11 @@ export function ompModel(model: string): string {
     return model.toLowerCase().startsWith('openrouter/') ? model : `openrouter/${model}`;
 }
 
-/** On a machine every write, command and Agora tool asks; in a box the registry's `--yolo`. */
-export const OMP_HOST_APPROVAL = ['--approval-mode', 'always-ask'] as const;
+/**
+ * On a machine every write, command and Agora tool asks, only the host's tools exist and no
+ * language server starts; in a box the registry's `--yolo`.
+ */
+export const OMP_HOST_APPROVAL = ['--approval-mode', 'always-ask', '--no-lsp', '--tools', OMP_HOST_TOOLS.join(',')] as const;
 
 /**
  * omp's arguments after `acp`: the approval mode, discovery off, the settings overlay, the
@@ -124,32 +139,43 @@ export function ompRuleName(name: unknown): string | undefined {
 }
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
-/** A URL, an omp internal URL (`xd://`, `artifact://`, ...), `~` or a Windows drive-relative path: never a worktree file. */
-const NOT_A_FILE = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|~|[A-Za-z]:(?![\\/]))/;
+/** A URL or omp internal URL (`xd://`, `artifact://`, `file:`...), or a Windows drive-relative path: never a worktree file. */
+const NOT_A_FILE = /^(?:[A-Za-z][A-Za-z0-9+.-]+:|[A-Za-z]:(?![\\/]))/;
+/**
+ * What omp rewrites before it resolves a path (its resolveToCwd / expandPath): a leading `@`,
+ * `:`, `~` or `!`, quotes; and path lists it splits on `;`, `,` and whitespace, running each
+ * part. Any of them, or a `..` segment anywhere, and the host doesn't try to follow it.
+ */
+const REWRITTEN = /^[@:~!]|[\s;,"'`]|(?:^|[\\/])\.\.(?:[\\/]|$)/;
+/** On Windows omp maps `/c/...` and `/mnt/c/...` to `C:\...`. */
+const DRIVE_ALIAS = /^[\\/](?:mnt[\\/])?[A-Za-z](?:[\\/]|$)/;
 /** `[path#ABCD]`, omp's hashline header around a write or edit target. */
 const HASHLINE = /^\[(.+?)(?:#[0-9A-Fa-f]{4})?\]$/;
 
 /**
- * A path as omp resolves it: relative to the worktree or absolute, after its hashline header
- * (`[path#ABCD]`) is taken off; null for anything else. Where omp would keep a bracketed name
- * as it is, it is relative, so inside the worktree either way. A read selector (`a.ts:10-20`)
- * only lengthens the last segment, so it never moves the path out of the worktree.
+ * A path the host can be sure omp resolves as it does: relative to the worktree or absolute,
+ * after its hashline header (`[path#ABCD]`) is taken off, and with nothing omp would rewrite or
+ * split (REWRITTEN); null for anything else, which is refused. Where omp would keep a bracketed
+ * name as it is, it is relative, so inside the worktree either way. A read selector
+ * (`a.ts:10-20`) only lengthens the last segment. The call's own absolute locations, which omp
+ * resolved itself, are checked as well (ompApproval).
  */
-export function plainPath(value: unknown): string | null {
+export function plainPath(value: unknown, platform = process.platform): string | null {
     if (typeof value !== 'string' || !value || value.length > 4096 || CONTROL.test(value)) return null;
-    let p = value.trim();
+    let p = value;
     const header = HASHLINE.exec(p);
     if (header) p = header[1];
     // `…` is omp's mark for a path it shortened in a prompt
-    if (!p || NOT_A_FILE.test(p) || p.includes('…')) return null;
+    if (!p || NOT_A_FILE.test(p) || REWRITTEN.test(p) || p.includes('…')) return null;
+    if (platform === 'win32' && DRIVE_ALIAS.test(p)) return null;
     return p;
 }
 
 export type OmpVerdict =
-    /** Judge this call (its locations are the paths omp will touch) against the rules. */
-    | { call: ToolCallInfo }
+    /** Judge this call (its locations are the paths omp will touch) against the rules. `id`: the waiting call it answers. */
+    | { call: ToolCallInfo; id?: string }
     /** Refuse without a card: a prompt the host can't map to one call and its paths. */
-    | { deny: string };
+    | { deny: string; id?: string };
 
 /**
  * What an omp approval prompt (`elicitation/create` with `Allow tool: <name>` and an Approve /
@@ -158,7 +184,13 @@ export type OmpVerdict =
  * tool; anything else (parallel calls, a reason line such as a restricted folder, a path the
  * host can't read the way omp will) is refused. A refusal only costs the agent a retry.
  */
-export function ompApproval(message: string, pending: OmpCall[]): OmpVerdict {
+export function ompApproval(message: string, pending: Array<OmpCall & { id?: string }>): OmpVerdict {
+    const verdict = judgeApproval(message, pending);
+    // The call it was matched to is answered: acp/session.ts never matches it again
+    return pending.length === 1 ? { ...verdict, id: pending[0].id } : verdict;
+}
+
+function judgeApproval(message: string, pending: OmpCall[]): OmpVerdict {
     const lines = message.split('\n');
     const head = /^Allow tool: ([A-Za-z0-9_.-]{1,128})$/.exec(lines[0] ?? '');
     if (!head) return { deny: 'Denied a prompt the host does not answer' };
@@ -175,7 +207,10 @@ export function ompApproval(message: string, pending: OmpCall[]): OmpVerdict {
     // Agora's tools: omp names them mcp__<server>_<tool>, the host only passes the agora server
     const agora = /^mcp__agora_([a-z][a-z_]{0,63})$/.exec(tool);
     if (agora) return { call: { kind: 'other', name: `mcp__agora__${agora[1]}`, rawInput: input } };
-    const one = (p: string | null): OmpVerdict => (p ? { call: { kind: tool === 'read' ? 'read' : tool === 'write' ? 'edit' : 'search', locations: [p] } } : { deny: `Denied ${tool}: a path the host can't check` });
+    // omp's own absolute locations for the call (it resolved them) must be inside too
+    const own = (call.locations ?? []).filter((l): l is string => typeof l === 'string');
+    if (own.some(l => !isAbsolute(l) || CONTROL.test(l))) return { deny: `Denied ${tool}: a path the host can't check` };
+    const one = (p: string | null): OmpVerdict => (p ? { call: { kind: tool === 'read' ? 'read' : tool === 'write' ? 'edit' : 'search', locations: [p, ...own] } } : { deny: `Denied ${tool}: a path the host can't check` });
     switch (tool) {
         case 'write': return call.kind === 'edit' ? one(plainPath(input.path)) : { deny: 'Denied write' };
         case 'read': return one(plainPath(input.path));
@@ -184,20 +219,20 @@ export function ompApproval(message: string, pending: OmpCall[]): OmpVerdict {
             // each. Every other line, a truncated path or an unknown one refuses it.
             const files = lines.slice(1).map(l => /^File: (.+)$/.exec(l)?.[1] ?? null);
             if (!files.length || files.some(f => f === null || f === '(unknown)')) return { deny: 'Denied edit: a path the host can\'t check' };
-            const paths = files.map(plainPath);
-            return paths.every(Boolean) ? { call: { kind: 'edit', locations: paths as string[] } } : { deny: 'Denied edit: a path the host can\'t check' };
+            const paths = files.map(f => plainPath(f));
+            return paths.every(Boolean) ? { call: { kind: 'edit', locations: [...paths as string[], ...own] } } : { deny: 'Denied edit: a path the host can\'t check' };
         }
         case 'grep': case 'glob': case 'find': case 'ast_grep': {
-            // A search runs in the worktree unless it names a root: `path` (`a;b` for several),
-            // or a glob pattern that starts at one
+            // A search runs in the worktree unless it names a root (`path`, `paths`; a list in one
+            // string is refused by plainPath), or a glob pattern that starts at one: refused
             const roots: unknown[] = [];
-            if (input.path !== undefined) roots.push(...(typeof input.path === 'string' ? input.path.split(';') : [input.path]));
+            if (input.path !== undefined) roots.push(input.path);
             if (Array.isArray(input.paths)) roots.push(...input.paths);
             const pattern = typeof input.pattern === 'string' ? input.pattern : '';
-            if ((tool === 'glob' || tool === 'find') && (isAbsolute(pattern) || /^(?:~|\.\.|[A-Za-z]:)/.test(pattern) || pattern.includes('/../'))) roots.push(pattern.replace(/[*?[{].*$/, '') || pattern);
-            const paths = roots.map(plainPath);
+            if ((tool === 'glob' || tool === 'find') && (isAbsolute(pattern) || REWRITTEN.test(pattern) || NOT_A_FILE.test(pattern))) return { deny: `Denied ${tool}: a pattern the host can't check` };
+            const paths = roots.map(r => plainPath(r));
             if (paths.some(p => p === null)) return { deny: `Denied ${tool}: a path the host can't check` };
-            return { call: { kind: 'search', name: 'Grep', locations: paths.length ? paths as string[] : ['.'] } };
+            return { call: { kind: 'search', name: 'Grep', locations: [...(paths.length ? paths as string[] : ['.']), ...own] } };
         }
         default: return { deny: `Denied ${tool}: not available to omp on a machine` };
     }

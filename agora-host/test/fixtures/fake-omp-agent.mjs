@@ -5,8 +5,8 @@
 //
 // ACP_LOG: every message it receives, one JSON line each, plus {cwd} and {argv} at start.
 // OMP_STEPS: JSON array; each step is { calls: [{title, kind, rawInput}], elicit?: {message, choices},
-// permission?: true } -- the calls are announced pending, then the elicitation (or a permission
-// request for the first call) is sent, and the answer logged.
+// permission?: true, keepPending?: true } -- the calls are announced pending, then the elicitation
+// (or a permission request for the first call) is sent, and the answer logged.
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
@@ -39,10 +39,11 @@ async function prompt(id, { sessionId }) {
         } else {
             const answer = await ask('elicitation/create', { mode: 'form', sessionId, message: step.elicit.message,
                 requestedSchema: { type: 'object', properties: { value: { type: 'string', enum: step.elicit.choices ?? ['Approve', 'Deny'] } }, required: ['value'] } });
-            log({ elicitation: ids[0], answer });
+            log({ elicitation: ids[0] ?? 'none', answer });
             allowed = answer?.action === 'accept' && typeof answer.content?.value === 'string' && answer.content.value.startsWith('Approve');
         }
-        for (const toolCallId of ids) update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed' });
+        // keepPending: omp hasn't reported the call's outcome yet when it asks again
+        if (!step.keepPending) for (const toolCallId of ids) update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed' });
     }
     update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '{"summary":"Done"}' } });
     reply(id, { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });

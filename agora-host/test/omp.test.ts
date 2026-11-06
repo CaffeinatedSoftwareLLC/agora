@@ -119,6 +119,9 @@ describe('omp on a machine', () => {
         const launch = await prepare(c, d); cleanups.push(launch.cleanup);
         const state = c.profiles.builder.stateDir;
         expect(launch.args.slice(0, 3)).toEqual(['acp', '--approval-mode', 'always-ask']);
+        // Only the tools the host can judge (Agora's MCP tools come on top), and no language server
+        expect(launch.args[launch.args.indexOf('--tools') + 1]).toBe('read,bash,edit,write,grep,glob,find,todo');
+        expect(launch.args).toContain('--no-lsp');
         for (const off of ['--yolo', '--auto-approve']) expect(launch.args).not.toContain(off);
         expect(launch.args).toEqual(expect.arrayContaining(['--no-extensions', '--no-skills', '--no-rules', '--no-title']));
         const model = 'openrouter/qwen/qwen3-coder';
@@ -141,7 +144,9 @@ describe('omp on a machine', () => {
         expect(s).toMatchObject({ enabledProviders: [], update: { auto: false }, startup: { checkUpdate: false }, telemetry: { otlpExportEnabled: false },
             dev: { autoqa: false }, spotlight: { experiment: { enabled: false } }, exa: { enabled: false }, mcp: { enableProjectConfig: false }, bash: { direnv: 'off' },
             tools: { approvalMode: 'always-ask', xdev: false,
-                approval: { task: 'deny', web_search: 'deny', browser: 'deny', computer: 'deny', read: 'prompt', grep: 'prompt', glob: 'prompt', find: 'prompt', ast_grep: 'prompt' } } });
+                approval: { task: 'deny', lsp: 'deny', github: 'deny', debug: 'deny', eval: 'deny', checkpoint: 'deny', web_search: 'deny', browser: 'deny', computer: 'deny',
+                    read: 'prompt', grep: 'prompt', glob: 'prompt', find: 'prompt', ast_grep: 'prompt' } },
+            lsp: { enabled: false, diagnosticsOnWrite: false, diagnosticsOnEdit: false, formatOnWrite: false } });
         // The overlay is the host's, written for this run; omp's own folders and the run's are
         // restricted (every action there needs a person), not the worktrees beside them
         const overlay = launch.args[launch.args.indexOf('--config') + 1];
@@ -180,12 +185,20 @@ describe('omp on a machine', () => {
         const first = JSON.parse((await readFile(log, 'utf8')).split('\n')[0]);
         // Started in its own home folder (so no worktree .env), with the switches every run gets
         expect(first.cwd).toBe(resolve(profile.stateDir, 'home'));
-        expect(first.argv).toEqual(['--approval-mode', 'always-ask', '--no-extensions', '--no-skills', '--no-rules']);
+        // ...and the same settings overlay
+        const configAt = first.argv.indexOf('--config');
+        expect(first.argv.slice(0, configAt)).toEqual(['--approval-mode', 'always-ask', '--no-lsp', '--tools', 'read,bash,edit,write,grep,glob,find,todo',
+            '--no-extensions', '--no-skills', '--no-rules']);
+        expect(JSON.parse(await readFile(first.argv[configAt + 1], 'utf8')).disabledProviders).toContain('anthropic');
+        // The provider, discovery and tool lists are 18.17.0's: nothing else without allowUntestedVersion
+        await agent('18.17.1');
+        await expect(verifyProfile(profile)).rejects.toThrow('unsupported_cli_version');
         await agent('18.18.0');
         await expect(verifyProfile(profile)).rejects.toThrow('unsupported_cli_version');
         // The box image's pin passes the gate
         expect(testedCliVersion('omp', BOX_ADAPTERS.omp.version)).toBe(true);
         expect(testedCliVersion('omp', '18.16.0')).toBe(false);
+        expect(testedCliVersion('omp', '18.17.1')).toBe(false);
         expect(await verifyProfile({ ...profile, allowUntestedVersion: true })).toBe('acp/1 18.18.0');
     });
 });
@@ -246,6 +259,21 @@ describe('omp approval prompts on a machine', () => {
         expect(result.deniedTools).toEqual(['mcp__agora__thread_close', 'Bash(git:*)']);
     });
 
+    it('answers a call once, and refuses a write whose resolved location is outside', async () => {
+        const { answers } = await run([
+            { calls: [{ name: 'write', title: 'write: a.txt', kind: 'edit', rawInput: { path: 'a.txt', content: 'x' } }], elicit: { message: 'Allow tool: write\nPath: a.txt' }, keepPending: true },
+            // A second prompt while that call is still pending: never matched to it again
+            { calls: [], elicit: { message: 'Allow tool: write\nPath: a.txt' } },
+            // omp resolved the path itself to somewhere else (its `@` rewriting, say)
+            { calls: [{ name: 'write', title: 'write: a.txt', kind: 'edit', rawInput: { path: 'a.txt', content: 'x' }, locations: [{ path: '/elsewhere/.bashrc' }] }], elicit: { message: 'Allow tool: write\nPath: a.txt' } },
+            { calls: [{ name: 'write', title: 'write: @/x', kind: 'edit', rawInput: { path: '@/etc/x', content: 'x' } }], elicit: { message: 'Allow tool: write\nPath: @/etc/x' } },
+            { calls: [{ name: 'read', title: 'read: a.txt;/etc/passwd', kind: 'read', rawInput: { path: 'a.txt;/etc/passwd' } }], elicit: { message: 'Allow tool: read' } },
+            { calls: [{ name: 'grep', title: 'grep: x', kind: 'search', rawInput: { pattern: 'x', path: 'src /etc' } }], elicit: { message: 'Allow tool: grep' } },
+            { calls: [{ name: 'glob', title: 'glob: @/etc/*', kind: 'search', rawInput: { pattern: '@/etc/*' } }], elicit: { message: 'Allow tool: glob' } },
+        ], ['Edit', 'Read', 'Grep']);
+        expect(answers).toEqual(['Approve', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny', 'Deny']);
+    });
+
     it('asks for Edit when it has no rule, and never picks a remembered choice', async () => {
         const { result, answers } = await run([write('a.txt')], []);
         expect(answers).toEqual(['Deny']);
@@ -286,8 +314,15 @@ describe('omp approval helpers', () => {
         expect(plainPath('[src/a.ts#1A2B]')).toBe('src/a.ts');
         expect(plainPath('[/etc/passwd#1a2b]')).toBe('/etc/passwd');
         expect(plainPath('app/[id]/page.tsx')).toBe('app/[id]/page.tsx');
-        for (const bad of ['https://x.example', 'xd://lsp/x', 'artifact://1', '~/.ssh/id_rsa', 'C:evil', 'a\nb', '', 42, null, 'x'.repeat(5000)])
+        for (const bad of ['https://x.example', 'xd://lsp/x', 'artifact://1', 'file:///etc/passwd', 'file:a', '~/.ssh/id_rsa', 'C:evil', 'a\nb', '', 42, null, 'x'.repeat(5000),
+            // What omp rewrites or splits before it resolves a path (resolveToCwd / expandPath)
+            '@/home/u/.bashrc', '@~/.bashrc', '@C:\\Users\\u\\x', ':/etc/passwd', ':~/x', ':./a', ':../a', '"/etc/passwd"', "'a.txt'", '!a',
+            '/home/u/.ssh/id_rsa;../wt/a.txt', 'a.txt,/etc/passwd', 'a.txt /etc/passwd', 'a\t/etc/passwd', '../a', 'src/../../a', 'src\\..\\a', '..', '[@/etc/passwd#1A2B]', '[../a]'])
             expect(plainPath(bad), String(bad)).toBeNull();
+        // On Windows omp maps /c/... and /mnt/c/... to C:\...
+        for (const alias of ['/c/Users/u/.bashrc', '/mnt/c/Users/u', '\\d\\x']) expect(plainPath(alias, 'win32'), alias).toBeNull();
+        expect(plainPath('/c/x', 'linux')).toBe('/c/x');
+        expect(plainPath('src/a..b.ts')).toBe('src/a..b.ts');
     });
     it('maps Agora tool prompts to their rules and nothing else', () => {
         const pending = (title: string) => [{ title, kind: 'other', status: 'pending' }];
@@ -296,6 +331,12 @@ describe('omp approval helpers', () => {
         expect(ompApproval('Allow tool: mcp__agora_chat_send', pending('mcp__agora_thread_close'))).toHaveProperty('deny');
         expect(ompApproval('Allow tool: mcp__agora_chat_send', [])).toHaveProperty('deny');
         expect(ompApproval('Please allow mcp__agora_chat_send', pending('mcp__agora_chat_send'))).toHaveProperty('deny');
+    });
+    it('checks omp\'s own resolved locations as well, and names the call it matched', () => {
+        const call = (locations: string[]) => [{ id: 'c1', agentName: 'write', title: 'write: a.txt', kind: 'edit', status: 'pending', rawInput: { path: 'a.txt' }, locations }];
+        expect(ompApproval('Allow tool: write\nPath: a.txt', call(['/wt/a.txt']))).toEqual({ call: { kind: 'edit', locations: ['a.txt', '/wt/a.txt'] }, id: 'c1' });
+        expect(ompApproval('Allow tool: write\nPath: a.txt', call(['relative.txt']))).toMatchObject({ deny: expect.any(String), id: 'c1' });
+        expect(ompApproval('Allow tool: write', [])).not.toHaveProperty('id');
     });
     it('a box gets --yolo semantics in its settings, and no restricted folder', () => {
         const s = ompSettings({ boxed: true, restricted: ['/home/agent/.agora/state/p/agent'] }) as any;

@@ -165,9 +165,9 @@ function ompEnv(profile: LocalProfile, source: NodeJS.ProcessEnv): NodeJS.Proces
     return env;
 }
 
-/** The switches the start-up probe runs omp with, as every run gets them (acp/omp.ts). */
-export function ompProbeArgs(profile: LocalProfile, boxed = inBox()): string[] {
-    return [...profile.acpArgs, ...(boxed ? ['--yolo'] : OMP_HOST_APPROVAL), '--no-extensions', '--no-skills', '--no-rules'];
+/** The switches and settings overlay the start-up probe runs omp with, as every run gets them (acp/omp.ts). */
+export function ompProbeArgs(profile: LocalProfile, settingsFile: string, boxed = inBox()): string[] {
+    return [...profile.acpArgs, ...(boxed ? ['--yolo'] : OMP_HOST_APPROVAL), '--no-extensions', '--no-skills', '--no-rules', '--config', settingsFile];
 }
 
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
@@ -176,7 +176,10 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
         // started outside the worktree as every run is (acp/omp.ts)
         const dirs = ompDirs(profile.stateDir);
         await mkdir(dirs.home, { recursive: true, mode: 0o700 }); await mkdir(dirs.agent, { recursive: true, mode: 0o700 });
-        const probe = await probeAcp({ executable: profile.executable, args: ompProbeArgs(profile), cwd: profile.workdir, spawnCwd: dirs.home, env: childEnv(profile) });
+        const settingsFile = join(dirs.home, 'omp-probe.yml');
+        const boxed = inBox();
+        await writeFile(settingsFile, JSON.stringify(ompSettings({ boxed, restricted: [dirs.agent, dirs.home] })), { mode: 0o600 });
+        const probe = await probeAcp({ executable: profile.executable, args: ompProbeArgs(profile, settingsFile, boxed), cwd: profile.workdir, spawnCwd: dirs.home, env: childEnv(profile) });
         const version = probe.split(' ')[1] ?? '';
         if (!testedCliVersion('omp', version) && !profile.allowUntestedVersion) throw new Error('unsupported_cli_version');
         return probe;
@@ -194,15 +197,16 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
 }
 
 /**
- * The CLI versions this host was tested with: Codex 0.163.x, Claude Code 2.1.x, oh-my-pi 18.17.x
- * (it releases every few days; checked from its ACP agentInfo, verifyProfile). The box image's
+ * The CLI versions this host was tested with: Codex 0.163.x, Claude Code 2.1.x, oh-my-pi 18.17.0
+ * exactly (it releases every few days, and the provider, discovery and tool lists in acp/omp.ts
+ * are that version's; checked from its ACP agentInfo, verifyProfile). The box image's
  * pins (box-adapters.ts) must pass it; agora-host/test/box.test.ts checks that they do.
  */
 export function testedCliVersion(adapter: string, version: string): boolean {
     const v = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
     if (!v) return false;
     return adapter === 'codex' ? v[1] === '0' && v[2] === '163' : adapter === 'claude' ? v[1] === '2' && v[2] === '1'
-        : adapter === 'omp' ? v[1] === '18' && v[2] === '17' : false;
+        : adapter === 'omp' ? version === '18.17.0' : false;
 }
 
 /**

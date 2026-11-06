@@ -18,16 +18,23 @@ export interface BoxTelemetryHost {
     what: string;
 }
 
+/**
+ * Where box/Dockerfile gets a CLI. In a URL, `{version}` is the pinned version (the Dockerfile
+ * writes its ARG there) and `{arch}` the release's name for the image's CPU.
+ * - `npm`: the package, installed at the pinned version.
+ * - `binary`: one release file per CPU, checked against its sha256 (amd64 and arm64).
+ * - `tarball`: one release archive (x86_64 only), checked against its sha256 and unpacked.
+ */
+export type BoxImageSource =
+    | { npm: string }
+    | { binary: { url: string; sha256: { amd64: string; arm64: string } } }
+    | { tarball: { url: string; sha256: string } };
+
 export interface BoxAdapterSpec {
     /** Shown on cards and in Settings → Agents. */
     label: string;
-    /**
-     * The pinned CLI in the box image: its version and the box/Dockerfile ARG that holds it, and
-     * where it comes from: an npm package, or a release binary (`{version}` and `{arch}` in its
-     * URL) checked against its sha256 for each CPU the image is built for.
-     */
-    image: { version: string; versionArg: string }
-        & ({ npm: string } | { binary: { url: string; sha256: { amd64: string; arm64: string } } });
+    /** The pinned CLI in the box image: its version, the box/Dockerfile ARG that holds it, and its source. */
+    image: { version: string; versionArg: string } & BoxImageSource;
     /** How agora-host drives it: the CLI's own headless mode, or the Agent Client Protocol. */
     protocol: 'cli' | 'acp';
     /**
