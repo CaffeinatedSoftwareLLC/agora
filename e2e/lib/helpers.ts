@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { Browser, Page } from '@playwright/test';
+import type { Browser, Locator, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import { apis } from './fixtures';
 import { e2eEnv } from './env';
@@ -18,6 +18,25 @@ export async function freshChannel(seed: Seed, prefix: string): Promise<{ id: st
 
 /** Message rows (virtualized list items) containing the text. */
 export const rowWith = (page: Page, text: string) => page.locator('[data-index]').filter({ hasText: text });
+
+/** The console strip above the channel: agent chips, then the active-thread chips. */
+export const activeThreadsBar = (page: Page) => page.getByRole('toolbar', { name: 'Agents and active threads' });
+
+/** The active-thread chip whose label starts "Open thread" and contains the text. */
+export const threadChip = (page: Page, text: string) =>
+    activeThreadsBar(page).getByRole('button', { name: new RegExp('^Open thread.*' + text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) });
+
+/**
+ * Make the thread chips visible before asserting on one. The strip can keep them collapsed
+ * behind a "Threads" toggle (closed by default in a fresh browser, remembered in localStorage),
+ * so open it when it shows collapsed; with no toggle, or one already open, this only waits.
+ * Never throws: the caller's assertion on the chip reports a failure.
+ */
+export async function revealThreadChips(page: Page, chip: Locator, timeout = 10_000): Promise<void> {
+    const collapsed = activeThreadsBar(page).locator('[data-testid="threads-toggle"][aria-expanded="false"]');
+    await chip.or(collapsed).first().waitFor({ state: 'visible', timeout }).catch(() => {});
+    if (await collapsed.isVisible().catch(() => false)) await collapsed.click().catch(() => {});
+}
 
 export const sha256 = (b: Buffer | Uint8Array) => crypto.createHash('sha256').update(b).digest('hex');
 

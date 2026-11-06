@@ -1,7 +1,7 @@
 import { test, expect, apis, openChannel, storageStateFor } from '../lib/fixtures';
 import { checkThreadReplyActions } from '../lib/thread-reply-actions';
 import { snap } from '../lib/snap';
-import { freshChannel, rowWith } from '../lib/helpers';
+import { freshChannel, revealThreadChips, rowWith, threadChip } from '../lib/helpers';
 import { checkThreadPagination } from '../lib/thread-pagination';
 
 test('[UI-01.thread-pagination] newest page, older prepend anchor and live replies beyond 50', async ({ page, seed }, ti) => {
@@ -65,8 +65,8 @@ test.describe('threads: replies, active-threads bar, who may close', () => {
             await expect(panel.getByRole('paragraph').filter({ hasText: r })).toHaveCount(1);
             await expect(panel.getByPlaceholder('Reply...')).toHaveValue('');
         }
-        const chip = page.getByRole('toolbar', { name: 'Agents and active threads' })
-            .getByRole('button', { name: new RegExp('^Open thread.*' + root.content.slice(0, 20)) });
+        const chip = threadChip(page, root.content.slice(0, 20));
+        await revealThreadChips(page, chip);
         await expect(chip, 'thread shows in the active-threads bar').toBeVisible();
         await snap(page, ti, 'UI-01.thread-member-close', '01-owner-thread', 'A thread panel open beside the channel with two replies', { ready: panel.getByRole('paragraph').filter({ hasText: replies[1] }) });
 
@@ -81,8 +81,8 @@ test.describe('threads: replies, active-threads bar, who may close', () => {
         const ctx = await browser.newContext({ storageState: storageStateFor('member') });
         const mp = await ctx.newPage();
         await openChannel(mp, ch.id, ch.name);
-        const mChip = mp.getByRole('toolbar', { name: 'Agents and active threads' })
-            .getByRole('button', { name: new RegExp('^Open thread.*' + root.content.slice(0, 20)) });
+        const mChip = threadChip(mp, root.content.slice(0, 20));
+        await revealThreadChips(mp, mChip);
         await mChip.click();
         const mPanel = mp.locator('aside[aria-label="thread"]');
         await expect(mPanel.getByRole('paragraph').filter({ hasText: replies[1] })).toBeVisible();

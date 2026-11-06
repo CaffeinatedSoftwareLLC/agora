@@ -1,5 +1,33 @@
-import { test, expect, openChannel } from '../lib/fixtures';
+import { test, expect, openChannel, apis } from '../lib/fixtures';
 import { snap } from '../lib/snap';
+import { Api } from '../lib/api';
+import { e2eEnv } from '../lib/env';
+import type { Seed } from '../lib/seed-types';
+
+/**
+ * Put the seeded ChatGPT plan profile back to a state where Continue is enabled. An earlier
+ * repeat or run left its request pending, and no host process runs to pick it up (#150).
+ * Acts as the seeded host: pick up the request, then report the profile signed out.
+ */
+async function resetPlanRequest(seed: Seed) {
+    const { owner } = apis(seed);
+    const plans = (await owner.ok('GET', `/servers/${seed.serverId}/agent-plans`)) as any[];
+    const plan = plans.find(p => String(p.profileId).trim() === seed.agents.codexPlan.profileId);
+    if (!plan || !['requested', 'in_progress', 'disconnect_requested'].includes(plan.status)) return;
+    const host = new Api(e2eEnv().apiURL).with(`AgentHost ${seed.secrets.hostToken}`);
+    // A request still waiting wins over the host's report, so take it first (oldest first, one
+    // per call), then report every profile taken back as signed out, so none stays in progress
+    const taken = new Set([seed.agents.codexPlan.name]);
+    for (let i = 0; i < 10; i++) {
+        const next = await host.req('GET', '/agent-hosts/@me/plan-requests/next');
+        if (next.status === 204) break;
+        if (next.status !== 200) throw new Error(`plan-requests/next -> ${next.status}`);
+        taken.add(next.data.profile);
+    }
+    for (const name of taken) {
+        await host.ok('POST', `/agent-hosts/@me/plans/${name}`, { status: 'disconnected' }, [200]);
+    }
+}
 
 test.describe('admin and settings pages @smoke', () => {
     test('[ID-06.provider-terms] provider terms page lists the seeded documents; Check now queues', async ({ page }, ti) => {
@@ -30,6 +58,7 @@ test.describe('admin and settings pages @smoke', () => {
     test('[AG-10.agents-page] agents settings: auth badges and ChatGPT plan states per profile auth mode', async ({ page, seed }, ti) => {
         const { codexKey, codexSub, codexPlan, claude } = seed.agents;
         const host = `e2e-host-${seed.runTag}`;
+        await resetPlanRequest(seed);
         await page.goto('/settings/agents');
         await expect(page.getByRole('heading', { name: 'Agents', level: 2 })).toBeVisible({ timeout: 15_000 });
         await expect(page.getByText(host).first()).toBeVisible();

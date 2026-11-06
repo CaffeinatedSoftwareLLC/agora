@@ -67,10 +67,13 @@ test.describe('mobile viewport @smoke', () => {
         await expect(page.locator('nav[aria-label="Channels"]')).toBeHidden();
     });
 
-    test('[UI-08.mobile-thread] phone: message action sheet opens a thread pane with one Back control', async ({ page, seed }, ti) => {
+    test('[UI-08.mobile-thread] phone: message action sheet opens a thread pane with one Back control', async ({ page, seed, tag }, ti) => {
         const name = `agents-${seed.runTag}`;
+        // Its own message: the seeded ones scroll out of view as runs and repeats add messages
+        const text = `Phone thread root ${tag}`;
+        await apis(seed).owner.ok('POST', `/channels/${seed.channels.agents}/messages`, { content: text }, [201]);
         await openChannel(page, seed.channels.agents, name);
-        const row = page.locator('[data-index]').filter({ hasText: 'Duis aute irure' }).first();
+        const row = page.locator('[data-index]').filter({ hasText: text }).first();
         await expect(row).toBeVisible();
         await row.getByRole('button', { name: 'Message actions' }).click();
         await page.getByRole('button', { name: /Reply in thread/ }).click();

@@ -1,6 +1,6 @@
 import { test, expect, apis, openChannel, storageStateFor } from '../lib/fixtures';
 import { snap } from '../lib/snap';
-import { freshChannel, rowWith } from '../lib/helpers';
+import { freshChannel, revealThreadChips, rowWith, threadChip } from '../lib/helpers';
 import type { WebSocketRoute } from '@playwright/test';
 
 test.describe('chat, mentions, threads @smoke', () => {
@@ -59,10 +59,10 @@ test.describe('chat, mentions, threads @smoke', () => {
         expect((res.mentions ?? []).map((x: string) => x.trim()), 'server resolved the upper-case mention to the bot').toContain(seed.agents.claude.botId);
     });
 
-    test('[UI-01.thread-wake] thread reply mentioning an agent with no session posts the wake notice in the thread', async ({ page, seed }, ti) => {
+    test('[UI-01.thread-wake] thread reply mentioning an agent with no session posts the wake notice in the thread', async ({ page, seed, tag }, ti) => {
         const { owner } = apis(seed);
         const ch = seed.channels.general;
-        const root = (await owner.ok('POST', `/channels/${ch}/messages`, { content: `Thread root ${seed.runTag} ${Date.now()}` }, [201])) as any;
+        const root = (await owner.ok('POST', `/channels/${ch}/messages`, { content: `Thread root ${tag} ${Date.now()}` }, [201])) as any;
         await openChannel(page, ch, 'general');
         const row = page.locator('[data-index]').filter({ hasText: root.content }).first();
         await row.hover();
@@ -77,9 +77,11 @@ test.describe('chat, mentions, threads @smoke', () => {
         await snap(page, ti, 'UI-01.thread-wake', '01-wake-notice', 'A thread panel beside the channel with a reply and a system notice saying the agent has no live session',
             { ready: notice });
         // Active-threads bar lists the new thread (live, then after reload)
-        const chip = page.getByRole('toolbar', { name: 'Agents and active threads' }).getByRole('button', { name: new RegExp('^Open thread.*' + root.content.slice(0, 20)) });
+        const chip = threadChip(page, root.content);
+        await revealThreadChips(page, chip, 5_000);
         await expect.soft(chip, 'new thread appears in the active-threads bar without a reload').toBeVisible({ timeout: 5_000 });
         await page.reload();
+        await revealThreadChips(page, chip);
         await expect(chip).toBeVisible();
         await chip.click();
         await expect(panel.getByRole('heading', { name: /Thread/ })).toBeVisible();

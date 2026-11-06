@@ -37,9 +37,9 @@ test.describe('files @smoke', () => {
         expect(body.subarray(1, 4).toString()).toBe('PNG');
         expect([body.readUInt32BE(16), body.readUInt32BE(20)]).toEqual([64, 48]);
 
-        // Full view overlay
+        // Full view overlay (scoped to it: earlier repeats left more previews in the channel)
         await img.click();
-        await expect(page.locator('img[alt="e2e-image.png"]')).toHaveCount(2);
+        await expect(page.getByRole('button', { name: 'Close image e2e-image.png' }).locator('img[alt="e2e-image.png"]')).toHaveCount(1);
         await page.keyboard.press('Escape');
     });
 
