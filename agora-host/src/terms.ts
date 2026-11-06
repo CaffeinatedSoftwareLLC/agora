@@ -70,6 +70,11 @@ export const DEVIN_SUBSCRIPTION_ONLY =
     + 'and log the profile in once with `agora-host devin login --profile <name> --config <file>`. Cognition\'s terms let only the account holder '
     + `use a Devin account, so only the owner can wake it. See ${TERMS_DOC}`;
 
+export const DEVIN_HOST_UNVERIFIED =
+    'A devin profile on this machine needs "allowUnverifiedApprovals": true. On a machine every Devin tool call must come to agora-host '
+    + 'for approval, and that it does for file edits (which Devin\'s Code mode lets through by itself) has not been seen with a logged-in Devin yet; '
+    + 'until it has, running Devin unboxed is the owner\'s explicit choice. A Devin agent in a box needs no opt-in. See the agora-host README, "Devin".';
+
 /**
  * The ACP `authenticate` method that reads each API key variable (acp/session.ts). An
  * api_key profile on ACP must use it, so the agent can't fall back to an account login.

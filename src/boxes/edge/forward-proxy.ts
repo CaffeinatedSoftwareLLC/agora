@@ -2,7 +2,7 @@ import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerRespon
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { DOMAIN_ENTRY, domainAllowed } from '../../lib/boxes/contract';
-import { domainRecentlyDenied, LOGIN_PROVIDER_DOMAINS } from '../../lib/boxes/edge-requests';
+import { boxLoginOpen, domainRecentlyDenied, LOGIN_ONLY_HOSTS, LOGIN_PROVIDER_DOMAINS, OPEN_LOGIN_STATUSES } from '../../lib/boxes/edge-requests';
 import { isTelemetryHost } from '../../lib/boxes/domains';
 import { frameBody, requestApproval, sendText, TOO_MANY_WAITING, type EdgeDeps } from './common';
 import type { EdgeBox, Identify } from './identity';
@@ -37,8 +37,7 @@ const CONNECT_TIMEOUT_MS = 10_000;
 export const LOGIN_HOLD_MS = 120_000;
 const LOGIN_HOLD_POLL_MS = 1000;
 const MAX_HOLDS_PER_BOX = 4;
-/** The login statuses during which the CLI's login command runs (src/routes/boxes.ts OPEN_LOGIN). */
-const OPEN_LOGIN = ['requested', 'claimed', 'awaiting_user', 'awaiting_code', 'code_sent'];
+const OPEN_LOGIN = OPEN_LOGIN_STATUSES;
 const TUNNEL_IDLE_MS = 10 * 60 * 1000;
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
@@ -115,7 +114,10 @@ async function decide(opts: ForwardProxyOptions, box: EdgeBox, rawHost: string, 
     }
     // The directory is a few seconds old; before refusing, read the allowlist itself, so a
     // retry right after the owner allows a domain goes through instead of making a new card
-    if (!domainAllowed(host, box.allowedDomains) && !domainAllowed(host, await currentAllowlist(opts, box))) {
+    // A host the box CLI needs only to sign in (Devin's app.devin.ai): no card while the owner's
+    // login for this box is open; any other time it is an unknown domain like the rest
+    const loginOnly = (LOGIN_ONLY_HOSTS[box.adapter ?? ''] ?? []).includes(host) && await boxLoginOpen(opts.deps.db, box.id);
+    if (!loginOnly && !domainAllowed(host, box.allowedDomains) && !domainAllowed(host, await currentAllowlist(opts, box))) {
         if (await domainRecentlyDenied(opts.deps.db, box.id, host)) {
             return { ok: false, status: 403, text: `domain ${host} was denied by the owner` };
         }

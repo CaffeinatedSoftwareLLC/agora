@@ -49,6 +49,12 @@ export interface BoxAdapterSpec {
      * request to these for the owner's card instead of refusing it (§4.2.3). Empty without a login.
      */
     loginDomains: readonly string[];
+    /**
+     * Hosts the CLI needs only to sign in (exact names, never on the allowlist): the edge lets the
+     * box reach them without a card while the owner's login for this box is open, and treats them
+     * as any unknown domain otherwise (§4.2.3).
+     */
+    loginOnly: readonly string[];
     /** Telemetry, metrics, error-report and share hosts the edge refuses without a card (§4.2.1). */
     telemetry: readonly BoxTelemetryHost[];
 }
@@ -65,6 +71,7 @@ export const BOX_ADAPTER_REGISTRY = {
         // login code exchanged at platform.claude.com/v1/oauth/token
         allowlist: ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'console.anthropic.com'],
         loginDomains: ['anthropic.com', 'claude.ai', 'claude.com'],
+        loginOnly: [],
         telemetry: [
             { domain: 'statsig.anthropic.com', what: 'feature flags and events (older versions)' },
             { domain: 'http-intake.logs.us5.datadoghq.com', what: 'operational metrics' },
@@ -84,6 +91,7 @@ export const BOX_ADAPTER_REGISTRY = {
         // start (seen live 2026-11-04: three regions, one card each)
         allowlist: ['api.openai.com', 'chatgpt.com', 'auth.openai.com', '*.oaiusercontent.com'],
         loginDomains: ['openai.com', 'chatgpt.com'],
+        loginOnly: [],
         telemetry: [
             { domain: 'ab.chatgpt.com', what: 'usage metrics (OpenTelemetry export; `analytics.enabled`)' },
             { domain: 'ingest.sentry.io', what: 'feedback and crash reports' },
@@ -104,6 +112,7 @@ export const BOX_ADAPTER_REGISTRY = {
         // (models.opencode.ai; OPENCODE_DISABLE_MODELS_FETCH would leave it no OpenRouter models)
         allowlist: ['openrouter.ai', 'models.opencode.ai'],
         loginDomains: [],
+        loginOnly: [],
         telemetry: [
             { domain: 'opncd.ai', what: 'session sharing (off: `share: "disabled"`, `OPENCODE_DISABLE_SHARE`)' },
         ],
@@ -130,12 +139,17 @@ export const BOX_ADAPTER_REGISTRY = {
         // account token from it, so it is named here and nowhere else.
         apiKeyEnv: 'WINDSURF_API_KEY',
         modelRequired: false,
-        // Checked against the pinned binary through a logging proxy, with no login (2026-11-06):
-        // Devin's API and web app (its sign-in), and the Windsurf/Codeium server its credentials
-        // name as the API server (contacted at every start and by the login). Model traffic after
-        // a login may need more: verify live.
-        allowlist: ['api.devin.ai', 'app.devin.ai', 'server.codeium.com'],
-        loginDomains: ['devin.ai'],
+        // Checked against the pinned binary through a logging proxy, with no login (2026-11-06): the
+        // Windsurf/Codeium server its credentials name as the API server, contacted at every start
+        // and by the login. It is Devin's provider seam: model calls and its own analytics go to the
+        // same host and can't be told apart at the edge. api.devin.ai was never contacted, so it is
+        // not listed; app.devin.ai is only the sign-in (loginOnly). Model traffic after a login may
+        // need more: verify live.
+        allowlist: ['server.codeium.com'],
+        // The paste login's link is on app.devin.ai, or on windsurf.com when the CLI can't resolve
+        // its deployment (seen offline)
+        loginDomains: ['devin.ai', 'windsurf.com'],
+        loginOnly: ['app.devin.ai'],
         telemetry: [
             { domain: 'unleash.codeium.com', what: 'feature flags, fetched at start (Devin keeps its defaults without them)' },
             { domain: 'ingest.us.sentry.io', what: 'error reports, sent at every session end (`o4507463137361920.ingest.us.sentry.io`)' },

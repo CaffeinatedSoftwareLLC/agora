@@ -47,8 +47,9 @@ async function hostBox(request: FastifyRequest, reply: FastifyReply): Promise<{ 
 export const LOGIN_HOSTS: Record<string, string[]> = {
     claude: ['claude.ai', 'claude.com', 'anthropic.com'],
     codex: ['openai.com', 'chatgpt.com'],
-    // `devin auth login --force-manual-token-flow` prints https://app.devin.ai/auth/cli/continue?...
-    devin: ['devin.ai'],
+    // `devin auth login --force-manual-token-flow` prints https://app.devin.ai/auth/cli/continue?...,
+    // or a windsurf.com link when it can't resolve its deployment
+    devin: ['devin.ai', 'windsurf.com'],
 };
 export function loginUrlAllowed(adapter: string, raw: string): boolean {
     let url: URL;

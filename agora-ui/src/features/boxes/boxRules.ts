@@ -185,7 +185,7 @@ export function safeUrl(url: string | null | undefined): string | null {
 const LOGIN_HOSTS: Record<string, string[]> = {
   claude: ['claude.ai', 'claude.com', 'anthropic.com'],
   codex: ['openai.com', 'chatgpt.com'],
-  devin: ['devin.ai'],
+  devin: ['devin.ai', 'windsurf.com'],
 };
 
 /** A sign-in link to show the owner: https, on the CLI's provider's own hosts; else nothing. */

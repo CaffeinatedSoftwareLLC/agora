@@ -48,6 +48,8 @@ export interface AcpPlan {
      * allowed, as the boxed CLIs run without prompts. Never set on a machine.
      */
     allowAll?: boolean;
+    /** Under allowAll, the requests still refused: tool names (or titles) and ACP tool kinds. */
+    allowAllExcept?: { names: string[]; kinds: string[] };
     /**
      * The session mode the turn runs in (Devin: "accept-edits" on a machine, "bypass" in a box),
      * set before the prompt, also on a resumed session, whose saved mode could be another one. An
@@ -244,7 +246,15 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
         if (stopping || p.data.sessionId !== sessionId) return { outcome: { outcome: 'cancelled' } };
         const call = track(p.data.toolCall) ?? {};
         // In a box the box is the sandbox: nothing is denied (adapters.ts prepare sets it only there)
-        if (plan.allowAll) return { outcome: outcome(p.data.options, true) };
+        // but the adapter's exceptions, tools that would reach the open web around the edge
+        if (plan.allowAll) {
+            const except = plan.allowAllExcept;
+            const names = [call.name, call.title].filter((n): n is string => typeof n === 'string').map(n => n.trim().toLowerCase());
+            const refused = !!except && ((!!call.kind && except.kinds.includes(call.kind)) || names.some(n => except.names.includes(n))
+                || ['WebSearch', 'WebFetch'].includes((ruleForCall(call) ?? '').replace(/\(.*$/, '')));
+            if (refused) step = 'Denied a web tool: a box reaches the web only through its edge';
+            return { outcome: outcome(p.data.options, !refused) };
+        }
         const place = await locationsInside(call, launch.cwd, { rules, env: launch.env, roots: launch.workspace ? [launch.workspace.workdir] : [] });
         const allow = place === 'ok' && allowedCall(call, rules);
         if (!allow) {

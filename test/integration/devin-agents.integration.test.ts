@@ -50,7 +50,8 @@ describe('Devin agents', () => {
         const res = await createBox({ name: 'devin-box', adapter: 'devin' });
         expect(res.status, JSON.stringify(res.body)).toBe(201);
         expect(res.body.box).toMatchObject({ adapter: 'devin', auth: 'subscription', loginState: 'none' });
-        expect(res.body.box.allowedDomains).toEqual(['api.devin.ai', 'app.devin.ai', 'server.codeium.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        // app.devin.ai is reachable only during a login (registry loginOnly), api.devin.ai not at all
+        expect(res.body.box.allowedDomains).toEqual(['server.codeium.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
         const row = (await ctx.db.query(
             `SELECT b.api_key_env, b.api_key_enc, p.auth_mode, p.api_key_env AS profile_env FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id WHERE b.id = $1`,
             [res.body.box.id])).rows[0];

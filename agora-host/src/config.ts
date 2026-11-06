@@ -34,6 +34,9 @@ const profile = z.preprocess(acpDefaults, z.object({
     approvedTools: z.array(tool).default([]),
     caps: z.object({ maxTokens: z.number().int().positive().optional(), maxBudgetUsd: z.number().positive().optional() }).strict().default({}),
     allowUntestedVersion: z.boolean().default(false),
+    // Devin on a machine only: run it although no logged-in turn has yet shown that its file edits
+    // reach agora-host's approvals (terms.ts DEVIN_HOST_UNVERIFIED). Never needed in a box.
+    allowUnverifiedApprovals: z.boolean().default(false),
     // How the CLI signs in (docs/provider-terms.md): its own account login, an API key
     // read from this host's environment variable `apiKeyEnv` and passed to the child, or
     // (codex only) a ChatGPT plan through Sign in with ChatGPT (docs/codex-chatgpt-plan.md).
@@ -84,6 +87,7 @@ const profile = z.preprocess(acpDefaults, z.object({
     if (p.adapter === 'opencode' && (p.protocol !== 'acp' || p.auth !== 'api_key')) ctx.addIssue({ code: 'custom', message: OPENCODE_ACP_ONLY });
     // Devin: its own ACP server on the owner's own login (docs/provider-terms.md, "Devin")
     if (p.adapter === 'devin' && (p.protocol !== 'acp' || p.auth !== 'subscription')) ctx.addIssue({ code: 'custom', message: DEVIN_SUBSCRIPTION_ONLY });
+    if (p.allowUnverifiedApprovals && p.adapter !== 'devin') ctx.addIssue({ code: 'custom', message: 'allowUnverifiedApprovals applies only to a devin profile' });
     // For opencode the cap is the OpenRouter key's own credit limit (README, "opencode and OpenRouter")
     if (p.protocol === 'acp' && p.caps.maxBudgetUsd !== undefined) ctx.addIssue({ code: 'custom', message: 'ACP has no verified USD cap' });
     if (p.caps.maxTokens !== undefined) ctx.addIssue({ code: 'custom', message: 'Neither verified CLI supports a hard per-run token cap; omit maxTokens explicitly' });

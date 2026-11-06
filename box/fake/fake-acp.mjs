@@ -106,17 +106,71 @@ function acp() {
         if (CLI === 'opencode' && !process.env.OPENROUTER_API_KEY) return fail(id, { code: -32000, message: 'No API key for provider openrouter (401)' });
         if (CLI === 'devin' && !(devinLogin && existsSync(devinLogin))) return fail(id, { code: -32000, message: 'Authentication required' });
         seen.modes.push(session.mode ?? null); record();
+        if (CLI === 'devin') return devinTurn(id, sessionId, session);
         const toolCallId = 'call-0';
-        update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: CLI === 'devin' ? 'git status' : 'bash', kind: 'execute', status: 'pending', rawInput: { command: 'git status' } });
-        // Devin asks nothing in bypass mode
-        const answer = CLI === 'devin' && session.mode === 'bypass' ? { outcome: { outcome: 'selected', optionId: 'once' } }
-            : await ask('session/request_permission', { sessionId, toolCall: { toolCallId },
-                options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }, { optionId: 'always', name: 'Always', kind: 'allow_always' },
-                    { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
-        if (!(CLI === 'devin' && session.mode === 'bypass')) { seen.answers.push(answer?.outcome?.optionId ?? answer?.outcome?.outcome ?? null); record(); }
+        update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: 'bash', kind: 'execute', status: 'pending', rawInput: { command: 'git status' } });
+        const answer = await ask('session/request_permission', { sessionId, toolCall: { toolCallId },
+            options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }, { optionId: 'always', name: 'Always', kind: 'allow_always' },
+                { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
+        seen.answers.push(answer?.outcome?.optionId ?? answer?.outcome?.outcome ?? null); record();
         update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: answer?.outcome?.optionId === 'once' ? 'completed' : 'failed' });
         await postReply(session.env);
         update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `{"summary":"fake ${CLI} turn"}` } });
+        reply(id, { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
+    }
+
+    /**
+     * Devin's own permission decision, as its reference (docs/reference/permissions.mdx, 3000.11.234)
+     * describes it, so tests see what the config agora-host writes really decides: deny rules, then
+     * ask rules, then allow rules, then the mode's default. In Code mode ("accept-edits") a file
+     * edit in the workspace runs without asking unless a rule says otherwise; everything else asks.
+     * Bypass asks nothing.
+     */
+    function devinDecides(call) {
+        const rules = config?.permissions ?? {};
+        const matches = rule => {
+            if (rule === call.tool) return true;
+            const m = /^(Write|Exec)\((.*)\)$/.exec(rule);
+            if (!m) return false;
+            if (m[1] === 'Exec') return call.tool === 'exec' && (call.command === m[2] || call.command.startsWith(`${m[2]} `));
+            if (call.tool !== 'edit' && call.tool !== 'write') return false;
+            if (/\.devin\//.test(m[2])) return /(^|\/)\.devin\//.test(call.path);
+            return m[2] === '/**' || (m[2] === '**' && call.inWorkspace);
+        };
+        if ((rules.deny ?? []).some(matches)) return 'denied';
+        if ((rules.ask ?? []).some(matches)) return 'ask';
+        if ((rules.allow ?? []).some(matches)) return 'auto';
+        if (call.mode === 'bypass') return 'auto';
+        return call.tool === 'edit' && call.inWorkspace && call.mode === 'accept-edits' ? 'auto' : 'ask';
+    }
+
+    /** One Devin turn: an edit in the workspace, a shell command, its web search, and a fetch no rule names. */
+    async function devinTurn(id, sessionId, session) {
+        const file = join(process.cwd(), 'notes.txt');
+        const calls = [
+            { tool: 'edit', kind: 'edit', title: 'Edit notes.txt', path: file.split('\\').join('/'), inWorkspace: true, locations: [{ path: file }], rawInput: { file_path: file } },
+            { tool: 'exec', kind: 'execute', title: 'git status', command: 'git status', rawInput: { command: 'git status' } },
+            { tool: 'web_search', kind: 'fetch', title: 'web_search', rawInput: { query: 'agora' } },
+            { tool: 'read_url', kind: 'fetch', title: 'read_url', rawInput: { url: 'https://example.com/' } },
+        ];
+        seen.calls = [];
+        for (const [n, c] of calls.entries()) {
+            const toolCallId = `call-${n}`;
+            const decision = devinDecides({ ...c, mode: session.mode });
+            update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: c.title, kind: c.kind, status: 'pending', rawInput: c.rawInput, ...(c.locations ? { locations: c.locations } : {}) });
+            let ran = decision === 'auto', outcome = decision;
+            if (decision === 'ask') {
+                const answer = await ask('session/request_permission', { sessionId, toolCall: { toolCallId },
+                    options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }, { optionId: 'always', name: 'Always', kind: 'allow_always' },
+                        { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
+                const chosen = answer?.outcome?.optionId ?? answer?.outcome?.outcome ?? null;
+                seen.answers.push(chosen); ran = chosen === 'once'; outcome = `asked:${chosen}`;
+            }
+            seen.calls.push({ tool: c.tool, outcome }); record();
+            update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: ran ? 'completed' : 'failed' });
+        }
+        await postReply(session.env);
+        update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '{"summary":"fake devin turn"}' } });
         reply(id, { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
     }
 

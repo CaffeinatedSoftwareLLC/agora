@@ -446,52 +446,72 @@ wake it again.
 ### Devin
 
 A `devin` profile runs Devin's own ACP server (`devin acp`, Devin CLI 3000.11) on your own
-Devin login. Only `adapter`, `executable`, `workdir`, `workdirAlias` and `stateDir` are
-needed; `protocol` defaults to `"acp"`, `acpArgs` to `["acp"]` and `auth` stays
-`"subscription"`. Anything else (`protocol: "cli"`, `auth: "api_key"`, `auth: "siwc"`) is
-refused: a Devin account is its holder's own (docs/provider-terms.md, "Devin"), so only the
-server owner can wake a Devin agent.
+Devin login. Only `adapter`, `executable`, `workdir`, `workdirAlias`, `stateDir` and, on a
+machine, `allowUnverifiedApprovals` are needed; `protocol` defaults to `"acp"`, `acpArgs` to
+`["acp"]` and `auth` stays `"subscription"`. Anything else (`protocol: "cli"`,
+`auth: "api_key"`, `auth: "siwc"`) is refused: a Devin account is its holder's own
+(docs/provider-terms.md, "Devin"), so only the server owner can wake a Devin agent.
+
+**On a machine it is opt-in.** Devin's Code mode runs file edits in the workspace without
+asking; the host's config adds `ask` rules so they come to the host like every other call,
+but that has not been seen with a logged-in Devin yet. So a devin profile on a machine is
+refused at start unless it has `"allowUnverifiedApprovals": true`. A Devin agent in a box
+needs no opt-in. **The live check that lifts this:** with a logged-in Devin on a scratch repo,
+run one turn that asks Devin to edit a file in the worktree, with no `Edit` rule: the host must
+log a denied `Edit` and the file must be unchanged; then approve the card and wake it again:
+the edit must go through. Record Devin's MCP call names from the same run.
 
 ```json
 "devin": { "adapter": "devin",
   "executable": "C:/Users/USER/AppData/Local/devin/cli/bin/devin.exe",
   "workdir": "C:/projects/agora", "workdirAlias": "agora", "stateDir": "C:/private/agora/devin-state",
-  "approvedTools": ["chat_history", "chat_send", "thread_start"] }
+  "allowUnverifiedApprovals": true, "approvedTools": ["chat_history", "chat_send", "thread_start"] }
 ```
 
 Use the binary itself (`~/.local/bin/devin` links to it on Linux and macOS). **Log the profile
 in once** with `agora-host devin login --profile devin --config <file>`: it runs
-`devin auth login` (your browser) with the profile's own Devin folders; `--paste` uses
-Devin's paste-the-code flow instead. The login stays in the `stateDir`; the host never reads
+`devin auth login` (your browser) with the profile's own Devin folders and a config with
+nothing imported and no auto-update; `--paste` uses Devin's paste-the-code flow instead. The login stays in the `stateDir`; the host never reads
 it. A profile that isn't logged in fails its run with `acp_auth_required`, which is not
 retried.
 
 **Its own folders.** Devin keeps its config, MCP servers, login, sessions and logs in the XDG
 directories on Linux and macOS, so `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
 `XDG_STATE_HOME` point into the `stateDir`. On Windows Devin ignores those and `APPDATA`
-alone, so its child gets `USERPROFILE`, `APPDATA` and `LOCALAPPDATA` in a `home` folder in
-the `stateDir`; `HOME` stays yours, so git and ssh keep your settings. Your own Devin login,
-config, MCP servers and sessions never reach a hosted run, and Devin's account token
-(`WINDSURF_API_KEY`) is never passed.
+alone, so its child gets `USERPROFILE`, `HOME`, `APPDATA` and `LOCALAPPDATA` in a `home`
+folder in the `stateDir`, and `GIT_CONFIG_GLOBAL` pointing at your own `.gitconfig`, so git
+keeps your identity. With you logged in to Devin, `devin auth status` in that environment
+says "Not logged in" (checked on 3000.11.234). Your own Devin login, config, MCP servers and
+sessions never reach a hosted run, and Devin's account token (`WINDSURF_API_KEY`) is never
+passed. The start-up check runs in the `stateDir`, not your workdir.
 
 **What the host sets.** Each run gets its own config file (`devin --config <file> acp`; it
 replaces your own `config.json`, with its permission rules and hooks): no auto-update, no
 OpenTelemetry export, and every `read_config_from` source off. By default Devin imports MCP
 servers, rules, skills and hooks from Claude Code (`~/.claude.json`, `.mcp.json`,
 `CLAUDE.md`), Cursor, Windsurf, opencode, Zed, Copilot and Devin Cloud; tried with them on,
-it started the Claude Code MCP servers of the user it ran as. Every tool asks (`ask` rules
-for `read`, `edit`, `grep`, `glob` and `exec`), and the host answers each request from the
-claim's rules as above; the Agora tools in `approvedTools` are allowed in the config, and
-writing to `.devin/` is denied. A session starts in Devin's "Code" mode (`accept-edits`),
+it started the Claude Code MCP servers of the user it ran as. With them off, a project's
+`.claude/settings.json` hooks, `.mcp.json`, `.cursor/mcp.json`, `.windsurf/`, `opencode.json`
+and `.zed/` did not load; `.agents/skills/` still loads as Devin's own skills. Every tool
+asks: `ask` rules for the tools Devin's reference names (`read`, `edit`, `grep`, `glob`,
+`exec`) and for `Write(**)` and `Write(/**)`, which cover its `write` tool and paths outside
+the workdir. Devin's loader accepts any rule text without a word (a typo is silently no
+rule), so these follow its reference (docs/reference/permissions.mdx in the 3000.11.234
+tarball), which mixes the two forms in one list; it has no catch-all rule. The host answers
+each request from the claim's rules as above; the Agora tools in `approvedTools` are allowed
+in the config, and writing to `.devin/` is denied. A session starts in Devin's "Code" mode (`accept-edits`),
 which the host sets again on a resumed session. The Agora MCP server comes from
 `session/new`, as for other ACP agents.
 
 **A `.devin` folder refuses the run.** Devin runs the hooks in `.devin/hooks.v1.json` (and
 in `.devin/config.json`) at session start without a permission request, whatever the user
 config says, and loads `.devin/` MCP servers. So on a machine the host refuses to start
-Devin in a worktree that has a `.devin` folder (at its root or above it up to the
-repository root, or anywhere in its tracked or untracked files), with a fixed message in the
-channel. Remove it from the branch, or run the agent in a box.
+Devin when there is a `.devin` folder in the worktree, in any folder above it up to the
+filesystem root (your home included), or anywhere in the worktree's tracked or untracked
+files, with a fixed message in the channel. (Devin itself ran a hooks file only from the
+worktree when tried, not from above the repository or from `$HOME`, but that is its discovery
+rule today.) A `.devin/config.local.json` left by your own Devin use in a parent folder counts
+too: move it, or run the agent in a box.
 
 **Version.** The host checks `devin --version` (Devin's ACP server calls itself `0.0.0-dev`):
 3000.11.x passes; anything else needs `"allowUntestedVersion": true`. Turn Devin's own
@@ -501,8 +521,7 @@ version to stop the agent at its next start.
 **Checked against** Devin 3000.11.234 with no login: the version check, `initialize` (ACP
 v1), `session/new`, the session's mode and model config options, the imports with
 `read_config_from` on and off, a project hook running unasked, and the folders it writes on
-Linux and Windows. A turn with a real login is *verify live*: that the `ask` rules make Code
-mode ask for workspace edits, and how Devin names its MCP calls.
+Linux and Windows. A turn with a real login is *verify live* (the check above).
 
 ## Execution and recovery
 
@@ -639,9 +658,9 @@ In an agent box (`docs/agent-boxes.md`) agora-host runs inside the box's contain
 - **Start.** tini runs `/opt/agora/agora-box-start`, which checks the environment boxd set (`AGORA_INSTANCE_URL`, `AGORA_HOST_TOKEN`, `AGORA_BOT_ID`, `AGORA_BOT_TOKEN`, `AGORA_BOX_PROFILE`), clones the attached repos into `~/work/<owner>/<repo>` through the edge (`http://edge:8080/git/github.com/<owner>/<repo>.git`, retried at the next start if it fails), makes `~/scratch` when there is no cloned repo (or the first one's origin is not that repo through the edge), sets the git identity to the box's name and bot, links the box rules (`/opt/agora/AGENTS.md`) as `~/AGENTS.md`, `~/CLAUDE.md` and the CLI's global instructions, then runs `agora-host box-config --out /run/agora/host.json` and `agora-host --config /run/agora/host.json` with `AGORA_HOST_IN_BOX=1`. The host and bot tokens are removed from agora-host's own environment; it reads them from the config file (mode 0600, on a tmpfs).
 - **`agora-host box-config`** writes the config from the environment: one profile named after the box, `executable` the pinned CLI in `/opt/agora/bin`, `workdir` the first attached repo when its clone's origin is that repo (else `~/scratch`), `workdirAlias` `work`, `stateDir` `~/.agora/state/<name>`, `proxyEnv: true`. `box-config --repos` checks the environment and prints the attached repos. Errors name the variable or field, never a value.
 - **Box mode** is on only when `AGORA_HOST_IN_BOX=1` **and** the image's marker file `/etc/agora-box` exists. Then:
-  - Codex runs `exec --dangerously-bypass-approvals-and-sandbox` (no `-s`, no approval policy, `web_search="disabled"`) and Claude runs with `--dangerously-skip-permissions --disallowedTools WebSearch` (no `--permission-mode`, no `--allowedTools`). The ACP agents run with every permission request allowed: opencode with a permission config that allows every tool but web and code search, Devin with `"permission_mode": "dangerous"`, `web_search` denied, and its session switched to `bypass` before each prompt (a `.devin` folder doesn't refuse the run in a box). Tool presets, allowed tools and one-time grants don't apply: inside the box everything is allowed, and the edge's approvals are the boundary. Web search stays off because a box has no open web; agents search through Agora.
+  - Codex runs `exec --dangerously-bypass-approvals-and-sandbox` (no `-s`, no approval policy, `web_search="disabled"`) and Claude runs with `--dangerously-skip-permissions --disallowedTools WebSearch` (no `--permission-mode`, no `--allowedTools`). The ACP agents run with every permission request allowed: opencode with a permission config that allows every tool but web and code search; Devin with every tool allowed in its own config but its web tools (`web_search`, `webfetch`), its session kept in Code mode rather than bypass, so what it still asks reaches the host, which allows it unless it is a web tool or a fetch (`allowAllExcept`; a box fetches through the edge, with `curl`). A `.devin` folder doesn't refuse the run in a box. Tool presets, allowed tools and one-time grants don't apply: inside the box everything is allowed, and the edge's approvals are the boundary. Web search stays off because a box has no open web; agents search through Agora.
   - `proxyEnv` passes `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` (and their lowercase copies) to the CLI, on top of the usual OS allowlist. Nothing else is added: the CLI never sees the host token, and gets the bot token only as `AGORA_BOT_TOKEN` for the agora-mcp server it starts, as on a machine.
   - On a machine, none of this happens: the bypass flags are never passed, and `proxyEnv` is ignored.
-- **Log in** (`src/box-login.ts`). The host polls `GET /agent-hosts/@me/box-login` every 3 seconds. For a claimed request it runs, without a shell, `codex login --device-auth` (`CODEX_HOME` = the state dir), `claude auth login --claudeai` (`CLAUDE_CONFIG_DIR` = the state dir) or `devin auth login --force-manual-token-flow` (Devin's XDG directories in the state dir; a URL only on `devin.ai`, then the pasted code, as for Claude). It reads the CLI's output (terminal escapes removed, a URL only on `openai.com`/`chatgpt.com` or `claude.ai`/`claude.com`/`anthropic.com`), reports `awaiting_user` with Codex's URL and code or `awaiting_code` with Claude's URL, and for Claude polls `GET .../box-login/<id>/code` every 2 seconds and writes the owner's pasted code to the CLI's input. The CLI's exit is reported as `succeeded` or `failed`; after 10 minutes (or 60 seconds without a prompt) the CLI is stopped and the login fails. A `404`/`409` from Agora (the owner cancelled, or the login expired) stops the CLI with no further report. The URL, the codes and the CLI's output are never logged. *Verify live:* both logins with real accounts.
+- **Log in** (`src/box-login.ts`). The host polls `GET /agent-hosts/@me/box-login` every 3 seconds. For a claimed request it runs, without a shell, `codex login --device-auth` (`CODEX_HOME` = the state dir), `claude auth login --claudeai` (`CLAUDE_CONFIG_DIR` = the state dir) or `devin auth login --force-manual-token-flow` (Devin's XDG directories in the state dir; a URL only on `devin.ai` or `windsurf.com`, then the pasted code, as for Claude; a pasted code may be up to 4096 characters, since Devin's can be a whole token). It reads the CLI's output (terminal escapes removed, a URL only on `openai.com`/`chatgpt.com` or `claude.ai`/`claude.com`/`anthropic.com`), reports `awaiting_user` with Codex's URL and code or `awaiting_code` with Claude's URL, and for Claude polls `GET .../box-login/<id>/code` every 2 seconds and writes the owner's pasted code to the CLI's input. The CLI's exit is reported as `succeeded` or `failed`; after 10 minutes (or 60 seconds without a prompt) the CLI is stopped and the login fails. A `404`/`409` from Agora (the owner cancelled, or the login expired) stops the CLI with no further report. The URL, the codes and the CLI's output are never logged. *Verify live:* both logins with real accounts.
 - **Image.** `box/Dockerfile` builds agora-host and agora-mcp from the checkout and installs Claude Code 2.1.311, Codex 0.163.0, opencode 1.18.34 and Devin 3000.11.234 (the families the host verifies, so no `allowUntestedVersion`; Devin from its sha256-checked release tarball). The fake ACP CLI (`box/fake/fake-acp.mjs`) plays opencode or Devin by its file name, with Devin's paste login. The `test` target swaps them for fake CLIs (`box/fake/fake-cli.mjs`) that answer `--version`, one headless turn (and post `fake-<cli> reply` to the wake's channel), and both logins; they need a fake login (`.fake-login` in the state dir) or an API key to answer a turn.
 - **Pull requests.** `agora-pr create --title T (--body B | --body-file F) [--base B] [--head H] [--draft]` and `agora-pr status <n>` talk to the edge's PR broker. Exit codes: 0 done, 1 refused or failed, 2 usage, 3 needs the owner's approval (run it again after approval), 4 not in a box repo, 5 the edge didn't answer.

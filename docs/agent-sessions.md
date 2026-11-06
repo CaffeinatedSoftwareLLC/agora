@@ -124,13 +124,14 @@ A `devin` agent runs [Devin CLI](https://docs.devin.ai/cli)'s own ACP server (`d
    "devin": { "adapter": "devin",
      "executable": "C:/Users/USER/AppData/Local/devin/cli/bin/devin.exe",
      "workdir": "C:/projects/agora", "workdirAlias": "agora", "stateDir": "C:/private/agora/devin-state",
-     "approvedTools": ["chat_history", "chat_send", "thread_start"] }
+     "allowUnverifiedApprovals": true, "approvedTools": ["chat_history", "chat_send", "thread_start"] }
    ```
    `protocol` and `acpArgs` default to `"acp"` and `["acp"]`; `auth` stays `"subscription"` (an API key is refused).
+   `allowUnverifiedApprovals` is your explicit opt-in to running Devin unboxed: that its file edits come to the host for approval is not yet checked with a logged-in Devin (agora-host README, "Devin"). Without it the host refuses the profile; a Devin box needs none.
 4. **Log it in once:** `agora-host devin login --profile devin --config <file>` (your browser; `--paste` to paste a code instead). The login stays in the profile's `stateDir`, apart from your own Devin login.
 5. Start the host as above.
 
-Each run gets its own Devin config with nothing imported from Claude Code, Cursor, Windsurf or other tools, and every tool asks, answered from the agent's rules (a denial is an approval card). A worktree with a `.devin` folder is refused, because Devin runs the hooks there without asking. Details: [agora-host README, "Devin"](../agora-host/README.md#devin).
+Each run gets its own Devin config with nothing imported from Claude Code, Cursor, Windsurf or other tools, and every tool asks, answered from the agent's rules (a denial is an approval card). A `.devin` folder in the worktree or any folder above it is refused, because Devin runs the hooks there without asking. Details: [agora-host README, "Devin"](../agora-host/README.md#devin).
 
 ## Use it
 

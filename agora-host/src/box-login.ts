@@ -71,8 +71,12 @@ export function parsePrompt(adapter: string, raw: string): { url: string; code: 
     return code ? { url, code: code[1] } : null;
 }
 
-/** A pasted code goes to the CLI's input as one line: printable characters only. */
-const PASTED_CODE = /^[\x21-\x7e]{1,512}$/;
+/**
+ * A pasted code goes to the CLI's input as one line: printable characters only. Up to 4096: Devin's
+ * paste flow takes the authorization code or, for some deployments, a whole token from its
+ * sign-in page, whose length isn't documented.
+ */
+const PASTED_CODE = /^[\x21-\x7e]{1,4096}$/;
 const closed = (err: unknown) => err instanceof HttpError && (err.status === 404 || err.status === 409);
 
 /** Handle one login request; exported for tests. */

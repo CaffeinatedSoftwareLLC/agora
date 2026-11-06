@@ -113,7 +113,7 @@ export function LoginDialog({ box, onClose, pollMs = 2000 }: { box: Box; onClose
         {wantsCode && (
           <form className="flex flex-col gap-2 md:flex-row" onSubmit={e => { e.preventDefault(); void sendCode(); }}>
             <input className={`${INPUT} font-mono`} value={code} onChange={e => setCode(e.target.value)} autoComplete="off" spellCheck={false}
-              placeholder={`Paste the code ${provider?.provider} shows`} aria-label={`Code from ${provider?.provider}`} maxLength={500} />
+              placeholder={`Paste the code ${provider?.provider} shows`} aria-label={`Code from ${provider?.provider}`} maxLength={4096} />
             <Button type="submit" disabled={!code.trim()} loading={sending} className={TOUCH}>Send code</Button>
           </form>
         )}

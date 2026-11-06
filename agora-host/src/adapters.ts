@@ -9,7 +9,7 @@ import { ensureWorkspace, git, type Workspace } from './workspaces.js';
 import { handoffNotes } from './handoff.js';
 import { CODEX_WORDS, resolvePermissions, type Permissions } from './presets.js';
 import { detectSignals } from './signals.js';
-import { ACP_API_KEY_METHODS, checkTerms, DEVIN_SUBSCRIPTION_ONLY, GEMINI_NOT_HOSTED, HostConfigError, OPENCODE_ACP_ONLY, opencodeProvider, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
+import { ACP_API_KEY_METHODS, checkTerms, DEVIN_HOST_UNVERIFIED, DEVIN_SUBSCRIPTION_ONLY, GEMINI_NOT_HOSTED, HostConfigError, OPENCODE_ACP_ONLY, opencodeProvider, TermsRefusal, type Adapter, type SiwcRunError } from './terms.js';
 import { accessToken, type AccessToken } from './siwc/session.js';
 import { SiwcError } from './siwc/oauth.js';
 import { DEFAULT_DIR } from './siwc/store.js';
@@ -61,20 +61,35 @@ const OPENCODE_FLAGS = ['OPENCODE_DISABLE_PROJECT_CONFIG', 'OPENCODE_PURE', 'OPE
  * Devin (3000.11) keeps its config, MCP servers, login, sessions and logs in the XDG directories
  * on Linux and macOS (the same layout as opencode's). On Windows it ignores those, and APPDATA on
  * its own, and uses %USERPROFILE%\AppData\{Roaming,Local}\devin; so its child gets a home of its
- * own in the state directory, with APPDATA and LOCALAPPDATA inside it (checked on 3000.11.234).
- * HOME stays the user's, so git, ssh and the tools the agent runs keep the user's own settings.
+ * own in the state directory, with APPDATA and LOCALAPPDATA inside it, and HOME there too (checked
+ * on 3000.11.234: with the owner logged in, `devin auth status` in that environment says "Not
+ * logged in"). Git keeps the user's identity through GIT_CONFIG_GLOBAL (childEnv).
  */
 export function devinDirs(stateDir: string, platform = process.platform): Record<string, string> {
     if (platform !== 'win32') return Object.fromEntries(Object.entries(OPENCODE_DIRS).map(([name, dir]) => [name, posix.join(stateDir, dir)]));
     const home = win32.join(stateDir, 'home');
-    return { USERPROFILE: home, APPDATA: win32.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: win32.join(home, 'AppData', 'Local') };
+    return { USERPROFILE: home, HOME: home, APPDATA: win32.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: win32.join(home, 'AppData', 'Local') };
 }
 /** Make Devin's own directories (Windows Devin fails to start without its profile folders). */
 export async function ensureDevinDirs(profile: LocalProfile, platform = process.platform): Promise<void> {
-    for (const dir of Object.values(devinDirs(profile.stateDir, platform))) await mkdir(dir, { recursive: true, mode: 0o700 });
+    for (const dir of new Set(Object.values(devinDirs(profile.stateDir, platform)))) await mkdir(dir, { recursive: true, mode: 0o700 });
 }
 /** Every source Devin would import settings, rules, skills, hooks or MCP servers from (its docs: read_config_from). */
 const DEVIN_IMPORTS = ['agents_standard', 'cursor', 'windsurf', 'claude', 'copilot', 'opencode', 'zed', 'cloud'] as const;
+/**
+ * Permission rules, as Devin's own reference (bundled with 3000.11.234, docs/reference/
+ * permissions.mdx) spells them: whole tools by name (`read`, `edit`, `grep`, `glob`, `exec`, the
+ * only tool names it accepts) and paths with `Write(glob)`, which covers both the `edit` and the
+ * `write` tool; an absolute `/**` reaches files outside the working directory, a bare `**` the
+ * ones in it. Devin's loader takes any string without a word (a typo is silently no rule, checked
+ * on 3000.11.234), so these come from the reference, and its own example mixes the two forms in
+ * one `ask` list. There is no catch-all rule; anything no rule decides prompts in Code mode
+ * except edits in the workspace, which the `edit` and `Write` asks cover.
+ */
+const DEVIN_TOOLS = ['read', 'edit', 'grep', 'glob', 'exec'] as const;
+const DEVIN_WRITES = ['Write(**)', 'Write(/**)'] as const;
+/** Devin's web tools (from the 3000.11.234 binary): a search and a fetch that may run on Devin's side, around the edge. */
+export const DEVIN_WEB_TOOLS = ['web_search', 'webfetch'] as const;
 /**
  * The Devin user config for one run (`devin --config <file> acp`, which replaces the user's own
  * ~/.config/devin/config.json with its permission rules and hooks). No auto-update, no OTel
@@ -83,41 +98,48 @@ const DEVIN_IMPORTS = ['agents_standard', 'cursor', 'windsurf', 'claude', 'copil
  * the Claude Code MCP servers of the user it ran as when tried).
  *
  * On a machine every tool asks (`ask` rules come before the session mode, Devin's "Code" mode,
- * which would let workspace edits through), so acp/session.ts answers each request from the
- * claim's rules and a denial becomes an approval card. The Agora tools the owner always allows
- * are allowed here, since Devin names an MCP call its own way. `.devin/` can't be written: a
- * hooks file there runs commands at the next session start (devinProjectConfig).
+ * which would otherwise let workspace edits through), so acp/session.ts answers each request from
+ * the claim's rules and a denial becomes an approval card. That an edit really reaches the host
+ * this way is not yet seen with a logged-in Devin, so host mode needs `allowUnverifiedApprovals`
+ * (DEVIN_HOST_UNVERIFIED). The Agora tools the owner always allows are allowed here, since Devin
+ * names an MCP call its own way. `.devin/` can't be written: a hooks file there would run
+ * commands at the next session start (devinProjectConfig).
  *
- * `boxed` (yeet mode in an agent box, box-adapters.ts): bypass, everything allowed but web
- * search, which reaches a search service around the edge (as Claude's WebSearch is off).
+ * `boxed` (yeet mode in an agent box): every tool allowed in Devin's own rules, the web tools
+ * denied there, and the session stays in Code mode rather than bypass, so whatever Devin still
+ * asks reaches the host, which allows it unless it is a web tool (acp/session.ts allowAllExcept).
  */
 export function devinConfig(boxed: boolean, agoraTools: readonly string[] = []): string {
-    const base = { auto_update: false, read_config_from: Object.fromEntries(DEVIN_IMPORTS.map(k => [k, false])), otel: { enabled: false } };
+    const base = { auto_update: false, read_config_from: Object.fromEntries(DEVIN_IMPORTS.map(k => [k, false])), otel: { enabled: false }, permission_mode: 'normal' };
     return `${JSON.stringify(boxed
-        ? { ...base, permission_mode: 'dangerous', permissions: { allow: ['mcp__agora__*'], deny: ['web_search'] } }
-        : { ...base, permission_mode: 'normal', permissions: {
+        ? { ...base, permissions: { allow: [...DEVIN_TOOLS, ...DEVIN_WRITES, 'mcp__agora__*'], deny: [...DEVIN_WEB_TOOLS] } }
+        : { ...base, permissions: {
             allow: [...new Set(agoraTools)].map(t => `mcp__agora__${t}`),
-            ask: ['read', 'edit', 'grep', 'glob', 'exec'],
-            deny: ['Write(.devin/**)', 'Write(**/.devin/**)'],
+            ask: [...DEVIN_TOOLS, ...DEVIN_WRITES],
+            deny: ['Write(.devin/**)', 'Write(**/.devin/**)', 'Write(/**/.devin/**)'],
         } }, null, 2)}\n`;
 }
-/** The ACP session mode a Devin turn runs in on a machine: "Code" (box-adapters.ts acpMode in a box). */
-export const DEVIN_HOST_MODE = 'accept-edits';
+/** The ACP session mode every Devin turn runs in, set again on a resumed session: "Code". */
+export const DEVIN_SESSION_MODE = 'accept-edits';
 export const DEVIN_PROJECT_CONFIG =
-    'This Devin agent did not start: its worktree has a .devin folder. Devin runs the hooks and MCP servers in .devin/ without asking, '
-    + 'so agora-host runs Devin on a machine only in a worktree without one. Remove .devin from the branch, or run the agent in a box.';
+    'This Devin agent did not start: there is a .devin folder in its worktree or a folder above it. Devin runs the hooks and MCP servers in .devin/ without asking, '
+    + 'so agora-host runs Devin on a machine only where there is none. Remove it, or run the agent in a box.';
 async function present(path: string) { try { await lstat(path); return true; } catch (e: any) { if (e.code === 'ENOENT') return false; throw e; } }
 /**
- * Whether Devin would find project config in this worktree: a `.devin` folder in it or in a
- * folder above it up to the repository root (where Devin looks for hooks, rules and MCP servers),
- * or one anywhere in its tracked or untracked files. Devin runs project hooks at session start
- * without a permission request, whatever the user config says (checked on 3000.11.234), so on a
- * machine such a worktree is refused. In a box the box is the sandbox.
+ * Whether Devin could find project config for this worktree: a `.devin` folder in it or in any
+ * folder above it up to the filesystem root (the user's home included), or one anywhere in its
+ * tracked or untracked files. Devin runs project hooks at session start without a permission
+ * request, whatever the user config says (checked on 3000.11.234: a `.devin/hooks.v1.json` in the
+ * worktree ran with every import off; one above the repository root or in $HOME did not, but
+ * that is Devin's discovery rule today, not a promise), so on a machine such a worktree is
+ * refused. Other tools' project files (`.claude/settings.json` hooks, `.mcp.json`,
+ * `.cursor/mcp.json`, `.windsurf/`, `opencode.json`, `.zed/`) did not load with every
+ * `read_config_from` source off, so they need no refusal. In a box the box is the sandbox.
  */
 export async function devinProjectConfig(cwd: string): Promise<boolean> {
     for (let dir = resolve(cwd); ; dir = dirname(dir)) {
         if (await present(join(dir, '.devin'))) return true;
-        if (await present(join(dir, '.git')) || dirname(dir) === dir) break;
+        if (dirname(dir) === dir) break;
     }
     return (await git(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ':(glob)**/.devin/**'])).length > 0;
 }
@@ -179,10 +201,11 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
         for (const [name, dir] of Object.entries(OPENCODE_DIRS)) env[name] = join(profile.stateDir, dir);
         for (const name of OPENCODE_FLAGS) env[name] = '1';
     } else if (profile.adapter === 'devin') {
-        // Devin's config, MCP servers, login and sessions: the user's own stay out of hosted runs
+        // Devin's config, MCP servers, login and sessions: the user's own stay out of hosted runs.
+        // On Windows its home is in the state directory too; git still finds the user's identity
         if (platform === 'win32') {
             const home = getVar(env, 'HOME') ?? getVar(env, 'USERPROFILE');
-            if (home) setVar(env, 'HOME', home);
+            if (home) setVar(env, 'GIT_CONFIG_GLOBAL', win32.join(home, '.gitconfig'));
         }
         for (const [name, dir] of Object.entries(devinDirs(profile.stateDir, platform))) setVar(env, name, dir);
     } else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
@@ -225,17 +248,19 @@ export const DEVIN_TESTED = /^3000\.11\.\d+$/;
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
     if (profile.adapter === 'devin') {
         if (profile.protocol !== 'acp' || profile.auth !== 'subscription') throw new HostConfigError(DEVIN_SUBSCRIPTION_ONLY);
-        // Its ACP server calls itself 0.0.0-dev, so the CLI's own version is the gate, then ACP v1
+        if (!inBox() && !profile.allowUnverifiedApprovals) throw new HostConfigError(DEVIN_HOST_UNVERIFIED);
+        // Its ACP server calls itself 0.0.0-dev, so the CLI's own version is the gate, then ACP v1.
+        // Both run in the state directory: nothing in the owner's workdir is Devin's project there
+        await mkdir(profile.stateDir, { recursive: true, mode: 0o700 });
         await ensureDevinDirs(profile);
         const env = childEnv(profile);
-        const { stdout } = await promisify(execFile)(profile.executable, ['--version'], { env, cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096 });
+        const { stdout } = await promisify(execFile)(profile.executable, ['--version'], { env, cwd: profile.stateDir, windowsHide: true, timeout: 10000, maxBuffer: 4096 });
         const version = /\bdevin (\d+\.\d+\.\d+)\b/.exec(stdout)?.[1];
         if (!version || (!DEVIN_TESTED.test(version) && !profile.allowUntestedVersion)) throw new Error('unsupported_cli_version');
         // The probe starts no session, but gets a run's config, so nothing is imported or updated
-        await mkdir(profile.stateDir, { recursive: true, mode: 0o700 });
         const probeConfig = join(profile.stateDir, 'devin-probe.json');
         await writeFile(probeConfig, devinConfig(inBox()), { mode: 0o600 });
-        return `devin ${version}, ${await probeAcp({ executable: profile.executable, args: ['--config', probeConfig, ...profile.acpArgs], cwd: profile.workdir, env })}`;
+        return `devin ${version}, ${await probeAcp({ executable: profile.executable, args: ['--config', probeConfig, ...profile.acpArgs], cwd: profile.stateDir, env })}`;
     }
     // ACP: the protocol version is the gate, not the CLI's version string
     if (profile.protocol === 'acp') return probeAcp({ executable: profile.executable, args: profile.acpArgs, cwd: profile.workdir, env: childEnv(profile) });
@@ -376,20 +401,23 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 mcpServers: [{ name: 'agora', ...server, env: (['AGORA_INSTANCE', 'AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL'] as const).map(name => ({ name, value: env[name]! })) }],
                 authMethod: local.auth === 'api_key' ? ACP_API_KEY_METHODS[local.apiKeyEnv!] ?? null : null,
                 ...(allowAll ? { allowAll: true } : {}),
+                // In a box, the requests the box still refuses (Devin's web tools, box-adapters.ts)
+                ...(allowAll && box?.yeet.acpDeny ? { allowAllExcept: { names: [...box.yeet.acpDeny.names], kinds: [...box.yeet.acpDeny.kinds] } } : {}),
             };
             // In a box, after the ACP arguments: the adapter's yeet and quiet arguments (box-adapters.ts)
             let args = box ? [...local.acpArgs, ...box.yeet.args, ...box.quiet.args] : local.acpArgs;
             const policy = local.adapter === 'gemini' ? geminiPolicy(acpRules) : '';
             if (policy) { await writeFile(paths[3], policy, { mode: 0o600 }); args = [...args, '--policy', paths[3]]; }
             if (local.adapter === 'devin') {
-                // On a machine, a worktree with Devin project config (its hooks run unasked) is refused
+                // On a machine: only with the owner's opt-in to unverified approvals, and never in a
+                // worktree with Devin project config (its hooks run unasked)
+                if (!yeet && !local.allowUnverifiedApprovals) throw new HostConfigError(DEVIN_HOST_UNVERIFIED);
                 if (!yeet && await devinProjectConfig(workspace.cwd)) throw new HostConfigError(DEVIN_PROJECT_CONFIG);
                 await ensureDevinDirs(local);
                 // `--config` is a global option, so it comes before `acp`
                 await writeFile(paths[4], devinConfig(allowAll, local.approvedTools), { mode: 0o600 });
                 args = ['--config', paths[4], ...args];
-                const mode = allowAll ? box?.yeet.acpMode : DEVIN_HOST_MODE;
-                if (mode) acpPlan.sessionMode = mode;
+                acpPlan.sessionMode = DEVIN_SESSION_MODE;
             }
             return { executable: local.executable, args, env, cwd: workspace.cwd, workspace, adapter: local.adapter, stdin: '', cleanup,
                 lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, acp: acpPlan };

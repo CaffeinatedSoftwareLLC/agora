@@ -811,6 +811,26 @@ describe('forward proxy: telemetry, wildcards and logins', () => {
         expect(Date.now() - quick).toBeLessThan(1000);
     });
 
+    it('a login-only host (Devin\'s app.devin.ai) goes through without a card only while a login is open', async () => {
+        const profile = (await ctx.db.query('SELECT profile_id FROM agent_boxes WHERE id = $1', [boxId])).rows[0].profile_id;
+        await ctx.db.query(`UPDATE agent_profiles SET adapter = 'devin' WHERE id = $1`, [profile]);
+        try {
+            // No login: an unknown domain, refused at once with a card
+            expect(await connect('app.devin.ai:443')).toMatch(/^HTTP\/1.1 403/);
+            expect((await requests('domain')).map(r => r.subject.host)).toEqual(['app.devin.ai']);
+            await ctx.db.query('TRUNCATE box_edge_requests');
+            await openLogin();
+            expect(await connect('app.devin.ai:443')).not.toMatch(/^HTTP\/1.1 403/);
+            expect(await requests('domain')).toHaveLength(0);
+            // Only that exact name, and nothing joins the allowlist
+            expect(await connect('api.devin.ai:443')).toMatch(/^HTTP\/1.1 403/);
+            const box = (await ctx.db.query('SELECT allowed_domains FROM agent_boxes WHERE id = $1', [boxId])).rows[0];
+            expect(box.allowed_domains).toEqual(['allowed.example.com']);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET adapter = 'claude' WHERE id = $1`, [profile]);
+        }
+    });
+
     it('without a login, a provider domain is refused at once', async () => {
         const started = Date.now();
         expect(await connect('platform.claude.com:443')).toMatch(/^HTTP\/1.1 403/);

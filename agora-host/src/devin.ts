@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { loadConfig } from './config.js';
-import { childEnv, ensureDevinDirs } from './adapters.js';
+import { childEnv, devinConfig, ensureDevinDirs } from './adapters.js';
 
 /**
  * `agora-host devin login --profile <name> --config <file>`: log a Devin profile in on this
@@ -22,7 +24,10 @@ export async function devinCommand(argv: string[], out: (line: string) => void =
     const local = config.profiles[profile];
     if (local?.adapter !== 'devin') { out(`Profile "${profile}" is not a devin profile in this config.`); return 2; }
     await ensureDevinDirs(local);
-    const args = ['auth', 'login', ...(argv.includes('--paste') ? ['--force-manual-token-flow'] : [])];
+    // The login gets a run's config too: no auto-update, nothing imported from other tools
+    const configFile = join(local.stateDir, 'devin-login.json');
+    await writeFile(configFile, devinConfig(false), { mode: 0o600 });
+    const args = ['--config', configFile, 'auth', 'login', ...(argv.includes('--paste') ? ['--force-manual-token-flow'] : [])];
     out(`Logging ${profile} in to Devin. Use the Devin account this agent should run on: yours (only you can wake it).`);
     const code = await new Promise<number | null>(resolve => {
         const child = spawn(local.executable, args, { cwd: local.stateDir, env: childEnv(local), stdio: 'inherit', shell: false, windowsHide: false });
