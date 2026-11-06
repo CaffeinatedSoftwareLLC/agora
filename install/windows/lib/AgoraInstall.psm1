@@ -33,12 +33,16 @@ No names, addresses, IPs or IDs are kept. [y/N]
 # with HCS_E_HYPERV_NOT_INSTALLED (seen on a clean Windows 11 VM, 2026-11-05)
 $script:VmpOffHelp = 'Virtual Machine Platform is turned off, so WSL 2 cannot start a distro (WSL reports HCS_E_HYPERV_NOT_INSTALLED). To turn it on, run wsl --install --no-distribution as administrator, restart Windows, then run this installer again.'
 $script:VirtualizationHelp = 'If it still fails after the restart, turn on virtualization (Intel VT-x, or AMD-V/SVM) in the firmware (BIOS/UEFI) settings; in a virtual machine, turn on nested virtualization for it.'
+# After wsl --install --no-distribution and a restart the feature is still off: don't offer the same step again
+$script:VmpStillOffHelp = 'Virtual Machine Platform is still off after the restart. Next: as administrator run dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart, restart Windows, and run this installer again. If WSL then still reports HCS_E_HYPERV_NOT_INSTALLED, turn on virtualization (Intel VT-x, or AMD-V/SVM) in the firmware (BIOS/UEFI) settings; in a virtual machine, turn on nested virtualization for it.'
 # The least memory WSL may use for Agora. The Linux installer needs 4 GB free inside WSL, and the
 # distro's kernel, systemd and Docker already hold part of WSL's limit before it checks, so a
 # 4 GB limit always fails and 5 GB barely passes; 6 GB passes with room for the stack's
 # containers and a box. WSL's default is half of the PC's memory: 4 GB on an 8 GB PC (3.2 GB in the
-# 2026-11-05 test VM), too little.
+# 2026-11-05 test VM), too little. The check compares against 5.5 so a 12 GB PC (Windows reports
+# about 11.7 GB, so WSL gets 5.9) isn't flagged.
 $script:WslMemoryFloorGB = 6
+$script:WslMemoryMinGB = 5.5
 
 # --- Thin wrappers (mocked in tests) ---
 
@@ -194,7 +198,9 @@ function Read-WslConfig {
     # $null when there is no .wslconfig
     $path = Get-WslConfigPath
     if (-not (Test-Path -LiteralPath $path)) { return $null }
-    return [string](Get-Content -LiteralPath $path -Raw)
+    # Not Get-Content: Windows PowerShell 5.1 reads a file without a BOM as ANSI, which mangles
+    # UTF-8 paths (kernel=, swapFile=) on write-back. ReadAllText takes UTF-8 and honours a BOM.
+    return [System.IO.File]::ReadAllText($path)
 }
 
 function Save-WslConfig {
@@ -206,7 +212,20 @@ function Save-WslConfig {
         $backup = "$path.agora-backup-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
         Copy-Item -LiteralPath $path -Destination $backup -Force
     }
-    [System.IO.File]::WriteAllText($path, $Text, (New-Object System.Text.UTF8Encoding $false))
+    # WriteAllText can't truncate a hidden file (UnauthorizedAccessException): unhide it while writing
+    $hidden = $false
+    if (Test-Path -LiteralPath $path) {
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.Attributes -band [System.IO.FileAttributes]::Hidden) {
+            $hidden = $true
+            $item.Attributes = $item.Attributes -band (-bnot [System.IO.FileAttributes]::Hidden)
+        }
+    }
+    try {
+        [System.IO.File]::WriteAllText($path, $Text, (New-Object System.Text.UTF8Encoding $false))
+    } finally {
+        if ($hidden) { $i = Get-Item -LiteralPath $path -Force; $i.Attributes = $i.Attributes -bor [System.IO.FileAttributes]::Hidden }
+    }
     return $backup
 }
 
@@ -218,7 +237,8 @@ function Test-Preflight {
     $problems = @()
     if ($Info.Build -lt 19041) { $problems += "Windows build $($Info.Build) is older than Windows 10 2004 (19041)" }
     if (-not $Info.Virtualization) { $problems += 'virtualization is off: turn on Intel VT-x / AMD-V (SVM) in the firmware settings' }
-    if ($Info.MemoryGB -lt 8) { $problems += "$($Info.MemoryGB) GB of memory; Agora needs 8 GB" }
+    # Most "8 GB" PCs report 7.7-7.9 GB (memory reserved by firmware and graphics)
+    if ($Info.MemoryGB -lt 7.5) { $problems += "$($Info.MemoryGB) GB of memory; Agora needs 8 GB" }
     if ($Info.Arch -ne 'AMD64') { $problems += "this installer supports x64 Windows only ($($Info.Arch)); Canonical publishes the Ubuntu 24.04 WSL image for amd64" }
     return , $problems
 }
@@ -307,38 +327,53 @@ function Get-WslMemoryLimit {
     return [pscustomobject]@{ GB = [math]::Round($Info.MemoryGB / 2, 1); Source = 'default' }
 }
 
-function Invoke-WslMemoryCheck {
-    # Raises WSL's memory limit to the floor only with consent; without a terminal it only advises
-    param([hashtable]$Options, $Info)
-    $text = Read-WslConfig
-    $limit = Get-WslMemoryLimit -Info $Info -ConfigText $text
+function Write-WslMemoryAdvice {
+    param([string]$Path)
     $floor = $script:WslMemoryFloorGB
-    if ($limit.GB -ge $floor) { Write-Ok "WSL may use up to $($limit.GB) GB of memory"; return 'ok' }
+    Write-Host "  To raise it yourself: put these lines in $Path (or set memory= in its [wsl2] section), then run wsl --shutdown, which stops every running WSL distro:"
+    Write-Host '    [wsl2]'
+    Write-Host "    memory=$($floor)GB"
+    Write-Host '  Carrying on; if the Linux installer then reports too little free memory, do that and run this installer again.'
+}
+
+function Invoke-WslMemoryCheck {
+    # Raises WSL's memory limit to the floor only with consent; without a terminal it only advises.
+    # A .wslconfig it can't read or write never stops the install: it advises instead.
+    param([hashtable]$Options, $Info)
     $path = Get-WslConfigPath
-    $why = if ($limit.Source -eq 'wslconfig') { "set in $path" } else { "WSL's default: half of this PC's $($Info.MemoryGB) GB" }
-    Write-Host "  WSL may use only $($limit.GB) GB of memory ($why). Agora needs at least $floor GB there: the Linux installer wants 4 GB free inside WSL, and the distro and Docker use part of the limit first."
-    $write = $false
-    if (-not $Options.NonInteractive) {
-        $write = (Read-Answer -Prompt "Set memory=$($floor)GB under [wsl2] in $path (other settings are kept, the current file is backed up first)? [y/N]" -Default 'n') -match '^(y|yes)$'
-    }
-    if (-not $write) {
-        Write-Host "  To raise it yourself: put these lines in $path (or set memory= in its [wsl2] section), then run wsl --shutdown, which stops every running WSL distro:"
-        Write-Host '    [wsl2]'
-        Write-Host "    memory=$($floor)GB"
-        Write-Host '  Carrying on; if the Linux installer then reports too little free memory, do that and run this installer again.'
+    try {
+        $text = Read-WslConfig
+        $limit = Get-WslMemoryLimit -Info $Info -ConfigText $text
+        $floor = $script:WslMemoryFloorGB
+        if ($limit.GB -ge $script:WslMemoryMinGB) { Write-Ok "WSL may use up to $($limit.GB) GB of memory"; return 'ok' }
+        $why = if ($limit.Source -eq 'wslconfig') { "set in $path" } else { "WSL's default: half of this PC's $($Info.MemoryGB) GB" }
+        Write-Host "  WSL may use only $($limit.GB) GB of memory ($why). Agora needs at least $floor GB there: the Linux installer wants 4 GB free inside WSL, and the distro and Docker use part of the limit first."
+        $write = $false
+        if (-not $Options.NonInteractive) {
+            $write = (Read-Answer -Prompt "Set memory=$($floor)GB under [wsl2] in $path (other settings are kept, the current file is backed up first)? [y/N]" -Default 'n') -match '^(y|yes)$'
+        }
+        if (-not $write) { Write-WslMemoryAdvice -Path $path; return 'advised' }
+        $backup = Save-WslConfig -Text (Set-WslConfigMemory -Text $text -Memory "$($floor)GB")
+        Write-Ok "set memory=$($floor)GB in $path$(if ($backup) { " (backup: $backup)" })"
+    } catch {
+        Write-Host "  Could not read or change $path ($($_.Exception.Message))."
+        Write-WslMemoryAdvice -Path $path
         return 'advised'
     }
-    $backup = Save-WslConfig -Text (Set-WslConfigMemory -Text $text -Memory "$($floor)GB")
-    Write-Ok "set memory=$($floor)GB in $path$(if ($backup) { " (backup: $backup)" })"
-    # WSL reads .wslconfig when its VM starts. With no distro running the next start uses it.
+    # WSL reads .wslconfig when its VM starts. With no distro running the VM may still idle for
+    # about a minute with the old limit: shut it down (that stops no distro).
     # Not @(...): the function returns its list as one object, which @() would wrap again
     $running = Get-WslRunningNames
-    if ($running.Count -eq 0) { return 'written' }
+    if ($running.Count -eq 0) {
+        Invoke-Wsl '--shutdown' | Out-Null
+        Write-Ok 'WSL shut down; it starts with the new limit'
+        return 'shut-down'
+    }
     $restart = (Read-Answer -Prompt "The new limit applies once WSL restarts. Run wsl --shutdown now? It stops every running WSL distro ($($running -join ', ')), Docker Desktop's included; they start again when next used. [y/N]" -Default 'n') -match '^(y|yes)$'
     if ($restart) {
         Invoke-Wsl '--shutdown' | Out-Null
-        Write-Ok 'WSL restarted with the new limit'
-        return 'restarted'
+        Write-Ok 'WSL shut down; the new limit applies when it next starts'
+        return 'shut-down'
     }
     Write-Host '  The new limit applies after wsl --shutdown or a restart of Windows. Until then the Linux installer may report too little free memory.'
     return 'written'
@@ -677,11 +712,19 @@ function Invoke-AgoraInstall {
         Write-Step $step 'WSL'
         $wslOk = Test-WslInstalled
         # `wsl --status` passes with Virtual Machine Platform off, so ask Windows too. 'unknown'
-        # carries on: the import then recognises WSL's error.
+        # carries on: the import then recognises WSL's error. A running WSL 2 distro proves the
+        # platform works, whatever the feature query says.
         $vmpOff = $wslOk -and ((Get-VmPlatformState) -eq 'disabled')
+        if ($vmpOff -and (Get-WslRunningNames).Count -gt 0) {
+            Write-Host '  Windows reports Virtual Machine Platform off, but WSL 2 distros run; carrying on.'
+            $vmpOff = $false
+        }
+        # A run that already turned it on and restarted (resumed, or started again by hand):
+        # don't offer the same step again
+        $afterInstall = $Options.Resume -or ($state.ContainsKey('Phase') -and $state.Phase -eq 'after-wsl')
+        if ($vmpOff -and $afterInstall) { throw $script:VmpStillOffHelp }
         if (-not $wslOk -or $vmpOff) {
             if ($Options.Resume) {
-                if ($vmpOff) { throw "Virtual Machine Platform is still off after the reboot. $($script:VmpOffHelp) $($script:VirtualizationHelp)" }
                 throw 'WSL is still not available after the reboot; run wsl --install --no-distribution yourself, then this installer again'
             }
             $consent = $Options.NonInteractive -and $Options.ContainsKey('AllowWslInstall') -and $Options.AllowWslInstall

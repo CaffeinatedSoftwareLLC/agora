@@ -224,12 +224,35 @@ Describe 'Virtual Machine Platform off (wsl --status still passes)' {
         Should -Invoke -ModuleName AgoraInstall Restart-Machine -Times 0
     }
 
-    It 'still off after the reboot: fails with the firmware hint' {
+    It 'still off after the reboot: says what to do next (dism, firmware) instead of offering the same step' {
         $r = Invoke-AgoraInstall -Options (Opt @{ Resume = $true })
         $r.Status | Should -Be 'failed'
         $r.Step | Should -Be 'win.wsl'
-        $r.Error | Should -Match 'still off after the reboot'
+        $r.Error | Should -Match 'still off after the restart'
+        $r.Error | Should -Match 'dism\.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart'
         $r.Error | Should -Match 'VT-x'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
+    }
+
+    It 'started again by hand after that restart: the same advice, no second wsl --install' {
+        New-Fake -Wsl $true -Answers @('n', 'y')
+        Set-Mocks
+        $global:AgoraFake.Vmp = 'disabled'
+        $global:AgoraFake.State = @{ Telemetry = 'off'; Phase = 'after-wsl'; Distro = $null; CreatedDistro = $false }
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'failed'
+        $r.Error | Should -Match 'dism\.exe'
+        Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
+        @($global:AgoraFake.Prompts | Where-Object { $_ -like '*Virtual Machine Platform*' }).Count | Should -Be 0
+    }
+
+    It 'reported off while a WSL 2 distro runs: the platform works, so it carries on' {
+        New-Fake -Wsl $true -Distros @((D 'Ubuntu' 'Running' -Default)) -Engines @('Ubuntu')
+        Set-Mocks
+        $global:AgoraFake.Vmp = 'disabled'
+        $r = Invoke-AgoraInstall -Options (Opt)
+        $r.Status | Should -Be 'done'
+        $r.Distro | Should -Be 'Ubuntu'
         Should -Invoke -ModuleName AgoraInstall Start-WslInstall -Times 0
     }
 
@@ -284,13 +307,33 @@ Describe 'WSL memory limit' {
         Should -Invoke -ModuleName AgoraInstall Save-WslConfig -Times 0
     }
 
-    It 'accepted with no distro running: writes the file and needs no shutdown' {
+    It 'accepted with no distro running: writes the file and shuts the idle WSL VM down without asking' {
         New-Fake -Wsl $true -Answers @('y')
         $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
         $r.Status | Should -Be 'done'
         $global:AgoraFake.Saved.Count | Should -Be 1
         $global:AgoraFake.Saved[0] | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
         @($global:AgoraFake.Prompts | Where-Object { $_ -like '*wsl --shutdown*' }).Count | Should -Be 0
+        @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 1
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*WSL shut down*' }
+        Should -Invoke -ModuleName AgoraInstall Write-Host -Times 0 -ParameterFilter { "$Object" -like '*restarted*' }
+    }
+
+    It 'a 12 GB PC (Windows reports 11.7 GB, WSL gets 5.9) is not flagged' {
+        Mock -ModuleName AgoraInstall Get-SystemInfo { [pscustomobject]@{ Build = 22631; Caption = 'Windows 11 Home'; Version = '10.0.22631'; MemoryGB = 11.7; Virtualization = $true; Arch = 'AMD64' } }
+        New-Fake -Wsl $true
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        $global:AgoraFake.Prompts.Count | Should -Be 0
+    }
+
+    It 'a .wslconfig it cannot write: prints the manual advice and carries on' {
+        New-Fake -Wsl $true -Answers @('y')
+        Mock -ModuleName AgoraInstall Save-WslConfig { throw [System.UnauthorizedAccessException]::new("Access to the path is denied.") }
+        $r = Invoke-AgoraInstall -Options (Opt @{ NonInteractive = $false; Telemetry = 'off' })
+        $r.Status | Should -Be 'done'
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -like '*Could not read or change*Access to the path is denied*' }
+        Should -Invoke -ModuleName AgoraInstall Write-Host -ParameterFilter { "$Object" -eq '    memory=6GB' }
         @($global:AgoraFake.Calls | Where-Object { $_ -eq '--shutdown' }).Count | Should -Be 0
     }
 
@@ -366,12 +409,69 @@ Describe '.wslconfig parsing and editing' {
         & (Get-Module AgoraInstall) { Read-WslConfig } | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
     }
 
+    It 'keeps non-ASCII UTF-8 lines intact through read, edit and write' {
+        $path = Join-Path $TestDrive 'utf8\.wslconfig'
+        New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
+        $line = 'kernel=C:\\Users\\Jos' + [char]0xE9 + '\\kernel'
+        [System.IO.File]::WriteAllText($path, "[wsl2]`r`n$line`r`nmemory=3GB`r`n", (New-Object System.Text.UTF8Encoding $false))
+        & (Get-Module AgoraInstall) {
+            $t = Read-WslConfig
+            Save-WslConfig -Text (Set-WslConfigMemory -Text $t -Memory '6GB') | Out-Null
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $hex = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ' '
+        $hex | Should -Match 'C3 A9'
+        $hex | Should -Not -Match 'C3 83 C2 A9'
+        [System.IO.File]::ReadAllText($path) | Should -Be "[wsl2]`r`n$line`r`nmemory=6GB`r`n"
+    }
+
+    It 'Save-WslConfig writes a hidden .wslconfig and keeps it hidden' {
+        $path = Join-Path $TestDrive 'hidden\.wslconfig'
+        New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
+        Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
+        Set-Content -LiteralPath $path -Value '[wsl2]' -NoNewline
+        (Get-Item -LiteralPath $path -Force).Attributes = 'Hidden'
+        & (Get-Module AgoraInstall) { Save-WslConfig -Text "[wsl2]`r`nmemory=6GB`r`n" } | Out-Null
+        [System.IO.File]::ReadAllText($path) | Should -Be "[wsl2]`r`nmemory=6GB`r`n"
+        ((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::Hidden) | Should -Not -Be 0
+    }
+
     It 'Save-WslConfig with no existing file makes no backup' {
         $path = Join-Path $TestDrive 'fresh\.wslconfig'
         New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
         Mock -ModuleName AgoraInstall Get-WslConfigPath { $path }
         & (Get-Module AgoraInstall) { Save-WslConfig -Text "[wsl2]`r`nmemory=6GB`r`n" } | Should -BeNullOrEmpty
         Test-Path $path | Should -BeTrue
+    }
+}
+
+Describe 'Get-VmPlatformState' {
+    It 'maps Win32_OptionalFeature InstallState 1, 2, 3 and 4' {
+        Mock -ModuleName AgoraInstall Get-WindowsOptionalFeature { throw 'not elevated' }
+        foreach ($case in @(@(1, 'enabled'), @(2, 'disabled'), @(3, 'disabled'), @(4, 'unknown'))) {
+            $global:AgoraCimState = $case[0]
+            Mock -ModuleName AgoraInstall Get-CimInstance { [pscustomobject]@{ Name = 'VirtualMachinePlatform'; InstallState = $global:AgoraCimState } }
+            Get-VmPlatformState | Should -Be $case[1]
+        }
+        Should -Invoke -ModuleName AgoraInstall Get-CimInstance -ParameterFilter { $ClassName -eq 'Win32_OptionalFeature' -and $Filter -like "*VirtualMachinePlatform*" }
+        Remove-Variable -Name AgoraCimState -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'unknown when the query fails' {
+        Mock -ModuleName AgoraInstall Get-CimInstance { throw 'WMI is broken' }
+        Mock -ModuleName AgoraInstall Get-WindowsOptionalFeature { throw 'not elevated' }
+        Get-VmPlatformState | Should -Be 'unknown'
+    }
+}
+
+Describe 'Test-Preflight memory' {
+    It 'accepts an "8 GB" PC that reports 7.8 GB and refuses 6 GB' {
+        $ok = [pscustomobject]@{ Build = 22631; MemoryGB = 7.8; Virtualization = $true; Arch = 'AMD64' }
+        $problems = Test-Preflight -Info $ok
+        $problems.Count | Should -Be 0
+        $low = [pscustomobject]@{ Build = 22631; MemoryGB = 6; Virtualization = $true; Arch = 'AMD64' }
+        (Test-Preflight -Info $low) -join ' ' | Should -Match '8 GB'
     }
 }
 

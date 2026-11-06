@@ -62,12 +62,15 @@ if (-not (Test-WslInstalled)) {
     Add-Line (($v.Output | Select-Object -First 2) -join '; ')
     switch (Get-VmPlatformState) {
         'enabled' { Pass 'Virtual Machine Platform on' }
-        'disabled' { Fail 'Virtual Machine Platform is off: WSL 2 cannot start a distro (wsl --install --no-distribution as administrator, then restart)' }
+        'disabled' {
+            if ((Get-WslRunningNames).Count -gt 0) { Note 'Virtual Machine Platform: Windows reports it off, but WSL 2 distros run' }
+            else { Fail 'Virtual Machine Platform is off: WSL 2 cannot start a distro (wsl --install --no-distribution as administrator, then restart)' }
+        }
         default { Note 'Virtual Machine Platform: could not tell' }
     }
     $mem = Get-WslMemoryLimit -Info $info -ConfigText (Read-WslConfig)
     $memText = "WSL memory limit $($mem.GB) GB ($(if ($mem.Source -eq 'wslconfig') { '.wslconfig' } else { 'default, half of this PC' }))"
-    if ($mem.GB -ge 6) { Pass $memText } else { Fail "$memText; Agora needs 6 GB: set memory=6GB under [wsl2] in $(Get-WslConfigPath), then wsl --shutdown" }
+    if ($mem.GB -ge 5.5) { Pass $memText } else { Note "$memText; Agora needs about 6 GB: set memory=6GB under [wsl2] in $(Get-WslConfigPath), then wsl --shutdown" }
     $distros = Get-WslDistros
     foreach ($d in $distros) { Add-Line "distro $($d.Name): $($d.State), WSL $($d.Version)$(if ($d.Default) { ', default' })" }
     $state = Get-InstallerState

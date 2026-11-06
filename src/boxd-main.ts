@@ -47,7 +47,14 @@ export async function preflight(docker: BoxDockerApi, opts: { image: string; ins
 async function holdLock(db: Pool): Promise<PoolClient> {
     for (;;) {
         const client = await db.connect();
-        const r = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS ok', [LOCK_KEY]);
+        let r;
+        try {
+            r = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS ok', [LOCK_KEY]);
+        } catch (err) {
+            // Destroy it, don't return it: startup retries must not leak the pool's 4 connections
+            client.release(err as Error);
+            throw err;
+        }
         if (r.rows[0].ok) return client;
         client.release();
         console.warn('[boxd] another boxd holds the lock; waiting');
