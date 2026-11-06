@@ -276,6 +276,22 @@ describe('Upload size follows the admin setting', () => {
         }
     });
 
+    // #206: multipart reads one byte past the setting, so a file that long is read whole and the
+    // setting's own check refuses it; a cut-off read can never come back looking within the limit.
+    test('a file one byte over the setting is refused and stores nothing', async () => {
+        await setMaxSize(1 * MB);
+        try {
+            const before = await fileCount();
+            const res = await ctx.request.post('/files/upload').set(owner.auth)
+                .field('channel_id', channelId)
+                .attach('file', Buffer.alloc(1 * MB + 1, 'e'), 'one-byte-over.txt');
+            expect([res.status, res.body.error]).toEqual([413, 'File exceeds maximum allowed size']);
+            expect(await fileCount()).toBe(before);
+        } finally {
+            await setMaxSize(26214400);
+        }
+    });
+
     test('a file exactly at the setting is stored', async () => {
         await setMaxSize(1 * MB);
         try {
