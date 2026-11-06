@@ -64,7 +64,7 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     return estimateMessageHeight(prev, messages[index]) + (run && isRunExpanded(run.key, run.aliases, run.defaultExpanded) && run.position === run.size - 1 ? 48 : 0);
   };
 
-  const virtualizer = useVirtualizer({
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     count,
     getScrollElement: () => parentRef.current,
     estimateSize: estimateAt,
@@ -89,7 +89,16 @@ export function MessageList({ channelId, channelName, isDm }: MessageListProps) 
     prevRunRowsRef.current = runRows;
     if (prev === expandedKeys && previousRows === runRows) return;
     const changed = new Set([...prev, ...expandedKeys].filter(k => prev.includes(k) !== expandedKeys.includes(k)).map(key => key.replace(/^collapsed:/, '')));
-    resizeChangedRunRows(virtualizer, previousRows, runRows, changed, estimateAt);
+    // Read rendered rows from the DOM; only rows that are not rendered get an estimate.
+    // Many role changes (an alias or a default added to an open run) leave a row's height
+    // as it was, so no ResizeObserver callback would replace an estimate and the rows below
+    // would be drawn over it. A row that does change size is also not re-measured while a
+    // smooth scroll runs far from it. (The virtualizer's measureElement without a
+    // ResizeObserver entry returns the cached size, so it cannot be used here.)
+    resizeChangedRunRows(virtualizer, previousRows, runRows, changed, (index, id) => {
+      const node = virtualizer.elementsCache.get(id);
+      return node?.isConnected ? node.offsetHeight : estimateAt(index);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedKeys, runLayout]);
 

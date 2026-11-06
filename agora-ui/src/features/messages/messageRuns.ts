@@ -66,11 +66,15 @@ export function computeMessageRuns(messages: readonly Message[]): (MessageRun | 
 
 export interface RunRow { id: string; run: MessageRun | null }
 
-/** Invalidate measured heights on toggle AND when a live run forms or breaks. */
+/**
+ * Invalidate measured heights on toggle AND when a live run forms or breaks.
+ * `size` must measure a row that is still mounted: a row whose rendered height did not
+ * change gets no ResizeObserver callback, so an estimate written for it would stick.
+ */
 export function resizeChangedRunRows(
   list: { resizeItem: (index: number, size: number) => void },
   previous: readonly RunRow[], next: readonly RunRow[], changedKeys: ReadonlySet<string>,
-  estimate: (index: number) => number,
+  size: (index: number, id: string) => number,
 ): void {
   const previousById = new Map(previous.map(row => [row.id, row.run]));
   next.forEach(({ id, run }, index) => {
@@ -80,6 +84,6 @@ export function resizeChangedRunRows(
       || before?.noticeOnly !== run?.noticeOnly
       || (!!before && before.position === before.size - 1) !== (!!run && run.position === run.size - 1)
       || before?.aliases.join(',') !== run?.aliases.join(',')
-      || (run && run.aliases.some(key => changedKeys.has(key)))) list.resizeItem(index, estimate(index));
+      || (run && run.aliases.some(key => changedKeys.has(key)))) list.resizeItem(index, size(index, id));
   });
 }
