@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BOX_ADAPTER_REGISTRY, BOX_ADAPTERS, boxAdapterSpec, boxHasLogin } from '../../src/lib/boxes/adapters';
+import { BOX_ADAPTER_REGISTRY, BOX_ADAPTERS, boxAdapterSpec, boxHasLogin, type BoxAdapterSpec } from '../../src/lib/boxes/adapters';
 import { defaultAllowlist, DOMAIN_ENTRY, PROVIDER_DOMAINS, REGISTRY_DOMAINS } from '../../src/lib/boxes/contract';
 import { isTelemetryHost, TELEMETRY_DOMAINS, wildcardTooWide } from '../../src/lib/boxes/domains';
 import { LOGIN_ONLY_HOSTS, LOGIN_PROVIDER_DOMAINS } from '../../src/lib/boxes/edge-requests';
@@ -87,18 +87,21 @@ describe('box/Dockerfile installs and links every adapter', () => {
     for (const [name, spec] of Object.entries(BOX_ADAPTER_REGISTRY)) {
         it(`${name}: the pinned version in the box stage, a fake CLI in the test stage`, () => {
             const box = stage('box');
-            const image: { npm?: string; tarball?: { url: string; sha256: Readonly<Record<string, string>> } } = spec.image;
-            expect(box).toContain(`ARG ${spec.image.versionArg}=${spec.image.version}\n`);
-            // From npm, or a release tarball checked against its pinned sha256 for each CPU
-            expect(!!image.npm !== !!image.tarball).toBe(true);
-            if (image.npm) expect(box).toContain(`"${image.npm}@\${${spec.image.versionArg}}"`);
-            if (image.tarball) {
-                expect(box).toContain(`"${image.tarball.url}"`);
-                expect(image.tarball.url).toContain(`\${${spec.image.versionArg}}`);
-                for (const [arg, sum] of Object.entries(image.tarball.sha256)) {
-                    expect(sum).toMatch(/^[0-9a-f]{64}$/);
-                    expect(box).toContain(`ARG ${arg}=${sum}\n`);
-                }
+            const image = spec.image as BoxAdapterSpec['image'];
+            expect(box).toContain(`ARG ${image.versionArg}=${image.version}\n`);
+            // A URL as the Dockerfile writes it: the version ARG and the `arch` variable
+            const url = (u: string) => u.replaceAll('{version}', `\${${image.versionArg}}`).replaceAll('{arch}', '${arch}');
+            if ('npm' in image) expect(box).toContain(`"${image.npm}@\${${image.versionArg}}"`);
+            else if ('binary' in image) {
+                // One release binary per CPU, each with its own sha256, checked before it is used
+                expect(box).toContain(url(image.binary.url));
+                for (const sum of Object.values(image.binary.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+                expect(box).toContain('sha256sum -c -');
+            } else {
+                // One release archive per CPU, each with its own sha256, checked before it is unpacked
+                expect(box).toContain(url(image.tarball.url));
+                for (const sum of Object.values(image.tarball.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+                expect(box).toMatch(/tar -xzf/);
                 expect(box).toContain('sha256sum -c -');
             }
             expect(box).toMatch(new RegExp(`ln -s \\S+ /opt/agora/bin/${name}\\b`));
@@ -178,10 +181,29 @@ describe('claude and codex resolve to what they were before the registry', () =>
     });
 });
 
+describe('oh-my-pi in a box', () => {
+    it('an OpenRouter key only, its model required, OpenRouter alone allowed, the Stencil hosts refused', () => {
+        expect(BOX_ADAPTER_REGISTRY.omp).toMatchObject({ protocol: 'acp', authModes: ['api_key'], apiKeyEnv: 'OPENROUTER_API_KEY', modelRequired: true, loginDomains: [] });
+        expect(boxHasLogin('omp')).toBe(false);
+        expect(defaultAllowlist('omp')).toEqual(['openrouter.ai', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
+        // Never an Anthropic host: omp's subscription login and its Claude-compatible identity stay out
+        expect(defaultAllowlist('omp').some(d => /anthropic|claude/.test(d))).toBe(false);
+        expect(LOGIN_PROVIDER_DOMAINS.omp).toBeUndefined();
+        expect(isTelemetryHost('build.stencil.so')).toBe(true);
+        expect(isTelemetryHost('cloud.stencil.so')).toBe(true);
+        expect(isTelemetryHost('catalog.stencil.so')).toBe(true);
+        expect(isTelemetryHost('stencil.so')).toBe(false);
+        expect(HOST_ADAPTERS.omp).toMatchObject({ acpArgs: ['acp'], login: null, noProxy: [], yeet: { args: ['--yolo'], noOpenWeb: [], acpAllowAll: true },
+            quiet: { env: { OTEL_SDK_DISABLED: 'true' }, args: [] }, state: { rulesFile: 'agent/AGENTS.md', files: {} } });
+        expect(BOX_ADAPTER_REGISTRY.omp.image).toMatchObject({ version: '18.17.0', versionArg: 'OMP_VERSION' });
+    });
+});
+
 describe('Devin in a box', () => {
-    it('the owner\'s own login only, Devin\'s hosts allowed, flags, error reports and updates refused', () => {
+    it('the owner\'s own login only, Devin\'s provider seam allowed, flags, error reports and updates refused', () => {
         expect(BOX_ADAPTER_REGISTRY.devin).toMatchObject({ label: 'Devin', protocol: 'acp', authModes: ['subscription'], modelRequired: false,
             loginDomains: ['devin.ai', 'windsurf.com'], loginOnly: ['app.devin.ai'] });
+        expect(BOX_ADAPTER_REGISTRY.devin.image).toMatchObject({ version: '3000.11.234', versionArg: 'DEVIN_VERSION' });
         expect(boxHasLogin('devin')).toBe(true);
         // Only the provider seam stays open; its sign-in host is reachable only while a login is open
         expect(defaultAllowlist('devin')).toEqual(['server.codeium.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);

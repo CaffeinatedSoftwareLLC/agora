@@ -119,6 +119,28 @@ export const BOX_ADAPTERS = {
         // XDG_CONFIG_HOME is <state>/config (adapters.ts): opencode's global rules file
         state: { rulesFile: 'config/opencode/AGENTS.md', files: {} },
     },
+    omp: {
+        executable: '/opt/agora/bin/omp',
+        version: '18.17.0',
+        protocol: 'acp',
+        acpArgs: ['acp'],
+        // An OpenRouter key only (terms.ts OMP_ACP_ONLY): omp's subscription logins (Claude,
+        // ChatGPT, Copilot, Cursor, Devin) are never offered, and every model provider but
+        // OpenRouter is disabled in its settings (acp/omp.ts)
+        authModes: ['api_key'],
+        apiKeyEnv: 'OPENROUTER_API_KEY',
+        login: null,
+        // On top of what every omp run gets (acp/omp.ts: no update check or install, OTLP export,
+        // auto-QA reports, Spotlight or Exa; nothing discovered from the repository)
+        quiet: { env: { OTEL_SDK_DISABLED: 'true' }, args: [] },
+        noProxy: [],
+        // --yolo: no prompts. Web search and the browser are denied tools in every mode
+        // (acp/omp.ts ompSettings), so nothing to add for the open web
+        yeet: { args: ['--yolo'], noOpenWeb: [], acpAllowAll: true },
+        // PI_CODING_AGENT_DIR is <state>/agent (adapters.ts); the host passes this file to omp
+        // with --append-system-prompt, as omp's own discovery is off
+        state: { rulesFile: 'agent/AGENTS.md', files: {} },
+    },
     devin: {
         executable: '/opt/agora/bin/devin',
         version: '3000.11.234',

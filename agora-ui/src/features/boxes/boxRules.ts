@@ -76,6 +76,9 @@ export const BOX_ADAPTER_OPTIONS: readonly BoxAdapterOption[] = [
   { value: 'codex', label: 'Codex', auth: ['subscription', 'api_key'], keyLabel: 'OpenAI API key', login: { kind: 'device', provider: 'OpenAI' } },
   { value: 'opencode', label: 'opencode', auth: ['api_key'], keyLabel: 'OpenRouter API key',
     model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
+  // oh-my-pi: an OpenRouter key only, never one of its subscription logins
+  { value: 'omp', label: 'oh-my-pi', auth: ['api_key'], keyLabel: 'OpenRouter API key',
+    model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
   // Your own Devin login only (Cognition's terms: the account holder); no API key mode
   { value: 'devin', label: 'Devin', auth: ['subscription'], keyLabel: 'Devin API key', login: { kind: 'paste', provider: 'Devin' } },
 ];

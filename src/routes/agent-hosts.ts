@@ -82,8 +82,8 @@ const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
     botId: ID,
     hostId: ID,
-    // gemini and opencode: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/)
-    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'devin'] },
+    // gemini, opencode and omp: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/)
+    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin'] },
     // As agora-host's claim schema accepts it (src/lib/boxes/service.ts MODEL_PATTERN): anything else never wakes
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64, pattern: MODEL_PATTERN },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
@@ -99,11 +99,12 @@ const profileFields = {
 } as const;
 
 /**
- * opencode's own default model is an OpenCode Zen one, so an opencode profile names its model
- * (agora-host refuses to run one without). OpenRouter IDs work with or without `openrouter/`.
+ * opencode's own default model is an OpenCode Zen one, and omp's is whatever its catalog lists
+ * first, so an opencode or omp profile names its model (agora-host refuses to run one without).
+ * OpenRouter IDs work with or without `openrouter/`.
  */
-const OPENCODE_MODEL_REQUIRED = 'An opencode profile needs a model, e.g. qwen/qwen3-coder (an OpenRouter model ID)';
-const missingModel = (adapter: string, model: string | null | undefined) => adapter === 'opencode' && !model;
+const OPENCODE_MODEL_REQUIRED = 'An opencode or omp profile needs a model, e.g. qwen/qwen3-coder (an OpenRouter model ID)';
+const missingModel = (adapter: string, model: string | null | undefined) => (adapter === 'opencode' || adapter === 'omp') && !model;
 
 /** The bot belongs to this server and the host is this server's and not revoked. */
 async function checkRefs(db: any, serverId: string, botId?: string, hostId?: string): Promise<string | null> {

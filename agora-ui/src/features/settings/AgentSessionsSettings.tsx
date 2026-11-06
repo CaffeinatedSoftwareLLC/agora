@@ -19,7 +19,7 @@ import { BoxModeBadge } from '../boxes/BoxModeBadge';
 /** kind 'box': the agora-host inside a box (docs/agent-boxes.md §8.1); listed under Boxes, not here. */
 interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null; kind?: 'machine' | 'box' }
 interface Profile {
-  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'devin';
+  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
@@ -177,7 +177,8 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
   const [unboxedAck, setUnboxedAck] = useState(false);
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm(f => ({ ...f, [k]: e.target.value }));
   const hostId = form.hostId || hosts[0]?.id || '';
-  const opencode = form.adapter === 'opencode';
+  // opencode and omp run on an OpenRouter key, with a named model
+  const opencode = form.adapter === 'opencode' || form.adapter === 'omp';
 
   const create = async () => {
     try {
@@ -223,6 +224,8 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
                 <option value="gemini">Gemini CLI (ACP, API key)</option>
                 {/* opencode acp on an OpenRouter key: any OpenRouter model, one model per agent */}
                 <option value="opencode">opencode (ACP, OpenRouter key)</option>
+                {/* omp acp on an OpenRouter key only; every write, command and Agora tool asks on a machine */}
+                <option value="omp">oh-my-pi (ACP, OpenRouter key)</option>
                 {/* devin acp on the owner's own Devin login; only the owner can wake it */}
                 <option value="devin">Devin (ACP, your Devin login)</option>
               </select>
@@ -277,8 +280,8 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   const [wakeBudget, setWakeBudget] = useState(String(profile.wakeBudget));
   const validWakeBudget = Number.isInteger(Number(wakeBudget)) && Number(wakeBudget) >= 1 && Number(wakeBudget) <= 100000;
   const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary') || wakeBudget !== String(profile.wakeBudget);
-  // opencode's own default is an OpenCode Zen model, so an opencode agent always names one
-  const opencode = profile.adapter === 'opencode';
+  // opencode's own default is an OpenCode Zen model, so an opencode (or omp) agent always names one
+  const opencode = profile.adapter === 'opencode' || profile.adapter === 'omp';
   const validModel = !opencode || !!model.trim();
 
   const save = async () => {

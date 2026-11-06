@@ -18,15 +18,24 @@ export interface BoxTelemetryHost {
     what: string;
 }
 
+/**
+ * Where box/Dockerfile gets a CLI. In a URL, `{version}` is the pinned version (the Dockerfile
+ * writes its ARG there) and `{arch}` the release's name for the image's CPU.
+ * - `npm`: the package, installed at the pinned version.
+ * - `binary`: one release file per CPU, checked against its sha256 (amd64 and arm64).
+ * - `tarball`: one release archive per CPU, checked against its sha256 (amd64 and arm64) and
+ *   unpacked (Devin).
+ */
+export type BoxImageSource =
+    | { npm: string }
+    | { binary: { url: string; sha256: { amd64: string; arm64: string } } }
+    | { tarball: { url: string; sha256: { amd64: string; arm64: string } } };
+
 export interface BoxAdapterSpec {
     /** Shown on cards and in Settings → Agents. */
     label: string;
-    /**
-     * The pinned CLI in the box image: its version and the box/Dockerfile ARG that holds it, and
-     * where it comes from: an npm package, or a release tarball (`url` as box/Dockerfile spells
-     * it, `${target}` the CPU) with its sha256 per CPU, each in the Dockerfile ARG named here.
-     */
-    image: { version: string; versionArg: string; npm?: string; tarball?: { url: string; sha256: Readonly<Record<string, string>> } };
+    /** The pinned CLI in the box image: its version, the box/Dockerfile ARG that holds it, and its source. */
+    image: { version: string; versionArg: string } & BoxImageSource;
     /** How agora-host drives it: the CLI's own headless mode, or the Agent Client Protocol. */
     protocol: 'cli' | 'acp';
     /**
@@ -117,17 +126,50 @@ export const BOX_ADAPTER_REGISTRY = {
             { domain: 'opncd.ai', what: 'session sharing (off: `share: "disabled"`, `OPENCODE_DISABLE_SHARE`)' },
         ],
     },
+    omp: {
+        label: 'oh-my-pi',
+        // The standalone binary from the GitHub release (MIT); omp releases every few days, so it
+        // is pinned by version and sha256 (SHA256SUMS.txt of the release)
+        image: {
+            version: '18.17.0', versionArg: 'OMP_VERSION',
+            binary: {
+                url: 'https://github.com/can1357/oh-my-pi/releases/download/v{version}/omp-linux-{arch}',
+                sha256: {
+                    amd64: 'a4ce6001ab1012ca835f4184d675437531bd1ac477a7ba8424ed0b5476e9e4cb',
+                    arm64: 'a9423fd7a69d869bf514931226b21d4ff55474225f574e2911fec457fc470e68',
+                },
+            },
+        },
+        protocol: 'acp',
+        // An OpenRouter key only (docs/provider-terms.md): omp's subscription logins are never used
+        authModes: ['api_key'],
+        apiKeyEnv: 'OPENROUTER_API_KEY',
+        modelRequired: true,
+        // Checked against the pinned binary (omp 18.17.0, 2026-11-06, through a logging proxy,
+        // a fake key): with only OpenRouter enabled it reaches openrouter.ai/api/v1 and
+        // catalog.stencil.so (model metadata, refused below; the turn runs without it). No
+        // Anthropic host: omp's Claude-compatible identity is for its Anthropic provider, which
+        // is disabled
+        allowlist: ['openrouter.ai'],
+        loginDomains: [],
+        loginOnly: [],
+        telemetry: [
+            { domain: 'build.stencil.so', what: 'update checks and downloads (interactive mode and `omp update` only; `update.auto: false`)' },
+            { domain: 'cloud.stencil.so', what: 'Spotlight experiment (off: `spotlight.experiment.enabled: false`)' },
+            { domain: 'catalog.stencil.so', what: 'model metadata (models.dev), fetched at start; omp runs without it' },
+        ],
+    },
     devin: {
         label: 'Devin',
-        // Cognition's release tarball (it is not on npm), checked against its sha256 for each CPU
+        // Cognition's release tarball (it is not on npm), one per CPU, checked against its sha256
         // (static.devin.ai/cli/3000.11.234/manifest.json; the x86_64 one also checked by hand)
         image: {
             version: '3000.11.234', versionArg: 'DEVIN_VERSION',
             tarball: {
-                url: 'https://static.devin.ai/cli/${DEVIN_VERSION}/devin-${DEVIN_VERSION}-${target}-unknown-linux.tar.gz',
+                url: 'https://static.devin.ai/cli/{version}/devin-{version}-{arch}-unknown-linux.tar.gz',
                 sha256: {
-                    DEVIN_SHA256_X86_64: '201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a',
-                    DEVIN_SHA256_AARCH64: '438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e',
+                    amd64: '201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a',
+                    arm64: '438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e',
                 },
             },
         },
