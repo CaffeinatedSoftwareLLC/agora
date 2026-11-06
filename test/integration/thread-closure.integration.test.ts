@@ -98,6 +98,47 @@ describe('who can close a thread', () => {
         expect((await close(third.id, codex())).status).toBe(403);
     });
 
+    it('a starter\'s close racing an owner\'s close cannot overwrite the owner\'s closure', async () => {
+        const parent = await post('Claude topic', claude());
+        await post(START, codex(), parent.id);
+        const next = await post('Moved here', claude());
+
+        // Hold the parent row so both closes queue on it: the owner's first, then the starter's.
+        // Without the row lock the starter would read the still-open thread, pass its check,
+        // and overwrite the owner's closure once the owner commits.
+        const holder = await ctx.db.connect();
+        const waiting = async (n: number) => {
+            for (let i = 0; i < 400; i++) {
+                const r = await ctx.db.query(
+                    `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`);
+                if (r.rows[0].n >= n) return;
+                await new Promise(res => setTimeout(res, 25));
+            }
+            throw new Error(`expected ${n} requests waiting on the thread row`);
+        };
+        let ownerClose: Promise<any>, starterClose: Promise<any>;
+        try {
+            await holder.query('BEGIN');
+            await holder.query('SELECT 1 FROM messages WHERE id = $1 FOR UPDATE', [parent.id]);
+            ownerClose = close(parent.id, owner.auth, { closed: true, reason: 'cancelled' }).then(r => r);
+            await waiting(1);
+            starterClose = close(parent.id, codex(), { closed: true, successor: next.id }).then(r => r);
+            await waiting(2);
+        } finally {
+            await holder.query('ROLLBACK');
+            holder.release();
+        }
+
+        expect((await ownerClose!).status).toBe(200);
+        const starter = await starterClose!;
+        expect(starter.status, JSON.stringify(starter.body)).toBe(403);
+        const row = (await ctx.db.query(
+            'SELECT thread_closed_by, thread_close_reason, thread_successor_id FROM messages WHERE id = $1', [parent.id])).rows[0];
+        expect(row.thread_closed_by.trim()).toBe(owner.userId);
+        expect(row.thread_close_reason).toBe('cancelled');
+        expect(row.thread_successor_id).toBeNull();
+    });
+
     it('an ordinary member who did not start it still cannot close it', async () => {
         const parent = await post('Owner topic', owner.auth);
         await post('a reply', member.auth, parent.id);

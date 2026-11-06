@@ -618,10 +618,14 @@ export async function threadRoutes(app: FastifyInstance) {
         }
         if (successor) reason = 'superseded';
 
-        // Fetch parent message (thread_id IS NULL ensures only parents)
+        // Fetch parent message (thread_id IS NULL ensures only parents). Locked until the request
+        // commits: the starter's right to close depends on who closed it, so a closure committed
+        // between this read and the UPDATE below must not be overwritten by a decision made on the
+        // older row. A concurrent close waits here and then sees the newer closure. NO KEY UPDATE is
+        // the lock the UPDATE takes anyway, so replies (whose FK takes KEY SHARE) are not held up.
         const parent = await db.query(
             `SELECT id, author_id, reply_count, last_reply_at, thread_closed_at, thread_close_reason, thread_successor_id, thread_closed_by
-             FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL`,
+             FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL FOR NO KEY UPDATE`,
             [msgId, channelId]
         );
         if (parent.rows.length === 0) {
