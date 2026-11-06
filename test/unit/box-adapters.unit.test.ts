@@ -100,6 +100,14 @@ describe('the UI offers every adapter', () => {
             expect(o.label).toBe(spec.label);
             expect(o.auth).toEqual([...spec.authModes]);
         }
+        // A model field exactly for the adapters that must be created with one
+        const chunks = source.slice(source.indexOf('export const BOX_ADAPTER_OPTIONS')).split('{ value: ').slice(1);
+        expect(chunks.map(c => /^'([a-z0-9-]+)'/.exec(c)![1])).toEqual(names);
+        for (const c of chunks) {
+            const name = /^'([a-z0-9-]+)'/.exec(c)![1];
+            const own = c.slice(0, c.search(/\n\];|$/));
+            expect(/\bmodel: \{/.test(own), name).toBe(boxAdapterSpec(name)!.modelRequired);
+        }
         expect(read('agora-ui/src/features/boxes/api.ts')).toContain(`export type BoxAdapter = ${names.map(n => `'${n}'`).join(' | ')};`);
     });
 });

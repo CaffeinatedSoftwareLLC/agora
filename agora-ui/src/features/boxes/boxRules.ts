@@ -77,6 +77,19 @@ export const BOX_ADAPTER_OPTIONS: readonly BoxAdapterOption[] = [
 
 export const ADAPTER_LABEL: Record<string, string> = Object.fromEntries(BOX_ADAPTER_OPTIONS.map(o => [o.value, o.label]));
 
+/** A model ID as the server and agora-host accept it (src/lib/boxes/service.ts MODEL_PATTERN). */
+export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
+/** Why a box's model ID can't be used, or null when it can. */
+export function modelProblem(model: string): string | null {
+  if (!model) return 'Enter the model ID.';
+  if (model.length > 64) return 'At most 64 characters.';
+  if (!MODEL_ID.test(model)) return 'Letters, digits and . _ : / - only, starting with a letter or digit.';
+  // OpenRouter's :online variants search the web on the provider's side, around the box's edge
+  if (/:online$/i.test(model)) return 'A box can\'t use an :online model: it searches the web around the box\'s edge.';
+  return null;
+}
+
 /** The state chip: what the box is doing, including an owner action boxd hasn't done yet. */
 export function stateChip(box: Box): { label: string; tone: string; login?: boolean } {
   if (box.deletedAt || box.desiredState === 'deleted') return { label: 'deleted', tone: 'bg-surface text-text-muted' };
@@ -191,6 +204,7 @@ const BOX_ERRORS: Record<string, string> = {
   api_key_needs_api_key_auth: 'An API key is only used with API key sign-in.',
   auth_not_supported: 'This CLI can\'t sign in that way in a box.',
   model_required: 'Enter the model ID.',
+  model_not_allowed: 'A box can\'t use an :online model: it searches the web around the box\'s edge.',
   login_not_supported: 'This box signs in with its API key; there is nothing to log in.',
   unknown_channel: 'That channel is not on this server.',
   login_active: 'A login is already in progress.',

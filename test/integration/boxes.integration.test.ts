@@ -98,6 +98,14 @@ describe('create and list', () => {
             .toMatchObject({ error: 'auth_not_supported' });
         expect((await createBox({ name: 'qwen', adapter: 'opencode', auth: 'api_key', apiKey: 'sk-or-test-1234567890' })).body)
             .toMatchObject({ error: 'model_required' });
+        // A model agora-host can't claim with would never wake, and the box's profile can't be edited
+        for (const model of ['qwen/qwen3-coder ', 'qwen qwen3', '/qwen'])
+            expect((await createBox({ name: 'qwen', adapter: 'opencode', apiKey: 'sk-or-test-1234567890', model })).status, model).toBe(400);
+        // An :online model searches the web on OpenRouter's side, around the edge
+        for (const model of ['qwen/qwen3-coder:online', 'openrouter/qwen/qwen3-coder:ONLINE'])
+            expect((await createBox({ name: 'qwen', adapter: 'opencode', apiKey: 'sk-or-test-1234567890', model })).body, model)
+                .toMatchObject({ error: 'model_not_allowed' });
+        expect((await createBox({ name: 'gpt', adapter: 'codex', model: 'gpt-x:online' })).body).toMatchObject({ error: 'model_not_allowed' });
         const res = await createBox({ name: 'qwen', adapter: 'opencode', apiKey: 'sk-or-test-1234567890', model: 'qwen/qwen3-coder' });
         expect(res.status, JSON.stringify(res.body)).toBe(201);
         expect(res.body.box).toMatchObject({ adapter: 'opencode', auth: 'api_key', loginState: 'none' });

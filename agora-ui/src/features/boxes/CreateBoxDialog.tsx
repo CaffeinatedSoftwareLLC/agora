@@ -3,7 +3,7 @@ import type { Channel } from '../../lib/contracts/server';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { boxApi, type Box, type BoxAdapter, type BoxAuth } from './api';
-import { BOX_ADAPTER_OPTIONS, BOX_NAME, INPUT, TOUCH, boxError, parseRepos } from './boxRules';
+import { BOX_ADAPTER_OPTIONS, BOX_NAME, INPUT, TOUCH, boxError, modelProblem, parseRepos } from './boxRules';
 
 /**
  * Create a box (docs/agent-boxes.md §9): the server creates its bot, host, profile and box row;
@@ -27,9 +27,11 @@ export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
   const option = BOX_ADAPTER_OPTIONS.find(o => o.value === adapter) ?? BOX_ADAPTER_OPTIONS[0];
   const pickAdapter = (value: BoxAdapter) => {
     setAdapter(value);
-    // An adapter that can't use the current sign-in mode switches to its own default
+    // Another CLI starts from its own default sign-in, and a key typed for the last one is dropped:
+    // an OpenRouter key must never be sent as an Anthropic one
     const next = BOX_ADAPTER_OPTIONS.find(o => o.value === value);
-    if (next && !next.auth.includes(auth)) setAuth(next.auth[0]);
+    if (next) setAuth(next.auth[0]);
+    setApiKey('');
   };
   const cleanModel = model.trim();
   const cleanName = name.trim().toLowerCase();
@@ -37,7 +39,7 @@ export function CreateBoxDialog({ serverId, channels, onClose, onCreated }: {
   const problems = {
     name: !cleanName ? null : BOX_NAME.test(cleanName) ? null : 'Letters, digits, - and _; start with a letter or digit; at most 32.',
     apiKey: auth === 'api_key' && !apiKey.trim() ? 'Enter the API key.' : null,
-    model: option.model && !cleanModel ? 'Enter the model ID.' : cleanModel.length > 64 ? 'At most 64 characters.' : null,
+    model: !option.model ? null : modelProblem(cleanModel),
     channel: homeChannelId ? null : 'Pick the channel the box works in.',
     repos: bad.length ? `Not owner/repo: ${bad.join(', ')}` : null,
   };

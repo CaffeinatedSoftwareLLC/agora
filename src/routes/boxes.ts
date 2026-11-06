@@ -7,7 +7,7 @@ import { config } from '../config';
 import { DOMAIN_ENTRY } from '../lib/boxes/contract';
 import { boxHasLogin } from '../lib/boxes/adapters';
 import { decideEdgeRequest, EdgeDecisionError, loginBlockedHosts } from '../lib/boxes/edge-requests';
-import { BOX_ADAPTERS, BoxError, REPO_PATTERN, boxAction, createBox, deleteBox, patchBox, purgeBox, restoreBox } from '../lib/boxes/service';
+import { BOX_ADAPTERS, BoxError, MODEL_PATTERN, REPO_PATTERN, boxAction, createBox, deleteBox, patchBox, purgeBox, restoreBox } from '../lib/boxes/service';
 
 /**
  * Agent boxes, owner API (docs/agent-boxes.md, docs/api-reference.md "Boxes").
@@ -161,7 +161,8 @@ export async function boxRoutes(app: FastifyInstance) {
                     apiKey: { type: 'string', minLength: 8, maxLength: 512, pattern: '^[\\x21-\\x7e]+$' },
                     homeChannelId: ID,
                     repos: { type: 'array', maxItems: 20, items: REPO },
-                    model: { type: ['string', 'null'], minLength: 1, maxLength: 64 },
+                    // agora-host's claim schema refuses anything else, so such a box would never wake
+                    model: { type: ['string', 'null'], minLength: 1, maxLength: 64, pattern: MODEL_PATTERN },
                     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
                 },
             },

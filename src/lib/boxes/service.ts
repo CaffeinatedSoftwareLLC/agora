@@ -30,6 +30,13 @@ export const API_KEY_ENV = Object.fromEntries(
 /** A deleted box's home volume is kept this long (§9.6). */
 export const DELETE_GRACE_DAYS = 7;
 export const REPO_PATTERN = '^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$';
+/** A model ID as agora-host's claim schema accepts it (agora-host src/types.ts): anything else never wakes. */
+export const MODEL_PATTERN = '^[A-Za-z0-9][A-Za-z0-9._:/-]*$';
+/**
+ * A model a box agent may not use: an OpenRouter `:online` variant searches the web on the
+ * provider's side, which no edge allowlist sees (docs/agent-boxes.md §8.1).
+ */
+export const providerWebSearchModel = (model: string) => /:online$/i.test(model.trim());
 
 export function parseRepo(full: string): { owner: string; repo: string } {
     const [owner, repo] = full.split('/');
@@ -86,6 +93,8 @@ export async function createBox(db: any, input: CreateBoxInput): Promise<string>
     const auth = input.auth ?? spec.authModes[0];
     if (!(spec.authModes as readonly string[]).includes(auth)) throw new BoxError(400, 'auth_not_supported', `${spec.label} in a box signs in with ${spec.authModes.join(' or ')}`);
     if (spec.modelRequired && !input.model) throw new BoxError(400, 'model_required', `${spec.label} needs a model`);
+    if (input.model && providerWebSearchModel(input.model))
+        throw new BoxError(400, 'model_not_allowed', 'An :online model searches the web on the provider\'s side, around the box\'s edge; pick the model without :online');
     if (auth === 'api_key' && !input.apiKey) throw new BoxError(400, 'api_key_required');
     if (auth !== 'api_key' && input.apiKey) throw new BoxError(400, 'api_key_needs_api_key_auth');
     await requireChannel(db, input.serverId, input.homeChannelId);

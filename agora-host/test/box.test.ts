@@ -2,7 +2,8 @@ import { fileURLToPath } from 'node:url';
 import { copyFile, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { childEnv, prepare, verifyProfile } from '../src/adapters.js';
+import { childEnv, prepare, testedCliVersion, verifyProfile } from '../src/adapters.js';
+import { BOX_ADAPTERS } from '../src/box-adapters.js';
 import { boxConfig, boxConfigCommand, boxMode, inBox, originMatches, proxyVars, readBoxProfile, repoDir } from '../src/box.js';
 import { configSchema, type Config } from '../src/config.js';
 import { ProcessRunner } from '../src/process.js';
@@ -266,6 +267,18 @@ async function opencodeSetup(executable = process.execPath) {
     return { c, delivery, dir };
 }
 
+describe('the box image pins', () => {
+    it('every CLI pin is a version this host verifies (verifyProfile), so a box never starts on an untested CLI', () => {
+        for (const [name, spec] of Object.entries(BOX_ADAPTERS)) {
+            // ACP agents are checked by their protocol version instead
+            if (spec.protocol === 'cli') expect(testedCliVersion(name, spec.version), name).toBe(true);
+        }
+        expect(testedCliVersion('codex', '0.164.0')).toBe(false);
+        expect(testedCliVersion('claude', '2.2.0')).toBe(false);
+        expect(testedCliVersion('opencode', '1.18.34')).toBe(false);
+    });
+});
+
 describe('opencode in a box', () => {
     const profile = (p: object = {}) => JSON.stringify({ name: 'qwen', adapter: 'opencode', auth: 'api_key', apiKeyEnv: 'OPENROUTER_API_KEY', workdirAlias: 'work', repos: [], ...p });
     const env = (p: object = {}) => ({ AGORA_INSTANCE_URL: 'http://edge:8080', AGORA_HOST_TOKEN: HOST_TOKEN, AGORA_BOT_ID: id(5),
@@ -301,6 +314,15 @@ describe('opencode in a box', () => {
         expect(launch.env.NO_PROXY).toBe('edge,localhost,127.0.0.1,::1');
         expect(launch.env.no_proxy).toBe('edge,localhost,127.0.0.1,::1');
         expect(launch.env.AGORA_HOST_TOKEN).toBeUndefined();
+    });
+    it('refuses an OpenRouter :online model in a box (provider-side web search around the edge), not on a machine', async () => {
+        const { c, delivery } = await opencodeSetup();
+        delivery.profile.model = 'qwen/qwen3-coder:online';
+        process.env.AGORA_HOST_IN_BOX = '1'; boxMode.marker = join(marker, '..', 'missing');
+        const launch = await prepare(c, delivery); cleanups.push(launch.cleanup);
+        expect(JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT!).model).toBe('openrouter/qwen/qwen3-coder:online');
+        enterBox();
+        await expect(prepare(c, delivery)).rejects.toThrow('box_model_not_allowed');
     });
     it.skipIf(!unix)('box-config --state links each CLI\'s rules file and writes its settings once', async () => {
         const t = await tempDir(); cleanups.push(t.cleanup);

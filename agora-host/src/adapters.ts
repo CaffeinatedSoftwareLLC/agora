@@ -152,9 +152,18 @@ export async function verifyProfile(profile: LocalProfile): Promise<string> {
         env: childEnv(profile), cwd: profile.workdir, windowsHide: true, timeout: 10000, maxBuffer: 4096,
     });
     const version = /(\d+)\.(\d+)\.(\d+)/.exec(stdout);
-    const tested = version && (profile.adapter === 'codex' ? version[1] === '0' && version[2] === '163' : version[1] === '2' && version[2] === '1');
-    if (!version || (!tested && !profile.allowUntestedVersion)) throw new Error('unsupported_cli_version');
+    if (!version || (!testedCliVersion(profile.adapter, version[0]) && !profile.allowUntestedVersion)) throw new Error('unsupported_cli_version');
     return version[0];
+}
+
+/**
+ * The CLI versions this host was tested with: Codex 0.163.x, Claude Code 2.1.x. The box image's
+ * pins (box-adapters.ts) must pass it; agora-host/test/box.test.ts checks that they do.
+ */
+export function testedCliVersion(adapter: string, version: string): boolean {
+    const v = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    if (!v) return false;
+    return adapter === 'codex' ? v[1] === '0' && v[2] === '163' : adapter === 'claude' ? v[1] === '2' && v[2] === '1' : false;
 }
 
 /**
@@ -186,8 +195,10 @@ export function opencodeModel(model: string, provider: string): string {
  * from the claim's rules, except its own to-do list, which touches nothing outside the session.
  *
  * `boxed` (yeet mode in an agent box, box-adapters.ts): the box is the sandbox, so every tool is
- * allowed without asking, except web and code search, which reach a search service around the
- * edge's allowlist (as Claude's WebSearch is off in a box).
+ * allowed without asking, except web and code search (Exa): they would go through the edge like
+ * anything else, but a box has no open web and searches through Agora, so they are off as Claude's
+ * WebSearch is. The real way around the edge is a provider-side search model (OpenRouter
+ * `:online`), refused for box agents in prepare() and by Agora.
  */
 export function opencodeConfig(model: string, provider: string, boxed = false): string {
     return JSON.stringify({ model, small_model: model, enabled_providers: [provider], share: 'disabled', autoupdate: false,
@@ -225,6 +236,9 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
         if (model === null) throw new Error('opencode_model_required');
         model = opencodeModel(model, provider);
     }
+    // In a box, no OpenRouter `:online` model: it searches the web on the provider's side, which
+    // the edge never sees (Agora refuses one at box creation too)
+    if (inBox() && model !== null && /:online$/i.test(model)) throw new Error('box_model_not_allowed');
     // ACP session IDs are the agent's own; the CLIs use UUIDs
     const nativeId = acp ? SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
