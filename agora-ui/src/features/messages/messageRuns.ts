@@ -66,20 +66,49 @@ export function computeMessageRuns(messages: readonly Message[]): (MessageRun | 
 
 export interface RunRow { id: string; run: MessageRun | null }
 
-/** Invalidate measured heights on toggle AND when a live run forms or breaks. */
+export interface RunRowSizer {
+  /** Rendered height of a mounted row, or undefined when the row is not rendered. */
+  measure: (index: number, id: string) => number | undefined;
+  estimate: (index: number, id: string) => number;
+  /** Whether a run was open before this change, and whether it is open now. */
+  wasExpanded: (run: MessageRun) => boolean;
+  isExpanded: (run: MessageRun) => boolean;
+}
+
+/** What a row renders: its height can only change when this does. */
+function rowShape(run: MessageRun | null | undefined, expanded: boolean): string {
+  if (!run) return 'plain';
+  return [run.key, run.position, run.position === run.size - 1, run.noticeOnly, expanded].join('|');
+}
+
+/**
+ * Invalidate measured heights on toggle AND when a live run forms or breaks.
+ * Mounted rows are measured: a row whose rendered height did not change gets no
+ * ResizeObserver callback, so an estimate written for it would stick. Rows that are not
+ * rendered get an estimate only when what they render changed (open/hidden, head, last,
+ * run boundary); a new alias or default with the same result keeps the measured size.
+ */
 export function resizeChangedRunRows(
   list: { resizeItem: (index: number, size: number) => void },
   previous: readonly RunRow[], next: readonly RunRow[], changedKeys: ReadonlySet<string>,
-  estimate: (index: number) => number,
+  sizer: RunRowSizer,
 ): void {
   const previousById = new Map(previous.map(row => [row.id, row.run]));
   next.forEach(({ id, run }, index) => {
     const before = previousById.get(id);
-    if (before?.key !== run?.key || before?.position !== run?.position
+    const toggled = !!run && run.aliases.some(key => changedKeys.has(key));
+    if (!(before?.key !== run?.key || before?.position !== run?.position
       || before?.defaultExpanded !== run?.defaultExpanded
       || before?.noticeOnly !== run?.noticeOnly
       || (!!before && before.position === before.size - 1) !== (!!run && run.position === run.size - 1)
       || before?.aliases.join(',') !== run?.aliases.join(',')
-      || (run && run.aliases.some(key => changedKeys.has(key)))) list.resizeItem(index, estimate(index));
+      || toggled)) return;
+    const measured = sizer.measure(index, id);
+    if (measured !== undefined) { list.resizeItem(index, measured); return; }
+    // A row that was never measured has no cached size to clear.
+    if (!previousById.has(id)) return;
+    if (toggled || rowShape(before, !!before && sizer.wasExpanded(before)) !== rowShape(run, !!run && sizer.isExpanded(run))) {
+      list.resizeItem(index, sizer.estimate(index, id));
+    }
   });
 }
