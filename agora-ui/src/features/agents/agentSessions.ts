@@ -30,6 +30,19 @@ export interface AgentSession {
   terminalMode?: 'channel' | 'mcp' | null;
   /** Terminal sessions: false. Agora can't stop a user's own CLI. */
   budgetEnforced?: boolean;
+  /** Terminal sessions (#230): a chat_wait is open (always, for a Claude Code Channel). */
+  listening?: boolean;
+  /** Terminal sessions: neither working nor listening since then; null while it is either. */
+  idleSince?: string | null;
+  /** Terminal sessions: the last agora-mcp tool it called (chat_wait aside). */
+  lastTool?: string | null;
+  /** Terminal sessions: what the agent reported with agent_status (0-100), and when. */
+  contextPercent?: number | null;
+  usagePercent?: number | null;
+  /** Which usage window usagePercent is, e.g. "5h window". */
+  usageLabel?: string | null;
+  statusNote?: string | null;
+  statusAt?: string | null;
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
   /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only, siwc = plan-owner-triggered only. */
   authMode?: 'subscription' | 'api_key' | 'siwc';
@@ -329,10 +342,60 @@ export function ownSessionChips(
     .sort((a, b) => OWN_RANK[a.status] - OWN_RANK[b.status] || a.username.localeCompare(b.username));
 }
 
+/** A terminal agent idle this long is "not listening", in amber (#230). */
+export const NOT_LISTENING_MINUTES = 20;
+
+/** 0 → "", 12 → "12m", 125 → "2h", 3000 → "2d". */
+export function shortDuration(minutes: number): string {
+  if (minutes < 1) return '';
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 48 * 60) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / (24 * 60))}d`;
+}
+
+export type TerminalActivity = 'working' | 'listening' | 'idle' | 'not_listening';
+
+export interface TerminalLabel {
+  /** "working", "listening", "idle 12m" or "not listening 2h", then " · context 87%" when known. */
+  text: string;
+  activity: TerminalActivity;
+  /** Idle for NOT_LISTENING_MINUTES or more: shown in amber. */
+  warn: boolean;
+}
+
+/**
+ * What a terminal session is doing (#230): working (calling tools), listening (a chat_wait
+ * open), or neither. Neither is "idle" for a while and then "not listening": its CLI may have
+ * stopped (context ran out) while agora-mcp stays connected. `listening` overrides the session's
+ * own flag with live presence when the caller has it.
+ */
+export function terminalLabel(s: AgentSession, now: number, listening = !!s.listening): TerminalLabel {
+  const context = typeof s.contextPercent === 'number' ? ` · context ${s.contextPercent}%` : '';
+  if (s.running) return { text: `working${context}`, activity: 'working', warn: false };
+  if (listening) return { text: `listening${context}`, activity: 'listening', warn: false };
+  const since = Date.parse(s.idleSince ?? s.lastActiveAt ?? '');
+  const minutes = Number.isFinite(since) ? Math.max(0, Math.floor((now - since) / 60_000)) : 0;
+  const time = shortDuration(minutes);
+  if (minutes >= NOT_LISTENING_MINUTES) return { text: `not listening ${time}${context}`, activity: 'not_listening', warn: true };
+  return { text: `${time ? `idle ${time}` : 'idle'}${context}`, activity: 'idle', warn: false };
+}
+
+/**
+ * The own-session chip's label: the terminal session's state when there is one (terminalLabel,
+ * with live presence for listening), else the presence status alone.
+ */
+export function ownChipLabel(chip: OwnSessionChip, now: number): TerminalLabel | { text: OwnSessionStatus; activity: null; warn: false } {
+  if (chip.status === 'offline' || !chip.session) return { text: chip.status, activity: null, warn: false };
+  return terminalLabel(chip.session, now, chip.status === 'listening' || !!chip.session.listening);
+}
+
 /** "Claude Code Channel" or "chat_wait", for the chip's tooltip. */
 export function ownSessionDetail(chip: OwnSessionChip): string {
   if (chip.status === 'offline') return 'Its agora-mcp has disconnected.';
   if (chip.session?.running) return `Working in its terminal: ${terminalUsage(chip.session)}.`;
+  if (chip.session && chip.status !== 'listening' && !chip.session.listening) {
+    return 'agora-mcp is connected, but the agent is neither listening nor calling tools. If its CLI stopped (its context ran out), start a fresh session in its terminal.';
+  }
   if (chip.mode === 'channel') return 'Claude Code Channel: instructions are pushed into the session.';
   return chip.status === 'listening' ? 'Waiting in chat_wait for new messages.' : 'agora-mcp is running; the agent is not waiting for messages right now.';
 }

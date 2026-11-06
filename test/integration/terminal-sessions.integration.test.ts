@@ -383,3 +383,199 @@ describe('POST /bots/@me/terminal-sessions/end (the Claude Code SessionEnd hook)
         expect((await endNow(paused.auth)).body).toEqual({ ended: [sessionId] });
     });
 });
+
+/**
+ * #230: Codex ran out of context while its agora-mcp stayed up, and its chip said "terminal ·
+ * connected" for 2.5 hours. Listening and idle are kept per terminal session, the agent can
+ * report its own context and usage, and only channel members see any of it.
+ */
+describe('listening, idle and agent_status (#230)', () => {
+    const status = (auth: object, body: object) => ctx.request.post('/bots/@me/terminal-sessions/status').set(auth).send(body);
+    async function agent(name: string): Promise<Agent> {
+        const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
+            .send({ hostModeAck: true, name, hostId, adapter: 'claude', workdirAlias: 'agora', channelId });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        return { id: res.body.bot.id, name, token: res.body.token, auth: { Authorization: `Bot ${res.body.token}` } };
+    }
+    const listed = async (sessionId: string, auth: object = member.auth) =>
+        (await command(auth, { command: 'sessions' })).body.sessions.find((s: any) => s.id === sessionId);
+
+    test('chat_wait and tool calls move a session between listening, working and idle, with the last tool', async () => {
+        const { socket, sessionId } = await connectTerminal(claude);
+        // Connected, no wait open: idle from the start
+        const fresh = await sessionRow(sessionId);
+        expect(fresh).toMatchObject({ listening: false, working: false, last_tool: null });
+        expect(fresh.idle_since).not.toBeNull();
+
+        socket.emit('Listening', { listening: true });
+        await until(async () => (await sessionRow(sessionId)).listening === true, 'listening');
+        expect((await sessionRow(sessionId)).idle_since).toBeNull();
+        expect(await listed(sessionId)).toMatchObject({ listening: true, idleSince: null });
+
+        socket.emit('Listening', { listening: false });
+        const idle = await until(async () => { const r = await sessionRow(sessionId); return !r.listening && r.idle_since && r; }, 'idle');
+        expect(idle.working).toBe(false);
+
+        // Working clears idle and keeps the tool name; the name is cleaned to an identifier
+        socket.emit('Activity', { working: true, toolCalls: 1, lastTool: 'chat_send' });
+        const working = await until(async () => { const r = await sessionRow(sessionId); return r.working && r; }, 'working');
+        expect(working).toMatchObject({ idle_since: null, last_tool: 'chat_send' });
+        socket.emit('Activity', { working: true, toolCalls: 2, lastTool: '<b>file read</b>; DROP' });
+        await until(async () => (await sessionRow(sessionId)).tool_calls === 2, 'second call');
+        expect((await sessionRow(sessionId)).last_tool).toBe('bfilereadbDROP');
+        socket.emit('Activity', { working: true, toolCalls: 3, lastTool: 42 });
+        await until(async () => (await sessionRow(sessionId)).tool_calls === 3, 'third call');
+        expect((await sessionRow(sessionId)).last_tool).toBe('bfilereadbDROP');
+        socket.emit('Activity', { working: true, toolCalls: 4, lastTool: 'x'.repeat(100) });
+        await until(async () => (await sessionRow(sessionId)).tool_calls === 4, 'fourth call');
+        expect((await sessionRow(sessionId)).last_tool).toBe('x'.repeat(64));
+
+        // Idle again, not listening: idle_since is set once and kept
+        socket.emit('Activity', { working: false, toolCalls: 4 });
+        const after = await until(async () => { const r = await sessionRow(sessionId); return !r.working && r.idle_since && r; }, 'idle again');
+        socket.emit('Activity', { working: false, toolCalls: 4 });
+        await new Promise(r => setTimeout(r, 150));
+        expect((await sessionRow(sessionId)).idle_since).toEqual(after.idle_since);
+        expect(await listed(sessionId)).toMatchObject({ listening: false, running: false, lastTool: 'x'.repeat(64), idleSince: after.idle_since.toISOString() });
+
+        // Waiting while idle: listening, not idle
+        socket.emit('Listening', { listening: true });
+        await until(async () => (await sessionRow(sessionId)).idle_since === null, 'listening clears idle');
+    });
+
+    test('a Claude Code Channel socket is always listening', async () => {
+        const { sessionId } = await connectTerminal(claude, 'channel');
+        expect(await sessionRow(sessionId)).toMatchObject({ listening: true, idle_since: null });
+    });
+
+    test('watchers see a listening flip as presence, not as a session reload', async () => {
+        const { socket, sessionId } = await connectTerminal(claude);
+        const watcher = io('http://localhost:4999', { transports: ['websocket'], reconnection: false, autoConnect: false, auth: { token: owner.token } });
+        sockets.push(watcher);
+        const ready = event(watcher, 'Ready');
+        watcher.connect();
+        await ready;
+        const reloads: any[] = [];
+        watcher.on('AgentSessionUpdate', (e: any) => { if (e.sessionId === sessionId) reloads.push(e); });
+        const presence = event(watcher, 'AgentPresence', e => e.userId === claude.id && e.status === 'listening');
+        socket.emit('Listening', { listening: true });
+        await presence;
+        await until(async () => (await sessionRow(sessionId)).listening === true, 'listening stored');
+        socket.emit('Listening', { listening: false });
+        await until(async () => (await sessionRow(sessionId)).listening === false, 'not listening stored');
+        // Each wake flips twice; a session reload per flip would refetch every watcher's lists
+        expect(reloads).toEqual([]);
+    });
+
+    test('a fresh CLI on a session kept through the grace period starts without the old self-report', async () => {
+        const first = await connectTerminal(claude);
+        expect((await status(claude.auth, { contextPercent: 95, note: 'almost out' })).body.warned).toBe(true);
+        first.socket.disconnect();
+        const again = await connectTerminal(claude);
+        expect(again.sessionId).toBe(first.sessionId);
+        expect(await sessionRow(again.sessionId)).toMatchObject({ context_percent: null, status_note: null, limit_warned_at: null });
+        // So its own approach to the limit warns again
+        expect((await status(claude.auth, { contextPercent: 85 })).body.warned).toBe(true);
+    });
+
+    test('a report back under 80% re-arms the warning for the next window', async () => {
+        await connectTerminal(claude);
+        expect((await status(claude.auth, { usagePercent: 90, usageLabel: '5h window' })).body.warned).toBe(true);
+        expect((await status(claude.auth, { usagePercent: 92 })).body.warned).toBe(false);
+        expect((await status(claude.auth, { usagePercent: 5, usageLabel: '5h window' })).body.warned).toBe(false);
+        expect((await status(claude.auth, { usagePercent: 81, usageLabel: '5h window' })).body.warned).toBe(true);
+    });
+
+    test('agent_status stores what the agent reports, and warns once at 80%', async () => {
+        const { sessionId } = await connectTerminal(claude);
+        const first = await status(claude.auth, { contextPercent: 42, usagePercent: 30, usageLabel: '5h window', note: 'reviewing\nthe diff' });
+        expect(first.status, JSON.stringify(first.body)).toBe(200);
+        expect(first.body).toEqual({ sessions: [sessionId], warned: false });
+        expect(await sessionRow(sessionId)).toMatchObject({ context_percent: 42, usage_percent: 30, usage_label: '5h window', status_note: 'reviewing the diff', limit_warned_at: null });
+        const seen = await listed(sessionId);
+        expect(seen).toMatchObject({ contextPercent: 42, usagePercent: 30, usageLabel: '5h window', statusNote: 'reviewing the diff' });
+        expect(seen.statusAt).toBeTruthy();
+
+        // Omitted fields keep their value
+        expect((await status(claude.auth, { note: 'still reviewing' })).status).toBe(200);
+        expect(await sessionRow(sessionId)).toMatchObject({ context_percent: 42, usage_percent: 30, status_note: 'still reviewing' });
+
+        const near = await status(claude.auth, { contextPercent: 85 });
+        expect(near.body).toEqual({ sessions: [sessionId], warned: true });
+        expect(await notices('termclaude reports context at 85%. It should hand off before it runs out')).toBe(1);
+        expect((await sessionRow(sessionId)).limit_warned_at).not.toBeNull();
+
+        // Once per session, also when usage crosses later
+        const again = await status(claude.auth, { contextPercent: 95, usagePercent: 90 });
+        expect(again.body.warned).toBe(false);
+        expect(await notices('termclaude reports')).toBe(1);
+    });
+
+    test('the warning goes in the thread the agent names, when it can see it', async () => {
+        const other = await agent('termstatusthread');
+        await connectTerminal(other);
+        const parent = await post(owner.auth, 'A long job');
+        const res = await status(other.auth, { usagePercent: 82, usageLabel: '5h window', threadId: parent.id });
+        expect(res.body.warned).toBe(true);
+        const inThread = await ctx.db.query(
+            `SELECT content FROM messages WHERE thread_id = $1 AND system_event = 'agent_session'`, [parent.id]);
+        expect(inThread.rows.map(r => r.content)).toEqual([expect.stringMatching(/^termstatusthread reports usage at 82% \(5h window\)\. It should hand off/)]);
+        expect(await notices('termstatusthread reports')).toBe(1);
+    });
+
+    test('a thread the bot cannot see gets nothing: the warning goes to its own channel', async () => {
+        const other = await agent('termstatusfar');
+        const { sessionId } = await connectTerminal(other);
+        // A channel the bot has no access to
+        const hidden = await ctx.request.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: 'term-hidden', channelType: 3 });
+        expect(hidden.status, JSON.stringify(hidden.body)).toBe(201);
+        const parent = await ctx.request.post(`/channels/${hidden.body.id}/messages`).set(owner.auth).send({ content: 'private' });
+        expect(parent.status).toBe(201);
+        const res = await status(other.auth, { contextPercent: 99, threadId: parent.body.id });
+        expect(res.body).toEqual({ sessions: [sessionId], warned: true });
+        expect((await ctx.db.query('SELECT 1 FROM messages WHERE thread_id = $1', [parent.body.id])).rows).toEqual([]);
+        expect(await notices('termstatusfar reports context at 99%')).toBe(1);
+    });
+
+    test('validates the report, and a bot writes only its own sessions', async () => {
+        const { sessionId } = await connectTerminal(claude);
+        for (const body of [{}, { contextPercent: 101 }, { contextPercent: -1 }, { contextPercent: 50.5 }, { contextPercent: 'many' },
+            { usagePercent: 200 }, { note: '' }, { note: 'x'.repeat(201) }, { usageLabel: 'x'.repeat(61), usagePercent: 1 },
+            { usageLabel: '5h window' }, { contextPercent: 5, threadId: 'not-a-thread' }]) {
+            const res = await status(claude.auth, body);
+            expect(res.status, JSON.stringify(body)).toBe(400);
+        }
+        // People can't report for a bot
+        expect((await status(owner.auth, { contextPercent: 90 })).status).toBe(403);
+        // Another bot reports on its own sessions only: it has none, so nothing changes
+        const other = await agent('termstatusother');
+        const refused = await status(other.auth, { contextPercent: 90 });
+        expect(refused.status).toBe(409);
+        expect(refused.body).toEqual({ error: 'no_terminal_session' });
+        expect(await sessionRow(sessionId)).toMatchObject({ context_percent: null, limit_warned_at: null });
+        expect(await notices('reports context')).toBe(0);
+    });
+
+    test('only members of the channel see a terminal session status', async () => {
+        const { sessionId } = await connectTerminal(claude);
+        await status(claude.auth, { contextPercent: 33, note: 'private detail' });
+        expect(await listed(sessionId)).toMatchObject({ contextPercent: 33, statusNote: 'private detail' });
+        const outsider = await authedUser(ctx.request, 'termoutsider');
+        const res = await command(outsider.auth, { command: 'sessions' });
+        expect(res.status).toBe(403);
+        expect(JSON.stringify(res.body)).not.toContain('private detail');
+        // RLS: as app_user, a non-member sees no agent_sessions row; a member does
+        const c = await ctx.db.connect();
+        try {
+            await c.query('BEGIN');
+            await c.query('SET LOCAL ROLE app_user');
+            await c.query(`SELECT set_config('app.current_user_id', $1, true)`, [outsider.userId]);
+            expect((await c.query('SELECT status_note FROM agent_sessions WHERE id = $1', [sessionId])).rows).toEqual([]);
+            await c.query(`SELECT set_config('app.current_user_id', $1, true)`, [member.userId]);
+            expect((await c.query('SELECT status_note FROM agent_sessions WHERE id = $1', [sessionId])).rows).toEqual([{ status_note: 'private detail' }]);
+        } finally {
+            await c.query('ROLLBACK');
+            c.release();
+        }
+    });
+});

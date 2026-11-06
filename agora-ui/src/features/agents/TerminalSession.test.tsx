@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ApiError } from '../../lib/api';
 import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -10,7 +10,7 @@ import { RunActivity } from './RunActivity';
 import { SessionSheet } from './SessionSheet';
 import { useAgentCommands } from '../messages/AgentCommands';
 import {
-  HOSTED_ONLY, classifyCommandError, deriveChips, describeSession, ownSessionChips, terminalUsage, type AgentSession,
+  HOSTED_ONLY, classifyCommandError, deriveChips, describeSession, ownChipLabel, ownSessionChips, terminalLabel, terminalUsage, type AgentSession,
 } from './agentSessions';
 
 /** Terminal sessions (#112): the user's own CLI as a lightweight session. */
@@ -113,5 +113,77 @@ describe('terminal session UI', () => {
     render(<RunActivity channelId={CH} />);
     expect(await screen.findByText('claude is working in its terminal…')).toBeTruthy();
     expect(screen.getByLabelText('claude terminal usage').textContent).toBe('3 tool calls · tokens n/a · no budget (own CLI)');
+  });
+});
+
+/** #230: a terminal agent whose CLI stopped kept showing "terminal · connected". */
+describe('terminal chip states', () => {
+  const NOW = Date.parse('2026-11-05T12:00:00Z');
+  const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
+  const chip = (status: 'listening' | 'connected' | 'offline', over: Partial<AgentSession> = {}) =>
+    ownSessionChips(status === 'offline' ? [] : [{ userId: CLAUDE, username: 'claude', status, mode: 'mcp' }], [terminal(over)])[0];
+
+  it('says working, listening, idle 12m, and not listening 2h in amber after 20 minutes', () => {
+    expect(ownChipLabel(chip('connected'), NOW)).toEqual({ text: 'working', activity: 'working', warn: false });
+    expect(ownChipLabel(chip('listening', { running: false }), NOW)).toMatchObject({ text: 'listening', warn: false });
+    // The session's own listening flag counts too (presence from another API process)
+    expect(ownChipLabel(chip('connected', { running: false, listening: true }), NOW).text).toBe('listening');
+    expect(ownChipLabel(chip('connected', { running: false, idleSince: ago(12) }), NOW)).toEqual({ text: 'idle 12m', activity: 'idle', warn: false });
+    expect(ownChipLabel(chip('connected', { running: false, idleSince: ago(19) }), NOW).warn).toBe(false);
+    expect(ownChipLabel(chip('connected', { running: false, idleSince: ago(20) }), NOW)).toEqual({ text: 'not listening 20m', activity: 'not_listening', warn: true });
+    expect(ownChipLabel(chip('connected', { running: false, idleSince: ago(130) }), NOW)).toMatchObject({ text: 'not listening 2h', warn: true });
+    expect(ownChipLabel(chip('connected', { running: false, idleSince: ago(0) }), NOW).text).toBe('idle');
+    // Without idleSince (an older server) the last activity stands in
+    expect(ownChipLabel(chip('connected', { running: false, lastActiveAt: ago(45) }), NOW).text).toBe('not listening 45m');
+  });
+
+  it('appends the context the agent reported', () => {
+    expect(ownChipLabel(chip('connected', { contextPercent: 87 }), NOW).text).toBe('working · context 87%');
+    expect(ownChipLabel(chip('connected', { running: false, idleSince: ago(130), contextPercent: 87 }), NOW).text).toBe('not listening 2h · context 87%');
+    expect(ownChipLabel(chip('listening', { running: false, contextPercent: 0 }), NOW).text).toBe('listening · context 0%');
+  });
+
+  it('keeps the presence label without a terminal session, and offline wins', () => {
+    const presenceOnly = ownSessionChips([{ userId: CLAUDE, username: 'claude', status: 'connected', mode: 'mcp' }], [])[0];
+    expect(ownChipLabel(presenceOnly, NOW).text).toBe('connected');
+    expect(ownChipLabel({ ...chip('connected'), status: 'offline' }, NOW).text).toBe('offline');
+  });
+
+  it('terminalLabel works from the session alone, for the sheet', () => {
+    expect(terminalLabel(terminal({ running: false, listening: false, idleSince: ago(5) }), NOW).text).toBe('idle 5m');
+  });
+
+  describe('on the strip', () => {
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] }); vi.setSystemTime(NOW); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('shows an idle agent in amber once it passes 20 minutes, with the label kept in its accessible name', async () => {
+      post.mockResolvedValue({ sessions: [terminal({ running: false, idleSince: ago(15), contextPercent: 87 })] });
+      useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'connected', mode: 'mcp' }]);
+      render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
+      const button = await screen.findByRole('button', { name: 'claude: terminal session, idle 15m · context 87%. Open session details' });
+      expect(button.textContent).toContain('terminal · idle 15m · context 87%');
+      expect(button.querySelector('.text-warn')).toBeNull();
+
+      // Five minutes later, without a refresh: the minute ticker moves the chip on
+      await act(async () => { vi.advanceTimersByTime(5 * 60_000); });
+      const amber = screen.getByRole('button', { name: 'claude: terminal session, not listening 20m · context 87%. Open session details' });
+      expect(amber.querySelector('.text-warn')?.textContent).toBe('terminal · not listening 20m · context 87%');
+    });
+
+    it('the sheet shows last activity, last tool, context, usage and the note', async () => {
+      render(<SessionSheet open onClose={() => {}} channelId={CH} mode={{ kind: 'terminal', botId: CLAUDE }}
+        sessions={[terminal({
+          running: false, idleSince: ago(130), lastActiveAt: ago(130), lastTool: 'chat_send', contextPercent: 91,
+          usagePercent: 82, usageLabel: '5h window', statusNote: 'handing off next', statusAt: ago(131),
+        })]} profiles={[]} onChanged={() => {}} />);
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.textContent).toContain('Terminal, not listening 2h');
+      const details = screen.getByTestId('terminal-details').textContent ?? '';
+      for (const text of ['Last activity', 'Last toolchat_send', 'Context91% used', 'Usage82% of 5h window', 'Notehanding off next', 'Reported']) {
+        expect(details).toContain(text);
+      }
+      expect(dialog.textContent).toContain('start a fresh CLI session');
+    });
   });
 });

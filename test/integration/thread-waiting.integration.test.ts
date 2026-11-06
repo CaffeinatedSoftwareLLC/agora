@@ -161,6 +161,51 @@ describe('handoff nudges', () => {
         expect(told.rows).toHaveLength(0);
     });
 
+    /**
+     * #230: a terminal agent whose CLI stopped keeps its agora-mcp socket. The gateway keeps
+     * listening/working/idle_since on its terminal session; a fixture row stands in for it here.
+     */
+    async function terminalSession(botId: string, state: { listening: boolean; working: boolean; idleSince: Date | null }) {
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, kind, started_by, terminal_mode, seen_at, listening, working, idle_since)
+             VALUES ($1, $2, $3, $4, NULL, 'terminal', $5, 'mcp', NOW(), $6, $7, $8)`,
+            [generateUlid(), serverId, channelId, botId, owner.userId, state.listening, state.working, state.idleSince]);
+    }
+
+    it('an idle terminal agent is not reached: the reminder says it isn\'t listening, and its owner is told', async () => {
+        const { thread } = await deferredHandoff();
+        const idleSince = new Date(Date.now() - 30 * MIN);
+        await terminalSession(bots.WaitClaude.id, { listening: false, working: false, idleSince });
+        // Its socket is still up: connected is not enough
+        await run(later(16), [bots.WaitClaude.id]);
+        const [nudge] = await nudgesIn(thread);
+        const hhmm = idleSince.toISOString().slice(11, 16);
+        expect(nudge.content).toMatch(new RegExp(`WaitClaude isn't listening: no chat_wait and no Agora tool call since (\\d{4}-\\d\\d-\\d\\d )?${hhmm} UTC\\. `
+            + `It may be busy outside Agora, or its session may have stopped; its owner was told\\.$`));
+        expect(nudge.content).not.toMatch(/can't reach/);
+        expect(nudge.systemData).toEqual(expect.objectContaining({ ownerTold: true, notListening: true, idleSince: idleSince.toISOString() }));
+        const told = await ctx.db.query('SELECT label FROM notifications WHERE user_id = $1 AND thread_id = $2', [owner.userId, thread]);
+        expect(told.rows).toEqual([expect.objectContaining({ label: expect.stringMatching(/^WaitClaude isn't listening, and a thread waits on it in #wait-/) })]);
+        // Still one notice per pending turn
+        await run(later(40), [bots.WaitClaude.id]);
+        expect(await nudgesIn(thread)).toHaveLength(1);
+    });
+
+    it('a listening or working terminal agent is reached: a plain reminder, no owner notice', async () => {
+        for (const state of [{ listening: true, working: false, idleSince: null }, { listening: false, working: true, idleSince: null }]) {
+            await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"at": 0}' WHERE system_event = 'handoff_nudge'`);
+            await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', end_reason = 'disconnected' WHERE kind = 'terminal' AND state = 'live'`);
+            const { thread } = await deferredHandoff();
+            await terminalSession(bots.WaitClaude.id, state);
+            await run(later(16));
+            const [nudge] = await nudgesIn(thread);
+            expect(nudge.content, JSON.stringify(state)).toMatch(/^@WaitClaude this thread has waited on you/);
+            expect(nudge.content).not.toMatch(/listening|can't reach|owner/);
+            const told = await ctx.db.query('SELECT 1 FROM notifications WHERE thread_id = $1', [thread]);
+            expect(told.rows).toHaveLength(0);
+        }
+    });
+
     it('leaves the thread alone once the agent posts, and a fresh WAIT starts a new wait', async () => {
         const { thread } = await deferredHandoff();
         await post('Builder is at step 3 of 5.', claude(), thread);

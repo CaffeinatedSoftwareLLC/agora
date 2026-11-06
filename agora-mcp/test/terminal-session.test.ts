@@ -6,7 +6,7 @@ vi.mock('socket.io-client', () => ({ io: ioMock }));
 import { ActivityReporter, connectSocket } from '../src/socket.js';
 import { registerTools, withActivity } from '../src/tools.js';
 import { CursorTracker } from '../src/cursor.js';
-import type { AgoraApi } from '../src/api.js';
+import { AgoraApiError, type AgoraApi } from '../src/api.js';
 
 /**
  * Terminal sessions (#112): agora-mcp's presence socket makes Agora attach a terminal
@@ -58,7 +58,7 @@ describe('presence socket → terminal session', () => {
 
         reporter.toolStart('chat_read');
         socket.handlers.get('TerminalSession')!({ sessions: [{ channelId: 'ch1', sessionId: 's2' }] });
-        expect(socket.emitted.at(-1)).toEqual(['Activity', { working: true, toolCalls: 1 }]);
+        expect(socket.emitted.at(-1)).toEqual(['Activity', { working: true, toolCalls: 1, lastTool: 'chat_read' }]);
         expect(reporter.sessions[0].sessionId).toBe('s2');
     });
 });
@@ -72,12 +72,12 @@ describe('working / idle reporting', () => {
         const reporter = new ActivityReporter({ idleMs: 1000 });
         reporter.attach(socket);
         reporter.toolStart('chat_send');
-        expect(socket.emitted).toEqual([['Activity', { working: true, toolCalls: 1 }]]);
+        expect(socket.emitted).toEqual([['Activity', { working: true, toolCalls: 1, lastTool: 'chat_send' }]]);
         reporter.toolEnd('chat_send');
         await vi.advanceTimersByTimeAsync(999);
         expect(reporter.state.working).toBe(true);
         await vi.advanceTimersByTimeAsync(1);
-        expect(socket.emitted.at(-1)).toEqual(['Activity', { working: false, toolCalls: 1 }]);
+        expect(socket.emitted.at(-1)).toEqual(['Activity', { working: false, toolCalls: 1, lastTool: 'chat_send' }]);
     });
 
     it('chat_wait is listening, not work: idle at once and not counted', () => {
@@ -87,12 +87,13 @@ describe('working / idle reporting', () => {
         reporter.toolStart('file_read');
         reporter.toolEnd('file_read');
         reporter.toolStart('chat_wait');
+        // chat_wait is not the last tool: the sheet shows what the agent last did
         expect(socket.emitted).toEqual([
-            ['Activity', { working: true, toolCalls: 1 }],
-            ['Activity', { working: false, toolCalls: 1 }],
+            ['Activity', { working: true, toolCalls: 1, lastTool: 'file_read' }],
+            ['Activity', { working: false, toolCalls: 1, lastTool: 'file_read' }],
         ]);
         reporter.toolEnd('chat_wait');
-        expect(reporter.state).toEqual({ working: false, toolCalls: 1 });
+        expect(reporter.state).toEqual({ working: false, toolCalls: 1, lastTool: 'file_read' });
     });
 
     it('stays working while calls overlap, and throttles count updates', () => {
@@ -105,7 +106,7 @@ describe('working / idle reporting', () => {
         expect(socket.emitted).toHaveLength(1);
         now = 6000;
         reporter.toolStart('c');
-        expect(socket.emitted.at(-1)).toEqual(['Activity', { working: true, toolCalls: 3 }]);
+        expect(socket.emitted.at(-1)).toEqual(['Activity', { working: true, toolCalls: 3, lastTool: 'c' }]);
     });
 
     it('registered tools report their calls through withActivity', async () => {
@@ -127,5 +128,40 @@ describe('working / idle reporting', () => {
         const target = { tools: [] as string[], tool(this: any, name: string) { this.tools.push(name); } };
         withActivity(target as never, { toolStart() {}, toolEnd() {} }).tool('x' as never, (async () => ({})) as never);
         expect(target.tools).toEqual(['x']);
+    });
+});
+
+/** #230: the agent reports its own context and usage, so Agora can warn before a limit. */
+describe('agent_status', () => {
+    function setup(reportStatus: (...a: any[]) => Promise<any>) {
+        const handlers = new Map<string, (...a: any[]) => Promise<any>>();
+        const server = { tool: (name: string, ...rest: unknown[]) => { handlers.set(name, rest[rest.length - 1] as any); } };
+        const api = {
+            getMe: vi.fn().mockResolvedValue({ id: 'self', username: 'codex', serverId: 's1', bot: true, channels: [{ id: 'ch1', name: 'general', channelType: 'text' }] }),
+            reportStatus: vi.fn(reportStatus),
+        } as unknown as AgoraApi & { reportStatus: ReturnType<typeof vi.fn> };
+        registerTools(server as never, api, new CursorTracker(api), { defaultChannel: 'general' });
+        return { api, call: (args: any) => handlers.get('agent_status')!(args, {}) };
+    }
+
+    it('sends context, usage, label, note and thread to Agora', async () => {
+        const { api, call } = setup(async () => ({ sessions: ['s1'], warned: false }));
+        const out = await call({ context_percent: 62, usage_percent: 40, usage_label: '5h window', note: 'midway', thread: 'T1' });
+        expect(api.reportStatus).toHaveBeenCalledWith({ contextPercent: 62, usagePercent: 40, usageLabel: '5h window', note: 'midway', threadId: 'T1' });
+        expect(out.content[0].text).toBe('Status reported (context 62%, usage 40% (5h window), note "midway") on 1 terminal session.');
+    });
+
+    it('sends only what was given, and tells the agent to hand off when Agora warned', async () => {
+        const { api, call } = setup(async () => ({ sessions: ['s1', 's2'], warned: true }));
+        const out = await call({ context_percent: 85 });
+        expect(api.reportStatus).toHaveBeenCalledWith({ contextPercent: 85 });
+        expect(out.content[0].text).toMatch(/on 2 terminal sessions\. Agora posted that you are near a limit: hand off now/);
+    });
+
+    it('needs something to report, and explains a hosted session', async () => {
+        const { api, call } = setup(async () => { throw new AgoraApiError('409', 409, 'no_terminal_session', null); });
+        await expect(call({ usage_label: 'weekly' })).rejects.toThrow(/at least one of/);
+        expect(api.reportStatus).not.toHaveBeenCalled();
+        await expect(call({ note: 'hi' })).rejects.toThrow(/No terminal session to report on/);
     });
 });

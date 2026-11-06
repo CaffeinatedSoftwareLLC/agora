@@ -6,6 +6,7 @@ import { getFileSettings, invalidateSettingsCache } from '../lib/settings';
 import { codeRetentionDays, countRunsPrunedBy } from '../runtime/service';
 import { DELETED_ACCOUNT_MESSAGES_KEY, deletedAccountMessages } from '../lib/account-deletion';
 import { allowedRelays, isHttpsOrigin } from '../lib/notifications';
+import { denyApprovalCards } from '../lib/run-cards';
 
 async function logAdminAction(
     db: any,
@@ -268,11 +269,16 @@ export async function adminRoutes(app: FastifyInstance) {
             [targetId]
         );
         // Denied, as the runner does for a paused bot's run and the sweep does for an expired approval
-        await db.query(
+        const denied = await db.query(
             `UPDATE exec_runs SET status = 'denied', error = 'The submitting bot or its owner was suspended', finished_at = NOW()
-             WHERE status IN ('submitted', 'gated', 'awaiting_approval', 'queued') AND submitted_by IN (${bots})`,
+             WHERE status IN ('submitted', 'gated', 'awaiting_approval', 'queued') AND submitted_by IN (${bots})
+             RETURNING id`,
             [targetId]
         );
+        // Their approval cards say DENIED, live, instead of still offering Approve (#244)
+        request.pendingEvents ??= [];
+        request.pendingEvents.push(...await denyApprovalCards(db, denied.rows.map((r: any) => r.id),
+            'The submitting bot or its owner was suspended'));
 
         await logAdminAction(db, userId, 'user_ban', 'user', targetId, {
             before: { accountStatus: 'active' },

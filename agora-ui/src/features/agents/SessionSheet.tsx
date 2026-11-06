@@ -7,8 +7,13 @@ import { useOverlayFocus } from '../shell/useOverlayFocus';
 import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
   ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState,
-  terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
+  terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
+
+/** A clock time in the viewer's locale, for the terminal sheet's details. */
+function clock(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 
 /**
  * Agent session sheet (docs/planning/ui-redesign.md 6.2): start, resume, shelve-and-start-new
@@ -70,6 +75,13 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
   // /start for an agent connected from a terminal (409 terminal_connected)
   const [terminalConflict, setTerminalConflict] = useState<CommandBody | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // A terminal session's "idle 12m" moves on with the clock (#230)
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open || mode.kind !== 'terminal') return;
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [open, mode.kind]);
 
   // One overlay at a time (Phase 1 overlay manager): registering closes any other sheet, makes
   // Back and Escape dismiss this one, and inerts the shell behind it.
@@ -143,13 +155,38 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
   if (mode.kind === 'terminal') {
     title = `Terminal: ${terminal?.botUsername ?? 'agent'}`;
     const standby = terminal ? sessions.find(s => s.kind !== 'terminal' && s.state === 'live' && !s.threadId && s.botId?.trim() === mode.botId.trim()) : undefined;
-    body = terminal ? (
+    const state = terminal ? terminalLabel({ ...terminal, contextPercent: null }, now) : null;
+    // What agora-mcp and the agent itself reported (#230)
+    const details: [string, string][] = terminal ? [
+      ['Last activity', clock(terminal.lastActiveAt)],
+      ...(terminal.lastTool ? [['Last tool', terminal.lastTool] as [string, string]] : []),
+      ...(typeof terminal.contextPercent === 'number' ? [['Context', `${terminal.contextPercent}% used`] as [string, string]] : []),
+      ...(typeof terminal.usagePercent === 'number'
+        ? [['Usage', `${terminal.usagePercent}%${terminal.usageLabel ? ` of ${terminal.usageLabel}` : ''}`] as [string, string]] : []),
+      ...(terminal.statusNote ? [['Note', terminal.statusNote] as [string, string]] : []),
+      ...(terminal.statusAt ? [['Reported', clock(terminal.statusAt)] as [string, string]] : []),
+    ] : [];
+    body = terminal && state ? (
       <div className="space-y-4 text-sm">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text">
-          <StateDot state={terminal.running ? 'working' : 'idle'} />
-          <span className="font-medium">{terminal.running ? 'Terminal, working' : 'Terminal, idle'}</span>
+          <StateDot state={state.activity === 'working' ? 'working' : state.warn ? 'shelved' : 'idle'} />
+          <span className={`font-medium ${state.warn ? 'text-warn' : ''}`}>Terminal, {state.text}</span>
           <span className="font-mono text-xs text-text-muted">{terminalUsage(terminal)}</span>
         </p>
+        <dl data-testid="terminal-details" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+          {details.map(([term, value]) => (
+            <div key={term} className="contents">
+              <dt className="text-text-muted">{term}</dt>
+              <dd className="min-w-0 break-words text-text">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {state.warn && (
+          <p className="rounded-lg border border-warn/40 bg-warn/10 p-3 text-text">
+            It has neither listened for messages nor called a tool for a while. If its CLI stopped (for example, its context ran out),
+            close that terminal and start a fresh CLI session: agora-mcp connects it again as a new terminal session.
+          </p>
+        )}
         <p className="text-text-muted">
           The user's own CLI, connected through agora-mcp{terminal.terminalMode === 'channel' ? ' as a Claude Code Channel' : terminal.terminalMode === 'mcp' ? ' (chat_wait)' : ''}.
           It answers here while it is connected and ends when agora-mcp disconnects. Only owner and director messages are instructions to it.

@@ -305,22 +305,25 @@ Start a thread by posting its parent message. Returns the thread ID to pass as `
 
 ### thread_list
 
-List open threads in a channel, most recently active first. Each thread says who it waits on, for what and for how long (`— waiting on Claude for: builder commit, 52 min`), from its latest protocol message.
+List open threads in a channel, most recently active first. Each thread shows its latest protocol state and says who it waits on, for what and for how long (`— waiting on Claude for: builder commit, 52 min`). A thread with a newer request for you in the channel (an @mention or YIELD to you after its last reply) carries a `NOTE`: read that request before resuming the thread. With `closed=true` it lists recently closed threads instead, with how each ended and the thread its work moved to.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | channel | string | No | Channel name or ID. Uses default if omitted. |
 | limit | number | No | Max threads. Default: 10, max: 10. |
+| closed | boolean | No | List recently closed threads instead of open ones. |
 
 ### thread_close
 
-Close a thread so it accepts no further replies, or reopen it. Requires being the thread starter or having Manage Messages.
+Close a thread so it accepts no further replies, or reopen it. Allowed for the thread's author, the agent that posted the collaboration's first START in it (close only), and members with Manage Messages. A `reason` or `successor` is recorded on the thread and posted as a notice in it; replies to it are then refused with the successor's ID.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | channel | string | No | Channel name or ID. Uses default if omitted. |
 | thread | string | Yes | Thread parent message ID. |
-| reopen | boolean | No | Reopen a closed thread instead of closing it. |
+| reopen | boolean | No | Reopen a closed thread instead of closing it (clears its reason and successor). |
+| reason | string | No | `done`, `blocked`, `cancelled` or `superseded`. |
+| successor | string | No | Thread ID the work moved to, in the same channel. Implies `superseded`. |
 
 ### file_search
 
@@ -428,6 +431,20 @@ An admin must enable the bot's **runtime access** in Bot Management (`approval` 
 ### Task board and subtasks
 
 `task_list` lists a channel's task cards. `task_create`, `task_update` and `task_start` manage them and need *can direct*. `subtask_start` hands a brief to a child session during a hosted run. Its only result is a summary that comes back as a later wake. Parameters and rules: [docs/task-board.md](../docs/task-board.md).
+
+### agent_status
+
+For an agent running in its own terminal: report how much of its context window it has used, and optionally its plan or rate-limit window, so the people watching see it on its chip. At 80% of either, Agora posts one notice that it should hand off. Report at about 80% context, then post where the work stands and continue in a fresh session. Hosted sessions don't need it. See [docs/agent-sessions.md](../docs/agent-sessions.md#terminal-sessions).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| context_percent | integer | No* | Share of the context window used, 0-100. |
+| usage_percent | integer | No* | Share of the plan or rate-limit window used, 0-100. |
+| usage_label | string | No | Which window, e.g. `5h window` (max 60). |
+| note | string | No* | Short status line (max 200). |
+| thread | string | No | Thread parent message ID for the hand-off notice. |
+
+\* At least one of `context_percent`, `usage_percent` or `note`.
 
 ### runtime_status
 

@@ -21,6 +21,9 @@ export interface ThreadSummary {
   replyCount: number;
   lastReplyAt: string;
   threadClosedAt?: string | null;
+  /** Closed threads (#132): how it ended and where its work went. */
+  closeReason?: 'done' | 'blocked' | 'cancelled' | 'superseded' | null;
+  successorId?: string | null;
   canClose?: boolean;
   previewReplies: {
     id: string;
@@ -40,6 +43,8 @@ interface ThreadState {
   replyLoadErrors: Map<string, string>;
   activeThreads: Map<string, ThreadSummary[]>;
   hasMoreThreads: Map<string, boolean>;
+  /** Every open thread in the channel, from the server (#14); the list holds only the pages loaded. */
+  threadTotals: Map<string, number>;
 
   openThread: (channelId: string, messageId: string) => void;
   closeThread: () => void;
@@ -90,6 +95,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   replyLoadErrors: new Map(),
   activeThreads: new Map(),
   hasMoreThreads: new Map(),
+  threadTotals: new Map(),
 
   openThread: (channelId, messageId) => {
     set({ openThreadId: messageId, openThreadChannelId: channelId });
@@ -397,7 +403,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         do {
           listDirty.delete(channelId);
           const requestedAt = eventSeq;
-          const data = await api.get<ThreadSummary[]>(`/channels/${channelId}/threads?limit=5`);
+          const { data, total } = await api.getWithTotal<ThreadSummary[]>(`/channels/${channelId}/threads?limit=5`);
           if (generation !== listGeneration) return;
           set((state) => {
             const held = new Map((state.activeThreads.get(channelId) ?? []).map((t) => [t.id, t]));
@@ -410,7 +416,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             const nextHasMore = new Map(state.hasMoreThreads);
             next.set(channelId, merged);
             nextHasMore.set(channelId, data.length === 5);
-            return { activeThreads: next, hasMoreThreads: nextHasMore };
+            const totals = new Map(state.threadTotals);
+            if (total === null) totals.delete(channelId); else totals.set(channelId, total);
+            return { activeThreads: next, hasMoreThreads: nextHasMore, threadTotals: totals };
           });
         } while (listDirty.has(channelId));
       } finally {
@@ -433,16 +441,19 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     if (!get().hasMoreThreads.get(channelId)) return;
 
     const lastReplyAt = existing[existing.length - 1].lastReplyAt;
-    const data = await api.get<ThreadSummary[]>(
-      `/channels/${channelId}/threads?limit=5&before=${lastReplyAt}`
+    const { data, total } = await api.getWithTotal<ThreadSummary[]>(
+      `/channels/${channelId}/threads?limit=5&before=${encodeURIComponent(lastReplyAt)}`
     );
     set((state) => {
       const next = new Map(state.activeThreads);
       const nextHasMore = new Map(state.hasMoreThreads);
       const current = next.get(channelId) ?? [];
-      next.set(channelId, [...current, ...data]);
+      const seen = new Set(current.map((t) => t.id));
+      next.set(channelId, [...current, ...data.filter((t) => !seen.has(t.id))]);
       nextHasMore.set(channelId, data.length === 5);
-      return { activeThreads: next, hasMoreThreads: nextHasMore };
+      const totals = new Map(state.threadTotals);
+      if (total !== null) totals.set(channelId, total);
+      return { activeThreads: next, hasMoreThreads: nextHasMore, threadTotals: totals };
     });
   },
 
@@ -467,6 +478,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     if (loaded && data.replyCount > 0 && !data.threadClosedAt && !loaded.some((t) => t.id === data.messageId)) {
       void get().loadActiveThreads(data.channelId).catch(() => {});
       return;
+    }
+    // A thread closed (loaded or on a later page) or lost its last reply: fetch again, so the
+    // total and the threads shown are right (#14). A notice in an already closed thread changes neither.
+    const known = loaded?.find((t) => t.id === data.messageId);
+    if (loaded && ((data.threadClosedAt && !known?.threadClosedAt) || (data.replyCount === 0 && !!known))) {
+      void get().loadActiveThreads(data.channelId).catch(() => {});
     }
     set((state) => {
       const next = new Map(state.activeThreads);
@@ -503,6 +520,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       replyLoadErrors: new Map(),
       activeThreads: new Map(),
       hasMoreThreads: new Map(),
+      threadTotals: new Map(),
     });
   },
 }));

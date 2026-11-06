@@ -62,6 +62,10 @@ export function getAuthHeaders(): Record<string, string> {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return (await requestWithHeaders<T>(method, path, body)).data;
+}
+
+async function requestWithHeaders<T>(method: string, path: string, body?: unknown): Promise<{ data: T; headers: Headers }> {
   const headers = sessionHeaders(method);
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
@@ -79,11 +83,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       : [502, 503].includes(res.status) ? 'The server is temporarily unavailable. Try again in a few seconds.' : 'unknown_error';
     throw new ApiError(res.status, (typeof data?.error === 'string' && data.error) || gatewayError);
   }
-  return data as T;
+  return { data: data as T, headers: res.headers };
 }
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
+  /** A list page plus the server's `X-Total-Count` (every match, not just this page); null without it. */
+  getWithTotal: async <T>(path: string): Promise<{ data: T; total: number | null }> => {
+    const { data, headers } = await requestWithHeaders<T>('GET', path);
+    const raw = headers?.get?.('X-Total-Count');
+    const total = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
+    return { data, total: Number.isSafeInteger(total) && total >= 0 ? total : null };
+  },
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),

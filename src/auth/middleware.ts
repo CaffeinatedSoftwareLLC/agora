@@ -69,8 +69,9 @@ const BOT_ALLOWED_ROUTES = new Set([
     'GET /bots/@me/thread-cursors',
     'PUT /bots/@me/thread-cursors/:threadId',
     'GET /bots/@me',
-    // agora-mcp's Claude Code SessionEnd hook (src/routes/bots.ts)
+    // agora-mcp's Claude Code SessionEnd hook, and its agent_status tool (src/routes/bots.ts)
     'POST /bots/@me/terminal-sessions/end',
+    'POST /bots/@me/terminal-sessions/status',
     'POST /runtime/runs',
     'GET /runtime/runs/:id',
     'GET /runtime/runs/:id/code',

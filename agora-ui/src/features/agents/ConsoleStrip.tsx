@@ -8,7 +8,7 @@ import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { ProtocolBadge } from '../messages/ProtocolBadge';
 import { latestProtocol } from '../messages/latestProtocol';
 import {
-  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownSessionChips, ownSessionDetail, resetTime,
+  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownChipLabel, ownSessionChips, ownSessionDetail, resetTime,
   type AgentProfile, type AgentSession, type OwnSessionStatus,
 } from './agentSessions';
 import { SessionSheet, StateDot, type SheetMode } from './SessionSheet';
@@ -121,11 +121,17 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
     if (seen && seen.channelId === channelId && seen.id !== lastNoticeId && lastNoticeId !== undefined) refresh();
   }, [channelId, lastNoticeId, refresh]);
 
-  // Active collab threads (the data ActiveThreadsBar uses).
+  // Active collab threads (the data ActiveThreadsBar used).
   const activeThreads = useThreadStore(s => s.activeThreads.get(channelId));
+  const threadTotal = useThreadStore(s => s.threadTotals?.get(channelId));
+  const hasMoreThreads = useThreadStore(s => !!s.hasMoreThreads?.get(channelId));
   const repliesByThread = useThreadStore(s => s.repliesByThread);
   const loadActiveThreads = useThreadStore(s => s.loadActiveThreads);
+  const loadMoreThreads = useThreadStore(s => s.loadMoreThreads);
   useEffect(() => { void loadActiveThreads(channelId).catch(() => {}); }, [channelId, loadActiveThreads]);
+  // The thread chips start collapsed behind one count chip (#18); the choice is remembered per browser
+  const [threadsOpen, setThreadsOpen] = useState(readThreadsOpen);
+  const toggleThreads = () => setThreadsOpen(open => { writeThreadsOpen(!open); return !open; });
 
   const threads = useMemo(() => (activeThreads ?? []).filter(t => !t.threadClosedAt).map(t => {
     const parent = channelMessages?.find(m => m.id === t.id);
@@ -139,6 +145,12 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
   const chips = useMemo(() => deriveChips(sessions), [sessions]);
   const present = useAgentPresenceStore(s => s.byChannel.get(channelId));
   const ownChips = useMemo(() => ownSessionChips(present?.values() ?? [], sessions), [present, sessions]);
+  // "idle 12m" and "not listening 2h" on terminal chips move on with the clock
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const openStart = () => {
     setSheet({ mode: { kind: 'start' }, key: Date.now(), channelId });
@@ -182,12 +194,12 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 
       {ownChips.map(chip => {
         const working = !!chip.session?.running && chip.status !== 'offline';
-        const label = working ? 'working' : chip.status === 'listening' ? 'listening' : chip.status === 'connected' ? 'connected' : 'offline';
+        const { text: label, warn } = ownChipLabel(chip, now);
         const pill = (
           <span className={`${CHIP_PILL} border-dashed`}>
             <OwnSessionDot status={chip.status} working={working} />
             <span className="font-medium">{chip.username}</span>
-            <span className="text-xs text-text-muted">{chip.session ? `terminal · ${label}` : label}</span>
+            <span className={`text-xs ${warn ? 'font-medium text-warn' : 'text-text-muted'}`}>{chip.session ? `terminal · ${label}` : label}</span>
           </span>
         );
         // With a terminal session (#112) the chip opens its sheet; without one it is presence only
@@ -225,7 +237,32 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 
       {threads.length > 0 && <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />}
 
-      {threads.map(({ thread, protocol }) => {
+      {threads.length > 0 && (() => {
+        // Every open thread in the channel, not the pages loaded so far (#14)
+        const total = Math.max(threadTotal ?? threads.length, threads.length);
+        const waiting = threads.filter(t => t.protocol?.yieldTo || t.thread.waiting).length;
+        return (
+          <button
+            type="button"
+            className={CHIP_TARGET}
+            aria-expanded={threadsOpen}
+            aria-label={`Active threads (${total})${waiting ? `, ${waiting} waiting on someone` : ''}. ${threadsOpen ? 'Hide' : 'Show'} them`}
+            data-testid="threads-toggle"
+            onClick={toggleThreads}
+          >
+            <span className={CHIP_PILL}>
+              <svg className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${threadsOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9 6l6 6-6 6" />
+              </svg>
+              <span className="font-medium">Threads</span>
+              <span className="font-mono text-xs text-text-muted">{total}</span>
+              {waiting > 0 && <span className="text-xs text-text-muted">· {waiting} waiting</span>}
+            </span>
+          </button>
+        );
+      })()}
+
+      {threadsOpen && threads.map(({ thread, protocol }) => {
         const snippet = thread.content ? thread.content.replace(/\s+/g, ' ').trim() : '(deleted)';
         return (
           <button
@@ -249,6 +286,19 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
         );
       })}
 
+      {threadsOpen && hasMoreThreads && threads.length > 0 && (
+        <button
+          type="button"
+          className={CHIP_TARGET}
+          aria-label={`Show more threads${threadTotal !== undefined && threadTotal > threads.length ? ` (${threadTotal - threads.length} more)` : ''}`}
+          onClick={() => { void loadMoreThreads(channelId).catch(() => {}); }}
+        >
+          <span className={`${CHIP_PILL} border-dashed text-text-muted group-hover:text-text`}>
+            {threadTotal !== undefined && threadTotal > threads.length ? `+${threadTotal - threads.length} more` : 'More'}
+          </span>
+        </button>
+      )}
+
       {sheet && (
         <SessionSheet
           key={sheet.key}
@@ -270,4 +320,15 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
 function OwnSessionDot({ status, working = false }: { status: OwnSessionStatus; working?: boolean }) {
   const tone = working ? 'border-online bg-online motion-safe:animate-pulse' : status === 'listening' ? 'border-online bg-online/40 motion-safe:animate-pulse' : status === 'connected' ? 'border-online' : 'border-text-dim';
   return <span aria-hidden="true" className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full border-2 ${tone}`} />;
+}
+
+const THREADS_OPEN_KEY = 'agora.consoleStrip.threadsOpen';
+
+/** Collapsed unless this browser chose to show the thread chips (#18). Storage can throw or be empty. */
+function readThreadsOpen(): boolean {
+  try { return localStorage.getItem(THREADS_OPEN_KEY) === '1'; } catch { return false; }
+}
+
+function writeThreadsOpen(open: boolean): void {
+  try { localStorage.setItem(THREADS_OPEN_KEY, open ? '1' : '0'); } catch { /* a convenience only */ }
 }

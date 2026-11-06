@@ -154,6 +154,27 @@ describe('code retention', () => {
         expect((await runRow(stale)).status).toBe('denied');
     });
 
+    it('the expiry sweep switches the expired run\'s approval card to denied (#244)', async () => {
+        const stale = await seedRun('awaiting_approval', 60);
+        const fresh = await seedRun('awaiting_approval', 5);
+        const card = async (runId: string) => {
+            const id = generateUlid();
+            await ctx.db.query(
+                `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data)
+                 VALUES ($1, $2, NULL, 'A bot wants to run code.', 'runtime_approval', $3)`,
+                [id, channelId, JSON.stringify({ kind: 'runtime_approval', runId, status: 'pending' })]);
+            return id;
+        };
+        const staleCard = await card(stale), freshCard = await card(fresh);
+        expect(await runtimeMaintenance(ctx.db)).toEqual({ pruned: 0, expired: 1 });
+        const data = async (id: string) => (await ctx.db.query('SELECT content, system_data FROM messages WHERE id = $1', [id])).rows[0];
+        expect(await data(staleCard)).toMatchObject({
+            content: `Run ${stale}: Denied. Approval window expired.`,
+            system_data: { status: 'denied', deniedReason: 'Approval window expired' },
+        });
+        expect((await data(freshCard)).system_data.status).toBe('pending');
+    });
+
     it('[OP-01.code-retention] invalid values give 400 and change nothing', async () => {
         for (const body of [{}, { codeRetentionDays: 0 }, { codeRetentionDays: 3651 }, { codeRetentionDays: 1.5 }]) {
             const res = await ctx.request.patch('/admin/settings/runtime').set(admin.auth).send(body);

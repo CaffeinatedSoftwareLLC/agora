@@ -171,6 +171,76 @@ test('banning an owner revokes its bots\' run tokens and denies their runs that 
     expect(await liveRunTokens(unrelatedRun)).toBe(1);
 });
 
+async function approvalCard(runId: string) {
+    const id = generateUlid();
+    await ctx.db.query(
+        `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data)
+         VALUES ($1, $2, NULL, $3, 'runtime_approval', $4)`,
+        [id, server.generalChannelId, `A bot wants to run code (run ${runId}).`,
+            JSON.stringify({ kind: 'runtime_approval', runId, status: 'pending', capabilities: [] })]);
+    return id;
+}
+const cardRow = async (id: string) =>
+    (await ctx.db.query('SELECT content, system_data, edited_at FROM messages WHERE id = $1', [id])).rows[0];
+
+test('a suspension switches the approval card of a run that has not started to denied and emits the update (#244)', async () => {
+    const b = await bot('cardbot');
+    const awaiting = await run(b.id, 'awaiting_approval');
+    const card = await approvalCard(awaiting);
+    // Approved, so queued: the suspension denies it, and its "Approved; running" card says so too
+    const approved = await run(b.id, 'queued');
+    const approvedCard = await approvalCard(approved);
+    await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"status":"approved"}' WHERE id = $1`, [approvedCard]);
+    // A run that already started keeps its card
+    const reviewed = await run(b.id, 'running');
+    const reviewedCard = await approvalCard(reviewed);
+    await ctx.db.query(`UPDATE messages SET system_data = system_data || '{"status":"approved"}' WHERE id = $1`, [reviewedCard]);
+
+    const emit = vi.fn();
+    const room = vi.spyOn(ctx.app.io, 'to').mockReturnValue({ emit } as any);
+    try {
+        expect((await ctx.request.post(`/admin/users/${owner.userId}/ban`).set(admin.auth)).status).toBe(200);
+        await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('MessageUpdate', expect.objectContaining({
+            id: card, channelId: server.generalChannelId,
+            systemData: expect.objectContaining({ runId: awaiting, status: 'denied', deniedReason: 'The submitting bot or its owner was suspended' }),
+        })));
+        expect(room).toHaveBeenCalledWith(`channel:${server.generalChannelId}`);
+        expect(emit.mock.calls.filter(([e, d]) => e === 'MessageUpdate' && d.id === reviewedCard)).toHaveLength(0);
+    } finally { room.mockRestore(); }
+
+    const row = await cardRow(card);
+    expect(row.system_data).toMatchObject({ status: 'denied', runId: awaiting });
+    expect(row.content).toBe(`Run ${awaiting}: Denied. The submitting bot or its owner was suspended.`);
+    expect(row.edited_at).not.toBeNull();
+    expect((await cardRow(reviewedCard)).system_data.status).toBe('approved');
+    expect((await cardRow(approvedCard)).system_data).toMatchObject({ status: 'denied', runId: approved });
+
+    // Approving it now is still refused, and the card stays denied
+    const reviewer = await ctx.request.post(`/runtime/runs/${awaiting}/approve`).set(owner.auth);
+    expect(reviewer.status).not.toBe(200);
+});
+
+test('deleting an account switches its bots\' pending approval cards to denied (#244)', async () => {
+    const person = await authedUser(ctx.request, 'leavingowner');
+    // A bot in this test's server, owned by the person who leaves
+    const b = await bot('leavingbot');
+    await ctx.db.query('UPDATE users SET bot_owner_id = $1 WHERE id = $2', [person.userId, b.id]);
+    const awaiting = await run(b.id, 'awaiting_approval');
+    const card = await approvalCard(awaiting);
+    const { deleteAccount } = await import('../../src/lib/account-deletion');
+    const c = await ctx.db.connect();
+    try {
+        await c.query('BEGIN');
+        const result = await deleteAccount(c, person.userId, 'anonymize');
+        await c.query('COMMIT');
+        expect(result.events).toContainEqual(expect.objectContaining({
+            event: 'MessageUpdate', room: `channel:${server.generalChannelId}`,
+            data: expect.objectContaining({ id: card, systemData: expect.objectContaining({ status: 'denied' }) }),
+        }));
+    } finally { c.release(); }
+    expect((await cardRow(card)).system_data).toMatchObject({ status: 'denied', deniedReason: 'The submitter or its owner deleted their account' });
+});
+
 describe('agent invites', () => {
     const invite = async (botId: string) => {
         const res = await ctx.request.post(`/servers/${server.serverId}/agent-invites`).set(owner.auth).send({ botId });

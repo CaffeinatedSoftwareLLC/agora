@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { asService } from './agent-sessions';
+import { denyApprovalCards } from './run-cards';
 import { removeArtifactVersion } from './artifacts';
 import { decryptString } from './encryption';
 import { generateUlid } from '../utils/ulid';
@@ -110,11 +111,15 @@ export async function deleteAccount(db: any, userId: string, messages: DeletedAc
              WHERE revoked_at IS NULL AND run_id IN (SELECT id FROM exec_runs WHERE submitted_by IN (${submitters}))`,
             [userId]
         );
-        await db.query(
+        const denied = await db.query(
             `UPDATE exec_runs SET status = 'denied', error = 'The submitter or its owner deleted their account', finished_at = NOW()
-             WHERE status IN ('submitted', 'gated', 'awaiting_approval', 'queued') AND submitted_by IN (${submitters})`,
+             WHERE status IN ('submitted', 'gated', 'awaiting_approval', 'queued') AND submitted_by IN (${submitters})
+             RETURNING id`,
             [userId]
         );
+        // Their approval cards say DENIED, live (#244)
+        result.events.push(...await denyApprovalCards(db, denied.rows.map((r: any) => r.id),
+            'The submitter or its owner deleted their account'));
 
         // Agent hosts the person paired run on a machine that is no longer a member's
         await db.query('UPDATE agent_hosts SET revoked_at = NOW() WHERE created_by = $1 AND revoked_at IS NULL', [userId]);

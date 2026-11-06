@@ -54,12 +54,15 @@ export interface TerminalSessionRef { channelId: string; sessionId: string }
  * terminal session for this agent when the presence socket connects and answers with
  * `TerminalSession { sessions }`. This tells Agora whether the agent is working (calling
  * tools) or idle (waiting in chat_wait, or no tool call for `idleMs`), with the number of tool
- * calls it has seen. That is all agora-mcp can know: token use stays with the CLI ("n/a").
+ * calls it has seen and the name of the last one (chat_wait aside), which the session sheet
+ * shows (#230). That is all agora-mcp can know: token use stays with the CLI ("n/a"); an agent
+ * can report its context use itself with agent_status.
  */
 export class ActivityReporter {
     private socket: SocketLike | null = null;
     private working = false;
     private toolCalls = 0;
+    private lastTool: string | null = null;
     private active = 0;
     private idleTimer: ReturnType<typeof setTimeout> | null = null;
     private lastSent = 0;
@@ -84,6 +87,7 @@ export class ActivityReporter {
         if (name === 'chat_wait') { this.idle(); return; }
         this.active++;
         this.toolCalls++;
+        this.lastTool = name;
         this.clearIdle();
         if (!this.working) { this.working = true; this.send(); }
         else if (this.now() - this.lastSent >= (this.opts.minIntervalMs ?? 5_000)) this.send();
@@ -107,8 +111,8 @@ export class ActivityReporter {
         this.send();
     }
 
-    get state(): { working: boolean; toolCalls: number } {
-        return { working: this.working, toolCalls: this.toolCalls };
+    get state(): { working: boolean; toolCalls: number; lastTool: string | null } {
+        return { working: this.working, toolCalls: this.toolCalls, lastTool: this.lastTool };
     }
 
     private clearIdle() {
@@ -117,6 +121,6 @@ export class ActivityReporter {
 
     private send() {
         this.lastSent = this.now();
-        this.socket?.emit('Activity', { working: this.working, toolCalls: this.toolCalls });
+        this.socket?.emit('Activity', { working: this.working, toolCalls: this.toolCalls, ...(this.lastTool ? { lastTool: this.lastTool } : {}) });
     }
 }
