@@ -212,8 +212,11 @@ services:
     network_mode: none
     restart: "no"
 
-  # Restricted Docker API: only reachable by the runner; container operations
-  # limited to agora-run-* names; bind mounts rejected
+  # Restricted Docker API: only reachable by the runner; container operations limited to this
+  # install's <instance>-run-<ulid> names; bind mounts rejected. No container list: the proxy
+  # matches paths, not query strings, so it can't hold a list to this install's label. So one
+  # install's runner never sees, stops or removes another install's runs on this engine (#126).
+  # Every per-container call names the container (an ID wouldn't match).
   socket-proxy:
     image: wollomatic/socket-proxy:1.13.1
     restart: unless-stopped
@@ -232,15 +235,20 @@ services:
       - "-allowfrom=runner"
       - "-allowbindmountfrom=/nonexistent-agora-no-bind-mounts"
       - "-allowHEAD=(/v1\\.[0-9]+)?/_ping"
-      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/json|containers/agora-run-[0-9a-z]{26}/(json|logs)|networks/${AGORA_INSTANCE:-agora}_sandbox|images/.+/json)"
-      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(create|agora-run-[0-9a-z]{26}/(start|wait|kill))"
-      - "-allowDELETE=(/v1\\.[0-9]+)?/containers/agora-run-[0-9a-z]{26}"
+      # An image reference's segments start with a letter or digit, so a `..` segment can't
+      # walk an image path over to another container's inspect
+      - "-allowGET=(/v1\\.[0-9]+)?/(_ping|version|info|containers/${AGORA_INSTANCE:-agora}-run-[0-9a-z]{26}/(json|logs)|networks/${AGORA_INSTANCE:-agora}_sandbox|images/[0-9A-Za-z][0-9A-Za-z._:@-]*(/[0-9A-Za-z][0-9A-Za-z._:@-]*)*/json)"
+      - "-allowPOST=(/v1\\.[0-9]+)?/containers/(create|${AGORA_INSTANCE:-agora}-run-[0-9a-z]{26}/(start|wait|kill))"
+      - "-allowDELETE=(/v1\\.[0-9]+)?/containers/${AGORA_INSTANCE:-agora}-run-[0-9a-z]{26}"
 
   runner:
     build:
       context: .
       dockerfile: Dockerfile
     command: ["node", "dist/src/runner-main.js"]
+    # On SIGTERM the runner takes no new runs and finishes the ones in progress (the longest may
+    # take 10 minutes, limits.ts TIME_PROFILES), so a stop or recreate doesn't cut them off
+    stop_grace_period: 11m
     environment:
       DATABASE_URL: postgres://accord:${DB_PASSWORD}@postgres:5432/agora
       REDIS_URL: redis://redis:6379
@@ -337,9 +345,17 @@ networks:
   default: {}
   # Internal-only: no route out. Members: cap-gateway + per-run sandbox containers.
   # Named after the instance so two installs on one engine never share it (#209).
+  # inhibit_ipv4: the bridge gets no IPv4 address, so the host isn't on this network and a run
+  # can't reach host services on the gateway address (agent boxes do the same, networkSpec).
+  # The runner refuses a sandbox network without it. Compose doesn't reliably change an existing
+  # network: install/upgrade.sh recreates it (install/sandbox-network.sh, spec §6.1).
   sandbox:
     name: ${AGORA_INSTANCE:-agora}_sandbox
     internal: true
+    # inhibit_ipv4 covers IPv4 only: keep IPv6 off, whatever the daemon's defaults
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
 
 volumes:
   caddy_data:

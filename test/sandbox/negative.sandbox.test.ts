@@ -7,6 +7,7 @@ import { processRun, type RunnerDeps } from '../../src/runtime/runner';
 import { resolveLimits, type RunLimits } from '../../src/runtime/limits';
 import { containerName } from '../../src/runtime/container-spec';
 import { startGatewayHarness, FORWARDER } from './gateway-harness';
+import { INSTANCE, leftoverContainers, networkGateway } from './host-docker';
 
 /**
  * WBS 3.9: the negative security suite (sandbox-isolation-spec §14). Every test
@@ -14,6 +15,8 @@ import { startGatewayHarness, FORWARDER } from './gateway-harness';
  *
  * Where each §14 item is tested:
  *    1  core services, file volume ........ here ("core services…", "the container has no mounts…", "the network itself…")
+ *       the host on the gateway address,
+ *       another install's runs ............ here ("the host is not on the sandbox network…", §6.1, #126)
  *    2  internet, raw TCP, DNS ............ here ("no route to the internet…", "the network itself…")
  *    3  remote imports .................... here
  *    4  environment ....................... here
@@ -35,10 +38,14 @@ import { startGatewayHarness, FORWARDER } from './gateway-harness';
  */
 
 const IMAGE = process.env.AGORA_SANDBOX_IMAGE ?? 'agora/sandbox-deno:dev';
-const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? 'agora_sandbox';
+const NETWORK = process.env.AGORA_SANDBOX_NETWORK ?? `${INSTANCE}_sandbox`;
 const DOCKER_HOST = process.env.AGORA_DOCKER_HOST ?? 'http://127.0.0.1:2375';
 const PROBE_IMAGE = 'alpine/socat:latest'; // has busybox sh, nc, nslookup; already used by the harness
 const TARGET = 'agora-neg-target';
+const HOST_LISTENER = 'agora-neg-host-listener';
+const OTHER_NETWORK = 'agora-neg-other_sandbox';
+const OTHER_RUN = 'agora-neg-other-run';
+const OPEN_NETWORK = 'agora-neg-open_sandbox';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let serverId: string;
@@ -98,10 +105,6 @@ function expectNoneReached(probes: Record<string, Probe>) {
     }
 }
 
-async function leftoverContainers(runId: string) {
-    return dockerFromEnv(DOCKER_HOST).listContainers({ all: true, filters: { label: [`agora.run=${runId}`] } });
-}
-
 beforeAll(async () => {
     ctx = await setupTestApp();
     await cleanDatabase(ctx.db);
@@ -115,12 +118,13 @@ beforeAll(async () => {
     deps = {
         db: ctx.db,
         sandbox,
-        config: { image: IMAGE, network: NETWORK, runtime, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER },
+        config: { image: IMAGE, network: NETWORK, runtime, instance: INSTANCE, capUrl: 'http://cap-gateway:8080', perServerConcurrency: 4, capacityRetryMs: 100, capContainer: FORWARDER },
     };
 });
 
 afterAll(async () => {
-    docker(['rm', '-f', TARGET], { ignoreErrors: true });
+    docker(['rm', '-f', TARGET, HOST_LISTENER, OTHER_RUN], { ignoreErrors: true });
+    docker(['network', 'rm', OTHER_NETWORK, OPEN_NETWORK], { ignoreErrors: true });
     await gateway?.stop();
     await ctx.close();
 });
@@ -159,7 +163,7 @@ describe('spec §14: what a run cannot reach', () => {
             for (let i = 0; i < 100 && !info; i++) {
                 await new Promise(r => setTimeout(r, 100));
                 try {
-                    const candidate = await dockerFromEnv(DOCKER_HOST).getContainer(containerName(id)).inspect();
+                    const candidate = await dockerFromEnv(DOCKER_HOST).getContainer(containerName(id, INSTANCE)).inspect();
                     if (candidate.State?.Running) info = candidate;
                 } catch { /* not created yet */ }
             }
@@ -180,7 +184,7 @@ describe('spec §14: what a run cannot reach', () => {
         } finally {
             expect(await pending).toEqual({ kind: 'ran', status: 'succeeded' });
         }
-        expect(await leftoverContainers(id)).toHaveLength(0);
+        expect(leftoverContainers(id)).toHaveLength(0);
     });
 
     test('no route to the internet: fetch, raw TCP and DNS all fail (item 2)', async () => {
@@ -230,6 +234,58 @@ describe('spec §14: what a run cannot reach', () => {
             'host-gateway-port': 'BLOCKED',
             'internet-tcp': 'BLOCKED',
             'internet-dns': 'BLOCKED',
+        });
+    });
+
+    test('the host is not on the sandbox network, and another install\'s runs are out of reach (§6.1, #126)', async () => {
+        // A service on the Docker host listening on every address, the way an sshd or a Docker
+        // API on 2375 does. Without inhibit_ipv4 the sandbox bridge holds the network's gateway
+        // address, and a run reaches the host there even on an internal network.
+        const port = 20000 + Math.floor(Math.random() * 10000);
+        docker(['rm', '-f', HOST_LISTENER, OTHER_RUN], { ignoreErrors: true });
+        docker(['run', '-d', '--name', HOST_LISTENER, '--network', 'host', PROBE_IMAGE, `TCP-LISTEN:${port},fork,reuseaddr`, 'SYSTEM:echo host']);
+
+        // Another install's sandbox network on the same engine, with one of its runs listening
+        docker(['network', 'rm', OTHER_NETWORK], { ignoreErrors: true });
+        docker(['network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', OTHER_NETWORK]);
+        docker(['run', '-d', '--name', OTHER_RUN, '--network', OTHER_NETWORK, '--label', 'agora.managed=runtime',
+            '--label', 'agora.instance=agora-neg-other', PROBE_IMAGE, 'TCP-LISTEN:8080,fork,reuseaddr', 'SYSTEM:echo other']);
+        const otherIp = docker(['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', OTHER_RUN]);
+        expect(otherIp).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+
+        const sandboxGateway = networkGateway(NETWORK);
+        const bridgeGateway = networkGateway('bridge');
+        const check = (name: string, host: string, p: number) =>
+            `if nc -z -w 3 ${host} ${p} >/dev/null 2>&1; then echo "${name}=REACHED"; else echo "${name}=BLOCKED"; fi`;
+        const parse = (out: string) => Object.fromEntries(out.split('\n').filter(l => l.includes('=')).map(l => l.trim().split('=')));
+        const probe = (network: string, script: string, rt = 'runc') => parse(docker(
+            ['run', '--rm', `--runtime=${rt}`, '--network', network, '--entrypoint', 'sh', PROBE_IMAGE, '-c', script],
+            { ignoreErrors: true },
+        ));
+
+        // Controls: the listener answers on the default bridge's gateway, and the other run answers on its own network
+        expect(probe('bridge', check('host', bridgeGateway, port)), 'control: the host listener should answer on the default bridge gateway')
+            .toEqual({ host: 'REACHED' });
+        // The gap itself, on this engine: an internal network made the old way (no inhibit_ipv4)
+        // lets a container reach the host on its gateway address. Without this the test below
+        // could pass on an engine whose firewall blocks it anyway, fix or no fix.
+        docker(['network', 'rm', OPEN_NETWORK], { ignoreErrors: true });
+        docker(['network', 'create', '--internal', OPEN_NETWORK]);
+        expect(probe(OPEN_NETWORK, check('host', networkGateway(OPEN_NETWORK), port), runtime),
+            'control: on an internal network without inhibit_ipv4 the host should answer on the gateway address').toEqual({ host: 'REACHED' });
+        docker(['network', 'rm', OPEN_NETWORK], { ignoreErrors: true });
+        expect(probe(OTHER_NETWORK, check('other', otherIp, 8080)), "control: the other install's run should answer on its own network")
+            .toEqual({ other: 'REACHED' });
+
+        const fromSandbox = probe(NETWORK, [
+            check('host-on-sandbox-gateway', sandboxGateway, port),
+            check('host-on-default-gateway', bridgeGateway, port),
+            check('other-install-run', otherIp, 8080),
+        ].join('; '), runtime);
+        expect(fromSandbox).toEqual({
+            'host-on-sandbox-gateway': 'BLOCKED',
+            'host-on-default-gateway': 'BLOCKED',
+            'other-install-run': 'BLOCKED',
         });
     });
 
@@ -335,7 +391,7 @@ describe('spec §14: what a run cannot reach', () => {
         expect(result.kind).toBe('ran');
         expect(['failed', 'killed', 'timeout']).toContain((result as any).status);
         expect(Date.now() - started).toBeLessThan(40_000);
-        expect(await leftoverContainers(id)).toHaveLength(0);
+        expect(leftoverContainers(id)).toHaveLength(0);
 
         // The engine is still healthy: an ordinary run works straight afterwards
         const after = await insertRun('console.log("still fine")');

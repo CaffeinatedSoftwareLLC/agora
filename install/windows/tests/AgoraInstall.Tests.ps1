@@ -338,6 +338,21 @@ bb415d824822c4b878125729af451a5d18fb13d1cf5cbed9a7393ad64ac6039e *ubuntu-24.04.5
     }
 }
 
+Describe 'ConvertTo-ResponseText' {
+    # Canonical serves SHA256SUMS with no Content-Type, so Windows PowerShell 5.1 hands back bytes
+    It 'decodes byte content as UTF-8 so the image list still matches' {
+        $line = 'bb415d824822c4b878125729af451a5d18fb13d1cf5cbed9a7393ad64ac6039e *ubuntu-24.04.5-wsl-amd64.wsl'
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$line`n")
+        $text = & (Get-Module AgoraInstall) { param($c) ConvertTo-ResponseText $c } $bytes
+        $text | Should -BeOfType [string]
+        (Select-UbuntuWslImage -Sha256Sums $text -Arch 'amd64').FileName | Should -Be 'ubuntu-24.04.5-wsl-amd64.wsl'
+    }
+
+    It 'leaves string content as it is' {
+        & (Get-Module AgoraInstall) { ConvertTo-ResponseText 'plain text' } | Should -Be 'plain text'
+    }
+}
+
 Describe 'Get-UbuntuWslImage' {
     It 'deletes a download whose SHA-256 differs and refuses it' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("agora-pester-" + [guid]::NewGuid())
@@ -350,6 +365,33 @@ Describe 'Get-UbuntuWslImage' {
         } finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
         }
+    }
+}
+
+Describe 'Windows argument quoting for wsl.exe' {
+    # Invoke-LinuxInstaller hands wsl.exe one command line (Start-Process), so every argument
+    # must survive the Windows parsing rules exactly
+    It 'leaves plain arguments alone and quotes spaces, empties and quotes' {
+        & (Get-Module AgoraInstall) {
+            ConvertTo-WindowsArgument '--wsl' | Should -Be '--wsl'
+            ConvertTo-WindowsArgument '/mnt/c/Users/A B/agora' | Should -Be '"/mnt/c/Users/A B/agora"'
+            ConvertTo-WindowsArgument '' | Should -Be '""'
+            ConvertTo-WindowsArgument 'say "hi"' | Should -Be '"say \"hi\""'
+            ConvertTo-WindowsArgument 'C:\dir with space\' | Should -Be '"C:\dir with space\\"'
+        }
+    }
+
+    It 'round-trips through a real process unchanged' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        $values = @('-d', 'Agora', '/mnt/c/Users/A B/agora', '', 'say "hi"', 'C:\dir with space\', 'a\\b', 'tab	here')
+        $out = Join-Path ([System.IO.Path]::GetTempPath()) ("agora-args-" + [guid]::NewGuid() + '.json')
+        $line = & (Get-Module AgoraInstall) { param($v) Join-WindowsArguments $v } $values
+        $script = 'require(\"fs\").writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))'
+        try {
+            $p = Start-Process -FilePath 'node' -ArgumentList "-e `"$script`" `"$out`" $line" -NoNewWindow -Wait -PassThru
+            $p.ExitCode | Should -Be 0
+            $got = Get-Content $out -Raw | ConvertFrom-Json
+            @($got) | Should -Be $values
+        } finally { Remove-Item $out -ErrorAction SilentlyContinue }
     }
 }
 

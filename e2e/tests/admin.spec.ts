@@ -249,8 +249,11 @@ test.describe('instance admin', () => {
             expect(r.data.size).toBe(2 * MB);
             expect(await totalFiles(owner)).toBe(before + 1);
             // Over the setting is still refused by the setting's own check
+            // #206: this once got 201. Multipart had cut the file to exactly 3 MB without an error, so
+            // a 201 here would show size 3145728; the message records what was stored.
             const over = await upload(owner, ch.id, 'four-mb.txt', Buffer.alloc(4 * MB, 'c'));
-            expect([over.status, over.data?.error]).toEqual([413, 'File exceeds maximum allowed size']);
+            expect([over.status, over.data?.error], `stored size ${over.data?.size ?? 'none'}: ${JSON.stringify(over.data)}`)
+                .toEqual([413, 'File exceeds maximum allowed size']);
         } finally {
             await restoreFileSettings(owner, original);
         }

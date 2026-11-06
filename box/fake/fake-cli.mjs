@@ -90,7 +90,11 @@ async function claude() {
 
 async function codex() {
     if (args[0] === '--version') { console.log('codex-cli 0.163.0'); return 0; }
-    if (args[0] === 'login' && args[1] === '--device-auth') {
+    // Like the real CLI, root-level `-c key=value` overrides may come before the subcommand
+    // (agora-host's box login passes CODEX_BOX_QUIET that way)
+    let sub = 0;
+    while (args[sub] === '-c' && args[sub + 1] !== undefined) sub += 2;
+    if (args[sub] === 'login' && args[sub + 1] === '--device-auth') {
         const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
         const pick = n => Array.from({ length: n }, () => letters[randomInt(letters.length)]).join('');
         process.stdout.write('\nWelcome to Codex [v\x1b[90m0.163.0\x1b[0m]\n\x1b[90mOpenAI\'s command-line coding agent\x1b[0m\n\n'

@@ -31,7 +31,9 @@ test.describe('chat, mentions, threads @smoke', () => {
         const before = (await owner.ok('GET', `/channels/${ch}/messages?limit=5`)) as any[];
         const box = page.getByPlaceholder(`Message #${name}`);
         await box.click();
-        await box.pressSequentially(`@${bot.slice(0, -1)}`);
+        // The full name: a shorter prefix also matched bots left over from earlier runs on the
+        // long-lived e2e database (claude-e2e-05a1 for claude-e2e-05a6), and Enter took the first (#246)
+        await box.pressSequentially(`@${bot}`);
         const option = page.getByRole('button', { name: new RegExp(`${bot}$`) });
         await expect(option).toBeVisible();
         await snap(page, ti, 'UI-01.mention-enter', '01-suggestions', `A mention suggestion list showing ${bot} above the message box`, { ready: option });

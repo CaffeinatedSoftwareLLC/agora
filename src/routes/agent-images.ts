@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { checkRun, type Notice } from '../lib/agent-runs';
-import { storeFile, getFileSetting, readUploadPart, FILE_TOO_LARGE } from '../lib/file-store';
+import { storeFile, getFileSetting, readUploadPart, readLimitFor, FILE_TOO_LARGE } from '../lib/file-store';
 import { IMAGE_MIMES, validateFileType } from '../lib/file-validation';
 import { extractImagePaths } from '../lib/image-references';
 
@@ -48,7 +48,7 @@ export async function agentImageRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
         const maxBytes = Number(await getFileSetting(db, 'files.max_size_bytes'));
         if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) return reply.status(503).send({ error: 'file_size_limit_required' });
-        const data = await request.file({ limits: { fileSize: maxBytes, files: 1, fields: 3 } });
+        const data = await request.file({ limits: { fileSize: readLimitFor(maxBytes), files: 1, fields: 3 } });
         if (!data) return reply.status(400).send({ error: 'image is required' });
         const field = (name: string) => (data.fields[name] as any)?.value;
         const auth = await authorize(request, reply, field('claimToken'));
@@ -64,7 +64,8 @@ export async function agentImageRoutes(app: FastifyInstance) {
             if (err instanceof app.multipartErrors.RequestFileTooLargeError) buffer = null;
             else throw err;
         }
-        if (!buffer) return reply.status(FILE_TOO_LARGE.status).send({ error: FILE_TOO_LARGE.error });
+        // Read one byte past the setting (readLimitFor): anything longer than the setting is over it
+        if (!buffer || buffer.length > maxBytes) return reply.status(FILE_TOO_LARGE.status).send({ error: FILE_TOO_LARGE.error });
         const digest = createHash('sha256').update(buffer).digest('hex');
         const prior = await db.query('SELECT file_id FROM agent_run_images WHERE run_id = $1 AND digest = $2', [auth.run.id, digest]);
         if (prior.rows.length) return reply.send({ ok: true, repeated: true, fileId: prior.rows[0].file_id.trim() });

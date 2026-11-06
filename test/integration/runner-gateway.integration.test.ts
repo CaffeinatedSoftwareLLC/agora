@@ -80,7 +80,8 @@ describe('gateway address for sandbox runs', () => {
         const { sandbox, created } = fakeDocker({ containers: {} });
         const { result, row } = await run(sandbox, config('runsc'));
         expect(result).toEqual({ kind: 'ran', status: 'error' });
-        expect(row.error).toBe('Capability gateway container "cap-gateway" was not found on the "agora_sandbox" network');
+        // Looked up by exact name, <instance>-cap-gateway (spec §6.2), not by the substring "cap-gateway"
+        expect(row.error).toBe('Capability gateway container "agora-cap-gateway" was not found on the "agora_sandbox" network');
         expect(created).toHaveLength(0);
     });
 

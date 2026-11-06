@@ -302,12 +302,12 @@ Both files default to the same project name (the directory name), and without `-
 The sandboxed code runtime (see [`docs/planning/sandbox-isolation-spec.md`](planning/sandbox-isolation-spec.md)) runs agent code in throwaway containers. In development it needs three things on top of the dev infra:
 
 ```bash
-docker network create --internal agora_sandbox                  # internal-only: no route out
+docker network create --internal -o com.docker.network.bridge.inhibit_ipv4=true agora_sandbox  # no route out, and the host isn't on it
 docker build -t agora/sandbox-deno:dev sandbox                   # sandbox image (Deno, distroless)
 docker compose -f docker-compose.yml -p agora-dev --profile sandbox up -d socket-proxy
 ```
 
-The socket proxy publishes a restricted Docker API on `127.0.0.1:2375`. The runner can only create, start, inspect and remove `agora-run-*` containers, and bind mounts are rejected.
+The socket proxy publishes a restricted Docker API on `127.0.0.1:2375`. The runner can only create, start, inspect and remove `agora-run-*` containers (an install's own `<instance>-run-*` in production), it can't list containers, and bind mounts are rejected. The runner refuses a sandbox network without `inhibit_ipv4`; if you made `agora_sandbox` before, remove it and create it again with the command above.
 
 Start the runner and the capability gateway, and run the Docker-backed tests:
 
@@ -338,7 +338,7 @@ If you also run the production stack on the same machine, remove the dev network
 scripts/test-sandbox-gvisor.sh
 ```
 
-It needs only Docker on that machine: it starts its own Postgres, Redis, socket proxy and internal network, runs the tests in a Node container, and removes everything afterwards. It refuses to start while a real code run is in progress on the same engine, because the suite removes every `agora-run-*` container.
+It needs only Docker on that machine: it starts its own Postgres, Redis, socket proxy and internal network, runs the tests in a Node container, and removes everything afterwards. It refuses to start on an engine that hosts any Agora stack or code-run container, because its harness drives the host's Docker directly.
 
 **Running the prod stack with gVisor on Linux.** Set `DOCKER_GID` in `.env.prod` to the host's docker group id (`getent group docker | cut -d: -f3`). The socket proxy runs unprivileged and needs that group to reach `/var/run/docker.sock`. The id differs between hosts (for example 986 or 999).
 

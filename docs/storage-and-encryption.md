@@ -116,6 +116,21 @@ With the S3 driver the provider sees ciphertext only, plus object names and size
 
 Limits (size, allowed extensions, retention, quota, EXIF stripping) live in the `instance_settings` table and are set from **Admin → Storage**. They apply the same way to both drivers. A background worker (`src/workers/file-cleanup.ts`) deletes expired files, orphaned uploads and old soft-deleted rows every hour.
 
+**Content checks.** Allowing an extension is never enough on its own: every upload's content must match it (`validateFileType()` in `src/lib/file-validation.ts`). Most types are recognised by their magic bytes. Formats that have none, or that share a container with others, have their own check (#303):
+
+| Extension | Stored as | What the content must have |
+|---|---|---|
+| `xls` | `application/vnd.ms-excel` | A compound file (OLE2) with a `Workbook` (Excel 97-2003) or `Book` (Excel 5/95) stream that opens with a BOF record. Excel 2-4 files, which have no compound file, are refused. |
+| `doc` | `application/msword` | A compound file with a `WordDocument` stream that opens with the Word file-information block's identifier |
+| `ppt` | `application/vnd.ms-powerpoint` | A compound file with a `PowerPoint Document` stream and a `Current User` stream holding a CurrentUserAtom |
+| `mpp` | `application/vnd.ms-project` | A compound file whose `CompObj` stream names the format `MSProject.MPP8` to `MSProject.MPP14` |
+| `accdb` | `application/x-msaccess` | The Access 2007+ header: `Standard ACE DB` and a format version from 2 up, in a full first page |
+| `jmp` | `application/x-jmp` | The JMP data table header `ff ff 00 00 07 00 00 00` |
+| `avif` | `image/avif` | An ISO-BMFF `ftyp` box listing the `avif` or `avis` brand, and an image sharp can read. With EXIF stripping on, an AVIF that carries EXIF, XMP or IPTC metadata is re-encoded without it. |
+| `drawio` | `application/xml` | UTF-8 XML whose root element is `<mxfile>` or `<mxGraphModel>` (compressed diagrams are still this XML) |
+
+Compound files are read by `src/lib/cfb.ts`, which treats every offset and chain in the file as untrusted. None of these types is ever served inline.
+
 ### Two services share the volume
 
 `api` serves uploads and downloads. `cap-gateway` stores files posted by sandbox runs. Both mount `files-data` and both hold `AGORA_ENCRYPTION_KEY`, exactly as both held the MinIO credentials before. **Sandbox containers never mount the volume**: the socket proxy rejects bind mounts, and a run can only add a file by calling the gateway with its run token.

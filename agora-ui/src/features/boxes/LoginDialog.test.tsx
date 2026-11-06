@@ -63,6 +63,14 @@ it('Claude: shows the sign-in link and sends the pasted code', async () => {
   await waitFor(() => expect(screen.getByTestId('login-status')).toHaveTextContent('Login failed: invalid code'));
 });
 
+it('says which domain blocked the login, while it runs and when it fails', async () => {
+  polls = [login({ status: 'code_sent', blockedHosts: ['platform.claude.com'] })];
+  render(<LoginDialog box={box('claude')} onClose={vi.fn()} pollMs={5} />);
+  await waitFor(() => expect(screen.getByTestId('login-status')).toHaveTextContent('Blocked: the login needs platform.claude.com'));
+  polls = [login({ status: 'failed', error: 'needs_domain', blockedHosts: ['platform.claude.com'] })];
+  await waitFor(() => expect(screen.getByTestId('login-status')).toHaveTextContent('the box was blocked from platform.claude.com'));
+});
+
 it('shows an expired login', async () => {
   polls = [login({ status: 'expired' })];
   render(<LoginDialog box={box('claude')} onClose={vi.fn()} pollMs={5} />);

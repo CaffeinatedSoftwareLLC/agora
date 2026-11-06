@@ -36,9 +36,9 @@ describe('bot upload channel permissions', () => {
         expect(await checkChannelPermissions(client({ deny: permission }), 'channel', 'bot', required, { isBot: true })).toMatchObject({ allowed: false, status: 403 });
         expect(await checkChannelPermissions(client({ deny: permission, allow: permission }), 'channel', 'bot', required, { isBot: true })).toEqual({ allowed: true });
     });
-    it('gates bots by channel access, not SendMessages or ViewChannel; people still need SendMessages', async () => {
+    it('gates bots by channel access, not SendMessages or ViewChannel; people still need ViewChannel and SendMessages', async () => {
         const denied = Permissions.SendMessages | Permissions.ViewChannel;
         expect(await checkChannelPermissions(client({ deny: denied }), 'channel', 'bot', required, { isBot: true })).toEqual({ allowed: true });
-        expect(uploadPermissions(false)).toBe(Permissions.UploadFiles | Permissions.SendMessages);
+        expect(uploadPermissions(false)).toBe(Permissions.ViewChannel | Permissions.UploadFiles | Permissions.SendMessages);
     });
 });
