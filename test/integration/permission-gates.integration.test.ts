@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { Permissions, DEFAULT_EVERYONE_PERMS } from '../../src/permissions';
-import { OWNER_ONLY_ERROR } from '../../src/lib/direct-agents';
+import { DIRECTOR_ROLE_ERROR, OWNER_ONLY_ERROR } from '../../src/lib/direct-agents';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 
@@ -139,6 +139,32 @@ describe('Role hierarchy', () => {
         const refused = await ctx.request.delete(`${base}/roles/${directors}`).set(w.admin.auth);
         expect(refused.status).toBe(403);
         expect(refused.body.error).toBe(OWNER_ONLY_ERROR);
+        // Every field, not only the permissions (#246)
+        for (const field of [{ name: 'Muted' }, { color: '#123456' }, { position: 0 }, { permissions: Permissions.DirectAgents.toString() }]) {
+            const res = await ctx.request.patch(`${base}/roles/${directors}`).set(w.admin.auth).send(field);
+            expect(res.status, JSON.stringify(field)).toBe(403);
+            expect(res.body.error).toBe(DIRECTOR_ROLE_ERROR);
+        }
+        expect((await ctx.db.query('SELECT name FROM roles WHERE id = $1', [directors])).rows[0].name).toBe('Directors');
+        expect((await ctx.request.patch(`${base}/roles/${directors}`).set(w.owner.auth).send({ color: '#123456' })).status).toBe(200);
+    });
+
+    it('@everyone carrying DirectAgents stays with Administrators, except for the bit itself', async () => {
+        const w = await roleWorld('rh7');
+        const path = `/servers/${w.serverId}/roles/${w.everyoneRoleId}`;
+        // "Everyone directs in #general", and on the server too
+        expect((await ctx.request.put(`/channels/${w.generalChannelId}/overrides/roles/${w.everyoneRoleId}`).set(w.owner.auth)
+            .send({ allow: Permissions.DirectAgents.toString(), deny: '0' })).status).toBe(200);
+        const withBit = DEFAULT_EVERYONE_PERMS | Permissions.DirectAgents;
+        expect((await ctx.request.patch(path).set(w.owner.auth).send({ permissions: withBit.toString() })).status).toBe(200);
+
+        const trimmed = withBit & ~Permissions.CreateInvites;
+        expect((await ctx.request.patch(path).set(w.admin.auth).send({ permissions: trimmed.toString() })).status).toBe(200);
+        expect((await ctx.request.patch(path).set(w.admin.auth).send({ color: '#abcdef' })).status).toBe(200);
+        const drop = await ctx.request.patch(path).set(w.admin.auth).send({ permissions: (trimmed & ~Permissions.DirectAgents).toString() });
+        expect(drop.status).toBe(403);
+        expect(drop.body.error).toBe(OWNER_ONLY_ERROR);
+        expect(await rolePerms(w.everyoneRoleId)).toBe(trimmed.toString());
     });
 
     it('the owner can manage Administrator roles', async () => {
@@ -302,6 +328,52 @@ describe('SendMessages', () => {
         // Muting a bot means removing its channel access
         expect((await ctx.request.delete(`${ch}/bots/${bot.body.id}`).set(c.owner.auth)).status).toBe(200);
         expect((await ctx.request.post(`${ch}/messages`).set(botAuth).send({ content: 'gone' })).status).toBe(403);
+    });
+});
+
+describe('UploadFiles', () => {
+    const upload = (auth: Record<string, string>, channelId: string, name: string) => ctx.request.post('/files/upload').set(auth)
+        .field('channel_id', channelId).attach('file', Buffer.from('hello'), name);
+    const storedIn = async (channelId: string) =>
+        (await ctx.db.query('SELECT COUNT(*)::int AS n FROM files WHERE channel_id = $1', [channelId])).rows[0].n as number;
+
+    it('a person needs ViewChannel too: no uploads into a channel they cannot see (#246)', async () => {
+        const owner = await authedUser(ctx.request, 'up1owner');
+        const member = await authedUser(ctx.request, 'up1member');
+        const server = await createServer(ctx.request, owner.auth, 'up1 server');
+        await joinViaInvite(ctx.request, owner.auth, member.auth, server.serverId);
+        const ch = server.generalChannelId;
+        expect((await upload(member.auth, ch, 'seen.txt')).status).toBe(201);
+
+        // Hidden from the member, who still holds UploadFiles and SendMessages there
+        expect((await ctx.request.put(`/channels/${ch}/overrides/roles/${server.everyoneRoleId}`).set(owner.auth)
+            .send({ allow: '0', deny: Permissions.ViewChannel.toString() })).status).toBe(200);
+        expect((await ctx.request.put(`/channels/${ch}/overrides/members/${member.userId}`).set(owner.auth)
+            .send({ allow: (Permissions.UploadFiles | Permissions.SendMessages).toString(), deny: '0' })).status).toBe(200);
+        const hidden = await upload(member.auth, ch, 'unseen.txt');
+        expect(hidden.status).toBe(403);
+        expect(hidden.body.error).toBe('Missing required permissions');
+        expect(await storedIn(ch)).toBe(1);
+
+        // Seeing the channel again lets the upload through
+        expect((await ctx.request.put(`/channels/${ch}/overrides/members/${member.userId}`).set(owner.auth)
+            .send({ allow: (Permissions.ViewChannel | Permissions.UploadFiles | Permissions.SendMessages).toString(), deny: '0' })).status).toBe(200);
+        expect((await upload(member.auth, ch, 'seen-again.txt')).status).toBe(201);
+        expect(await storedIn(ch)).toBe(2);
+    });
+
+    it('a bot is still gated by its channel access, not ViewChannel', async () => {
+        const owner = await authedUser(ctx.request, 'up2owner');
+        const server = await createServer(ctx.request, owner.auth, 'up2 server');
+        const ch = server.generalChannelId;
+        const bot = await ctx.request.post(`/servers/${server.serverId}/bots`).set(owner.auth).send({ username: 'up2bot' });
+        expect(bot.status).toBe(201);
+        const token = await ctx.request.post(`/servers/${server.serverId}/bots/${bot.body.id}/tokens`).set(owner.auth).send({});
+        const botAuth = { Authorization: `Bot ${token.body.token}` };
+        expect((await ctx.request.post(`/channels/${ch}/bots/${bot.body.id}`).set(owner.auth)).status).toBe(201);
+        expect((await ctx.request.put(`/channels/${ch}/overrides/roles/${server.everyoneRoleId}`).set(owner.auth)
+            .send({ allow: '0', deny: Permissions.ViewChannel.toString() })).status).toBe(200);
+        expect((await upload(botAuth, ch, 'bot.txt')).status, 'bot upload').toBe(201);
     });
 });
 
