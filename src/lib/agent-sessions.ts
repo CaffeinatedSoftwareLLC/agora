@@ -17,7 +17,7 @@ import { stampAuthority } from './direct-agents';
  * - a top-level START from an agent with a live session binds a collaboration thread and
  *   wakes the other participants → 'protocol'. From a terminal agent (posting with the token
  *   that opened its terminal session), only when it names a live agent and it or the person
- *   who opened the terminal can direct agents here; otherwise it is an ordinary post. A
+ *   whose token opened the terminal can direct agents here; otherwise it is an ordinary post. A
  *   participant with a live terminal session is bound too, so its own protocol messages
  *   route, but is never woken: it hears the thread itself;
  * - in a bound thread, protocol messages from participants hand off (YIELD, ACK, DECIDE),
@@ -412,12 +412,14 @@ async function unreachable(db: any, msg: RoutedMessage, authorId: string, termin
 
 /**
  * May a terminal agent's START open a collaboration thread? Only with authority to direct
- * agents in the channel: the bot's own (the post's stamp), or that of the person who opened
- * the terminal (its started_by: the bot's owner when it attached).
+ * agents in the channel: the bot's own (the post's stamp), or that of the person whose token
+ * opened the terminal (a personal or invite token's minter). Not the bot's owner as such: a
+ * token someone else minted for the bot doesn't borrow the owner's authority, and a host's,
+ * box's or model agent's token has only the bot's own.
  */
 async function terminalMayDirect(db: any, msg: RoutedMessage, author: LiveSession): Promise<boolean> {
     if (msg.couldDirect) return true;
-    return !!author.startedBy && await stampAuthority(db, msg.channelId, author.startedBy, false);
+    return !!author.tokenMintedBy && await stampAuthority(db, msg.channelId, author.tokenMintedBy, false);
 }
 
 /** Bind a START's thread to its author and peers, and wake the hosted peers ('protocol'). */
@@ -437,7 +439,7 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
     // An agent with a live session (hosted or terminal) opens a collaboration thread. Terminal
     // participants are members of the thread, so their turns route, but are never woken: they
     // hear the thread themselves. A terminal agent opens one only with authority to direct
-    // agents here (its own, or that of the person who opened the terminal); otherwise, or when
+    // agents here (its own, or that of the person whose token opened the terminal); otherwise, or when
     // it names no live agent, its START is an ordinary post.
     if (authorSession && msg.protocol?.state === 'START') {
         const peers = (msg.protocol.participants ?? [])

@@ -34,7 +34,10 @@ WHERE a.action = 'agent_invite_redeem'
   AND t.id = (a.changes->>'tokenId')
   AND i.bot_id = t.bot_id;
 
--- The token whose socket opened a terminal session; NULL when unknown or when sockets with
--- different tokens shared the session (src/lib/terminal-sessions.ts attachTerminal)
+-- The token whose socket opened a terminal session (src/lib/terminal-sessions.ts attachTerminal).
+-- token_mixed: sockets with different tokens shared the session, so no token speaks for it
+-- (token_id stays NULL until it ends). A NULL token_id without it (a session live before this
+-- migration) adopts the next attaching socket's token.
 ALTER TABLE agent_sessions
-    ADD COLUMN token_id CHAR(26) REFERENCES bot_tokens(id) ON DELETE SET NULL;
+    ADD COLUMN token_id    CHAR(26) REFERENCES bot_tokens(id) ON DELETE SET NULL,
+    ADD COLUMN token_mixed BOOLEAN NOT NULL DEFAULT false;
