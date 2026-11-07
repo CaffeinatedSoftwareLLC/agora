@@ -1241,7 +1241,7 @@ Start a passkey assertion that `DELETE /users/@me` accepts instead of the passwo
 
 ### DELETE /users/@me
 
-Delete the signed-in account. Messages are kept as "Deleted user" or removed, by the instance setting (`GET/PATCH /admin/settings/accounts`). Bots the person owns are paused with their tokens revoked. All sessions and sockets of the account end; a cookie session's cookies are cleared.
+Delete the signed-in account. Messages are kept as "Deleted user" or removed, by the instance setting (`GET/PATCH /admin/settings/accounts`). Bots the person owns are paused with their tokens revoked, and every bot token the person made, on anyone's bot, is revoked too. All sessions and sockets of the account end; a cookie session's cookies are cleared.
 
 **Auth:** Required (not bots) · rate limit 5 per 15 minutes
 

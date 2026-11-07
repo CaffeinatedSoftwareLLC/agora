@@ -469,6 +469,57 @@ describe('subscription profiles: hand-offs from the owner\'s terminal agents', (
         expect(await notices(since2)).toEqual([NOTICE('alpha')]);
     });
 
+    /** The terminal session as the agent strip gets it (/sessions), for `by`. */
+    const terminalAs = async (by: { auth: object }) =>
+        ((await cmd(by.auth, { command: 'sessions' })).body.sessions as any[]).find(s => s.kind === 'terminal' && s.state === 'live');
+
+    it("the strip says why a terminal doesn't count: host, box and model tokens, someone else's token", async () => {
+        await connectTerminal(beta, tokenOf(beta.auth));
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'host', ownedByYou: true });
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
+        await connectTerminal(beta, await mint(beta, admin));
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'other_maker' });
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
+        await connectTerminal(beta, await mint(beta, owner));
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null, ownedByYou: true });
+        // Anyone who sees the session sees whether it counts; only the bot's owner is told it is theirs
+        expect(await terminalAs(member)).toMatchObject({ ownerToken: true, ownedByYou: false });
+        // Hosted sessions carry none of it
+        await startSession(alpha);
+        const hosted = ((await cmd(owner.auth, { command: 'sessions' })).body.sessions as any[]).find(s => s.kind === 'hosted');
+        expect(hosted).not.toHaveProperty('ownerToken');
+        expect(hosted).not.toHaveProperty('ownedByYou');
+    });
+
+    it("a legacy token counts once the bot's owner claims it, on the terminal already connected with it", async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(beta, owner);
+        // As a token made before migration 090 left it: no maker on record
+        await ctx.db.query(`UPDATE bot_tokens SET created_by = NULL, created_at = '2020-01-01T00:00:00Z' WHERE id = $1`, [mine.id]);
+        await connectTerminal(beta, mine);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: true });
+
+        await startSession(gamma);
+        const opened = await post(gamma.auth, START('gamma', 'alpha', 'beta'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
+        const since = mark();
+        await reply(mine.auth, opened.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+
+        // An Administrator can't claim it for the owner
+        expect((await ctx.request.post(`/servers/${serverId}/bots/${beta.botId}/tokens/${mine.id}/claim`).set(admin.auth)).status).toBe(403);
+        const claimed = await ctx.request.post(`/servers/${serverId}/bots/${beta.botId}/tokens/${mine.id}/claim`).set(owner.auth);
+        expect(claimed.status, JSON.stringify(claimed.body)).toBe(200);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null });
+
+        // The same live terminal, no reconnect: its next YIELD wakes alpha
+        const since2 = mark();
+        const back = await reply(mine.auth, opened.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }]);
+        expect(await notices(since2)).toEqual([]);
+    });
+
     it("a post with another token while the owner's terminal is live keeps the old rules", async () => {
         const sa = await startSession(alpha);
         const mine = await mint(beta, owner);

@@ -8,7 +8,7 @@ import { useAgentPresenceStore } from '../../stores/agentPresenceStore';
 import { ProtocolBadge } from '../messages/ProtocolBadge';
 import { latestProtocol } from '../messages/latestProtocol';
 import {
-  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownChipLabel, ownSessionChips, ownSessionDetail, resetTime,
+  OWN_SESSION_LABEL, STATE_LABEL, compactTokens, deriveChips, listProfiles, listSessions, ownChipLabel, ownSessionChips, ownSessionDetail, ownerTokenNote, resetTime,
   type AgentProfile, type AgentSession, type OwnSessionStatus,
 } from './agentSessions';
 import { SessionSheet, StateDot, type SheetMode } from './SessionSheet';
@@ -195,11 +195,18 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
       {ownChips.map(chip => {
         const working = !!chip.session?.running && chip.status !== 'offline';
         const { text: label, warn } = ownChipLabel(chip, now);
+        // Whether its hand-offs count as the bot owner's (docs/provider-terms.md)
+        const owner = chip.session ? ownerTokenNote(chip.session) : null;
         const pill = (
           <span className={`${CHIP_PILL} border-dashed`}>
             <OwnSessionDot status={chip.status} working={working} />
             <span className="font-medium">{chip.username}</span>
             <span className={`text-xs ${warn ? 'font-medium text-warn' : 'text-text-muted'}`}>{chip.session ? `terminal · ${label}` : label}</span>
+            {owner?.yours && (
+              <span className={`hidden text-xs sm:inline ${owner.counts ? 'text-online' : 'text-text-muted'}`} data-testid="owner-token">
+                · {owner.counts ? 'counts as you' : "doesn't count as you"}
+              </span>
+            )}
           </span>
         );
         // With a terminal session (#112) the chip opens its sheet; without one it is presence only
@@ -209,8 +216,8 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
             type="button"
             className={CHIP_TARGET}
             aria-haspopup="dialog"
-            title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}`}
-            aria-label={`${chip.username}: terminal session, ${label}. Open session details`}
+            title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}${owner ? ` ${owner.text}` : ''}`}
+            aria-label={`${chip.username}: terminal session, ${label}${owner?.yours ? `, ${owner.counts ? 'counts as you' : "doesn't count as you"}` : ''}. Open session details`}
             data-testid="own-session-chip"
             onClick={() => setSheet({ mode: { kind: 'terminal', botId: chip.userId }, key: Date.now(), channelId })}
           >

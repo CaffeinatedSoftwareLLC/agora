@@ -794,7 +794,8 @@ Requires `ManageBots` permission (bit 27) unless noted:
 | PATCH | `/servers/:id/bots/:botId` | Update bot (name, avatar) |
 | DELETE | `/servers/:id/bots/:botId` | Delete bot (cascades tokens, access) |
 | POST | `/servers/:id/bots/:botId/tokens` | Create a new token (owner/admin only) |
-| GET | `/servers/:id/bots/:botId/tokens` | List tokens (owner/admin only) |
+| GET | `/servers/:id/bots/:botId/tokens` | List tokens (owner/admin only), with `purpose`, `createdBy`, `createdByName` and `countsAsYou` for the caller |
+| POST | `/servers/:id/bots/:botId/tokens/:tokenId/claim` | Record the caller as a legacy personal token's maker (the bot's owner only; audit `bot_token_claimed`) |
 | DELETE | `/servers/:id/bots/:botId/tokens/:tokenId` | Revoke a token (owner/admin only) |
 | PUT | `/servers/:id/bots/:botId/channels/:channelId` | Grant channel access |
 | DELETE | `/servers/:id/bots/:botId/channels/:channelId` | Revoke channel access |
