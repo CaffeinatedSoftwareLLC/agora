@@ -33,7 +33,18 @@ export class CommandError extends Error {
     constructor(public status: number, public body: any) { super(body?.error ?? 'error'); }
 }
 
-export function sessionJson(r: any) {
+/**
+ * Why a terminal session does or doesn't count as its bot owner's for the plan-owner rule
+ * (docs/provider-terms.md, src/lib/agent-sessions.ts authorIsOwners): 'ok' when its token is a
+ * live personal or invite token minted by the bot's owner and no other token shares it.
+ */
+export type OwnerTokenState = 'ok' | 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner' | 'unknown_maker' | 'other_maker';
+
+/**
+ * `viewerId`: the caller, so a terminal session can say whether its bot is theirs. Without it
+ * (and for hosted sessions) ownedByYou is left out.
+ */
+export function sessionJson(r: any, viewerId?: string) {
     return {
         id: r.id.trim(), kind: r.kind ?? 'hosted', profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
@@ -54,6 +65,10 @@ export function sessionJson(r: any) {
             listening: !!r.listening, idleSince: r.idle_since ?? null, lastTool: r.last_tool ?? null,
             contextPercent: r.context_percent ?? null, usagePercent: r.usage_percent ?? null, usageLabel: r.usage_label ?? null,
             statusNote: r.status_note ?? null, statusAt: r.status_at ?? null,
+            // Its hand-offs count as the bot owner's (docs/provider-terms.md); the reason when not
+            ownerToken: r.owner_token_state === 'ok',
+            ownerTokenReason: r.owner_token_state === 'ok' ? null : (r.owner_token_state ?? 'no_token') as OwnerTokenState,
+            ...(viewerId ? { ownedByYou: !!r.bot_owner_id && r.bot_owner_id.trim() === viewerId.trim() } : {}),
         } : {}),
     };
 }
@@ -71,7 +86,17 @@ export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profi
                 'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths) AS run
              FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 5) recent) AS recent_runs,
         CASE WHEN s.kind = 'terminal' THEN s.state = 'live' AND s.working
-             ELSE EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') END AS running
+             ELSE EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') END AS running,
+        u.bot_owner_id,
+        CASE WHEN s.kind <> 'terminal' THEN NULL
+             WHEN s.token_mixed THEN 'mixed'
+             ELSE COALESCE((SELECT CASE WHEN t.revoked_at IS NOT NULL THEN 'revoked'
+                                        WHEN t.purpose NOT IN ('personal', 'invite') THEN t.purpose
+                                        WHEN u.bot_owner_id IS NULL THEN 'no_owner'
+                                        WHEN t.created_by IS NULL THEN 'unknown_maker'
+                                        WHEN t.created_by <> u.bot_owner_id THEN 'other_maker'
+                                        ELSE 'ok' END
+                            FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id), 'no_token') END AS owner_token_state
     FROM agent_sessions s LEFT JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
 
 export async function profileByName(db: any, channelId: string, name: string) {
@@ -194,7 +219,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                  ORDER BY (s.thread_id IS NULL) DESC, (s.state = 'live') DESC, s.last_active_at DESC LIMIT 25`,
                 [channelId]
             ));
-            return reply.send({ sessions: rows.rows.map(sessionJson) });
+            return reply.send({ sessions: rows.rows.map((r: any) => sessionJson(r, userId)) });
         }
 
         if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {

@@ -11,6 +11,16 @@ import { Button } from '../../components/ui/Button';
 import { CreateBotModal } from './CreateBotModal';
 import { CreateTokenModal } from './CreateTokenModal';
 import { CreateAgentInviteModal } from './CreateAgentInviteModal';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { useAuthStore } from '../../stores/authStore';
+import { CLAIM_WARNING, tokenBadge, type TokenBadgeTone } from './tokenBadge';
+
+const BADGE_TONE: Record<TokenBadgeTone, string> = {
+  counts: 'border-online text-online',
+  maker: 'border-border text-text-muted',
+  never: 'border-border text-text-muted',
+  unknown: 'border-warn text-warn',
+};
 
 export function BotManagement() {
   const instanceServerId = useServerStore(s => s.instanceServerId);
@@ -513,6 +523,8 @@ function BotDetailPanel({
   const [avatarInput, setAvatarInput] = useState('');
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [avatarError, setAvatarError] = useState('');
+  const viewerId = useAuthStore(s => s.user?.id);
+  const [claiming, setClaiming] = useState<{ tokenId: string; busy: boolean } | null>(null);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -568,6 +580,20 @@ function BotDetailPanel({
       setTokens(prev => prev.map(t => t.id === tokenId ? { ...t, boundClient: null, boundAt: null, lastRefused: null } : t));
     } catch (err) {
       setError(err instanceof ApiError ? err.code : 'Failed to clear the binding');
+    }
+  }
+
+  async function handleClaimToken(tokenId: string) {
+    setClaiming({ tokenId, busy: true });
+    setError('');
+    try {
+      await botApi.claimToken(serverId, botId, tokenId);
+      // The server works out countsAsYou: reload rather than guess
+      setTokens(await botApi.listTokens(serverId, botId));
+      setClaiming(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : 'Failed to claim the token');
+      setClaiming(null);
     }
   }
 
@@ -748,10 +774,21 @@ function BotDetailPanel({
             <p className="text-text-muted text-xs">No tokens yet.</p>
           ) : (
             <div className="flex flex-col gap-1">
-              {activeTokens.map((t) => (
-                <div key={t.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-surface text-sm">
+              {activeTokens.map((t) => {
+                const badge = tokenBadge(t, viewerId, detail.ownerId);
+                return (
+                <div key={t.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-surface text-sm" data-testid="bot-token">
                   <div>
                     <span className="text-text">{t.name || 'Unnamed'}</span>
+                    {badge && (
+                      <span
+                        className={`ml-2 inline-flex items-center rounded-full border px-2 text-[11px] leading-5 ${BADGE_TONE[badge.tone]}`}
+                        title={badge.title}
+                        data-testid="token-badge"
+                      >
+                        {badge.label}
+                      </span>
+                    )}
                     <span className="text-text-muted text-xs ml-2">
                       Created {new Date(t.createdAt).toLocaleDateString()}
                     </span>
@@ -776,6 +813,15 @@ function BotDetailPanel({
                     )}
                   </div>
                   <div className="flex shrink-0">
+                    {badge?.claimable && (
+                      <button
+                        onClick={() => setClaiming({ tokenId: t.id, busy: false })}
+                        className="min-h-11 md:min-h-8 px-2 text-text-muted text-xs hover:underline"
+                        title="Record that you made this token, so a terminal agent using it counts as you"
+                      >
+                        Claim as mine
+                      </button>
+                    )}
                     {t.boundClient && (
                       <button
                         onClick={() => handleClearBinding(t.id)}
@@ -793,7 +839,8 @@ function BotDetailPanel({
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
               {revokedTokens.map((t) => (
                 <div key={t.id} className="flex items-center px-2 py-1.5 rounded bg-surface text-sm opacity-50">
                   <span className="text-text line-through">{t.name || 'Unnamed'}</span>
@@ -812,6 +859,15 @@ function BotDetailPanel({
               const t = await botApi.listTokens(serverId, botId);
               setTokens(t);
             }}
+          />
+          <ConfirmDialog
+            open={!!claiming}
+            title="Claim this token as yours?"
+            message={CLAIM_WARNING}
+            confirmLabel="Claim as mine"
+            loading={!!claiming?.busy}
+            onConfirm={() => { if (claiming) void handleClaimToken(claiming.tokenId); }}
+            onCancel={() => setClaiming(null)}
           />
         </section>
       )}

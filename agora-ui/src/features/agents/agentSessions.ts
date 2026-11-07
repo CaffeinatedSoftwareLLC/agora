@@ -43,6 +43,14 @@ export interface AgentSession {
   usageLabel?: string | null;
   statusNote?: string | null;
   statusAt?: string | null;
+  /**
+   * Terminal sessions: its token is a live personal or invite token the bot's owner made, so
+   * its hand-offs count as the owner's (docs/provider-terms.md). ownerTokenReason says why not.
+   */
+  ownerToken?: boolean;
+  ownerTokenReason?: OwnerTokenReason | null;
+  /** Terminal sessions: the bot is the viewer's. */
+  ownedByYou?: boolean;
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
   /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only, siwc = plan-owner-triggered only. */
   authMode?: 'subscription' | 'api_key' | 'siwc';
@@ -76,6 +84,34 @@ export interface AgentSession {
   /** A subtask's parent session. */
   parentSessionId?: string | null;
   title?: string | null;
+}
+
+export type OwnerTokenReason = 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner' | 'unknown_maker' | 'other_maker';
+
+const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
+  mixed: 'two different tokens share this terminal session',
+  no_token: 'no token is on record for this session yet; reconnect its agora-mcp',
+  revoked: 'its token is revoked',
+  host: "it uses the agent host's token, which never counts",
+  box: "it uses a box's token, which never counts",
+  model: "it uses a model agent's token, which never counts",
+  no_owner: 'the bot has no owner',
+  unknown_maker: 'its token was made before Nov 7 with no recorded maker (claim it in Settings → Bots if you made it)',
+  other_maker: "its token was made by someone other than the bot's owner",
+};
+
+/**
+ * Does this terminal agent count as its bot's owner for the plan-owner rule (its hand-offs
+ * wake the owner's subscription agents)? null for hosted sessions, or a server that doesn't say.
+ */
+export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boolean; text: string } | null {
+  if (s.kind !== 'terminal' || typeof s.ownerToken !== 'boolean') return null;
+  const yours = !!s.ownedByYou;
+  if (s.ownerToken) {
+    return { counts: true, yours, text: yours ? 'Its hand-offs wake your subscription agents.' : "Counts as its owner: its hand-offs wake the owner's subscription agents." };
+  }
+  const reason = OWNER_TOKEN_REASON[s.ownerTokenReason ?? 'no_token'] ?? OWNER_TOKEN_REASON.no_token;
+  return { counts: false, yours, text: `Hand-offs from this terminal won't wake subscription agents: ${reason}.` };
 }
 
 export interface AgentProfile {

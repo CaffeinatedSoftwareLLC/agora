@@ -189,6 +189,16 @@ export interface BotToken {
   lastUsedUserAgent?: string | null;
   /** The last refused use: another client, or none, with a bound token. */
   lastRefused?: { at: string; client: string | null; ip: string | null } | null;
+  /**
+   * What minted it (migration 090): 'personal' (New Token), 'invite' (a redeemed agent invite),
+   * 'host' (an agent host's config), 'box', 'model' (a model agent's server-side token).
+   */
+  purpose?: 'personal' | 'invite' | 'host' | 'box' | 'model';
+  /** Who minted it; null for a token made before Nov 7, 2026 (no recorded maker). */
+  createdBy?: string | null;
+  createdByName?: string | null;
+  /** A terminal agent on this token counts as you for the plan-owner rule (docs/provider-terms.md). */
+  countsAsYou?: boolean;
 }
 
 export interface CreateTokenResponse {
@@ -245,6 +255,10 @@ export const botApi = {
 
   clearTokenBinding: (serverId: string, botId: string, tokenId: string) =>
     api.delete<{ cleared: true }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}/binding`),
+
+  /** Record yourself as the maker of a legacy personal token on your own bot. */
+  claimToken: (serverId: string, botId: string, tokenId: string) =>
+    api.post<{ claimed: true; tokenId: string }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}/claim`),
 
   grantChannel: (channelId: string, botId: string) =>
     api.post<{ botId: string; channelId: string }>(`/channels/${channelId}/bots/${botId}`),

@@ -7,7 +7,7 @@ import { useOverlayFocus } from '../shell/useOverlayFocus';
 import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
   ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState,
-  terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
+  ownerTokenNote, terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
 
 /** A clock time in the viewer's locale, for the terminal sheet's details. */
@@ -156,6 +156,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     title = `Terminal: ${terminal?.botUsername ?? 'agent'}`;
     const standby = terminal ? sessions.find(s => s.kind !== 'terminal' && s.state === 'live' && !s.threadId && s.botId?.trim() === mode.botId.trim()) : undefined;
     const state = terminal ? terminalLabel({ ...terminal, contextPercent: null }, now) : null;
+    const owner = terminal ? ownerTokenNote(terminal) : null;
     // What agora-mcp and the agent itself reported (#230)
     const details: [string, string][] = terminal ? [
       ['Last activity', clock(terminal.lastActiveAt)],
@@ -191,6 +192,12 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           The user's own CLI, connected through agora-mcp{terminal.terminalMode === 'channel' ? ' as a Claude Code Channel' : terminal.terminalMode === 'mcp' ? ' (chat_wait)' : ''}.
           It answers here while it is connected and ends when agora-mcp disconnects. Only owner and director messages are instructions to it.
         </p>
+        {owner && (
+          <p data-testid="terminal-owner-token" className={`rounded-lg border p-3 ${owner.counts ? 'border-online/40 text-text' : 'border-border text-text-muted'}`}>
+            {owner.yours && <span className="font-medium">{owner.counts ? 'Counts as you. ' : "Doesn't count as you. "}</span>}
+            {owner.text}
+          </p>
+        )}
         <p data-testid="terminal-budget" className="rounded-lg border border-border bg-bg/60 p-3 text-text-muted">{TERMINAL_BUDGET}</p>
         {standby && <p className="text-text-muted">Its hosted session ({shortId(standby.id)}) is on standby: messages don't wake it while the terminal is connected.</p>}
         <div className="flex flex-col gap-2 md:flex-row md:flex-wrap" role="group" aria-label="Hosted-only actions">
