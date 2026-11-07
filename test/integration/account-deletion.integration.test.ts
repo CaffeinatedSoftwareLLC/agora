@@ -317,6 +317,31 @@ describe('bots the person owns', () => {
         expect(list.body.find((m: any) => m.id === botMsg.body.id).authorUsername).toBe('ad_alicebot');
         expect((await ctx.request.delete(`/servers/${serverId}/bots/${botId}`).set(owner.auth)).status).toBe(200);
     });
+
+    test("tokens the person made for someone else's bot are revoked too, and can't be claimed after (provider-terms.md)", async () => {
+        // alice is an Administrator, so she can mint tokens for the owner's bot
+        const role = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth).send({ name: 'Admins', permissions: (1n << 0n).toString() });
+        expect(role.status).toBe(201);
+        await ctx.request.put(`/servers/${serverId}/members/${alice.userId}/roles/${role.body.id}`).set(owner.auth);
+        const created = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: 'ad_ownerbot' });
+        const botId = created.body.id as string;
+        const hers = await ctx.request.post(`/servers/${serverId}/bots/${botId}/tokens`).set(alice.auth).send({ name: 'alice made' });
+        const his = await ctx.request.post(`/servers/${serverId}/bots/${botId}/tokens`).set(owner.auth).send({ name: 'owner made' });
+        expect([hers.status, his.status]).toEqual([201, 201]);
+
+        expect((await deleteAccount(alice, { confirm: 'ad_alice', password: PASSWORD })).status).toBe(200);
+
+        const rows = await ctx.db.query('SELECT id, created_by, revoked_at FROM bot_tokens WHERE bot_id = $1', [botId]);
+        const byId = new Map(rows.rows.map((r: any) => [r.id.trim(), r]));
+        expect(byId.get(hers.body.tokenId).revoked_at).not.toBeNull();
+        expect(byId.get(hers.body.tokenId).created_by).toBeNull();
+        expect(byId.get(his.body.tokenId).revoked_at).toBeNull();
+        const list = await ctx.request.get(`/servers/${serverId}/bots/${botId}/tokens`).set(owner.auth);
+        expect(list.body.find((t: any) => t.id === hers.body.tokenId)).toMatchObject({ createdBy: null, madeBeforeMakers: false, countsAsYou: false });
+        const claim = await ctx.request.post(`/servers/${serverId}/bots/${botId}/tokens/${hers.body.tokenId}/claim`).set(owner.auth);
+        expect(claim.status).toBe(409);
+        expect(claim.body.error).toBe('token_revoked');
+    });
 });
 
 describe('push devices', () => {

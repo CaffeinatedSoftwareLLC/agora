@@ -33,13 +33,24 @@ async function mint(botId: string, by: { auth: Record<string, string> }, name = 
     return res.body.tokenId;
 }
 
-/** A token as an older Agora (or an agent host, box or model agent) left it: no maker on record. */
+/**
+ * A token as an older Agora left it: made before migration 090 was applied (so before Agora
+ * recorded makers), with no maker on record.
+ */
 async function legacy(botId: string, purpose: 'personal' | 'invite' | 'host' | 'box' | 'model', revoked = false): Promise<string> {
     const id = generateUlid();
     await ctx.db.query(
-        `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, purpose, created_by, revoked_at) VALUES ($1, $2, 'x', $3, $4, NULL, $5)`,
+        `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, purpose, created_by, revoked_at, created_at)
+         VALUES ($1, $2, 'x', $3, $4, NULL, $5, '2020-01-01T00:00:00Z')`,
         [id, botId, `legacy ${purpose}`, purpose, revoked ? new Date() : null]
     );
+    return id;
+}
+
+/** A token made since Agora records makers whose maker's account is gone (created_by ON DELETE SET NULL). */
+async function makerGone(botId: string): Promise<string> {
+    const id = await mint(botId, owner, 'orphan');
+    await ctx.db.query('UPDATE bot_tokens SET created_by = NULL WHERE id = $1', [id]);
     return id;
 }
 
@@ -87,7 +98,8 @@ describe('token list: who each token counts as', () => {
         expect(asOwner.get(adminMinted)).toMatchObject({ purpose: 'personal', createdBy: admin.userId, createdByName: 'claimadmin', countsAsYou: false });
         expect(asOwner.get(revoked)).toMatchObject({ createdBy: owner.userId, countsAsYou: false });
         expect(asOwner.get(host)).toMatchObject({ purpose: 'host', createdBy: null, createdByName: null, countsAsYou: false });
-        expect(asOwner.get(old)).toMatchObject({ purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false });
+        expect(asOwner.get(old)).toMatchObject({ purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false, madeBeforeMakers: true });
+        expect(asOwner.get(bot.tokenId)).toMatchObject({ madeBeforeMakers: false });
 
         // The same list for an Administrator: nothing counts as them on someone else's bot,
         // not even the token they made
@@ -174,6 +186,39 @@ describe('claiming a legacy token', () => {
             expect(await madeBy(id)).toBeNull();
         }
         expect(await madeBy(revoked)).toBeNull();
+    });
+
+    it("a makerless token made since Agora records makers lost its maker to a deleted account: never claimable", async () => {
+        const bot = await makeBot(owner, 'orphanbot');
+        const orphan = await makerGone(bot.id);
+        expect((await list(bot.id, owner)).get(orphan)).toMatchObject({ createdBy: null, madeBeforeMakers: false, countsAsYou: false });
+        const res = await claim(bot.id, orphan, owner);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('maker_deleted');
+        expect(await madeBy(orphan)).toBeNull();
+    });
+
+    it('tells the agent strip: a claim sends AgentSessionUpdate for live terminal sessions on the token', async () => {
+        const bot = await makeBot(owner, 'eventbot');
+        const old = await legacy(bot.id, 'personal');
+        const channelId = (await ctx.db.query('SELECT id FROM channels WHERE server_id = $1 ORDER BY id LIMIT 1', [serverId])).rows[0].id.trim();
+        const sessionId = generateUlid();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, kind, token_id) VALUES ($1, $2, $3, $4, 'terminal', $5)`,
+            [sessionId, serverId, channelId, bot.id, old]
+        );
+        const emitted: Array<{ room: string; event: string; data: any }> = [];
+        const io = (ctx.app as any).io;
+        const to = vi.spyOn(io, 'to').mockImplementation((room: any) => ({
+            emit: (event: string, data: any) => { emitted.push({ room, event, data }); return true; },
+        }) as any);
+        try {
+            expect((await claim(bot.id, old, owner)).status).toBe(200);
+        } finally {
+            to.mockRestore();
+        }
+        expect(emitted.filter(e => e.event === 'AgentSessionUpdate'))
+            .toEqual([{ room: `channel:${channelId}`, event: 'AgentSessionUpdate', data: expect.objectContaining({ sessionId, kind: 'terminal', state: 'live' }) }]);
     });
 
     it('refuses a non-member, a bot, another bot\'s token, and a malformed ID', async () => {

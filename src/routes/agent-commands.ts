@@ -7,6 +7,7 @@ import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Not
 import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
+import { madeBeforeMakersSql } from '../lib/token-provenance';
 
 /**
  * Session commands (docs/planning/agent-sessions-wbs.md, "Commands"): /start, /end,
@@ -38,7 +39,8 @@ export class CommandError extends Error {
  * (docs/provider-terms.md, src/lib/agent-sessions.ts authorIsOwners): 'ok' when its token is a
  * live personal or invite token minted by the bot's owner and no other token shares it.
  */
-export type OwnerTokenState = 'ok' | 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner' | 'unknown_maker' | 'other_maker';
+export type OwnerTokenState = 'ok' | 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner'
+    | 'unknown_maker' | 'maker_deleted' | 'other_maker';
 
 /**
  * `viewerId`: the caller, so a terminal session can say whether its bot is theirs. Without it
@@ -93,7 +95,8 @@ export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profi
              ELSE COALESCE((SELECT CASE WHEN t.revoked_at IS NOT NULL THEN 'revoked'
                                         WHEN t.purpose NOT IN ('personal', 'invite') THEN t.purpose
                                         WHEN u.bot_owner_id IS NULL THEN 'no_owner'
-                                        WHEN t.created_by IS NULL THEN 'unknown_maker'
+                                        WHEN t.created_by IS NULL AND ${madeBeforeMakersSql('t')} THEN 'unknown_maker'
+                                        WHEN t.created_by IS NULL THEN 'maker_deleted'
                                         WHEN t.created_by <> u.bot_owner_id THEN 'other_maker'
                                         ELSE 'ok' END
                             FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id), 'no_token') END AS owner_token_state

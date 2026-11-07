@@ -13,7 +13,7 @@ import { CreateTokenModal } from './CreateTokenModal';
 import { CreateAgentInviteModal } from './CreateAgentInviteModal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useAuthStore } from '../../stores/authStore';
-import { CLAIM_WARNING, tokenBadge, type TokenBadgeTone } from './tokenBadge';
+import { CLAIM_WARNING, claimTokenSummary, tokenBadge, type TokenBadgeTone } from './tokenBadge';
 
 const BADGE_TONE: Record<TokenBadgeTone, string> = {
   counts: 'border-online text-online',
@@ -642,6 +642,7 @@ function BotDetailPanel({
   const directChannelIds = new Set(detail.channels.filter(c => c.canDirect).map(c => c.id));
   const activeTokens = tokens.filter(t => !t.revokedAt);
   const revokedTokens = tokens.filter(t => t.revokedAt);
+  const claimingToken = claiming ? tokens.find(t => t.id === claiming.tokenId) : undefined;
 
   return (
     <div className="border-t border-border px-4 py-4 flex flex-col gap-5 bg-bg/50">
@@ -863,7 +864,7 @@ function BotDetailPanel({
           <ConfirmDialog
             open={!!claiming}
             title="Claim this token as yours?"
-            message={CLAIM_WARNING}
+            message={`${claimingToken ? `${claimTokenSummary(claimingToken)} ` : ''}${CLAIM_WARNING}`}
             confirmLabel="Claim as mine"
             loading={!!claiming?.busy}
             onConfirm={() => { if (claiming) void handleClaimToken(claiming.tokenId); }}

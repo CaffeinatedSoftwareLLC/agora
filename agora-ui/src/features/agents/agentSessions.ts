@@ -86,7 +86,8 @@ export interface AgentSession {
   title?: string | null;
 }
 
-export type OwnerTokenReason = 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner' | 'unknown_maker' | 'other_maker';
+export type OwnerTokenReason = 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner'
+  | 'unknown_maker' | 'maker_deleted' | 'other_maker';
 
 const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
   mixed: 'two different tokens share this terminal session',
@@ -96,7 +97,8 @@ const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
   box: "it uses a box's token, which never counts",
   model: "it uses a model agent's token, which never counts",
   no_owner: 'the bot has no owner',
-  unknown_maker: 'its token was made before Nov 7 with no recorded maker (claim it in Settings → Bots if you made it)',
+  unknown_maker: 'its token was made before Agora recorded token makers',
+  maker_deleted: "its token's maker deleted their account",
   other_maker: "its token was made by someone other than the bot's owner",
 };
 
@@ -108,9 +110,12 @@ export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boole
   if (s.kind !== 'terminal' || typeof s.ownerToken !== 'boolean') return null;
   const yours = !!s.ownedByYou;
   if (s.ownerToken) {
-    return { counts: true, yours, text: yours ? 'Its hand-offs wake your subscription agents.' : "Counts as its owner: its hand-offs wake the owner's subscription agents." };
+    return { counts: true, yours, text: yours ? 'Its hand-offs wake subscription agents you started.' : "Counts as its owner: its hand-offs wake subscription agents the owner started." };
   }
-  const reason = OWNER_TOKEN_REASON[s.ownerTokenReason ?? 'no_token'] ?? OWNER_TOKEN_REASON.no_token;
+  const why = s.ownerTokenReason ?? 'no_token';
+  // Only the bot's owner can claim a legacy token, so only they are told how
+  const hint = why === 'unknown_maker' && yours ? ' (claim it in Settings → Bots if you made it)' : '';
+  const reason = (OWNER_TOKEN_REASON[why] ?? OWNER_TOKEN_REASON.no_token) + hint;
   return { counts: false, yours, text: `Hand-offs from this terminal won't wake subscription agents: ${reason}.` };
 }
 

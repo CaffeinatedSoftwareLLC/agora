@@ -238,7 +238,9 @@ describe('token badges: who each token counts as', () => {
     { ...base, id: 'T3', name: 'agent host', purpose: 'host', createdBy: ME, createdByName: 'me', countsAsYou: false },
     { ...base, id: 'T4', name: 'box', purpose: 'box', createdBy: null, createdByName: null, countsAsYou: false },
     { ...base, id: 'T5', name: 'model agent (server)', purpose: 'model', createdBy: ME, createdByName: 'me', countsAsYou: false },
-    { ...base, id: 'T6', name: 'old terminal', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false },
+    { ...base, id: 'T6', name: 'old terminal', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false,
+      madeBeforeMakers: true, lastUsedAt: '2026-10-30T00:00:00Z', lastUsedClient: 'claude-code' },
+    { ...base, id: 'T7', name: 'orphan', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false, madeBeforeMakers: false },
   ];
 
   async function openBot(ownerId: string, list: BotToken[] = tokens()) {
@@ -256,13 +258,16 @@ describe('token badges: who each token counts as', () => {
   it('labels each token by purpose and maker, with what it means in the tooltip', async () => {
     await openBot(ME);
     expect(badge('laptop')).toHaveTextContent('Counts as you');
-    expect(badge('laptop')).toHaveAttribute('title', expect.stringContaining('wake your subscription agents'));
+    expect(badge('laptop')).toHaveAttribute('title', expect.stringContaining('wake subscription agents you started'));
     expect(badge('admin made')).toHaveTextContent('Made by ada');
     expect(badge('agent host')).toHaveTextContent('Agora host token');
     expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining('never counts'));
     expect(badge('box')).toHaveTextContent('Box token');
     expect(badge('model agent (server)')).toHaveTextContent('Model agent token');
-    expect(badge('old terminal')).toHaveTextContent('Unknown maker (made before Nov 7)');
+    expect(badge('old terminal')).toHaveTextContent('Unknown maker (made before Agora recorded token makers)');
+    // Made since makers were recorded, with no maker: its maker's account is gone
+    expect(badge('orphan')).toHaveTextContent("Maker's account was deleted");
+    expect(badge('orphan')).toHaveAttribute('title', expect.stringContaining('nobody can claim it'));
     // Only the legacy personal token can be claimed
     expect(screen.getAllByRole('button', { name: 'Claim as mine' })).toHaveLength(1);
     expect(within(row('old terminal')).getByRole('button', { name: 'Claim as mine' })).toBeInTheDocument();
@@ -272,7 +277,10 @@ describe('token badges: who each token counts as', () => {
     const { listTokens } = await openBot(ME);
     const claim = vi.spyOn(botApi, 'claimToken').mockResolvedValue({ claimed: true, tokenId: 'T6' });
     fireEvent.click(within(row('old terminal')).getByRole('button', { name: 'Claim as mine' }));
-    expect(screen.getByText('Only claim a token you created yourself. Agents using it will count as you and can wake your subscription agents.')).toBeInTheDocument();
+    // The dialog names the token: name, when it was made, the client that last used it
+    const message = screen.getByText(/Only claim a token you created yourself/).textContent;
+    expect(message).toContain(`"old terminal": Made ${new Date('2026-11-01T00:00:00Z').toLocaleDateString()}, last used by claude-code.`);
+    expect(message).toContain('Only claim a token you created yourself and that only your own terminal uses: not one pasted into an agora-host config (botTokens), a CI job, or given to anyone else. Whoever holds it can wake your subscription agents.');
     // Cancel claims nothing
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(claim).not.toHaveBeenCalled();
@@ -290,7 +298,7 @@ describe('token badges: who each token counts as', () => {
 
   it("offers no claim on someone else's bot (an administrator viewing it)", async () => {
     await openBot(OTHER);
-    expect(badge('old terminal')).toHaveTextContent('Unknown maker (made before Nov 7)');
+    expect(badge('old terminal')).toHaveTextContent('Unknown maker (made before Agora recorded token makers)');
     expect(badge('old terminal')).toHaveAttribute('title', expect.stringContaining("Only the bot's owner can claim it"));
     expect(screen.queryByRole('button', { name: 'Claim as mine' })).toBeNull();
   });

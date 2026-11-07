@@ -104,7 +104,9 @@ export async function deleteAccount(db: any, userId: string, messages: DeletedAc
              WHERE redeemed_at IS NULL AND expires_at > clock_timestamp() AND (bot_id IN (${ownedBots}) OR created_by = $1)`,
             [userId]
         );
-        await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE revoked_at IS NULL AND bot_id IN (${ownedBots})`, [userId]);
+        // Also the tokens they made for anyone's bot: once the user row goes, created_by is
+        // NULL and nobody can tell who held them (src/lib/token-provenance.ts)
+        await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE revoked_at IS NULL AND (bot_id IN (${ownedBots}) OR created_by = $1)`, [userId]);
         const submitters = `SELECT $1::CHAR(26) UNION ALL ${ownedBots}`;
         await db.query(
             `UPDATE exec_run_tokens SET revoked_at = NOW()

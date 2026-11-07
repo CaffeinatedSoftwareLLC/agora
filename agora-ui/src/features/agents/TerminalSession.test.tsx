@@ -193,13 +193,18 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     expect(ownerTokenNote(hosted())).toBeNull();
     expect(ownerTokenNote(terminal())).toBeNull(); // a server that doesn't say
     expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: true })))
-      .toEqual({ counts: true, yours: true, text: 'Its hand-offs wake your subscription agents.' });
+      .toEqual({ counts: true, yours: true, text: 'Its hand-offs wake subscription agents you started.' });
     expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: false }))?.text)
-      .toBe("Counts as its owner: its hand-offs wake the owner's subscription agents.");
+      .toBe('Counts as its owner: its hand-offs wake subscription agents the owner started.');
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'host', ownedByYou: true }))?.text)
       .toBe("Hand-offs from this terminal won't wake subscription agents: it uses the agent host's token, which never counts.");
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: true }))?.text)
-      .toContain('claim it in Settings → Bots');
+      .toBe("Hand-offs from this terminal won't wake subscription agents: its token was made before Agora recorded token makers (claim it in Settings → Bots if you made it).");
+    // Only the bot's owner can claim, so only they get the hint
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: false }))?.text)
+      .toBe("Hand-offs from this terminal won't wake subscription agents: its token was made before Agora recorded token makers.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'maker_deleted', ownedByYou: true }))?.text)
+      .toBe("Hand-offs from this terminal won't wake subscription agents: its token's maker deleted their account.");
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'mixed' }))?.text)
       .toBe("Hand-offs from this terminal won't wake subscription agents: two different tokens share this terminal session.");
   });
@@ -209,11 +214,11 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: 'claude: terminal session, working, counts as you. Open session details' });
-    expect(chip.getAttribute('title')).toContain('Its hand-offs wake your subscription agents.');
+    expect(chip.getAttribute('title')).toContain('Its hand-offs wake subscription agents you started.');
     expect(screen.getByTestId('owner-token').textContent).toContain('counts as you');
     fireEvent.click(chip);
     await screen.findByRole('dialog');
-    expect(screen.getByTestId('terminal-owner-token').textContent).toBe('Counts as you. Its hand-offs wake your subscription agents.');
+    expect(screen.getByTestId('terminal-owner-token').textContent).toBe('Counts as you. Its hand-offs wake subscription agents you started.');
   });
 
   it("a terminal on someone else's token says it doesn't count, and why", async () => {
@@ -230,7 +235,7 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: 'claude: terminal session, working. Open session details' });
-    expect(chip.getAttribute('title')).toContain("Counts as its owner: its hand-offs wake the owner's subscription agents.");
+    expect(chip.getAttribute('title')).toContain('Counts as its owner: its hand-offs wake subscription agents the owner started.');
     expect(screen.queryByTestId('owner-token')).toBeNull();
   });
 });

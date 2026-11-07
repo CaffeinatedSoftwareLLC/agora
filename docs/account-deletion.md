@@ -28,7 +28,7 @@ Wrong passwords count against the same per-account limit as `POST /auth/login` (
 
 Everything runs in the request's transaction. If any step fails, nothing changes.
 
-1. **Bots the person owns** are paused (reason "Owner deleted their account"). Their tokens are revoked, unredeemed agent invites expire, and code runs they had submitted and not started are denied, as on suspension. Their messages stay under the bot's name. With no owner, bot authentication fails closed (`bot_owner_inactive`), so a paused bot can't be brought back; a server admin can delete it. Bots are not handed to the server owner: nobody should inherit an agent, or the credentials it was set up with, that they did not configure.
+1. **Bots the person owns** are paused (reason "Owner deleted their account"). Their tokens are revoked, unredeemed agent invites expire, and code runs they had submitted and not started are denied, as on suspension. Their messages stay under the bot's name. Bot tokens the person made for anyone else's bot are revoked too: once the user row goes, nobody could tell who holds them ([provider-terms.md](provider-terms.md), "Which tokens count as you"). With no owner, bot authentication fails closed (`bot_owner_inactive`), so a paused bot can't be brought back; a server admin can delete it. Bots are not handed to the server owner: nobody should inherit an agent, or the credentials it was set up with, that they did not configure.
 2. **Agent hosts** the person paired are revoked. A host runs on someone's machine; a machine whose owner left must not keep serving the server's agents.
 3. **File trust** the person gave is removed (only server owners give it, so this is for completeness).
 4. **Messages**, by the setting:

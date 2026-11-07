@@ -10,6 +10,7 @@ import { asService } from '../lib/agent-sessions';
 import { endTerminalSessionNow, limitNotice, storeTerminalStatus, type LimitWarning } from '../lib/terminal-sessions';
 import { postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { agentPresence } from '../lib/agent-presence';
+import { madeBeforeMakersSql } from '../lib/token-provenance';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -560,7 +561,8 @@ export async function botRoutes(app: FastifyInstance) {
         const result = await db.query(
             `SELECT t.id, t.name, t.last_used_at, t.created_at, t.revoked_at, t.bound_client, t.bound_at,
                     t.last_used_client, t.last_used_ip, t.last_used_user_agent, t.last_refused_at, t.last_refused_client, t.last_refused_ip,
-                    t.purpose, t.created_by, maker.username AS created_by_name, bot.bot_owner_id
+                    t.purpose, t.created_by, maker.username AS created_by_name, bot.bot_owner_id,
+                    ${madeBeforeMakersSql('t')} AS made_before_makers
              FROM bot_tokens t
              JOIN users bot ON bot.id = t.bot_id
              LEFT JOIN users maker ON maker.id = t.created_by
@@ -581,6 +583,8 @@ export async function botRoutes(app: FastifyInstance) {
             createdBy: r.created_by?.trim() ?? null,
             createdByName: r.created_by ? (r.created_by_name ?? null) : null,
             countsAsYou: tokenCountsAs(r, userId),
+            // No maker: made before Agora recorded makers (claimable), or the maker's account was deleted
+            madeBeforeMakers: !!r.made_before_makers,
             // Where it is used from, and the client it is bound to (#39, src/auth/token-binding.ts)
             boundClient: r.bound_client,
             boundAt: r.bound_at,
@@ -600,7 +604,7 @@ export async function botRoutes(app: FastifyInstance) {
     // never counts as anyone's (docs/provider-terms.md). The bot's owner, and only they (not an
     // administrator), can record themselves as its maker. Refusals: 403 not_bot_owner, 404
     // token_not_found, 409 token_revoked, not_claimable (host, box, model or invite token),
-    // already_claimed.
+    // already_claimed, maker_deleted (made after makers were recorded, src/lib/token-provenance.ts).
     app.post('/servers/:serverId/bots/:id/tokens/:tokenId/claim', {
         schema: {
             params: {
@@ -631,17 +635,22 @@ export async function botRoutes(app: FastifyInstance) {
         const claimed = await db.query(
             `UPDATE bot_tokens SET created_by = $3
              WHERE id = $1 AND bot_id = $2 AND created_by IS NULL AND revoked_at IS NULL AND purpose = 'personal'
+               AND ${madeBeforeMakersSql('bot_tokens')}
              RETURNING id`,
             [tokenId, botId, userId]
         );
         if (claimed.rows.length === 0) {
-            const row = (await db.query('SELECT revoked_at, purpose, created_by FROM bot_tokens WHERE id = $1 AND bot_id = $2', [tokenId, botId])).rows[0];
+            const row = (await db.query(
+                `SELECT t.revoked_at, t.purpose, t.created_by, ${madeBeforeMakersSql('t')} AS made_before_makers
+                 FROM bot_tokens t WHERE t.id = $1 AND t.bot_id = $2`, [tokenId, botId])).rows[0];
             if (!row) return reply.status(404).send({ error: 'token_not_found' });
             if (row.revoked_at) return reply.status(409).send({ error: 'token_revoked', message: 'That token is revoked.' });
             if (row.purpose !== 'personal') {
                 return reply.status(409).send({ error: 'not_claimable', message: 'Only a personal token can be claimed: host, box, model agent and invite tokens never count as you.' });
             }
-            return reply.status(409).send({ error: 'already_claimed', message: 'That token already has a recorded maker.' });
+            if (row.created_by) return reply.status(409).send({ error: 'already_claimed', message: 'That token already has a recorded maker.' });
+            // Made after Agora started recording makers: its maker's account was deleted
+            return reply.status(409).send({ error: 'maker_deleted', message: 'Its maker\'s account was deleted, so nobody can claim it. Make a new token.' });
         }
 
         await db.query(

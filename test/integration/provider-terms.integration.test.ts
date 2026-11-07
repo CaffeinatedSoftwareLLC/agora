@@ -495,7 +495,7 @@ describe('subscription profiles: hand-offs from the owner\'s terminal agents', (
         const sa = await startSession(alpha);
         const mine = await mint(beta, owner);
         // As a token made before migration 090 left it: no maker on record
-        await ctx.db.query('UPDATE bot_tokens SET created_by = NULL WHERE id = $1', [mine.id]);
+        await ctx.db.query(`UPDATE bot_tokens SET created_by = NULL, created_at = '2020-01-01T00:00:00Z' WHERE id = $1`, [mine.id]);
         await connectTerminal(beta, mine);
         expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: true });
 

@@ -194,9 +194,14 @@ export interface BotToken {
    * 'host' (an agent host's config), 'box', 'model' (a model agent's server-side token).
    */
   purpose?: 'personal' | 'invite' | 'host' | 'box' | 'model';
-  /** Who minted it; null for a token made before Nov 7, 2026 (no recorded maker). */
+  /** Who minted it; null when no maker is on record (see madeBeforeMakers). */
   createdBy?: string | null;
   createdByName?: string | null;
+  /**
+   * Made before Agora recorded token makers (migration 090). A makerless token made after that
+   * lost its maker to a deleted account and can't be claimed.
+   */
+  madeBeforeMakers?: boolean;
   /** A terminal agent on this token counts as you for the plan-owner rule (docs/provider-terms.md). */
   countsAsYou?: boolean;
 }
