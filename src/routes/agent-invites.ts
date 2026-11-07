@@ -69,16 +69,17 @@ export async function agentInviteRoutes(app: FastifyInstance) {
             FROM users b JOIN users o ON o.id = b.bot_owner_id
             WHERE i.code_hash=$1 AND i.redeemed_at IS NULL AND i.expires_at > clock_timestamp()
               AND b.id = i.bot_id AND b.account_status = 'active' AND o.account_status = 'active'
-            RETURNING i.id, i.bot_id, i.server_id`, [hashCode(code)]);
+            RETURNING i.id, i.bot_id, i.server_id, i.created_by`, [hashCode(code)]);
         if (!redeemed.rowCount) {
             await db.query(`INSERT INTO audit_log (id, action, target_type, changes)
                 VALUES ($1,'agent_invite_redeem_failed','agent_invite',$2)`, [generateUlid(), JSON.stringify({ ip: request.ip })]);
             return reply.code(410).send({ error: 'invite_invalid_or_expired' });
         }
-        const { id, bot_id, server_id } = redeemed.rows[0];
+        const { id, bot_id, server_id, created_by } = redeemed.rows[0];
         const token = await generateBotToken();
-        await db.query(`INSERT INTO bot_tokens (id, bot_id, secret_hash, name) VALUES ($1,$2,$3,'Agent invite')`,
-            [token.tokenId, bot_id, token.secretHash]);
+        // The invite's creator minted this token (provider-terms: whose terminal agent it is)
+        await db.query(`INSERT INTO bot_tokens (id, bot_id, secret_hash, name, created_by, purpose) VALUES ($1,$2,$3,'Agent invite',$4,'invite')`,
+            [token.tokenId, bot_id, token.secretHash, created_by]);
         await db.query(`INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
             VALUES ($1,$2,$3,'agent_invite_redeem','bot',$3,$4)`,
             [generateUlid(), server_id, bot_id, JSON.stringify({ inviteId: id.trim(), tokenId: token.tokenId, ip: request.ip })]);

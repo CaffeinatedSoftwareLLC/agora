@@ -241,6 +241,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 
         request.userId = tokenRow.rows[0].bot_id;
         request.isBot = true;
+        request.botTokenId = parsed.tokenId;
         return;
     }
 

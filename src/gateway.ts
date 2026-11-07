@@ -301,7 +301,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     const reopen = () => {
                         terminalQueue = terminalQueue.then(async () => {
                             if (!socket.connected) return;
-                            const reopened = await reattachTerminal(db, botId, channelIds, mode, isListening());
+                            const reopened = await reattachTerminal(db, botId, channelIds, mode, isListening(), socket.data.botTokenId ?? null);
                             if (!reopened) return;
                             emitNotices(reopened.notices);
                             if (socket.connected) socket.emit('TerminalSession', { sessions: reopened.attached });
@@ -349,7 +349,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     });
                     // Chat keeps working if this fails; the agent just shows no terminal session
                     terminalQueue = terminalQueue.then(async () => {
-                        const { attached, notices } = await attachTerminal(db, botId, channelIds, mode, isListening());
+                        const { attached, notices } = await attachTerminal(db, botId, channelIds, mode, isListening(), socket.data.botTokenId ?? null);
                         emitNotices(notices);
                         if (socket.connected) socket.emit('TerminalSession', { sessions: attached });
                     }).catch(() => { /* presence still works */ });

@@ -102,6 +102,8 @@ describe('terminal session lifecycle', () => {
         const { socket, sessionId } = await connectTerminal(claude);
         const row = await sessionRow(sessionId);
         expect(row).toMatchObject({ kind: 'terminal', state: 'live', profile_id: null, terminal_mode: 'mcp' });
+        // The token the socket authenticated with (the plan-owner rule, src/lib/agent-sessions.ts)
+        expect(row.token_id?.trim()).toBe(claude.token.slice('bot_'.length).split('.')[0]);
 
         const listed = await command(member.auth, { command: 'sessions' });
         expect(listed.body.sessions).toEqual([expect.objectContaining({

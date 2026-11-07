@@ -17,7 +17,8 @@ import { PLAN_OWNER_SQL, planNotice, WAKE_AUTH_SQL } from './provider-terms';
  *
  * Plan-owned recipients ('subscription', 'siwc') take a handoff only inside work their plan
  * owner started: the recipient's session started by that owner, and the sender's too, or the
- * sender is that owner's own bot in a live terminal session (the agent-to-agent rule in
+ * sender is that owner's own bot in a live terminal session opened with a personal or invite
+ * token the owner minted, offering with that token (the agent-to-agent rule in
  * agent-sessions.ts termsAllow).
  *
  * Everything here runs as the service role inside the request's transaction (asService).
@@ -199,19 +200,23 @@ async function resolveRecipient(db: any, serverId: string, name: string, senderB
 /**
  * The plan-owner rule for a handoff: a recipient on a personal plan takes it only when its
  * session was started (or last resumed) by that plan's owner, and the sender's session was
- * too, or the sender is that owner's own bot in a live terminal session. Returns the refusal,
- * or null.
+ * too, or the sender is that owner's own bot in a terminal session opened with a live personal
+ * or invite token the owner minted. At offer time `senderTokenId` is the token the offer was
+ * made with, and must be that one; at accept time (undefined) the offer already checked it.
+ * Returns the refusal, or null.
  */
-async function planRefusal(db: any, fromSessionId: string, toSessionId: string): Promise<HandoffError | null> {
+async function planRefusal(db: any, fromSessionId: string, toSessionId: string, senderTokenId?: string | null): Promise<HandoffError | null> {
     const row = (await db.query(
         `SELECT t.kind, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode, ${PLAN_OWNER_SQL} AS plan_owner_id,
                 t.started_by AS to_started_by, f.started_by AS from_started_by,
-                f.kind AS from_kind, fu.bot_owner_id AS from_bot_owner
+                f.kind AS from_kind, f.token_id AS from_token, fu.bot_owner_id AS from_bot_owner,
+                CASE WHEN ft.revoked_at IS NULL AND ft.purpose IN ('personal', 'invite') THEN ft.created_by END AS from_token_minted_by
          FROM agent_sessions t
          LEFT JOIN agent_profiles p ON p.id = t.profile_id
          JOIN servers srv ON srv.id = t.server_id
          JOIN agent_sessions f ON f.id = $2
          JOIN users fu ON fu.id = f.bot_id
+         LEFT JOIN bot_tokens ft ON ft.id = f.token_id AND ft.bot_id = f.bot_id
          WHERE t.id = $1`,
         [toSessionId, fromSessionId]
     )).rows[0];
@@ -220,7 +225,8 @@ async function planRefusal(db: any, fromSessionId: string, toSessionId: string):
     const owner = row.plan_owner_id?.trim() ?? null;
     // A terminal sender was live when it offered (senderSession); accepting later doesn't need it still
     const senderIsOwners = row.from_kind === 'terminal'
-        ? row.from_bot_owner?.trim() === owner
+        ? row.from_bot_owner?.trim() === owner && row.from_token_minted_by?.trim() === owner
+            && (senderTokenId === undefined || (!!senderTokenId && row.from_token?.trim() === senderTokenId))
         : row.from_started_by?.trim() === owner;
     if (owner && row.to_started_by?.trim() === owner && senderIsOwners) return null;
     return new HandoffError(403, { error: 'plan_owner_only',
@@ -240,7 +246,7 @@ async function committedHead(db: any, session: any) {
 
 export interface OfferInput { threadId: string; to: string; summary: string; ttlSeconds?: number }
 
-export async function createOffer(db: any, botId: string, channelId: string, input: OfferInput, notices: Notice[]): Promise<Offer> {
+export async function createOffer(db: any, botId: string, channelId: string, input: OfferInput, notices: Notice[], tokenId: string | null = null): Promise<Offer> {
     const threadId = input.threadId;
     await checkThread(db, channelId, threadId, true);
     const sender = await senderSession(db, botId, channelId, threadId);
@@ -251,7 +257,7 @@ export async function createOffer(db: any, botId: string, channelId: string, inp
     }
     const target = await recipientSession(db, recipient.id, channelId, threadId);
     if (!target) fail(409, 'recipient_not_live', `${recipient.username} has no live session in this channel. Ask the owner or a director to /start it first.`);
-    const refusal = await planRefusal(db, sender.id, target.id);
+    const refusal = await planRefusal(db, sender.id, target.id, tokenId);
     if (refusal) throw refusal;
     const owner = (await db.query('SELECT bot_id FROM agent_thread_owners WHERE thread_id = $1', [threadId])).rows[0];
     if (owner && owner.bot_id.trim() !== botId) fail(403, 'not_task_owner', 'Another agent owns this thread\'s task; only its owner can hand it off.');

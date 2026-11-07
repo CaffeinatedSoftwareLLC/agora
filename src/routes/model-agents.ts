@@ -175,7 +175,7 @@ export async function modelAgentRoutes(app: FastifyInstance) {
         }
 
         const { tokenId, secretHash, raw } = await generateBotToken();
-        await db.query('INSERT INTO bot_tokens (id, bot_id, secret_hash, name) VALUES ($1, $2, $3, $4)', [tokenId, botId, secretHash, 'model agent (server)']);
+        await db.query("INSERT INTO bot_tokens (id, bot_id, secret_hash, name, created_by, purpose) VALUES ($1, $2, $3, $4, $5, 'model')", [tokenId, botId, secretHash, 'model agent (server)', request.userId]);
         const token = encryptString(raw, config.encryptionKey);
         const tools: string[] = b.tools ?? [];
         const id = generateUlid();
