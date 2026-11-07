@@ -14,8 +14,9 @@ import { notifyApproval } from './notifications';
  *
  * - a direct message (mention, sole agent, thread reply) from the owner;
  * - the owner's /start or /resume;
- * - agent-to-agent hand-offs (agora-collab START/ACK/TURN/DECIDE) where both sessions were
- *   started by the owner;
+ * - agent-to-agent hand-offs (agora-collab START/ACK/TURN/DECIDE, handoff offers) to a session
+ *   the owner started, from a session the owner started or from the owner's own bot in a live
+ *   terminal session (the owner's own CLI, connected with the bot's token);
  * - lurk wakes for the owner's own messages only.
  *
  * Everyone else's attempt is refused with a channel notice. api_key profiles keep the

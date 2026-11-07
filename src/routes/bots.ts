@@ -521,9 +521,9 @@ export async function botRoutes(app: FastifyInstance) {
         const { tokenId, secretHash, raw } = await generateBotToken();
 
         await db.query(
-            `INSERT INTO bot_tokens (id, bot_id, secret_hash, name)
-             VALUES ($1, $2, $3, $4)`,
-            [tokenId, botId, secretHash, name || null]
+            `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, created_by, purpose)
+             VALUES ($1, $2, $3, $4, $5, 'personal')`,
+            [tokenId, botId, secretHash, name || null, request.userId]
         );
 
         // Return the raw token ONCE — it cannot be retrieved later

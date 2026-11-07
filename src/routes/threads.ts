@@ -238,7 +238,7 @@ export async function threadRoutes(app: FastifyInstance) {
         // Wake agents this reply is addressed to (same transaction as the reply)
         const termsNotices = await routeMessage(db, {
             channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol,
-            mentionedUserIds: mentionedUsers.map(u => u.id),
+            mentionedUserIds: mentionedUsers.map(u => u.id), authorTokenId: request.isBot ? request.botTokenId ?? null : null,
         });
 
         const userRow = await db.query(

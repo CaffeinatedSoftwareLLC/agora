@@ -73,7 +73,7 @@ export async function rotateBoxTokens(pool: Pool, boxId: string): Promise<BoxTok
         // Every token the bot had: a box bot never holds an unbound one
         await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE bot_id = $1 AND revoked_at IS NULL`, [botId]);
         await db.query(
-            `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, box_id, box_generation) VALUES ($1, $2, $3, 'box', $4, $5)`,
+            `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, box_id, box_generation, purpose) VALUES ($1, $2, $3, 'box', $4, $5, 'box')`,
             [bot.tokenId, botId, bot.secretHash, boxId, gen]
         );
         return { generation: gen, hostId, hostToken: `ah_${hostId}.${hostSecret}`, botId, botToken: bot.raw };

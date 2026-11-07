@@ -4,6 +4,7 @@ import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { expireLiveRequests } from './agent-permissions';
 import { planNotice, PLAN_OWNER_SQL, WAKE_AUTH_SQL } from './provider-terms';
 import { noticeStandby } from './terminal-sessions';
+import { stampAuthority } from './direct-agents';
 
 /**
  * Agent sessions: which posts wake which agent (docs/planning/agent-sessions-wbs.md,
@@ -14,7 +15,11 @@ import { noticeStandby } from './terminal-sessions';
  * - a top-level post from someone who can direct, mentioning the agent (or with only one
  *   agent live in the channel) → 'direct';
  * - a top-level START from an agent with a live session binds a collaboration thread and
- *   wakes the other participants → 'protocol';
+ *   wakes the other participants → 'protocol'. From a terminal agent (posting with the token
+ *   that opened its terminal session), only when it names a live agent and it or the person
+ *   whose token opened the terminal can direct agents here; otherwise it is an ordinary post. A
+ *   participant with a live terminal session is bound too, so its own protocol messages
+ *   route, but is never woken: it hears the thread itself;
  * - in a bound thread, protocol messages from participants hand off (YIELD, ACK, DECIDE),
  *   and messages from someone who can direct reach every participant.
  * - in any other thread (#120), a reply from someone who can direct that @mentions an agent
@@ -46,7 +51,10 @@ import { noticeStandby } from './terminal-sessions';
  * Sessions on a plan-owned profile ('subscription': the CLI's own account login, owned by the
  * server owner; 'siwc': a ChatGPT plan connected through Sign in with ChatGPT, owned by the
  * person who connected it) only take wakes their plan owner caused
- * (src/lib/provider-terms.ts); anyone else's is refused with a notice.
+ * (src/lib/provider-terms.ts); anyone else's is refused with a notice. Agent-to-agent wakes
+ * (handoff, protocol) count as the plan owner's when the target was started by them and the
+ * author is either a session they started or their own bot in a live terminal session here,
+ * opened with a personal or invite token the plan owner minted, posting with that token.
  *
  * Members can read sessions through RLS but can't write them, so the writes here run as
  * the service role on the request's own connection.
@@ -63,11 +71,24 @@ export interface RoutedMessage {
     protocol: ProtocolInfo | null;
     /** Users the post @mentions (resolveMentions). */
     mentionedUserIds: string[];
+    /** The bot token the post was made with (a bot author only). */
+    authorTokenId?: string | null;
 }
 
 interface LiveSession {
     id: string;
+    /** 'terminal': the bot's own CLI connected through agora-mcp (no profile, never woken here). */
+    kind: 'hosted' | 'terminal';
     botId: string;
+    /** Who owns the bot (users.bot_owner_id); set for terminal sessions only. */
+    botOwnerId: string | null;
+    /** Terminal only: the bot token whose socket opened it (null: unknown, or several). */
+    tokenId: string | null;
+    /**
+     * Terminal only: who minted that token, when it is a live personal or invite token (not a
+     * host's, box's or model agent's).
+     */
+    tokenMintedBy: string | null;
     names: string[];
     lurkMode: string | null;
     profileName: string;
@@ -89,7 +110,10 @@ interface RouteContext {
     couldDirect: boolean;
     /** The author is a person, not a bot. */
     authorHuman: boolean;
-    /** The author's own live session in this channel, if it is an agent. */
+    /**
+     * The author's own live session in this channel, if it is an agent: its hosted channel
+     * session, or its terminal session while it has one (then its hosted one is on standby).
+     */
     authorSession: LiveSession | undefined;
     /** Sessions refused because of the subscription rule; one notice each. */
     refused: Map<string, LiveSession>;
@@ -135,7 +159,11 @@ async function liveSessions(db: any, channelId: string, threadId: string | null 
     );
     return rows.rows.map((r: any) => ({
         id: r.id.trim(),
+        kind: 'hosted' as const,
         botId: r.bot_id.trim(),
+        botOwnerId: null,
+        tokenId: null,
+        tokenMintedBy: null,
         lurkMode: r.lurk_mode,
         names: [String(r.username).toLowerCase(), String(r.profile_name).toLowerCase()],
         profileName: r.profile_name,
@@ -144,6 +172,41 @@ async function liveSessions(db: any, channelId: string, threadId: string | null 
         planOwnerId: r.plan_owner_id?.trim() ?? null,
         startedBy: r.started_by?.trim() ?? null,
         startedByOwner: !!r.started_by_owner,
+    }));
+}
+
+/**
+ * Live terminal sessions in the channel (src/lib/terminal-sessions.ts), with the bot's owner.
+ * They are never woken here (the agent hears messages itself); routing uses them for single
+ * responder, as a message's author, and as members of a collaboration thread.
+ */
+async function terminalSessions(db: any, channelId: string): Promise<LiveSession[]> {
+    const rows = await db.query(
+        `SELECT s.id, s.bot_id, s.started_by, s.token_id, u.username, u.bot_owner_id,
+                CASE WHEN t.revoked_at IS NULL AND t.purpose IN ('personal', 'invite') THEN t.created_by END AS token_minted_by,
+                ARRAY(SELECT p.name FROM agent_profiles p WHERE p.bot_id = s.bot_id AND p.server_id = s.server_id) AS profile_names
+         FROM agent_sessions s
+         JOIN users u ON u.id = s.bot_id
+         LEFT JOIN bot_tokens t ON t.id = s.token_id AND t.bot_id = s.bot_id
+         WHERE s.channel_id = $1 AND s.state = 'live' AND s.kind = 'terminal'
+         ORDER BY s.id`,
+        [channelId]
+    );
+    return rows.rows.map((r: any) => ({
+        id: r.id.trim(),
+        kind: 'terminal' as const,
+        botId: r.bot_id.trim(),
+        botOwnerId: r.bot_owner_id?.trim() ?? null,
+        tokenId: r.token_id?.trim() ?? null,
+        tokenMintedBy: r.token_minted_by?.trim() ?? null,
+        lurkMode: null,
+        names: [String(r.username).toLowerCase(), ...(r.profile_names ?? []).map((n: string) => String(n).toLowerCase())],
+        profileName: r.username,
+        subscription: false,
+        authMode: 'terminal',
+        planOwnerId: null,
+        startedBy: r.started_by?.trim() ?? null,
+        startedByOwner: false,
     }));
 }
 
@@ -157,8 +220,18 @@ function termsAllow(target: LiveSession, reason: 'direct' | 'handoff' | 'protoco
     if (!owner) return false;
     // A person's own message, with authority to direct agents now
     if (reason === 'direct' || reason === 'lurk') return ctx.authorHuman && ctx.couldDirect && ctx.authorId === owner;
-    // Agent-to-agent: both sessions were started by this plan's owner
-    return ctx.authorSession?.startedBy === owner && target.startedBy === owner;
+    // Agent-to-agent: the target was started by this plan's owner, and so was the author's
+    // session; or the author is the plan owner's own bot in a live terminal session here that
+    // the owner's own token opened (routeMessage only takes a terminal as the author when the
+    // post was made with that token)
+    return target.startedBy === owner && authorIsOwners(ctx.authorSession, owner);
+}
+
+/** The author's session counts as the plan owner's for an agent-to-agent wake. */
+function authorIsOwners(author: LiveSession | undefined, owner: string): boolean {
+    if (!author) return false;
+    if (author.kind === 'terminal') return author.botOwnerId === owner && author.tokenMintedBy === owner;
+    return author.startedBy === owner;
 }
 
 /** Split targets by the subscription rule; refused ones (except passive lurk) get a notice. */
@@ -261,21 +334,23 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
     return asService(db, async () => {
         const authorId = msg.authorId.trim();
         // Single responder: an agent connected from a terminal answers there, not through its hosted session
-        const terminalBots = new Set<string>((await db.query(
-            `SELECT bot_id FROM agent_sessions WHERE channel_id = $1 AND state = 'live' AND kind = 'terminal'`,
-            [msg.channelId]
-        )).rows.map((r: any) => r.bot_id.trim()));
+        const terminals = await terminalSessions(db, msg.channelId);
+        const terminalBots = new Set<string>(terminals.map(s => s.botId));
         const all = await liveSessions(db, msg.channelId);
         const standby = all.filter(s => terminalBots.has(s.botId));
         const sessions = all.filter(s => !terminalBots.has(s.botId));
-        const authorSession = sessions.find(s => s.botId === authorId);
+        // An agent writing from its terminal is that terminal session (its hosted one is on
+        // standby), when the post was made with the token that opened it. Any other post by
+        // the bot (another token: a hosted run, a plain API call) keeps the old rules.
+        const authorSession = sessions.find(s => s.botId === authorId)
+            ?? terminals.find(s => s.botId === authorId && !!s.tokenId && s.tokenId === msg.authorTokenId);
         const author = await db.query(`SELECT u.bot FROM users u WHERE u.id = $1`, [authorId]);
         const authorHuman = author.rows[0]?.bot === false;
         const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, refused: new Map() };
 
         if (msg.threadId === null) {
             const agents = new Set([...sessions.map(s => s.botId), ...terminalBots]).size;
-            await routeTopLevel(db, msg, sessions, authorSession, ctx, agents);
+            await routeTopLevel(db, msg, sessions, terminals, authorSession, ctx, agents);
         } else {
             await routeThreadReply(db, msg, sessions, authorId, ctx);
         }
@@ -335,23 +410,48 @@ async function unreachable(db: any, msg: RoutedMessage, authorId: string, termin
     return rows.rows.map((r: any) => ({ username: r.username, profile: r.name }));
 }
 
-async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], authorSession: LiveSession | undefined, ctx: RouteContext, agents: number): Promise<void> {
-    // An agent with a live session opens a collaboration thread
+/**
+ * May a terminal agent's START open a collaboration thread? Only with authority to direct
+ * agents in the channel: the bot's own (the post's stamp), or that of the person whose token
+ * opened the terminal (a personal or invite token's minter). Not the bot's owner as such: a
+ * token someone else minted for the bot doesn't borrow the owner's authority, and a host's,
+ * box's or model agent's token has only the bot's own.
+ */
+async function terminalMayDirect(db: any, msg: RoutedMessage, author: LiveSession): Promise<boolean> {
+    if (msg.couldDirect) return true;
+    return !!author.tokenMintedBy && await stampAuthority(db, msg.channelId, author.tokenMintedBy, false);
+}
+
+/** Bind a START's thread to its author and peers, and wake the hosted peers ('protocol'). */
+async function openThread(db: any, msg: RoutedMessage, author: LiveSession, peers: LiveSession[], peerIds: string[], ctx: RouteContext): Promise<void> {
+    if (peerIds.length === 0) return;
+    await db.query(
+        `INSERT INTO agent_session_threads (thread_id, channel_id, initiator_session_id, session_ids)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (thread_id) DO NOTHING`,
+        [msg.messageId, msg.channelId, author.id, [author.id, ...peerIds]]
+    );
+    const unique = peerIds.map(id => peers.find(p => p.id === id)!).filter(p => p.kind === 'hosted');
+    await addInbox(db, permitted(unique, 'protocol', ctx), msg.messageId, msg.messageId, 'protocol');
+}
+
+async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[], terminals: LiveSession[], authorSession: LiveSession | undefined, ctx: RouteContext, agents: number): Promise<void> {
+    // An agent with a live session (hosted or terminal) opens a collaboration thread. Terminal
+    // participants are members of the thread, so their turns route, but are never woken: they
+    // hear the thread themselves. A terminal agent opens one only with authority to direct
+    // agents here (its own, or that of the person whose token opened the terminal); otherwise, or when
+    // it names no live agent, its START is an ordinary post.
     if (authorSession && msg.protocol?.state === 'START') {
         const peers = (msg.protocol.participants ?? [])
-            .map(name => byName(sessions, name))
-            .filter((s): s is LiveSession => !!s && s.id !== authorSession.id);
+            .map(name => byName(sessions, name) ?? byName(terminals, name))
+            .filter((s): s is LiveSession => !!s && s.botId !== authorSession.botId);
         const peerIds = [...new Set(peers.map(p => p.id))];
-        if (peerIds.length === 0) return;
-        await db.query(
-            `INSERT INTO agent_session_threads (thread_id, channel_id, initiator_session_id, session_ids)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (thread_id) DO NOTHING`,
-            [msg.messageId, msg.channelId, authorSession.id, [authorSession.id, ...peerIds]]
-        );
-        const unique = peerIds.map(id => peers.find(p => p.id === id)!);
-        await addInbox(db, permitted(unique, 'protocol', ctx), msg.messageId, msg.messageId, 'protocol');
-        return;
+        const opens = authorSession.kind === 'hosted'
+            || (peerIds.length > 0 && await terminalMayDirect(db, msg, authorSession));
+        if (opens) {
+            await openThread(db, msg, authorSession, peers, peerIds, ctx);
+            return;
+        }
     }
 
     // Someone who can direct addresses an agent: by @mention, or the only agent here
@@ -522,7 +622,13 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
     }
 
     const participants = sessions.filter(s => boundIds.has(s.id));
-    const author = participants.find(s => s.botId === authorId);
+    let author = participants.find(s => s.botId === authorId);
+    // A participant writing from its terminal: the bot is in the thread through one of its
+    // sessions (this terminal session, an earlier one, or its hosted session now on standby)
+    if (!author && ctx.authorSession?.kind === 'terminal') {
+        const member = await db.query(`SELECT 1 FROM agent_sessions WHERE id = ANY($1) AND bot_id = $2 LIMIT 1`, [[...boundIds], authorId]);
+        if (member.rows.length > 0) author = ctx.authorSession;
+    }
     const others = participants.filter(s => s.botId !== authorId);
     const state = msg.protocol?.state;
 
@@ -531,9 +637,10 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
     const cancel = state === 'CANCEL' && msg.couldDirect;
     const closing = cancel || (!!author && (state === 'DONE' || state === 'BLOCK'));
     if (closing) {
-        // Lock order is session → binding (as in a claim): lock the participants' sessions
-        // in ID order first, then the binding, and recheck it is still open.
-        await db.query(`SELECT 1 FROM agent_sessions WHERE id = ANY($1) ORDER BY id FOR UPDATE`, [[...boundIds].sort()]);
+        // Lock order is session → binding (as in a claim): lock the participants' hosted sessions
+        // in ID order first, then the binding, and recheck it is still open. Terminal sessions
+        // never claim, and their heartbeats update them in no set order, so they aren't locked.
+        await db.query(`SELECT 1 FROM agent_sessions WHERE id = ANY($1) AND kind = 'hosted' ORDER BY id FOR UPDATE`, [[...boundIds].sort()]);
         const still = await db.query(`SELECT 1 FROM agent_session_threads WHERE thread_id = $1 AND state = 'open' FOR UPDATE`, [threadId]);
         if (still.rows.length > 0) await closeThread(db, threadId, [...boundIds], cancel);
         return;

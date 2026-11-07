@@ -1,5 +1,6 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
+import { attachTerminal } from '../../src/lib/terminal-sessions';
 
 /**
  * Provider-terms guardrails (docs/provider-terms.md, src/lib/provider-terms.ts).
@@ -326,6 +327,299 @@ describe('subscription profiles: agent hand-offs', () => {
         await post(beta.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [beta, alpha]\ntask: x');
         expect(await inbox(sa)).toEqual([]);
         expect(await notices(since)).toEqual([NOTICE('alpha')]);
+    });
+});
+
+/**
+ * The owner's own agent in a terminal session (agora-mcp from a CLI on the owner's machine,
+ * src/lib/terminal-sessions.ts) hands off like an owner-started session: its START and YIELDs
+ * wake an owner-started subscription agent. Only when the terminal was opened with a personal
+ * or invite token the plan owner minted, and the post is made with that same token. Its hosted
+ * session (if any) is on standby, so the terminal session is the author.
+ */
+describe('subscription profiles: hand-offs from the owner\'s terminal agents', () => {
+    let gamma: Agent;
+    let admin: Awaited<ReturnType<typeof authedUser>>;
+    beforeAll(async () => {
+        gamma = await makeAgent('gamma', hostId);
+        admin = await authedUser(ctx.request, 'ptadmin');
+        await joinViaInvite(ctx.request, owner.auth, admin.auth, serverId);
+        const role = await ctx.request.post(`/servers/${serverId}/roles`).set(owner.auth).send({ name: 'Admins', permissions: (1n << 0n).toString() });
+        expect(role.status).toBe(201);
+        await ctx.request.put(`/servers/${serverId}/members/${admin.userId}/roles/${role.body.id}`).set(owner.auth);
+    });
+    beforeEach(async () => {
+        await setMode(gamma, 'subscription');
+        for (const a of [beta, gamma]) await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [a.botId, owner.userId]);
+    });
+
+    type Token = { id: string; auth: { Authorization: string } };
+    const tokenOf = (auth: { Authorization: string }): Token => ({ id: auth.Authorization.slice('Bot bot_'.length).split('.')[0], auth });
+    /** A personal token for the bot, minted by `by` (its owner, or an Administrator). */
+    async function mint(agent: Agent, by: { auth: object }): Promise<Token> {
+        const res = await ctx.request.post(`/servers/${serverId}/bots/${agent.botId}/tokens`).set(by.auth).send({ name: 'my terminal' });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        return { id: res.body.tokenId, auth: { Authorization: `Bot ${res.body.token}` } };
+    }
+    /** What the gateway does when agora-mcp connects with presence on this token. */
+    const connectTerminal = async (agent: Agent, token: Token) =>
+        (await attachTerminal(ctx.db, agent.botId, [channelId], 'mcp', false, token.id)).attached[0].sessionId;
+    const START = (...names: string[]) => `[AGORA/v1 MODE=plan STATE=START]\nparticipants: [${names.join(', ')}]\ntask: x`;
+    const TURN = (to: string) => `[AGORA/v1 MODE=plan STATE=TURN]\nyour turn\n[YIELD to=${to}]`;
+    const boundThread = async (threadId: string) =>
+        (await ctx.db.query('SELECT state FROM agent_session_threads WHERE thread_id = $1', [threadId])).rows[0]?.state ?? null;
+
+    it('records who minted a token and what it is for', async () => {
+        const mine = await mint(beta, owner);
+        const rows = await ctx.db.query(`SELECT id, created_by, purpose FROM bot_tokens WHERE id = ANY($1)`, [[mine.id, tokenOf(beta.auth).id]]);
+        const byId = new Map(rows.rows.map((r: any) => [r.id.trim(), { createdBy: r.created_by?.trim(), purpose: r.purpose }]));
+        expect(byId.get(mine.id)).toEqual({ createdBy: owner.userId, purpose: 'personal' });
+        expect(byId.get(tokenOf(beta.auth).id)).toEqual({ createdBy: owner.userId, purpose: 'host' });
+        // An agent invite's token was minted by whoever created the invite
+        const invite = await ctx.request.post(`/servers/${serverId}/agent-invites`).set(admin.auth).send({ botId: beta.botId });
+        expect(invite.status, JSON.stringify(invite.body)).toBe(201);
+        const redeemed = await ctx.request.post('/agent-invites/redeem').send({ code: invite.body.code });
+        expect(redeemed.status).toBe(200);
+        const row = (await ctx.db.query(`SELECT created_by, purpose FROM bot_tokens WHERE id = $1`,
+            [redeemed.body.token.slice('bot_'.length).split('.')[0]])).rows[0];
+        expect({ createdBy: row.created_by.trim(), purpose: row.purpose }).toEqual({ createdBy: admin.userId, purpose: 'invite' });
+    });
+
+    it('wakes an owner-started subscription agent on its START and YIELDs (protocol, handoff), with no notice', async () => {
+        const sa = await startSession(alpha);
+        await startSession(beta); // its hosted session goes on standby behind the terminal
+        const mine = await mint(beta, owner);
+        await connectTerminal(beta, mine);
+        const since = mark();
+        const start = await post(mine.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+        expect(await boundThread(start.id)).toBe('open');
+        // alpha yields to the terminal agent: nothing to wake (it hears the thread itself)
+        await reply(alpha.auth, start.id, TURN('beta'));
+        const back = await reply(mine.auth, start.id, TURN('alpha'));
+        const waiting = await reply(mine.auth, start.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nneed your review\n[WAIT on=alpha for=review]');
+        expect(await inbox(sa)).toEqual([
+            { message_id: start.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }, { message_id: waiting.id, reason: 'handoff' },
+        ]);
+        expect(await notices(since)).toEqual([]);
+        // The claim's recheck and the host's rule (authorBot) keep them
+        const c = await claim();
+        expect(c.status, JSON.stringify(c.body)).toBe(200);
+        expect(c.body.session.startedByOwner).toBe(true);
+        expect(c.body.inbox.map((i: any) => i.reason)).toEqual(['protocol', 'handoff', 'handoff']);
+        // A participant's DONE from its terminal closes the thread
+        await reply(mine.auth, start.id, '[AGORA/v1 MODE=plan STATE=DONE]\ndone');
+        expect(await boundThread(start.id)).toBe('closed');
+    });
+
+    it('routes a YIELD from the terminal agent in a thread a hosted session started, also after it reconnects', async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(beta, owner);
+        const first = await connectTerminal(beta, mine);
+        const start = await post(alpha.auth, START('alpha', 'beta'));
+        expect(await boundThread(start.id)).toBe('open');
+        const since = mark();
+        const back = await reply(mine.auth, start.id, TURN('alpha'));
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [first]);
+        expect(await connectTerminal(beta, mine)).not.toBe(first);
+        const again = await reply(mine.auth, start.id, TURN('alpha'));
+        expect((await inbox(sa)).map(r => [r.message_id, r.reason])).toEqual([[back.id, 'handoff'], [again.id, 'handoff']]);
+        expect(await notices(since)).toEqual([]);
+    });
+
+    it('a terminal opened with a token an Administrator minted is refused', async () => {
+        const sa = await startSession(alpha);
+        const adminMinted = await mint(beta, admin);
+        await connectTerminal(beta, adminMinted);
+        const since = mark();
+        const start = await post(adminMinted.auth, START('beta', 'alpha'));
+        // Its minter can't direct agents here, so the START is an ordinary post: no thread, no wake
+        expect(await boundThread(start.id)).toBeNull();
+        await reply(adminMinted.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+        // In a thread an owner-started hosted agent opened with it: its YIELD is refused with a notice
+        await startSession(gamma);
+        const opened = await post(gamma.auth, START('gamma', 'alpha', 'beta'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
+        const since2 = mark();
+        await reply(adminMinted.auth, opened.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
+        expect(await notices(since2)).toEqual([NOTICE('alpha')]);
+    });
+
+    it("a terminal opened with the agent's host token (what hosted runs get) is refused", async () => {
+        const sa = await startSession(alpha);
+        const host = tokenOf(beta.auth);
+        await connectTerminal(beta, host);
+        const since = mark();
+        const start = await post(host.auth, START('beta', 'alpha'));
+        // A host token has only the bot's own authority (none here): an ordinary post, no thread, no wake
+        expect(await boundThread(start.id)).toBeNull();
+        await reply(host.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+        // In a thread an owner-started hosted agent opened with it: its YIELD is refused with a notice
+        await startSession(gamma);
+        const opened = await post(gamma.auth, START('gamma', 'alpha', 'beta'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
+        const since2 = mark();
+        await reply(host.auth, opened.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
+        expect(await notices(since2)).toEqual([NOTICE('alpha')]);
+    });
+
+    it("a post with another token while the owner's terminal is live keeps the old rules", async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(beta, owner);
+        const other = await mint(beta, owner);
+        await connectTerminal(beta, mine);
+        const start = await post(mine.auth, START('beta', 'alpha'));
+        const before = await inbox(sa);
+        // In the thread the terminal opened: a YIELD with the second token (or the host's) wakes nothing
+        await reply(other.auth, start.id, TURN('alpha'));
+        await reply(beta.auth, start.id, TURN('alpha'));
+        // A START with it opens no thread
+        const fresh = await post(other.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual(before);
+        expect(await boundThread(fresh.id)).toBeNull();
+    });
+
+    it('the same bot without a live terminal session (plain API posts) is refused as before', async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(beta, owner);
+        const terminal = await connectTerminal(beta, mine);
+        const start = await post(mine.auth, START('beta', 'alpha'));
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [terminal]);
+        const before = await inbox(sa);
+        await reply(mine.auth, start.id, TURN('alpha'));
+        const fresh = await post(mine.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual(before);
+        expect(await boundThread(fresh.id)).toBeNull();
+    });
+
+    it('sockets with two different tokens on one terminal session: no token counts, even when the first reconnects', async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(beta, owner);
+        const session = await connectTerminal(beta, mine);
+        await connectTerminal(beta, tokenOf(beta.auth));
+        await connectTerminal(beta, mine);
+        const row = (await ctx.db.query('SELECT token_id, token_mixed FROM agent_sessions WHERE id = $1', [session])).rows[0];
+        expect(row).toEqual({ token_id: null, token_mixed: true });
+        const since = mark();
+        await post(mine.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+    });
+
+    it('a terminal session live before the token was recorded adopts the next attaching token', async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(beta, owner);
+        // As a session live at deploy: no token recorded
+        const session = (await attachTerminal(ctx.db, beta.botId, [channelId], 'mcp', false, null)).attached[0].sessionId;
+        expect(await connectTerminal(beta, mine)).toBe(session);
+        const row = (await ctx.db.query('SELECT token_id, token_mixed FROM agent_sessions WHERE id = $1', [session])).rows[0];
+        expect({ token: row.token_id?.trim(), mixed: row.token_mixed }).toEqual({ token: mine.id, mixed: false });
+        const start = await post(mine.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+    });
+
+    it("an API-key target: a token an Administrator minted doesn't borrow the bot owner's authority to open a thread", async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(alpha, 'api_key');
+        const sa = await startSession(alpha, director.userId);
+        // The admin can't direct agents (Administrator doesn't imply DirectAgents); the owner can
+        const adminMinted = await mint(beta, admin);
+        await connectTerminal(beta, adminMinted);
+        const since = mark();
+        const refused = await post(adminMinted.auth, START('beta', 'alpha'));
+        expect(await boundThread(refused.id)).toBeNull();
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+        // The same bot on a token the owner minted opens it
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
+        const mine = await mint(beta, owner);
+        await connectTerminal(beta, mine);
+        const start = await post(mine.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+    });
+
+    it("another user's bot in a terminal session, on a token its owner minted, is refused with a notice", async () => {
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
+        const sa = await startSession(alpha);
+        const theirs = await mint(gamma, director);
+        await connectTerminal(gamma, theirs);
+        const since = mark();
+        const start = await post(theirs.auth, START('gamma', 'alpha'));
+        expect(await boundThread(start.id)).toBe('open'); // the director may direct agents here
+        await reply(theirs.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha'), NOTICE('alpha')]);
+    });
+
+    it('a target the owner did not start, or a hosted author the owner did not start, is still refused', async () => {
+        const sa = await startSession(alpha, director.userId);
+        const mine = await mint(beta, owner);
+        await connectTerminal(beta, mine);
+        const since = mark();
+        await post(mine.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+
+        await ctx.db.query('TRUNCATE agent_inbox, agent_session_threads, agent_sessions CASCADE');
+        const sa2 = await startSession(alpha);
+        await startSession(gamma, director.userId);
+        const since2 = mark();
+        await post(gamma.auth, START('gamma', 'alpha'));
+        expect(await inbox(sa2)).toEqual([]);
+        expect(await notices(since2)).toEqual([NOTICE('alpha')]);
+    });
+
+    it("an API-key target: a non-director's terminal bot's START wakes nothing; a director's does", async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(alpha, 'api_key');
+        const sa = await startSession(alpha, director.userId);
+        // A member without DirectAgents owns the bot from the start
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, member.userId]);
+        const memberToken = await mint(gamma, member);
+        await connectTerminal(gamma, memberToken);
+        const since = mark();
+        const refused = await post(memberToken.auth, START('gamma', 'alpha'));
+        expect(await boundThread(refused.id)).toBeNull();
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
+        const directorToken = await mint(gamma, director);
+        await connectTerminal(gamma, directorToken);
+        const start = await post(directorToken.auth, START('gamma', 'alpha'));
+        const back = await reply(directorToken.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }]);
+        expect(await notices(since)).toEqual([]);
+    });
+
+    it("a handoff offer from the owner's terminal agent on its token reaches an owner-started subscription agent; others are refused", async () => {
+        await startSession(alpha);
+        const mine = await mint(beta, owner);
+        await connectTerminal(beta, mine);
+        const parent = await post(owner.auth, 'Fix the flaky upload test');
+        const offerAs = (auth: object) => ctx.request.post(`/channels/${channelId}/handoffs`).set(auth).send({ threadId: parent.id, to: 'alpha', summary: 'x' });
+        // The bot's host token while the owner's terminal is live
+        const otherToken = await offerAs(beta.auth);
+        expect(otherToken.status).toBe(403);
+        expect(otherToken.body.error).toBe('plan_owner_only');
+        const ok = await offerAs(mine.auth);
+        expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+        await ctx.request.post(`/channels/${channelId}/handoffs/${ok.body.offer.id}`).set(owner.auth).send({ action: 'cancel' });
+
+        // A bot the director owns from the start, in a terminal on a token the director minted
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
+        const theirs = await mint(gamma, director);
+        await connectTerminal(gamma, theirs);
+        const refused = await offerAs(theirs.auth);
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('plan_owner_only');
     });
 });
 

@@ -48,7 +48,7 @@ export async function handoffRoutes(app: FastifyInstance) {
         const channelId = (request.params as any).id, b = request.body as any;
         if (!request.isBot) return reply.status(403).send({ error: 'live_bot_session_required' });
         if (!(await canViewChannel(request.dbClient!, channelId, request.userId!, true)).allowed) return reply.status(403).send({ error: 'forbidden' });
-        return run(request, reply, 201, async notices => ({ offer: await createOffer(request.dbClient!, request.userId!, channelId, b, notices) }));
+        return run(request, reply, 201, async notices => ({ offer: await createOffer(request.dbClient!, request.userId!, channelId, b, notices, request.botTokenId ?? null) }));
     });
 
     app.post('/channels/:id/handoffs/:offerId', {

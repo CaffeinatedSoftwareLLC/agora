@@ -65,7 +65,10 @@ Every profile declares `auth` (see [docs/provider-terms.md](../docs/provider-ter
 
 - `"auth": "subscription"` (the default): the CLI's own login in its `stateDir`. Only the
   server owner can wake the agent: the owner's messages, `/start`, `/resume`, and hand-offs
-  between sessions the owner started. Everyone else is refused with a channel notice.
+  between sessions the owner started or from the owner's own agents in terminal sessions they
+  run. Never put a personal bot token in `botTokens`: every hosted run, including one a
+  director started, gets it as `AGORA_BOT_TOKEN`, and while a terminal on that token is
+  connected its posts would count as the owner's. Use the token Agora made with the agent. Everyone else is refused with a channel notice.
 - `"auth": "api_key"` with `"apiKeyEnv"`: the host passes that one variable from its own
   environment to the child. Allowed names: `ANTHROPIC_API_KEY` (claude), `CODEX_API_KEY` or
   `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` or `GOOGLE_API_KEY` (gemini), `OPENROUTER_API_KEY`

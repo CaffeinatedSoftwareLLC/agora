@@ -81,8 +81,13 @@ export async function noticeStandby(c: PoolClient | any, channelId: string, botI
 /**
  * agora-mcp connected with presence: make (or keep) a live terminal session in each channel.
  * A session still in its grace period is reused, so a reconnect keeps its ID and reservations.
+ * `tokenId` is the bot token the socket authenticated with: the session records it (the
+ * plan-owner rule counts a terminal as its owner's only for posts made with an owner-minted
+ * token, src/lib/agent-sessions.ts). A session without one (live before migration 090) adopts
+ * it. A socket with another token marks the session mixed (token_mixed): then no token speaks
+ * for it until it ends.
  */
-export async function attachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode, listening = mode === 'channel'): Promise<{ attached: Attached[]; notices: Notice[] }> {
+export async function attachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode, listening = mode === 'channel', tokenId: string | null = null): Promise<{ attached: Attached[]; notices: Notice[] }> {
     if (channelIds.length === 0) return { attached: [], notices: [] };
     return tx(pool, async (c) => {
         const attached: Attached[] = [];
@@ -97,9 +102,12 @@ export async function attachTerminal(pool: Pool, botId: string, channelIds: stri
                 `UPDATE agent_sessions SET seen_at = NOW(), terminal_mode = $3, last_active_at = NOW(), listening = $4,
                      idle_since = CASE WHEN $4 OR working THEN NULL ELSE COALESCE(idle_since, NOW()) END,
                      context_percent = NULL, usage_percent = NULL, usage_label = NULL, status_note = NULL,
-                     status_at = NULL, limit_warned_at = NULL
+                     status_at = NULL, limit_warned_at = NULL,
+                     token_mixed = token_mixed OR (token_id IS NOT NULL AND token_id IS DISTINCT FROM $5::char(26)),
+                     token_id = CASE WHEN token_mixed OR (token_id IS NOT NULL AND token_id IS DISTINCT FROM $5::char(26)) THEN NULL
+                                     ELSE COALESCE(token_id, $5::char(26)) END
                  WHERE channel_id = $1 AND bot_id = $2 AND kind = 'terminal' AND state = 'live' RETURNING id`,
-                [channelId, botId, mode, listening]
+                [channelId, botId, mode, listening, tokenId]
             )).rows[0];
             let sessionId: string;
             if (existing) {
@@ -107,16 +115,19 @@ export async function attachTerminal(pool: Pool, botId: string, channelIds: stri
             } else {
                 sessionId = generateUlid();
                 const inserted = await c.query(
-                    `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, kind, started_by, terminal_mode, seen_at, listening, idle_since)
-                     VALUES ($1, $2, $3, $4, NULL, 'terminal', $5, $6, NOW(), $7, CASE WHEN $7 THEN NULL ELSE NOW() END)
+                    `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, kind, started_by, terminal_mode, seen_at, listening, idle_since, token_id)
+                     VALUES ($1, $2, $3, $4, NULL, 'terminal', $5, $6, NOW(), $7, CASE WHEN $7 THEN NULL ELSE NOW() END, $8)
                      ON CONFLICT (channel_id, bot_id) WHERE state = 'live' AND kind = 'terminal' DO NOTHING RETURNING id`,
-                    [sessionId, channel.server_id, channelId, botId, owner, mode, listening]
+                    [sessionId, channel.server_id, channelId, botId, owner, mode, listening, tokenId]
                 );
                 if (!inserted.rows[0]) {
-                    // Another socket of this bot attached first
+                    // Another socket of this bot attached first: as for a session already live above
                     sessionId = (await c.query(
-                        `SELECT id FROM agent_sessions WHERE channel_id = $1 AND bot_id = $2 AND kind = 'terminal' AND state = 'live'`,
-                        [channelId, botId]
+                        `UPDATE agent_sessions SET token_mixed = token_mixed OR (token_id IS NOT NULL AND token_id IS DISTINCT FROM $3::char(26)),
+                             token_id = CASE WHEN token_mixed OR (token_id IS NOT NULL AND token_id IS DISTINCT FROM $3::char(26)) THEN NULL
+                                             ELSE COALESCE(token_id, $3::char(26)) END
+                         WHERE channel_id = $1 AND bot_id = $2 AND kind = 'terminal' AND state = 'live' RETURNING id`,
+                        [channelId, botId, tokenId]
                     )).rows[0].id.trim();
                 }
             }
@@ -273,10 +284,10 @@ export function endTerminalSessionNow(c: PoolClient | any, botId: string): Promi
  * A still-connected presence socket reported Listening or Activity: if the bot has no live
  * terminal session (the SessionEnd hook ended it), attach one again. Null when one is live.
  */
-export async function reattachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode, listening = mode === 'channel'): Promise<{ attached: Attached[]; notices: Notice[] } | null> {
+export async function reattachTerminal(pool: Pool, botId: string, channelIds: string[], mode: TerminalMode, listening = mode === 'channel', tokenId: string | null = null): Promise<{ attached: Attached[]; notices: Notice[] } | null> {
     const live = await pool.query(`SELECT 1 FROM agent_sessions WHERE bot_id = $1 AND kind = 'terminal' AND state = 'live' LIMIT 1`, [botId]);
     if (live.rows.length > 0) return null;
-    return attachTerminal(pool, botId, channelIds, mode, listening);
+    return attachTerminal(pool, botId, channelIds, mode, listening, tokenId);
 }
 
 /** Presence dropped and the grace period passed: end the bot's terminal sessions. */

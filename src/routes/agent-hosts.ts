@@ -426,8 +426,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     [botId, b.name, request.userId, serverId]
                 );
                 await db.query(
-                    `INSERT INTO bot_tokens (id, bot_id, secret_hash, name) VALUES ($1, $2, $3, $4)`,
-                    [tokenId, botId, secretHash, 'agent host']
+                    `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, created_by, purpose) VALUES ($1, $2, $3, $4, $5, 'host')`,
+                    [tokenId, botId, secretHash, 'agent host', request.userId]
                 );
                 if (b.channelId) {
                     await db.query(

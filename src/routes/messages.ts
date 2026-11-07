@@ -206,7 +206,7 @@ export async function messageRoutes(app: FastifyInstance) {
         // every validation gate: a rejected post must not wake anyone.
         const termsNotices = await routeMessage(db, {
             channelId, messageId, threadId: null, authorId: userId, couldDirect, protocol,
-            mentionedUserIds: mentionedUsers.map(u => u.id),
+            mentionedUserIds: mentionedUsers.map(u => u.id), authorTokenId: request.isBot ? request.botTokenId ?? null : null,
         });
 
         const userRow = await db.query(
