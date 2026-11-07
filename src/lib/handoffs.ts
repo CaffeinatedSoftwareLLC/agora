@@ -16,7 +16,8 @@ import { PLAN_OWNER_SQL, planNotice, WAKE_AUTH_SQL } from './provider-terms';
  * owner and moves the reservations to it with a fresh TTL, in one transaction.
  *
  * Plan-owned recipients ('subscription', 'siwc') take a handoff only inside work their plan
- * owner started: both sessions started by that owner (the agent-to-agent rule in
+ * owner started: the recipient's session started by that owner, and the sender's too, or the
+ * sender is that owner's own bot in a live terminal session (the agent-to-agent rule in
  * agent-sessions.ts termsAllow).
  *
  * Everything here runs as the service role inside the request's transaction (asService).
@@ -196,24 +197,32 @@ async function resolveRecipient(db: any, serverId: string, name: string, senderB
 }
 
 /**
- * The plan-owner rule for a handoff: a recipient on a personal plan takes it only when both
- * sessions were started (or last resumed) by that plan's owner. Returns the refusal, or null.
+ * The plan-owner rule for a handoff: a recipient on a personal plan takes it only when its
+ * session was started (or last resumed) by that plan's owner, and the sender's session was
+ * too, or the sender is that owner's own bot in a live terminal session. Returns the refusal,
+ * or null.
  */
 async function planRefusal(db: any, fromSessionId: string, toSessionId: string): Promise<HandoffError | null> {
     const row = (await db.query(
         `SELECT t.kind, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode, ${PLAN_OWNER_SQL} AS plan_owner_id,
-                t.started_by AS to_started_by, f.started_by AS from_started_by
+                t.started_by AS to_started_by, f.started_by AS from_started_by,
+                f.kind AS from_kind, fu.bot_owner_id AS from_bot_owner
          FROM agent_sessions t
          LEFT JOIN agent_profiles p ON p.id = t.profile_id
          JOIN servers srv ON srv.id = t.server_id
          JOIN agent_sessions f ON f.id = $2
+         JOIN users fu ON fu.id = f.bot_id
          WHERE t.id = $1`,
         [toSessionId, fromSessionId]
     )).rows[0];
     // A terminal recipient is its user's own CLI: nothing here starts a run on anyone's plan
     if (!row || row.kind !== 'hosted' || row.auth_mode === 'api_key') return null;
     const owner = row.plan_owner_id?.trim() ?? null;
-    if (owner && row.to_started_by?.trim() === owner && row.from_started_by?.trim() === owner) return null;
+    // A terminal sender was live when it offered (senderSession); accepting later doesn't need it still
+    const senderIsOwners = row.from_kind === 'terminal'
+        ? row.from_bot_owner?.trim() === owner
+        : row.from_started_by?.trim() === owner;
+    if (owner && row.to_started_by?.trim() === owner && senderIsOwners) return null;
     return new HandoffError(403, { error: 'plan_owner_only',
         message: `${planNotice(row.profile_name, row.auth_mode, !!owner)} A handoff reaches it only inside work its plan owner started.` });
 }

@@ -1,5 +1,6 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
+import { attachTerminal } from '../../src/lib/terminal-sessions';
 
 /**
  * Provider-terms guardrails (docs/provider-terms.md, src/lib/provider-terms.ts).
@@ -326,6 +327,147 @@ describe('subscription profiles: agent hand-offs', () => {
         await post(beta.auth, '[AGORA/v1 MODE=plan STATE=START]\nparticipants: [beta, alpha]\ntask: x');
         expect(await inbox(sa)).toEqual([]);
         expect(await notices(since)).toEqual([NOTICE('alpha')]);
+    });
+});
+
+/**
+ * The owner's own agent in a terminal session (agora-mcp from a CLI on the owner's machine,
+ * src/lib/terminal-sessions.ts) hands off like an owner-started session: its START and YIELDs
+ * wake an owner-started subscription agent. Its hosted session (if any) is on standby, so the
+ * terminal session is the author.
+ */
+describe('subscription profiles: hand-offs from the owner\'s terminal agents', () => {
+    let gamma: Agent;
+    beforeAll(async () => {
+        gamma = await makeAgent('gamma', hostId);
+    });
+    beforeEach(async () => {
+        await setMode(gamma, 'subscription');
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, owner.userId]);
+    });
+
+    /** What agora-mcp's presence socket does when the CLI connects. */
+    const connectTerminal = async (agent: Agent) => (await attachTerminal(ctx.db, agent.botId, [channelId], 'mcp')).attached[0].sessionId;
+    const START = (...names: string[]) => `[AGORA/v1 MODE=plan STATE=START]\nparticipants: [${names.join(', ')}]\ntask: x`;
+    const TURN = (to: string) => `[AGORA/v1 MODE=plan STATE=TURN]\nyour turn\n[YIELD to=${to}]`;
+    const boundThread = async (threadId: string) =>
+        (await ctx.db.query('SELECT state FROM agent_session_threads WHERE thread_id = $1', [threadId])).rows[0]?.state ?? null;
+
+    it('wakes an owner-started subscription agent on its START and YIELDs (protocol, handoff), with no notice', async () => {
+        const bot = (await ctx.db.query('SELECT bot_owner_id FROM users WHERE id = $1', [beta.botId])).rows[0];
+        expect(bot.bot_owner_id.trim()).toBe(owner.userId);
+        const sa = await startSession(alpha);
+        await startSession(beta); // its hosted session goes on standby behind the terminal
+        await connectTerminal(beta);
+        const since = mark();
+        const start = await post(beta.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+        expect(await boundThread(start.id)).toBe('open');
+        // alpha yields to the terminal agent: nothing to wake (it hears the thread itself)
+        await reply(alpha.auth, start.id, TURN('beta'));
+        const back = await reply(beta.auth, start.id, TURN('alpha'));
+        const waiting = await reply(beta.auth, start.id, '[AGORA/v1 MODE=plan STATE=WAIT]\nneed your review\n[WAIT on=alpha for=review]');
+        expect(await inbox(sa)).toEqual([
+            { message_id: start.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }, { message_id: waiting.id, reason: 'handoff' },
+        ]);
+        expect(await notices(since)).toEqual([]);
+        // The claim's recheck and the host's rule (authorBot) keep them
+        const c = await claim();
+        expect(c.status, JSON.stringify(c.body)).toBe(200);
+        expect(c.body.session.startedByOwner).toBe(true);
+        expect(c.body.inbox.map((i: any) => i.reason)).toEqual(['protocol', 'handoff', 'handoff']);
+        expect(c.body.inbox.every((i: any) => i.authorBot)).toBe(true);
+        // A participant's DONE from its terminal closes the thread
+        await reply(beta.auth, start.id, '[AGORA/v1 MODE=plan STATE=DONE]\ndone');
+        expect(await boundThread(start.id)).toBe('closed');
+    });
+
+    it('routes a YIELD from the terminal agent in a thread a hosted session started', async () => {
+        const sa = await startSession(alpha);
+        await connectTerminal(beta);
+        const start = await post(alpha.auth, START('alpha', 'beta'));
+        expect(await boundThread(start.id)).toBe('open');
+        const since = mark();
+        const back = await reply(beta.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: back.id, reason: 'handoff' }]);
+        expect(await notices(since)).toEqual([]);
+    });
+
+    it('a terminal agent that reconnected (a new terminal session) still hands off in its thread', async () => {
+        const sa = await startSession(alpha);
+        const first = await connectTerminal(beta);
+        const start = await post(beta.auth, START('beta', 'alpha'));
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [first]);
+        expect(await connectTerminal(beta)).not.toBe(first);
+        const back = await reply(beta.auth, start.id, TURN('alpha'));
+        expect((await inbox(sa)).map(r => [r.message_id, r.reason])).toEqual([[start.id, 'protocol'], [back.id, 'handoff']]);
+    });
+
+    it('the same bot without a live terminal session (plain API posts) is refused as before', async () => {
+        const sa = await startSession(alpha);
+        const terminal = await connectTerminal(beta);
+        const start = await post(beta.auth, START('beta', 'alpha'));
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [terminal]);
+        const before = await inbox(sa);
+        await reply(beta.auth, start.id, TURN('alpha'));
+        const fresh = await post(beta.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual(before);
+        expect(await boundThread(fresh.id)).toBeNull();
+    });
+
+    it("another user's bot in a terminal session is refused with a notice", async () => {
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
+        const sa = await startSession(alpha);
+        await connectTerminal(gamma);
+        const since = mark();
+        const start = await post(gamma.auth, START('gamma', 'alpha'));
+        await reply(gamma.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha'), NOTICE('alpha')]);
+    });
+
+    it('a target the owner did not start, or a hosted author the owner did not start, is still refused', async () => {
+        const sa = await startSession(alpha, director.userId);
+        await connectTerminal(beta);
+        const since = mark();
+        await post(beta.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+
+        await ctx.db.query('TRUNCATE agent_inbox, agent_session_threads, agent_sessions CASCADE');
+        const sa2 = await startSession(alpha);
+        await startSession(gamma, director.userId);
+        const since2 = mark();
+        await post(gamma.auth, START('gamma', 'alpha'));
+        expect(await inbox(sa2)).toEqual([]);
+        expect(await notices(since2)).toEqual([NOTICE('alpha')]);
+    });
+
+    it("an API-key target on a box host takes any terminal agent's START, without the plan-owner rule", async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(alpha, 'api_key');
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
+        const sa = await startSession(alpha, director.userId);
+        await connectTerminal(gamma);
+        const since = mark();
+        const start = await post(gamma.auth, START('gamma', 'alpha'));
+        const back = await reply(gamma.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }]);
+        expect(await notices(since)).toEqual([]);
+    });
+
+    it('a handoff offer from the owner\'s terminal agent reaches an owner-started subscription agent; another user\'s is refused', async () => {
+        await startSession(alpha);
+        await connectTerminal(beta);
+        await connectTerminal(gamma);
+        const parent = await post(owner.auth, 'Fix the flaky upload test');
+        const ok = await ctx.request.post(`/channels/${channelId}/handoffs`).set(beta.auth).send({ threadId: parent.id, to: 'alpha', summary: 'x' });
+        expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+        await ctx.request.post(`/channels/${channelId}/handoffs/${ok.body.offer.id}`).set(owner.auth).send({ action: 'cancel' });
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
+        const refused = await ctx.request.post(`/channels/${channelId}/handoffs`).set(gamma.auth).send({ threadId: parent.id, to: 'alpha', summary: 'x' });
+        expect(refused.status).toBe(403);
+        expect(refused.body.error).toBe('plan_owner_only');
     });
 });
 
