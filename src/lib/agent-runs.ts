@@ -424,15 +424,22 @@ async function botCanAct(c: PoolClient, botId: string, channelId: string): Promi
 
 /**
  * #361 at claim time, for a hand-off or protocol wake by a bot on a plan-owned profile: the bot
- * has a live hosted session in the channel the plan owner started, or a live terminal session
+ * has a live hosted session in the channel the plan owner started, on a profile only that plan
+ * owner can wake (not api_key), and the post was made with that run's own token (the agent
+ * host's or box's); or a live terminal session
  * there on the post's token (`tokenId`), not mixed, that is a live personal or invite token the
  * plan owner made for their own bot.
  */
 async function strictAuthorOk(c: PoolClient, botId: string, tokenId: string | null, channelId: string, owner: string): Promise<boolean> {
     const row = await c.query(
         `SELECT 1 FROM agent_sessions s
+         LEFT JOIN agent_profiles p ON p.id = s.profile_id
+         JOIN servers srv ON srv.id = s.server_id
          WHERE s.bot_id = $1 AND s.channel_id = $3 AND s.state = 'live'
-           AND ((s.kind = 'hosted' AND s.started_by = $4)
+           -- A hosted author: its own run's post (agent host or box token) on a profile only this plan's owner can wake
+           AND ((s.kind = 'hosted' AND s.started_by = $4 AND ${WAKE_AUTH_SQL} <> 'api_key' AND ${PLAN_OWNER_SQL} = $4
+                 AND EXISTS (SELECT 1 FROM bot_tokens ht WHERE ht.id = $2::char(26) AND ht.bot_id = $1 AND ht.revoked_at IS NULL
+                             AND ht.purpose IN ('host', 'box')))
                 OR (s.kind = 'terminal' AND NOT s.token_mixed AND $2::char(26) IS NOT NULL AND s.token_id = $2
                     AND EXISTS (SELECT 1 FROM bot_tokens t JOIN users u ON u.id = t.bot_id
                                 WHERE t.id = $2 AND t.bot_id = $1 AND t.revoked_at IS NULL AND t.purpose IN ('personal', 'invite')

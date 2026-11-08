@@ -214,15 +214,18 @@ async function planRefusal(db: any, fromSessionId: string, toSessionId: string, 
                 t.started_by AS to_started_by, f.started_by AS from_started_by, srv.subscription_wakes,
                 f.kind AS from_kind, f.token_id AS from_token, f.token_mixed AS from_token_mixed, f.bot_id AS from_bot,
                 f.channel_id AS from_channel, fu.bot_owner_id AS from_bot_owner,
-                CASE WHEN ft.revoked_at IS NULL AND ft.purpose IN ('personal', 'invite') THEN ft.created_by END AS from_token_minted_by
+                CASE WHEN ft.revoked_at IS NULL AND ft.purpose IN ('personal', 'invite') THEN ft.created_by END AS from_token_minted_by,
+                ${WAKE_AUTH_SQL.replace(/\bp\./g, 'fp.')} AS from_auth_mode, ${PLAN_OWNER_SQL.replace(/\bp\./g, 'fp.')} AS from_plan_owner,
+                (SELECT ot.purpose FROM bot_tokens ot WHERE ot.id = $3::char(26) AND ot.bot_id = f.bot_id AND ot.revoked_at IS NULL) AS offer_token_purpose
          FROM agent_sessions t
          LEFT JOIN agent_profiles p ON p.id = t.profile_id
          JOIN servers srv ON srv.id = t.server_id
          JOIN agent_sessions f ON f.id = $2
+         LEFT JOIN agent_profiles fp ON fp.id = f.profile_id
          JOIN users fu ON fu.id = f.bot_id
          LEFT JOIN bot_tokens ft ON ft.id = f.token_id AND ft.bot_id = f.bot_id
          WHERE t.id = $1`,
-        [toSessionId, fromSessionId]
+        [toSessionId, fromSessionId, senderTokenId ?? null]
     )).rows[0];
     // A terminal recipient is its user's own CLI: nothing here starts a run on anyone's plan
     if (!row || row.kind !== 'hosted' || row.auth_mode === 'api_key') return null;
@@ -235,11 +238,13 @@ async function planRefusal(db: any, fromSessionId: string, toSessionId: string, 
             : await ownerBotOf(db, { botId: row.from_bot.trim(), tokenId: senderTokenId, channelId: row.from_channel.trim() }) === owner);
         if (ownersBot && row.to_started_by?.trim() === owner) return null;
     }
-    // #361, in either setting (owner_bots adds to it). A terminal sender was live when it offered (senderSession); accepting later doesn't need it still
+    // #361, in either setting (owner_bots adds to it). A terminal sender was live when it offered (senderSession); accepting later doesn't need it still.
+    // A hosted sender counts only on a profile only this plan's owner can wake, and (offering) with its own run's token
     const senderIsOwners = row.from_kind === 'terminal'
         ? row.from_bot_owner?.trim() === owner && row.from_token_minted_by?.trim() === owner
             && (senderTokenId === undefined || (!!senderTokenId && row.from_token?.trim() === senderTokenId))
-        : row.from_started_by?.trim() === owner;
+        : row.from_started_by?.trim() === owner && row.from_auth_mode !== 'api_key' && row.from_plan_owner?.trim() === owner
+            && (senderTokenId === undefined || row.offer_token_purpose === 'host' || row.offer_token_purpose === 'box');
     if (owner && row.to_started_by?.trim() === owner && senderIsOwners) return null;
     return new HandoffError(403, { error: 'plan_owner_only',
         message: `${planNotice(row.profile_name, row.auth_mode, !!owner)} A handoff reaches it only inside work its plan owner started.` });

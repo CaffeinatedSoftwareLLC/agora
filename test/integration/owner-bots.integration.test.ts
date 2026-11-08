@@ -538,8 +538,8 @@ describe('no relay through agents others can wake', () => {
 
 /** owner_bots adds to #361; it never takes away (here: a ChatGPT plan whose owner isn't the bot's owner). */
 describe('owner_bots is a superset of owner_only', () => {
-    it("a siwc plan owner's sessions hand off as under #361, though the bot belongs to the server owner", async () => {
-        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'siwc', plan_owner_id = $2 WHERE id = $1`, [alpha.profileId, member.userId]);
+    it("a siwc plan owner's two sessions hand off as under #361, though the bots belong to the server owner", async () => {
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'siwc', plan_owner_id = $2 WHERE id = ANY($1)`, [[alpha.profileId, beta.profileId], member.userId]);
         try {
             const sa = await startSession(alpha, member.userId);
             await startSession(beta, member.userId);
@@ -552,15 +552,63 @@ describe('owner_bots is a superset of owner_only', () => {
             await post(beta.auth, '@alpha deploy it');
             expect(await inbox(sa)).toHaveLength(2);
         } finally {
-            await ctx.db.query(`UPDATE agent_profiles SET plan_owner_id = NULL WHERE id = $1`, [alpha.profileId]);
+            await ctx.db.query(`UPDATE agent_profiles SET plan_owner_id = NULL WHERE id = ANY($1)`, [[alpha.profileId, beta.profileId]]);
         }
     });
 
-    it("another person's bot in a session the owner started hands off as under #361", async () => {
+    it("another person's bot in a session the owner started hands off as under #361, only with its run's own token", async () => {
         const sa = await startSession(alpha);
         await startSession(gamma);
         const start = await post(gamma.auth, START('gamma', 'alpha'));
         expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+        // Its owner's personal token, posting as that session: refused
+        const theirs = await mint(gamma, director);
+        const since = mark();
+        await reply(theirs.auth, start.id, TURN('alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+    });
+});
+
+/**
+ * #361's hosted branch counts a session the plan owner started only for its own run's posts
+ * (its agent host's or box's token) and only on a profile nobody but that plan owner can wake.
+ */
+describe('#361 hosted authors', () => {
+    it('an owner-started API-key agent in a box (a director can wake it): its START and handoff offer are refused, in both settings', async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(beta, 'api_key');
+        const sa = await startSession(alpha);
+        await startSession(beta);
+        for (const wakes of ['owner_bots', 'owner_only']) {
+            await ctx.db.query(`UPDATE servers SET subscription_wakes = $2 WHERE id = $1`, [serverId, wakes]);
+            const since = mark();
+            await post(beta.auth, START('beta', 'alpha'));
+            expect(await inbox(sa)).toEqual([]);
+            expect(await notices(since)).toEqual([NOTICE('alpha')]);
+            const parent = await post(owner.auth, `Fix it (${wakes})`);
+            const offer = await ctx.request.post(`/channels/${channelId}/handoffs`).set(beta.auth).send({ threadId: parent.id, to: 'alpha', summary: 'x' });
+            expect(offer.status, JSON.stringify(offer.body)).toBe(403);
+            expect(offer.body.error).toBe('plan_owner_only');
+        }
+    });
+
+    it("a TURN on an Administrator's token, posted as the owner's owner-started session, is refused in both settings", async () => {
+        const sa = await startSession(alpha);
+        await startSession(beta);
+        const start = await post(beta.auth, START('beta', 'alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+        const adminMinted = await mint(beta, admin);
+        for (const wakes of ['owner_bots', 'owner_only']) {
+            await ctx.db.query(`UPDATE servers SET subscription_wakes = $2 WHERE id = $1`, [serverId, wakes]);
+            const since = mark();
+            await reply(adminMinted.auth, start.id, TURN('alpha'));
+            expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+            expect(await notices(since)).toEqual([NOTICE('alpha')]);
+        }
+        // The run's own token still hands off
+        const back = await reply(beta.auth, start.id, TURN('alpha'));
+        expect((await inbox(sa)).map(r => r.message_id)).toEqual([start.id, back.id]);
     });
 });
 

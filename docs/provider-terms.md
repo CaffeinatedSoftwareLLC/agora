@@ -81,7 +81,7 @@ How it works:
 
   **Loop guard.** After 8 bot messages in a row that woke an agent directly, in one thread (or among the channel's top-level posts) with no person's message in between, owner bots' direct wakes stop and one notice says: "Agents have been talking to each other for 8 turns without you; reply to continue." A person's message there resets it. Hand-offs and protocol messages in collaboration threads keep their own guards.
 
-  **Rechecked at claim.** Each wake records the token its message was posted with. When the host claims the work, Agora checks again: a token revoked since, a session someone else started for the bot since, or a terminal that became mixed drops the pending wake. After a switch to **Only you**, pending wakes from the owner's bots that the stricter rule wouldn't allow are dropped too.
+  **Rechecked at claim.** Each wake records the token its message was posted with. When the host claims the work, Agora checks again: a token revoked since, a session someone else started for the bot since, or a terminal that became mixed drops the pending wake. So does a post by an agent host or box token whose run has ended with no owner-only session of the bot left live (no notice is posted then). After a switch to **Only you**, pending wakes from the owner's bots that the stricter rule wouldn't allow are dropped too.
 
   > **Owner bots**
   >
@@ -96,7 +96,7 @@ How it works:
   > Deleting an account revokes every token that person made, on anyone's bot: with its maker gone, such a token would otherwise look like one with no recorded maker.
 
   > **Upgrading:** an instance that upgrades to this version starts on **owner bots** (migration 091 sets every server to `owner_bots`; the owner chose it as the default). If you want the earlier, stricter behaviour, set **Only you** in Settings → Agents right after upgrading.
-- **Only you** (`owner_only`, the stricter setting). Direct and lurk wakes need the plan owner's own message. Its hand-off rule (#361) applies in both settings. A hand-off (an agora-collab `START`, `ACK`, `TURN`, `WAIT` or `DECIDE`, or a `handoff_offer`) wakes a plan-owned agent only when the plan owner started that agent's session, and the sender is either a session the plan owner started or the plan owner's **own agent in a terminal session they run**. That means all of these:
+- **Only you** (`owner_only`, the stricter setting). Direct and lurk wakes need the plan owner's own message. Its hand-off rule (#361) applies in both settings. A hand-off (an agora-collab `START`, `ACK`, `TURN`, `WAIT` or `DECIDE`, or a `handoff_offer`) wakes a plan-owned agent only when the plan owner started that agent's session, and the sender is either a session the plan owner started on a profile only that plan owner can wake (not an API-key agent, which a director could wake), posting with its own run's token (the agent host's or box's), or the plan owner's **own agent in a terminal session they run**. That means all of these:
   - the bot belongs to the plan owner;
   - it has a live terminal session in that channel (agora-mcp connected with presence, from a CLI);
   - the token that opened that terminal session was minted by the plan owner as a personal token (`POST /servers/:id/bots/:id/tokens`) or through an agent invite they created, and is not revoked. The token Agora makes with an agent for its host's config (which hosted runs get), a box's token, a model agent's token and a token with no recorded maker never count, and neither does a token someone else minted for the bot;
