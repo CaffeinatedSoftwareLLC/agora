@@ -232,84 +232,59 @@ describe('token badges: who each token counts as', () => {
   const ME = 'U'.padEnd(26, 'M');
   const OTHER = 'U'.padEnd(26, 'O');
   const base = { lastUsedAt: null, createdAt: '2026-11-01T00:00:00Z', revokedAt: null };
+  /** As the server sends them to the bot's owner: countsAsYou on a personal or invite token no other person made. */
   const tokens = (): BotToken[] => [
     { ...base, id: 'T1', name: 'laptop', purpose: 'personal', createdBy: ME, createdByName: 'me', countsAsYou: true },
     { ...base, id: 'T2', name: 'admin made', purpose: 'personal', createdBy: OTHER, createdByName: 'ada', countsAsYou: false },
     { ...base, id: 'T3', name: 'agent host', purpose: 'host', createdBy: ME, createdByName: 'me', countsAsYou: false },
     { ...base, id: 'T4', name: 'box', purpose: 'box', createdBy: null, createdByName: null, countsAsYou: false },
-    { ...base, id: 'T5', name: 'model agent (server)', purpose: 'model', createdBy: ME, createdByName: 'me', countsAsYou: false },
-    { ...base, id: 'T6', name: 'old terminal', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false,
-      madeBeforeMakers: true, lastUsedAt: '2026-10-30T00:00:00Z', lastUsedClient: 'claude-code' },
-    { ...base, id: 'T7', name: 'orphan', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: false, madeBeforeMakers: false },
+    { ...base, id: 'T7', name: 'model agent (server)', purpose: 'model', createdBy: ME, createdByName: 'me', countsAsYou: false },
+    { ...base, id: 'T5', name: 'old terminal', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: true,
+      lastUsedAt: '2026-10-30T00:00:00Z', lastUsedClient: 'claude-code' },
+  ];
+  /** The same tokens as an administrator sees them on someone else's bot: nothing counts as them. */
+  const asAdmin = (): BotToken[] => [
+    ...tokens().map(t => ({ ...t, countsAsYou: false })),
+    { ...base, id: 'T6', name: 'mine for them', purpose: 'personal', createdBy: ME, createdByName: 'me', countsAsYou: false },
   ];
 
   async function openBot(ownerId: string, list: BotToken[] = tokens()) {
     useAuthStore.setState({ user: { id: ME, username: 'me' } });
     vi.spyOn(botApi, 'get').mockImplementation(async (_s, id) => ({ ...detail(bots.find(b => b.id === id)!), ownerId, canManageTokens: true }));
-    const listTokens = vi.spyOn(botApi, 'listTokens').mockResolvedValue(list);
+    vi.spyOn(botApi, 'listTokens').mockResolvedValue(list);
     render(<MemoryRouter><BotManagement /></MemoryRouter>);
     fireEvent.click(await screen.findByText('bot-1999'));
     await screen.findByText('old terminal');
-    return { listTokens };
   }
   const row = (name: string) => screen.getByText(name).closest('[data-testid="bot-token"]') as HTMLElement;
   const badge = (name: string) => within(row(name)).getByTestId('token-badge');
 
-  it('labels each token by purpose and maker, with what it means in the tooltip', async () => {
+  it('on your own bot your personal tokens count as you, agent host and box tokens only in your own runs, a model agent token never', async () => {
     await openBot(ME);
-    expect(badge('laptop')).toHaveTextContent('Counts as you');
-    expect(badge('laptop')).toHaveAttribute('title', expect.stringContaining('wake subscription agents you started'));
-    expect(badge('admin made')).toHaveTextContent('Made by ada');
-    expect(badge('agent host')).toHaveTextContent('Agora host token');
-    expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining('never counts'));
-    expect(badge('box')).toHaveTextContent('Box token');
+    for (const name of ['laptop', 'old terminal']) {
+      expect(badge(name)).toHaveTextContent('Counts as you');
+      expect(badge(name)).toHaveAttribute('title', expect.stringContaining('wake subscription agents you started'));
+    }
+    expect(badge('agent host')).toHaveTextContent('Your own runs only');
+    expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining("An API-key agent's runs never count"));
+    expect(badge('box')).toHaveTextContent('Your own runs only');
     expect(badge('model agent (server)')).toHaveTextContent('Model agent token');
-    expect(badge('old terminal')).toHaveTextContent('Unknown maker (made before Agora recorded token makers)');
-    // Made since makers were recorded, with no maker: its maker's account is gone
-    expect(badge('orphan')).toHaveTextContent("Maker's account was deleted");
-    expect(badge('orphan')).toHaveAttribute('title', expect.stringContaining('nobody can claim it'));
-    // Only the legacy personal token can be claimed
-    expect(screen.getAllByRole('button', { name: 'Claim as mine' })).toHaveLength(1);
-    expect(within(row('old terminal')).getByRole('button', { name: 'Claim as mine' })).toBeInTheDocument();
-  });
-
-  it('claims after the warning, then shows the badge the server works out', async () => {
-    const { listTokens } = await openBot(ME);
-    const claim = vi.spyOn(botApi, 'claimToken').mockResolvedValue({ claimed: true, tokenId: 'T6' });
-    fireEvent.click(within(row('old terminal')).getByRole('button', { name: 'Claim as mine' }));
-    // The dialog names the token: name, when it was made, the client that last used it
-    const message = screen.getByText(/Only claim a token you created yourself/).textContent;
-    expect(message).toContain(`"old terminal": Made ${new Date('2026-11-01T00:00:00Z').toLocaleDateString()}, last used by claude-code.`);
-    expect(message).toContain('Only claim a token you created yourself and that only your own terminal uses: not one pasted into an agora-host config (botTokens), a CI job, or given to anyone else. Whoever holds it can wake your subscription agents.');
-    // Cancel claims nothing
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(claim).not.toHaveBeenCalled();
-    expect(screen.queryByText(/Only claim a token you created yourself/)).toBeNull();
-
-    fireEvent.click(within(row('old terminal')).getByRole('button', { name: 'Claim as mine' }));
-    listTokens.mockResolvedValue(tokens().map(t => t.id === 'T6' ? { ...t, createdBy: ME, createdByName: 'me', countsAsYou: true } : t));
-    const dialogButtons = screen.getAllByRole('button', { name: 'Claim as mine' });
-    fireEvent.click(dialogButtons[dialogButtons.length - 1]);
-    await waitFor(() => expect(badge('old terminal')).toHaveTextContent('Counts as you'));
-    expect(claim).toHaveBeenCalledWith('server', bots[1999].id, 'T6');
-    expect(screen.queryByText(/Only claim a token you created yourself/)).toBeNull();
+    expect(badge('model agent (server)')).toHaveAttribute('title', expect.stringContaining('never count as anyone'));
+    expect(badge('admin made')).toHaveTextContent('Made by ada');
+    expect(badge('admin made')).toHaveAttribute('title', expect.stringContaining('never wakes subscription agents'));
+    // Nothing to claim any more
     expect(screen.queryByRole('button', { name: 'Claim as mine' })).toBeNull();
   });
 
-  it("offers no claim on someone else's bot (an administrator viewing it)", async () => {
-    await openBot(OTHER);
-    expect(badge('old terminal')).toHaveTextContent('Unknown maker (made before Agora recorded token makers)');
-    expect(badge('old terminal')).toHaveAttribute('title', expect.stringContaining("Only the bot's owner can claim it"));
+  it("on someone else's bot (an administrator viewing it): their tokens count as their owner, the one you made counts as no one", async () => {
+    await openBot(OTHER, asAdmin());
+    expect(badge('agent host')).toHaveTextContent('Made by you');
+    expect(badge('old terminal')).toHaveTextContent('Counts as its owner');
+    expect(badge('old terminal')).toHaveAttribute('title', expect.stringContaining("count as the bot's owner"));
+    expect(badge('box')).toHaveTextContent("Its owner's own runs only");
+    expect(badge('mine for them')).toHaveTextContent('Made by you');
+    expect(badge('mine for them')).toHaveAttribute('title', expect.stringContaining('counts as no one'));
+    expect(badge('admin made')).toHaveTextContent('Counts as its owner');
     expect(screen.queryByRole('button', { name: 'Claim as mine' })).toBeNull();
-  });
-
-  it('shows a failed claim and keeps the token unclaimed', async () => {
-    await openBot(ME);
-    vi.spyOn(botApi, 'claimToken').mockRejectedValue(new ApiError(409, 'already_claimed'));
-    fireEvent.click(within(row('old terminal')).getByRole('button', { name: 'Claim as mine' }));
-    const dialogButtons = screen.getAllByRole('button', { name: 'Claim as mine' });
-    fireEvent.click(dialogButtons[dialogButtons.length - 1]);
-    expect(await screen.findByText('already_claimed')).toBeInTheDocument();
-    expect(badge('old terminal')).toHaveTextContent('Unknown maker');
   });
 });

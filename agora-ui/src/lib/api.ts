@@ -194,15 +194,13 @@ export interface BotToken {
    * 'host' (an agent host's config), 'box', 'model' (a model agent's server-side token).
    */
   purpose?: 'personal' | 'invite' | 'host' | 'box' | 'model';
-  /** Who minted it; null when no maker is on record (see madeBeforeMakers). */
+  /** Who minted it; null when no person is on record (Agora made it, or it predates migration 090). */
   createdBy?: string | null;
   createdByName?: string | null;
   /**
-   * Made before Agora recorded token makers (migration 090). A makerless token made after that
-   * lost its maker to a deleted account and can't be claimed.
+   * An agent posting with this token counts as you for the plan-owner rule's owner bots
+   * (docs/provider-terms.md): a live token on your own bot that no other person made.
    */
-  madeBeforeMakers?: boolean;
-  /** A terminal agent on this token counts as you for the plan-owner rule (docs/provider-terms.md). */
   countsAsYou?: boolean;
 }
 
@@ -260,10 +258,6 @@ export const botApi = {
 
   clearTokenBinding: (serverId: string, botId: string, tokenId: string) =>
     api.delete<{ cleared: true }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}/binding`),
-
-  /** Record yourself as the maker of a legacy personal token on your own bot. */
-  claimToken: (serverId: string, botId: string, tokenId: string) =>
-    api.post<{ claimed: true; tokenId: string }>(`/servers/${serverId}/bots/${botId}/tokens/${tokenId}/claim`),
 
   grantChannel: (channelId: string, botId: string) =>
     api.post<{ botId: string; channelId: string }>(`/channels/${channelId}/bots/${botId}`),

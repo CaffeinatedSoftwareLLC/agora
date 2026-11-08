@@ -7,7 +7,6 @@ import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Not
 import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
-import { madeBeforeMakersSql } from '../lib/token-provenance';
 
 /**
  * Session commands (docs/planning/agent-sessions-wbs.md, "Commands"): /start, /end,
@@ -35,12 +34,15 @@ export class CommandError extends Error {
 }
 
 /**
- * Why a terminal session does or doesn't count as its bot owner's for the plan-owner rule
- * (docs/provider-terms.md, src/lib/agent-sessions.ts authorIsOwners): 'ok' when its token is a
- * live personal or invite token minted by the bot's owner and no other token shares it.
+ * Why a terminal session does or doesn't count as its bot owner's for the plan-owner rule's
+ * owner bots (docs/provider-terms.md, src/lib/provider-terms.ts ownerBotOf): 'ok' when the bot
+ * has an owner, no other token shares the session, the owner started it, and it has a live
+ * personal or invite token ('no_token': none on record, or revoked; 'agent_token': an agent
+ * host's, box's or model agent's token) that no other person made. With the server set to
+ * 'owner_only' (#361) the bot's owner must have made the token ('owner_only_token' when not).
  */
-export type OwnerTokenState = 'ok' | 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner'
-    | 'unknown_maker' | 'maker_deleted' | 'other_maker';
+export type OwnerTokenState = 'ok' | 'mixed' | 'other_bot_owner' | 'started_by_other' | 'no_token' | 'agent_token'
+    | 'other_maker' | 'owner_only_token';
 
 /**
  * `viewerId`: the caller, so a terminal session can say whether its bot is theirs. Without it
@@ -69,7 +71,9 @@ export function sessionJson(r: any, viewerId?: string) {
             statusNote: r.status_note ?? null, statusAt: r.status_at ?? null,
             // Its hand-offs count as the bot owner's (docs/provider-terms.md); the reason when not
             ownerToken: r.owner_token_state === 'ok',
-            ownerTokenReason: r.owner_token_state === 'ok' ? null : (r.owner_token_state ?? 'no_token') as OwnerTokenState,
+            ownerTokenReason: r.owner_token_state === 'ok' ? null : (r.owner_token_state ?? 'other_bot_owner') as OwnerTokenState,
+            // The server's setting: with 'owner_only' a counting terminal wakes subscription agents by hand-offs only
+            subscriptionWakes: r.subscription_wakes ?? null,
             ...(viewerId ? { ownedByYou: !!r.bot_owner_id && r.bot_owner_id.trim() === viewerId.trim() } : {}),
         } : {}),
     };
@@ -92,15 +96,18 @@ export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profi
         u.bot_owner_id,
         CASE WHEN s.kind <> 'terminal' THEN NULL
              WHEN s.token_mixed THEN 'mixed'
-             ELSE COALESCE((SELECT CASE WHEN t.revoked_at IS NOT NULL THEN 'revoked'
-                                        WHEN t.purpose NOT IN ('personal', 'invite') THEN t.purpose
-                                        WHEN u.bot_owner_id IS NULL THEN 'no_owner'
-                                        WHEN t.created_by IS NULL AND ${madeBeforeMakersSql('t')} THEN 'unknown_maker'
-                                        WHEN t.created_by IS NULL THEN 'maker_deleted'
-                                        WHEN t.created_by <> u.bot_owner_id THEN 'other_maker'
+             WHEN u.bot_owner_id IS NULL THEN 'other_bot_owner'
+             WHEN s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id THEN 'started_by_other'
+             ELSE COALESCE((SELECT CASE WHEN t.purpose NOT IN ('personal', 'invite') THEN 'agent_token'
+                                        WHEN t.created_by IS NOT NULL AND t.created_by <> u.bot_owner_id THEN 'other_maker'
+                                        -- 'Only you' (owner_only, #361): only a token the bot's owner made counts
+                                        WHEN srv_wakes.subscription_wakes = 'owner_only' AND t.created_by IS NULL THEN 'owner_only_token'
                                         ELSE 'ok' END
-                            FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id), 'no_token') END AS owner_token_state
-    FROM agent_sessions s LEFT JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id`;
+                            FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id AND t.revoked_at IS NULL), 'no_token')
+             END AS owner_token_state,
+        srv_wakes.subscription_wakes
+    FROM agent_sessions s LEFT JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id
+    LEFT JOIN servers srv_wakes ON srv_wakes.id = s.server_id`;
 
 export async function profileByName(db: any, channelId: string, name: string) {
     // Lock order is profile → session (as in profile edits and completions): take the

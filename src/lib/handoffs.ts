@@ -2,7 +2,7 @@ import { generateUlid } from '../utils/ulid';
 import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { canViewChannel } from './channel-access';
 import { noticePathList } from './file-reservations';
-import { PLAN_OWNER_SQL, planNotice, WAKE_AUTH_SQL } from './provider-terms';
+import { ownerBotOf, PLAN_OWNER_SQL, planNotice, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 
 /**
  * Ownership handoffs between agents (#84, docs/agent-sessions.md "Handoffs").
@@ -199,35 +199,52 @@ async function resolveRecipient(db: any, serverId: string, name: string, senderB
 
 /**
  * The plan-owner rule for a handoff: a recipient on a personal plan takes it only when its
- * session was started (or last resumed) by that plan's owner, and the sender's session was
- * too, or the sender is that owner's own bot in a terminal session opened with a live personal
- * or invite token the owner minted. At offer time `senderTokenId` is the token the offer was
- * made with, and must be that one; at accept time (undefined) the offer already checked it.
- * Returns the refusal, or null.
+ * session was started (or last resumed) by that plan's owner, and the sender counts as them.
+ * With the server's subscription_wakes 'owner_bots' (default): the sender is the plan owner's
+ * own bot (ownerBotOf at offer time, with the token the offer was made with; at accept time
+ * the sender's session must still not be someone else's run or a mixed terminal). With
+ * 'owner_only': the sender's session was started by the plan owner too, or the sender is that
+ * owner's own bot in a terminal session opened with a live personal or invite token the owner
+ * minted. At offer time `senderTokenId` is the token the offer was made with, and must be that
+ * one; at accept time (undefined) the offer already checked it. Returns the refusal, or null.
  */
 async function planRefusal(db: any, fromSessionId: string, toSessionId: string, senderTokenId?: string | null): Promise<HandoffError | null> {
     const row = (await db.query(
         `SELECT t.kind, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode, ${PLAN_OWNER_SQL} AS plan_owner_id,
-                t.started_by AS to_started_by, f.started_by AS from_started_by,
-                f.kind AS from_kind, f.token_id AS from_token, fu.bot_owner_id AS from_bot_owner,
-                CASE WHEN ft.revoked_at IS NULL AND ft.purpose IN ('personal', 'invite') THEN ft.created_by END AS from_token_minted_by
+                t.started_by AS to_started_by, f.started_by AS from_started_by, srv.subscription_wakes,
+                f.kind AS from_kind, f.token_id AS from_token, f.token_mixed AS from_token_mixed, f.bot_id AS from_bot,
+                f.channel_id AS from_channel, fu.bot_owner_id AS from_bot_owner,
+                CASE WHEN ft.revoked_at IS NULL AND ft.purpose IN ('personal', 'invite') THEN ft.created_by END AS from_token_minted_by,
+                ${WAKE_AUTH_SQL.replace(/\bp\./g, 'fp.')} AS from_auth_mode, ${PLAN_OWNER_SQL.replace(/\bp\./g, 'fp.')} AS from_plan_owner,
+                (SELECT ot.purpose FROM bot_tokens ot WHERE ot.id = $3::char(26) AND ot.bot_id = f.bot_id AND ot.revoked_at IS NULL) AS offer_token_purpose
          FROM agent_sessions t
          LEFT JOIN agent_profiles p ON p.id = t.profile_id
          JOIN servers srv ON srv.id = t.server_id
          JOIN agent_sessions f ON f.id = $2
+         LEFT JOIN agent_profiles fp ON fp.id = f.profile_id
          JOIN users fu ON fu.id = f.bot_id
          LEFT JOIN bot_tokens ft ON ft.id = f.token_id AND ft.bot_id = f.bot_id
          WHERE t.id = $1`,
-        [toSessionId, fromSessionId]
+        [toSessionId, fromSessionId, senderTokenId ?? null]
     )).rows[0];
     // A terminal recipient is its user's own CLI: nothing here starts a run on anyone's plan
     if (!row || row.kind !== 'hosted' || row.auth_mode === 'api_key') return null;
     const owner = row.plan_owner_id?.trim() ?? null;
-    // A terminal sender was live when it offered (senderSession); accepting later doesn't need it still
+    if (subscriptionWakesOf(row.subscription_wakes) === 'owner_bots') {
+        // The plan owner's own bot: checked with the offer's token when offering; when accepting,
+        // its session must still be its owner's (not a run someone else started, not mixed)
+        const ownersBot = !!owner && row.from_bot_owner?.trim() === owner && (senderTokenId === undefined
+            ? !row.from_token_mixed && (row.from_started_by === null || row.from_started_by.trim() === owner)
+            : await ownerBotOf(db, { botId: row.from_bot.trim(), tokenId: senderTokenId, channelId: row.from_channel.trim() }) === owner);
+        if (ownersBot && row.to_started_by?.trim() === owner) return null;
+    }
+    // #361, in either setting (owner_bots adds to it). A terminal sender was live when it offered (senderSession); accepting later doesn't need it still.
+    // A hosted sender counts only on a profile only this plan's owner can wake, and (offering) with its own run's token
     const senderIsOwners = row.from_kind === 'terminal'
         ? row.from_bot_owner?.trim() === owner && row.from_token_minted_by?.trim() === owner
             && (senderTokenId === undefined || (!!senderTokenId && row.from_token?.trim() === senderTokenId))
-        : row.from_started_by?.trim() === owner;
+        : row.from_started_by?.trim() === owner && row.from_auth_mode !== 'api_key' && row.from_plan_owner?.trim() === owner
+            && (senderTokenId === undefined || row.offer_token_purpose === 'host' || row.offer_token_purpose === 'box');
     if (owner && row.to_started_by?.trim() === owner && senderIsOwners) return null;
     return new HandoffError(403, { error: 'plan_owner_only',
         message: `${planNotice(row.profile_name, row.auth_mode, !!owner)} A handoff reaches it only inside work its plan owner started.` });
@@ -303,9 +320,9 @@ export async function createOffer(db: any, botId: string, channelId: string, inp
     // Wake the recipient (a terminal agent reads the thread itself)
     if (target.kind === 'hosted') {
         await db.query(
-            `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason) VALUES ($1, $2, $3, $4, 'handoff')
+            `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason, author_token_id) VALUES ($1, $2, $3, $4, 'handoff', $5)
              ON CONFLICT (session_id, message_id) DO NOTHING`,
-            [generateUlid(), target.id, messageId, threadId]
+            [generateUlid(), target.id, messageId, threadId, tokenId]
         );
     }
     return offer;

@@ -193,20 +193,30 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     expect(ownerTokenNote(hosted())).toBeNull();
     expect(ownerTokenNote(terminal())).toBeNull(); // a server that doesn't say
     expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: true })))
-      .toEqual({ counts: true, yours: true, text: 'Its hand-offs wake subscription agents you started.' });
+      .toEqual({ counts: true, yours: true, text: 'Its messages and hand-offs wake subscription agents you started.' });
     expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: false }))?.text)
-      .toBe('Counts as its owner: its hand-offs wake subscription agents the owner started.');
-    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'host', ownedByYou: true }))?.text)
-      .toBe("Hand-offs from this terminal won't wake subscription agents: it uses the agent host's token, which never counts.");
-    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: true }))?.text)
-      .toBe("Hand-offs from this terminal won't wake subscription agents: its token was made before Agora recorded token makers (claim it in Settings → Bots if you made it).");
-    // Only the bot's owner can claim, so only they get the hint
-    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: false }))?.text)
-      .toBe("Hand-offs from this terminal won't wake subscription agents: its token was made before Agora recorded token makers.");
-    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'maker_deleted', ownedByYou: true }))?.text)
-      .toBe("Hand-offs from this terminal won't wake subscription agents: its token's maker deleted their account.");
+      .toBe('Counts as its owner: its messages and hand-offs wake subscription agents the owner started.');
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'other_maker', ownedByYou: true }))?.text)
+      .toBe("This terminal won't wake subscription agents: its token was made by someone other than the bot's owner.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'started_by_other', ownedByYou: true }))?.text)
+      .toBe("This terminal won't wake subscription agents: someone other than the bot's owner started this session.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'other_bot_owner', ownedByYou: false }))?.text)
+      .toBe("This terminal won't wake subscription agents: the bot has no owner.");
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'mixed' }))?.text)
-      .toBe("Hand-offs from this terminal won't wake subscription agents: two different tokens share this terminal session.");
+      .toBe("This terminal won't wake subscription agents: two different tokens share this terminal session.");
+    // With Only you set, the strict #361 rule: only hand-offs count, and only on a personal or invite token its owner made
+    expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: true, subscriptionWakes: 'owner_only' }))?.text)
+      .toBe('Its hand-offs wake subscription agents you started.');
+    expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: false, subscriptionWakes: 'owner_only' }))?.text)
+      .toBe('Counts as its owner: its hand-offs wake subscription agents the owner started.');
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'owner_only_token', ownedByYou: true, subscriptionWakes: 'owner_only' }))?.text)
+      .toBe("This terminal won't wake subscription agents: Settings → Agents is set to Only you, and its token isn't a personal or agent invite token its owner made.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'agent_token', ownedByYou: true }))?.text)
+      .toBe("This terminal won't wake subscription agents: it uses an agent host's, box's or model agent's token; give your terminal a personal token.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'no_token', ownedByYou: true }))?.text)
+      .toBe("This terminal won't wake subscription agents: no live token is on record for it (revoked, or reconnect its agora-mcp).");
+    // A reason an older server sent that no longer exists reads as no owner, never as counting
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker' as never }))?.counts).toBe(false);
   });
 
   it('the chip and its sheet show "counts as you" to the bot owner, with the reason in the tooltip', async () => {
@@ -214,11 +224,11 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: 'claude: terminal session, working, counts as you. Open session details' });
-    expect(chip.getAttribute('title')).toContain('Its hand-offs wake subscription agents you started.');
+    expect(chip.getAttribute('title')).toContain('Its messages and hand-offs wake subscription agents you started.');
     expect(screen.getByTestId('owner-token').textContent).toContain('counts as you');
     fireEvent.click(chip);
     await screen.findByRole('dialog');
-    expect(screen.getByTestId('terminal-owner-token').textContent).toBe('Counts as you. Its hand-offs wake subscription agents you started.');
+    expect(screen.getByTestId('terminal-owner-token').textContent).toBe('Counts as you. Its messages and hand-offs wake subscription agents you started.');
   });
 
   it("a terminal on someone else's token says it doesn't count, and why", async () => {
@@ -226,7 +236,7 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: "claude: terminal session, working, doesn't count as you. Open session details" });
-    expect(chip.getAttribute('title')).toContain("Hand-offs from this terminal won't wake subscription agents: its token was made by someone other than the bot's owner.");
+    expect(chip.getAttribute('title')).toContain("This terminal won't wake subscription agents: its token was made by someone other than the bot's owner.");
     expect(screen.getByTestId('owner-token').textContent).toContain("doesn't count as you");
   });
 
@@ -235,7 +245,7 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: 'claude: terminal session, working. Open session details' });
-    expect(chip.getAttribute('title')).toContain('Counts as its owner: its hand-offs wake subscription agents the owner started.');
+    expect(chip.getAttribute('title')).toContain('Counts as its owner: its messages and hand-offs wake subscription agents the owner started.');
     expect(screen.queryByTestId('owner-token')).toBeNull();
   });
 });

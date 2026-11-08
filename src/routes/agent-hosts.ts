@@ -15,6 +15,7 @@ import { attachProjectDocs, verificationSchema } from '../lib/channel-projects';
 import { storage } from '../lib/storage';
 import { config } from '../config';
 import { MODEL_PATTERN } from '../lib/boxes/service';
+import { serverSubscriptionWakes, SUBSCRIPTION_WAKES, type SubscriptionWakes } from '../lib/provider-terms';
 
 /**
  * Agent hosts and profiles (docs/planning/agent-sessions-wbs.md).
@@ -205,6 +206,48 @@ export async function agentHostRoutes(app: FastifyInstance) {
         ));
         if (row.rows.length === 0) return reply.status(404).send({ error: 'Host not found' });
         return reply.status(204).send();
+    });
+
+    // ─── Server-wide agent settings ───
+
+    // GET /servers/:serverId/agent-settings → 200 { subscriptionWakes } (any member)
+    // subscriptionWakes: who besides the plan owner wakes subscription and siwc agents
+    // (src/lib/provider-terms.ts, docs/provider-terms.md): 'owner_bots' (default) or 'owner_only'.
+    app.get('/servers/:serverId/agent-settings', async (request, reply) => {
+        const { serverId } = request.params as any;
+        const db = request.dbClient!;
+        const member = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [serverId, request.userId]);
+        if (member.rows.length === 0) return reply.status(403).send({ error: 'forbidden' });
+        return reply.send({ subscriptionWakes: await asService(db, () => serverSubscriptionWakes(db, serverId)) });
+    });
+
+    // PATCH /servers/:serverId/agent-settings { subscriptionWakes } → 200 { subscriptionWakes } (owner)
+    // Applies from the next message routed and the next claim; audit agent_settings_update.
+    app.patch('/servers/:serverId/agent-settings', {
+        schema: {
+            body: {
+                type: 'object', required: ['subscriptionWakes'], additionalProperties: false,
+                properties: { subscriptionWakes: { type: 'string', enum: [...SUBSCRIPTION_WAKES] } },
+            },
+        },
+    }, async (request, reply) => {
+        const serverId = await requireOwner(request, reply);
+        if (!serverId) return reply;
+        const db = request.dbClient!;
+        const { subscriptionWakes } = request.body as { subscriptionWakes: SubscriptionWakes };
+        const previous = await asService(db, async () => {
+            const before = await serverSubscriptionWakes(db, serverId);
+            await db.query('UPDATE servers SET subscription_wakes = $2 WHERE id = $1', [serverId, subscriptionWakes]);
+            return before;
+        });
+        if (previous !== subscriptionWakes) {
+            await db.query(
+                `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
+                 VALUES ($1, $2, $3, 'agent_settings_update', 'server', $2, $4)`,
+                [generateUlid(), serverId, request.userId, JSON.stringify({ subscriptionWakes, previous })]
+            );
+        }
+        return reply.send({ subscriptionWakes });
     });
 
     // ─── Profiles (owner) ───

@@ -5,7 +5,7 @@ import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, WAKE_AUTH_SQL } from './provider-terms';
+import { consumeRunApproval, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
@@ -158,6 +158,12 @@ export interface ClaimResult {
         messageId: string; threadId: string | null; reason: string;
         authorId: string | null; authorName: string | null; authorBot: boolean;
         authority: 'owner' | 'director' | null; content: string | null; createdAt: string;
+        /**
+         * Plan-owned sessions only: the author is the plan owner's own bot and the server's
+         * subscription_wakes is 'owner_bots', so its direct and lurk wakes count as the plan
+         * owner's (provider-terms.ts). The host's checkTerms reads it.
+         */
+        ownerBot?: boolean;
     }>;
     /** Handoff offers in this batch addressed to the session, and handoffs that made it a thread's owner (handoffs.ts). */
     handoffs: Array<{ offerId: string; threadId: string; from: string; status: 'pending' | 'accepted';
@@ -195,7 +201,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
                 COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
                 p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep,
                 ${WAKE_AUTH_SQL} AS auth_mode, p.run_approval, ${PLAN_OWNER_SQL} AS plan_owner_id,
-                (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner,
+                (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner, srv.subscription_wakes,
                 (SELECT t.title FROM task_cards t WHERE t.session_id = s.id) AS task_title
          FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
@@ -305,7 +311,9 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     // 4. Recheck each row; rows that fail are acknowledged without work
     const subscription = session.auth_mode !== 'api_key';
     const planOwnerId: string | null = session.plan_owner_id?.trim() ?? null;
-    const kept = await recheckRows(c, channelId, rows, subscription ? { startedByOwner: !!session.started_by_owner, planOwnerId } : null);
+    const kept = await recheckRows(c, channelId, rows, subscription
+        ? { startedByOwner: !!session.started_by_owner, planOwnerId, ownerBots: subscriptionWakesOf(session.subscription_wakes) === 'owner_bots' }
+        : null);
     // Turning lurk off invalidates pending passive work, including retry batches.
     for (let i = kept.length - 1; i >= 0; i--) {
         if (kept[i].row.reason === 'lurk' && !session.lurk_mode) kept.splice(i, 1);
@@ -415,14 +423,49 @@ async function botCanAct(c: PoolClient, botId: string, channelId: string): Promi
 }
 
 /**
- * `terms` is set for a plan-owned profile (provider-terms.ts): only the plan owner's own
- * messages, the plan owner's commands, and hand-offs inside a session they started count.
+ * #361 at claim time, for a hand-off or protocol wake by a bot on a plan-owned profile: the bot
+ * has a live hosted session in the channel the plan owner started, on a profile only that plan
+ * owner can wake (not api_key), and the post was made with that run's own token (the agent
+ * host's or box's); or a live terminal session
+ * there on the post's token (`tokenId`), not mixed, that is a live personal or invite token the
+ * plan owner made for their own bot.
  */
-async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms: { startedByOwner: boolean; planOwnerId: string | null } | null = null) {
+async function strictAuthorOk(c: PoolClient, botId: string, tokenId: string | null, channelId: string, owner: string): Promise<boolean> {
+    const row = await c.query(
+        `SELECT 1 FROM agent_sessions s
+         LEFT JOIN agent_profiles p ON p.id = s.profile_id
+         JOIN servers srv ON srv.id = s.server_id
+         WHERE s.bot_id = $1 AND s.channel_id = $3 AND s.state = 'live'
+           -- A hosted author: its own run's post (agent host or box token) on a profile only this plan's owner can wake
+           AND ((s.kind = 'hosted' AND s.started_by = $4 AND ${WAKE_AUTH_SQL} <> 'api_key' AND ${PLAN_OWNER_SQL} = $4
+                 AND EXISTS (SELECT 1 FROM bot_tokens ht WHERE ht.id = $2::char(26) AND ht.bot_id = $1 AND ht.revoked_at IS NULL
+                             AND ht.purpose IN ('host', 'box')))
+                OR (s.kind = 'terminal' AND NOT s.token_mixed AND $2::char(26) IS NOT NULL AND s.token_id = $2
+                    AND EXISTS (SELECT 1 FROM bot_tokens t JOIN users u ON u.id = t.bot_id
+                                WHERE t.id = $2 AND t.bot_id = $1 AND t.revoked_at IS NULL AND t.purpose IN ('personal', 'invite')
+                                  AND t.created_by = $4 AND u.bot_owner_id = $4)))
+         LIMIT 1`,
+        [botId, tokenId, channelId, owner]
+    );
+    return row.rows.length > 0;
+}
+
+/**
+ * `terms` is set for a plan-owned profile (provider-terms.ts): only the plan owner's own
+ * messages, the plan owner's commands, and hand-offs inside a session they started count; with
+ * `ownerBots` (subscription_wakes 'owner_bots') also every wake from the plan owner's own bots.
+ * The checks are rerun here with the post's token (agent_inbox.author_token_id): ownerBotOf for
+ * owner bots (a revoked token, a session someone else started since, or a terminal that became
+ * mixed drops the wake), and #361 (strictAuthorOk) for hand-offs and protocol messages, which
+ * after a switch to owner_only is the only rule left.
+ */
+async function recheckRows(c: PoolClient, channelId: string, rows: any[],
+                           terms: { startedByOwner: boolean; planOwnerId: string | null; ownerBots: boolean } | null = null) {
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
-                u.username, u.bot AS author_bot, m.system_event,
+                u.username, u.bot AS author_bot, u.bot_owner_id AS author_bot_owner,
+                (u.bot_paused_at IS NULL AND u.account_status = 'active') AS author_active, m.system_event,
                 -- A handoff offer card (src/lib/handoffs.ts) wakes its recipient while the offer is open,
                 -- and still on a retry after the recipient accepted it in the failed attempt
                 EXISTS (SELECT 1 FROM agent_handoffs h WHERE h.message_id = m.id
@@ -445,11 +488,20 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
     }
 
     const kept: Array<{ row: any; entry: ClaimResult['inbox'][number] }> = [];
+    const ownerBots = new Map<string, boolean>();
     for (const row of rows) {
         const m = byId.get(row.message_id.trim());
         if (!m || m.deleted_at) continue;
         const authority = authorities.get(m.id.trim()) ?? null;
-        if (row.reason === 'direct' && !authority) continue;
+        const tokenId: string | null = row.author_token_id?.trim() ?? null;
+        // The plan owner's own bot (owner bots): counts as them without can_direct, while active and unpaused
+        let ownerBot = false;
+        if (terms?.ownerBots && terms.planOwnerId && m.author_bot && m.author_active && m.author_bot_owner?.trim() === terms.planOwnerId) {
+            const key = `${m.author_id.trim()}:${tokenId}`;
+            if (!ownerBots.has(key)) ownerBots.set(key, await ownerBotOf(c, { botId: m.author_id.trim(), tokenId, channelId }) === terms.planOwnerId);
+            ownerBot = ownerBots.get(key)!;
+        }
+        if (row.reason === 'direct' && !authority && !ownerBot) continue;
         // A session notice from /start or /resume: no author, valid while the session is live
         if (row.reason === 'command' && m.author_id) continue;
         const offer = row.reason === 'handoff' && m.system_event === 'agent_handoff';
@@ -459,8 +511,14 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
         if (row.reason === 'delegate' && !m.author_bot) continue;
         if (terms) {
             if (!terms.startedByOwner || !terms.planOwnerId) continue;
-            if ((row.reason === 'direct' || row.reason === 'lurk') && (!authority || m.author_bot || m.author_id?.trim() !== terms.planOwnerId)) continue;
+            if (row.reason === 'direct' || row.reason === 'lurk') {
+                // The plan owner's own message, with authority; or their own bot's (owner bots)
+                if (m.author_bot ? !ownerBot : (!authority || m.author_id?.trim() !== terms.planOwnerId)) continue;
+            }
             if ((row.reason === 'handoff' || row.reason === 'protocol') && !m.author_bot) continue;
+            // A hand-off card is rechecked when it is accepted (handoffs.ts planRefusal)
+            if ((row.reason === 'handoff' || row.reason === 'protocol') && !offer && !ownerBot
+                && !await strictAuthorOk(c, m.author_id.trim(), tokenId, channelId, terms.planOwnerId)) continue;
         }
         kept.push({
             row,
@@ -474,6 +532,7 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[], terms:
                 authority,
                 content: m.content,
                 createdAt: new Date(m.created_at).toISOString(),
+                ...(terms ? { ownerBot } : {}),
             },
         });
     }

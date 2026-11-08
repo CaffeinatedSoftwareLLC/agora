@@ -337,6 +337,12 @@ describe('plan owner rule on the host', () => {
         const unbound = planClaim(); unbound.profile.planOwnerId = null;
         expect(() => checkTerms(local(), unbound)).toThrow(expect.objectContaining({ code: 'siwc_not_connected' }));
     });
+    it("runs for the plan owner's own bots only when the server marks them (ownerBot)", () => {
+        const mine = planClaim(); mine.inbox = [{ ...mine.inbox[0], reason: 'direct', authorBot: true, authorId: id(12), authority: 'director', ownerBot: true }];
+        expect(() => checkTerms(local(), mine)).not.toThrow();
+        const theirs = planClaim(); theirs.inbox = [{ ...theirs.inbox[0], reason: 'direct', authorBot: true, authorId: id(12), authority: 'director' }];
+        expect(() => checkTerms(local(), theirs)).toThrow(expect.objectContaining({ code: 'plan_owner_only' }));
+    });
 });
 
 describe('app-server conversation (fake app-server)', () => {

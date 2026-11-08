@@ -1,89 +1,57 @@
 import type { BotToken } from '../../lib/api';
 
 /**
- * The "who does this token count as" badge in Settings → Bots (docs/provider-terms.md, "Which
- * tokens count as you"). A terminal agent's hand-offs wake the owner's subscription agents only
- * when its token is a live personal or invite token the bot's owner made. The server says
- * whether that is the viewer (countsAsYou); the rest is labelled from purpose and maker.
+ * The "who does this token count as" badge in Settings → Bots (docs/provider-terms.md, "Owner
+ * bots"). A personal or invite token counts as the bot's owner when no other person made it:
+ * the owner made it, or it predates Agora recording makers. Then the agent's messages and
+ * hand-offs wake the owner's subscription agents (with Settings → Agents set to Only you, only
+ * hand-offs from a terminal, on a token the owner made). An agent host's or box's token counts
+ * only in runs only the owner can have caused; a model agent's token never counts. The server
+ * says whether a token counts as the viewer (countsAsYou); the rest is labelled here.
  */
 
-export type TokenBadgeTone = 'counts' | 'maker' | 'never' | 'unknown';
+export type TokenBadgeTone = 'counts' | 'owner' | 'never';
 
 export interface TokenBadge {
   label: string;
-  /** The tooltip: what the badge means for hand-offs. */
+  /** The tooltip: what the badge means for waking subscription agents. */
   title: string;
   tone: TokenBadgeTone;
-  /** The viewer owns the bot and may claim this legacy personal token. */
-  claimable: boolean;
 }
 
-export const UNKNOWN_MAKER = 'Unknown maker (made before Agora recorded token makers)';
-export const MAKER_DELETED = "Maker's account was deleted";
-
-export const CLAIM_WARNING =
-  'Only claim a token you created yourself and that only your own terminal uses: not one pasted into an agora-host config (botTokens), a CI job, or given to anyone else. Whoever holds it can wake your subscription agents.';
-
-/** The claim dialog's description of the token: name, when it was made, the client that last used it. */
-export function claimTokenSummary(token: BotToken): string {
-  const parts = [`Made ${new Date(token.createdAt).toLocaleDateString()}`];
-  parts.push(token.lastUsedClient ? `last used by ${token.lastUsedClient}` : token.lastUsedAt ? 'last used by an unnamed client' : 'never used');
-  return `"${token.name || 'Unnamed'}": ${parts.join(', ')}.`;
-}
-
-const NEVER: Record<'host' | 'box' | 'model', TokenBadge> = {
-  host: {
-    label: 'Agora host token', tone: 'never', claimable: false,
-    title: "Made with an agent for its host's config, which every hosted run gets. It never counts as anyone, so its hand-offs never wake subscription agents.",
-  },
-  box: {
-    label: 'Box token', tone: 'never', claimable: false,
-    title: "An agent box's token. It never counts as anyone, so its hand-offs never wake subscription agents.",
-  },
-  model: {
-    label: 'Model agent token', tone: 'never', claimable: false,
-    title: "A model agent's server-side token. It never counts as anyone, so its hand-offs never wake subscription agents.",
-  },
-};
+const RUNS_ONLY =
+  "Hosted runs post with it. They count as the bot's owner only while every live session of the bot is one only the owner can wake: a subscription or ChatGPT-plan agent the owner started, or an agent on the owner's machine. An API-key agent's runs never count, since others can wake it.";
 
 /** null for a revoked token, or one from a server that doesn't say what made it. */
 export function tokenBadge(token: BotToken, viewerId: string | undefined, botOwnerId: string | null): TokenBadge | null {
   if (token.revokedAt || !token.purpose) return null;
-  if (token.purpose === 'host' || token.purpose === 'box' || token.purpose === 'model') return NEVER[token.purpose];
-  const yourBot = !!viewerId && botOwnerId === viewerId;
+  if (token.purpose === 'model') {
+    return { label: 'Model agent token', tone: 'never',
+      title: 'A model agent answers any member, so its posts never count as anyone: they never wake subscription agents.' };
+  }
   if (token.countsAsYou) {
     return {
-      label: 'Counts as you', tone: 'counts', claimable: false,
-      title: 'You made this token for your own bot. A terminal agent using it counts as you: its hand-offs wake subscription agents you started.',
+      label: 'Counts as you', tone: 'counts',
+      title: 'A token on your own bot that no one else made. Agents using it count as you: they wake subscription agents you started.',
     };
   }
-  if (!token.createdBy && !token.madeBeforeMakers) {
-    return {
-      label: MAKER_DELETED, tone: 'never', claimable: false,
-      title: 'The person who made it deleted their account, so it counts as no one and nobody can claim it. Revoke it and make a new token.',
-    };
+  // Someone other than the bot's owner made it: it counts as no one
+  if (token.createdBy && token.createdBy !== botOwnerId) {
+    return token.createdBy === viewerId
+      ? { label: 'Made by you', tone: 'never', title: "You made it for a bot that isn't yours, so it counts as no one: it never wakes subscription agents." }
+      : { label: `Made by ${token.createdByName ?? 'someone else'}`, tone: 'never',
+          title: "Made by someone other than the bot's owner, so it counts as no one: it never wakes subscription agents." };
   }
-  if (!token.createdBy) {
-    const claimable = token.purpose === 'personal' && yourBot;
-    return {
-      label: UNKNOWN_MAKER, tone: 'unknown', claimable,
-      title: token.purpose === 'invite'
-        ? 'Made from an agent invite before Agora recorded token makers. It counts as no one; make a new token if a terminal agent should count as you.'
-        : claimable
-          ? 'Made before Agora recorded token makers, so it counts as no one. If you made it yourself, claim it.'
-          : "Made before Agora recorded token makers, so it counts as no one. Only the bot's owner can claim it.",
-    };
+  if (!botOwnerId) {
+    return { label: 'Counts as no one', tone: 'never', title: 'The bot has no owner, so its tokens never wake subscription agents.' };
   }
-  if (token.createdBy === viewerId) {
-    return {
-      label: 'Made by you', tone: 'maker', claimable: false,
-      title: "You made it, but this bot isn't yours, so it doesn't count as you.",
-    };
+  const yours = !!viewerId && botOwnerId === viewerId;
+  if (token.purpose === 'host' || token.purpose === 'box') {
+    return { label: yours ? 'Your own runs only' : "Its owner's own runs only", tone: 'owner',
+      title: `${token.purpose === 'host' ? "The agent host's token" : "A box's token"}. ${RUNS_ONLY}` };
   }
   return {
-    label: `Made by ${token.createdByName ?? 'someone else'}`, tone: 'maker', claimable: false,
-    title: token.createdBy === botOwnerId
-      ? 'Its maker owns this bot: a terminal agent using it counts as them, and its hand-offs can wake subscription agents they started.'
-      : "Made by someone other than the bot's owner, so it counts as no one: its hand-offs don't wake subscription agents.",
+    label: 'Counts as its owner', tone: 'owner',
+    title: "A token its owner made (or from before Agora recorded makers). Agents using it count as the bot's owner and wake subscription agents they started.",
   };
 }

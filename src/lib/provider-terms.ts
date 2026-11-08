@@ -9,17 +9,22 @@ import { notifyApproval } from './notifications';
  * A hosted profile runs its CLI on the CLI's own account login ('subscription') or on an
  * API key ('api_key'). Consumer subscriptions are personal: Anthropic's terms forbid
  * routing requests through Free/Pro/Max credentials on behalf of other users, and OpenAI
- * and Google say the same of their accounts. So only the server owner may trigger a run
- * on a subscription profile:
+ * and Google say the same of their accounts. So only the server owner (the plan owner) and
+ * their own automation may trigger a run on a subscription profile:
  *
  * - a direct message (mention, sole agent, thread reply) from the owner;
  * - the owner's /start or /resume;
- * - agent-to-agent hand-offs (agora-collab START/ACK/TURN/DECIDE, handoff offers) to a session
- *   the owner started, from a session the owner started or from the owner's own bot in a live
- *   terminal session (the owner's own CLI, connected with the bot's token);
- * - lurk wakes for the owner's own messages only.
+ * - with servers.subscription_wakes = 'owner_bots' (the default): any post by the owner's own
+ *   bot (ownerBotOf: bot_owner_id is the owner, on a token nobody else made, not from a hosted
+ *   session someone else started), for every reason (direct, protocol, hand-off, lurk), to a
+ *   session the owner started. Like the owner opening several CLIs on their own account;
+ * - with 'owner_only': agent-to-agent hand-offs (agora-collab START/ACK/TURN/DECIDE, handoff
+ *   offers) to a session the owner started, from a session the owner started or from the
+ *   owner's own bot in a live terminal session opened with a personal or invite token the owner
+ *   made (#361); lurk wakes for the owner's own messages only.
  *
- * Everyone else's attempt is refused with a channel notice. api_key profiles keep the
+ * Everyone else (other people, their bots, the owner's bot on a token someone else made or in a
+ * run someone else started) is refused with a channel notice. api_key profiles keep the
  * ordinary authority rules (owner, directors, bots the owner allowed to direct).
  *
  * A profile with run approval (the host's requireRunApproval, forced on for a Gemini profile
@@ -51,6 +56,78 @@ export const WAKE_AUTH_SQL = `(CASE WHEN p.host_mode AND p.auth_mode = 'api_key'
 /** The same for a profile row already read (needs auth_mode and host_mode). */
 export function wakeAuthMode(row: { auth_mode?: string | null; host_mode?: boolean | null }): string | null {
     return row.host_mode && row.auth_mode === 'api_key' ? 'subscription' : row.auth_mode ?? null;
+}
+
+/**
+ * Who besides the plan owner may wake a plan-owned agent (servers.subscription_wakes, migration
+ * 091): 'owner_bots' adds the plan owner's own bots (ownerBotOf); 'owner_only' is the stricter
+ * #361 rule.
+ */
+export type SubscriptionWakes = 'owner_bots' | 'owner_only';
+export const SUBSCRIPTION_WAKES: readonly SubscriptionWakes[] = ['owner_bots', 'owner_only'];
+
+export function subscriptionWakesOf(value: unknown): SubscriptionWakes {
+    // Anything unexpected is the stricter mode
+    return value === 'owner_bots' ? 'owner_bots' : 'owner_only';
+}
+
+/** The server's subscription_wakes setting. */
+export async function serverSubscriptionWakes(db: any, serverId: string): Promise<SubscriptionWakes> {
+    const row = (await db.query('SELECT subscription_wakes FROM servers WHERE id = $1', [serverId])).rows[0];
+    return subscriptionWakesOf(row?.subscription_wakes);
+}
+
+/**
+ * Owner bots (subscription_wakes 'owner_bots'): whose own automation a bot's post is, for the
+ * plan-owner rule. Returns the bot's owner when all of these hold, otherwise null:
+ * - the author is a bot with an owner (users.bot_owner_id);
+ * - the post was made with a live token of that bot that no other person made (created_by is
+ *   NULL, i.e. Agora made it or it predates migration 090, or is the bot's owner). Never a
+ *   model agent's token: a model agent answers any member, so its posts are not the owner's;
+ * - no live terminal session of the bot in this channel is shared by two tokens (mixed);
+ * - for a personal or invite token (a terminal or script the owner runs): either it is the token
+ *   that opened the bot's live terminal session in this channel, or the bot has no live hosted
+ *   session on the server that another person started (a subtask's session carries its
+ *   parent's starter);
+ * - for an agent host's or a box's token (what hosted runs get, also if it opened a terminal):
+ *   only when the bot's hosted runs can only have been caused by its owner. The bot has a live
+ *   hosted session on the server, and every one of them was started by the owner on an
+ *   owner-only profile whose plan is the owner's (subscription or siwc, or a machine-host
+ *   profile). An API-key agent in a box can be woken by a director, so its runs never count.
+ * The caller compares the result with the target's plan owner. Needs the service role (reads
+ * agent_sessions, agent_profiles and bot_tokens).
+ */
+export async function ownerBotOf(db: any, input: { botId: string; tokenId: string | null | undefined; channelId: string }): Promise<string | null> {
+    if (!input.tokenId) return null;
+    const hosted = `SELECT 1 FROM agent_sessions s
+                    WHERE s.bot_id = u.id AND s.kind = 'hosted' AND s.state = 'live' AND s.server_id = ch.server_id`;
+    const row = (await db.query(
+        `SELECT u.bot_owner_id
+         FROM users u
+         JOIN bot_tokens t ON t.id = $2 AND t.bot_id = u.id AND t.revoked_at IS NULL
+         JOIN channels ch ON ch.id = $3
+         WHERE u.id = $1 AND u.bot = true AND u.bot_owner_id IS NOT NULL
+           AND (t.created_by IS NULL OR t.created_by = u.bot_owner_id)
+           AND t.purpose <> 'model'
+           AND NOT EXISTS (SELECT 1 FROM agent_sessions s
+                           WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_mixed)
+           AND CASE WHEN t.purpose IN ('personal', 'invite') THEN
+                    EXISTS (SELECT 1 FROM agent_sessions s
+                            WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_id = $2)
+                    OR NOT EXISTS (${hosted} AND s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id)
+               ELSE
+                    EXISTS (${hosted})
+                    AND NOT EXISTS (SELECT 1 FROM agent_sessions s
+                                    JOIN agent_profiles p ON p.id = s.profile_id
+                                    JOIN servers srv ON srv.id = s.server_id
+                                    WHERE s.bot_id = u.id AND s.kind = 'hosted' AND s.state = 'live' AND s.server_id = ch.server_id
+                                      AND (s.started_by IS DISTINCT FROM u.bot_owner_id
+                                           OR ${WAKE_AUTH_SQL} = 'api_key'
+                                           OR ${PLAN_OWNER_SQL} IS DISTINCT FROM u.bot_owner_id))
+               END`,
+        [input.botId, input.tokenId, input.channelId]
+    )).rows[0];
+    return row?.bot_owner_id?.trim() ?? null;
 }
 
 /** The channel notice for a wake the plan-owner rule refused. */

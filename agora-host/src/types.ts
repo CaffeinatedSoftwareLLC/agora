@@ -69,6 +69,9 @@ export const claimSchema = z.object({
         authorId: id.nullable(), authorName: z.string().nullable(), authorBot: z.boolean(),
         authority: z.enum(['owner', 'director']).nullable(), content: z.string().max(4000).nullable(),
         createdAt: z.string().datetime(),
+        // Plan-owned sessions: the author is the plan owner's own bot and the server lets owner
+        // bots wake it (subscription_wakes 'owner_bots'); checkTerms (terms.ts) reads it
+        ownerBot: z.boolean().optional(),
     })).min(1).max(20),
     // Handoff offers in this batch addressed to this session, and handoffs that made it a
     // thread's owner (server src/lib/handoffs.ts); handoff.ts turns them into prompt lines

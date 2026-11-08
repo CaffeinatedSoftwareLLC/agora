@@ -239,12 +239,14 @@ describe('wake routing (S1)', () => {
         expect((await inbox(s1)).map(r => r.message_id)).toEqual([m.id]);
     });
 
-    it('does not wake on other bots\' chatter or in unbound threads', async () => {
+    // On a box host (API key): on a machine host codex is owner-only, and outsider, the owner's
+    // own bot, reaches it without can_direct (owner bots, owner-bots.integration.test.ts)
+    it('does not wake on other bots\' chatter or in unbound threads', () => onBoxHost(async () => {
         const s1 = await startSession(codex);
         const p = await post(outsider.auth, '@codex do my bidding');
         await reply(outsider.auth, p.id, '[AGORA/v1 MODE=plan STATE=TURN]\nhi\n[YIELD to=codex]');
         expect(await inbox(s1)).toEqual([]);
-    });
+    }));
 
     it('binds a thread on a top-level START and routes the protocol inside it', async () => {
         const sx = await startSession(codex);
