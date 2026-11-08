@@ -53,7 +53,8 @@ import { stampAuthority } from './direct-agents';
  * person who connected it) only take wakes their plan owner caused
  * (src/lib/provider-terms.ts); anyone else's is refused with a notice. With the server's
  * subscription_wakes 'owner_bots' (default), a post by the plan owner's own bot (ownerBotOf)
- * counts as theirs for every reason, when the target was started by them. With 'owner_only',
+ * counts as theirs for every reason, when the target was started by them; toward those targets
+ * it may address them directly without can_direct (mayDirect). With 'owner_only',
  * direct and lurk wakes need the plan owner's own message, and agent-to-agent wakes (handoff,
  * protocol) count as the plan owner's when the target was started by them and the author is
  * either a session they started or their own bot in a live terminal session here, opened with a
@@ -237,6 +238,19 @@ function termsAllow(target: LiveSession, reason: 'direct' | 'handoff' | 'protoco
     // the owner's own token opened (routeMessage only takes a terminal as the author when the
     // post was made with that token)
     return target.startedBy === owner && authorIsOwners(ctx.authorSession, owner);
+}
+
+/**
+ * May this message address this target directly (an @mention, the sole agent, a task card's
+ * thread)? Whoever could direct agents here may. So may the plan owner's own bot (owner bots,
+ * ownerBotOf) toward a plan-owned target of that same owner, without can_direct: the owner
+ * needs no extra setup for their own agents to wake each other. Every other target (api_key,
+ * another person's plan) keeps the plain authority rule. termsAllow still decides the wake.
+ */
+function mayDirect(target: LiveSession, ctx: RouteContext): boolean {
+    if (ctx.couldDirect) return true;
+    return !ctx.authorHuman && ctx.wakes === 'owner_bots' && target.subscription
+        && !!target.planOwnerId && ctx.countsAs === target.planOwnerId;
 }
 
 /** The author's session counts as the plan owner's for an agent-to-agent wake. */
@@ -478,13 +492,14 @@ async function routeTopLevel(db: any, msg: RoutedMessage, sessions: LiveSession[
     // Someone who can direct addresses an agent: by @mention, or the only agent here
     const others = sessions.filter(s => s.botId !== msg.authorId.trim());
     const mentioned = new Set(msg.mentionedUserIds.map(id => id.trim()));
-    if (!msg.couldDirect) {
+    if (!msg.couldDirect && ctx.authorHuman) {
         // A person without DirectAgents @mentions a subscription agent: say why nothing happens
-        if (ctx.authorHuman) for (const s of others) if (s.subscription && mentioned.has(s.botId)) ctx.refused.set(s.id, s);
+        for (const s of others) if (s.subscription && mentioned.has(s.botId)) ctx.refused.set(s.id, s);
         return;
     }
-    let targets = others.filter(s => mentioned.has(s.botId));
-    if (targets.length === 0 && others.length === 1 && sessions.length === 1 && agents === 1) {
+    // A bot without authority reaches only its owner's plan-owned agents (mayDirect)
+    let targets = others.filter(s => mentioned.has(s.botId) && mayDirect(s, ctx));
+    if (targets.length === 0 && others.length === 1 && sessions.length === 1 && agents === 1 && mayDirect(others[0], ctx)) {
         // The only agent here, unless the post is addressed to some other bot (#120)
         const otherBot = mentioned.size > 0 && (await db.query(
             `SELECT 1 FROM users WHERE id = ANY($1) AND bot = true LIMIT 1`, [[...mentioned]]
@@ -608,9 +623,7 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
     const threadId = msg.threadId!;
     // A task card's or subtask's own thread: someone who can direct speaks to its agent
     const scoped = (await liveSessions(db, msg.channelId, threadId)).filter(s => s.botId !== authorId);
-    if (msg.couldDirect) {
-        await addInbox(db, permitted(scoped, 'direct', ctx), msg.messageId, threadId, 'direct');
-    }
+    await addInbox(db, permitted(scoped.filter(s => mayDirect(s, ctx)), 'direct', ctx), msg.messageId, threadId, 'direct');
     const binding = await db.query(
         `SELECT initiator_session_id, session_ids FROM agent_session_threads WHERE thread_id = $1 AND state = 'open'`,
         [threadId]
@@ -624,9 +637,9 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
     const mentioned = new Set(msg.mentionedUserIds.map(id => id.trim()));
     const scopedBots = new Set(scoped.map(s => s.botId));
     const addressed = sessions.filter(s => mentioned.has(s.botId) && s.botId !== authorId && !boundIds.has(s.id) && !scopedBots.has(s.botId));
-    if (msg.couldDirect) {
-        await addInbox(db, permitted(addressed, 'direct', ctx), msg.messageId, threadId, 'direct');
-    } else if (ctx.authorHuman) {
+    if (msg.couldDirect || !ctx.authorHuman) {
+        await addInbox(db, permitted(addressed.filter(s => mayDirect(s, ctx)), 'direct', ctx), msg.messageId, threadId, 'direct');
+    } else {
         // As at the top level: a person without DirectAgents @mentions a plan-owned agent; say why nothing happens
         for (const s of addressed) if (s.subscription) ctx.refused.set(s.id, s);
     }

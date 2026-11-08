@@ -434,7 +434,8 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
-                u.username, u.bot AS author_bot, u.bot_owner_id AS author_bot_owner, m.system_event,
+                u.username, u.bot AS author_bot, u.bot_owner_id AS author_bot_owner,
+                (u.bot_paused_at IS NULL AND u.account_status = 'active') AS author_active, m.system_event,
                 -- A handoff offer card (src/lib/handoffs.ts) wakes its recipient while the offer is open,
                 -- and still on a retry after the recipient accepted it in the failed attempt
                 EXISTS (SELECT 1 FROM agent_handoffs h WHERE h.message_id = m.id
@@ -461,7 +462,10 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
         const m = byId.get(row.message_id.trim());
         if (!m || m.deleted_at) continue;
         const authority = authorities.get(m.id.trim()) ?? null;
-        if (row.reason === 'direct' && !authority) continue;
+        // The plan owner's own bot (owner bots): counts as them without can_direct, while active and unpaused
+        const ownerBot = !!terms?.ownerBots && !!m.author_bot && !!m.author_active && !!terms.planOwnerId
+            && m.author_bot_owner?.trim() === terms.planOwnerId;
+        if (row.reason === 'direct' && !authority && !ownerBot) continue;
         // A session notice from /start or /resume: no author, valid while the session is live
         if (row.reason === 'command' && m.author_id) continue;
         const offer = row.reason === 'handoff' && m.system_event === 'agent_handoff';
@@ -469,7 +473,6 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
         if (!offer && (row.reason === 'handoff' || row.reason === 'protocol') && (!row.thread_id || !openThreads.has(row.thread_id.trim()))) continue;
         // A subtask's brief or summary: written by the server for a session it delegated, from an agent
         if (row.reason === 'delegate' && !m.author_bot) continue;
-        const ownerBot = !!terms?.ownerBots && !!m.author_bot && !!terms.planOwnerId && m.author_bot_owner?.trim() === terms.planOwnerId;
         if (terms) {
             if (!terms.startedByOwner || !terms.planOwnerId) continue;
             if (row.reason === 'direct' || row.reason === 'lurk') {

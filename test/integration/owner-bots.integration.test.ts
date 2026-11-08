@@ -33,6 +33,8 @@ type Token = { id: string; auth: { Authorization: string } };
 let alpha: Agent;
 let beta: Agent;
 let gamma: Agent;
+/** delta: another of the owner's bots, without can_direct (no extra setup). */
+let delta: Agent;
 
 async function makeAgent(name: string): Promise<Agent> {
     const res = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
@@ -127,6 +129,7 @@ beforeAll(async () => {
     alpha = await makeAgent('alpha');
     beta = await makeAgent('beta');
     gamma = await makeAgent('gamma');
+    delta = await makeAgent('delta');
     await canDirect(beta);
     await canDirect(gamma);
 });
@@ -135,10 +138,10 @@ afterAll(async () => { await ctx.close(); });
 
 beforeEach(async () => {
     await ctx.db.query('TRUNCATE agent_handoffs, agent_thread_owners, agent_runs, agent_inbox, agent_batches, agent_session_threads, agent_sessions CASCADE');
-    for (const a of [alpha, beta, gamma]) await setMode(a, 'subscription');
+    for (const a of [alpha, beta, gamma, delta]) await setMode(a, 'subscription');
     await setHostKind(ctx.db, hostId, 'machine');
     await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_bots' WHERE id = $1`, [serverId]);
-    await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = ANY($1)', [[alpha.botId, beta.botId], owner.userId]);
+    await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = ANY($1)', [[alpha.botId, beta.botId, delta.botId], owner.userId]);
     await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [gamma.botId, director.userId]);
 });
 
@@ -226,6 +229,80 @@ describe('owner bots wake the owner\'s subscription agents', () => {
         expect((await inbox(sa)).map(r => r.reason)).toEqual(['handoff']);
         const accept = await ctx.request.post(`/channels/${channelId}/handoffs/${offer.body.offer.id}`).set(alpha.auth).send({ action: 'accept' });
         expect(accept.status, JSON.stringify(accept.body)).toBe(200);
+    });
+});
+
+/**
+ * The owner's own bots need no extra setup: without can_direct they still address the owner's
+ * plan-owned agents (@mention, task card thread, the sole agent here). Every other target keeps
+ * the plain authority rule.
+ */
+describe('owner bots without can_direct', () => {
+    it('an @mention wakes an owner-started subscription agent, and the claim keeps it (ownerBot, no authority)', async () => {
+        const sa = await startSession(alpha);
+        await startSession(delta);
+        const since = mark();
+        const m = await post(delta.auth, '@alpha please review');
+        expect(await inbox(sa)).toEqual([{ message_id: m.id, reason: 'direct' }]);
+        expect(await notices(since)).toEqual([]);
+        const c = await claim();
+        expect(c.status, JSON.stringify(c.body)).toBe(200);
+        expect(c.body.inbox).toEqual([expect.objectContaining({ messageId: m.id, reason: 'direct', authorBot: true, authority: null, ownerBot: true })]);
+    });
+
+    it('a task card thread and the sole live agent are reached too; an @mention in an ordinary thread as well', async () => {
+        const parent = await post(owner.auth, 'Task: fix the upload test');
+        const card = await startSession(alpha, owner.userId, { threadId: parent.id });
+        const r = await reply(delta.auth, parent.id, 'here is the stack trace');
+        expect(await inbox(card)).toEqual([{ message_id: r.id, reason: 'direct' }]);
+
+        // delta posts with no session of its own: alpha's channel session is the only agent live here
+        const sa = await startSession(alpha);
+        const sole = await post(delta.auth, 'anyone there?');
+        expect(await inbox(sa)).toEqual([{ message_id: sole.id, reason: 'direct' }]);
+        const inThread = await reply(delta.auth, sole.id, '@alpha this one');
+        expect((await inbox(sa)).map(x => x.message_id)).toEqual([sole.id, inThread.id]);
+    });
+
+    it('a plain reply in an ordinary thread still wakes nobody (no bot-to-bot chains)', async () => {
+        const sa = await startSession(alpha);
+        await startSession(delta);
+        const parent = await post(alpha.auth, 'Opened the PR, details here');
+        await reply(delta.auth, parent.id, 'looks good to me');
+        expect(await inbox(sa)).toEqual([]);
+    });
+
+    it('an API-key agent is not reached: that still needs can_direct', async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(alpha, 'api_key');
+        const sa = await startSession(alpha);
+        await startSession(delta);
+        const since = mark();
+        await post(delta.auth, '@alpha please review');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+    });
+
+    it('owner_only: no reach without can_direct', async () => {
+        await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_only' WHERE id = $1`, [serverId]);
+        const sa = await startSession(alpha);
+        await startSession(delta);
+        await post(delta.auth, '@alpha please review');
+        expect(await inbox(sa)).toEqual([]);
+    });
+
+    it("another person's bot without can_direct reaches nothing; with it, it is refused with a notice", async () => {
+        const sa = await startSession(alpha);
+        await startSession(gamma);
+        await ctx.db.query('UPDATE bot_channel_access SET can_direct = false WHERE bot_id = $1 AND channel_id = $2', [gamma.botId, channelId]);
+        const since = mark();
+        await post(gamma.auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+        await canDirect(gamma);
+        await post(gamma.auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
     });
 });
 

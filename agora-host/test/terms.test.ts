@@ -143,13 +143,14 @@ describe('claim checks', () => {
         expect(code(() => checkTerms(local(), direct))).toBeNull();
         const lurk = claim(); lurk.inbox[0] = { ...lurk.inbox[0], reason: 'lurk', authorBot: true, authority: null, ownerBot: true };
         expect(code(() => checkTerms(local(), lurk))).toBeNull();
-        // Without the mark (another person's bot, an older server, or owner_only), and a direct wake without authority
+        // The owner's own bot needs no authority to direct its owner's agents
+        const noAuthority = claim(); noAuthority.inbox[0] = { ...noAuthority.inbox[0], reason: 'direct', authorBot: true, authority: null, ownerBot: true };
+        expect(code(() => checkTerms(local(), noAuthority))).toBeNull();
+        // Without the mark (another person's bot, an older server, or owner_only)
         const unmarked = claim(); unmarked.inbox[0] = { ...unmarked.inbox[0], reason: 'direct', authorBot: true, authority: 'director' };
         expect(code(() => checkTerms(local(), unmarked))).toBe('subscription_owner_only');
         const marked = claim(); marked.inbox[0] = { ...marked.inbox[0], reason: 'direct', authorBot: true, authority: 'director', ownerBot: false };
         expect(code(() => checkTerms(local(), marked))).toBe('subscription_owner_only');
-        const noAuthority = claim(); noAuthority.inbox[0] = { ...noAuthority.inbox[0], reason: 'direct', authorBot: true, authority: null, ownerBot: true };
-        expect(code(() => checkTerms(local(), noAuthority))).toBe('subscription_owner_only');
         // A person's message is never an owner bot's, whatever the mark says
         const person = claim(); person.inbox[0] = { ...person.inbox[0], reason: 'direct', authorBot: false, authority: 'director', ownerBot: true };
         expect(code(() => checkTerms(local(), person))).toBe('subscription_owner_only');

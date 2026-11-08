@@ -75,7 +75,7 @@ How it works:
   - it was posted with a live token of that bot that **no other person made**: one the plan owner made (a personal token, an agent invite they created, the agent host token made with the agent) or one Agora made (a box's token, or a token from before Agora recorded makers). An administrator can mint a token for any bot; that token never counts;
   - it doesn't come from a run someone else started: either the token is the one that opened the bot's live terminal session in that channel, or the bot has no live hosted session on the server that another person started (a subtask's session counts as started by whoever started its parent) and no mixed terminal session there.
 
-  A direct wake still needs the ordinary authority to direct agents: the server owner turns on **Can direct agents** for the bot's channel access (Settings → Bots). Without it, the bot's @mention wakes no agent at all, on any profile. As for every agent, a bot's plain reply in an ordinary thread (no @mention, not a collaboration or task card thread) wakes nobody: only a person's follow-up does, so bots don't chain.
+  The owner's own bots need no extra setup for this: toward the plan owner's own subscription and ChatGPT-plan agents they count as able to direct (an @mention, a task card's thread, the sole live agent in the channel) without **Can direct agents** on their channel access. Every other target (an API-key agent, someone else's plan) keeps the ordinary rule, so there the bot still needs **Can direct agents** (Settings → Bots). As for every agent, a bot's plain reply in an ordinary thread (no @mention, not a collaboration or task card thread) wakes nobody: only a person's follow-up does, so bots don't chain.
 
   > **Owner bots**
   >

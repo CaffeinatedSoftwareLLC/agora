@@ -204,6 +204,13 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
       .toBe("This terminal won't wake subscription agents: the bot has no owner.");
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'mixed' }))?.text)
       .toBe("This terminal won't wake subscription agents: two different tokens share this terminal session.");
+    // With Only you set, the strict #361 rule: only hand-offs count, and only on a personal or invite token its owner made
+    expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: true, subscriptionWakes: 'owner_only' }))?.text)
+      .toBe('Its hand-offs wake subscription agents you started.');
+    expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: false, subscriptionWakes: 'owner_only' }))?.text)
+      .toBe('Counts as its owner: its hand-offs wake subscription agents the owner started.');
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'owner_only_token', ownedByYou: true, subscriptionWakes: 'owner_only' }))?.text)
+      .toBe("This terminal won't wake subscription agents: Settings → Agents is set to Only you, and its token isn't a personal or agent invite token its owner made.");
     // A reason an older server sent that no longer exists reads as no owner, never as counting
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker' as never }))?.counts).toBe(false);
   });

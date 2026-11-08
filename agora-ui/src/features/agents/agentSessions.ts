@@ -50,6 +50,8 @@ export interface AgentSession {
    */
   ownerToken?: boolean;
   ownerTokenReason?: OwnerTokenReason | null;
+  /** Terminal sessions: the server's setting for who wakes subscription agents (Settings → Agents). */
+  subscriptionWakes?: 'owner_bots' | 'owner_only' | null;
   /** Terminal sessions: the bot is the viewer's. */
   ownedByYou?: boolean;
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
@@ -87,13 +89,14 @@ export interface AgentSession {
   title?: string | null;
 }
 
-export type OwnerTokenReason = 'mixed' | 'other_maker' | 'other_bot_owner' | 'started_by_other';
+export type OwnerTokenReason = 'mixed' | 'other_maker' | 'other_bot_owner' | 'started_by_other' | 'owner_only_token';
 
 const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
   mixed: 'two different tokens share this terminal session',
   other_maker: "its token was made by someone other than the bot's owner",
   other_bot_owner: 'the bot has no owner',
   started_by_other: "someone other than the bot's owner started this session",
+  owner_only_token: "Settings → Agents is set to Only you, and its token isn't a personal or agent invite token its owner made",
 };
 
 /**
@@ -105,7 +108,9 @@ export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boole
   if (s.kind !== 'terminal' || typeof s.ownerToken !== 'boolean') return null;
   const yours = !!s.ownedByYou;
   if (s.ownerToken) {
-    return { counts: true, yours, text: yours ? 'Its messages and hand-offs wake subscription agents you started.' :'Counts as its owner: its messages and hand-offs wake subscription agents the owner started.' };
+    // With Only you set (owner_only, #361), only its hand-offs count
+    const what = s.subscriptionWakes === 'owner_only' ? 'Its hand-offs' : 'Its messages and hand-offs';
+    return { counts: true, yours, text: yours ? `${what} wake subscription agents you started.` : `Counts as its owner: ${what.toLowerCase()} wake subscription agents the owner started.` };
   }
   const why = s.ownerTokenReason ?? 'other_bot_owner';
   const reason = OWNER_TOKEN_REASON[why] ?? OWNER_TOKEN_REASON.other_bot_owner;

@@ -124,12 +124,12 @@ export function needsRunApproval(profile: LocalProfile): boolean {
 
 /**
  * A direct or lurk wake by a bot on a plan-owned profile: only one the server marked as the plan
- * owner's own bot (subscription_wakes 'owner_bots'). A direct wake also needs the authority to
- * direct that every direct wake needs. Without the mark (an older server, or 'owner_only') a
- * bot's direct or lurk wake is refused.
+ * owner's own bot (subscription_wakes 'owner_bots'). The owner's own bots need no authority to
+ * direct their owner's plan-owned agents, so a direct item may carry none. Without the mark (an
+ * older server, or 'owner_only') a bot's direct or lurk wake is refused.
  */
 function ownerBotItem(item: Claim['inbox'][number]): boolean {
-    return item.ownerBot === true && (item.reason === 'lurk' || item.authority !== null);
+    return item.ownerBot === true;
 }
 
 /**
