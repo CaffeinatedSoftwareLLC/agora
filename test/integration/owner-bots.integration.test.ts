@@ -1,6 +1,8 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { attachTerminal } from '../../src/lib/terminal-sessions';
+import { generateBotToken } from '../../src/auth/bot-tokens';
+import { OWNER_BOT_HOP_LIMIT, OWNER_BOT_HOP_NOTICE } from '../../src/lib/agent-sessions';
 
 /**
  * Owner bots (docs/provider-terms.md, src/lib/provider-terms.ts ownerBotOf): with the server's
@@ -251,16 +253,18 @@ describe('owner bots without can_direct', () => {
     });
 
     it('a task card thread and the sole live agent are reached too; an @mention in an ordinary thread as well', async () => {
+        // A personal token: an agent host token counts only with an owner-only hosted run behind it
+        const mine = await mint(delta, owner);
         const parent = await post(owner.auth, 'Task: fix the upload test');
         const card = await startSession(alpha, owner.userId, { threadId: parent.id });
-        const r = await reply(delta.auth, parent.id, 'here is the stack trace');
+        const r = await reply(mine.auth, parent.id, 'here is the stack trace');
         expect(await inbox(card)).toEqual([{ message_id: r.id, reason: 'direct' }]);
 
         // delta posts with no session of its own: alpha's channel session is the only agent live here
         const sa = await startSession(alpha);
-        const sole = await post(delta.auth, 'anyone there?');
+        const sole = await post(mine.auth, 'anyone there?');
         expect(await inbox(sa)).toEqual([{ message_id: sole.id, reason: 'direct' }]);
-        const inThread = await reply(delta.auth, sole.id, '@alpha this one');
+        const inThread = await reply(mine.auth, sole.id, '@alpha this one');
         expect((await inbox(sa)).map(x => x.message_id)).toEqual([sole.id, inThread.id]);
     });
 
@@ -307,9 +311,9 @@ describe('owner bots without can_direct', () => {
 });
 
 describe('everyone else is refused', () => {
-    it('another person\'s bot, even in a session the owner started: @mention, START and YIELD get a notice', async () => {
+    it('another person\'s bot in a session they started: @mention, START and YIELD get a notice', async () => {
         const sa = await startSession(alpha);
-        await startSession(gamma);
+        await startSession(gamma, director.userId);
         const since = mark();
         await post(gamma.auth, '@alpha deploy it');
         const start = await post(gamma.auth, START('gamma', 'alpha'));
@@ -359,7 +363,15 @@ describe('everyone else is refused', () => {
         expect(await inbox(sa)).toEqual([]);
         expect(await notices(since2)).toEqual([NOTICE('alpha')]);
 
-        // The owner's own terminal on the owner's token is its own source: it counts
+        // Its agent host token in a terminal (any token can open one) is still that run's: refused
+        const hostTerminal = await connectTerminal(beta, tokenOf(beta.auth));
+        const since3 = mark();
+        await post(beta.auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since3)).toEqual([NOTICE('alpha')]);
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [hostTerminal]);
+
+        // The owner's own terminal on the owner's personal token is its own source: it counts
         const mine = await mint(beta, owner);
         await connectTerminal(beta, mine);
         const m = await post(mine.auth, '@alpha now you');
@@ -386,18 +398,15 @@ describe('everyone else is refused', () => {
         expect(await notices(since)).toEqual([NOTICE('alpha')]);
     });
 
-    it('handoff offers: another person\'s bot and an Administrator-minted token are refused; accepting rechecks who started the sender', async () => {
+    it('handoff offers: another person\'s bot in its own session is refused; accepting rechecks who started the sender', async () => {
         const sa = await startSession(alpha);
         const sb = await startSession(beta);
-        await startSession(gamma);
+        await startSession(gamma, director.userId);
         const parent = await post(owner.auth, 'Fix the flaky upload test');
         const offerAs = (auth: object) => ctx.request.post(`/channels/${channelId}/handoffs`).set(auth).send({ threadId: parent.id, to: 'alpha', summary: 'x' });
         const theirs = await offerAs(gamma.auth);
         expect(theirs.status).toBe(403);
         expect(theirs.body.error).toBe('plan_owner_only');
-        const adminMinted = await offerAs((await mint(beta, admin)).auth);
-        expect(adminMinted.status).toBe(403);
-        expect(adminMinted.body.error).toBe('plan_owner_only');
         expect(await inbox(sa)).toEqual([]);
 
         const ok = await offerAs(beta.auth);
@@ -468,5 +477,160 @@ describe('the subscription_wakes setting', () => {
         const c = await claim();
         expect(c.status).toBe(200);
         expect(c.body.inbox[0]).not.toHaveProperty('ownerBot');
+    });
+});
+
+/** A token of the bot with this purpose and maker, as the server makes them (model agents, boxes). */
+async function tokenWith(agent: Agent, purpose: 'model' | 'box' | 'host', createdBy: string | null): Promise<Token> {
+    const { tokenId, secretHash, raw } = await generateBotToken();
+    await ctx.db.query(`INSERT INTO bot_tokens (id, bot_id, secret_hash, name, created_by, purpose) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [tokenId, agent.botId, secretHash, purpose, createdBy, purpose]);
+    return { id: tokenId, auth: { Authorization: `Bot ${raw}` } };
+}
+
+/**
+ * No relay through runs others can cause: a model agent answers any member, and an API-key
+ * agent's hosted run can be woken by a director, so neither counts as the owner. Agent host and
+ * box tokens count only while every live hosted session of the bot is the owner's own,
+ * owner-only one.
+ */
+describe('no relay through agents others can wake', () => {
+    it("a model agent's reply never counts: no wake by @mention or as the sole agent", async () => {
+        const sa = await startSession(alpha);
+        const model = await tokenWith(delta, 'model', owner.userId);
+        const since = mark();
+        await post(model.auth, '@alpha deploy it');
+        await post(model.auth, 'and anyone else around?');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([]);
+        // With can_direct it reaches alpha's session and is refused
+        const modelBeta = await tokenWith(beta, 'model', owner.userId);
+        await post(modelBeta.auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+    });
+
+    it("an owner-started API-key run in a box (a director can wake it) doesn't count; an owner-only run's box token does", async () => {
+        await setHostKind(ctx.db, hostId, 'box');
+        await setMode(beta, 'api_key');
+        const sa = await startSession(alpha);
+        await startSession(beta);
+        const since = mark();
+        await post(beta.auth, '@alpha deploy it');
+        await post((await tokenWith(beta, 'box', null)).auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha'), NOTICE('alpha')]);
+
+        // The same bot on its owner's subscription: only the owner's chain can wake its run
+        await setMode(beta, 'subscription');
+        const box = await post((await tokenWith(beta, 'box', null)).auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([{ message_id: box.id, reason: 'direct' }]);
+    });
+
+    it("an agent host token with no live hosted session behind it doesn't count", async () => {
+        const sa = await startSession(alpha);
+        const since = mark();
+        await post(beta.auth, '@alpha deploy it');
+        expect(await inbox(sa)).toEqual([]);
+        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+    });
+});
+
+/** owner_bots adds to #361; it never takes away (here: a ChatGPT plan whose owner isn't the bot's owner). */
+describe('owner_bots is a superset of owner_only', () => {
+    it("a siwc plan owner's sessions hand off as under #361, though the bot belongs to the server owner", async () => {
+        await ctx.db.query(`UPDATE agent_profiles SET auth_mode = 'siwc', plan_owner_id = $2 WHERE id = $1`, [alpha.profileId, member.userId]);
+        try {
+            const sa = await startSession(alpha, member.userId);
+            await startSession(beta, member.userId);
+            const since = mark();
+            const start = await post(beta.auth, START('beta', 'alpha'));
+            const back = await reply(beta.auth, start.id, TURN('alpha'));
+            expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }]);
+            expect(await notices(since)).toEqual([]);
+            // A direct message from the server owner's bot is not the plan owner's
+            await post(beta.auth, '@alpha deploy it');
+            expect(await inbox(sa)).toHaveLength(2);
+        } finally {
+            await ctx.db.query(`UPDATE agent_profiles SET plan_owner_id = NULL WHERE id = $1`, [alpha.profileId]);
+        }
+    });
+
+    it("another person's bot in a session the owner started hands off as under #361", async () => {
+        const sa = await startSession(alpha);
+        await startSession(gamma);
+        const start = await post(gamma.auth, START('gamma', 'alpha'));
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }]);
+    });
+});
+
+describe('loop guard for owner bots', () => {
+    it(`stops after ${OWNER_BOT_HOP_LIMIT} bot turns without a person, with one notice; a person's reply resets it`, async () => {
+        const sa = await startSession(alpha);
+        await startSession(delta);
+        const parent = await post(owner.auth, 'Work on the upload test together');
+        const wakes: string[] = [];
+        for (let i = 0; i < OWNER_BOT_HOP_LIMIT; i++) wakes.push((await reply(delta.auth, parent.id, `@alpha turn ${i}`)).id);
+        expect((await inbox(sa)).map(r => r.message_id)).toEqual(wakes);
+        const since = mark();
+        await reply(delta.auth, parent.id, '@alpha one more');
+        await reply(delta.auth, parent.id, '@alpha and another');
+        expect((await inbox(sa)).map(r => r.message_id)).toEqual(wakes);
+        expect(await notices(since)).toEqual([OWNER_BOT_HOP_NOTICE]);
+        // Top-level posts are their own scope
+        const top = await post(delta.auth, '@alpha top level');
+        expect((await inbox(sa)).map(r => r.message_id)).toEqual([...wakes, top.id]);
+        // The owner replies: the bots go on
+        await reply(owner.auth, parent.id, 'carry on');
+        const after = await reply(delta.auth, parent.id, '@alpha continuing');
+        expect((await inbox(sa)).map(r => r.message_id)).toContain(after.id);
+    });
+});
+
+describe('the claim reruns the owner-bots check', () => {
+    it('a revoked token or a session a director started since drops the pending wake', async () => {
+        const sa = await startSession(alpha);
+        const mine = await mint(delta, owner);
+        await post(mine.auth, '@alpha please review');
+        expect(await inbox(sa)).toHaveLength(1);
+        const row = (await ctx.db.query('SELECT author_token_id FROM agent_inbox WHERE session_id = $1', [sa])).rows[0];
+        expect(row.author_token_id.trim()).toBe(mine.id);
+        expect((await ctx.request.delete(`/servers/${serverId}/bots/${delta.botId}/tokens/${mine.id}`).set(owner.auth)).status).toBe(200);
+        expect((await claim()).status).toBe(204);
+        expect(await inbox(sa)).toEqual([]);
+
+        const again = await mint(delta, owner);
+        await post(again.auth, '@alpha please review');
+        expect(await inbox(sa)).toHaveLength(1);
+        await startSession(delta, director.userId);
+        expect((await claim()).status).toBe(204);
+        expect(await inbox(sa)).toEqual([]);
+    });
+
+    it("switching to owner_only drops an owner bot's pending YIELD that #361 doesn't allow; keeps one it does", async () => {
+        const sa = await startSession(alpha);
+        await startSession(gamma);
+        // A terminal on a token with no recorded maker counts as an owner bot, not under #361
+        const legacy = await mint(delta, owner);
+        await ctx.db.query(`UPDATE bot_tokens SET created_by = NULL WHERE id = $1`, [legacy.id]);
+        await connectTerminal(delta, legacy);
+        const opened = await post(gamma.auth, START('gamma', 'alpha', 'delta'));
+        const yielded = await reply(legacy.auth, opened.id, TURN('alpha'));
+        expect((await inbox(sa)).map(r => r.message_id)).toEqual([opened.id, yielded.id]);
+        expect((await setting(owner.auth, { subscriptionWakes: 'owner_only' })).status).toBe(200);
+        const c = await claim();
+        expect(c.status, JSON.stringify(c.body)).toBe(200);
+        // gamma's START (a session the owner started) is kept under #361
+        expect(c.body.inbox.map((i: any) => i.messageId)).toEqual([opened.id]);
+    });
+});
+
+describe('collaboration threads', () => {
+    it("an owner bot's plain reply in a bound thread reaches the owner's plan-owned participants without can_direct", async () => {
+        const sa = await startSession(alpha);
+        await startSession(delta);
+        const start = await post(delta.auth, START('delta', 'alpha'));
+        const plain = await reply(delta.auth, start.id, 'the stack trace is in the PR');
+        expect(await inbox(sa)).toEqual([{ message_id: start.id, reason: 'protocol' }, { message_id: plain.id, reason: 'direct' }]);
     });
 });

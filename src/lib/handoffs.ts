@@ -234,10 +234,8 @@ async function planRefusal(db: any, fromSessionId: string, toSessionId: string, 
             ? !row.from_token_mixed && (row.from_started_by === null || row.from_started_by.trim() === owner)
             : await ownerBotOf(db, { botId: row.from_bot.trim(), tokenId: senderTokenId, channelId: row.from_channel.trim() }) === owner);
         if (ownersBot && row.to_started_by?.trim() === owner) return null;
-        return new HandoffError(403, { error: 'plan_owner_only',
-            message: `${planNotice(row.profile_name, row.auth_mode, !!owner)} A handoff reaches it only from its plan owner's own agents, in work they started.` });
     }
-    // owner_only (#361). A terminal sender was live when it offered (senderSession); accepting later doesn't need it still
+    // #361, in either setting (owner_bots adds to it). A terminal sender was live when it offered (senderSession); accepting later doesn't need it still
     const senderIsOwners = row.from_kind === 'terminal'
         ? row.from_bot_owner?.trim() === owner && row.from_token_minted_by?.trim() === owner
             && (senderTokenId === undefined || (!!senderTokenId && row.from_token?.trim() === senderTokenId))
@@ -317,9 +315,9 @@ export async function createOffer(db: any, botId: string, channelId: string, inp
     // Wake the recipient (a terminal agent reads the thread itself)
     if (target.kind === 'hosted') {
         await db.query(
-            `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason) VALUES ($1, $2, $3, $4, 'handoff')
+            `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason, author_token_id) VALUES ($1, $2, $3, $4, 'handoff', $5)
              ON CONFLICT (session_id, message_id) DO NOTHING`,
-            [generateUlid(), target.id, messageId, threadId]
+            [generateUlid(), target.id, messageId, threadId, tokenId]
         );
     }
     return offer;

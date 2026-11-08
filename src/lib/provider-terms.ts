@@ -82,32 +82,49 @@ export async function serverSubscriptionWakes(db: any, serverId: string): Promis
  * plan-owner rule. Returns the bot's owner when all of these hold, otherwise null:
  * - the author is a bot with an owner (users.bot_owner_id);
  * - the post was made with a live token of that bot that no other person made (created_by is
- *   NULL, i.e. Agora made it or it predates migration 090, or is the bot's owner). Any purpose:
- *   personal, invite, host, box, model;
- * - it doesn't come from a run someone else started: either the token is the one that opened the
- *   bot's live terminal session in this channel (not mixed), or the bot has no live hosted
- *   session on the server that another person started (a subtask's session carries its parent's
- *   starter) and no mixed terminal session in this channel.
+ *   NULL, i.e. Agora made it or it predates migration 090, or is the bot's owner). Never a
+ *   model agent's token: a model agent answers any member, so its posts are not the owner's;
+ * - no live terminal session of the bot in this channel is shared by two tokens (mixed);
+ * - for a personal or invite token (a terminal or script the owner runs): either it is the token
+ *   that opened the bot's live terminal session in this channel, or the bot has no live hosted
+ *   session on the server that another person started (a subtask's session carries its
+ *   parent's starter);
+ * - for an agent host's or a box's token (what hosted runs get, also if it opened a terminal):
+ *   only when the bot's hosted runs can only have been caused by its owner. The bot has a live
+ *   hosted session on the server, and every one of them was started by the owner on an
+ *   owner-only profile whose plan is the owner's (subscription or siwc, or a machine-host
+ *   profile). An API-key agent in a box can be woken by a director, so its runs never count.
  * The caller compares the result with the target's plan owner. Needs the service role (reads
- * agent_sessions and bot_tokens).
+ * agent_sessions, agent_profiles and bot_tokens).
  */
 export async function ownerBotOf(db: any, input: { botId: string; tokenId: string | null | undefined; channelId: string }): Promise<string | null> {
     if (!input.tokenId) return null;
+    const hosted = `SELECT 1 FROM agent_sessions s
+                    WHERE s.bot_id = u.id AND s.kind = 'hosted' AND s.state = 'live' AND s.server_id = ch.server_id`;
     const row = (await db.query(
         `SELECT u.bot_owner_id
          FROM users u
          JOIN bot_tokens t ON t.id = $2 AND t.bot_id = u.id AND t.revoked_at IS NULL
+         JOIN channels ch ON ch.id = $3
          WHERE u.id = $1 AND u.bot = true AND u.bot_owner_id IS NOT NULL
            AND (t.created_by IS NULL OR t.created_by = u.bot_owner_id)
-           AND (EXISTS (SELECT 1 FROM agent_sessions s
-                        WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live'
-                          AND s.token_id = $2 AND NOT s.token_mixed)
-                OR (NOT EXISTS (SELECT 1 FROM agent_sessions s
-                                WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_mixed)
+           AND t.purpose <> 'model'
+           AND NOT EXISTS (SELECT 1 FROM agent_sessions s
+                           WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_mixed)
+           AND CASE WHEN t.purpose IN ('personal', 'invite') THEN
+                    EXISTS (SELECT 1 FROM agent_sessions s
+                            WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_id = $2)
+                    OR NOT EXISTS (${hosted} AND s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id)
+               ELSE
+                    EXISTS (${hosted})
                     AND NOT EXISTS (SELECT 1 FROM agent_sessions s
-                                    WHERE s.bot_id = u.id AND s.kind = 'hosted' AND s.state = 'live'
-                                      AND s.server_id = (SELECT c.server_id FROM channels c WHERE c.id = $3)
-                                      AND s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id)))`,
+                                    JOIN agent_profiles p ON p.id = s.profile_id
+                                    JOIN servers srv ON srv.id = s.server_id
+                                    WHERE s.bot_id = u.id AND s.kind = 'hosted' AND s.state = 'live' AND s.server_id = ch.server_id
+                                      AND (s.started_by IS DISTINCT FROM u.bot_owner_id
+                                           OR ${WAKE_AUTH_SQL} = 'api_key'
+                                           OR ${PLAN_OWNER_SQL} IS DISTINCT FROM u.bot_owner_id))
+               END`,
         [input.botId, input.tokenId, input.channelId]
     )).rows[0];
     return row?.bot_owner_id?.trim() ?? null;

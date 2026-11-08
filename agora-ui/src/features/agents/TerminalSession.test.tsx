@@ -211,6 +211,10 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
       .toBe('Counts as its owner: its hand-offs wake subscription agents the owner started.');
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'owner_only_token', ownedByYou: true, subscriptionWakes: 'owner_only' }))?.text)
       .toBe("This terminal won't wake subscription agents: Settings → Agents is set to Only you, and its token isn't a personal or agent invite token its owner made.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'agent_token', ownedByYou: true }))?.text)
+      .toBe("This terminal won't wake subscription agents: it uses an agent host's, box's or model agent's token; give your terminal a personal token.");
+    expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'no_token', ownedByYou: true }))?.text)
+      .toBe("This terminal won't wake subscription agents: no live token is on record for it (revoked, or reconnect its agora-mcp).");
     // A reason an older server sent that no longer exists reads as no owner, never as counting
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'unknown_maker' as never }))?.counts).toBe(false);
   });

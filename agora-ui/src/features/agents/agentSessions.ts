@@ -89,10 +89,12 @@ export interface AgentSession {
   title?: string | null;
 }
 
-export type OwnerTokenReason = 'mixed' | 'other_maker' | 'other_bot_owner' | 'started_by_other' | 'owner_only_token';
+export type OwnerTokenReason = 'mixed' | 'other_maker' | 'other_bot_owner' | 'started_by_other' | 'no_token' | 'agent_token' | 'owner_only_token';
 
 const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
   mixed: 'two different tokens share this terminal session',
+  no_token: 'no live token is on record for it (revoked, or reconnect its agora-mcp)',
+  agent_token: "it uses an agent host's, box's or model agent's token; give your terminal a personal token",
   other_maker: "its token was made by someone other than the bot's owner",
   other_bot_owner: 'the bot has no owner',
   started_by_other: "someone other than the bot's owner started this session",

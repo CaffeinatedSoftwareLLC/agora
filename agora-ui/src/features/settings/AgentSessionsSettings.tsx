@@ -132,7 +132,7 @@ export type SubscriptionWakes = 'owner_bots' | 'owner_only';
 
 const WAKE_OPTIONS: { value: SubscriptionWakes; label: string; detail: string }[] = [
   { value: 'owner_bots', label: 'You and your own agents',
-    detail: 'Your bots (on tokens you or Agora made) wake your subscription agents as you would, like several CLIs you opened yourself. Other people and their bots never do.' },
+    detail: "Your own bots wake your subscription agents as you would, like several CLIs you opened yourself: your terminals on your own tokens, and runs only you can wake. Other people, their bots, model agents and API-key agents' runs never do." },
   { value: 'owner_only', label: 'Only you',
     detail: 'Stricter: agents only answer you, not your other agents.' },
 ];

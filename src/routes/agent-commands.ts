@@ -36,12 +36,13 @@ export class CommandError extends Error {
 /**
  * Why a terminal session does or doesn't count as its bot owner's for the plan-owner rule's
  * owner bots (docs/provider-terms.md, src/lib/provider-terms.ts ownerBotOf): 'ok' when the bot
- * has an owner, no other token shares the session, the owner started it, and its token wasn't
- * made by another person (made by the owner, or by Agora: no recorded maker). With the server
- * set to 'owner_only' (#361) its token must also be a live personal or invite token the bot's
- * owner made ('owner_only_token' when not).
+ * has an owner, no other token shares the session, the owner started it, and it has a live
+ * personal or invite token ('no_token': none on record, or revoked; 'agent_token': an agent
+ * host's, box's or model agent's token) that no other person made. With the server set to
+ * 'owner_only' (#361) the bot's owner must have made the token ('owner_only_token' when not).
  */
-export type OwnerTokenState = 'ok' | 'mixed' | 'other_bot_owner' | 'started_by_other' | 'other_maker' | 'owner_only_token';
+export type OwnerTokenState = 'ok' | 'mixed' | 'other_bot_owner' | 'started_by_other' | 'no_token' | 'agent_token'
+    | 'other_maker' | 'owner_only_token';
 
 /**
  * `viewerId`: the caller, so a terminal session can say whether its bot is theirs. Without it
@@ -97,13 +98,13 @@ export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profi
              WHEN s.token_mixed THEN 'mixed'
              WHEN u.bot_owner_id IS NULL THEN 'other_bot_owner'
              WHEN s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id THEN 'started_by_other'
-             WHEN EXISTS (SELECT 1 FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id
-                            AND t.created_by IS NOT NULL AND t.created_by <> u.bot_owner_id) THEN 'other_maker'
-             -- 'Only you' (owner_only, #361): only a live personal or invite token the bot's owner made counts
-             WHEN srv_wakes.subscription_wakes = 'owner_only'
-                  AND NOT EXISTS (SELECT 1 FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id AND t.revoked_at IS NULL
-                                    AND t.purpose IN ('personal', 'invite') AND t.created_by = u.bot_owner_id) THEN 'owner_only_token'
-             ELSE 'ok' END AS owner_token_state,
+             ELSE COALESCE((SELECT CASE WHEN t.purpose NOT IN ('personal', 'invite') THEN 'agent_token'
+                                        WHEN t.created_by IS NOT NULL AND t.created_by <> u.bot_owner_id THEN 'other_maker'
+                                        -- 'Only you' (owner_only, #361): only a token the bot's owner made counts
+                                        WHEN srv_wakes.subscription_wakes = 'owner_only' AND t.created_by IS NULL THEN 'owner_only_token'
+                                        ELSE 'ok' END
+                            FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id AND t.revoked_at IS NULL), 'no_token')
+             END AS owner_token_state,
         srv_wakes.subscription_wakes
     FROM agent_sessions s LEFT JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id
     LEFT JOIN servers srv_wakes ON srv_wakes.id = s.server_id`;

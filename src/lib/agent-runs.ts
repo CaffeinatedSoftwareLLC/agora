@@ -5,7 +5,7 @@ import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
+import { consumeRunApproval, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
@@ -423,11 +423,34 @@ async function botCanAct(c: PoolClient, botId: string, channelId: string): Promi
 }
 
 /**
+ * #361 at claim time, for a hand-off or protocol wake by a bot on a plan-owned profile: the bot
+ * has a live hosted session in the channel the plan owner started, or a live terminal session
+ * there on the post's token (`tokenId`), not mixed, that is a live personal or invite token the
+ * plan owner made for their own bot.
+ */
+async function strictAuthorOk(c: PoolClient, botId: string, tokenId: string | null, channelId: string, owner: string): Promise<boolean> {
+    const row = await c.query(
+        `SELECT 1 FROM agent_sessions s
+         WHERE s.bot_id = $1 AND s.channel_id = $3 AND s.state = 'live'
+           AND ((s.kind = 'hosted' AND s.started_by = $4)
+                OR (s.kind = 'terminal' AND NOT s.token_mixed AND $2::char(26) IS NOT NULL AND s.token_id = $2
+                    AND EXISTS (SELECT 1 FROM bot_tokens t JOIN users u ON u.id = t.bot_id
+                                WHERE t.id = $2 AND t.bot_id = $1 AND t.revoked_at IS NULL AND t.purpose IN ('personal', 'invite')
+                                  AND t.created_by = $4 AND u.bot_owner_id = $4)))
+         LIMIT 1`,
+        [botId, tokenId, channelId, owner]
+    );
+    return row.rows.length > 0;
+}
+
+/**
  * `terms` is set for a plan-owned profile (provider-terms.ts): only the plan owner's own
  * messages, the plan owner's commands, and hand-offs inside a session they started count; with
- * `ownerBots` (subscription_wakes 'owner_bots') also direct and lurk wakes from the plan owner's
- * own bots. Routing already checked the bot's token and who started its run (ownerBotOf); the
- * message doesn't record its token, so this recheck is of the bot's owner and the setting.
+ * `ownerBots` (subscription_wakes 'owner_bots') also every wake from the plan owner's own bots.
+ * The checks are rerun here with the post's token (agent_inbox.author_token_id): ownerBotOf for
+ * owner bots (a revoked token, a session someone else started since, or a terminal that became
+ * mixed drops the wake), and #361 (strictAuthorOk) for hand-offs and protocol messages, which
+ * after a switch to owner_only is the only rule left.
  */
 async function recheckRows(c: PoolClient, channelId: string, rows: any[],
                            terms: { startedByOwner: boolean; planOwnerId: string | null; ownerBots: boolean } | null = null) {
@@ -458,13 +481,19 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
     }
 
     const kept: Array<{ row: any; entry: ClaimResult['inbox'][number] }> = [];
+    const ownerBots = new Map<string, boolean>();
     for (const row of rows) {
         const m = byId.get(row.message_id.trim());
         if (!m || m.deleted_at) continue;
         const authority = authorities.get(m.id.trim()) ?? null;
+        const tokenId: string | null = row.author_token_id?.trim() ?? null;
         // The plan owner's own bot (owner bots): counts as them without can_direct, while active and unpaused
-        const ownerBot = !!terms?.ownerBots && !!m.author_bot && !!m.author_active && !!terms.planOwnerId
-            && m.author_bot_owner?.trim() === terms.planOwnerId;
+        let ownerBot = false;
+        if (terms?.ownerBots && terms.planOwnerId && m.author_bot && m.author_active && m.author_bot_owner?.trim() === terms.planOwnerId) {
+            const key = `${m.author_id.trim()}:${tokenId}`;
+            if (!ownerBots.has(key)) ownerBots.set(key, await ownerBotOf(c, { botId: m.author_id.trim(), tokenId, channelId }) === terms.planOwnerId);
+            ownerBot = ownerBots.get(key)!;
+        }
         if (row.reason === 'direct' && !authority && !ownerBot) continue;
         // A session notice from /start or /resume: no author, valid while the session is live
         if (row.reason === 'command' && m.author_id) continue;
@@ -480,6 +509,9 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
                 if (m.author_bot ? !ownerBot : (!authority || m.author_id?.trim() !== terms.planOwnerId)) continue;
             }
             if ((row.reason === 'handoff' || row.reason === 'protocol') && !m.author_bot) continue;
+            // A hand-off card is rechecked when it is accepted (handoffs.ts planRefusal)
+            if ((row.reason === 'handoff' || row.reason === 'protocol') && !offer && !ownerBot
+                && !await strictAuthorOk(c, m.author_id.trim(), tokenId, channelId, terms.planOwnerId)) continue;
         }
         kept.push({
             row,

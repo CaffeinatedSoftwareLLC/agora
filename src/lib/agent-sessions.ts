@@ -123,6 +123,10 @@ interface RouteContext {
     wakes: SubscriptionWakes;
     /** A bot author: the person whose own automation this post is (ownerBotOf), or null. */
     countsAs: string | null;
+    /** An owner bot's direct wakes in this scope reached OWNER_BOT_HOP_LIMIT. */
+    hopLimited: boolean;
+    /** The loop guard held back a wake here. */
+    hopBlocked: boolean;
     /** Sessions refused because of the subscription rule; one notice each. */
     refused: Map<string, LiveSession>;
 }
@@ -228,12 +232,11 @@ function termsAllow(target: LiveSession, reason: 'direct' | 'handoff' | 'protoco
     if (!owner) return false;
     // A person's own message, with authority to direct agents now
     if (ctx.authorHuman) return (reason === 'direct' || reason === 'lurk') && ctx.couldDirect && ctx.authorId === owner;
-    // Owner bots: the plan owner's own bot counts as them for every reason (a direct wake
-    // still needed authority to direct, which the routing checked), to a session they started.
-    // Other people's bots never do, whoever started their sessions.
-    if (ctx.wakes === 'owner_bots') return target.startedBy === owner && ctx.countsAs === owner;
+    // Owner bots: the plan owner's own bot counts as them for every reason, to a session they
+    // started (routing lets it address their plan-owned agents directly, mayDirect)
+    if (ctx.wakes === 'owner_bots' && target.startedBy === owner && ctx.countsAs === owner) return true;
     if (reason === 'direct' || reason === 'lurk') return false;
-    // owner_only (#361). Agent-to-agent: the target was started by this plan's owner, and so was the author's
+    // #361, in either setting (owner_bots adds to it). Agent-to-agent: the target was started by this plan's owner, and so was the author's
     // session; or the author is the plan owner's own bot in a live terminal session here that
     // the owner's own token opened (routeMessage only takes a terminal as the author when the
     // post was made with that token)
@@ -264,10 +267,53 @@ function authorIsOwners(author: LiveSession | undefined, owner: string): boolean
 function permitted(targets: LiveSession[], reason: 'direct' | 'handoff' | 'protocol' | 'lurk', ctx: RouteContext): string[] {
     const ok: string[] = [];
     for (const t of targets) {
-        if (termsAllow(t, reason, ctx)) ok.push(t.id);
-        else if (reason !== 'lurk') ctx.refused.set(t.id, t);
+        if (!termsAllow(t, reason, ctx)) {
+            if (reason !== 'lurk') ctx.refused.set(t.id, t);
+        } else if (reason === 'direct' && ctx.hopLimited && ownerBotWake(t, ctx)) {
+            // Owner bots have talked long enough without the owner (OWNER_BOT_HOP_LIMIT)
+            ctx.hopBlocked = true;
+        } else {
+            ok.push(t.id);
+        }
     }
     return ok;
+}
+
+/** A wake of the owner's plan-owned agent by one of the owner's own bots (owner bots). */
+function ownerBotWake(target: LiveSession, ctx: RouteContext): boolean {
+    return !ctx.authorHuman && ctx.wakes === 'owner_bots' && target.subscription && !!target.planOwnerId && ctx.countsAs === target.planOwnerId;
+}
+
+/**
+ * Loop guard for owner bots, which can direct-wake the owner's plan-owned agents without
+ * can_direct while the thread hop guard is off by default: after this many bot-authored
+ * messages in a row that woke an agent directly ('direct' inbox rows), in the same thread (its
+ * parent included) or among the channel's top-level posts, with no person's message in between,
+ * an owner bot's direct wakes stop and one notice says so. A person's message resets it.
+ * Protocol and handoff wakes in bound threads keep their own guards.
+ */
+export const OWNER_BOT_HOP_LIMIT = 8;
+export const OWNER_BOT_HOP_NOTICE = `Agents have been talking to each other for ${OWNER_BOT_HOP_LIMIT} turns without you; reply to continue.`;
+
+/** The scope's bot-authored direct wakes since its latest person's message, and whether the notice was posted since. */
+async function ownerBotHops(db: any, msg: RoutedMessage): Promise<{ count: number; noticed: boolean }> {
+    // $2 is always typed: a top-level post's is NULL
+    const scope = msg.threadId ? '(m.thread_id = $2::char(26) OR m.id = $2::char(26))' : '(m.thread_id IS NULL AND $2::char(26) IS NULL)';
+    const row = (await db.query(
+        `WITH last_human AS (
+             SELECT max(m.id) AS id FROM messages m JOIN users u ON u.id = m.author_id
+             WHERE m.channel_id = $1 AND ${scope} AND NOT u.bot AND m.deleted_at IS NULL AND m.id <> $3)
+         SELECT
+             (SELECT count(*)::int FROM messages m JOIN users u ON u.id = m.author_id
+              WHERE m.channel_id = $1 AND ${scope} AND u.bot AND m.id <> $3
+                AND m.id > COALESCE((SELECT id FROM last_human), '')
+                AND EXISTS (SELECT 1 FROM agent_inbox i WHERE i.message_id = m.id AND i.reason = 'direct')) AS count,
+             EXISTS (SELECT 1 FROM messages m
+                     WHERE m.channel_id = $1 AND ${scope} AND m.author_id IS NULL AND m.content = $4
+                       AND m.id > COALESCE((SELECT id FROM last_human), '')) AS noticed`,
+        [msg.channelId, msg.threadId, msg.messageId, OWNER_BOT_HOP_NOTICE]
+    )).rows[0];
+    return { count: row.count, noticed: row.noticed };
 }
 
 function byName(sessions: LiveSession[], name: string): LiveSession | undefined {
@@ -381,7 +427,9 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
         const countsAs = author.rows[0]?.bot === true && wakes === 'owner_bots'
             ? await ownerBotOf(db, { botId: authorId, tokenId: msg.authorTokenId, channelId: msg.channelId })
             : null;
-        const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, wakes, countsAs, refused: new Map() };
+        const hops = countsAs ? await ownerBotHops(db, msg) : null;
+        const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, wakes, countsAs,
+            hopLimited: !!hops && hops.count >= OWNER_BOT_HOP_LIMIT, hopBlocked: false, refused: new Map() };
 
         if (msg.threadId === null) {
             const agents = new Set([...sessions.map(s => s.botId), ...terminalBots]).size;
@@ -394,6 +442,10 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
         if (!authorSession?.lurkMode) {
             await addInbox(db, permitted(sessions.filter(s => s.lurkMode && s.botId !== authorId), 'lurk', ctx),
                 msg.messageId, msg.threadId, 'lurk');
+        }
+        // The bot's token on its wakes: the claim reruns ownerBotOf with it (agent-runs.ts)
+        if (author.rows[0]?.bot === true && msg.authorTokenId) {
+            await db.query('UPDATE agent_inbox SET author_token_id = $2 WHERE message_id = $1', [msg.messageId, msg.authorTokenId]);
         }
         const notices: Notice[] = [];
         // Someone who can direct addressed an agent on standby: say once why its hosted session stays quiet
@@ -408,6 +460,8 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
             if (msg.threadId) notices.push(await threadReplyCounted(db, msg.channelId, msg.threadId));
         };
         for (const s of ctx.refused.values()) await say(planNotice(s.profileName, s.authMode, !!s.planOwnerId));
+        // Once per run of bot turns: a person's message resets it
+        if (ctx.hopBlocked && !hops?.noticed) await say(OWNER_BOT_HOP_NOTICE);
         if (msg.couldDirect && authorHuman) {
             const refusedBots = new Set([...ctx.refused.values()].map(s => s.botId));
             for (const name of await unreachable(db, msg, authorId, terminalBots, refusedBots)) {
@@ -719,8 +773,9 @@ async function routeThreadReply(db: any, msg: RoutedMessage, sessions: LiveSessi
         }
     }
 
-    // Someone who can direct speaks in the thread: every other participant hears it
-    if (msg.couldDirect) {
-        await addInbox(db, permitted(others, 'direct', ctx), msg.messageId, threadId, 'direct');
-    }
+    // Someone who can direct speaks in the thread: every other participant hears it. So does a
+    // participant that is the owner's own bot, to the owner's plan-owned participants (mayDirect),
+    // under the loop guard; a bot outside the thread needs authority to direct
+    const hearers = msg.couldDirect ? others : author ? others.filter(s => mayDirect(s, ctx)) : [];
+    await addInbox(db, permitted(hearers, 'direct', ctx), msg.messageId, threadId, 'direct');
 }

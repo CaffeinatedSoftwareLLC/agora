@@ -4,9 +4,10 @@ import { generateUlid } from '../../src/utils/ulid';
 /**
  * Settings → Bots says who each token counts as (docs/provider-terms.md, "Owner bots"):
  * GET /servers/:id/bots/:id/tokens returns purpose, createdBy, createdByName and countsAsYou for
- * the caller. countsAsYou: a live token of any purpose on a bot the caller owns, that no other
- * person made (the caller made it, or Agora did: no recorded maker). There is nothing to claim
- * any more, so the claim route is gone.
+ * the caller. countsAsYou: a live personal or invite token on a bot the caller owns, that no
+ * other person made (the caller made it, or no recorded maker). An agent host's or box's token
+ * counts only in runs only the owner can have caused (decided per post), a model agent's never.
+ * There is nothing to claim any more, so the claim route is gone.
  */
 
 const ADMINISTRATOR = (1n << 0n).toString();
@@ -68,13 +69,14 @@ beforeAll(async () => {
 afterAll(async () => { await ctx.close(); });
 
 describe('token list: who each token counts as', () => {
-    it('countsAsYou for any live token on your own bot that no other person made; never one someone else made', async () => {
+    it('countsAsYou for a live personal token on your own bot that no other person made; never one someone else made', async () => {
         const bot = await makeBot(owner, 'listbot');
         const adminMinted = await mint(bot.id, admin, 'admin made');
         const revoked = await mint(bot.id, owner, 'old');
         expect((await ctx.request.delete(`/servers/${serverId}/bots/${bot.id}/tokens/${revoked}`).set(owner.auth)).status).toBe(200);
         const host = await makerless(bot.id, 'host');
         const box = await makerless(bot.id, 'box');
+        const model = await makerless(bot.id, 'model');
         const old = await makerless(bot.id, 'personal');
         const oldRevoked = await makerless(bot.id, 'personal', true);
 
@@ -82,10 +84,11 @@ describe('token list: who each token counts as', () => {
         expect(asOwner.get(bot.tokenId)).toMatchObject({ purpose: 'personal', createdBy: owner.userId, createdByName: 'countowner', countsAsYou: true });
         expect(asOwner.get(adminMinted)).toMatchObject({ purpose: 'personal', createdBy: admin.userId, createdByName: 'countadmin', countsAsYou: false });
         expect(asOwner.get(revoked)).toMatchObject({ createdBy: owner.userId, countsAsYou: false });
-        // Agora made it, or it predates recorded makers: yours
-        expect(asOwner.get(host)).toMatchObject({ purpose: 'host', createdBy: null, createdByName: null, countsAsYou: true });
-        expect(asOwner.get(box)).toMatchObject({ purpose: 'box', countsAsYou: true });
+        // Predates recorded makers: yours. Agent host, box and model agent tokens are not a blanket "you"
         expect(asOwner.get(old)).toMatchObject({ purpose: 'personal', createdBy: null, countsAsYou: true });
+        expect(asOwner.get(host)).toMatchObject({ purpose: 'host', createdBy: null, createdByName: null, countsAsYou: false });
+        expect(asOwner.get(box)).toMatchObject({ purpose: 'box', countsAsYou: false });
+        expect(asOwner.get(model)).toMatchObject({ purpose: 'model', countsAsYou: false });
         expect(asOwner.get(oldRevoked)).toMatchObject({ countsAsYou: false });
         expect(asOwner.get(old)).not.toHaveProperty('madeBeforeMakers');
 
@@ -97,14 +100,14 @@ describe('token list: who each token counts as', () => {
         expect([...asAdmin.values()].some(t => t.countsAsYou)).toBe(false);
     });
 
-    it("the agent host token made with an agent counts as the owner who made the agent", async () => {
+    it("the agent host token made with an agent is the owner's, but not a blanket \"counts as you\"", async () => {
         const host = await ctx.request.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
         expect(host.status).toBe(201);
         const agent = await ctx.request.post(`/servers/${serverId}/agents`).set(owner.auth)
             .send({ hostModeAck: true, name: 'hostagent', adapter: 'claude', hostId: host.body.host.id, workdirAlias: 'agora' });
         expect(agent.status, JSON.stringify(agent.body)).toBe(201);
         const tokenId = String(agent.body.token).slice('bot_'.length).split('.')[0];
-        expect((await list(agent.body.bot.id, owner)).get(tokenId)).toMatchObject({ purpose: 'host', createdBy: owner.userId, countsAsYou: true });
+        expect((await list(agent.body.bot.id, owner)).get(tokenId)).toMatchObject({ purpose: 'host', createdBy: owner.userId, countsAsYou: false });
     });
 
     it('an invite token counts as whoever created the invite, on their own bot; not on a bot someone else owns', async () => {

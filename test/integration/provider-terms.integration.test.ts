@@ -477,14 +477,22 @@ describe('subscription profiles (owner_only): hand-offs from the owner\'s termin
     const terminalAs = async (by: { auth: object }) =>
         ((await cmd(by.auth, { command: 'sessions' })).body.sessions as any[]).find(s => s.kind === 'terminal' && s.state === 'live');
 
-    it("the strip says why a terminal doesn't count as its owner: someone else's token, a mixed session, no owner", async () => {
-        // Owner bots: any token nobody else made counts, the agent host's token too
-        await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_bots' WHERE id = $1`, [serverId]);
+    it("the strip says why a terminal doesn't count as its owner: an agent's token, someone else's token, a mixed session, no owner", async () => {
+        // An agent host's token in a terminal never counts as the terminal's
         await connectTerminal(beta, tokenOf(beta.auth));
-        expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null, ownedByYou: true, subscriptionWakes: 'owner_bots' });
-        // Only you (#361): only a personal or invite token the bot's owner made
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'agent_token', ownedByYou: true, subscriptionWakes: 'owner_only' });
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
+        // A token with no recorded maker: owner bots count it; Only you (#361) doesn't
+        const legacy = await mint(beta, owner);
+        await ctx.db.query(`UPDATE bot_tokens SET created_by = NULL WHERE id = $1`, [legacy.id]);
+        await connectTerminal(beta, legacy);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'owner_only_token' });
+        await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_bots' WHERE id = $1`, [serverId]);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null, subscriptionWakes: 'owner_bots' });
+        // A revoked token never counts
+        await ctx.db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE id = $1`, [legacy.id]);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'no_token' });
         await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_only' WHERE id = $1`, [serverId]);
-        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'owner_only_token', subscriptionWakes: 'owner_only' });
         await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
         await connectTerminal(beta, await mint(beta, admin));
         expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'other_maker' });

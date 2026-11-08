@@ -18,11 +18,14 @@ const ULID_PATTERN = '^[0-9A-HJKMNP-TV-Z]{26}$';
 /**
  * Does an agent posting with this token count as `userId` for the plan-owner rule's owner bots
  * (docs/provider-terms.md; the token part of ownerBotOf in src/lib/provider-terms.ts): a live
- * token of any purpose on a bot `userId` owns, that no other person made (made by `userId`, or
- * by Agora: no recorded maker). Expects the bot_tokens row with the bot's bot_owner_id.
+ * personal or invite token on a bot `userId` owns, that no other person made (made by `userId`,
+ * or no recorded maker). An agent host's or box's token counts only in runs only the owner can
+ * have caused, which depends on the bot's sessions at the time (the UI says so), and a model
+ * agent's token never does. Expects the bot_tokens row with the bot's bot_owner_id.
  */
-function tokenCountsAs(r: { revoked_at: unknown; created_by: string | null; bot_owner_id: string | null }, userId: string): boolean {
-    return !r.revoked_at && r.bot_owner_id?.trim() === userId && (!r.created_by || r.created_by.trim() === userId);
+function tokenCountsAs(r: { revoked_at: unknown; purpose: string; created_by: string | null; bot_owner_id: string | null }, userId: string): boolean {
+    return !r.revoked_at && (r.purpose === 'personal' || r.purpose === 'invite')
+        && r.bot_owner_id?.trim() === userId && (!r.created_by || r.created_by.trim() === userId);
 }
 
 function isValidAvatarUrl(value: string): boolean {

@@ -232,12 +232,13 @@ describe('token badges: who each token counts as', () => {
   const ME = 'U'.padEnd(26, 'M');
   const OTHER = 'U'.padEnd(26, 'O');
   const base = { lastUsedAt: null, createdAt: '2026-11-01T00:00:00Z', revokedAt: null };
-  /** As the server sends them to the bot's owner: countsAsYou on any token no other person made. */
+  /** As the server sends them to the bot's owner: countsAsYou on a personal or invite token no other person made. */
   const tokens = (): BotToken[] => [
     { ...base, id: 'T1', name: 'laptop', purpose: 'personal', createdBy: ME, createdByName: 'me', countsAsYou: true },
     { ...base, id: 'T2', name: 'admin made', purpose: 'personal', createdBy: OTHER, createdByName: 'ada', countsAsYou: false },
-    { ...base, id: 'T3', name: 'agent host', purpose: 'host', createdBy: ME, createdByName: 'me', countsAsYou: true },
-    { ...base, id: 'T4', name: 'box', purpose: 'box', createdBy: null, createdByName: null, countsAsYou: true },
+    { ...base, id: 'T3', name: 'agent host', purpose: 'host', createdBy: ME, createdByName: 'me', countsAsYou: false },
+    { ...base, id: 'T4', name: 'box', purpose: 'box', createdBy: null, createdByName: null, countsAsYou: false },
+    { ...base, id: 'T7', name: 'model agent (server)', purpose: 'model', createdBy: ME, createdByName: 'me', countsAsYou: false },
     { ...base, id: 'T5', name: 'old terminal', purpose: 'personal', createdBy: null, createdByName: null, countsAsYou: true,
       lastUsedAt: '2026-10-30T00:00:00Z', lastUsedClient: 'claude-code' },
   ];
@@ -258,13 +259,17 @@ describe('token badges: who each token counts as', () => {
   const row = (name: string) => screen.getByText(name).closest('[data-testid="bot-token"]') as HTMLElement;
   const badge = (name: string) => within(row(name)).getByTestId('token-badge');
 
-  it('on your own bot every token you or Agora made counts as you; one someone else made never does', async () => {
+  it('on your own bot your personal tokens count as you, agent host and box tokens only in your own runs, a model agent token never', async () => {
     await openBot(ME);
-    for (const name of ['laptop', 'agent host', 'box', 'old terminal']) {
+    for (const name of ['laptop', 'old terminal']) {
       expect(badge(name)).toHaveTextContent('Counts as you');
       expect(badge(name)).toHaveAttribute('title', expect.stringContaining('wake subscription agents you started'));
     }
-    expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining("The agent host's token on your own bot"));
+    expect(badge('agent host')).toHaveTextContent('Your own runs only');
+    expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining("An API-key agent's runs never count"));
+    expect(badge('box')).toHaveTextContent('Your own runs only');
+    expect(badge('model agent (server)')).toHaveTextContent('Model agent token');
+    expect(badge('model agent (server)')).toHaveAttribute('title', expect.stringContaining('never count as anyone'));
     expect(badge('admin made')).toHaveTextContent('Made by ada');
     expect(badge('admin made')).toHaveAttribute('title', expect.stringContaining('never wakes subscription agents'));
     // Nothing to claim any more
@@ -275,8 +280,8 @@ describe('token badges: who each token counts as', () => {
     await openBot(OTHER, asAdmin());
     expect(badge('agent host')).toHaveTextContent('Made by you');
     expect(badge('old terminal')).toHaveTextContent('Counts as its owner');
-    expect(badge('box')).toHaveTextContent('Counts as its owner');
-    expect(badge('box')).toHaveAttribute('title', expect.stringContaining("count as the bot's owner"));
+    expect(badge('old terminal')).toHaveAttribute('title', expect.stringContaining("count as the bot's owner"));
+    expect(badge('box')).toHaveTextContent("Its owner's own runs only");
     expect(badge('mine for them')).toHaveTextContent('Made by you');
     expect(badge('mine for them')).toHaveAttribute('title', expect.stringContaining('counts as no one'));
     expect(badge('admin made')).toHaveTextContent('Counts as its owner');
