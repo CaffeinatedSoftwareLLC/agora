@@ -11,15 +11,13 @@ import { Button } from '../../components/ui/Button';
 import { CreateBotModal } from './CreateBotModal';
 import { CreateTokenModal } from './CreateTokenModal';
 import { CreateAgentInviteModal } from './CreateAgentInviteModal';
-import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useAuthStore } from '../../stores/authStore';
-import { CLAIM_WARNING, claimTokenSummary, tokenBadge, type TokenBadgeTone } from './tokenBadge';
+import { tokenBadge, type TokenBadgeTone } from './tokenBadge';
 
 const BADGE_TONE: Record<TokenBadgeTone, string> = {
   counts: 'border-online text-online',
-  maker: 'border-border text-text-muted',
+  owner: 'border-border text-text-muted',
   never: 'border-border text-text-muted',
-  unknown: 'border-warn text-warn',
 };
 
 export function BotManagement() {
@@ -524,7 +522,6 @@ function BotDetailPanel({
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [avatarError, setAvatarError] = useState('');
   const viewerId = useAuthStore(s => s.user?.id);
-  const [claiming, setClaiming] = useState<{ tokenId: string; busy: boolean } | null>(null);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -583,20 +580,6 @@ function BotDetailPanel({
     }
   }
 
-  async function handleClaimToken(tokenId: string) {
-    setClaiming({ tokenId, busy: true });
-    setError('');
-    try {
-      await botApi.claimToken(serverId, botId, tokenId);
-      // The server works out countsAsYou: reload rather than guess
-      setTokens(await botApi.listTokens(serverId, botId));
-      setClaiming(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.code : 'Failed to claim the token');
-      setClaiming(null);
-    }
-  }
-
   async function toggleDirect(channelId: string, canDirect: boolean) {
     setChannelLoading(channelId);
     setError('');
@@ -642,7 +625,6 @@ function BotDetailPanel({
   const directChannelIds = new Set(detail.channels.filter(c => c.canDirect).map(c => c.id));
   const activeTokens = tokens.filter(t => !t.revokedAt);
   const revokedTokens = tokens.filter(t => t.revokedAt);
-  const claimingToken = claiming ? tokens.find(t => t.id === claiming.tokenId) : undefined;
 
   return (
     <div className="border-t border-border px-4 py-4 flex flex-col gap-5 bg-bg/50">
@@ -814,15 +796,6 @@ function BotDetailPanel({
                     )}
                   </div>
                   <div className="flex shrink-0">
-                    {badge?.claimable && (
-                      <button
-                        onClick={() => setClaiming({ tokenId: t.id, busy: false })}
-                        className="min-h-11 md:min-h-8 px-2 text-text-muted text-xs hover:underline"
-                        title="Record that you made this token, so a terminal agent using it counts as you"
-                      >
-                        Claim as mine
-                      </button>
-                    )}
                     {t.boundClient && (
                       <button
                         onClick={() => handleClearBinding(t.id)}
@@ -860,15 +833,6 @@ function BotDetailPanel({
               const t = await botApi.listTokens(serverId, botId);
               setTokens(t);
             }}
-          />
-          <ConfirmDialog
-            open={!!claiming}
-            title="Claim this token as yours?"
-            message={`${claimingToken ? `${claimTokenSummary(claimingToken)} ` : ''}${CLAIM_WARNING}`}
-            confirmLabel="Claim as mine"
-            loading={!!claiming?.busy}
-            onConfirm={() => { if (claiming) void handleClaimToken(claiming.tokenId); }}
-            onCancel={() => setClaiming(null)}
           />
         </section>
       )}

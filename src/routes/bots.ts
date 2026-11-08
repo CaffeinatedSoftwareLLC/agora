@@ -10,21 +10,19 @@ import { asService } from '../lib/agent-sessions';
 import { endTerminalSessionNow, limitNotice, storeTerminalStatus, type LimitWarning } from '../lib/terminal-sessions';
 import { postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { agentPresence } from '../lib/agent-presence';
-import { madeBeforeMakersSql } from '../lib/token-provenance';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
 const ULID_PATTERN = '^[0-9A-HJKMNP-TV-Z]{26}$';
 
 /**
- * Does a terminal agent on this token count as `userId` for the plan-owner rule
- * (docs/provider-terms.md; the same test as terminalSessions/authorIsOwners in
- * src/lib/agent-sessions.ts): a live personal or invite token that `userId` minted, on a bot
- * `userId` owns. Expects the bot_tokens row with the bot's bot_owner_id.
+ * Does an agent posting with this token count as `userId` for the plan-owner rule's owner bots
+ * (docs/provider-terms.md; the token part of ownerBotOf in src/lib/provider-terms.ts): a live
+ * token of any purpose on a bot `userId` owns, that no other person made (made by `userId`, or
+ * by Agora: no recorded maker). Expects the bot_tokens row with the bot's bot_owner_id.
  */
-function tokenCountsAs(r: { revoked_at: unknown; purpose: string; created_by: string | null; bot_owner_id: string | null }, userId: string): boolean {
-    return !r.revoked_at && (r.purpose === 'personal' || r.purpose === 'invite')
-        && r.created_by?.trim() === userId && r.bot_owner_id?.trim() === userId;
+function tokenCountsAs(r: { revoked_at: unknown; created_by: string | null; bot_owner_id: string | null }, userId: string): boolean {
+    return !r.revoked_at && r.bot_owner_id?.trim() === userId && (!r.created_by || r.created_by.trim() === userId);
 }
 
 function isValidAvatarUrl(value: string): boolean {
@@ -561,8 +559,7 @@ export async function botRoutes(app: FastifyInstance) {
         const result = await db.query(
             `SELECT t.id, t.name, t.last_used_at, t.created_at, t.revoked_at, t.bound_client, t.bound_at,
                     t.last_used_client, t.last_used_ip, t.last_used_user_agent, t.last_refused_at, t.last_refused_client, t.last_refused_ip,
-                    t.purpose, t.created_by, maker.username AS created_by_name, bot.bot_owner_id,
-                    ${madeBeforeMakersSql('t')} AS made_before_makers
+                    t.purpose, t.created_by, maker.username AS created_by_name, bot.bot_owner_id
              FROM bot_tokens t
              JOIN users bot ON bot.id = t.bot_id
              LEFT JOIN users maker ON maker.id = t.created_by
@@ -578,13 +575,11 @@ export async function botRoutes(app: FastifyInstance) {
             createdAt: r.created_at,
             revokedAt: r.revoked_at,
             // What minted it and who (migration 090). countsAsYou: the plan-owner rule
-            // (docs/provider-terms.md) counts a terminal on this token as the caller's
+            // (docs/provider-terms.md) counts an agent posting with this token as the caller
             purpose: r.purpose,
             createdBy: r.created_by?.trim() ?? null,
             createdByName: r.created_by ? (r.created_by_name ?? null) : null,
             countsAsYou: tokenCountsAs(r, userId),
-            // No maker: made before Agora recorded makers (claimable), or the maker's account was deleted
-            madeBeforeMakers: !!r.made_before_makers,
             // Where it is used from, and the client it is bound to (#39, src/auth/token-binding.ts)
             boundClient: r.bound_client,
             boundAt: r.bound_at,
@@ -597,83 +592,6 @@ export async function botRoutes(app: FastifyInstance) {
         }));
 
         return reply.status(200).send(tokens);
-    });
-
-    // POST /servers/:serverId/bots/:id/tokens/:tokenId/claim → 200 { claimed: true, tokenId }
-    // A personal token made before migration 090 has no recorded maker, so a terminal on it
-    // never counts as anyone's (docs/provider-terms.md). The bot's owner, and only they (not an
-    // administrator), can record themselves as its maker. Refusals: 403 not_bot_owner, 404
-    // token_not_found, 409 token_revoked, not_claimable (host, box, model or invite token),
-    // already_claimed, maker_deleted (made after makers were recorded, src/lib/token-provenance.ts).
-    app.post('/servers/:serverId/bots/:id/tokens/:tokenId/claim', {
-        schema: {
-            params: {
-                type: 'object',
-                required: ['serverId', 'id', 'tokenId'],
-                properties: {
-                    serverId: { type: 'string', pattern: ULID_PATTERN },
-                    id: { type: 'string', pattern: ULID_PATTERN },
-                    tokenId: { type: 'string', pattern: ULID_PATTERN },
-                },
-            },
-        },
-    }, async (request, reply) => {
-        const { serverId, id: botId, tokenId } = request.params as { serverId: string; id: string; tokenId: string };
-        const db = request.dbClient!;
-        const userId = request.userId.trim();
-        if (request.isBot) return reply.status(403).send({ error: 'Bots cannot manage other bots' });
-
-        const member = await db.query('SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2', [serverId, userId]);
-        if (member.rows.length === 0) return reply.status(403).send({ error: 'Not a member of this server' });
-        const bot = await db.query('SELECT bot_owner_id FROM users WHERE id = $1 AND bot = true AND server_id = $2', [botId, serverId]);
-        if (!bot.rows[0]) return reply.status(404).send({ error: 'Bot not found in this server' });
-        // The owner's alone: claiming says "I made this token", which an administrator can't say for someone else
-        if (bot.rows[0].bot_owner_id?.trim() !== userId) {
-            return reply.status(403).send({ error: 'not_bot_owner', message: 'Only the bot\'s owner can claim its tokens.' });
-        }
-
-        const claimed = await db.query(
-            `UPDATE bot_tokens SET created_by = $3
-             WHERE id = $1 AND bot_id = $2 AND created_by IS NULL AND revoked_at IS NULL AND purpose = 'personal'
-               AND ${madeBeforeMakersSql('bot_tokens')}
-             RETURNING id`,
-            [tokenId, botId, userId]
-        );
-        if (claimed.rows.length === 0) {
-            const row = (await db.query(
-                `SELECT t.revoked_at, t.purpose, t.created_by, ${madeBeforeMakersSql('t')} AS made_before_makers
-                 FROM bot_tokens t WHERE t.id = $1 AND t.bot_id = $2`, [tokenId, botId])).rows[0];
-            if (!row) return reply.status(404).send({ error: 'token_not_found' });
-            if (row.revoked_at) return reply.status(409).send({ error: 'token_revoked', message: 'That token is revoked.' });
-            if (row.purpose !== 'personal') {
-                return reply.status(409).send({ error: 'not_claimable', message: 'Only a personal token can be claimed: host, box, model agent and invite tokens never count as you.' });
-            }
-            if (row.created_by) return reply.status(409).send({ error: 'already_claimed', message: 'That token already has a recorded maker.' });
-            // Made after Agora started recording makers: its maker's account was deleted
-            return reply.status(409).send({ error: 'maker_deleted', message: 'Its maker\'s account was deleted, so nobody can claim it. Make a new token.' });
-        }
-
-        await db.query(
-            `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
-             VALUES ($1, $2, $3, 'bot_token_claimed', 'bot', $4, $5)`,
-            [generateUlid(), serverId, userId, botId, JSON.stringify({ tokenId })]
-        );
-
-        // A live terminal on this token counts from its next post (routing reads created_by
-        // each time); tell the agent strips now. agent_sessions is read past RLS, as /sessions does.
-        const notices = await asService(db, async () => {
-            const live = await db.query(
-                `SELECT id FROM agent_sessions WHERE token_id = $1 AND bot_id = $2 AND kind = 'terminal' AND state = 'live'`,
-                [tokenId, botId]
-            );
-            const out: Notice[] = [];
-            for (const r of live.rows) out.push(await sessionUpdate(db, r.id.trim(), false));
-            return out;
-        });
-        request.pendingEvents ??= [];
-        for (const n of notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
-
-        return reply.status(200).send({ claimed: true, tokenId: claimed.rows[0].id.trim() });
     });
 
     // DELETE /servers/:serverId/bots/:id/tokens/:tokenId/binding → 200 { cleared: true }

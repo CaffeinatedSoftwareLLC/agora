@@ -112,17 +112,77 @@ export function AgentSessionsSettings() {
 
       <p className="text-text-muted text-xs mb-6">
         Each agent runs its CLI on your own login (<em>subscription</em>) or on an API key, as set in the host's config.
-        Personal subscriptions are for one person, so only you can wake a subscription agent; give agents that other
-        members wake an API key. A Codex agent can also run on a ChatGPT plan through Sign in with ChatGPT; only the
-        person who connected their plan can wake it. See docs/provider-terms.md and docs/codex-chatgpt-plan.md.
+        Personal subscriptions are for one person, so only you and your own agents can wake a subscription agent; give
+        agents that other members wake an API key. A Codex agent can also run on a ChatGPT plan through Sign in with
+        ChatGPT; only the person who connected their plan, and their own agents, can wake it. See docs/provider-terms.md
+        and docs/codex-chatgpt-plan.md.
       </p>
 
+      <SubscriptionWakesSection serverId={serverId} isOwner={isOwner} />
       <BoxesSection serverId={serverId} channels={channels} isOwner={isOwner} />
       <HostsSection serverId={serverId} hosts={machineHosts} onChange={load} onToken={setSecret} onError={setError} />
       <AgentsSection serverId={serverId} hosts={activeHosts} allHosts={hosts} profiles={profiles} channels={channels} plans={plans}
         onChange={load} onToken={setSecret} onError={setError} />
       <NotAffiliated className="mt-8" />
     </div>
+  );
+}
+
+export type SubscriptionWakes = 'owner_bots' | 'owner_only';
+
+const WAKE_OPTIONS: { value: SubscriptionWakes; label: string; detail: string }[] = [
+  { value: 'owner_bots', label: 'You and your own agents',
+    detail: 'Your bots (on tokens you or Agora made) wake your subscription agents as you would, like several CLIs you opened yourself. Other people and their bots never do.' },
+  { value: 'owner_only', label: 'Only you',
+    detail: 'Stricter: agents only answer you, not your other agents.' },
+];
+
+/**
+ * Who besides the plan owner wakes subscription and ChatGPT-plan agents (servers.subscription_wakes,
+ * docs/provider-terms.md "Owner bots"). Everyone sees it; only the server owner changes it.
+ */
+export function SubscriptionWakesSection({ serverId, isOwner }: { serverId: string; isOwner: boolean }) {
+  const [value, setValue] = useState<SubscriptionWakes | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    // An older server without the setting: the section stays hidden
+    api.get<{ subscriptionWakes: SubscriptionWakes }>(`/servers/${serverId}/agent-settings`)
+      .then(r => { if (!cancelled) setValue(r.subscriptionWakes); })
+      .catch(() => { if (!cancelled) setValue(null); });
+    return () => { cancelled = true; };
+  }, [serverId]);
+
+  if (!value) return null;
+  const choose = async (next: SubscriptionWakes) => {
+    if (next === value) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api.patch<{ subscriptionWakes: SubscriptionWakes }>(`/servers/${serverId}/agent-settings`, { subscriptionWakes: next });
+      setValue(r.subscriptionWakes);
+    } catch (err) { setError(errorText(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className="mb-8">
+      <h3 className="text-lg font-semibold text-text mb-1">Who can wake subscription agents</h3>
+      <p className="text-text-muted text-xs mb-2">Other people and their bots never can: a personal subscription is for one person.</p>
+      <div role="radiogroup" aria-label="Who can wake subscription agents" className="flex flex-col gap-1">
+        {WAKE_OPTIONS.map(o => (
+          <label key={o.value} className="flex min-h-11 md:min-h-8 items-start gap-2 text-sm text-text">
+            <input type="radio" name="subscription-wakes" className="mt-1" value={o.value} checked={value === o.value}
+              disabled={!isOwner || busy} onChange={() => void choose(o.value)} />
+            <span>{o.label} <span className="text-xs text-text-muted">{o.detail}</span></span>
+          </label>
+        ))}
+      </div>
+      {!isOwner && <p className="mt-1 text-xs text-text-muted">Only the server owner can change this.</p>}
+      {error && <p className="mt-1 text-danger text-sm">{error}</p>}
+    </section>
   );
 }
 

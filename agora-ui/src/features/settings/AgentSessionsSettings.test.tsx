@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, serverApi } from '../../lib/api';
 import { useServerStore } from '../../stores/serverStore';
-import { AgentSessionsSettings } from './AgentSessionsSettings';
+import { AgentSessionsSettings, SubscriptionWakesSection } from './AgentSessionsSettings';
 
 beforeEach(() => {
   useServerStore.setState({ instanceServerId: 'S' });
@@ -60,4 +60,46 @@ it('does not save an opencode agent without a model', async () => {
   fireEvent.change(await screen.findByLabelText('Model for qwen'), { target: { value: ' ' } });
   expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
   expect(patch).not.toHaveBeenCalled();
+});
+
+describe('who can wake subscription agents (docs/provider-terms.md, "Owner bots")', () => {
+  const settingsGet = (value: string) => vi.mocked(api.get).mockImplementation(async (path: string) =>
+    (path.endsWith('/agent-settings') ? { subscriptionWakes: value } : []) as never);
+
+  it('shows the default (you and your own agents) and lets the owner make it stricter', async () => {
+    settingsGet('owner_bots');
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({ subscriptionWakes: 'owner_only' });
+    render(<SubscriptionWakesSection serverId="S" isOwner />);
+    const ours = await screen.findByRole('radio', { name: /^You and your own agents/ });
+    const strict = screen.getByRole('radio', { name: /^Only you/ });
+    expect(ours).toHaveProperty('checked', true);
+    expect(strict).toHaveProperty('checked', false);
+    expect(screen.getByText('Stricter: agents only answer you, not your other agents.')).toBeTruthy();
+    fireEvent.click(strict);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-settings', { subscriptionWakes: 'owner_only' }));
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^Only you/ })).toHaveProperty('checked', true));
+  });
+
+  it('shows the setting to everyone else, without letting them change it', async () => {
+    settingsGet('owner_only');
+    const patch = vi.spyOn(api, 'patch');
+    render(<SubscriptionWakesSection serverId="S" isOwner={false} />);
+    const strict = await screen.findByRole('radio', { name: /^Only you/ });
+    expect(strict).toHaveProperty('checked', true);
+    expect(strict).toHaveProperty('disabled', true);
+    expect(screen.getByRole('radio', { name: /^You and your own agents/ })).toHaveProperty('disabled', true);
+    expect(screen.getByText('Only the server owner can change this.')).toBeTruthy();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('is part of the Agents page, and stays hidden on a server without the setting', async () => {
+    settingsGet('owner_bots');
+    render(<AgentSessionsSettings />);
+    expect(await screen.findByRole('radiogroup', { name: 'Who can wake subscription agents' })).toBeTruthy();
+    cleanup();
+    vi.mocked(api.get).mockRejectedValue(new Error('404'));
+    const { container } = render(<SubscriptionWakesSection serverId="S" isOwner />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/servers/S/agent-settings'));
+    expect(container.textContent).toBe('');
+  });
 });

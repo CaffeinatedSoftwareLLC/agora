@@ -7,8 +7,9 @@ import { attachTerminal } from '../../src/lib/terminal-sessions';
  *
  * - The host reports each profile's auth mode; a profile counts as 'subscription' until then.
  * - A subscription profile runs only for the server owner: owner messages, owner /start and
- *   /resume, hand-offs between owner-started sessions, lurk on owner messages. Everyone
- *   else is refused with a notice. API-key profiles keep the ordinary authority rules on a
+ *   /resume, hand-offs between owner-started sessions, lurk on owner messages, and (the server's
+ *   subscription_wakes 'owner_bots', default) the owner's own bots for every reason; the owner
+ *   bots cases are in owner-bots.integration.test.ts. Everyone else is refused with a notice. API-key profiles keep the ordinary authority rules on a
  *   box's host; on a machine host (host mode, docs/agent-boxes.md §10) they are owner-only too.
  * - A profile with run approval waits for the owner to approve each wake on a card.
  */
@@ -111,6 +112,7 @@ beforeEach(async () => {
     await setMode(alpha, 'subscription');
     await setMode(beta, 'subscription');
     await setHostKind(ctx.db, hostId, 'machine');
+    await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_bots' WHERE id = $1`, [serverId]);
 });
 
 describe('host reports auth modes', () => {
@@ -331,13 +333,14 @@ describe('subscription profiles: agent hand-offs', () => {
 });
 
 /**
- * The owner's own agent in a terminal session (agora-mcp from a CLI on the owner's machine,
- * src/lib/terminal-sessions.ts) hands off like an owner-started session: its START and YIELDs
- * wake an owner-started subscription agent. Only when the terminal was opened with a personal
- * or invite token the plan owner minted, and the post is made with that same token. Its hosted
- * session (if any) is on standby, so the terminal session is the author.
+ * subscription_wakes 'owner_only' (the stricter setting; #361): the owner's own agent in a
+ * terminal session (agora-mcp from a CLI on the owner's machine, src/lib/terminal-sessions.ts)
+ * hands off like an owner-started session: its START and YIELDs wake an owner-started
+ * subscription agent. Only when the terminal was opened with a personal or invite token the plan
+ * owner minted, and the post is made with that same token. Its hosted session (if any) is on
+ * standby, so the terminal session is the author.
  */
-describe('subscription profiles: hand-offs from the owner\'s terminal agents', () => {
+describe('subscription profiles (owner_only): hand-offs from the owner\'s terminal agents', () => {
     let gamma: Agent;
     let admin: Awaited<ReturnType<typeof authedUser>>;
     beforeAll(async () => {
@@ -351,6 +354,7 @@ describe('subscription profiles: hand-offs from the owner\'s terminal agents', (
     beforeEach(async () => {
         await setMode(gamma, 'subscription');
         for (const a of [beta, gamma]) await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [a.botId, owner.userId]);
+        await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_only' WHERE id = $1`, [serverId]);
     });
 
     type Token = { id: string; auth: { Authorization: string } };
@@ -473,17 +477,27 @@ describe('subscription profiles: hand-offs from the owner\'s terminal agents', (
     const terminalAs = async (by: { auth: object }) =>
         ((await cmd(by.auth, { command: 'sessions' })).body.sessions as any[]).find(s => s.kind === 'terminal' && s.state === 'live');
 
-    it("the strip says why a terminal doesn't count: host, box and model tokens, someone else's token", async () => {
+    it("the strip says why a terminal doesn't count as its owner: someone else's token, a mixed session, no owner", async () => {
+        // Any token nobody else made counts: the agent host's token too
         await connectTerminal(beta, tokenOf(beta.auth));
-        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'host', ownedByYou: true });
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null, ownedByYou: true });
         await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
         await connectTerminal(beta, await mint(beta, admin));
         expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'other_maker' });
         await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
-        await connectTerminal(beta, await mint(beta, owner));
+        const mine = await mint(beta, owner);
+        await connectTerminal(beta, mine);
         expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null, ownedByYou: true });
         // Anyone who sees the session sees whether it counts; only the bot's owner is told it is theirs
         expect(await terminalAs(member)).toMatchObject({ ownerToken: true, ownedByYou: false });
+        await connectTerminal(beta, tokenOf(beta.auth));
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'mixed' });
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE kind = 'terminal'`);
+        await connectTerminal(beta, mine);
+        await ctx.db.query(`UPDATE agent_sessions SET started_by = $1 WHERE kind = 'terminal' AND state = 'live'`, [director.userId]);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'started_by_other' });
+        await ctx.db.query('UPDATE users SET bot_owner_id = NULL WHERE id = $1', [beta.botId]);
+        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'other_bot_owner', ownedByYou: false });
         // Hosted sessions carry none of it
         await startSession(alpha);
         const hosted = ((await cmd(owner.auth, { command: 'sessions' })).body.sessions as any[]).find(s => s.kind === 'hosted');
@@ -491,14 +505,12 @@ describe('subscription profiles: hand-offs from the owner\'s terminal agents', (
         expect(hosted).not.toHaveProperty('ownedByYou');
     });
 
-    it("a legacy token counts once the bot's owner claims it, on the terminal already connected with it", async () => {
+    it("a token with no recorded maker (made before Agora recorded makers) doesn't count in owner_only; owner bots count it", async () => {
         const sa = await startSession(alpha);
         const mine = await mint(beta, owner);
         // As a token made before migration 090 left it: no maker on record
         await ctx.db.query(`UPDATE bot_tokens SET created_by = NULL, created_at = '2020-01-01T00:00:00Z' WHERE id = $1`, [mine.id]);
         await connectTerminal(beta, mine);
-        expect(await terminalAs(owner)).toMatchObject({ ownerToken: false, ownerTokenReason: 'unknown_maker', ownedByYou: true });
-
         await startSession(gamma);
         const opened = await post(gamma.auth, START('gamma', 'alpha', 'beta'));
         expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
@@ -506,14 +518,8 @@ describe('subscription profiles: hand-offs from the owner\'s terminal agents', (
         await reply(mine.auth, opened.id, TURN('alpha'));
         expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }]);
         expect(await notices(since)).toEqual([NOTICE('alpha')]);
-
-        // An Administrator can't claim it for the owner
-        expect((await ctx.request.post(`/servers/${serverId}/bots/${beta.botId}/tokens/${mine.id}/claim`).set(admin.auth)).status).toBe(403);
-        const claimed = await ctx.request.post(`/servers/${serverId}/bots/${beta.botId}/tokens/${mine.id}/claim`).set(owner.auth);
-        expect(claimed.status, JSON.stringify(claimed.body)).toBe(200);
-        expect(await terminalAs(owner)).toMatchObject({ ownerToken: true, ownerTokenReason: null });
-
-        // The same live terminal, no reconnect: its next YIELD wakes alpha
+        // The default (owner bots) counts it as the bot's owner
+        await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_bots' WHERE id = $1`, [serverId]);
         const since2 = mark();
         const back = await reply(mine.auth, opened.id, TURN('alpha'));
         expect(await inbox(sa)).toEqual([{ message_id: opened.id, reason: 'protocol' }, { message_id: back.id, reason: 'handoff' }]);

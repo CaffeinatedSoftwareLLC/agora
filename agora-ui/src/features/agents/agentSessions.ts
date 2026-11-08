@@ -44,8 +44,9 @@ export interface AgentSession {
   statusNote?: string | null;
   statusAt?: string | null;
   /**
-   * Terminal sessions: its token is a live personal or invite token the bot's owner made, so
-   * its hand-offs count as the owner's (docs/provider-terms.md). ownerTokenReason says why not.
+   * Terminal sessions: it counts as its bot's owner (owner bots, docs/provider-terms.md): the bot
+   * has an owner who started the session, its token wasn't made by another person, and no other
+   * token shares the session. ownerTokenReason says why not.
    */
   ownerToken?: boolean;
   ownerTokenReason?: OwnerTokenReason | null;
@@ -86,37 +87,29 @@ export interface AgentSession {
   title?: string | null;
 }
 
-export type OwnerTokenReason = 'mixed' | 'no_token' | 'revoked' | 'host' | 'box' | 'model' | 'no_owner'
-  | 'unknown_maker' | 'maker_deleted' | 'other_maker';
+export type OwnerTokenReason = 'mixed' | 'other_maker' | 'other_bot_owner' | 'started_by_other';
 
 const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
   mixed: 'two different tokens share this terminal session',
-  no_token: 'no token is on record for this session yet; reconnect its agora-mcp',
-  revoked: 'its token is revoked',
-  host: "it uses the agent host's token, which never counts",
-  box: "it uses a box's token, which never counts",
-  model: "it uses a model agent's token, which never counts",
-  no_owner: 'the bot has no owner',
-  unknown_maker: 'its token was made before Agora recorded token makers',
-  maker_deleted: "its token's maker deleted their account",
   other_maker: "its token was made by someone other than the bot's owner",
+  other_bot_owner: 'the bot has no owner',
+  started_by_other: "someone other than the bot's owner started this session",
 };
 
 /**
- * Does this terminal agent count as its bot's owner for the plan-owner rule (its hand-offs
- * wake the owner's subscription agents)? null for hosted sessions, or a server that doesn't say.
+ * Does this terminal agent count as its bot's owner (owner bots, docs/provider-terms.md: its
+ * messages and hand-offs wake the owner's subscription agents)? null for hosted sessions, or a
+ * server that doesn't say.
  */
 export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boolean; text: string } | null {
   if (s.kind !== 'terminal' || typeof s.ownerToken !== 'boolean') return null;
   const yours = !!s.ownedByYou;
   if (s.ownerToken) {
-    return { counts: true, yours, text: yours ? 'Its hand-offs wake subscription agents you started.' : "Counts as its owner: its hand-offs wake subscription agents the owner started." };
+    return { counts: true, yours, text: yours ? 'Its messages and hand-offs wake subscription agents you started.' :'Counts as its owner: its messages and hand-offs wake subscription agents the owner started.' };
   }
-  const why = s.ownerTokenReason ?? 'no_token';
-  // Only the bot's owner can claim a legacy token, so only they are told how
-  const hint = why === 'unknown_maker' && yours ? ' (claim it in Settings → Bots if you made it)' : '';
-  const reason = (OWNER_TOKEN_REASON[why] ?? OWNER_TOKEN_REASON.no_token) + hint;
-  return { counts: false, yours, text: `Hand-offs from this terminal won't wake subscription agents: ${reason}.` };
+  const why = s.ownerTokenReason ?? 'other_bot_owner';
+  const reason = OWNER_TOKEN_REASON[why] ?? OWNER_TOKEN_REASON.other_bot_owner;
+  return { counts: false, yours, text: `This terminal won't wake subscription agents: ${reason}.` };
 }
 
 export interface AgentProfile {

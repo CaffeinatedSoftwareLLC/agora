@@ -138,6 +138,26 @@ describe('claim checks', () => {
         expect(code(() => checkTerms(local(), stale))).toBe('subscription_owner_only');
     });
 
+    it("the owner's own bots (the server's ownerBot mark, docs/provider-terms.md \"Owner bots\") wake it directly and by lurk", () => {
+        const direct = claim(); direct.inbox[0] = { ...direct.inbox[0], reason: 'direct', authorBot: true, authority: 'director', ownerBot: true };
+        expect(code(() => checkTerms(local(), direct))).toBeNull();
+        const lurk = claim(); lurk.inbox[0] = { ...lurk.inbox[0], reason: 'lurk', authorBot: true, authority: null, ownerBot: true };
+        expect(code(() => checkTerms(local(), lurk))).toBeNull();
+        // Without the mark (another person's bot, an older server, or owner_only), and a direct wake without authority
+        const unmarked = claim(); unmarked.inbox[0] = { ...unmarked.inbox[0], reason: 'direct', authorBot: true, authority: 'director' };
+        expect(code(() => checkTerms(local(), unmarked))).toBe('subscription_owner_only');
+        const marked = claim(); marked.inbox[0] = { ...marked.inbox[0], reason: 'direct', authorBot: true, authority: 'director', ownerBot: false };
+        expect(code(() => checkTerms(local(), marked))).toBe('subscription_owner_only');
+        const noAuthority = claim(); noAuthority.inbox[0] = { ...noAuthority.inbox[0], reason: 'direct', authorBot: true, authority: null, ownerBot: true };
+        expect(code(() => checkTerms(local(), noAuthority))).toBe('subscription_owner_only');
+        // A person's message is never an owner bot's, whatever the mark says
+        const person = claim(); person.inbox[0] = { ...person.inbox[0], reason: 'direct', authorBot: false, authority: 'director', ownerBot: true };
+        expect(code(() => checkTerms(local(), person))).toBe('subscription_owner_only');
+        // Still only in a session the owner started
+        const theirs = claim(); theirs.session.startedByOwner = false; theirs.inbox[0] = direct.inbox[0];
+        expect(code(() => checkTerms(local(), theirs))).toBe('subscription_owner_only');
+    });
+
     it('an api_key profile keeps the server\'s rules; run approval needs the owner\'s yes', () => {
         const p = { ...local(), auth: 'api_key' as const, apiKeyEnv: 'CODEX_API_KEY' };
         const director = claim(); director.session.startedByOwner = false;

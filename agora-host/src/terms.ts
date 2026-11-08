@@ -6,9 +6,10 @@ import type { Claim } from './types.js';
  * the server.
  *
  * - A profile on `subscription` (the CLI's own account login) runs only for the server
- *   owner: the owner's messages, the owner's /start, and hand-offs between agents inside
- *   sessions the owner started. Consumer subscriptions are personal; letting other people
- *   drive one is what every provider's terms forbid.
+ *   owner: the owner's messages, the owner's /start, hand-offs between agents inside
+ *   sessions the owner started, and (when the server lets owner bots wake it) the owner's own
+ *   bots' messages, which the server marks `ownerBot`. Consumer subscriptions are personal;
+ *   letting other people drive one is what every provider's terms forbid.
  * - A profile on `api_key` gets its key from this host's environment (`apiKeyEnv`), passed
  *   to the child only. The key is never logged, stored or sent to Agora.
  * - Gemini (CLI or Antigravity) must use an API key: Google's terms call third-party access
@@ -122,6 +123,16 @@ export function needsRunApproval(profile: LocalProfile): boolean {
 }
 
 /**
+ * A direct or lurk wake by a bot on a plan-owned profile: only one the server marked as the plan
+ * owner's own bot (subscription_wakes 'owner_bots'). A direct wake also needs the authority to
+ * direct that every direct wake needs. Without the mark (an older server, or 'owner_only') a
+ * bot's direct or lurk wake is refused.
+ */
+function ownerBotItem(item: Claim['inbox'][number]): boolean {
+    return item.ownerBot === true && (item.reason === 'lurk' || item.authority !== null);
+}
+
+/**
  * Check a claim against the local profile's auth mode before anything starts. The server
  * applies the same rules; this catches a stale server-side mode or a server bug.
  */
@@ -139,7 +150,8 @@ export function checkTerms(profile: LocalProfile, claim: Claim, boundUser: strin
             if (item.reason === 'command') continue;
             // delegate: a subtask's brief or summary, posted by the server for a session it delegated
             if (item.reason === 'handoff' || item.reason === 'protocol' || item.reason === 'delegate') { if (!item.authorBot) throw refuse(); continue; }
-            if (item.authorBot || item.authority === null || item.authorId !== owner) throw refuse();
+            if (item.authorBot) { if (!ownerBotItem(item)) throw refuse(); continue; }
+            if (item.authority === null || item.authorId !== owner) throw refuse();
         }
     }
     if (profile.auth === 'subscription') {
@@ -154,8 +166,9 @@ export function checkTerms(profile: LocalProfile, claim: Claim, boundUser: strin
                 if (!item.authorBot) throw refuse();
                 continue;
             }
-            // direct and lurk: the owner's own message
-            if (item.authorBot || item.authority !== 'owner') throw refuse();
+            // direct and lurk: the owner's own message, or their own bot's (owner bots)
+            if (item.authorBot) { if (!ownerBotItem(item)) throw refuse(); continue; }
+            if (item.authority !== 'owner') throw refuse();
         }
     }
     if (needsRunApproval(profile) && !claim.run.ownerApproved)

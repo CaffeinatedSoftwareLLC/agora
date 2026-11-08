@@ -2,7 +2,7 @@ import { generateUlid, ulidFloor } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
 import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { expireLiveRequests } from './agent-permissions';
-import { planNotice, PLAN_OWNER_SQL, WAKE_AUTH_SQL } from './provider-terms';
+import { ownerBotOf, planNotice, PLAN_OWNER_SQL, subscriptionWakesOf, WAKE_AUTH_SQL, type SubscriptionWakes } from './provider-terms';
 import { noticeStandby } from './terminal-sessions';
 import { stampAuthority } from './direct-agents';
 
@@ -51,10 +51,13 @@ import { stampAuthority } from './direct-agents';
  * Sessions on a plan-owned profile ('subscription': the CLI's own account login, owned by the
  * server owner; 'siwc': a ChatGPT plan connected through Sign in with ChatGPT, owned by the
  * person who connected it) only take wakes their plan owner caused
- * (src/lib/provider-terms.ts); anyone else's is refused with a notice. Agent-to-agent wakes
- * (handoff, protocol) count as the plan owner's when the target was started by them and the
- * author is either a session they started or their own bot in a live terminal session here,
- * opened with a personal or invite token the plan owner minted, posting with that token.
+ * (src/lib/provider-terms.ts); anyone else's is refused with a notice. With the server's
+ * subscription_wakes 'owner_bots' (default), a post by the plan owner's own bot (ownerBotOf)
+ * counts as theirs for every reason, when the target was started by them. With 'owner_only',
+ * direct and lurk wakes need the plan owner's own message, and agent-to-agent wakes (handoff,
+ * protocol) count as the plan owner's when the target was started by them and the author is
+ * either a session they started or their own bot in a live terminal session here, opened with a
+ * personal or invite token the plan owner minted, posting with that token.
  *
  * Members can read sessions through RLS but can't write them, so the writes here run as
  * the service role on the request's own connection.
@@ -115,6 +118,10 @@ interface RouteContext {
      * session, or its terminal session while it has one (then its hosted one is on standby).
      */
     authorSession: LiveSession | undefined;
+    /** The server's subscription_wakes setting. */
+    wakes: SubscriptionWakes;
+    /** A bot author: the person whose own automation this post is (ownerBotOf), or null. */
+    countsAs: string | null;
     /** Sessions refused because of the subscription rule; one notice each. */
     refused: Map<string, LiveSession>;
 }
@@ -219,8 +226,13 @@ function termsAllow(target: LiveSession, reason: 'direct' | 'handoff' | 'protoco
     const owner = target.planOwnerId;
     if (!owner) return false;
     // A person's own message, with authority to direct agents now
-    if (reason === 'direct' || reason === 'lurk') return ctx.authorHuman && ctx.couldDirect && ctx.authorId === owner;
-    // Agent-to-agent: the target was started by this plan's owner, and so was the author's
+    if (ctx.authorHuman) return (reason === 'direct' || reason === 'lurk') && ctx.couldDirect && ctx.authorId === owner;
+    // Owner bots: the plan owner's own bot counts as them for every reason (a direct wake
+    // still needed authority to direct, which the routing checked), to a session they started.
+    // Other people's bots never do, whoever started their sessions.
+    if (ctx.wakes === 'owner_bots') return target.startedBy === owner && ctx.countsAs === owner;
+    if (reason === 'direct' || reason === 'lurk') return false;
+    // owner_only (#361). Agent-to-agent: the target was started by this plan's owner, and so was the author's
     // session; or the author is the plan owner's own bot in a live terminal session here that
     // the owner's own token opened (routeMessage only takes a terminal as the author when the
     // post was made with that token)
@@ -344,9 +356,18 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
         // the bot (another token: a hosted run, a plain API call) keeps the old rules.
         const authorSession = sessions.find(s => s.botId === authorId)
             ?? terminals.find(s => s.botId === authorId && !!s.tokenId && s.tokenId === msg.authorTokenId);
-        const author = await db.query(`SELECT u.bot FROM users u WHERE u.id = $1`, [authorId]);
+        const author = await db.query(
+            `SELECT u.bot, srv.subscription_wakes FROM users u, channels c JOIN servers srv ON srv.id = c.server_id
+             WHERE u.id = $1 AND c.id = $2`,
+            [authorId, msg.channelId]
+        );
         const authorHuman = author.rows[0]?.bot === false;
-        const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, refused: new Map() };
+        const wakes = subscriptionWakesOf(author.rows[0]?.subscription_wakes);
+        // Whose own automation a bot's post is, for plan-owned targets (owner bots)
+        const countsAs = author.rows[0]?.bot === true && wakes === 'owner_bots'
+            ? await ownerBotOf(db, { botId: authorId, tokenId: msg.authorTokenId, channelId: msg.channelId })
+            : null;
+        const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, wakes, countsAs, refused: new Map() };
 
         if (msg.threadId === null) {
             const agents = new Set([...sessions.map(s => s.botId), ...terminalBots]).size;
