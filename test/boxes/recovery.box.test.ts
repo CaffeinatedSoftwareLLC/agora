@@ -80,9 +80,7 @@ describe('box recovery', () => {
         await waitRunning(inst, box.id, generation + 1);
         box = await inspectBox(box.id);
         expect(await label()).toBe(next);
-        expect((await inBox(box.container, 'cat ~/marker ~/.agora/state/recover/login.json')).stdout).toBe('keep-me
-fake-login
-');
+        expect((await inBox(box.container, 'cat ~/marker ~/.agora/state/recover/login.json')).stdout).toBe('keep-me\nfake-login\n');
         // Once per build: it stays on this container
         await new Promise(r => setTimeout(r, 20_000));
         expect((await inspectBox(box.id)).generation).toBe(box.generation);
