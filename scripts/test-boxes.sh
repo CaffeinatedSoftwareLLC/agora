@@ -22,6 +22,8 @@ export BOXTEST_INSTANCE="$INSTANCE"
 export BOXTEST_COMPOSE="docker compose -p $INSTANCE -f docker-compose.prod.yml --env-file $ENV_FILE"
 export BOXTEST_API="http://127.0.0.1:${BOXTEST_API_PORT:-13000}"
 DC=(docker compose -p "$INSTANCE" -f docker-compose.prod.yml --env-file "$ENV_FILE")
+# The box image's build label (boxd rebuilds boxes on an older build)
+export AGORA_BOX_BUILD="${AGORA_BOX_BUILD:-$(sh scripts/box-build-id.sh)}"
 
 if docker info --format '{{json .Runtimes}}' | grep -q '"runsc"'; then
     export BOXTEST_RUNTIME=runsc; INSECURE=
@@ -72,7 +74,7 @@ trap cleanup EXIT
 
 echo "==> images"
 BOX_VERSION=$(tr -d "[:space:]" < box/VERSION)
-docker build -q -f box/Dockerfile --target test --build-arg BOX_VERSION="$BOX_VERSION" -t "agora/box:$BOX_VERSION-test" . >/dev/null
+docker build -q -f box/Dockerfile --target test --build-arg BOX_VERSION="$BOX_VERSION" --build-arg BOX_BUILD="$AGORA_BOX_BUILD" -t "agora/box:$BOX_VERSION-test" . >/dev/null
 "${DC[@]}" build -q api migrate files-perms boxd box-edge
 
 echo "==> stack $INSTANCE ($BOXTEST_RUNTIME)"

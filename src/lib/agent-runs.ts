@@ -5,7 +5,7 @@ import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
+import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
@@ -363,10 +363,10 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const runId = generateUlid();
     const claimToken = 'rt_' + randomBytes(32).toString('hex');
     const lease = await c.query(
-        `INSERT INTO agent_runs (id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation, lease_until)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8))
+        `INSERT INTO agent_runs (id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation, lease_until, timeout_sec)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8), $9)
          RETURNING lease_until`,
-        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS]
+        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS, session.run_timeout_sec]
     );
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
@@ -864,12 +864,23 @@ async function recordVerification(c: PoolClient, run: any, v: VerificationReport
 }
 
 /**
+ * The notice for a run the host stopped at its run time limit (agora-host `run_timeout`), with
+ * the limit the run was claimed with. Every profile's limit, a box's too, is set in Settings → Agents.
+ */
+export function runTimeoutNotice(profile: string, seconds: number): string {
+    const limit = seconds % 60 === 0 ? `${seconds / 60}-minute` : `${seconds}-second`;
+    return `${profile}'s run hit its ${limit} limit, and its last wake was dropped: raise the limit in Settings → Agents, then send it again.`;
+}
+
+/**
  * After a failed or expired attempt: retry the batch unchanged, or give it up. Cancelled
- * work and work for sessions that are no longer live is dropped, never retried.
+ * work and work for sessions that are no longer live is dropped, never retried. A run stopped
+ * at its time limit isn't retried either: the same work would hit the same limit again.
  */
 async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: string, notices: Notice[]) {
+    if (error === 'run_timeout') retryable = false;
     const s = await c.query(
-        `SELECT s.state, s.channel_id, p.name AS profile_name, p.auth_mode FROM agent_sessions s
+        `SELECT s.state, s.channel_id, p.name AS profile_name, p.auth_mode, p.run_timeout_sec FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
         [run.session_id]
     );
@@ -889,9 +900,10 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     await c.query(`UPDATE agent_batches SET status = 'failed', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
     await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
     // The host refused the run under the provider-terms rules (agora-host/src/terms.ts)
-    const text = error === 'subscription_owner_only' ? planNotice(session.profile_name, 'subscription')
+    const text = error === 'subscription_owner_only' ? hostRefusalNotice(session.profile_name)
         : Object.hasOwn(SIWC_ERRORS, error) ? `${session.profile_name} ${SIWC_ERRORS[error]}`
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
+        : error === 'run_timeout' ? runTimeoutNotice(session.profile_name, run.timeout_sec ?? session.run_timeout_sec)
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));
     await notifySession(c, run.session_id, error === 'siwc_usage_limit' ? 'credit' : 'blocked');

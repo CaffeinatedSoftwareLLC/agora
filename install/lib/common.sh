@@ -82,7 +82,10 @@ dk() { "${DOCKER[@]}" "$@"; }
 # compose in an install's folder: compose_in <dir> <args...>
 compose_in() {
     local dir=$1; shift
-    (cd "$dir" && "${DOCKER[@]}" compose -f "$COMPOSE_FILE_NAME" --env-file "$ENV_FILE_NAME" "$@")
+    # The box image's build ID (scripts/box-build-id.sh): boxd rebuilds boxes on an older build
+    local build=
+    [ -f "$dir/scripts/box-build-id.sh" ] && build=$(sh "$dir/scripts/box-build-id.sh" 2>/dev/null || true)
+    (cd "$dir" && AGORA_BOX_BUILD="${AGORA_BOX_BUILD:-$build}" "${DOCKER[@]}" compose -f "$COMPOSE_FILE_NAME" --env-file "$ENV_FILE_NAME" "$@")
 }
 
 # An install's name: the Compose project and AGORA_INSTANCE are one name (#209). Installs made

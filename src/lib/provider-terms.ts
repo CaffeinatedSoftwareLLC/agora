@@ -38,6 +38,17 @@ export function subscriptionNotice(agent: string): string {
 }
 
 /**
+ * The run's host refused a wake the server let through (agora-host checkTerms,
+ * subscription_owner_only). Not the server's refusal text: the two have different causes, and
+ * the usual one here is a host on an older agora-host than the server (a box not yet rebuilt
+ * after a stack upgrade, a machine host not restarted).
+ */
+export function hostRefusalNotice(agent: string): string {
+    return `${agent}'s host refused this run: it runs on the owner's personal subscription, and the host didn't count the message as the owner's. `
+        + 'The server let it through, so if the owner or one of their own bots sent it, that host runs an older agora-host than the server: update it.';
+}
+
+/**
  * Plan-owned profiles (docs/codex-chatgpt-plan.md). A 'subscription' profile's plan belongs
  * to the server owner; a 'siwc' profile's to the person who connected their ChatGPT plan to
  * it (agent_profiles.plan_owner_id). Only the plan owner can wake either. api_key: nobody's.
@@ -78,6 +89,29 @@ export async function serverSubscriptionWakes(db: any, serverId: string): Promis
 }
 
 /**
+ * Whether a terminal session's posts on its own token count as its bot owner's, and why not
+ * (agent-commands.ts OwnerTokenState): 'ok', or 'mixed', 'other_bot_owner', 'started_by_other',
+ * 'agent_token' (a host's, box's or model agent's token), 'other_maker', 'owner_only_token'
+ * (with 'owner_only' only a token the bot's owner made counts), 'no_token'. One definition for
+ * the session chip (SESSION_SELECT) and for ownerBotOf's terminal case: when the chip says
+ * "counts as you", a post with the terminal's own token counts. (Not the other way round: a
+ * personal or invite token can also count outside a terminal, under ownerBotOf's other rule.)
+ * `s`: the terminal session, `u`: its bot, `srv`: its server (aliases in the caller's query).
+ */
+export function terminalOwnerStateSql(s = 's', u = 'u', srv = 'srv'): string {
+    return `(CASE WHEN ${s}.token_mixed THEN 'mixed'
+             WHEN ${u}.bot_owner_id IS NULL THEN 'other_bot_owner'
+             WHEN ${s}.started_by IS NOT NULL AND ${s}.started_by <> ${u}.bot_owner_id THEN 'started_by_other'
+             ELSE COALESCE((SELECT CASE WHEN tt.purpose NOT IN ('personal', 'invite') THEN 'agent_token'
+                                        WHEN tt.created_by IS NOT NULL AND tt.created_by <> ${u}.bot_owner_id THEN 'other_maker'
+                                        -- 'Only you' (owner_only, #361): only a token the bot's owner made counts
+                                        WHEN ${srv}.subscription_wakes = 'owner_only' AND tt.created_by IS NULL THEN 'owner_only_token'
+                                        ELSE 'ok' END
+                            FROM bot_tokens tt WHERE tt.id = ${s}.token_id AND tt.bot_id = ${s}.bot_id AND tt.revoked_at IS NULL), 'no_token')
+             END)`;
+}
+
+/**
  * Owner bots (subscription_wakes 'owner_bots'): whose own automation a bot's post is, for the
  * plan-owner rule. Returns the bot's owner when all of these hold, otherwise null:
  * - the author is a bot with an owner (users.bot_owner_id);
@@ -86,7 +120,8 @@ export async function serverSubscriptionWakes(db: any, serverId: string): Promis
  *   model agent's token: a model agent answers any member, so its posts are not the owner's;
  * - no live terminal session of the bot in this channel is shared by two tokens (mixed);
  * - for a personal or invite token (a terminal or script the owner runs): either it is the token
- *   that opened the bot's live terminal session in this channel, or the bot has no live hosted
+ *   that opened the bot's live terminal session in this channel and that session counts
+ *   (terminalOwnerStateSql 'ok', what its chip shows), or the bot has no live hosted
  *   session on the server that another person started (a subtask's session carries its
  *   parent's starter);
  * - for an agent host's or a box's token (what hosted runs get, also if it opened a terminal):
@@ -112,8 +147,10 @@ export async function ownerBotOf(db: any, input: { botId: string; tokenId: strin
            AND NOT EXISTS (SELECT 1 FROM agent_sessions s
                            WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_mixed)
            AND CASE WHEN t.purpose IN ('personal', 'invite') THEN
-                    EXISTS (SELECT 1 FROM agent_sessions s
-                            WHERE s.bot_id = u.id AND s.channel_id = $3 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_id = $2)
+                    -- The token that opened the bot's terminal here, whose chip says it counts
+                    EXISTS (SELECT 1 FROM agent_sessions ts JOIN servers tsrv ON tsrv.id = ts.server_id
+                            WHERE ts.bot_id = u.id AND ts.channel_id = $3 AND ts.kind = 'terminal' AND ts.state = 'live' AND ts.token_id = $2
+                              AND ${terminalOwnerStateSql('ts', 'u', 'tsrv')} = 'ok')
                     OR NOT EXISTS (${hosted} AND s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id)
                ELSE
                     EXISTS (${hosted})

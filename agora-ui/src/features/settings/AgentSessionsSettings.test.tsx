@@ -52,6 +52,49 @@ it.each(['', '0', '-5', '2.5', '1e9', '9007199254740993'])('does not save an inv
   expect(patch).not.toHaveBeenCalled();
 });
 
+it('lets the owner set the run time limit in minutes next to the budgets, saved in seconds', async () => {
+  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+  render(<AgentSessionsSettings />);
+  const input = await screen.findByLabelText('Run time limit for claude');
+  expect(input).toHaveProperty('value', '15');
+  expect(screen.getByText('A run longer than this is stopped. Long jobs should run detached and be checked on later.')).toBeTruthy();
+  expect(screen.getByText(/15 min per run/)).toBeTruthy();
+  fireEvent.change(input, { target: { value: '60' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', expect.objectContaining({ runTimeoutSec: 3600, wakeBudget: 50 })));
+});
+
+it('leaves the run time limit out of a save that did not change it', async () => {
+  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+  render(<AgentSessionsSettings />);
+  fireEvent.change(await screen.findByLabelText('Wake budget for claude'), { target: { value: '60' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(patch).toHaveBeenCalled());
+  expect(patch.mock.calls[0][1]).not.toHaveProperty('runTimeoutSec');
+});
+
+it("sends only the session limits for a box's profile (its model and the rest are the box's)", async () => {
+  vi.mocked(api.get).mockImplementation(async (path: string) => (path.endsWith('/agent-hosts')
+    ? [{ id: 'H', name: 'box-cci', revokedAt: null, kind: 'box' }]
+    : path.endsWith('/agent-profiles') ? [{ id: 'P', name: 'cci', botId: 'B', hostId: 'H', adapter: 'codex', boxed: true,
+      model: 'gpt-x', effort: null, workdirAlias: 'work', workspaceId: 'primary', wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 900 }]
+    : []) as never);
+  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+  render(<AgentSessionsSettings />);
+  fireEvent.change(await screen.findByLabelText('Run time limit for cci'), { target: { value: '45' } });
+  expect(screen.queryByLabelText('Model for cci')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 2700 }));
+});
+
+it.each(['', '0', '1.5', '121', '-5'])('does not save an invalid run time limit: %s', async value => {
+  const patch = vi.spyOn(api, 'patch');
+  render(<AgentSessionsSettings />);
+  fireEvent.change(await screen.findByLabelText('Run time limit for claude'), { target: { value } });
+  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+  expect(patch).not.toHaveBeenCalled();
+});
+
 it('creates an opencode agent only with an OpenRouter model ID', async () => {
   const post = vi.spyOn(api, 'post').mockResolvedValue({ bot: { username: 'qwen' }, token: 'bot_x' });
   render(<AgentSessionsSettings />);

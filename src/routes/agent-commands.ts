@@ -6,7 +6,7 @@ import { asService } from '../lib/agent-sessions';
 import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
-import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
+import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, terminalOwnerStateSql, wakeAuthMode } from '../lib/provider-terms';
 
 /**
  * Session commands (docs/planning/agent-sessions-wbs.md, "Commands"): /start, /end,
@@ -35,7 +35,8 @@ export class CommandError extends Error {
 
 /**
  * Why a terminal session does or doesn't count as its bot owner's for the plan-owner rule's
- * owner bots (docs/provider-terms.md, src/lib/provider-terms.ts ownerBotOf): 'ok' when the bot
+ * owner bots (docs/provider-terms.md, src/lib/provider-terms.ts terminalOwnerStateSql, which
+ * ownerBotOf uses too): 'ok' when the bot
  * has an owner, no other token shares the session, the owner started it, and it has a live
  * personal or invite token ('no_token': none on record, or revoked; 'agent_token': an agent
  * host's, box's or model agent's token) that no other person made. With the server set to
@@ -94,17 +95,8 @@ export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profi
         CASE WHEN s.kind = 'terminal' THEN s.state = 'live' AND s.working
              ELSE EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') END AS running,
         u.bot_owner_id,
-        CASE WHEN s.kind <> 'terminal' THEN NULL
-             WHEN s.token_mixed THEN 'mixed'
-             WHEN u.bot_owner_id IS NULL THEN 'other_bot_owner'
-             WHEN s.started_by IS NOT NULL AND s.started_by <> u.bot_owner_id THEN 'started_by_other'
-             ELSE COALESCE((SELECT CASE WHEN t.purpose NOT IN ('personal', 'invite') THEN 'agent_token'
-                                        WHEN t.created_by IS NOT NULL AND t.created_by <> u.bot_owner_id THEN 'other_maker'
-                                        -- 'Only you' (owner_only, #361): only a token the bot's owner made counts
-                                        WHEN srv_wakes.subscription_wakes = 'owner_only' AND t.created_by IS NULL THEN 'owner_only_token'
-                                        ELSE 'ok' END
-                            FROM bot_tokens t WHERE t.id = s.token_id AND t.bot_id = s.bot_id AND t.revoked_at IS NULL), 'no_token')
-             END AS owner_token_state,
+        -- The same definition routing uses (provider-terms.ts terminalOwnerStateSql)
+        CASE WHEN s.kind <> 'terminal' THEN NULL ELSE ${terminalOwnerStateSql('s', 'u', 'srv_wakes')} END AS owner_token_state,
         srv_wakes.subscription_wakes
     FROM agent_sessions s LEFT JOIN agent_profiles p ON p.id = s.profile_id JOIN users u ON u.id = s.bot_id
     LEFT JOIN servers srv_wakes ON srv_wakes.id = s.server_id`;

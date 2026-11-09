@@ -354,6 +354,97 @@ describe('boxd reconcile', () => {
         expect(t.docker.count(`removeVolume`)).toBe(0);
     });
 
+    describe('another build of the same box/VERSION (agora-host, agora-mcp or box/ changed)', () => {
+        const buildOf = (id: string) => t.docker.containers.get(names(id).c).Config.Labels['org.agora.box.build'];
+
+        it('rebuilds each box onto the current build, one per pass, after active runs, then leaves them alone', async () => {
+            const a = t.store.add();
+            const b = t.store.add();
+            await t.r.pass();
+            expect(buildOf(a.id)).toBe('build-1');
+            const before = t.store.minted.length;
+            // The stack rebuilt agora/box:1 with new agora-host: same tag and version, new build label
+            t.docker.imageBuild = 'build-2';
+            t.store.activeRuns.add(a.id);
+
+            await t.r.pass();
+            // a is busy, b waits its turn: both keep the old build, with no drift
+            expect([buildOf(a.id), buildOf(b.id)]).toEqual(['build-1', 'build-1']);
+            expect(t.store.get(a.id).state).toBe('running');
+
+            t.tick(UPGRADE_WAIT_MS + 1);
+            await t.r.pass();
+            expect([buildOf(a.id), buildOf(b.id)]).toEqual(['build-2', 'build-1']);
+            expect(t.store.get(a.id).imageVersion).toBe(1);
+            expect(t.store.notices.find(n => n.boxId === a.id && n.kind === 'upgraded')?.content).toContain('current build of box image v1');
+
+            await t.r.pass();
+            expect(buildOf(b.id)).toBe('build-2');
+            expect(t.store.minted.length).toBe(before + 2);
+            await t.r.pass();
+            await t.r.pass();
+            expect(t.store.minted.length).toBe(before + 2);
+            expect(t.docker.count('removeVolume')).toBe(0);
+        });
+
+        it('never rebuilds twice for the same image build, but does for the next one', async () => {
+            const box = t.store.add();
+            await t.r.pass();
+            t.docker.imageBuild = 'build-2';
+            await t.r.pass();
+            const after = t.store.minted.length;
+            // The rebuilt container still doesn't carry it (say, the tag moved under boxd): no loop
+            t.docker.containers.get(names(box.id).c).Config.Labels['org.agora.box.build'] = 'build-1';
+            await t.r.pass();
+            await t.r.pass();
+            expect(t.store.minted.length).toBe(after);
+            t.docker.imageBuild = 'build-3';
+            await t.r.pass();
+            expect(t.store.minted.length).toBe(after + 1);
+            expect(buildOf(box.id)).toBe('build-3');
+        });
+
+        it('rebuilds nothing when the build label is unknown on either side, or the image inspect fails', async () => {
+            // A container from an image without the label (built before it existed)
+            t.docker.imageBuild = null;
+            const old = t.store.add();
+            await t.r.pass();
+            expect(buildOf(old.id)).toBeUndefined();
+            t.docker.imageBuild = 'build-2';
+            await t.r.pass();
+            await t.r.pass();
+            expect(t.store.minted).toHaveLength(1);
+            // A labelled box, then the engine can't say what the image is
+            const labelled = t.store.add();
+            await t.r.pass();
+            expect(buildOf(labelled.id)).toBe('build-2');
+            t.docker.imageBuild = 'build-3';
+            t.docker.imageInspectFails = true;
+            await t.r.pass();
+            await t.r.pass();
+            expect(buildOf(labelled.id)).toBe('build-2');
+            // And an image built without one (no AGORA_BOX_BUILD)
+            t.docker.imageInspectFails = false;
+            t.docker.imageBuild = null;
+            await t.r.pass();
+            expect(buildOf(labelled.id)).toBe('build-2');
+            expect(t.store.minted).toHaveLength(2);
+        });
+
+        it('rebuilds a stopped box too, and leaves it stopped', async () => {
+            const box = t.store.add();
+            await t.r.pass();
+            t.store.get(box.id).desiredState = 'stopped';
+            await t.r.pass();
+            expect(t.docker.containers.get(names(box.id).c).State.Running).toBe(false);
+            t.docker.imageBuild = 'build-2';
+            await t.r.pass();
+            expect(buildOf(box.id)).toBe('build-2');
+            expect(t.docker.containers.get(names(box.id).c).State.Running).toBe(false);
+            expect(t.store.get(box.id).state).toBe('stopped');
+        });
+    });
+
     it('removes unclaimed resources of this instance only', async () => {
         const kept = t.store.add();
         await t.r.pass();

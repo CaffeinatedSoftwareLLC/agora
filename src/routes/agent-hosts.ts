@@ -122,6 +122,8 @@ async function checkRefs(db: any, serverId: string, botId?: string, hostId?: str
 }
 
 const BOX_PROFILE = 'This profile belongs to a box; change it in the box settings';
+/** What Settings → Agents may still change on a box's profile: its session limits. */
+const BOX_PROFILE_FIELDS: ReadonlySet<string> = new Set(['wakeBudget', 'tokenBudget', 'runTimeoutSec']);
 async function isBoxProfile(db: any, profileId: string): Promise<boolean> {
     return (await db.query(`SELECT 1 FROM agent_boxes WHERE profile_id = $1`, [profileId])).rows.length > 0;
 }
@@ -333,7 +335,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
             );
             const p = cur.rows[0];
             if (!p) return { status: 404, body: { error: 'Profile not found' } };
-            if (await isBoxProfile(db, profileId)) return { status: 409, body: { error: BOX_PROFILE } };
+            // A box's profile is the box's (its settings); only the session limits are set here
+            if (await isBoxProfile(db, profileId) && Object.keys(b).some(k => !BOX_PROFILE_FIELDS.has(k))) return { status: 409, body: { error: BOX_PROFILE } };
             if (b.workspaceId !== undefined && b.workspaceId !== p.workspace_id) {
                 const used = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state <> 'ended' LIMIT 1`, [profileId]);
                 if (used.rows.length) return { status: 409, body: { error: 'End this profile\'s sessions before changing its workspace' } };

@@ -71,6 +71,10 @@ RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/f
 COPY box/fake/fake-omp.mjs /opt/agora/fake/omp.mjs
 RUN chmod 0755 /opt/agora/fake/omp.mjs && ln -s /opt/agora/fake/omp.mjs /opt/agora/bin/omp
 USER 1000:1000
+# What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
+# box whose container has another build than the current image. Last, so it busts no cache.
+ARG BOX_BUILD=
+LABEL org.agora.box.build=${BOX_BUILD}
 
 # ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x, Codex 0.163.x, omp
 # 18.17.x and Devin 3000.11.x; opencode is checked by its ACP protocol version). One ARG and one install block per
@@ -136,3 +140,7 @@ RUN export HOME=/root \
  && rm -rf /root/.config/devin /root/.local/share/devin /root/.cache/devin
 RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
 USER 1000:1000
+# What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
+# box whose container has another build than the current image. Last, so it busts no cache.
+ARG BOX_BUILD=
+LABEL org.agora.box.build=${BOX_BUILD}
