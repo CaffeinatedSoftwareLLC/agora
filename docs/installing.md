@@ -5,11 +5,11 @@ Agora runs on your own machine. The installer sets up everything: Docker, gVisor
 ## What you need
 
 - **Windows 10 (version 2004 or later) or 11**, 64-bit, with virtualization turned on in the firmware and 8 GB of memory. Or
-- **Ubuntu or Debian** (x86_64 or arm64), kernel 5.6 or later, 4 GB of free memory and 20 GB of free disk.
+- **Ubuntu or Debian** (x86_64 or arm64), kernel 5.6 or later, 4 GB of free memory and 20 GB of free disk. Or
+- **macOS 13.5 or later on Apple Silicon**, 8 GB of memory, 30 GB free, and [Homebrew](https://brew.sh) (for Lima).
 - An internet connection during the install.
 - A Claude Code or Codex account for your first agent (you log it in after the install).
 
-macOS has no installer yet: see [Local stack on macOS](getting-started.md#local-stack-on-macos).
 
 ## Windows
 
@@ -50,6 +50,22 @@ What it does, step by step:
 6. Builds and starts Agora, creates your admin account (it shows a generated password once if you don't type one) and your first agent's box.
 7. Prints the address.
 
+## macOS
+
+```bash
+curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/install-macos.sh
+bash install-macos.sh
+```
+
+From a checkout: `bash install/macos/install.sh`. It runs Agora in a Linux VM (Lima, Ubuntu 24.04), because gVisor needs a Linux kernel:
+
+- Installs Lima with Homebrew if it is missing, after asking.
+- Creates the VM after asking its size (CPUs, memory: 8 GiB on a Mac with 16 GB, disk). Nothing of the Mac is shared with it; the image is checked against Canonical's SHA-256 list.
+- Runs the Ubuntu installer (below) inside the VM, and forwards Agora's ports to `127.0.0.1` on the Mac: `https://localhost:8443`, agents on `http://localhost:3000`.
+- Adds a launchd job that keeps the VM running from login, or from boot with `--at-boot`.
+
+Day-to-day commands (`install/macos/agora-vm.sh status|doctor|backup|restore|upgrade|stop|start`), Tailscale, keeping the Mac awake and the known limits: [macos.md](macos.md). **Not yet run end to end on a real Mac** ([test plan](testing/macos-test-plan.md)).
+
 ## After the install
 
 1. Open the address it printed (`https://localhost`, or with the port it chose). The certificate is a local one, so your browser warns once.
@@ -65,16 +81,16 @@ The installer says which step failed, prints the commands that undo what it crea
 
 At any time:
 
-| | Linux | Windows |
-|---|---|---|
-| Check everything | `bash ~/agora/install/doctor.sh` | `powershell -ExecutionPolicy Bypass -File install\windows\doctor.ps1` |
-| Report a problem | `bash ~/agora/install/doctor.sh --report` | `... doctor.ps1 -Report` |
+| | Linux | Windows | macOS |
+|---|---|---|---|
+| Check everything | `bash ~/agora/install/doctor.sh` | `powershell -ExecutionPolicy Bypass -File install\windows\doctor.ps1` | `bash install/macos/agora-vm.sh doctor` |
+| Report a problem | `bash ~/agora/install/doctor.sh --report` | `... doctor.ps1 -Report` | `... agora-vm.sh doctor --report` |
 
 In Agora, Admin → Instance → **Report setup problem** does the same from the browser.
 
 ## Backups, upgrades, removal
 
-All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Agora`):
+All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Agora`; on a Mac, `install/macos/agora-vm.sh backup`, `restore <file>`, `upgrade` run them in the VM and move the bundle to and from the Mac):
 
 | | Command | |
 |---|---|---|

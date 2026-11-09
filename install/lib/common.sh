@@ -139,6 +139,39 @@ env_set() {
     mv "$tmp" "$file"
 }
 
+# origin_list_add <comma list> <origin>: the list with origin appended once
+origin_list_add() {
+    local list=$1 o=$2 item
+    local IFS=,
+    for item in $list; do
+        item=$(printf '%s' "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's#/*$##')
+        [ "$item" = "$o" ] && { printf '%s' "$list"; return; }
+    done
+    if [ -n "$list" ]; then printf '%s,%s' "$list" "$o"; else printf '%s' "$o"; fi
+}
+
+# add_origins_for_port <env file>: with AGORA_HTTPS_PORT other than 443, makes sure CORS_ORIGIN
+# (and WEBAUTHN_ORIGINS when it is set, since it then replaces the defaults) allows
+# https://localhost:<port>, and https://<DOMAIN>:<port> when DOMAIN is set (it may be the
+# bundle's, from another machine). An empty CORS_ORIGIN starts from compose's default,
+# https://<DOMAIN or localhost>, so setting it drops nothing. src/config.ts adds only
+# https://localhost (no port) by itself.
+add_origins_for_port() {
+    local env=$1 port host o v new
+    port=$(env_get "$env" AGORA_HTTPS_PORT)
+    [ -n "$port" ] && [ "$port" != 443 ] || return 0
+    host=$(env_get "$env" DOMAIN); host=${host#http*://}; host=${host%%/*}
+    v=$(env_get "$env" CORS_ORIGIN)
+    new=${v:-https://${host:-localhost}}
+    for o in "https://localhost:$port" ${host:+"https://$host:$port"}; do new=$(origin_list_add "$new" "$o"); done
+    [ "$new" = "$v" ] || env_set "$env" CORS_ORIGIN "$new"
+    v=$(env_get "$env" WEBAUTHN_ORIGINS)
+    [ -n "$v" ] || return 0
+    new=$v
+    for o in "https://localhost:$port" ${host:+"https://$host:$port"}; do new=$(origin_list_add "$new" "$o"); done
+    [ "$new" = "$v" ] || env_set "$env" WEBAUTHN_ORIGINS "$new"
+}
+
 agora_version() {
     sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$1/package.json" 2>/dev/null | head -n 1
 }

@@ -97,6 +97,9 @@ done
 mv "$WORK/env.prod" "$DIR/$ENV_FILE_NAME"
 # The box image tag is the release in this folder's, whatever the bundle's install had
 if [ -f "$DIR/box/VERSION" ]; then env_set "$DIR/$ENV_FILE_NAME" AGORA_BOX_VERSION "$(box_version "$DIR")"; fi
+# The browser's origin follows this machine's HTTPS port: a bundle from a machine on 443 restored
+# on one on another port (a Mac's VM uses 8443) must still let https://<host>:<port> in
+add_origins_for_port "$DIR/$ENV_FILE_NAME"
 PROJECT=$(env_get "$DIR/$ENV_FILE_NAME" COMPOSE_PROJECT_NAME); PROJECT=${PROJECT:-$B_INSTANCE}
 ok ".env.prod (the previous one is $ENV_FILE_NAME.before-restore)"
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    AutostartDeps, ExecResult, autostartCommand, assertSafePath, launchAgentPlist, parseSchtasksList, planFor, statusOf, systemdUnit, windowsLauncher, windowsTaskXml,
+    AutostartDeps, ExecResult, autostartCommand, assertSafePath, launchAgentPlist, parseSchtasksList, planFor, stableNodePath, statusOf, systemdUnit, windowsLauncher, windowsTaskXml,
 } from '../src/autostart.js';
 
 type Call = [string, string[]];
@@ -166,6 +166,22 @@ describe('macOS', () => {
         expect(await h.run(['disable'])).toBe(0);
         expect(plist in h.files).toBe(false);
         expect(await h.run(['disable'])).toBe(0);
+    });
+    it("uses Homebrew's opt link for a Cellar node, so brew upgrade node doesn't break it", async () => {
+        const cellar = '/opt/homebrew/Cellar/node/24.3.0/bin/node';
+        const h = harness('darwin', { uid: 501, files: { '/opt/homebrew/opt/node/bin/node': '' } });
+        h.deps.nodePath = cellar;
+        expect(await h.run(['enable', '--config', h.config])).toBe(0);
+        expect(String(h.files[plist])).toContain('<string>/opt/homebrew/opt/node/bin/node</string>');
+        expect(String(h.files[plist])).not.toContain('Cellar');
+        const pinned = harness('darwin', { uid: 501, files: { '/opt/homebrew/opt/node@22/bin/node': '' } });
+        pinned.deps.nodePath = '/opt/homebrew/Cellar/node@22/22.20.0/bin/node';
+        expect(await stableNodePath(pinned.deps)).toBe('/opt/homebrew/opt/node@22/bin/node');
+        // No opt link (an unusual Homebrew), or not Homebrew: the path stays as it is
+        const bare = harness('darwin', { uid: 501 });
+        bare.deps.nodePath = cellar;
+        expect(await stableNodePath(bare.deps)).toBe(cellar);
+        expect(await stableNodePath(harness('darwin').deps)).toBe('/usr/bin/node');
     });
     it('status parses launchctl print', async () => {
         const h = harness('darwin', { uid: 501, replies: { 'launchctl print': { stdout: 'com.agora.host = {\n\tstate = running\n}' } } });

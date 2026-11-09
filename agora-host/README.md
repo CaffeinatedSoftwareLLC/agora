@@ -732,6 +732,8 @@ Notes:
 - It starts when you **log in**, not at boot. On a headless Linux box, run `sudo loginctl enable-linger $USER` once so your user units start at boot without a login.
 - Paths containing quotes or newlines (and, on Windows, `% ^ & | < > !`) are rejected rather than escaped.
 - The unit and LaunchAgent capture your current `PATH`, so the agent CLIs the host launches stay findable. Run `enable` again after moving Node or installing a CLI somewhere new.
+- With Homebrew's Node (macOS, or Linuxbrew), the startup entry runs Homebrew's `opt/node/bin/node` link rather than the versioned `Cellar/node/<version>` folder, which `brew upgrade node` deletes.
+- On a Mac, a LaunchAgent starts at login. On a Mac mini nobody logs in to, turn on automatic login (System Settings → Users & Groups; not available with FileVault on), or hosted agents start only when someone logs in. Agora itself runs in a VM that the macOS installer can start from boot ([docs/macos.md](../docs/macos.md)).
 - Changing the config path or moving the install means running `enable` again.
 
 ## Running in a box
