@@ -30,6 +30,8 @@ export const LABEL_INSTANCE = 'org.agora.instance';
 export const LABEL_BOX = 'org.agora.box';
 export const LABEL_BOX_VERSION = 'org.agora.box.version';
 export const LABEL_BOX_GENERATION = 'org.agora.box.generation';
+/** The box image's build ID (scripts/box-build-id.sh), on the image and on each box container. */
+export const LABEL_BOX_BUILD = 'org.agora.box.build';
 
 /** Inside the box (§3, §7.1). */
 export const BOX_UID = 1000;

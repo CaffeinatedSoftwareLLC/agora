@@ -353,12 +353,15 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
     || wakeBudget !== String(profile.wakeBudget) || tokenBudget !== String(profile.tokenBudget) || runMinutes !== savedMinutes;
   // opencode's own default is an OpenCode Zen model, so an opencode (or omp) agent always names one
   const opencode = profile.adapter === 'opencode' || profile.adapter === 'omp';
-  const validModel = !opencode || !!model.trim();
+  const boxed = !!profile.boxed;
+  const validModel = boxed || !opencode || !!model.trim();
 
   const save = async () => {
     try {
       if (!validWakeBudget || !validTokenBudget || !validRunMinutes || !validModel) return;
-      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase(),
+      // A box's profile takes only its session limits here; the rest is in the box's settings
+      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, {
+        ...(boxed ? {} : { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase() }),
         wakeBudget: Number(wakeBudget), tokenBudget: Number(tokenBudget),
         // Only when changed: a limit that isn't whole minutes stays as it is
         ...(runMinutes !== savedMinutes ? { runTimeoutSec: Number(runMinutes) * 60 } : {}) });
@@ -384,14 +387,16 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
         <button className="min-h-11 md:min-h-8 px-2 text-xs text-danger hover:underline" onClick={() => void remove()}>Delete</button>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <label className="flex flex-col text-xs text-text-muted">Workspace ID (end sessions before changing)
-          <input className={input} value={workspaceId} maxLength={64} onChange={e => setWorkspaceId(e.target.value)} />
-        </label>
-        <input className={input} value={model} placeholder={opencode ? 'OpenRouter model ID (required)' : 'model (CLI default)'} maxLength={64}
-          aria-label={`Model for ${profile.name}`} onChange={e => setModel(e.target.value)} />
-        <select className={input} value={effort} onChange={e => setEffort(e.target.value)}>
-          {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
-        </select>
+        {!boxed && <>
+          <label className="flex flex-col text-xs text-text-muted">Workspace ID (end sessions before changing)
+            <input className={input} value={workspaceId} maxLength={64} onChange={e => setWorkspaceId(e.target.value)} />
+          </label>
+          <input className={input} value={model} placeholder={opencode ? 'OpenRouter model ID (required)' : 'model (CLI default)'} maxLength={64}
+            aria-label={`Model for ${profile.name}`} onChange={e => setModel(e.target.value)} />
+          <select className={input} value={effort} onChange={e => setEffort(e.target.value)}>
+            {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
+          </select>
+        </>}
         <label className="flex flex-col text-xs text-text-muted">Wake budget per session
           <input className={input} type="number" min={1} max={100000} step={1} value={wakeBudget}
             onChange={e => setWakeBudget(e.target.value)} aria-label={`Wake budget for ${profile.name}`} />

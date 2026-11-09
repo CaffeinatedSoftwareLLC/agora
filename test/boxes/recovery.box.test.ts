@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -65,6 +65,28 @@ describe('box recovery', () => {
         expect(box.generation).toBe(generation + 1);
         expect((await inBox(box.container, 'cat ~/marker ~/.agora/state/recover/login.json')).stdout).toBe('keep-me\nfake-login\n');
     }, 300_000);
+
+    it('a box on another build of its image (new agora-host code, same box/VERSION) is rebuilt onto the current one, home kept', async () => {
+        const label = async () => JSON.parse((await docker('inspect', box.container)).stdout)[0].Config.Labels['org.agora.box.build'] ?? null;
+        const before = await label();
+        expect(before).toBeTruthy();
+        const generation = box.generation;
+        // What the stack does on an upgrade that changed agora-host: the same tag, another build label
+        const version = readFileSync('box/VERSION', 'utf8').trim();
+        const next = `${before}-next`;
+        const built = await sh('docker', ['build', '-q', '-f', 'box/Dockerfile', '--target', 'test', '--build-arg', `BOX_VERSION=${version}`,
+            '--build-arg', `BOX_BUILD=${next}`, '-t', `agora/box:${version}-test`, '.'], 900_000);
+        expect(built.code, built.stderr).toBe(0);
+        await waitRunning(inst, box.id, generation + 1);
+        box = await inspectBox(box.id);
+        expect(await label()).toBe(next);
+        expect((await inBox(box.container, 'cat ~/marker ~/.agora/state/recover/login.json')).stdout).toBe('keep-me
+fake-login
+');
+        // Once per build: it stays on this container
+        await new Promise(r => setTimeout(r, 20_000));
+        expect((await inspectBox(box.id)).generation).toBe(box.generation);
+    }, 900_000);
 
     it.runIf(process.env.BOXTEST_ALLOW_DAEMON_RESTART === '1')('the reboot test: everything is back after the Docker daemon restarts', async () => {
         const t = await now().catch(() => new Date().toISOString());

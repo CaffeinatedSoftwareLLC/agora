@@ -4,6 +4,7 @@ import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
 import { checkTerms } from '../../agora-host/src/terms';
 import { hostRefusalNotice, subscriptionNotice } from '../../src/lib/provider-terms';
+import { runTimeoutNotice } from '../../src/lib/agent-runs';
 
 /**
  * Live report (#diakrisis, 2026-11-09): the server owner's bot, connected from a terminal with
@@ -275,14 +276,35 @@ describe('a run stopped at its time limit', () => {
         const c = await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(worker.hostAuth);
         expect(c.status, JSON.stringify(c.body)).toBe(200);
         expect(c.body.run.timeoutSeconds).toBe(900);
+        // The owner raises it while the run is going: the notice names the limit this run had
+        const raised = await ctx.request.patch(`/servers/${serverId}/agent-profiles/${worker.profileId}`).set(owner.auth).send({ runTimeoutSec: 3600 });
+        expect(raised.status, JSON.stringify(raised.body)).toBe(200);
         const since = await lastId();
         const failed = await ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/fail`).set(worker.hostAuth)
             .send({ claimToken: c.body.run.claimToken, error: 'run_timeout', retryable: true });
         expect(failed.status, JSON.stringify(failed.body)).toBe(200);
-        expect(await notices(since)).toEqual(["diakrisis's run hit its 15-minute limit; raise it in Settings → Agents."]);
+        expect(await notices(since)).toEqual([runTimeoutNotice('diakrisis', 900)]);
+        expect(runTimeoutNotice('diakrisis', 900)).toBe("diakrisis's run hit its 15-minute limit, and its last wake was dropped: raise the limit in Settings → Agents, then send it again.");
         const batch = await ctx.db.query(`SELECT status FROM agent_batches WHERE id = (SELECT batch_id FROM agent_runs WHERE id = $1)`, [c.body.run.id]);
         expect(batch.rows[0].status).toBe('failed');
         expect((await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(worker.hostAuth)).status).toBe(204);
         await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [card.sessionId]);
+        await ctx.db.query(`UPDATE agent_profiles SET run_timeout_sec = 900 WHERE id = $1`, [worker.profileId]);
+    });
+
+    it("a box's run time limit and budgets are set from Settings → Agents; the rest of its profile stays the box's", async () => {
+        const patch = (body: object, auth = owner.auth) => ctx.request.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(auth).send(body);
+        const ok = await patch({ runTimeoutSec: 2700, tokenBudget: 80_000_000, wakeBudget: 200 });
+        expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+        expect(ok.body).toMatchObject({ runTimeoutSec: 2700, tokenBudget: 80_000_000, wakeBudget: 200 });
+        for (const body of [{ model: 'gpt-x' }, { runTimeoutSec: 1800, effort: 'high' }, { workspaceId: 'other' }]) {
+            const refused = await patch(body);
+            expect(refused.status, JSON.stringify(body)).toBe(409);
+            expect(refused.body.error).toContain('box');
+        }
+        // Owner only, as for any profile
+        const member = await authedUser(ctx.request, 'diakmember');
+        expect((await patch({ runTimeoutSec: 600 }, member.auth)).status).toBe(403);
+        expect((await ctx.db.query(`SELECT run_timeout_sec FROM agent_profiles WHERE id = $1`, [box.profileId])).rows[0].run_timeout_sec).toBe(2700);
     });
 });

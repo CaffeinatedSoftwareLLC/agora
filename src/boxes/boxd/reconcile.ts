@@ -1,4 +1,4 @@
-import { LABEL_BOX, LABEL_INSTANCE, boxContainerName, boxNetworkName, boxVolumeName } from '../../lib/boxes/contract';
+import { LABEL_BOX, LABEL_BOX_BUILD, LABEL_INSTANCE, boxContainerName, boxNetworkName, boxVolumeName } from '../../lib/boxes/contract';
 import { BoxGoneError } from '../../lib/boxes/tokens';
 import { notFound, statusOf, type BoxDockerApi, type NetworkInfo } from './docker';
 import {
@@ -14,9 +14,10 @@ import type { BoxRow, BoxStore, PendingAction } from './store';
  * (restart, rebuild, reset) and desired state (running, stopped, deleted). Before every start
  * the container is inspected and refused if it isn't what boxd would create (§7.2).
  * After the boxes: at most one upgrade (image_version below the current box/VERSION, or a
- * container on an older build of the current image: the stack rebuilt agora/box:<VERSION> with
- * new agora-host or agora-mcp code, which bumps no VERSION), then this instance's labelled
- * leftovers that no row claims are removed.
+ * container on another build of the current version: its build label, scripts/box-build-id.sh,
+ * isn't the image's, i.e. the stack rebuilt agora/box:<VERSION> with new agora-host, agora-mcp or
+ * box/ code, which bumps no VERSION), then this instance's labelled leftovers that no row claims
+ * are removed. A missing build label on either side never rebuilds anything.
  *
  * boxd reads only DB rows and Docker replies; nothing from a box reaches it.
  */
@@ -57,8 +58,10 @@ interface Track {
     notified: boolean;
     restartCount?: number;
     upgradeWaitSince?: number;
-    /** Its container runs an older build of the current image (seen at the last ensure). */
+    /** Its container has another build label than the current image (seen at the last ensure). */
     staleBuild?: boolean;
+    /** The image build it was last rebuilt for as stale: never twice for the same one. */
+    rebuiltFor?: string;
 }
 
 interface PassContext {
@@ -66,8 +69,6 @@ interface PassContext {
     networks: NetworkInfo[];
     containers: Set<string>;
     volumes: Set<string>;
-    /** The image ID the configured tag names now; null when unknown. */
-    imageId: string | null;
 }
 
 type Outcome = 'ok' | 'held';
@@ -80,6 +81,8 @@ const errText = (err: unknown) => {
 export class Reconciler {
     private track = new Map<string, Track>();
     private stopping = false;
+    /** The current image's build label, read at the start of each pass. */
+    private build: string | null = null;
 
     constructor(private d: {
         docker: BoxDockerApi;
@@ -115,8 +118,10 @@ export class Reconciler {
             networks: await this.d.docker.listNetworks(),
             containers: new Set((await this.d.docker.listContainers(label)).map(c => (c.Names?.[0] ?? '').replace(/^\//, ''))),
             volumes: new Set((await this.d.docker.listVolumes(label)).map(v => v.Name)),
-            imageId: (await this.d.docker.imageInspect(this.cfg.image).catch(() => null))?.Id ?? null,
         };
+        // The current image's build label; unknown (an inspect error, no label) rebuilds nothing
+        const image = await this.d.docker.imageInspect(this.cfg.image).catch(() => null);
+        this.build = image?.Config?.Labels?.[LABEL_BOX_BUILD] || null;
         for (const box of boxes) {
             if (this.stopping) return;
             await this.reconcileOne(box, ctx);
@@ -203,9 +208,11 @@ export class Reconciler {
 
         const drift = await this.drift(box, info, net.subnet);
         if (drift.length) return this.refuse(box, info, drift);
-        // The same box/VERSION, built again with newer agora-host or agora-mcp code: the box
+        // The same box/VERSION, built again with other agora-host, agora-mcp or box/ code: the box
         // keeps the code it was created with until it is rebuilt (upgradeOne)
-        t.staleBuild = !!ctx.imageId && !!info.Image && box.imageVersion === this.cfg.imageVersion && info.Image !== ctx.imageId;
+        const has = info.Config?.Labels?.[LABEL_BOX_BUILD] || null;
+        t.staleBuild = !!this.build && !!has && has !== this.build && box.imageVersion === this.cfg.imageVersion
+            && t.rebuiltFor !== this.build;
 
         const running = !!info.State?.Running || !!info.State?.Restarting;
         if (box.desiredState === 'stopped') {
@@ -286,9 +293,11 @@ export class Reconciler {
                 workdirAlias: 'work', repos: inputs.repos,
             },
             apiKey: box.auth === 'api_key' ? inputs.apiKey : null,
+            build: this.build,
         });
         const id = await this.d.docker.createContainer(spec);
         box.imageVersion = this.cfg.imageVersion;
+        this.trackOf(box.id).staleBuild = false;
         box.containerId = id;
         this.trackOf(box.id).restartCount = 0;
         this.d.log.info(`box ${box.id}: created container generation ${tokens.generation} image v${this.cfg.imageVersion}`);
@@ -550,12 +559,13 @@ export class Reconciler {
             this.d.log.info(`box ${box.id}: upgrading although a run is still active (waited 15 minutes)`);
         }
         const from = box.imageVersion;
+        // A stale build is rebuilt once per image build, even if the rebuild fails
+        if (from === this.cfg.imageVersion && this.build) t.rebuiltFor = this.build;
         try {
             await this.rebuild(box, ctx, false);
             t.upgradeWaitSince = undefined;
-            t.staleBuild = false;
             await this.d.store.notice(box, 'upgraded', from === this.cfg.imageVersion
-                ? `Box **${box.name}** was updated to the current build of box image v${from} (newer agora-host and agora-mcp). Its home folder and logins are kept.`
+                ? `Box **${box.name}** was rebuilt on the current build of box image v${from} (its agora-host, agora-mcp or box scripts changed). Its home folder and logins are kept.`
                 : `Box **${box.name}** was upgraded from box image v${from} to v${this.cfg.imageVersion}. Its home folder and logins are kept.`);
         } catch (err) {
             await this.failed(box, t, err);

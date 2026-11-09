@@ -363,10 +363,10 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const runId = generateUlid();
     const claimToken = 'rt_' + randomBytes(32).toString('hex');
     const lease = await c.query(
-        `INSERT INTO agent_runs (id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation, lease_until)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8))
+        `INSERT INTO agent_runs (id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation, lease_until, timeout_sec)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8), $9)
          RETURNING lease_until`,
-        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS]
+        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS, session.run_timeout_sec]
     );
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
@@ -863,10 +863,13 @@ async function recordVerification(c: PoolClient, run: any, v: VerificationReport
     notices.push(await postNotice(c, s.rows[0].channel_id.trim(), verificationNotice(s.rows[0].name, v)));
 }
 
-/** The notice for a run the host stopped at the profile's run time limit (agora-host `run_timeout`). */
+/**
+ * The notice for a run the host stopped at its run time limit (agora-host `run_timeout`), with
+ * the limit the run was claimed with. Every profile's limit, a box's too, is set in Settings → Agents.
+ */
 export function runTimeoutNotice(profile: string, seconds: number): string {
     const limit = seconds % 60 === 0 ? `${seconds / 60}-minute` : `${seconds}-second`;
-    return `${profile}'s run hit its ${limit} limit; raise it in Settings → Agents.`;
+    return `${profile}'s run hit its ${limit} limit, and its last wake was dropped: raise the limit in Settings → Agents, then send it again.`;
 }
 
 /**
@@ -900,7 +903,7 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     const text = error === 'subscription_owner_only' ? hostRefusalNotice(session.profile_name)
         : Object.hasOwn(SIWC_ERRORS, error) ? `${session.profile_name} ${SIWC_ERRORS[error]}`
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
-        : error === 'run_timeout' ? runTimeoutNotice(session.profile_name, session.run_timeout_sec)
+        : error === 'run_timeout' ? runTimeoutNotice(session.profile_name, run.timeout_sec ?? session.run_timeout_sec)
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));
     await notifySession(c, run.session_id, error === 'siwc_usage_limit' ? 'credit' : 'blocked');

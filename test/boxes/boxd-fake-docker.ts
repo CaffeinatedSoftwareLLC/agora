@@ -41,8 +41,10 @@ export class FakeDocker implements BoxDockerApi {
     /** Throw this from the next call to the named method, once. */
     failNext = new Map<string, Error>();
     private ids = 0;
-    /** The ID of the image the box tag names now; a rebuild of the stack gives it a new one. */
-    imageId = 'sha256:' + '1'.repeat(64);
+    /** The current image's build label (org.agora.box.build); null: none. A stack rebuild changes it. */
+    imageBuild: string | null = 'build-1';
+    /** Throw from imageInspect (the engine didn't answer). */
+    imageInspectFails = false;
 
     private hit(call: string) {
         this.calls.push(call);
@@ -53,7 +55,10 @@ export class FakeDocker implements BoxDockerApi {
     count(prefix: string) { return this.calls.filter(c => c.startsWith(prefix)).length; }
 
     async info() { return { Runtimes: { runc: {} } }; }
-    async imageInspect(_name: string) { return { Id: this.imageId, Config: { Labels: { 'org.agora.box.version': '1' } } }; }
+    async imageInspect(_name: string) {
+        if (this.imageInspectFails) throw dockerError(500, 'engine error');
+        return { Config: { Labels: { 'org.agora.box.version': '1', ...(this.imageBuild ? { 'org.agora.box.build': this.imageBuild } : {}) } } };
+    }
     async listNetworks() { return [...this.networks.values()].map(n => JSON.parse(JSON.stringify(n))); }
     async listContainers(filters: Record<string, string[]>) {
         const out: any[] = [];
@@ -128,8 +133,7 @@ export class FakeDocker implements BoxDockerApi {
             if (!this.volumes.has(m.Source)) this.volumes.set(m.Source, { Name: m.Source, Labels: {} });
         }
         const id = String(++this.ids).padStart(64, 'a');
-        // A container keeps the image ID it was created from, whatever the tag names later
-        this.containers.set(body.name!, { ...inspectFrom(body, id), Image: this.imageId });
+        this.containers.set(body.name!, inspectFrom(body, id));
         return id;
     }
     private attach(name: string, running: boolean) {

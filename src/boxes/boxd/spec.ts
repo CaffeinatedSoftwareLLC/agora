@@ -2,7 +2,7 @@ import type { ContainerCreateOptions } from 'dockerode';
 import type { BoxAdapter } from '../../lib/boxes/adapters';
 import {
     BOX_HOME, BOX_UID, EDGE_AGORA_PORT, EDGE_HOSTNAME, EDGE_PROXY_PORT,
-    LABEL_BOX, LABEL_BOX_GENERATION, LABEL_BOX_VERSION, LABEL_INSTANCE,
+    LABEL_BOX, LABEL_BOX_BUILD, LABEL_BOX_GENERATION, LABEL_BOX_VERSION, LABEL_INSTANCE,
     boxContainerName, boxNetworkName, boxVolumeName,
 } from '../../lib/boxes/contract';
 import { boxAddress, edgeAddress, gatewayAddress } from './subnets';
@@ -55,6 +55,8 @@ export interface BoxSpecInput {
     profile: BoxProfileEnv;
     /** api_key profiles: the provider key, under profile.apiKeyEnv */
     apiKey: string | null;
+    /** The image's build label when the container is created (LABEL_BOX_BUILD); none when unknown. */
+    build?: string | null;
 }
 
 /** A provider key variable: `<NAME>_API_KEY`, never one of Agora's own or the proxy's. */
@@ -150,6 +152,7 @@ export function containerSpec(input: BoxSpecInput): ContainerCreateOptions {
             ...boxLabels(input.instance, input.boxId),
             [LABEL_BOX_VERSION]: String(input.imageVersion),
             [LABEL_BOX_GENERATION]: String(input.generation),
+            ...(input.build ? { [LABEL_BOX_BUILD]: input.build } : {}),
         },
         HostConfig: {
             Runtime: input.runtime,

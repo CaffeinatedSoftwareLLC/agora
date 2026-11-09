@@ -45,7 +45,7 @@ export function subscriptionNotice(agent: string): string {
  */
 export function hostRefusalNotice(agent: string): string {
     return `${agent}'s host refused this run: it runs on the owner's personal subscription, and the host didn't count the message as the owner's. `
-        + 'The server did, so if the owner or one of their own bots sent it, that host runs an older agora-host than the server: update it.';
+        + 'The server let it through, so if the owner or one of their own bots sent it, that host runs an older agora-host than the server: update it.';
 }
 
 /**
@@ -92,10 +92,11 @@ export async function serverSubscriptionWakes(db: any, serverId: string): Promis
  * Whether a terminal session's posts on its own token count as its bot owner's, and why not
  * (agent-commands.ts OwnerTokenState): 'ok', or 'mixed', 'other_bot_owner', 'started_by_other',
  * 'agent_token' (a host's, box's or model agent's token), 'other_maker', 'owner_only_token'
- * (with 'owner_only' only a token the bot's owner made counts), 'no_token'. ONE definition for
- * the session chip (SESSION_SELECT) and for routing (ownerBotOf's terminal case), so the chip's
- * "counts as you" can't disagree with what wakes. `s`: the terminal session, `u`: its bot,
- * `srv`: its server (aliases in the caller's query).
+ * (with 'owner_only' only a token the bot's owner made counts), 'no_token'. One definition for
+ * the session chip (SESSION_SELECT) and for ownerBotOf's terminal case: when the chip says
+ * "counts as you", a post with the terminal's own token counts. (Not the other way round: a
+ * personal or invite token can also count outside a terminal, under ownerBotOf's other rule.)
+ * `s`: the terminal session, `u`: its bot, `srv`: its server (aliases in the caller's query).
  */
 export function terminalOwnerStateSql(s = 's', u = 'u', srv = 'srv'): string {
     return `(CASE WHEN ${s}.token_mixed THEN 'mixed'

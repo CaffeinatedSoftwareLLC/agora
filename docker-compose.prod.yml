@@ -108,6 +108,8 @@ services:
       target: ${AGORA_BOX_TARGET:-box}
       args:
         BOX_VERSION: ${AGORA_BOX_VERSION:-5}
+        # scripts/box-build-id.sh (install/lib/common.sh compose_in sets it); empty: boxd never rebuilds for a newer build
+        BOX_BUILD: ${AGORA_BOX_BUILD:-}
     image: agora/box:${AGORA_BOX_VERSION:-5}${AGORA_BOX_TAG_SUFFIX:-}
     entrypoint: ["true"]
     network_mode: none
