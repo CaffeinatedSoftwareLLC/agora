@@ -4,10 +4,10 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentSessionUpdatePayload, TaskCardDeletePayload, TaskCardUpdatePayload } from '../../lib/contracts/ws-events';
-import { compactTokens, listProfiles, type AgentProfile } from '../agents/agentSessions';
+import { compactTokens, listProfiles, runAgentCommand, type AgentProfile } from '../agents/agentSessions';
 import { SessionWorkspace } from '../agents/SessionWorkspace';
 import {
-  SESSION_LABEL, STATUSES, STATUS_LABEL, cardSessionState, githubApi, groupCards, safeUrl, taskApi, taskError, upsertCard,
+  SESSION_LABEL, STATUSES, STATUS_LABEL, cardSessionState, githubApi, groupCards, safeUrl, startError, taskApi, taskError, upsertCard,
   type AgentHost, type Board, type CardSessionState, type CardStatus, type GithubIssue, type GithubState, type TaskCard,
 } from './taskBoard';
 
@@ -414,6 +414,19 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
                 <dd>{card.session.changedPaths.length} changed {card.session.changedPaths.length === 1 ? 'file' : 'files'}</dd></>}
             </dl>
           )}
+          {board.isOwner && card.session && card.session.state !== 'ended' && (
+            <RaiseBudget key={`budget-${card.session.id}`} card={card} busy={busy}
+              onSave={async tokenBudget => {
+                let saved = false;
+                await act(async () => {
+                  const r = await runAgentCommand(card.channelId, { command: 'budget', sessionId: card.session!.id, tokenBudget });
+                  onChanged({ ...card, session: { ...card.session!, tokenBudget: r.session?.tokenBudget ?? tokenBudget } });
+                  saved = true;
+                  return card.session!.state === 'shelved' ? 'Budget saved. Press Resume to continue.' : 'Budget saved.';
+                });
+                return saved;
+              }} />
+          )}
           {(pr || card.mergedSha) && (
             <p className="text-xs">
               {pr && <a className="break-all text-primary underline" href={pr} target="_blank" rel="noreferrer">Pull request ({card.prState ?? 'open'})</a>}
@@ -425,7 +438,11 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
             {card.threadId && <button type="button" className={BTN} onClick={() => openThread(card.channelId, card.threadId!)}>Open thread</button>}
             {board.canManage && card.profile && !live && (
               <button type="button" className={BTN_PRIMARY} disabled={busy}
-                onClick={() => void act(async () => { const r = await taskApi.start(card.channelId, card.id); onChanged(r.card); return r.action === 'resumed' ? 'Session resumed.' : 'Agent started.'; })}>
+                onClick={() => void act(async () => {
+                  try {
+                    const r = await taskApi.start(card.channelId, card.id); onChanged(r.card); return r.action === 'resumed' ? 'Session resumed.' : 'Agent started.';
+                  } catch (err) { throw new Error(startError(err, card)); }
+                })}>
                 {card.session?.state === 'shelved' && card.session.profile === card.profile.name ? 'Resume' : 'Start'}
               </button>
             )}
@@ -480,6 +497,31 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
         </div>
       )}
     </article>
+  );
+}
+
+/**
+ * The owner sets the card session's own token budget (the agent-commands `budget` command), so
+ * a session shelved on its budget can be resumed with more. The profile's budget, in Settings →
+ * Agents, is for sessions without their own.
+ */
+function RaiseBudget({ card, busy, onSave }: { card: TaskCard; busy: boolean; onSave: (tokenBudget: number) => Promise<boolean> }) {
+  const current = card.session!.tokenBudget;
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(String(current));
+  const valid = /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) >= 1 && Number(value) !== current;
+  if (!open) {
+    return <button type="button" className={BTN} disabled={busy} onClick={() => { setValue(String(current)); setOpen(true); }}>Raise budget</button>;
+  }
+  return (
+    <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); if (valid) void onSave(Number(value)).then(saved => { if (saved) setOpen(false); }); }}>
+      <label className="flex min-w-0 flex-1 flex-col text-xs text-text-muted">Session token budget
+        <input className={INPUT} type="number" min={1} step={1} value={value} aria-label="Card session token budget"
+          onChange={e => setValue(e.target.value)} />
+      </label>
+      <button type="submit" className={BTN_PRIMARY} disabled={busy || !valid}>Save budget</button>
+      <button type="button" className={BTN} onClick={() => setOpen(false)}>Cancel</button>
+    </form>
   );
 }
 

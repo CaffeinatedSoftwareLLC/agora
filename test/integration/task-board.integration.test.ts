@@ -197,6 +197,34 @@ describe('task board', () => {
         expect(resumed.body).toMatchObject({ action: 'resumed', card: { session: { id: again.body.card.session.id, state: 'live' } } });
     });
 
+    it('a new profile gets a 50M token budget; raising the profile budget lets a budget-exhausted card resume', async () => {
+        // Migration 093: the column default for new profiles (existing rows keep theirs)
+        await setHostKind(ctx.db, hostId, 'machine'); // agents are created on machine hosts
+        const roomy = await makeAgent('roomy');
+        await setHostKind(ctx.db, hostId, 'box');
+        const profiles = await ctx.request.get(`/servers/${serverId}/agent-profiles`).set(owner.auth);
+        expect(profiles.body.find((p: any) => p.id === roomy.profileId)).toMatchObject({ tokenBudget: 50_000_000 });
+        expect((await ctx.request.delete(`/servers/${serverId}/agent-profiles/${roomy.profileId}`).set(owner.auth)).status).toBe(204);
+
+        // builder's profile is on 2,000,000 (beforeEach); the card's session has no budget of its own
+        const card = (await create({ title: 'Long job', profile: 'builder', start: true })).body.card;
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', tokens_used = 2000000 WHERE id = $1`, [card.session.id]);
+        const refused = await start(card.id);
+        expect(refused.status).toBe(409);
+        expect(refused.body.error).toBe('budget_exhausted');
+
+        // Only the owner raises it, through the profile PATCH that Settings → Agents uses
+        const path = `/servers/${serverId}/agent-profiles/${builder.profileId}`;
+        expect((await ctx.request.patch(path).set(director.auth).send({ tokenBudget: 50_000_000 })).status).toBe(403);
+        expect((await ctx.request.patch(path).set(owner.auth).send({ tokenBudget: 0 })).status).toBe(400);
+        const raised = await ctx.request.patch(path).set(owner.auth).send({ tokenBudget: 50_000_000 });
+        expect(raised.status, JSON.stringify(raised.body)).toBe(200);
+
+        const resumed = await start(card.id);
+        expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+        expect(resumed.body).toMatchObject({ action: 'resumed', card: { session: { id: card.session.id, state: 'live', tokensUsed: 2_000_000, tokenBudget: 50_000_000 } } });
+    });
+
     it('refuses to reassign a working card, and a director cannot start a subscription agent', async () => {
         const card = (await create({ title: 'Busy', profile: 'builder', start: true })).body.card;
         expect((await patch(card.id, { profile: 'helper' })).body.error).toBe('card_session_live');

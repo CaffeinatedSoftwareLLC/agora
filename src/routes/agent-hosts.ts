@@ -279,7 +279,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias,
                                                  wake_budget, token_budget, run_timeout_sec, created_by, workspace_id, tool_presets, allowed_tools,
                                                  host_mode, host_mode_ack_at, host_mode_ack_by)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 2000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'),
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 50000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'),
                              COALESCE($15, '{}'::text[]), COALESCE($16, '{}'::text[]),
                              $17, CASE WHEN $17 THEN NOW() END, CASE WHEN $17 THEN $13::char(26) END)
                      RETURNING ${PROFILE_COLS}`,
