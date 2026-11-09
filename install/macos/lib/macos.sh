@@ -14,7 +14,10 @@
 #   - Every program that changes the Mac (brew, limactl, launchctl, sudo, curl) runs through a
 #     function or a command looked up in PATH, so test/install/macos.test.sh can replace it.
 #   - Nothing of the Mac is shared with the VM: no mounts, no SSH agent. The release goes in
-#     with limactl copy. Ports are forwarded to 127.0.0.1 on the Mac only.
+#     with limactl copy. Ports are forwarded to 127.0.0.1 on the Mac only. In the other
+#     direction, Lima's network makes the Mac's own 127.0.0.1 reachable from the VM as
+#     192.168.5.2 (host.lima.internal); guest/host-firewall.sh drops new connections to it from
+#     the VM and its containers, at every boot.
 #   - Lima is installed, a VM created, a LaunchDaemon written, only with the user's consent.
 
 MAC_STATE_DIR=${AGORA_MAC_STATE_DIR:-$HOME/.agora/macos}
@@ -27,8 +30,15 @@ VM_MIN_MEMORY_GB=6
 VM_MIN_DISK_GB=40
 # The Linux installer wants 20 GB free inside the VM; the VM's disk is a sparse file on the Mac
 MAC_MIN_FREE_DISK_GB=30
-# Canonical's Ubuntu 24.04 (noble) cloud images, with SHA256SUMS next to them (checked 2026-11-09)
-UBUNTU_IMAGE_BASE=${AGORA_UBUNTU_IMAGE_BASE:-https://cloud-images.ubuntu.com/releases/noble/release}
+# Canonical's Ubuntu 24.04 (noble) cloud images. The VM is pinned to one dated build
+# (release-YYYYMMDD/, as Lima's own templates do) and its SHA-256 from that folder's SHA256SUMS
+# (checked 2026-11-09). AGORA_UBUNTU_IMAGE_BASE gives a folder directly.
+UBUNTU_IMAGE_ROOT=${AGORA_UBUNTU_IMAGE_ROOT:-https://cloud-images.ubuntu.com/releases/noble}
+UBUNTU_IMAGE_BASE=${AGORA_UBUNTU_IMAGE_BASE:-}
+# Below this much free space on the Mac, the VM's growing disk can fill it: doctor and the
+# keep-alive warn
+MAC_LOW_DISK_GB=10
+MACOS_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 UBUNTU_IMAGE_FILE=ubuntu-24.04-server-cloudimg-arm64.img
 KEEPALIVE_LABEL_PREFIX=com.agora.vm
 KEEPALIVE_INTERVAL=300
@@ -52,7 +62,9 @@ mac_sleep_minutes() { pmset -g 2>/dev/null | awk '$1 == "sleep" {print $2; exit}
 version_ge() {
     local a=$1 b=$2 i x y
     for i in 1 2 3 4; do
-        x=$(printf '%s' "$a" | cut -d. -f"$i"); y=$(printf '%s' "$b" | cut -d. -f"$i")
+        # -s: a version without that many dots has no such field (cut would print it whole)
+        x=$(printf '%s' "$a" | cut -s -d. -f"$i"); y=$(printf '%s' "$b" | cut -s -d. -f"$i")
+        [ "$i" -gt 1 ] || { x=${a%%.*}; y=${b%%.*}; }
         x=${x%%[!0-9]*}; y=${y%%[!0-9]*}; x=${x:-0}; y=${y:-0}
         [ "$x" -gt "$y" ] && return 0
         [ "$x" -lt "$y" ] && return 1
@@ -160,7 +172,26 @@ check_port() {
 
 # ─── The VM's Lima config ───
 
-# image_digest: the arm64 image's SHA-256 from Canonical's SHA256SUMS (64 hex), or fail
+# image_releases: Canonical's dated builds (release-YYYYMMDD), newest first
+image_releases() {
+    curl -fsSL --proto '=https' -m 60 "$UBUNTU_IMAGE_ROOT/" 2>/dev/null | grep -Eo 'release-[0-9]{8}/' | tr -d / | sort -ru || true
+}
+
+# pick_image: sets UBUNTU_IMAGE_BASE (a dated folder) and IMAGE_DIGEST, trying the three newest
+# builds (the newest may still be uploading). Fails when none has the arm64 image in its sums.
+pick_image() {
+    local r
+    if [ -n "$UBUNTU_IMAGE_BASE" ]; then IMAGE_DIGEST=$(image_digest) || return 1; return 0; fi
+    for r in $(image_releases | head -n 3); do
+        UBUNTU_IMAGE_BASE="$UBUNTU_IMAGE_ROOT/$r"
+        if IMAGE_DIGEST=$(image_digest); then return 0; fi
+    done
+    UBUNTU_IMAGE_BASE=''
+    return 1
+}
+
+# image_digest: the arm64 image's SHA-256 from $UBUNTU_IMAGE_BASE/SHA256SUMS (64 hex), or fail.
+# The sums come over HTTPS from Canonical's own server; their GPG signature isn't checked.
 image_digest() {
     local sums d
     sums=$(curl -fsSL --proto '=https' -m 60 "$UBUNTU_IMAGE_BASE/SHA256SUMS") || return 1
@@ -194,6 +225,12 @@ containerd:
 ssh:
   forwardAgent: false
   loadDotSSHPubKeys: false
+# At every boot: no new connections from the VM or its containers to the Mac's own 127.0.0.1
+# (192.168.5.2, host.lima.internal). install/macos/guest/host-firewall.sh
+provision:
+  - mode: system
+    script: |
+$(sed 's/^/      /' "$MACOS_LIB_DIR/../guest/host-firewall.sh")
 portForwards:
   - guestPort: $5
     hostIP: "127.0.0.1"
@@ -272,6 +309,22 @@ EOF
 EOF
 }
 
+# launchd_load <sudo|-> <domain> <plist>: bootstrap, retried: right after a bootout launchd may
+# still be removing the old job and refuse the new one for a moment
+launchd_load() {
+    local i
+    for i in 1 2 3 4 5; do
+        if [ "$1" = sudo ]; then sudo launchctl bootstrap "$2" "$3" >/dev/null 2>&1 && return 0
+        else launchctl bootstrap "$2" "$3" >/dev/null 2>&1 && return 0; fi
+        [ "$i" = 5 ] || sleep 1
+    done
+    return 1
+}
+
+# The installer holds this while it creates or starts the VM; keepalive.sh leaves the VM alone
+# while the PID in it runs
+install_lock() { echo "$MAC_STATE_DIR/$1.installing"; }
+
 launchd_path() {
     local b
     b=$(brew_bin_dir 2>/dev/null || true)
@@ -291,7 +344,7 @@ install_keepalive() {
         sudo launchctl bootout "system/$(keepalive_label "$vm")" >/dev/null 2>&1 || true
         sudo install -m 644 -o root -g wheel "$tmp" "$plist"
         rm -f "$tmp"
-        sudo launchctl bootstrap system "$plist"
+        launchd_load sudo system "$plist" || die "launchctl bootstrap system $plist failed"
         # One way to start it, not two
         remove_keepalive_agent "$vm"
     else
@@ -299,7 +352,7 @@ install_keepalive() {
         mkdir -p "$(dirname "$plist")"
         keepalive_plist "$vm" agent "$(id -un)" "$(launchd_path)" > "$plist"
         launchctl bootout "gui/$uid/$(keepalive_label "$vm")" >/dev/null 2>&1 || true
-        if ! launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1; then
+        if ! launchd_load - "gui/$uid" "$plist"; then
             # Over SSH there is no login session to load it into; launchd loads it at the next login
             warn "no login session to load the keep-alive into (over SSH?). It starts at your next login; for a Mac nobody logs in to, run the installer again with --at-boot."
         fi

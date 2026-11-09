@@ -93,7 +93,7 @@ In Agora, Admin → Instance → **Report setup problem** does the same from the
 All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Agora`; on a Mac, `install/macos/agora-vm.sh backup`, `restore <file>`, `upgrade` run them in the VM and move the bundle to and from the Mac):
 
 | | Command | |
-|---|---|---|---|
+|---|---|---|
 | Back up | `bash install/backup.sh` | One encrypted file in `backups/` with the database, files, every agent's box (logins and repos) and `.env.prod`. You choose its passphrase; without it the backup can't be restored. Agora stops for the length of the backup. |
 | Restore | `bash install/restore.sh backups/<file>.agorabk` | Into an install with the same name. Tokens and approvals from before the backup stop working; boxes are rebuilt with fresh ones. |
 | Upgrade | `bash install/upgrade.sh` | Backs up first, then installs the latest release. Boxes keep their home folders. The replaced release is kept in `.releases/` for `--rollback`. An install from before agent boxes has no `install/` folder: unpack the new release anywhere and run `bash <new release>/install/upgrade.sh --dir ~/agora`. |

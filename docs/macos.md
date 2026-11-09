@@ -46,8 +46,10 @@ What it does, step by step:
    - **No mounts.** Nothing of the Mac is visible in the VM. The release goes in with `limactl copy`.
    - No SSH agent forwarding, and Lima's own containerd is off.
    - **Port forwards to 127.0.0.1 only:** the three ports above, and nothing else in the VM. Nothing on your network reaches Agora through the Mac.
+   - **The VM can't reach the Mac's own services.** In Lima's network the Mac's `127.0.0.1` is `192.168.5.2` (`host.lima.internal`) inside the VM. A script Lima runs at every boot (`install/macos/guest/host-firewall.sh`) refuses every new connection from the VM and its containers to that address, so nothing in it reaches what listens only on the Mac's loopback (Ollama, dev servers, agora-host's sign-in callback). See [What the VM can reach on the Mac](#what-the-vm-can-reach-on-the-mac).
+   - The image is a dated Ubuntu build (`release-YYYYMMDD/`), its SHA-256 from that folder's `SHA256SUMS` (fetched over HTTPS from Canonical; the GPG signature is not checked).
 5. **Copies the release in** and runs `install/linux/install.sh --lima` inside the VM with those ports. That installs Docker Engine and gVisor from their apt repositories, checks a `-gvisor` kernel, writes `.env.prod`, builds and starts the stack, creates your admin and your first agent's box ([docs/installing.md](installing.md#ubuntu-or-debian) describes each step). Password and key files you pass are copied into a private folder in the VM and deleted afterwards.
-6. **Keeps the VM running** with launchd (the counterpart of the Windows scheduled task). It is set up right after the VM starts, before step 5, so the sudo that `--at-boot` asks for in step 1 is still fresh:
+6. **Keeps the VM running** with launchd (the counterpart of the Windows scheduled task). It is written before the VM is created, while the sudo that `--at-boot` asks for in step 1 is still fresh (macOS forgets it after 5 minutes), and leaves the VM alone while the installer creates or starts it:
    - By default a **LaunchAgent**, `~/Library/LaunchAgents/com.agora.vm.agora.plist`: when you log in and every 5 minutes it runs `~/.agora/macos/keepalive.sh`, which starts the VM if it isn't running. No sudo.
    - With `--at-boot`, a **LaunchDaemon**, `/Library/LaunchDaemons/com.agora.vm.agora.plist`, that runs as your user from boot, before anyone logs in. It needs sudo once. Use it on a Mac mini that nobody logs in to.
    - Inside the VM, systemd starts Docker, and the stack's `restart: unless-stopped` services start Agora.
@@ -77,6 +79,28 @@ Agents on the Mac connect to `http://localhost:3000`, which goes straight to the
 
 Boxed agents need nothing on the Mac. For host mode (an agent CLI running on the Mac itself), install `agora-host` and `agora-mcp` on the Mac from the GitHub release tarballs, write the host config with Mac paths, and start it at login with `agora-host autostart enable --config /Users/<you>/.agora-host/host.json` (a LaunchAgent, see [agora-host/README.md](../agora-host/README.md#start-automatically)). It uses Homebrew's stable `node` link, so `brew upgrade node` doesn't break it. A LaunchAgent starts at login; on a Mac nobody logs in to, turn on automatic login, or the host runs only while someone is logged in. FileVault turns automatic login off.
 
+## What the VM can reach on the Mac
+
+Nothing that listens only on the Mac's `127.0.0.1`: the VM's firewall refuses new connections to `192.168.5.2`, Lima's address for it. The internet, DNS, the port forwards and `limactl shell` work as usual.
+
+If Agora should use a service on the Mac, for example an Ollama for model agents, allow its port inside the VM:
+
+```bash
+bash install/macos/agora-vm.sh shell
+echo 11434 | sudo tee -a /etc/agora/host-allow-ports
+sudo systemctl restart agora-host-firewall
+```
+
+Then use `http://host.lima.internal:11434` as the provider's base URL in Settings → AI (with "Allow private network base URLs"). Only that port opens, for the whole VM and its containers. Boxes still can't reach it, because their edge refuses private addresses.
+
+## Back up, and keep the VM out of Time Machine
+
+The VM's disks (`~/.lima/agora/`) hold the install's `.env.prod`, with its encryption key, and the database, **unencrypted**. The installer makes that folder yours only (`700`) and offers to leave it out of Time Machine (`tmutil addexclusion ~/.lima/agora`; `--exclude-from-time-machine` when unattended). Back Agora up with `bash install/macos/agora-vm.sh backup` instead: one bundle encrypted with your passphrase, which Time Machine can then copy safely.
+
+## Disk space
+
+The VM's disk is a file that grows as the VM fills it, up to its size (100 GiB by default), and never shrinks by itself. When the Mac's disk is full, the VM stops, and Agora with it. `agora-vm.sh doctor` fails below 10 GB free, and the keep-alive writes a line to `~/.agora/macos/agora-keepalive.log` once a day while it is that low. To free space inside the VM: `bash install/macos/agora-vm.sh shell`, then `sudo docker system prune` (old images and build cache).
+
 ## Reaching it from your phone (Tailscale)
 
 Follow [remote-access.md](remote-access.md), **inside the VM**, as on Windows inside WSL: `bash install/macos/agora-vm.sh shell`, then install Tailscale there. The VM becomes its own machine on your tailnet. Tailscale on macOS itself is not needed for this and is left alone.
@@ -95,6 +119,7 @@ A sleeping Mac stops the VM's clock and every agent. On a Mac that serves Agora:
 ## Known issues and limits
 
 - **Ports.** macOS lets a normal user listen on a port below 1024 only on every network address, and Agora's forwards stay on 127.0.0.1, so the web port is 8443, not 443. The installer refuses ports below 1024.
+- **No `--domain`.** A domain with a public certificate needs ports 80 and 443 reachable from the internet; the VM's forwards are loopback-only, so the installer refuses `--domain`. Use Tailscale for other devices.
 - **One install per VM.** A second install gets its own VM: `--vm agora2` (it picks other ports).
 - **Memory is the VM's.** The VM holds what you give it while it runs. With local models on the same Mac (Ollama, LM Studio), leave them room.
 - **After the Mac slept,** the VM's clock can be behind until `systemd-timesyncd` catches up, and logins that check the time can fail for a few minutes.

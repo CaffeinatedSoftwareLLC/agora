@@ -96,7 +96,7 @@ Log in with your **own** account (not the throwaway admin of step 5). Your chann
 
 Do [remote-access.md](remote-access.md) steps 1, 4, 5 and 6 inside the VM (`bash install/macos/agora-vm.sh shell`). To keep the phone's address, give the VM the old machine name:
 
-1. In the Tailscale admin console, **remove** the old WSL machine (or rename it), so its name is free.
+1. In the Tailscale admin console, **rename** the old WSL machine (for example to `agora-home-wsl`), so its name is free. Renaming rather than removing keeps a way back (see "If something goes wrong"); remove it in step 9.
 2. In the VM: `curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up --hostname agora-home` (the name from step 1).
 3. In the policy (Access controls), set `agora-home` in `hosts` to the VM's new address (`tailscale ip -4` in the VM).
 4. `.env.prod` already has your `CORS_ORIGIN` and `TAILNET_WEB_PORT`. Restart with the override, in the install folder in the VM:
@@ -128,6 +128,14 @@ Run it from a checkout of Agora on Windows. It also removes the WSL keep-alive t
 
 ## If something goes wrong
 
-- **The restore fails** before `restore.start`: nothing on the Windows side changed. Start the Windows install again (`... --env-file .env.prod up -d` in the distro, and `agora-host autostart enable` if you use it) and report the failure with `bash install/macos/agora-vm.sh doctor --report`.
+**Going back to Windows.** Both installs hold the same bot tokens, host tokens and push relay registration, so never run both at once: **stop the Mac first**, then start Windows.
+
+1. On the Mac: `bash install/macos/agora-vm.sh stop` (it pauses the keep-alive too; `bash install/macos/agora-vm.sh keepalive off` keeps it from coming back at the next login or boot).
+2. On Windows: `wsl -d Ubuntu --cd ~/agora --exec docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d`, then `agora-host autostart enable --config <your host.json>` if you used it.
+3. In the Tailscale admin console, give the Windows machine its old name back (rename the Mac's VM first).
+
+Anything written on the Mac after the restore (messages, files, box work) **is not on Windows** and is lost on the way back, unless you move it with a new backup from the Mac (`agora-vm.sh backup`) restored on Windows (`install/restore.sh`).
+
+- **The restore fails** before `restore.start`: nothing on the Windows side changed. Go back as above and report the failure with `bash install/macos/agora-vm.sh doctor --report`.
 - **Wrong passphrase:** the restore stops at `restore.verify` and changes nothing.
 - **"this folder is install X, the bundle is Y":** the Mac install's name differs. Remove it (`bash install/macos/uninstall.sh --delete-vm`) and install again with `--instance Y`.

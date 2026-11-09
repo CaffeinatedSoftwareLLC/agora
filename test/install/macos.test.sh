@@ -34,8 +34,9 @@ stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/di
 stub pmset 'printf " standby 1\n sleep %s\n" "${FAKE_SLEEP:-0}"'
 # nc -z -w 1 127.0.0.1 <port>: "connects" (exit 0) to a busy port
 stub nc 'p=$(eval echo "\${$#}"); for b in ${FAKE_BUSY_PORTS:-}; do [ "$b" = "$p" ] && exit 0; done; exit 1'
-stub curl "case \"\$*\" in *SHA256SUMS*) printf '%s *ubuntu-24.04-server-cloudimg-amd64.img\n%s *ubuntu-24.04-server-cloudimg-arm64.img\n' ffff$DIGEST $DIGEST ;; *health*) echo '{\"status\":\"ok\"}' ;; *) exit 22 ;; esac"
+stub curl "case \"\$*\" in *release-20261101/SHA256SUMS*) exit 22 ;; */releases/noble/) printf '<a href=\"release-20261017/\">x</a> <a href=\"release-20261101/\">y</a> <a href=\"release/\">z</a>' ;; *SHA256SUMS*) printf '%s *ubuntu-24.04-server-cloudimg-amd64.img\n%s *ubuntu-24.04-server-cloudimg-arm64.img\n' ffff$DIGEST $DIGEST ;; *health*) echo '{\"status\":\"ok\"}' ;; *) exit 22 ;; esac"
 stub open ':'
+stub tmutil 'case "$1" in isexcluded) echo "[Included] $2" ;; esac'
 stub launchctl 'case "$1" in bootstrap) [ "${FAKE_NO_GUI:-0}" = 1 ] && [ "${2#gui/}" != "$2" ] && exit 5; exit 0 ;; *) exit 0 ;; esac'
 # sudo: runs the command as this user; `install -o root -g wheel` without the owner
 stub sudo 'if [ "$1" = -n ]; then shift; [ "${FAKE_SUDO:-0}" = 1 ] || exit 1; fi; if [ "$1" = install ]; then shift; a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift ;; *) a+=("$1") ;; esac; shift; done; exec install "${a[@]}"; fi; exec "$@"'
@@ -51,7 +52,7 @@ L="$T/lima"
 case "\$1" in
     --version) echo "limactl version \$(cat "\$L/version" 2>/dev/null || echo 2.3.0)" ;;
     list) [ -f "\$L/instances" ] && awk '{print \$1, \$2}' "\$L/instances" ;;
-    create) n=\$(printf '%s\n' "\$@" | sed -n '/^--name$/{n;p;}'); f=\$(eval echo "\\\${\$#}"); cp "\$f" "\$L/\$n.yaml"; echo "\$n Stopped" >> "\$L/instances" ;;
+    create) n=\$(printf '%s\n' "\$@" | sed -n '/^--name$/{n;p;}'); f=\$(eval echo "\\\${\$#}"); cp "\$f" "\$L/\$n.yaml"; mkdir -p "\$HOME/.lima/\$n"; echo "\$n Stopped" >> "\$L/instances" ;;
     start) n=\$(eval echo "\\\${\$#}"); sed -i.bak "s/^\$n .*/\$n Running/" "\$L/instances" ;;
     stop) sed -i.bak "s/^\$2 .*/\$2 Stopped/" "\$L/instances" ;;
     delete) sed -i.bak "/^\$3 /d" "\$L/instances" ;;
@@ -59,6 +60,7 @@ case "\$1" in
     shell)
         shift; while [ "\${1#--}" != "\$1" ]; do [ "\$1" = --workdir ] && shift; shift; done; shift
         case "\$*" in
+            *iptables*) exit 0 ;;
             *os-release*) printf '%s' "\${FAKE_GUEST:-ubuntu 24.04 aarch64}"; exit 0 ;;
             *working_dir*) echo "$T/guest/agora"; exit 0 ;;
             *install/linux/install.sh*)
@@ -101,6 +103,8 @@ printf 'hunter2hunter2\n' > "$T/pw"
     check 'version_ge 2.3.0 >= 2.0.0' 0 "$(version_ge 2.3.0 2.0.0; echo $?)"
     check 'version_ge 1.10 >= 1.9' 0 "$(version_ge 1.10 1.9; echo $?)"
     check 'version_ge 13.4 < 13.5' 1 "$(version_ge 13.4 13.5; echo $?)"
+    check 'version_ge 14 >= 13.5 (no minor in a)' 0 "$(version_ge 14 13.5; echo $?)"
+    check 'version_ge 13 < 13.5 (cut -s: a missing field is 0)' 1 "$(version_ge 13 13.5; echo $?)"
     check 'default CPUs: half of 10' 5 "$(default_vm_cpus 10)"
     check 'default CPUs: at least 2' 2 "$(default_vm_cpus 2)"
     check 'default CPUs: at most 8' 8 "$(default_vm_cpus 24)"
@@ -119,6 +123,10 @@ printf 'hunter2hunter2\n' > "$T/pw"
     check_true 'template: vz, aarch64, the given size' 'printf "%s" "$tpl" | grep -q "^vmType: vz" && printf "%s" "$tpl" | grep -q "^cpus: 4" && printf "%s" "$tpl" | grep -q "^memory: \"8GiB\""'
     check_true 'template: no mounts, no containerd, no agent forwarding' 'printf "%s" "$tpl" | grep -q "^mounts: \[\]" && printf "%s" "$tpl" | grep -q "system: false" && printf "%s" "$tpl" | grep -q "forwardAgent: false"'
     check 'template: three forwards to 127.0.0.1, everything else ignored' '3 1' "$(printf '%s\n' "$tpl" | grep -c 'hostIP: "127.0.0.1"') $(printf '%s\n' "$tpl" | grep -c 'ignore: true')"
+    check_true 'template: the guest firewall runs at every boot (provision, mode system)' 'printf "%s" "$tpl" | grep -q "^provision:" && printf "%s" "$tpl" | grep -q "^  - mode: system" && printf "%s" "$tpl" | grep -q "^      iptables -w -N AGORA-HOST"'
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+        check 'template parses as YAML; the provision script is the file, unindented' ok "$(printf '%s' "$tpl" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); s=d["provision"][0]["script"]; f=open(sys.argv[1]).read(); print("ok" if s.strip()==f.strip() and d["mounts"]==[] else "bad")' "$ROOT/install/macos/guest/host-firewall.sh")"
+    fi
     check_true 'template: the image pinned by digest' 'printf "%s" "$tpl" | grep -q "digest: \"sha256:$DIGEST\""'
     plist=$(keepalive_plist agora daemon eryk '/opt/homebrew/bin:/usr/bin:/bin')
     check_true 'daemon plist: UserName, interval, abandons its process group' 'printf "%s" "$plist" | grep -q "<key>UserName</key><string>eryk</string>" && printf "%s" "$plist" | grep -q "<integer>300</integer>" && printf "%s" "$plist" | grep -q "<key>AbandonProcessGroup</key><true/>"'
@@ -170,6 +178,13 @@ check 'brew install lima ran once' 1 "$(grep -c '^brew install lima' "$CALLS")"
 check 'the VM was created from the generated template' 1 "$(grep -c '^limactl create --tty=false --name agora .*/.agora/macos/agora.yaml' "$CALLS")"
 check_true 'the template forwards the free ports (8443 busy: 8444)' 'grep -q "guestPort: 8444" "$T/lima/agora.yaml" && grep -q "guestPort: 8000" "$T/lima/agora.yaml" && grep -q "guestPort: 3000" "$T/lima/agora.yaml"'
 check_true 'the template pins the arm64 digest from SHA256SUMS' 'grep -q "sha256:$DIGEST" "$T/lima/agora.yaml"'
+check_true 'the image is a dated build; the newest without sums is skipped' 'grep -q "releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-arm64.img" "$T/lima/agora.yaml"'
+probe="$T/permprobe"; mkdir -p "$probe"; chmod 700 "$probe"
+if [ "$(ls -ld "$probe" | cut -c1-10)" = drwx------ ]; then
+    check 'the VM folder ~/.lima/agora is 700' drwx------ "$(ls -ld "$T/home/.lima/agora" | cut -c1-10)"
+fi
+check 'Time Machine: no exclusion without consent (non-interactive)' 0 "$(grep -c '^tmutil addexclusion' "$CALLS")"
+check_true '... but it says how' 'grep -q "tmutil addexclusion" "$T/out"'
 args=$(tr '\n' ' ' < "$T/linux-args")
 check_true 'Linux installer: --lima, the Mac ports, telemetry, non-interactive, the agent' 'case "$args" in *"--lima "*"--http-port 8000 --https-port 8444 --api-port 3000 --telemetry off --non-interactive"*"--agent claude"*) true ;; *) false ;; esac'
 check 'Linux installer read the admin password from its copy in the VM' hunter2hunter2 "$(cat "$T/linux-saw-password" 2>/dev/null)"
@@ -196,6 +211,15 @@ check_true 'second run: the same ports, and --existing upgrade passed on' 'tr "
 # ─── A VM someone else made ───
 reset; with_lima; echo 'agora Running' > "$T/lima/instances"; run "$I" --non-interactive --telemetry off
 check_true 'a foreign VM named agora: refused, nothing created' '[ "$RC" = 1 ] && grep -q "didn.t create it" "$T/out" && [ "$(grep -c "^limactl create" "$CALLS")" = 0 ]'
+check_true '... and no keep-alive written for it' '[ ! -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
+
+# ─── Nobody to ask, --domain, Time Machine with consent ───
+reset; run "$I" --telemetry off
+check_true 'no terminal and no --non-interactive: refused before anything is made' '[ "$RC" = 1 ] && grep -q "pass --non-interactive" "$T/out" && [ "$(called brew)" = 0 ] && [ ! -d "$T/home/Library" ]'
+reset; run "$I" --non-interactive --domain chat.example.com
+check_true '--domain: refused (the forwards are loopback-only)' '[ "$RC" = 2 ] && grep -q "Tailscale" "$T/out"'
+reset; with_lima; run "$I" --non-interactive --telemetry off --exclude-from-time-machine
+check_true '--exclude-from-time-machine: tmutil addexclusion ~/.lima/agora' '[ "$RC" = 0 ] && grep -q "^tmutil addexclusion $T/home/.lima/agora" "$CALLS"'
 
 # ─── The Linux installer fails ───
 reset; with_lima; FAKE_ENV=(FAKE_LINUX_EXIT=3); run "$I" --non-interactive --telemetry off --admin-password-file "$T/pw"
@@ -234,10 +258,26 @@ rm -f "$T/lima/instances"; run "$K" agora
 check_true 'keep-alive with no VM: logs it, exits 0' '[ "$RC" = 0 ] && grep -q "no Lima VM named agora" "$T/out"'
 run "$K" 'a;b'
 check 'keep-alive refuses a bad name' 2 "$RC"
+echo 'agora Stopped' > "$T/lima/instances"; mkdir -p "$T/home/.agora/macos"
+echo $$ > "$T/home/.agora/macos/agora.installing"; : > "$CALLS"; run "$K" agora
+check 'keep-alive leaves the VM alone while the installer (a live PID in the lock) runs' 0 "$(grep -c '^limactl start' "$CALLS")"
+echo 999999 > "$T/home/.agora/macos/agora.installing"; run "$K" agora
+check 'keep-alive ignores a stale lock' 1 "$(grep -c '^limactl start' "$CALLS")"
+rm -f "$T/home/.agora/macos/agora.installing"
+FAKE_ENV=(FAKE_FREE_KB=5242880); run "$K" agora
+check_true 'keep-alive logs a nearly full Mac disk' 'grep -q "only 5 GB free" "$T/out"'
+run "$K" agora
+check_true '... once a day' '! grep -q "GB free" "$T/out"'
+FAKE_ENV=()
 
 # ─── agora-vm.sh ───
 V="$ROOT/install/macos/agora-vm.sh"
 reset; with_lima; run "$I" --non-interactive --telemetry off
+FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000'); run "$V" doctor
+check_true 'doctor: forwards, health, the VM firewall and the Mac disk pass' '[ "$RC" = 0 ] && grep -q "ok      the VM can.t reach this Mac.s loopback" "$T/out" && grep -q "GB free on this Mac" "$T/out"'
+FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000' FAKE_FREE_KB=5242880); run "$V" doctor
+check_true 'doctor: fails on a nearly full Mac disk' '[ "$RC" = 1 ] && grep -q "FAILED  only 5 GB free" "$T/out"'
+FAKE_ENV=()
 run "$V" status
 check_true 'status: ports and keep-alive' '[ "$RC" = 0 ] && grep -q "https 8443, http 8000, api 3000" "$T/out" && grep -q "Keep-alive: agent" "$T/out"'
 run "$V" backup
@@ -264,6 +304,10 @@ check 'keepalive with a bad mode: refused' 1 "$RC"
 FAKE_ENV=()
 
 # ─── uninstall.sh ───
+reset; with_lima; run "$I" --non-interactive --telemetry off; sed -i.bak 's/^agora .*/agora Stopped/' "$T/lima/instances"
+run "$ROOT/install/macos/uninstall.sh"
+check_true 'uninstall with the VM stopped: says the install inside stays' '[ "$RC" = 0 ] && grep -q "install inside it stays" "$T/out" && ! grep -q "install/uninstall.sh" "$CALLS"'
+reset; with_lima; run "$I" --non-interactive --telemetry off
 U="$ROOT/install/macos/uninstall.sh"
 run "$U"
 check_true 'uninstall: the guest uninstall ran, the LaunchAgent is gone, the VM stays' '[ "$RC" = 0 ] && grep -q "install/uninstall.sh" "$CALLS" && [ ! -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ] && grep -q "agora Running" "$T/lima/instances"'

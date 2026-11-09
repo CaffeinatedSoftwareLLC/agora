@@ -86,6 +86,20 @@ case "$CMD" in
         s=$(vm_status "$VM"); if [ "$s" = Running ]; then say "  ok      VM $VM running"; else say "  FAILED  VM $VM: ${s:-missing}"; fails=1; fi
         k=$(keepalive_kind "$VM"); if [ "$k" != none ]; then say "  ok      keep-alive ($k)"; else say "  note    no keep-alive: the VM won't start by itself after a restart"; fi
         m=$(mac_sleep_minutes); if [ -n "$m" ] && [ "$m" != 0 ]; then say "  note    the Mac sleeps after $m idle minutes, which stops Agora"; fi
+        f=$(mac_free_gb "$HOME")
+        if [ -n "$f" ] && [ "$f" -lt "$MAC_LOW_DISK_GB" ]; then say "  FAILED  only $f GB free on this Mac: the VM's disk grows into it, and when it is full the VM and Agora stop"; fails=1
+        else say "  ok      ${f:-?} GB free on this Mac"; fi
+        if [ -d "$HOME/.lima/$VM" ]; then
+            perm=$(stat -f %Lp "$HOME/.lima/$VM" 2>/dev/null || stat -c %a "$HOME/.lima/$VM" 2>/dev/null || echo ?)
+            if [ "$perm" = 700 ]; then say "  ok      ~/.lima/$VM is yours only (700)"; else say "  note    ~/.lima/$VM is $perm, not 700: its disks hold the install's secrets (chmod 700 ~/.lima/$VM)"; fi
+            if command -v tmutil >/dev/null 2>&1 && ! tmutil isexcluded "$HOME/.lima/$VM" 2>/dev/null | grep -q '\[Excluded\]'; then
+                say "  note    Time Machine may copy ~/.lima/$VM, secrets included (tmutil addexclusion ~/.lima/$VM; back up with agora-vm.sh backup)"
+            fi
+        fi
+        if [ "$s" = Running ]; then
+            if vm_sh "$VM" sudo -n iptables -w -C OUTPUT -d 192.168.5.2 -j AGORA-HOST >/dev/null 2>&1; then say "  ok      the VM can't reach this Mac's loopback (192.168.5.2)"
+            else say "  FAILED  the VM can reach this Mac's 127.0.0.1 (no AGORA-HOST rule; sudo systemctl restart agora-host-firewall in the VM)"; fails=1; fi
+        fi
         for p in "$(state_get "$VM" https_port)" "$(state_get "$VM" api_port)"; do
             [ -n "$p" ] || continue
             if mac_port_free "$p"; then say "  FAILED  nothing listens on 127.0.0.1:$p (Lima's port forward)"; fails=1; else say "  ok      127.0.0.1:$p forwarded"; fi

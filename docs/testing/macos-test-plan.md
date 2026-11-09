@@ -23,7 +23,7 @@ bash install/macos/install.sh
 
 Answer: telemetry **n**, install Lima **y** (if asked), VM size: defaults, create **y**, then in the Linux installer: admin `admin`, Enter for a generated password, agent `claude`.
 
-Expect, in order: `[mac.preflight]` ok; `[mac.lima]` ok with Lima 2.x; `[mac.vm]` ports `https 8443, http 8000, api 3000`, the image download, `created and started agora`, `inside: ubuntu 24.04 aarch64`; the Linux installer's steps, including `[gvisor.check] ... runsc works` (**the first proof that gVisor runs in a Lima VM on Apple Silicon**), `[box.start] box claude is running`; `[mac.keepalive]` LaunchAgent; then the browser opens `https://localhost:8443`.
+Expect, in order: `[mac.preflight]` ok; `[mac.lima]` ok with Lima 2.x; `[mac.keepalive]` LaunchAgent (written before the VM exists, so the sudo of `--at-boot` is still fresh); `[mac.vm]` ports `https 8443, http 8000, api 3000`, the image download, `created and started agora`, `inside: ubuntu 24.04 aarch64`; the Linux installer's steps, including `[gvisor.check] ... runsc works` (**the first proof that gVisor runs in a Lima VM on Apple Silicon**), `[box.start] box claude is running`; then the browser opens `https://localhost:8443`.
 
 Record: total time, and the time of the stack build alone.
 
@@ -35,6 +35,21 @@ limactl shell agora sh -c 'sudo docker info --format "{{json .Runtimes}}"; sudo 
 ```
 
 The `uname -r` must end in `-gvisor`. (`sudo`: Lima keeps one SSH connection to the VM open, so the `docker` group the installer gave your user applies only after `limactl stop agora && limactl start agora`; the installer's own scripts fall back to sudo by themselves.) Note the runsc version (`limactl shell agora runsc --version`) and the platform (`limactl shell agora sh -c 'cat /etc/docker/daemon.json'`, no `--platform` means systrap).
+
+**The VM can't reach the Mac's loopback:** start something on the Mac's 127.0.0.1 only, then try it from the VM and from a container in it. Both must fail at once (connection refused), and the internet must still work:
+
+```bash
+python3 -m http.server 8765 --bind 127.0.0.1 &          # on the Mac
+limactl shell agora curl -m3 -sS http://host.lima.internal:8765/ && echo 'FAIL: reachable'
+limactl shell agora sudo docker run --rm alpine:3.20 wget -T3 -qO- http://192.168.5.2:8765/ && echo 'FAIL: reachable'
+limactl shell agora curl -m5 -sS -o /dev/null -w '%{http_code}\n' https://github.com   # 200
+kill %1
+limactl shell agora sudo iptables -S AGORA-HOST
+```
+
+After the reboot in step 4, run the first two again: still refused.
+
+**The VM's files are private:** `stat -f '%Sp %N' ~/.lima/agora ~/.lima/agora/*disk*` shows `drwx------` for the folder; no disk file is readable by others (`-rw-------` or under the 700 folder). `tmutil isexcluded ~/.lima/agora` says `[Excluded]` if the owner said yes to the Time Machine question.
 
 **Nothing outside 127.0.0.1:** `lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(8000|8443|3000) '` shows only `127.0.0.1`. From another machine on the network, `https://<mac's LAN address>:8443` must not load.
 

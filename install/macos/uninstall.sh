@@ -47,6 +47,8 @@ if [ "$s" = Running ] && [ "$DELETE_VM" = 0 ]; then
         a=(--dir "$d"); [ "$PURGE" = 0 ] || a+=(--purge)
         vm_sh "$VM" bash "$d/install/uninstall.sh" "${a[@]}" || die "install/uninstall.sh failed in $VM ($d)"
     done
+elif [ -n "$s" ] && [ "$DELETE_VM" = 0 ]; then
+    warn "the VM $VM is $s, so the Agora install inside it stays. To remove it too: bash $HERE/agora-vm.sh start --vm $VM, then run this again (or --delete-vm to remove the VM with everything in it)"
 fi
 
 for kind in agent daemon; do

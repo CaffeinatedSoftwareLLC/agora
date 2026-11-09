@@ -28,11 +28,13 @@ This Mac:
   --at-boot                  start the VM at boot, before anyone logs in (a LaunchDaemon; asks
                              for sudo once). Default: at login (a LaunchAgent, no sudo)
   --no-keepalive             don't add the launchd job
+  --exclude-from-time-machine   with --non-interactive: leave the VM's disks out of Time Machine
+                             (they hold the encryption key and database unencrypted)
   --source DIR               install from this checkout (default: the one this script is in)
   --ref TAG                  when run on its own: the release to download (default: latest)
 
 Passed to the Linux installer inside the VM (install/linux/install.sh --help):
-  --instance NAME  --domain NAME  --admin-user NAME  --admin-email ADDRESS
+  --instance NAME  --admin-user NAME  --admin-email ADDRESS
   --admin-password-file F  --agent claude|codex|none  --agent-name NAME
   --agent-api-key-file F  --telemetry on|off  --existing upgrade|stop  --passphrase-file F
   --min-disk-gb N
@@ -43,10 +45,11 @@ EOF
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ARGS=("$@")
 NON_INTERACTIVE=0 ALLOW_LIMA=0 VM=agora CPUS='' MEMORY='' DISK='' HTTP_PORT='' HTTPS_PORT='' API_PORT=''
-CREATED_VM=0 STOP_AFTER_KEEPALIVE=0
+CREATED_VM=0 TM_EXCLUDE=0 LOCK=''
 AT_BOOT=0 NO_KEEPALIVE=0 SOURCE='' REF=latest TELEMETRY_ARG='' EXISTING=''
 ADMIN_PW_FILE='' AGENT_KEY_FILE='' PASS_FILE_ARG=''
 PASS=()
+die_early() { echo "install.sh: $1" >&2; exit 2; }
 need() { [ $# -ge 2 ] && [ -n "$2" ] || { echo "install.sh: $1 needs a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -68,7 +71,9 @@ while [ $# -gt 0 ]; do
         --admin-password-file) need "$@"; ADMIN_PW_FILE=$2; shift ;;
         --agent-api-key-file) need "$@"; AGENT_KEY_FILE=$2; shift ;;
         --passphrase-file) need "$@"; PASS_FILE_ARG=$2; shift ;;
-        --instance|--domain|--admin-user|--admin-email|--agent|--agent-name|--min-disk-gb)
+        --domain) die_early "--domain needs ports 80 and 443 reachable from the internet, and a Mac's VM forwards its ports to 127.0.0.1 only. Reach Agora from other devices with Tailscale instead (docs/remote-access.md)" ;;
+        --exclude-from-time-machine) TM_EXCLUDE=1 ;;
+        --instance|--admin-user|--admin-email|--agent|--agent-name|--min-disk-gb)
             need "$@"; PASS+=("$1" "$2"); shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "install.sh: unknown option $1" >&2; usage >&2; exit 2 ;;
@@ -105,7 +110,7 @@ OS_NAME=macos
 os_version() { mac_os_version; }
 # Copies of secrets in the VM go however this ends; then the usual failure report
 # shellcheck disable=SC2154 # rc is set inside the trap
-trap 'rc=$?; guest_cleanup; on_exit $rc' EXIT
+trap 'rc=$?; guest_cleanup; [ -z "${LOCK:-}" ] || rm -f "$LOCK"; on_exit $rc' EXIT
 
 printf '%s' "$VM" | grep -Eq "$VM_NAME_RE" || die "--vm must be lowercase letters, digits and dashes, starting with a letter"
 case "$TELEMETRY_ARG" in ''|on|off) ;; *) die "--telemetry must be on or off" ;; esac
@@ -125,6 +130,8 @@ say "${BOLD}Agora $AGORA_VERSION installer for macOS${RESET}"
 
 # ─── 1. This Mac ───
 step mac.preflight 'Checking this Mac'
+# Nobody to ask: only an explicit --non-interactive creates a VM and a launchd job with defaults
+[ "$NON_INTERACTIVE" = 1 ] || [ -t 0 ] || die "no terminal to ask questions in. Run it in Terminal, or pass --non-interactive (with --allow-lima-install and the flags you want) to install unattended"
 problems=$(preflight_problems)
 [ -z "$problems" ] || die "$(printf '%s' "$problems" | paste -sd ';' - | sed 's/;/; /g')"
 MAC_MEM=$(mac_memory_gb) MAC_CPUS=$(mac_cpus)
@@ -137,7 +144,7 @@ fi
 [ "$NO_KEEPALIVE" = 1 ] || [ "$(keepalive_kind "$VM")" != daemon ] || AT_BOOT=1
 # The LaunchDaemon needs sudo; ask now, not after the long part
 if [ "$AT_BOOT" = 1 ] && [ "$NO_KEEPALIVE" = 0 ]; then
-    if [ "$NON_INTERACTIVE" = 1 ] || [ ! -t 0 ]; then
+    if [ "$NON_INTERACTIVE" = 1 ]; then
         sudo -n true 2>/dev/null || die "--at-boot writes a LaunchDaemon to /Library/LaunchDaemons and needs sudo: run sudo -v, then this again right away"
     else
         info 'starting at boot needs a LaunchDaemon in /Library/LaunchDaemons: sudo asks for your password once'
@@ -188,11 +195,36 @@ if [ -d /Applications/Docker.app ] || [ -d /Applications/OrbStack.app ] || comma
     info 'Docker Desktop, OrbStack or Colima can stay installed; Agora does not use or change them, and its ports avoid theirs.'
 fi
 
-# ─── 4. The VM ───
-step mac.vm "The VM ($VM)"
+# ─── 4. Keep-alive, written now while the sudo that --at-boot asked for in preflight is fresh
+# (macOS forgets it after 5 minutes; the VM's first start takes longer). Until the VM exists,
+# and while this run creates or starts it (the lock file), keepalive.sh leaves it alone.
 STATUS=$(vm_status "$VM")
+[ -z "$STATUS" ] || [ "$(state_get "$VM" created)" = 1 ] || die "a Lima VM named $VM already exists, and this installer didn't create it. Agora needs a VM of its own (no mounts, only its ports forwarded): run again with --vm <another name>"
+mkdir -p "$MAC_STATE_DIR"; chmod 700 "$MAC_STATE_DIR"
+LOCK=$(install_lock "$VM")
+printf '%s\n' "$$" > "$LOCK"
+KEEPALIVE_BEFORE=$(keepalive_kind "$VM")
+step mac.keepalive 'Keeping the VM running (launchd)'
+if [ "$NO_KEEPALIVE" = 1 ]; then
+    info "skipped (--no-keepalive): start it after a restart with limactl start $VM"
+elif [ "$AT_BOOT" = 1 ]; then
+    install_keepalive "$VM" daemon "$HERE/keepalive.sh"
+    ok "LaunchDaemon $(keepalive_daemon_plist "$VM") (runs as $(id -un), from boot)"
+else
+    install_keepalive "$VM" agent "$HERE/keepalive.sh"
+    ok "LaunchAgent $(keepalive_agent_plist "$VM") (from login, every $((KEEPALIVE_INTERVAL / 60)) minutes)"
+fi
+# A keep-alive this run added for a VM that doesn't exist yet: removed again if the user stops
+undo_new_keepalive() {
+    [ "$KEEPALIVE_BEFORE" = none ] && [ -z "$STATUS" ] || return 0
+    remove_keepalive_agent "$VM"
+    [ ! -f "$(keepalive_daemon_plist "$VM")" ] || remove_keepalive_daemon "$VM"
+}
+[ "$KEEPALIVE_BEFORE" != none ] || [ -n "$STATUS" ] || [ "$NO_KEEPALIVE" = 1 ] || add_cleanup "bash $HERE/uninstall.sh --vm $VM   # the keep-alive this run added"
+
+# ─── 5. The VM ───
+step mac.vm "The VM ($VM)"
 if [ -n "$STATUS" ]; then
-    [ "$(state_get "$VM" created)" = 1 ] || die "a Lima VM named $VM already exists, and this installer didn't create it. Agora needs a VM of its own (no mounts, only its ports forwarded): run again with --vm <another name>"
     for k in http_port https_port api_port; do [ -n "$(state_get "$VM" "$k")" ] || die "the record of $VM ($(state_file "$VM")) has no $k; remove the VM (bash install/macos/uninstall.sh --vm $VM --delete-vm) and install again"; done
     old_h=$(state_get "$VM" http_port) old_s=$(state_get "$VM" https_port) old_a=$(state_get "$VM" api_port)
     if { [ -n "$HTTP_PORT" ] && [ "$HTTP_PORT" != "$old_h" ]; } || { [ -n "$HTTPS_PORT" ] && [ "$HTTPS_PORT" != "$old_s" ]; } || { [ -n "$API_PORT" ] && [ "$API_PORT" != "$old_a" ]; }; then
@@ -206,12 +238,15 @@ if [ -n "$STATUS" ]; then
     ok "using $VM, made by an earlier run"
     # Agora is already in it: upgrade or stop, never a second install the VM doesn't forward
     if [ "$(state_get "$VM" installed)" = 1 ] && [ -z "$EXISTING" ]; then
-        if [ "$NON_INTERACTIVE" = 1 ] || [ ! -t 0 ]; then EXISTING=stop
+        if [ "$NON_INTERACTIVE" = 1 ]; then EXISTING=stop
         else ask EXISTING "Agora is already installed in $VM. Upgrade it to $AGORA_VERSION (upgrade), or stop (stop)? [stop]" stop; fi
         case "$EXISTING" in upgrade) ;; *) EXISTING=stop ;; esac
     fi
-    STOP_AFTER_KEEPALIVE=0
-    [ "$EXISTING" != stop ] || [ "$(state_get "$VM" installed)" != 1 ] || STOP_AFTER_KEEPALIVE=1
+    if [ "$EXISTING" = stop ] && [ "$(state_get "$VM" installed)" = 1 ]; then
+        FINISHED=1
+        say "  Stopped; Agora in $VM was not changed. To upgrade it: --existing upgrade. Status: bash $HERE/agora-vm.sh status"
+        exit 0
+    fi
 else
     # Ports on the Mac, clear of every other Agora VM's (running or not) and of what listens now
     taken=''
@@ -238,43 +273,39 @@ else
     [ -n "$MEMORY" ] || { MEMORY=$(default_vm_memory "$MAC_MEM"); ask MEMORY "Memory for the VM in GiB (this Mac has $MAC_MEM GB; each running agent box takes about 1) [$MEMORY]:" "$MEMORY"; }
     [ -n "$DISK" ] || { DISK=$(default_vm_disk); ask DISK "Disk for the VM in GiB (it takes space on the Mac only as it fills) [$DISK]:" "$DISK"; }
     r=$(check_vm_size "$CPUS" "$MEMORY" "$DISK" "$MAC_CPUS" "$MAC_MEM"); [ -z "$r" ] || die "$r"
-    if [ "$NON_INTERACTIVE" = 0 ] && [ -t 0 ]; then
+    if [ "$NON_INTERACTIVE" = 0 ]; then
         if ! yes_no "Create the VM $VM (Ubuntu 24.04, $CPUS CPUs, $MEMORY GiB memory, $DISK GiB disk)? [Y/n]" y; then
+            undo_new_keepalive
             FINISHED=1; say '  Stopped; nothing was changed.'; exit 0
         fi
     fi
-    DIGEST=$(image_digest) || die "can't read the SHA-256 of Canonical's image from $UBUNTU_IMAGE_BASE/SHA256SUMS"
-    mkdir -p "$MAC_STATE_DIR"; chmod 700 "$MAC_STATE_DIR"
+    pick_image || die "can't read the SHA-256 of Canonical's arm64 image from $UBUNTU_IMAGE_ROOT (a dated release-YYYYMMDD/SHA256SUMS)"
     TEMPLATE="$MAC_STATE_DIR/$VM.yaml"
-    lima_template "$CPUS" "$MEMORY" "$DISK" "$DIGEST" "$HTTP_PORT" "$HTTPS_PORT" "$API_PORT" > "$TEMPLATE"
+    lima_template "$CPUS" "$MEMORY" "$DISK" "$IMAGE_DIGEST" "$HTTP_PORT" "$HTTPS_PORT" "$API_PORT" > "$TEMPLATE"
     state_set "$VM" created 1
     state_set "$VM" http_port "$HTTP_PORT"; state_set "$VM" https_port "$HTTPS_PORT"; state_set "$VM" api_port "$API_PORT"
     add_cleanup "rm -f $(state_file "$VM") $TEMPLATE"
-    info "downloading Ubuntu 24.04 (about 600 MB, checked against sha256:${DIGEST:0:12}…) and creating $VM"
+    info "downloading Ubuntu 24.04 (${UBUNTU_IMAGE_BASE##*/}, about 600 MB, checked against sha256:${IMAGE_DIGEST:0:12}…) and creating $VM"
     limactl create --tty=false --name "$VM" "$TEMPLATE" || die "limactl create failed"
     add_cleanup "limactl delete --force $VM   # the VM this run created, with everything in it"
+    # Its disks and config (the install's .env.prod and database end up in them) are this user's only
+    chmod 700 "$HOME/.lima/$VM" 2>/dev/null || true
     limactl start --tty=false "$VM" || die "limactl start $VM failed (~/.lima/$VM/ha.stderr.log)"
-    CREATED_VM=1 STOP_AFTER_KEEPALIVE=0
+    CREATED_VM=1
     ok "created and started $VM"
 fi
+rm -f "$LOCK"
 guest=$(vm_sh "$VM" sh -c '. /etc/os-release; printf "%s %s %s" "$ID" "$VERSION_ID" "$(uname -m)"' | tr -d '\r') || die "can't run a command in $VM (limactl shell $VM)"
 case "$guest" in "ubuntu "*" aarch64") ok "inside: $guest" ;; *) die "$VM runs $guest, not Ubuntu on aarch64" ;; esac
 
-# ─── 5. Keep-alive (before the long part, while sudo for --at-boot is still fresh) ───
-step mac.keepalive 'Keeping the VM running (launchd)'
-if [ "$NO_KEEPALIVE" = 1 ]; then
-    info "skipped (--no-keepalive): start it after a restart with limactl start $VM"
-elif [ "$AT_BOOT" = 1 ]; then
-    install_keepalive "$VM" daemon "$HERE/keepalive.sh"
-    ok "LaunchDaemon $(keepalive_daemon_plist "$VM") (runs as $(id -un), from boot)"
-else
-    install_keepalive "$VM" agent "$HERE/keepalive.sh"
-    ok "LaunchAgent $(keepalive_agent_plist "$VM") (from login, every $((KEEPALIVE_INTERVAL / 60)) minutes)"
-fi
-if [ "$STOP_AFTER_KEEPALIVE" = 1 ]; then
-    FINISHED=1
-    say "  Stopped; Agora in $VM was not changed. To upgrade it: --existing upgrade. Status: bash $HERE/agora-vm.sh status"
-    exit 0
+# Time Machine would copy the VM's disks, which hold .env.prod (the encryption key) and the
+# database unencrypted. agora-vm.sh backup makes an encrypted bundle instead.
+if [ "$CREATED_VM" = 1 ] && command -v tmutil >/dev/null 2>&1 && ! tmutil isexcluded "$HOME/.lima/$VM" 2>/dev/null | grep -q '\[Excluded\]'; then
+    exclude=0
+    if [ "$TM_EXCLUDE" = 1 ]; then exclude=1
+    elif [ "$NON_INTERACTIVE" = 0 ] && yes_no "Leave the VM ($HOME/.lima/$VM) out of Time Machine? Its disks hold Agora's encryption key and database unencrypted; back Agora up with agora-vm.sh backup instead. [Y/n]" y; then exclude=1; fi
+    if [ "$exclude" = 1 ]; then tmutil addexclusion "$HOME/.lima/$VM" && ok "Time Machine leaves out $HOME/.lima/$VM"
+    else info "Time Machine may copy $HOME/.lima/$VM, unencrypted secrets included, to its backup disk. To leave it out: tmutil addexclusion $HOME/.lima/$VM"; fi
 fi
 
 # ─── 6. The release, into the VM ───
