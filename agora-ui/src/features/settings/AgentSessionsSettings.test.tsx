@@ -33,6 +33,25 @@ it.each(['', '0', '-1', '1.5', '100001'])('does not save an invalid wake budget:
   expect(patch).not.toHaveBeenCalled();
 });
 
+it('lets the owner set the token budget per session next to the wake budget', async () => {
+  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+  render(<AgentSessionsSettings />);
+  const input = await screen.findByLabelText('Token budget for claude');
+  expect(input).toHaveProperty('value', '2000000');
+  expect(screen.getByText('Sessions without their own budget use this. Claude counts cached context, so long runs use millions.')).toBeTruthy();
+  fireEvent.change(input, { target: { value: '50000000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', expect.objectContaining({ tokenBudget: 50_000_000, wakeBudget: 50 })));
+});
+
+it.each(['', '0', '-5', '2.5', '1e9', '9007199254740993'])('does not save an invalid token budget: %s', async value => {
+  const patch = vi.spyOn(api, 'patch');
+  render(<AgentSessionsSettings />);
+  fireEvent.change(await screen.findByLabelText('Token budget for claude'), { target: { value } });
+  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+  expect(patch).not.toHaveBeenCalled();
+});
+
 it('creates an opencode agent only with an OpenRouter model ID', async () => {
   const post = vi.spyOn(api, 'post').mockResolvedValue({ bot: { username: 'qwen' }, token: 'bot_x' });
   render(<AgentSessionsSettings />);

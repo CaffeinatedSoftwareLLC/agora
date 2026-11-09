@@ -1,5 +1,5 @@
 import { api, ApiError, inBackground } from '../../lib/api';
-import { ERRORS, NO_AUTHORITY } from '../agents/agentSessions';
+import { ERRORS, NO_AUTHORITY, compactTokens } from '../agents/agentSessions';
 
 /**
  * Task board data and calls (docs/task-board.md). Server: src/routes/task-board.ts. A card's
@@ -165,6 +165,21 @@ export function taskError(err: unknown): string {
   if (GITHUB_ERRORS[err.code]) return GITHUB_ERRORS[err.code];
   if (err.status === 403) return err.code === 'subscription_owner_only' ? ERRORS.subscription_owner_only : NO_AUTHORITY;
   return `Request failed (${err.code}).`;
+}
+
+/**
+ * A failed Start/Resume as a sentence. budget_exhausted (409) names which budget the card's
+ * session used up: its tokens (raised on the card) or its wakes (raised in Settings → Agents).
+ */
+export function startError(err: unknown, card: TaskCard): string {
+  const s = card.session;
+  if (err instanceof ApiError && err.code === 'budget_exhausted' && s) {
+    if (s.tokensUsed >= s.tokenBudget) {
+      return `This card's session used its token budget (${compactTokens(s.tokensUsed)} / ${compactTokens(s.tokenBudget)}). Raise it, then start again.`;
+    }
+    return "This card's session used its wake budget. Raise it in Settings → Agents, then start again.";
+  }
+  return taskError(err);
 }
 
 /** Cards in board order: by status column, then oldest first. */

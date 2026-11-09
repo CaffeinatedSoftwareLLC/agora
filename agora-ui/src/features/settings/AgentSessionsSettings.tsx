@@ -339,15 +339,19 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   const [workspaceId, setWorkspaceId] = useState(profile.workspaceId ?? 'primary');
   const [wakeBudget, setWakeBudget] = useState(String(profile.wakeBudget));
   const validWakeBudget = Number.isInteger(Number(wakeBudget)) && Number(wakeBudget) >= 1 && Number(wakeBudget) <= 100000;
-  const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary') || wakeBudget !== String(profile.wakeBudget);
+  const [tokenBudget, setTokenBudget] = useState(String(profile.tokenBudget));
+  const validTokenBudget = /^\d+$/.test(tokenBudget) && Number.isSafeInteger(Number(tokenBudget)) && Number(tokenBudget) >= 1;
+  const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary')
+    || wakeBudget !== String(profile.wakeBudget) || tokenBudget !== String(profile.tokenBudget);
   // opencode's own default is an OpenCode Zen model, so an opencode (or omp) agent always names one
   const opencode = profile.adapter === 'opencode' || profile.adapter === 'omp';
   const validModel = !opencode || !!model.trim();
 
   const save = async () => {
     try {
-      if (!validWakeBudget || !validModel) return;
-      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase(), wakeBudget: Number(wakeBudget) });
+      if (!validWakeBudget || !validTokenBudget || !validModel) return;
+      await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase(),
+        wakeBudget: Number(wakeBudget), tokenBudget: Number(tokenBudget) });
       onChange();
     } catch (err) { onError(errorText(err)); }
   };
@@ -382,8 +386,13 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
           <input className={input} type="number" min={1} max={100000} step={1} value={wakeBudget}
             onChange={e => setWakeBudget(e.target.value)} aria-label={`Wake budget for ${profile.name}`} />
         </label>
-        {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validModel} onClick={() => void save()}>Save</Button>}
+        <label className="flex flex-col text-xs text-text-muted">Token budget per session
+          <input className={input} type="number" min={1} step={1} value={tokenBudget}
+            onChange={e => setTokenBudget(e.target.value)} aria-label={`Token budget for ${profile.name}`} />
+        </label>
+        {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validTokenBudget || !validModel} onClick={() => void save()}>Save</Button>}
       </div>
+      <p className="mt-1 text-xs text-text-muted">Sessions without their own budget use this. Claude counts cached context, so long runs use millions.</p>
       {/* A box logs its CLI in from its Boxes entry instead */}
       {profile.adapter === 'codex' && host && host.kind !== 'box' && !profile.boxed && (
         <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}

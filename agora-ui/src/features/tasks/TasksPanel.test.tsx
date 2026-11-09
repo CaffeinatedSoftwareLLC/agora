@@ -204,3 +204,70 @@ describe('TasksPanel', () => {
     expect(await screen.findByText(/gh is not signed in on the host/, undefined, { timeout: 3000 })).toBeTruthy();
   });
 });
+
+describe('card session budget', () => {
+  const shelved = { ...session, state: 'shelved' as const, endReason: 'budget', running: false, tokensUsed: 2_000_000, tokenBudget: 2_000_000 };
+
+  it('says the session used its token budget, lets the owner raise it, then resumes', async () => {
+    serve(board([card({ status: 'in_progress', session: shelved, threadId: 'TH' })]));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    post.mockRejectedValueOnce(new ApiError(409, 'budget_exhausted'));
+    fireEvent.click(screen.getByText('Resume'));
+    expect(await screen.findByText("This card's session used its token budget (2M / 2M). Raise it, then start again.")).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Raise budget'));
+    const input = screen.getByLabelText('Card session token budget');
+    expect(input).toHaveProperty('value', '2000000');
+    // Unchanged or invalid: nothing to save
+    expect(screen.getByText('Save budget')).toHaveProperty('disabled', true);
+    fireEvent.change(input, { target: { value: '0' } });
+    expect(screen.getByText('Save budget')).toHaveProperty('disabled', true);
+    fireEvent.change(input, { target: { value: '50000000' } });
+    post.mockResolvedValueOnce({ action: 'budget_updated', session: { id: shelved.id, tokenBudget: 50_000_000 } });
+    fireEvent.click(screen.getByText('Save budget'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${CH}/agent-commands`, { command: 'budget', sessionId: shelved.id, tokenBudget: 50_000_000 }));
+    expect(await screen.findByText('Budget saved. Press Resume to continue.')).toBeTruthy();
+    expect(screen.getByText('2M / 50M')).toBeTruthy();
+    expect(screen.queryByLabelText('Card session token budget')).toBeNull();
+
+    post.mockResolvedValueOnce({ action: 'resumed', card: card({ status: 'in_progress', threadId: 'TH', session: { ...shelved, state: 'live', endReason: null, tokenBudget: 50_000_000 } }) });
+    fireEvent.click(screen.getByText('Resume'));
+    await waitFor(() => expect(post).toHaveBeenLastCalledWith(`/channels/${CH}/tasks/T1/start`));
+    expect(await screen.findByText('Session resumed.')).toBeTruthy();
+  });
+
+  it('keeps the form open when saving fails', async () => {
+    serve(board([card({ status: 'in_progress', session: shelved, threadId: 'TH' })]));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    fireEvent.click(screen.getByText('Raise budget'));
+    fireEvent.change(screen.getByLabelText('Card session token budget'), { target: { value: '9000000' } });
+    post.mockRejectedValueOnce(new ApiError(403, 'forbidden'));
+    fireEvent.click(screen.getByText('Save budget'));
+    await waitFor(() => expect(screen.getByText(/Only the owner and directors/)).toBeTruthy());
+    expect(screen.getByLabelText('Card session token budget')).toBeTruthy();
+  });
+
+  it('names the wake budget when the tokens are not used up', async () => {
+    serve(board([card({ status: 'in_progress', session: { ...shelved, tokensUsed: 1_000 }, threadId: 'TH' })]));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    post.mockRejectedValueOnce(new ApiError(409, 'budget_exhausted'));
+    fireEvent.click(screen.getByText('Resume'));
+    expect(await screen.findByText("This card's session used its wake budget. Raise it in Settings → Agents, then start again.")).toBeTruthy();
+  });
+
+  it('only the owner gets the control, and not on an ended session', async () => {
+    serve({ cards: [card({ status: 'in_progress', session: shelved, threadId: 'TH' })], canManage: true, isOwner: false });
+    const { unmount } = render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    expect(screen.getByText('Resume')).toBeTruthy();
+    expect(screen.queryByText('Raise budget')).toBeNull();
+    unmount();
+    serve(board([card({ status: 'in_progress', session: { ...shelved, state: 'ended' }, threadId: 'TH' })]));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    expect(screen.queryByText('Raise budget')).toBeNull();
+  });
+});
