@@ -331,6 +331,10 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
   );
 }
 
+/** The run time limit's range in minutes: the profile API takes runTimeoutSec 60..7200. */
+const MIN_RUN_MINUTES = 1;
+const MAX_RUN_MINUTES = 120;
+
 function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   serverId: string; profile: Profile; host: Host | undefined; plan?: PlanConnection; onChange: () => void; onError: (e: string) => void;
 }) {
@@ -341,17 +345,23 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   const validWakeBudget = Number.isInteger(Number(wakeBudget)) && Number(wakeBudget) >= 1 && Number(wakeBudget) <= 100000;
   const [tokenBudget, setTokenBudget] = useState(String(profile.tokenBudget));
   const validTokenBudget = /^\d+$/.test(tokenBudget) && Number.isSafeInteger(Number(tokenBudget)) && Number(tokenBudget) >= 1;
+  // The host stops a run after this long (agent_profiles.run_timeout_sec, 60..7200 s); shown in minutes
+  const savedMinutes = String(Math.round(profile.runTimeoutSec / 60));
+  const [runMinutes, setRunMinutes] = useState(savedMinutes);
+  const validRunMinutes = /^\d+$/.test(runMinutes) && Number(runMinutes) >= MIN_RUN_MINUTES && Number(runMinutes) <= MAX_RUN_MINUTES;
   const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary')
-    || wakeBudget !== String(profile.wakeBudget) || tokenBudget !== String(profile.tokenBudget);
+    || wakeBudget !== String(profile.wakeBudget) || tokenBudget !== String(profile.tokenBudget) || runMinutes !== savedMinutes;
   // opencode's own default is an OpenCode Zen model, so an opencode (or omp) agent always names one
   const opencode = profile.adapter === 'opencode' || profile.adapter === 'omp';
   const validModel = !opencode || !!model.trim();
 
   const save = async () => {
     try {
-      if (!validWakeBudget || !validTokenBudget || !validModel) return;
+      if (!validWakeBudget || !validTokenBudget || !validRunMinutes || !validModel) return;
       await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase(),
-        wakeBudget: Number(wakeBudget), tokenBudget: Number(tokenBudget) });
+        wakeBudget: Number(wakeBudget), tokenBudget: Number(tokenBudget),
+        // Only when changed: a limit that isn't whole minutes stays as it is
+        ...(runMinutes !== savedMinutes ? { runTimeoutSec: Number(runMinutes) * 60 } : {}) });
       onChange();
     } catch (err) { onError(errorText(err)); }
   };
@@ -367,7 +377,7 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
           <span className="font-medium">{profile.name}</span>
           <BoxModeBadge profile={profile} className="ml-2" />
           <span className="ml-2 text-xs text-text-muted">
-            {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {profile.wakeBudget} wakes · {profile.tokenBudget.toLocaleString()} tokens per session
+            {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {profile.wakeBudget} wakes · {profile.tokenBudget.toLocaleString()} tokens per session · {savedMinutes} min per run
           </span>
           <AuthBadge profile={profile} />
         </span>
@@ -390,9 +400,14 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
           <input className={input} type="number" min={1} step={1} value={tokenBudget}
             onChange={e => setTokenBudget(e.target.value)} aria-label={`Token budget for ${profile.name}`} />
         </label>
-        {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validTokenBudget || !validModel} onClick={() => void save()}>Save</Button>}
+        <label className="flex flex-col text-xs text-text-muted">Run time limit per session (minutes)
+          <input className={input} type="number" min={MIN_RUN_MINUTES} max={MAX_RUN_MINUTES} step={1} value={runMinutes}
+            onChange={e => setRunMinutes(e.target.value)} aria-label={`Run time limit for ${profile.name}`} />
+        </label>
+        {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validTokenBudget || !validRunMinutes || !validModel} onClick={() => void save()}>Save</Button>}
       </div>
       <p className="mt-1 text-xs text-text-muted">Sessions without their own budget use this. Claude counts cached context, so long runs use millions.</p>
+      <p className="mt-1 text-xs text-text-muted">A run longer than this is stopped. Long jobs should run detached and be checked on later.</p>
       {/* A box logs its CLI in from its Boxes entry instead */}
       {profile.adapter === 'codex' && host && host.kind !== 'box' && !profile.boxed && (
         <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}

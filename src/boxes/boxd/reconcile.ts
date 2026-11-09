@@ -13,8 +13,10 @@ import type { BoxRow, BoxStore, PendingAction } from './store';
  * network → the edge attached at .2 → home volume → container, then the row's owner action
  * (restart, rebuild, reset) and desired state (running, stopped, deleted). Before every start
  * the container is inspected and refused if it isn't what boxd would create (§7.2).
- * After the boxes: at most one upgrade (image_version below the current box/VERSION), then
- * this instance's labelled leftovers that no row claims are removed.
+ * After the boxes: at most one upgrade (image_version below the current box/VERSION, or a
+ * container on an older build of the current image: the stack rebuilt agora/box:<VERSION> with
+ * new agora-host or agora-mcp code, which bumps no VERSION), then this instance's labelled
+ * leftovers that no row claims are removed.
  *
  * boxd reads only DB rows and Docker replies; nothing from a box reaches it.
  */
@@ -55,6 +57,8 @@ interface Track {
     notified: boolean;
     restartCount?: number;
     upgradeWaitSince?: number;
+    /** Its container runs an older build of the current image (seen at the last ensure). */
+    staleBuild?: boolean;
 }
 
 interface PassContext {
@@ -62,6 +66,8 @@ interface PassContext {
     networks: NetworkInfo[];
     containers: Set<string>;
     volumes: Set<string>;
+    /** The image ID the configured tag names now; null when unknown. */
+    imageId: string | null;
 }
 
 type Outcome = 'ok' | 'held';
@@ -109,6 +115,7 @@ export class Reconciler {
             networks: await this.d.docker.listNetworks(),
             containers: new Set((await this.d.docker.listContainers(label)).map(c => (c.Names?.[0] ?? '').replace(/^\//, ''))),
             volumes: new Set((await this.d.docker.listVolumes(label)).map(v => v.Name)),
+            imageId: (await this.d.docker.imageInspect(this.cfg.image).catch(() => null))?.Id ?? null,
         };
         for (const box of boxes) {
             if (this.stopping) return;
@@ -196,6 +203,9 @@ export class Reconciler {
 
         const drift = await this.drift(box, info, net.subnet);
         if (drift.length) return this.refuse(box, info, drift);
+        // The same box/VERSION, built again with newer agora-host or agora-mcp code: the box
+        // keeps the code it was created with until it is rebuilt (upgradeOne)
+        t.staleBuild = !!ctx.imageId && !!info.Image && box.imageVersion === this.cfg.imageVersion && info.Image !== ctx.imageId;
 
         const running = !!info.State?.Running || !!info.State?.Restarting;
         if (box.desiredState === 'stopped') {
@@ -524,10 +534,13 @@ export class Reconciler {
 
     // ─── Upgrade, leftovers ───
 
-    /** One box per pass onto the current image, once its agent isn't mid-run (at most 15 minutes, §9.1). */
+    /**
+     * One box per pass onto the current image, once its agent isn't mid-run (at most 15 minutes,
+     * §9.1): a box on an older box/VERSION, or on an older build of the current one.
+     */
     private async upgradeOne(ctx: PassContext) {
         const box = ctx.boxes.find(b => b.desiredState !== 'deleted' && b.state !== 'failed' && !b.pendingAction
-            && b.imageVersion !== null && b.imageVersion < this.cfg.imageVersion);
+            && b.imageVersion !== null && (b.imageVersion < this.cfg.imageVersion || !!this.track.get(b.id)?.staleBuild));
         if (!box) return;
         const t = this.trackOf(box.id);
         if (this.now() < t.nextAt) return;
@@ -540,7 +553,10 @@ export class Reconciler {
         try {
             await this.rebuild(box, ctx, false);
             t.upgradeWaitSince = undefined;
-            await this.d.store.notice(box, 'upgraded', `Box **${box.name}** was upgraded from box image v${from} to v${this.cfg.imageVersion}. Its home folder and logins are kept.`);
+            t.staleBuild = false;
+            await this.d.store.notice(box, 'upgraded', from === this.cfg.imageVersion
+                ? `Box **${box.name}** was updated to the current build of box image v${from} (newer agora-host and agora-mcp). Its home folder and logins are kept.`
+                : `Box **${box.name}** was upgraded from box image v${from} to v${this.cfg.imageVersion}. Its home folder and logins are kept.`);
         } catch (err) {
             await this.failed(box, t, err);
         }

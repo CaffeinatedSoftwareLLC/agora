@@ -5,7 +5,7 @@ import { claimHandoffs } from './handoffs';
 import { readAuthorities } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
+import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
@@ -863,13 +863,21 @@ async function recordVerification(c: PoolClient, run: any, v: VerificationReport
     notices.push(await postNotice(c, s.rows[0].channel_id.trim(), verificationNotice(s.rows[0].name, v)));
 }
 
+/** The notice for a run the host stopped at the profile's run time limit (agora-host `run_timeout`). */
+export function runTimeoutNotice(profile: string, seconds: number): string {
+    const limit = seconds % 60 === 0 ? `${seconds / 60}-minute` : `${seconds}-second`;
+    return `${profile}'s run hit its ${limit} limit; raise it in Settings → Agents.`;
+}
+
 /**
  * After a failed or expired attempt: retry the batch unchanged, or give it up. Cancelled
- * work and work for sessions that are no longer live is dropped, never retried.
+ * work and work for sessions that are no longer live is dropped, never retried. A run stopped
+ * at its time limit isn't retried either: the same work would hit the same limit again.
  */
 async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: string, notices: Notice[]) {
+    if (error === 'run_timeout') retryable = false;
     const s = await c.query(
-        `SELECT s.state, s.channel_id, p.name AS profile_name, p.auth_mode FROM agent_sessions s
+        `SELECT s.state, s.channel_id, p.name AS profile_name, p.auth_mode, p.run_timeout_sec FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`,
         [run.session_id]
     );
@@ -889,9 +897,10 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     await c.query(`UPDATE agent_batches SET status = 'failed', finished_at = NOW() WHERE id = $1`, [run.batch_id]);
     await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE batch_id = $1 AND acked_at IS NULL`, [run.batch_id]);
     // The host refused the run under the provider-terms rules (agora-host/src/terms.ts)
-    const text = error === 'subscription_owner_only' ? planNotice(session.profile_name, 'subscription')
+    const text = error === 'subscription_owner_only' ? hostRefusalNotice(session.profile_name)
         : Object.hasOwn(SIWC_ERRORS, error) ? `${session.profile_name} ${SIWC_ERRORS[error]}`
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
+        : error === 'run_timeout' ? runTimeoutNotice(session.profile_name, session.run_timeout_sec)
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));
     await notifySession(c, run.session_id, error === 'siwc_usage_limit' ? 'credit' : 'blocked');

@@ -1,6 +1,7 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { attachTerminal } from '../../src/lib/terminal-sessions';
+import { hostRefusalNotice } from '../../src/lib/provider-terms';
 
 /**
  * Provider-terms guardrails (docs/provider-terms.md, src/lib/provider-terms.ts).
@@ -733,7 +734,8 @@ describe('host refusals', () => {
         const fail = await ctx.request.post(`/agent-hosts/@me/runs/${c.body.run.id}/fail`).set(hostAuth)
             .send({ claimToken: c.body.run.claimToken, error: 'subscription_owner_only', message: 'Agent run did not complete', retryable: false });
         expect(fail.status).toBe(200);
-        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+        // The host's refusal, in its own words: not the server's (whose rule let it through)
+        expect(await notices(since)).toEqual([hostRefusalNotice('alpha')]);
         expect(await inbox(s)).toEqual([]);
         expect((await claim()).status).toBe(204);
     });

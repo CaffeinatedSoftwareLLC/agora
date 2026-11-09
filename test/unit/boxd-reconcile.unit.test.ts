@@ -354,6 +354,38 @@ describe('boxd reconcile', () => {
         expect(t.docker.count(`removeVolume`)).toBe(0);
     });
 
+    it('rebuilds boxes on an older build of the same box/VERSION (new agora-host code), one per pass, after active runs', async () => {
+        const a = t.store.add();
+        const b = t.store.add();
+        await t.r.pass();
+        const before = t.store.minted.length;
+        // The stack rebuilt agora/box:1 with newer agora-host: same tag and label, new image ID
+        t.docker.imageId = 'sha256:' + '2'.repeat(64);
+        t.store.activeRuns.add(a.id);
+
+        await t.r.pass();
+        // a is busy, b waits its turn: both still run the old build, with no drift
+        expect(t.docker.containers.get(names(a.id).c).Image).toBe('sha256:' + '1'.repeat(64));
+        expect(t.docker.containers.get(names(b.id).c).Image).toBe('sha256:' + '1'.repeat(64));
+        expect(t.store.get(a.id).state).toBe('running');
+
+        t.tick(UPGRADE_WAIT_MS + 1);
+        await t.r.pass();
+        expect(t.docker.containers.get(names(a.id).c).Image).toBe(t.docker.imageId);
+        expect(t.docker.containers.get(names(b.id).c).Image).toBe('sha256:' + '1'.repeat(64));
+        expect(t.store.get(a.id).imageVersion).toBe(1);
+        expect(t.store.notices.find(n => n.boxId === a.id && n.kind === 'upgraded')?.content).toContain('current build of box image v1');
+
+        await t.r.pass();
+        expect(t.docker.containers.get(names(b.id).c).Image).toBe(t.docker.imageId);
+        expect(t.store.minted.length).toBe(before + 2);
+        // Up to date now: later passes leave both alone, and no home volume was touched
+        await t.r.pass();
+        await t.r.pass();
+        expect(t.store.minted.length).toBe(before + 2);
+        expect(t.docker.count('removeVolume')).toBe(0);
+    });
+
     it('removes unclaimed resources of this instance only', async () => {
         const kept = t.store.add();
         await t.r.pass();

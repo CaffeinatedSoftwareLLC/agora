@@ -41,6 +41,8 @@ export class FakeDocker implements BoxDockerApi {
     /** Throw this from the next call to the named method, once. */
     failNext = new Map<string, Error>();
     private ids = 0;
+    /** The ID of the image the box tag names now; a rebuild of the stack gives it a new one. */
+    imageId = 'sha256:' + '1'.repeat(64);
 
     private hit(call: string) {
         this.calls.push(call);
@@ -51,7 +53,7 @@ export class FakeDocker implements BoxDockerApi {
     count(prefix: string) { return this.calls.filter(c => c.startsWith(prefix)).length; }
 
     async info() { return { Runtimes: { runc: {} } }; }
-    async imageInspect(_name: string) { return { Config: { Labels: { 'org.agora.box.version': '1' } } }; }
+    async imageInspect(_name: string) { return { Id: this.imageId, Config: { Labels: { 'org.agora.box.version': '1' } } }; }
     async listNetworks() { return [...this.networks.values()].map(n => JSON.parse(JSON.stringify(n))); }
     async listContainers(filters: Record<string, string[]>) {
         const out: any[] = [];
@@ -126,7 +128,8 @@ export class FakeDocker implements BoxDockerApi {
             if (!this.volumes.has(m.Source)) this.volumes.set(m.Source, { Name: m.Source, Labels: {} });
         }
         const id = String(++this.ids).padStart(64, 'a');
-        this.containers.set(body.name!, inspectFrom(body, id));
+        // A container keeps the image ID it was created from, whatever the tag names later
+        this.containers.set(body.name!, { ...inspectFrom(body, id), Image: this.imageId });
         return id;
     }
     private attach(name: string, running: boolean) {
