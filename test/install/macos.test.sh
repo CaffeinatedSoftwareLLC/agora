@@ -32,7 +32,8 @@ stub sw_vers 'echo "${FAKE_MACOS:-15.1}"'
 stub sysctl 'case "$2" in hw.memsize) echo "${FAKE_MEM_BYTES:-34359738368}" ;; hw.ncpu) echo "${FAKE_CPUS:-10}" ;; sysctl.proc_translated) echo "${FAKE_ROSETTA:-0}" ;; esac'
 stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/disk3 999999999 1 %s 1%% /\n" "${FAKE_FREE_KB:-209715200}"'
 stub pmset 'printf " standby 1\n sleep %s\n" "${FAKE_SLEEP:-0}"'
-stub lsof 'p=$(printf "%s\n" "$@" | sed -n "s/^-iTCP:\([0-9]*\)$/\1/p"); for b in ${FAKE_BUSY_PORTS:-}; do [ "$b" = "$p" ] && exit 0; done; exit 1'
+# nc -z -w 1 127.0.0.1 <port>: "connects" (exit 0) to a busy port
+stub nc 'p=$(eval echo "\${$#}"); for b in ${FAKE_BUSY_PORTS:-}; do [ "$b" = "$p" ] && exit 0; done; exit 1'
 stub curl "case \"\$*\" in *SHA256SUMS*) printf '%s *ubuntu-24.04-server-cloudimg-amd64.img\n%s *ubuntu-24.04-server-cloudimg-arm64.img\n' ffff$DIGEST $DIGEST ;; *health*) echo '{\"status\":\"ok\"}' ;; *) exit 22 ;; esac"
 stub open ':'
 stub launchctl 'case "$1" in bootstrap) [ "${FAKE_NO_GUI:-0}" = 1 ] && [ "${2#gui/}" != "$2" ] && exit 5; exit 0 ;; *) exit 0 ;; esac'
@@ -106,8 +107,10 @@ printf 'hunter2hunter2\n' > "$T/pw"
     check 'default memory on a 16 GB Mac: 8 GiB' 8 "$(default_vm_memory 16)"
     check 'default memory on an 8 GB Mac: 6 GiB' 6 "$(default_vm_memory 8)"
     check 'a sane size passes' '' "$(check_vm_size 4 8 100 10 16)"
+    check 'an 8 GB Mac can give the VM its 6 GiB' '' "$(check_vm_size 2 6 100 8 8)"
+    check 'a 32 GB Mac can give the VM 24 GiB' '' "$(check_vm_size 4 24 100 10 32)"
     check_true 'memory below 6 GiB is refused' '[ -n "$(check_vm_size 4 4 100 10 16)" ]'
-    check_true 'memory that leaves macOS under 4 GB is refused' '[ -n "$(check_vm_size 4 14 100 10 16)" ]'
+    check_true 'memory that leaves macOS under 2 GB is refused' '[ -n "$(check_vm_size 4 15 100 10 16)" ]'
     check_true 'more CPUs than the Mac has is refused' '[ -n "$(check_vm_size 12 8 100 10 16)" ]'
     check_true 'a non-number size is refused' '[ -n "$(check_vm_size 4 8GiB 100 10 16)" ]'
     check_true 'a port below 1024 is refused' '[ -n "$(check_port 443)" ]'
@@ -126,6 +129,14 @@ printf 'hunter2hunter2\n' > "$T/pw"
         check 'the plist parses (python plistlib)' agora "$(printf '%s' "$plist" | python3 -c 'import plistlib,sys; print(plistlib.loads(sys.stdin.buffer.read())["ProgramArguments"][2])')"
     fi
     check 'xml_escape' 'a&amp;b&lt;c' "$(printf 'a&b<c' | xml_escape)"
+    # The release copied into the VM: what setup-env.js needs stays, secrets and junk don't
+    mkdir -p "$T/src/.git" "$T/src/node_modules/x" "$T/src/agora-host/node_modules/y" "$T/src/docs"
+    for f in .env.prod.example .env.prod .env.prod.before-restore .env docker-compose.prod.yml docs/a.md .git/HEAD node_modules/x/i agora-host/node_modules/y/i; do echo x > "$T/src/$f"; done
+    source_tarball "$T/src" "$T/src.tgz"
+    list=$(tar -tzf "$T/src.tgz" | sed 's#^\./##' | sort | tr '\n' ' ')
+    check_true 'tarball keeps .env.prod.example (setup-env.js reads it)' 'case " $list" in *" .env.prod.example "*) true ;; *) false ;; esac'
+    check_true 'tarball has no .env, .env.prod, its restore backup, .git or node_modules' '! printf "%s" " $list" | grep -Eq " (\.env|\.env\.prod|\.env\.prod\.before-restore) |\.git/|node_modules"'
+    rm -rf "$T/src" "$T/src.tgz"
 }
 
 # ─── preflight refusals (before anything is installed) ───
@@ -175,7 +186,7 @@ check 'the VM is running' 'agora Running' "$(cat "$T/lima/instances")"
 
 # ─── Run again: the VM is reused, nothing is created ───
 : > "$CALLS"; rm -f "$T/linux-args"; FAKE_ENV=(); run "$I" --non-interactive --telemetry off
-check_true 'second run without --existing: stops, the Linux installer never runs' '[ "$RC" = 0 ] && grep -q "Stopped; nothing was changed" "$T/out" && [ ! -f "$T/linux-args" ]'
+check_true 'second run without --existing: stops, the Linux installer never runs' '[ "$RC" = 0 ] && grep -q "Stopped; Agora in agora was not changed" "$T/out" && [ ! -f "$T/linux-args" ]'
 : > "$CALLS"; run "$I" --non-interactive --telemetry off --existing upgrade
 check 'second run --existing upgrade: exit 0' 0 "$RC"
 check 'second run: no limactl create' 0 "$(grep -c '^limactl create' "$CALLS")"
@@ -187,10 +198,15 @@ reset; with_lima; echo 'agora Running' > "$T/lima/instances"; run "$I" --non-int
 check_true 'a foreign VM named agora: refused, nothing created' '[ "$RC" = 1 ] && grep -q "didn.t create it" "$T/out" && [ "$(grep -c "^limactl create" "$CALLS")" = 0 ]'
 
 # ─── The Linux installer fails ───
-reset; with_lima; FAKE_ENV=(FAKE_LINUX_EXIT=3); run "$I" --non-interactive --telemetry off
+reset; with_lima; FAKE_ENV=(FAKE_LINUX_EXIT=3); run "$I" --non-interactive --telemetry off --admin-password-file "$T/pw"
 check 'Linux installer failed: exit 1' 1 "$RC"
 check_true '... names it and keeps the VM' 'grep -q "the Linux installer failed (exit 3)" "$T/out" && grep -q "agora Running" "$T/lima/instances"'
-check_true '... no keep-alive' '[ ! -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
+check_true '... the keep-alive stays with the VM' '[ -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
+check_true '... the password copy in the VM is gone' 'p=$(sed -n "/^--admin-password-file$/{n;p;}" "$T/linux-args"); [ -n "$p" ] && [ ! -e "$p" ]'
+check_true '... and it offers to remove the VM it created' 'grep -q "uninstall.sh --vm agora --delete-vm" "$T/out"'
+: > "$CALLS"; FAKE_ENV=(FAKE_LINUX_EXIT=3); run "$I" --non-interactive --telemetry off --existing upgrade
+check_true 'a failed upgrade of an earlier VM: never offers to delete it' '[ "$RC" = 1 ] && ! grep -q -- "--delete-vm" "$T/out"'
+FAKE_ENV=()
 
 # ─── Over SSH (no login session): the LaunchAgent waits for the next login ───
 reset; with_lima; FAKE_ENV=(FAKE_NO_GUI=1); run "$I" --non-interactive --telemetry off
@@ -198,11 +214,15 @@ check_true 'no GUI session: still exit 0, with a warning' '[ "$RC" = 0 ] && grep
 
 # ─── --at-boot ───
 reset; with_lima; FAKE_ENV=(); run "$I" --non-interactive --telemetry off --at-boot
-check_true '--at-boot without sudo: refused before writing anything to /Library' '[ "$RC" = 1 ] && grep -q "sudo -v" "$T/out" && [ ! -e "$T/daemons/com.agora.vm.agora.plist" ]'
+check_true '--at-boot without sudo: refused in preflight, before a VM' '[ "$RC" = 1 ] && grep -q "sudo -v" "$T/out" && [ ! -e "$T/daemons/com.agora.vm.agora.plist" ] && [ "$(grep -c "^limactl create" "$CALLS")" = 0 ]'
 reset; with_lima; FAKE_ENV=(FAKE_SUDO=1); run "$I" --non-interactive --telemetry off --at-boot
 D="$T/daemons/com.agora.vm.agora.plist"
 check_true '--at-boot: a LaunchDaemon that runs as this user' '[ "$RC" = 0 ] && grep -q "<key>UserName</key><string>$(id -un)</string>" "$D" && grep -q "^sudo launchctl bootstrap system $D" "$CALLS"'
 check_true '--at-boot: no LaunchAgent as well' '[ ! -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
+check_true '--at-boot: the LaunchDaemon is in before the Linux installer runs' '[ "$(grep -n "^sudo launchctl bootstrap system" "$CALLS" | head -n 1 | cut -d: -f1)" -lt "$(grep -n "install/linux/install.sh" "$CALLS" | head -n 1 | cut -d: -f1)" ]'
+: > "$CALLS"; run "$I" --non-interactive --telemetry off
+check_true 'a re-run without --at-boot keeps the LaunchDaemon, adds no LaunchAgent' '[ "$RC" = 0 ] && [ -f "$D" ] && [ ! -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
+FAKE_ENV=()
 
 # ─── keepalive.sh ───
 K="$ROOT/install/macos/keepalive.sh"
@@ -249,6 +269,8 @@ run "$U"
 check_true 'uninstall: the guest uninstall ran, the LaunchAgent is gone, the VM stays' '[ "$RC" = 0 ] && grep -q "install/uninstall.sh" "$CALLS" && [ ! -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ] && grep -q "agora Running" "$T/lima/instances"'
 run "$U" --delete-vm
 check_true 'uninstall --delete-vm without a terminal: refused, the VM stays' '[ "$RC" = 1 ] && grep -q "agora Running" "$T/lima/instances"'
+reset; with_lima; run "$I" --non-interactive --telemetry off; run "$U" --delete-vm
+check_true '... and keeps its keep-alive (asked before anything is removed)' '[ "$RC" = 1 ] && [ -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
 
 # ─── bash 3.2: nothing the Mac's own /bin/bash can't parse ───
 for f in "$ROOT"/install/macos/*.sh "$ROOT"/install/macos/lib/macos.sh; do

@@ -446,6 +446,7 @@ jobs:
       - run: bash test/install/lib.test.sh
       - name: macOS installer scripts (shellcheck, decisions with Lima stubbed)
         run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq shellcheck; }
           shellcheck -x -P SCRIPTDIR -S warning install/macos/*.sh install/macos/lib/macos.sh test/install/macos.test.sh
           bash test/install/macos.test.sh
       - run: bash test/install/backup.test.sh

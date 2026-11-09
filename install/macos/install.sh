@@ -43,6 +43,7 @@ EOF
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ARGS=("$@")
 NON_INTERACTIVE=0 ALLOW_LIMA=0 VM=agora CPUS='' MEMORY='' DISK='' HTTP_PORT='' HTTPS_PORT='' API_PORT=''
+CREATED_VM=0 STOP_AFTER_KEEPALIVE=0
 AT_BOOT=0 NO_KEEPALIVE=0 SOURCE='' REF=latest TELEMETRY_ARG='' EXISTING=''
 ADMIN_PW_FILE='' AGENT_KEY_FILE='' PASS_FILE_ARG=''
 PASS=()
@@ -85,9 +86,14 @@ if [ ! -f "$HERE/lib/macos.sh" ]; then
     curl -fsSL --proto '=https' -o "$tmp/agora.tar.gz" "$url/agora.tar.gz"
     curl -fsSL --proto '=https' -o "$tmp/agora.tar.gz.sha256" "$url/agora.tar.gz.sha256"
     (cd "$tmp" && shasum -a 256 -c agora.tar.gz.sha256 >/dev/null) || { echo "install.sh: the download doesn't match its SHA-256; not installing" >&2; exit 1; }
-    mkdir "$tmp/src"
-    tar -xzf "$tmp/agora.tar.gz" -C "$tmp/src" --strip-components=1
-    exec /bin/bash "$tmp/src/install/macos/install.sh" ${ARGS[@]+"${ARGS[@]}"} --source "$tmp/src"
+    # Unpacked where it stays (not in a temp folder macOS clears): agora-vm.sh and uninstall.sh run from it later
+    rel="${AGORA_MAC_STATE_DIR:-$HOME/.agora/macos}/release"
+    mkdir -p "$(dirname "$rel")"; chmod 700 "$(dirname "$rel")"
+    rm -rf "$rel.new"; mkdir "$rel.new"
+    tar -xzf "$tmp/agora.tar.gz" -C "$rel.new" --strip-components=1
+    rm -rf "$tmp" "$rel"; mv "$rel.new" "$rel"
+    echo "Unpacked in $rel"
+    exec /bin/bash "$rel/install/macos/install.sh" ${ARGS[@]+"${ARGS[@]}"} --source "$rel"
 fi
 
 # shellcheck source=../lib/common.sh
@@ -97,7 +103,9 @@ fi
 # The install report's operating system is this Mac's, not the VM's
 OS_NAME=macos
 os_version() { mac_os_version; }
-trap 'on_exit $?' EXIT
+# Copies of secrets in the VM go however this ends; then the usual failure report
+# shellcheck disable=SC2154 # rc is set inside the trap
+trap 'rc=$?; guest_cleanup; on_exit $rc' EXIT
 
 printf '%s' "$VM" | grep -Eq "$VM_NAME_RE" || die "--vm must be lowercase letters, digits and dashes, starting with a letter"
 case "$TELEMETRY_ARG" in ''|on|off) ;; *) die "--telemetry must be on or off" ;; esac
@@ -124,6 +132,17 @@ ok "macOS $(mac_os_version) on Apple Silicon, $MAC_MEM GB, $MAC_CPUS CPUs, $(mac
 sleep_min=$(mac_sleep_minutes)
 if [ -n "$sleep_min" ] && [ "$sleep_min" != 0 ]; then
     warn "this Mac sleeps after $sleep_min idle minutes, and a sleeping Mac stops Agora and its agents. To keep it awake: System Settings → Energy (on a laptop: Battery → Options) → Prevent automatic sleeping when the display is off, or: sudo pmset -a sleep 0"
+fi
+# A keep-alive that already starts at boot stays that way on a re-run
+[ "$NO_KEEPALIVE" = 1 ] || [ "$(keepalive_kind "$VM")" != daemon ] || AT_BOOT=1
+# The LaunchDaemon needs sudo; ask now, not after the long part
+if [ "$AT_BOOT" = 1 ] && [ "$NO_KEEPALIVE" = 0 ]; then
+    if [ "$NON_INTERACTIVE" = 1 ] || [ ! -t 0 ]; then
+        sudo -n true 2>/dev/null || die "--at-boot writes a LaunchDaemon to /Library/LaunchDaemons and needs sudo: run sudo -v, then this again right away"
+    else
+        info 'starting at boot needs a LaunchDaemon in /Library/LaunchDaemons: sudo asks for your password once'
+        sudo -v || die "sudo is needed for --at-boot"
+    fi
 fi
 
 # ─── 2. Telemetry (asked here, once, and passed to the Linux installer) ───
@@ -191,11 +210,8 @@ if [ -n "$STATUS" ]; then
         else ask EXISTING "Agora is already installed in $VM. Upgrade it to $AGORA_VERSION (upgrade), or stop (stop)? [stop]" stop; fi
         case "$EXISTING" in upgrade) ;; *) EXISTING=stop ;; esac
     fi
-    if [ "$EXISTING" = stop ] && [ "$(state_get "$VM" installed)" = 1 ]; then
-        FINISHED=1
-        say "  Stopped; nothing was changed. Agora in $VM: bash $HERE/agora-vm.sh status"
-        exit 0
-    fi
+    STOP_AFTER_KEEPALIVE=0
+    [ "$EXISTING" != stop ] || [ "$(state_get "$VM" installed)" != 1 ] || STOP_AFTER_KEEPALIVE=1
 else
     # Ports on the Mac, clear of every other Agora VM's (running or not) and of what listens now
     taken=''
@@ -207,7 +223,7 @@ else
         local t
         if [ -n "$1" ]; then
             for t in $RESERVED_PORTS $taken; do [ "$t" = "$1" ] && die "port $1 is used by another Agora VM (or kept for the tailnet override)"; done
-            mac_port_free "$1" || die "port $1 is in use on this Mac (lsof -nP -iTCP:$1 -sTCP:LISTEN)"
+            mac_port_free "$1" || die "port $1 is in use on this Mac (sudo lsof -nP -iTCP:$1 -sTCP:LISTEN shows by what)"
             echo "$1"; return
         fi
         # shellcheck disable=SC2086 # one argument per port
@@ -238,16 +254,35 @@ else
     limactl create --tty=false --name "$VM" "$TEMPLATE" || die "limactl create failed"
     add_cleanup "limactl delete --force $VM   # the VM this run created, with everything in it"
     limactl start --tty=false "$VM" || die "limactl start $VM failed (~/.lima/$VM/ha.stderr.log)"
+    CREATED_VM=1 STOP_AFTER_KEEPALIVE=0
     ok "created and started $VM"
 fi
 guest=$(vm_sh "$VM" sh -c '. /etc/os-release; printf "%s %s %s" "$ID" "$VERSION_ID" "$(uname -m)"' | tr -d '\r') || die "can't run a command in $VM (limactl shell $VM)"
 case "$guest" in "ubuntu "*" aarch64") ok "inside: $guest" ;; *) die "$VM runs $guest, not Ubuntu on aarch64" ;; esac
 
-# ─── 5. The release, into the VM ───
+# ─── 5. Keep-alive (before the long part, while sudo for --at-boot is still fresh) ───
+step mac.keepalive 'Keeping the VM running (launchd)'
+if [ "$NO_KEEPALIVE" = 1 ]; then
+    info "skipped (--no-keepalive): start it after a restart with limactl start $VM"
+elif [ "$AT_BOOT" = 1 ]; then
+    install_keepalive "$VM" daemon "$HERE/keepalive.sh"
+    ok "LaunchDaemon $(keepalive_daemon_plist "$VM") (runs as $(id -un), from boot)"
+else
+    install_keepalive "$VM" agent "$HERE/keepalive.sh"
+    ok "LaunchAgent $(keepalive_agent_plist "$VM") (from login, every $((KEEPALIVE_INTERVAL / 60)) minutes)"
+fi
+if [ "$STOP_AFTER_KEEPALIVE" = 1 ]; then
+    FINISHED=1
+    say "  Stopped; Agora in $VM was not changed. To upgrade it: --existing upgrade. Status: bash $HERE/agora-vm.sh status"
+    exit 0
+fi
+
+# ─── 6. The release, into the VM ───
 step mac.source 'Copying Agora into the VM'
 GSRC=$(copy_source_in "$VM" "$SOURCE") || die "copying $SOURCE into $VM failed"
+guest_tmp_add "$VM" "$GSRC"
 GIN=$(vm_sh "$VM" mktemp -d /tmp/agora-in.XXXXXX | tr -d '\r') || die "can't make a folder in $VM"
-add_cleanup "limactl shell $VM rm -rf $GSRC $GIN   # the copy of the release in the VM"
+guest_tmp_add "$VM" "$GIN"
 LINUX_ARGS=(--lima --source "$GSRC" --http-port "$HTTP_PORT" --https-port "$HTTPS_PORT" --api-port "$API_PORT" --telemetry "$TELEMETRY")
 [ "$NON_INTERACTIVE" = 0 ] || LINUX_ARGS+=(--non-interactive)
 [ -z "$EXISTING" ] || LINUX_ARGS+=(--existing "$EXISTING")
@@ -256,40 +291,25 @@ LINUX_ARGS=(--lima --source "$GSRC" --http-port "$HTTP_PORT" --https-port "$HTTP
 [ -z "$PASS_FILE_ARG" ] || LINUX_ARGS+=(--passphrase-file "$(copy_secret_in "$VM" "$GIN" "$PASS_FILE_ARG")")
 ok "$AGORA_VERSION in $VM:$GSRC"
 
-# ─── 6. The Linux installer, inside ───
+# ─── 7. The Linux installer, inside ───
 step mac.linux "Running the Linux installer inside $VM"
 set +e
 vm_sh "$VM" bash "$GSRC/install/linux/install.sh" "${LINUX_ARGS[@]}" ${PASS[@]+"${PASS[@]}"}
 code=$?
 set -e
-vm_sh "$VM" rm -rf "$GSRC" "$GIN" >/dev/null 2>&1 || true
+guest_cleanup
 if [ "$code" != 0 ]; then
     # It reported its own failure (and offered a problem report); don't send a second one
     TELEMETRY_SENT=1
     CLEANUP_CMDS=()
-    add_cleanup "bash $HERE/uninstall.sh --vm $VM --delete-vm   # remove the VM and this Mac's records of it"
+    # Only a VM this run made is offered for removal, never one an earlier install lives in
+    [ "$CREATED_VM" = 0 ] || add_cleanup "bash $HERE/uninstall.sh --vm $VM --delete-vm   # the VM this run created, its keep-alive and this Mac's records of it"
     die "the Linux installer failed (exit $code); its message above names the step. The VM stays: fix what it says and run this installer again, or look inside with: limactl shell $VM"
 fi
 CLEANUP_CMDS=()
 GDIR=$(guest_install_dirs "$VM" | head -n 1)
 state_set "$VM" installed 1
 [ -z "$GDIR" ] || state_set "$VM" install_dir "$GDIR"
-
-# ─── 7. Keep-alive ───
-step mac.keepalive 'Keeping the VM running (launchd)'
-if [ "$NO_KEEPALIVE" = 1 ]; then
-    info "skipped (--no-keepalive): start it after a restart with limactl start $VM"
-else
-    if [ "$AT_BOOT" = 1 ]; then
-        if [ "$NON_INTERACTIVE" = 1 ] || [ ! -t 0 ]; then sudo -n true 2>/dev/null || die "--at-boot writes /Library/LaunchDaemons and needs sudo: run sudo -v first, then this again"
-        else info 'starting at boot needs a LaunchDaemon in /Library/LaunchDaemons; sudo asks for your password once'; fi
-        install_keepalive "$VM" daemon "$HERE/keepalive.sh"
-        ok "LaunchDaemon $(keepalive_daemon_plist "$VM") (runs as $(id -un), from boot)"
-    else
-        install_keepalive "$VM" agent "$HERE/keepalive.sh"
-        ok "LaunchAgent $(keepalive_agent_plist "$VM") (from login, every $((KEEPALIVE_INTERVAL / 60)) minutes)"
-    fi
-fi
 
 # ─── 8. Done ───
 step 'mac.done' 'Done'

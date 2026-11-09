@@ -27,6 +27,8 @@ curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/ag
 bash install-macos.sh
 ```
 
+Run on its own, it unpacks the release in `~/.agora/macos/release` and runs from there, so the commands below are `bash ~/.agora/macos/release/install/macos/agora-vm.sh ...` for you (the installer prints the full path at the end).
+
 It asks what it needs. `--help` lists every flag; unattended:
 
 ```bash
@@ -45,7 +47,7 @@ What it does, step by step:
    - No SSH agent forwarding, and Lima's own containerd is off.
    - **Port forwards to 127.0.0.1 only:** the three ports above, and nothing else in the VM. Nothing on your network reaches Agora through the Mac.
 5. **Copies the release in** and runs `install/linux/install.sh --lima` inside the VM with those ports. That installs Docker Engine and gVisor from their apt repositories, checks a `-gvisor` kernel, writes `.env.prod`, builds and starts the stack, creates your admin and your first agent's box ([docs/installing.md](installing.md#ubuntu-or-debian) describes each step). Password and key files you pass are copied into a private folder in the VM and deleted afterwards.
-6. **Keeps the VM running** with launchd (the counterpart of the Windows scheduled task):
+6. **Keeps the VM running** with launchd (the counterpart of the Windows scheduled task). It is set up right after the VM starts, before step 5, so the sudo that `--at-boot` asks for in step 1 is still fresh:
    - By default a **LaunchAgent**, `~/Library/LaunchAgents/com.agora.vm.agora.plist`: when you log in and every 5 minutes it runs `~/.agora/macos/keepalive.sh`, which starts the VM if it isn't running. No sudo.
    - With `--at-boot`, a **LaunchDaemon**, `/Library/LaunchDaemons/com.agora.vm.agora.plist`, that runs as your user from boot, before anyone logs in. It needs sudo once. Use it on a Mac mini that nobody logs in to.
    - Inside the VM, systemd starts Docker, and the stack's `restart: unless-stopped` services start Agora.

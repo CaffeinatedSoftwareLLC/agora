@@ -20,6 +20,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/../lib/common.sh"
 # shellcheck source=lib/macos.sh
 . "$HERE/lib/macos.sh"
+# Copies of a passphrase or bundle in the VM go however this ends
+trap guest_cleanup EXIT
 
 CMD=${1:-}
 [ $# -eq 0 ] || shift
@@ -106,10 +108,10 @@ case "$CMD" in
         name="agora-${inst:-agora}-$(date -u +%Y%m%dT%H%M%SZ).agorabk"
         if [ -z "$OUT" ]; then mkdir -p "$HOME/Agora Backups"; chmod 700 "$HOME/Agora Backups"; OUT="$HOME/Agora Backups/$name"; fi
         [ ! -e "$OUT" ] || die "$OUT already exists"
-        g=$(guest_tmp); pass_args "$g"
+        g=$(guest_tmp); guest_tmp_add "$VM" "$g"; pass_args "$g"
         vm_sh "$VM" sh -c 'mkdir -p "$1/backups" && chmod 700 "$1/backups"' _ "$d"
         set +e; vm_sh "$VM" bash "$d/install/backup.sh" --dir "$d" --out "$d/backups/$name" ${GPASS[@]+"${GPASS[@]}"}; c=$?; set -e
-        vm_sh "$VM" rm -rf "$g" >/dev/null 2>&1 || true
+        guest_cleanup
         [ "$c" = 0 ] || die "install/backup.sh failed in $VM (exit $c)"
         (umask 077; vm_copy_out "$VM" "$d/backups/$name" "$OUT") || die "the backup is in $VM:$d/backups/$name, but copying it to $OUT failed"
         chmod 600 "$OUT"
@@ -119,12 +121,12 @@ case "$CMD" in
         need_vm
         [ -n "$FILE" ] && [ -r "$FILE" ] || die "give the bundle to restore: agora-vm.sh restore <file>.agorabk"
         d=$(install_dir)
-        g=$(guest_tmp); pass_args "$g"
+        g=$(guest_tmp); guest_tmp_add "$VM" "$g"; pass_args "$g"
         info "copying $(basename "$FILE") into $VM"
         gb=$(copy_secret_in "$VM" "$g" "$FILE") || die "copying the bundle into $VM failed"
         y=(); [ "$YES" = 0 ] || y=(--yes)
         set +e; vm_sh "$VM" bash "$d/install/restore.sh" "$gb" --dir "$d" ${y[@]+"${y[@]}"} ${GPASS[@]+"${GPASS[@]}"}; c=$?; set -e
-        vm_sh "$VM" rm -rf "$g" >/dev/null 2>&1 || true
+        guest_cleanup
         [ "$c" = 0 ] || die "install/restore.sh failed in $VM (exit $c)"
         ;;
     upgrade)
@@ -135,9 +137,10 @@ case "$CMD" in
         [ -f "$SRC/install/upgrade.sh" ] || die "$SRC is not an Agora release"
         info "copying $(agora_version "$SRC") into $VM"
         gs=$(copy_source_in "$VM" "$SRC") || die "copying $SRC into $VM failed"
-        g=$(guest_tmp); pass_args "$g"
+        guest_tmp_add "$VM" "$gs"
+        g=$(guest_tmp); guest_tmp_add "$VM" "$g"; pass_args "$g"
         set +e; vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" ${GPASS[@]+"${GPASS[@]}"} ${REST[@]+"${REST[@]}"}; c=$?; set -e
-        vm_sh "$VM" rm -rf "$g" "$gs" >/dev/null 2>&1 || true
+        guest_cleanup
         [ "$c" = 0 ] || die "install/upgrade.sh failed in $VM (exit $c)"
         ;;
     stop)

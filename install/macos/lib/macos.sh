@@ -85,8 +85,9 @@ preflight_problems() {
 default_vm_cpus() { local n=$(( $1 / 2 )); [ "$n" -ge 2 ] || n=2; [ "$n" -le 8 ] || n=8; echo "$n"; }
 # 8 GiB (room for the stack and a few boxes) on a Mac with 16 GB or more, else the 6 GiB minimum
 default_vm_memory() { if [ "$1" -ge 16 ]; then echo 8; else echo "$VM_MIN_MEMORY_GB"; fi; }
-# What the VM may take at most: the Mac keeps 4 GB for itself
-max_vm_memory() { echo $(( $1 - 4 )); }
+# What the VM may take at most: macOS keeps 2 GB up to 16 (so an 8 GB Mac gives the VM its 6,
+# as an 8 GB PC gives WSL 6), a quarter above
+max_vm_memory() { if [ "$1" -gt 16 ]; then echo $(( $1 * 3 / 4 )); else echo $(( $1 - 2 )); fi; }
 default_vm_disk() { echo 100; }
 
 # check_vm_size <cpus> <memory> <disk> <mac cpus> <mac memory>: a reason, or nothing
@@ -96,7 +97,7 @@ check_vm_size() {
     [ "$c" -ge 2 ] || { echo "the VM needs at least 2 CPUs"; return; }
     [ "$c" -le "$mc" ] || { echo "this Mac has $mc CPUs; the VM can't have $c"; return; }
     [ "$m" -ge "$VM_MIN_MEMORY_GB" ] || { echo "the VM needs at least $VM_MIN_MEMORY_GB GiB of memory (the Linux installer wants 4 GB free inside it)"; return; }
-    [ "$m" -le "$(max_vm_memory "$mm")" ] || { echo "this Mac has $mm GB; give the VM at most $(max_vm_memory "$mm") GiB so macOS keeps 4"; return; }
+    [ "$m" -le "$(max_vm_memory "$mm")" ] || { echo "this Mac has $mm GB; give the VM at most $(max_vm_memory "$mm") GiB so macOS keeps the rest"; return; }
     [ "$d" -ge "$VM_MIN_DISK_GB" ] || { echo "the VM needs a disk of at least $VM_MIN_DISK_GB GiB"; return; }
 }
 
@@ -135,7 +136,8 @@ vm_copy_out() { limactl copy "$1:$2" "$3"; }
 
 # ─── Ports on the Mac (127.0.0.1; macOS lets a normal user bind a port below 1024 only on 0.0.0.0) ───
 
-mac_port_free() { ! lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+# A connect test, not lsof: without root, lsof lists only this user's own sockets
+mac_port_free() { ! nc -z -w 1 127.0.0.1 "$1" >/dev/null 2>&1; }
 
 # mac_free_port <start> <taken...>: the first free port from start, counting up
 mac_free_port() {
@@ -326,11 +328,13 @@ keepalive_kind() {
 
 # ─── The release, copied into the VM ───
 
-# source_tarball <checkout> <out file>: the release without what never belongs in it
+# source_tarball <checkout> <out file>: the release without what never belongs in it. macOS's
+# bsdtar matches an exclude at any depth; none of these names is a tracked path below the top.
+# .env.prod.example must stay: setup-env.js reads it.
 source_tarball() {
     COPYFILE_DISABLE=1 tar -C "$1" \
         --exclude ./.git --exclude ./.worktrees --exclude '*/node_modules' --exclude ./node_modules \
-        --exclude ./dist --exclude ./.env --exclude ./.env.prod --exclude './.env.prod.*' --exclude ./.claude \
+        --exclude ./dist --exclude ./.env --exclude ./.env.prod --exclude ./.env.prod.before-restore --exclude ./.claude \
         --exclude ./.releases --exclude ./backups --exclude ./data --exclude '.DS_Store' \
         -czf "$2" .
 }
@@ -346,6 +350,18 @@ copy_source_in() {
     vm_sh "$vm" tar --warning=no-unknown-keyword -xzf "$gdir.tgz" -C "$gdir" || return 1
     vm_sh "$vm" rm -f "$gdir.tgz"
     printf '%s' "$gdir"
+}
+
+# Folders in the VM to remove when a script exits, however it exits: they may hold a copied
+# password, key, passphrase or bundle. The scripts' EXIT traps run guest_cleanup. Call
+# guest_tmp_add in the script itself, not inside $(...), or the record is lost with the subshell.
+GUEST_TMPS='' GUEST_TMP_VM=''
+guest_tmp_add() { GUEST_TMP_VM=$1; GUEST_TMPS="$GUEST_TMPS $2"; }
+guest_cleanup() {
+    [ -n "$GUEST_TMPS" ] && [ -n "$GUEST_TMP_VM" ] || return 0
+    # shellcheck disable=SC2086 # mktemp paths, no spaces
+    vm_sh "$GUEST_TMP_VM" rm -rf $GUEST_TMPS >/dev/null 2>&1 || true
+    GUEST_TMPS=''
 }
 
 # copy_secret_in <vm> <guest dir> <mac file>: copies a file into a 0700 folder in the VM, prints its path

@@ -151,18 +151,25 @@ origin_list_add() {
 }
 
 # add_origins_for_port <env file>: with AGORA_HTTPS_PORT other than 443, makes sure CORS_ORIGIN
-# (and WEBAUTHN_ORIGINS when it is set, since it then replaces the defaults) has
-# https://<DOMAIN or localhost>:<port>. src/config.ts adds only https://localhost by itself.
+# (and WEBAUTHN_ORIGINS when it is set, since it then replaces the defaults) allows
+# https://localhost:<port>, and https://<DOMAIN>:<port> when DOMAIN is set (it may be the
+# bundle's, from another machine). An empty CORS_ORIGIN starts from compose's default,
+# https://<DOMAIN or localhost>, so setting it drops nothing. src/config.ts adds only
+# https://localhost (no port) by itself.
 add_origins_for_port() {
-    local env=$1 port host o v
+    local env=$1 port host o v new
     port=$(env_get "$env" AGORA_HTTPS_PORT)
     [ -n "$port" ] && [ "$port" != 443 ] || return 0
     host=$(env_get "$env" DOMAIN); host=${host#http*://}; host=${host%%/*}
-    o="https://${host:-localhost}:$port"
     v=$(env_get "$env" CORS_ORIGIN)
-    [ "$(origin_list_add "$v" "$o")" = "$v" ] || env_set "$env" CORS_ORIGIN "$(origin_list_add "$v" "$o")"
+    new=${v:-https://${host:-localhost}}
+    for o in "https://localhost:$port" ${host:+"https://$host:$port"}; do new=$(origin_list_add "$new" "$o"); done
+    [ "$new" = "$v" ] || env_set "$env" CORS_ORIGIN "$new"
     v=$(env_get "$env" WEBAUTHN_ORIGINS)
-    if [ -n "$v" ] && [ "$(origin_list_add "$v" "$o")" != "$v" ]; then env_set "$env" WEBAUTHN_ORIGINS "$(origin_list_add "$v" "$o")"; fi
+    [ -n "$v" ] || return 0
+    new=$v
+    for o in "https://localhost:$port" ${host:+"https://$host:$port"}; do new=$(origin_list_add "$new" "$o"); done
+    [ "$new" = "$v" ] || env_set "$env" WEBAUTHN_ORIGINS "$new"
 }
 
 agora_version() {

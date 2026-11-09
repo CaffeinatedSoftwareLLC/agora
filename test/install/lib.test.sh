@@ -61,7 +61,11 @@ add_origins_for_port "$T/origins443"
 check 'add_origins_for_port leaves a 443 install alone' 'AGORA_HTTPS_PORT=443' "$(cat "$T/origins443")"
 printf 'AGORA_HTTPS_PORT=9443\nDOMAIN=chat.example.com\n' > "$T/originsd"
 add_origins_for_port "$T/originsd"
-check 'add_origins_for_port uses DOMAIN and leaves an unset WEBAUTHN_ORIGINS unset' 'https://chat.example.com:9443|' "$(env_get "$T/originsd" CORS_ORIGIN)|$(env_get "$T/originsd" WEBAUTHN_ORIGINS)"
+check 'add_origins_for_port: an empty CORS_ORIGIN keeps compose default, adds localhost and DOMAIN on the port; WEBAUTHN_ORIGINS stays unset' 'https://chat.example.com,https://localhost:9443,https://chat.example.com:9443|' "$(env_get "$T/originsd" CORS_ORIGIN)|$(env_get "$T/originsd" WEBAUTHN_ORIGINS)"
+printf 'AGORA_HTTPS_PORT=8443
+' > "$T/originsl"
+add_origins_for_port "$T/originsl"
+check 'add_origins_for_port with no DOMAIN and no CORS_ORIGIN' 'https://localhost,https://localhost:8443' "$(env_get "$T/originsl" CORS_ORIGIN)"
 
 # ─── Versions ───
 mkdir -p "$T/src/box"

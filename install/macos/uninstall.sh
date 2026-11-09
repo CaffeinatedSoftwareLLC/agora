@@ -30,6 +30,16 @@ printf '%s' "$VM" | grep -Eq "$VM_NAME_RE" || die "--vm must be lowercase letter
 
 s=$(vm_status "$VM")
 created=$(state_get "$VM" created)
+# Confirmed before anything is removed, so a "no" leaves the VM with its keep-alive
+if [ "$DELETE_VM" = 1 ] && [ -n "$s" ]; then
+    [ "$created" = 1 ] || die "this installer didn't create the VM $VM; it is left alone (limactl delete $VM removes it)"
+    say ''
+    say "  This deletes the VM $VM and everything in it: Agora's database, files and every agent's box."
+    ans=''
+    [ -t 0 ] || die "deleting the VM needs a terminal to confirm"
+    ask ans "Type the VM's name ($VM) to delete it:" ''
+    [ "$ans" = "$VM" ] || die "not confirmed; the VM stays"
+fi
 if [ "$s" = Running ] && [ "$DELETE_VM" = 0 ]; then
     dirs=$(guest_install_dirs "$VM")
     for d in $dirs; do
@@ -45,13 +55,6 @@ for kind in agent daemon; do
 done
 
 if [ "$DELETE_VM" = 1 ] && [ -n "$s" ]; then
-    [ "$created" = 1 ] || die "this installer didn't create the VM $VM; it is left alone (limactl delete $VM removes it)"
-    say ''
-    say "  This deletes the VM $VM and everything in it: Agora's database, files and every agent's box."
-    ans=''
-    [ -t 0 ] || die "deleting the VM needs a terminal to confirm"
-    ask ans "Type the VM's name ($VM) to delete it:" ''
-    [ "$ans" = "$VM" ] || die "not confirmed; the VM stays"
     limactl delete --force "$VM"
     ok "deleted the VM $VM"
 fi
