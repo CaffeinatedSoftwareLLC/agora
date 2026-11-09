@@ -73,6 +73,21 @@ export function planFor(deps: AutostartDeps, config: string): Plan {
 
 export const commandLine = (p: Plan) => `${p.node} ${p.entry} --config ${p.config}`;
 
+/**
+ * Homebrew's node runs from a versioned Cellar folder (process.execPath resolves the symlink:
+ * /opt/homebrew/Cellar/node/24.3.0/bin/node), which `brew upgrade node` deletes, and a startup
+ * entry pointing there then fails at every login. Homebrew's opt link
+ * (/opt/homebrew/opt/node/bin/node, also for node@22 and Linuxbrew) follows upgrades: use it
+ * when it exists. Any other Node is kept as it is.
+ */
+export async function stableNodePath(deps: AutostartDeps): Promise<string> {
+    if (deps.platform === 'win32') return deps.nodePath;
+    const m = /^(\/.+)\/Cellar\/(node(?:@\d+)?)\/[^/]+\/bin\/node$/.exec(deps.nodePath);
+    if (!m) return deps.nodePath;
+    const opt = `${m[1]}/opt/${m[2]}/bin/node`;
+    try { await deps.fs.access(opt, fsc.X_OK); return opt; } catch { return deps.nodePath; }
+}
+
 // ---------- Windows ----------
 
 export function windowsLauncher(p: Plan): string {
@@ -246,7 +261,7 @@ function refuseRoot(deps: AutostartDeps): void {
 export async function enable(deps: AutostartDeps, configArg: string | undefined, out: (l: string) => void): Promise<void> {
     refuseRoot(deps);
     const config = await checkConfig(deps, configArg);
-    const p = planFor(deps, config);
+    const p = planFor({ ...deps, nodePath: await stableNodePath(deps) }, config);
     if (deps.platform === 'win32') {
         if (await windowsElevated(deps)) throw new AutostartError('This shell is running as administrator. Open a normal (non-admin) terminal; the task is per-user.');
         const launcher = launcherPath(p);

@@ -335,12 +335,19 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  # Isolation (#39), recovery and reboot tests on a real stack with boxes under gVisor.
+  # Isolation (#39), recovery and reboot tests on a real stack with boxes under gVisor. Also on
+  # arm64: a Mac's VM (docs/macos.md) is arm64 Linux, and every box CLI has an arm64 build.
   boxes:
-    name: Boxes (isolation, recovery, reboot under gVisor)
+    name: Boxes (isolation, recovery, reboot under gVisor) (${{ matrix.arch }})
     needs: changes
     if: needs.changes.outputs.boxes == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -360,13 +367,53 @@ jobs:
         env:
           BOXTEST_ALLOW_DAEMON_RESTART: '1'
 
+  # The real box image (not the test image's fake CLIs): it builds for this CPU, and every pinned
+  # CLI starts under gVisor. The Dockerfile already runs each --version under runc while building.
+  box-image:
+    name: Box image (real CLIs under gVisor) (${{ matrix.arch }})
+    needs: changes
+    if: needs.changes.outputs.boxes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -q && sudo apt-get install -yq runsc
+          sudo runsc install && sudo systemctl restart docker
+          docker run --rm --runtime=runsc alpine uname -r
+          runsc --version
+      - name: Build box/Dockerfile (target box)
+        run: docker build -f box/Dockerfile --target box --build-arg BOX_VERSION="$(cat box/VERSION)" -t agora/box:ci .
+      - name: Every CLI starts under runsc
+        run: |
+          for cli in claude codex opencode omp devin; do
+            echo "== $cli"
+            timeout 120 docker run --rm --runtime=runsc --network none --entrypoint "/opt/agora/bin/$cli" agora/box:ci --version
+          done
+
   # The code-run suites (test/sandbox: the runner, the negative security suite of
-  # sandbox-isolation-spec §14, the socket proxy between installs #126) on real gVisor containers.
+  # sandbox-isolation-spec §14, the socket proxy between installs #126) on real gVisor containers,
+  # also on arm64 (a Mac's VM).
   sandbox:
-    name: Sandbox (code runs under gVisor)
+    name: Sandbox (code runs under gVisor) (${{ matrix.arch }})
     needs: changes
     if: needs.changes.outputs.sandbox == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -380,16 +427,27 @@ jobs:
       - run: bash scripts/test-sandbox-gvisor.sh
 
   # The Linux installer on a fresh runner: installs gVisor, builds, starts, makes the admin and a
-  # boxed agent (test image), checks it answers a mention and that the doctor is happy.
+  # boxed agent (test image), checks it answers a mention and that the doctor is happy. On arm64
+  # too: it is what the macOS installer runs inside its Ubuntu arm64 VM.
   install-linux:
-    name: Installer (Linux, clean machine)
+    name: Installer (Linux, clean machine) (${{ matrix.arch }})
     needs: changes
     if: needs.changes.outputs.install == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - run: bash test/install/lib.test.sh
+      - name: macOS installer scripts (shellcheck, decisions with Lima stubbed)
+        run: |
+          shellcheck -x -P SCRIPTDIR -S warning install/macos/*.sh install/macos/lib/macos.sh test/install/macos.test.sh
+          bash test/install/macos.test.sh
       - run: bash test/install/backup.test.sh
       - run: bash test/install/upgrade.test.sh
       - run: bash test/install/db-password.test.sh
@@ -397,6 +455,20 @@ jobs:
       # Adds a docker group to check the installer's group handling, so it needs root
       - run: sudo bash test/install/install.test.sh
       - run: bash test/install/clean-install.sh
+
+  # The macOS installer's decisions on a Mac, under its own /bin/bash 3.2, with plutil checking the
+  # launchd plist. Lima, Homebrew and launchd are stubbed: GitHub's macOS runners can't start a
+  # VM (no nested virtualization), so the real run is docs/testing/macos-test-plan.md.
+  install-macos:
+    name: Installer (macOS decisions, Lima stubbed)
+    needs: changes
+    if: needs.changes.outputs.install == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - run: /bin/bash --version | head -n 1
+      - run: /bin/bash test/install/macos.test.sh
 
   # The Windows installer's decisions (WSL missing, an existing engine distro, Docker Desktop,
   # reboot resume, telemetry off), with wsl.exe and docker mocked. CI runners have no WSL2.

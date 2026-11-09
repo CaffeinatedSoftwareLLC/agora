@@ -139,6 +139,32 @@ env_set() {
     mv "$tmp" "$file"
 }
 
+# origin_list_add <comma list> <origin>: the list with origin appended once
+origin_list_add() {
+    local list=$1 o=$2 item
+    local IFS=,
+    for item in $list; do
+        item=$(printf '%s' "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's#/*$##')
+        [ "$item" = "$o" ] && { printf '%s' "$list"; return; }
+    done
+    if [ -n "$list" ]; then printf '%s,%s' "$list" "$o"; else printf '%s' "$o"; fi
+}
+
+# add_origins_for_port <env file>: with AGORA_HTTPS_PORT other than 443, makes sure CORS_ORIGIN
+# (and WEBAUTHN_ORIGINS when it is set, since it then replaces the defaults) has
+# https://<DOMAIN or localhost>:<port>. src/config.ts adds only https://localhost by itself.
+add_origins_for_port() {
+    local env=$1 port host o v
+    port=$(env_get "$env" AGORA_HTTPS_PORT)
+    [ -n "$port" ] && [ "$port" != 443 ] || return 0
+    host=$(env_get "$env" DOMAIN); host=${host#http*://}; host=${host%%/*}
+    o="https://${host:-localhost}:$port"
+    v=$(env_get "$env" CORS_ORIGIN)
+    [ "$(origin_list_add "$v" "$o")" = "$v" ] || env_set "$env" CORS_ORIGIN "$(origin_list_add "$v" "$o")"
+    v=$(env_get "$env" WEBAUTHN_ORIGINS)
+    if [ -n "$v" ] && [ "$(origin_list_add "$v" "$o")" != "$v" ]; then env_set "$env" WEBAUTHN_ORIGINS "$(origin_list_add "$v" "$o")"; fi
+}
+
 agora_version() {
     sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$1/package.json" 2>/dev/null | head -n 1
 }

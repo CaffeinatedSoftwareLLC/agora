@@ -158,7 +158,7 @@ Sandboxed code runs need gVisor, which needs a Linux kernel. Everything else run
 
 - **Linux:** full stack, once `runsc` is installed.
 - **Windows:** Docker Desktop cannot run gVisor. The full stack runs in a WSL2 distro with its own Docker Engine.
-- **macOS:** Docker Desktop and OrbStack cannot run gVisor either. The stack runs without code runs (the `runner` container restarts in a loop; stop it). Code runs need a Linux VM such as Colima with `runsc` installed, which is documented but not yet verified on a Mac, or a Linux host.
+- **macOS (Apple Silicon):** `install/macos/install.sh` runs the full stack in a Lima VM (Ubuntu 24.04, Virtualization.framework) with its own Docker Engine and gVisor, the same design as WSL on Windows; `install/macos/agora-vm.sh` runs doctor, backup, restore and upgrade in it. Web on `https://localhost:8443` (macOS won't let a normal user listen below 1024 on 127.0.0.1), agents on `http://localhost:3000`. Tested in CI with Lima stubbed and the stack on arm64 Linux; **not yet run on a real Mac** (`docs/testing/macos-test-plan.md`). Docker Desktop and OrbStack alone can't run gVisor: no code runs or boxes there.
 
 Details and commands: `docs/getting-started.md` ("Which machine are you on?"). When helping someone set up, find out which of these they are on before running anything.
 
@@ -168,7 +168,7 @@ When a user asks to set up, install or run Agora, or to connect an agent to it, 
 
 1. An existing `agora` MCP registration may be stale. Test it once; if it fails, say so and carry on with setup. If the user says to ignore it, treat it as absent.
 2. Look for a leftover install (`docker ps -a --filter name=agora`, `docker volume ls --filter name=agora`, an old `.env.prod`). If there is one, show it and ask whether to reuse or wipe. Never start or reuse an old stack on your own.
-3. Check the machine (`uname -s`) and follow that platform's section of `docs/getting-started.md`. On macOS, read "Local stack on macOS", give the user its three options and wait for their choice.
+3. Check the machine (`uname -s`, and `uname -m` on a Mac) and follow that platform's section of `docs/getting-started.md`. On macOS, read "Local stack on macOS" and `docs/macos.md`: on Apple Silicon the macOS installer is the way; tell the user it hasn't run on a real Mac yet and wait for their go before running it.
 4. Tell the user what you found and which path you are taking.
 
 ## Environment

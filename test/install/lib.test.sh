@@ -46,6 +46,23 @@ for _ in $(seq 1 50); do
 done
 check 'gen_password succeeds under pipefail, 20 alphanumerics, 50 runs' 0 "$gp_fails"
 
+# ─── Browser origins after a restore on another HTTPS port (a Mac's VM: 8443) ───
+check 'origin_list_add appends to a list' 'https://a.ts.net,https://localhost:8443' "$(origin_list_add 'https://a.ts.net' 'https://localhost:8443')"
+check 'origin_list_add keeps a list that has it (trailing slash, spaces)' 'https://a, https://localhost:8443/' "$(origin_list_add 'https://a, https://localhost:8443/' 'https://localhost:8443')"
+check 'origin_list_add on an empty list' 'https://localhost:8443' "$(origin_list_add '' 'https://localhost:8443')"
+printf 'AGORA_HTTPS_PORT=8443\nCORS_ORIGIN=https://agora-home.x.ts.net\nWEBAUTHN_ORIGINS=https://localhost,https://agora-home.x.ts.net\n' > "$T/origins"
+add_origins_for_port "$T/origins"
+check 'add_origins_for_port adds localhost:<port> to CORS_ORIGIN' 'https://agora-home.x.ts.net,https://localhost:8443' "$(env_get "$T/origins" CORS_ORIGIN)"
+check 'add_origins_for_port adds it to a set WEBAUTHN_ORIGINS' 'https://localhost,https://agora-home.x.ts.net,https://localhost:8443' "$(env_get "$T/origins" WEBAUTHN_ORIGINS)"
+add_origins_for_port "$T/origins"
+check 'add_origins_for_port twice changes nothing' 'https://agora-home.x.ts.net,https://localhost:8443' "$(env_get "$T/origins" CORS_ORIGIN)"
+printf 'AGORA_HTTPS_PORT=443\n' > "$T/origins443"
+add_origins_for_port "$T/origins443"
+check 'add_origins_for_port leaves a 443 install alone' 'AGORA_HTTPS_PORT=443' "$(cat "$T/origins443")"
+printf 'AGORA_HTTPS_PORT=9443\nDOMAIN=chat.example.com\n' > "$T/originsd"
+add_origins_for_port "$T/originsd"
+check 'add_origins_for_port uses DOMAIN and leaves an unset WEBAUTHN_ORIGINS unset' 'https://chat.example.com:9443|' "$(env_get "$T/originsd" CORS_ORIGIN)|$(env_get "$T/originsd" WEBAUTHN_ORIGINS)"
+
 # ─── Versions ───
 mkdir -p "$T/src/box"
 printf '{\n  "name": "agora",\n  "version": "1.2.3",\n  "deps": { "x": { "version": "9" } }\n}\n' > "$T/src/package.json"

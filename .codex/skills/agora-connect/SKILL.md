@@ -39,7 +39,7 @@ docker ps -a --filter name=agora --format '{{.Names}}  {{.Status}}'
 docker volume ls --filter name=agora --format '{{.Name}}'
 ```
 
-Also look for an existing checkout of the Agora repo and a `.env.prod` in it.
+Also look for an existing checkout of the Agora repo and a `.env.prod` in it. On a Mac, also run `limactl list` and `ls ~/.agora/macos`: a Lima VM named `agora` (or a record of one there) is an earlier macOS install; it counts as found.
 
 - **Nothing found:** go to Check 3.
 - **Anything found: stop and show the user the list.** Ask one question: *reuse this install, or wipe it and start fresh?* Never start, restart or reconnect to an old stack on your own, and never treat it as the instance the user asked you to set up.
@@ -52,10 +52,10 @@ Run `uname -s` (on Windows without a Unix shell, ask). It decides which instruct
 | Machine | What to follow | What the user gets |
 |---|---|---|
 | **Linux** | The guide's steps 1 to 5, plus installing gVisor (`runsc`) | Everything |
-| **macOS** (`Darwin`) | The guide's **"Local stack on macOS"** section. Read it before running anything | Docker Desktop or OrbStack: everything **except** sandboxed code runs. Code runs need the Colima route in that section (not yet verified on a real Mac) or a Linux host |
+| **macOS** (`Darwin`) | The guide's **"Local stack on macOS"** section and `docs/macos.md`. Read them before running anything | Apple Silicon (`uname -m` is `arm64`): the macOS installer gives everything, boxes and code runs included, in a Lima VM. It hasn't run end to end on a real Mac yet. Docker Desktop or OrbStack alone: everything **except** code runs and boxes |
 | **Windows** | The guide's **"Local stack on Windows with gVisor (WSL2)"** section | Docker Desktop: everything except code runs. WSL2 with its own Docker Engine: everything |
 
-On **macOS**, tell the user the three options from that section (A: Docker Desktop without code runs; B: Colima VM with gVisor; C: a Linux host, with the Mac as a client), say that A is the one known to work, and **wait for their choice** before starting anything. Then follow that option's steps exactly. On option A the `runner` container restarts in a loop; that is expected. Stop it (`docker compose -f docker-compose.prod.yml --env-file .env.prod stop runner`) and do not report it as a failure. macOS has no `getent`; on option A leave `DOCKER_GID` as it is.
+On **macOS** with Apple Silicon, propose the macOS installer (`bash install/macos/install.sh`), say it hasn't run on a real Mac yet and that it installs Lima with Homebrew and creates a VM (it asks before each), and **wait for the user's go**. It asks for the VM's size, an admin password and Lima's install itself, so let the user run it in their own terminal, or run it with the flags they choose (`--help`). The browser address is `https://localhost:8443`, not 443; agents use `http://localhost:3000`. If the user would rather not run a VM, Docker Desktop without code runs or boxes is the fallback: follow the guide's steps as written, and the `runner` container restarts in a loop, which is expected (stop it with `docker compose -f docker-compose.prod.yml --env-file .env.prod stop runner`; macOS has no `getent`, so leave `DOCKER_GID` as it is). On an Intel Mac, the installer refuses: offer Docker Desktop without code runs, or a Linux host.
 
 ### Check 4 — tell the user the plan
 

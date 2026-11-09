@@ -7,7 +7,9 @@
 # - web (nginx: the UI plus the API and WebSocket proxy) gets a port on 127.0.0.1:8080, which
 #   `tailscale serve` forwards to from https://<machine>.<tailnet>.ts.net.
 # - caddy listens on 127.0.0.1 only, so this machine still reaches https://localhost and nothing
-#   else on the network does. It also leaves port 443 on the tailnet address to tailscale.
+#   else on the network does. It also leaves port 443 on the tailnet address to tailscale. Its
+#   ports stay the install's own (AGORA_HTTP_PORT / AGORA_HTTPS_PORT, 80 and 443 by default; a
+#   Mac's VM uses 8000 and 8443 and forwards only those).
 services:
   web:
     ports:
@@ -15,5 +17,5 @@ services:
 
   caddy:
     ports: !override
-      - "127.0.0.1:80:80"
-      - "127.0.0.1:443:443"
+      - "127.0.0.1:${AGORA_HTTP_PORT:-80}:80"
+      - "127.0.0.1:${AGORA_HTTPS_PORT:-443}:443"

@@ -33,6 +33,7 @@ Usage: install.sh [options]
                              (default: ask; stop without a terminal)
   --passphrase-file F        backup passphrase, for --existing upgrade without a terminal
   --wsl                      running inside WSL (the Windows installer passes this)
+  --lima                     running inside the macOS installer's Lima VM (it passes this)
   --box-image-target box|test   test: the box image with fake CLIs (CI only)
   --box-insecure-dev         run boxes with runc instead of gVisor (dev only, never production)
   --min-disk-gb N            free disk required (default 20)
@@ -46,7 +47,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ARGS=("$@")
 NON_INTERACTIVE=0 INSTANCE='' INSTALL_DIR='' SOURCE='' REF=latest DOMAIN=''
 HTTP_PORT='' HTTPS_PORT='' API_PORT='' ADMIN_USER='' ADMIN_EMAIL='' ADMIN_PW_FILE=''
-AGENT='' AGENT_NAME='' AGENT_KEY_FILE='' TELEMETRY_ARG='' EXISTING='' WSL=0 PASS_FILE_ARG='' DOCKER_INSTALLED=0
+AGENT='' AGENT_NAME='' AGENT_KEY_FILE='' TELEMETRY_ARG='' EXISTING='' WSL=0 LIMA=0 PASS_FILE_ARG='' DOCKER_INSTALLED=0
 BOX_TARGET=box BOX_INSECURE=0 MIN_DISK_GB=${AGORA_MIN_DISK_GB:-20}
 need() { [ $# -ge 2 ] && [ -n "$2" ] || { echo "install.sh: $1 needs a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
@@ -70,6 +71,7 @@ while [ $# -gt 0 ]; do
         --existing) need "$@"; EXISTING=$2; shift ;;
         --passphrase-file) need "$@"; PASS_FILE_ARG=$2; shift ;;
         --wsl) WSL=1 ;;
+        --lima) LIMA=1 ;;
         --box-image-target) need "$@"; BOX_TARGET=$2; shift ;;
         --box-insecure-dev) BOX_INSECURE=1 ;;
         --min-disk-gb) need "$@"; MIN_DISK_GB=$2; shift ;;
@@ -123,6 +125,7 @@ AGORA_VERSION=$(agora_version "$SOURCE")
 AGORA_VERSION=${AGORA_VERSION:-unknown}
 OS_NAME=$(os_id)
 [ "$WSL" = 1 ] && OS_NAME="${OS_NAME}-wsl"
+[ "$LIMA" = 1 ] && OS_NAME="${OS_NAME}-lima"
 
 say "${BOLD}Agora $AGORA_VERSION installer${RESET}"
 
@@ -159,6 +162,11 @@ if [ "$WSL" = 1 ]; then
     grep -qi microsoft /proc/version || die "--wsl given, but this isn't WSL"
     [ -d /run/systemd/system ] || die "systemd is off in this distro. Add [boot] systemd=true to /etc/wsl.conf, run wsl --terminate <distro> from Windows, and start again"
     ok "WSL with systemd"
+fi
+if [ "$LIMA" = 1 ]; then
+    step preflight.lima 'Checking the Lima VM'
+    [ -d /run/systemd/system ] || die "--lima given, but systemd isn't running in this VM"
+    ok "Lima VM with systemd"
 fi
 
 # ─── 3. Docker Engine (before 2: listing installs needs Docker; gVisor after the question) ───
@@ -398,6 +406,7 @@ instance=$INSTANCE
 version=$AGORA_VERSION
 installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 wsl=$WSL
+lima=$LIMA
 EOF
 say ''
 say "${BOLD}Agora is running.${RESET}"

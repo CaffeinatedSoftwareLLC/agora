@@ -5,6 +5,7 @@ name: Agora release
 #   agora.tar.gz         the source at that tag, one top folder (`agora/`)
 #   agora.tar.gz.sha256  `sha256sum agora.tar.gz`; the installer checks it before unpacking
 #   install.sh           install/linux/install.sh, so a bare `curl … install.sh` works
+#   install-macos.sh     install/macos/install.sh, which run on its own downloads agora.tar.gz the same way
 #   install.ps1          install/windows/bootstrap.ps1: downloads agora.tar.gz, checks it, runs
 #                        install\windows\install.ps1 from it
 # and copies them to the fixed release agora-latest, so the installers' "latest" link never
@@ -54,17 +55,18 @@ jobs:
           sha256sum agora.tar.gz > agora.tar.gz.sha256
           cp install/linux/install.sh install.sh
           cp install/windows/bootstrap.ps1 install.ps1
+          cp install/macos/install.sh install-macos.sh
 
       - name: Upload release assets
-        run: gh release upload "${TAG}" agora.tar.gz agora.tar.gz.sha256 install.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"
+        run: gh release upload "${TAG}" agora.tar.gz agora.tar.gz.sha256 install.sh install-macos.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"
 
       - name: Update the agora-latest install link
         run: |
-          notes="The installers' download link: https://github.com/${GITHUB_REPOSITORY}/releases/download/agora-latest/install.sh (Linux) and install.ps1 (Windows). It holds Agora ${TAG}. The Agora release workflow replaces it on every app release."
+          notes="The installers' download link: https://github.com/${GITHUB_REPOSITORY}/releases/download/agora-latest/install.sh (Linux), install-macos.sh (macOS) and install.ps1 (Windows). It holds Agora ${TAG}. The Agora release workflow replaces it on every app release."
           if ! gh release view agora-latest --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
             gh release create agora-latest --repo "${GITHUB_REPOSITORY}" --target "$(git rev-parse HEAD)" \
               --title "Agora install link" --notes "${notes}" --prerelease --latest=false
           else
             gh release edit agora-latest --repo "${GITHUB_REPOSITORY}" --notes "${notes}"
           fi
-          gh release upload agora-latest agora.tar.gz agora.tar.gz.sha256 install.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"
+          gh release upload agora-latest agora.tar.gz agora.tar.gz.sha256 install.sh install-macos.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"

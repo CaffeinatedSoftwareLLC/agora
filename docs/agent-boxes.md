@@ -422,6 +422,19 @@ At install the installer asks once, default **no**:
 - **The button:** the installer offers **Report this problem** after a failure; Admin → Instance in Agora has **Report setup problem** (the API runs the checks it can: database, Redis, runner, boxd, boxes, versions). Both show the full bundle first, then send it only when the user presses **Send**, to `POST https://push.agora.host/telemetry/v1/problem` (at most 256 KB, kept 90 days). The user gets a report ID to quote in an issue.
 - Nothing is sent without that press, telemetry on or off.
 
+### 12.6 macOS (`install/macos/install.sh`)
+
+The Windows design with a Lima VM in place of WSL ([macos.md](macos.md)):
+
+1. **Preflight:** Apple Silicon (a Rosetta shell is refused), macOS 13.5+, 8 GB of memory, 30 GB free, not root. Warns when the Mac sleeps by itself.
+2. **Lima** 2.0+: if missing, `brew install lima` with consent (`--allow-lima-install` when non-interactive); Homebrew's own install script is never run.
+3. **One VM per install:** creates `agora` (or `--vm`) from a generated Lima config: `vmType: vz`, Canonical's Ubuntu 24.04 arm64 cloud image pinned by the digest in its `SHA256SUMS`, no mounts, no containerd, no SSH agent forwarding, and port forwards for the install's three ports to `127.0.0.1` on the Mac with every other guest port ignored. Mac-side ports are 1024 or above (8443, 8000, 3000 by default). A VM the installer didn't create is never used. gVisor runs on its default systrap platform, so no nested virtualization is needed.
+4. **The release goes in with `limactl copy`**, and `install/linux/install.sh --lima` runs inside with the Mac's ports (steps 3–9 of §12.1). Password and key files are copied into a 0700 folder in the VM and removed after.
+5. **Keep-alive:** a LaunchAgent (from login) or, with `--at-boot`, a LaunchDaemon running as the user (from boot, sudo once) runs `~/.agora/macos/keepalive.sh` at load and every 5 minutes, which starts the VM if it isn't running.
+6. Opens `https://localhost:<port>`.
+
+`install/macos/agora-vm.sh` runs `doctor.sh`, `backup.sh`, `restore.sh` and `upgrade.sh` inside the VM and moves bundles to and from the Mac. Tests: `test/install/macos.test.sh` drives the scripts with the Mac's and Lima's commands stubbed (CI on Linux and on `macos-latest` with its bash 3.2); the stack itself is covered on arm64 by the `-arm64` CI jobs. The full run is [testing/macos-test-plan.md](testing/macos-test-plan.md) on a real Mac (*verify live*).
+
 ## 13. Second install on one engine (#209)
 
 - `setup-env.js --prod` **no longer starts the stack**: it writes `.env.prod` and prints the start command. `--start` starts it. It refuses an install name the engine already has, starts nothing when Docker can't be asked what exists, and after a failed start removes nothing: it prints the exact `down --remove-orphans -v` command and what that deletes (two setups of one name can race, so an earlier empty inventory proves nothing).
@@ -459,7 +472,6 @@ These run with `scripts/test-boxes.sh` on any Linux Docker engine with `runsc`, 
 - GitLab and other forges in the git broker (github.com only).
 - Firecracker or VM boxes; GPU boxes (host mode covers GPU work).
 - Running agora-host and the CLI as different users inside the box (would keep the host token from the agent; accepted residual, §3.2).
-- macOS installer (Colima route stays manual, [getting-started.md](getting-started.md#local-stack-on-macos)).
 - Prebuilt images from a registry: the installer builds them locally.
 
 ## 16. Adding a box adapter

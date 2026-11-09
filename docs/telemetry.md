@@ -38,11 +38,13 @@ The request has no user agent header and no cookies. Nothing else is ever sent: 
 
 ### Step ids
 
-Linux installer (`install/linux/install.sh`): `preflight.os`, `preflight.kernel`, `preflight.memory`, `preflight.wsl`, `docker.install`, `gvisor.install`, `gvisor.check`, `existing`, `preflight.disk`, `preflight.ports`, `source.copy`, `telemetry`, `config`, `admin.password`, `start`, `health`, `admin`, `box`, `box.start`, `done`.
+Linux installer (`install/linux/install.sh`): `preflight.os`, `preflight.kernel`, `preflight.memory`, `preflight.wsl`, `preflight.lima`, `docker.install`, `gvisor.install`, `gvisor.check`, `existing`, `preflight.disk`, `preflight.ports`, `source.copy`, `telemetry`, `config`, `admin.password`, `start`, `health`, `admin`, `box`, `box.start`, `done`.
 
 Upgrade (`install/upgrade.sh`): `upgrade.fetch`, `upgrade.maintenance`, `upgrade.backup`, `upgrade.replace`, `upgrade.config`, `upgrade.build`, `upgrade.drain`, `upgrade.network`, `upgrade.start`, `upgrade.rollback`. Uninstall sends nothing.
 
 Windows installer (`install/windows/install.ps1`): `win.preflight`, `win.telemetry`, `win.wsl`, `win.reboot`, `win.distro`, `win.import`, `win.linux`, `win.keepalive`, `win.browser`. When the Linux installer fails inside WSL it sends its own report; the Windows installer doesn't send a second one.
+
+macOS installer (`install/macos/install.sh`): `mac.preflight`, `mac.telemetry`, `mac.lima`, `mac.vm`, `mac.source`, `mac.linux`, `mac.keepalive`, `mac.done`. Its `os` is `macos` and `osVersion` the macOS version; the Linux installer inside the VM reports itself as `ubuntu-lima`. As on Windows, a failure inside the VM is reported once, by the Linux installer.
 
 ## Problem reports
 
