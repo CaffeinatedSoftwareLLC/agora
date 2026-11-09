@@ -60,7 +60,9 @@ case "\$1" in
     shell)
         shift; while [ "\${1#--}" != "\$1" ]; do [ "\$1" = --workdir ] && shift; shift; done; shift
         case "\$*" in
+            *iptables*DOCKER-USER*) [ "\${FAKE_FW_MISSING:-}" = DOCKER-USER ] && exit 1; exit 0 ;;
             *iptables*) exit 0 ;;
+            *systemctl*) exit 0 ;;
             *os-release*) printf '%s' "\${FAKE_GUEST:-ubuntu 24.04 aarch64}"; exit 0 ;;
             *working_dir*) echo "$T/guest/agora"; exit 0 ;;
             *install/linux/install.sh*)
@@ -123,7 +125,7 @@ printf 'hunter2hunter2\n' > "$T/pw"
     check_true 'template: vz, aarch64, the given size' 'printf "%s" "$tpl" | grep -q "^vmType: vz" && printf "%s" "$tpl" | grep -q "^cpus: 4" && printf "%s" "$tpl" | grep -q "^memory: \"8GiB\""'
     check_true 'template: no mounts, no containerd, no agent forwarding' 'printf "%s" "$tpl" | grep -q "^mounts: \[\]" && printf "%s" "$tpl" | grep -q "system: false" && printf "%s" "$tpl" | grep -q "forwardAgent: false"'
     check 'template: three forwards to 127.0.0.1, everything else ignored' '3 1' "$(printf '%s\n' "$tpl" | grep -c 'hostIP: "127.0.0.1"') $(printf '%s\n' "$tpl" | grep -c 'ignore: true')"
-    check_true 'template: the guest firewall runs at every boot (provision, mode system)' 'printf "%s" "$tpl" | grep -q "^provision:" && printf "%s" "$tpl" | grep -q "^  - mode: system" && printf "%s" "$tpl" | grep -q "^      iptables -w -N AGORA-HOST"'
+    check_true 'template: the guest firewall runs at every boot (provision, mode system)' 'printf "%s" "$tpl" | grep -q "^provision:" && printf "%s" "$tpl" | grep -q "^  - mode: system" && printf "%s" "$tpl" | grep -q "^      ipt -N AGORA-HOST-NEW"'
     if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
         check 'template parses as YAML; the provision script is the file, unindented' ok "$(printf '%s' "$tpl" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); s=d["provision"][0]["script"]; f=open(sys.argv[1]).read(); print("ok" if s.strip()==f.strip() and d["mounts"]==[] else "bad")' "$ROOT/install/macos/guest/host-firewall.sh")"
     fi
@@ -184,6 +186,7 @@ if [ "$(ls -ld "$probe" | cut -c1-10)" = drwx------ ]; then
     check 'the VM folder ~/.lima/agora is 700' drwx------ "$(ls -ld "$T/home/.lima/agora" | cut -c1-10)"
 fi
 check 'Time Machine: no exclusion without consent (non-interactive)' 0 "$(grep -c '^tmutil addexclusion' "$CALLS")"
+check_true 'after the Linux installer, the firewall is re-applied (Docker exists now)' 'grep -q "agora sudo -n systemctl restart agora-host-firewall" "$CALLS"'
 check_true '... but it says how' 'grep -q "tmutil addexclusion" "$T/out"'
 args=$(tr '\n' ' ' < "$T/linux-args")
 check_true 'Linux installer: --lima, the Mac ports, telemetry, non-interactive, the agent' 'case "$args" in *"--lima "*"--http-port 8000 --https-port 8444 --api-port 3000 --telemetry off --non-interactive"*"--agent claude"*) true ;; *) false ;; esac'
@@ -277,6 +280,8 @@ FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000'); run "$V" doctor
 check_true 'doctor: forwards, health, the VM firewall and the Mac disk pass' '[ "$RC" = 0 ] && grep -q "ok      the VM can.t reach this Mac.s loopback" "$T/out" && grep -q "GB free on this Mac" "$T/out"'
 FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000' FAKE_FREE_KB=5242880); run "$V" doctor
 check_true 'doctor: fails on a nearly full Mac disk' '[ "$RC" = 1 ] && grep -q "FAILED  only 5 GB free" "$T/out"'
+FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000' FAKE_FW_MISSING=DOCKER-USER); run "$V" doctor
+check_true 'doctor: fails when containers can reach the Mac (no DOCKER-USER jump)' '[ "$RC" = 1 ] && grep -q "FAILED  the VM.s containers can reach" "$T/out" && grep -q "ok      the VM can.t reach this Mac.s loopback (192.168.5.2, OUTPUT)" "$T/out"'
 FAKE_ENV=()
 run "$V" status
 check_true 'status: ports and keep-alive' '[ "$RC" = 0 ] && grep -q "https 8443, http 8000, api 3000" "$T/out" && grep -q "Keep-alive: agent" "$T/out"'

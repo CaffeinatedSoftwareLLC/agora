@@ -338,6 +338,9 @@ if [ "$code" != 0 ]; then
     die "the Linux installer failed (exit $code); its message above names the step. The VM stays: fix what it says and run this installer again, or look inside with: limactl shell $VM"
 fi
 CLEANUP_CMDS=()
+# Docker came with the Linux installer: apply the firewall to its containers now, not at the next
+# boot (Docker's drop-in does it on every later start). A failure here is the doctor's to report.
+vm_sh "$VM" sudo -n systemctl restart agora-host-firewall >/dev/null 2>&1 || warn "couldn't re-apply the VM's firewall (bash $HERE/agora-vm.sh doctor shows whether it is in place)"
 GDIR=$(guest_install_dirs "$VM" | head -n 1)
 state_set "$VM" installed 1
 [ -z "$GDIR" ] || state_set "$VM" install_dir "$GDIR"

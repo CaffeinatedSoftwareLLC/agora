@@ -97,8 +97,13 @@ case "$CMD" in
             fi
         fi
         if [ "$s" = Running ]; then
-            if vm_sh "$VM" sudo -n iptables -w -C OUTPUT -d 192.168.5.2 -j AGORA-HOST >/dev/null 2>&1; then say "  ok      the VM can't reach this Mac's loopback (192.168.5.2)"
-            else say "  FAILED  the VM can reach this Mac's 127.0.0.1 (no AGORA-HOST rule; sudo systemctl restart agora-host-firewall in the VM)"; fails=1; fi
+            # The VM itself (OUTPUT) and its containers (DOCKER-USER); a VM made before the firewall
+            # existed has neither, and needs a new VM (uninstall.sh --delete-vm after a backup)
+            for chain in OUTPUT DOCKER-USER; do
+                who='the VM'; [ "$chain" = OUTPUT ] || who="the VM's containers"
+                if vm_sh "$VM" sudo -n iptables -w -C "$chain" -d 192.168.5.2 -j AGORA-HOST >/dev/null 2>&1; then say "  ok      $who can't reach this Mac's loopback (192.168.5.2, $chain)"
+                else say "  FAILED  $who can reach this Mac's 127.0.0.1: no AGORA-HOST jump in $chain (in the VM: sudo systemctl restart agora-host-firewall; journalctl -u agora-host-firewall)"; fails=1; fi
+            done
         fi
         for p in "$(state_get "$VM" https_port)" "$(state_get "$VM" api_port)"; do
             [ -n "$p" ] || continue

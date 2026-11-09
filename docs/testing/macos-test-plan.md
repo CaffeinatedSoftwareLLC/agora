@@ -47,7 +47,7 @@ kill %1
 limactl shell agora sudo iptables -S AGORA-HOST
 ```
 
-After the reboot in step 4, run the first two again: still refused.
+Run this right after the install, **before any reboot**: the containers' rule must already be there (`limactl shell agora sudo iptables -S DOCKER-USER` shows `-j AGORA-HOST`). After the reboot in step 4, run the first two again: still refused. Then check a bad allow line fails closed: `limactl shell agora sh -c 'echo 99999 | sudo tee -a /etc/agora/host-allow-ports; sudo systemctl restart agora-host-firewall; sudo journalctl -u agora-host-firewall -n 3'` logs a skipped line, and the two checks above are still refused. Remove the line afterwards.
 
 **The VM's files are private:** `stat -f '%Sp %N' ~/.lima/agora ~/.lima/agora/*disk*` shows `drwx------` for the folder; no disk file is readable by others (`-rw-------` or under the 700 folder). `tmutil isexcluded ~/.lima/agora` says `[Excluded]` if the owner said yes to the Time Machine question.
 
