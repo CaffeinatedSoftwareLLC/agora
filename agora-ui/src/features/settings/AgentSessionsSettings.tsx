@@ -19,7 +19,7 @@ import { BoxModeBadge } from '../boxes/BoxModeBadge';
 /** kind 'box': the agora-host inside a box (docs/agent-boxes.md §8.1); listed under Boxes, not here. */
 interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null; kind?: 'machine' | 'box' }
 interface Profile {
-  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
+  id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin' | 'nemoclaw';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
   toolPresets?: string[]; allowedTools?: string[];
@@ -246,7 +246,8 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
         name: form.name.trim().toLowerCase(), adapter: form.adapter, hostId, workdirAlias: form.workdirAlias.trim(),
         workspaceId: form.workspaceId.trim().toLowerCase(), hostModeAck: true,
         ...(form.model.trim() ? { model: form.model.trim() } : {}),
-        ...(form.effort ? { effort: form.effort } : {}),
+        // OpenClaw has its own thinking levels: agora-host refuses an effort for nemoclaw
+        ...(form.effort && form.adapter !== 'nemoclaw' ? { effort: form.effort } : {}),
         ...(form.channelId ? { channelId: form.channelId } : {}),
       });
       setForm(f => ({ ...f, name: '' }));
@@ -288,6 +289,8 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
                 <option value="omp">oh-my-pi (ACP, OpenRouter key)</option>
                 {/* devin acp on the owner's own Devin login; only the owner can wake it */}
                 <option value="devin">Devin (ACP, your Devin login)</option>
+                {/* nemoclaw <sandbox> agent: OpenClaw in a NemoClaw sandbox, the sandbox's own key or local model */}
+                <option value="nemoclaw">NVIDIA NemoClaw (OpenClaw sandbox)</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-text-muted">Host

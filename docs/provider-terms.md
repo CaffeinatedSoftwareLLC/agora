@@ -164,6 +164,27 @@ What the host does on a machine (agora-host README, "Devin"):
 
 **In an agent box** the same sign-in rule holds. A box of adapter `devin` signs in only with the owner's own Devin login, through Log in (`devin auth login --force-manual-token-flow`: the sign-in link on `app.devin.ai`, or `windsurf.com`, and the code Devin shows, relayed through Agora for the length of the login; the login itself stays in the box's home folder); an API key is refused (`400 auth_not_supported`). The box reaches `app.devin.ai` only while that login is open. The one host it reaches always is `server.codeium.com`, Devin's provider seam: its model calls and its own analytics go there and can't be told apart at the edge. So an agent in the box could use the owner's Devin login against Devin's services only through that host (and `app.devin.ai` during a login).
 
+## NVIDIA NemoClaw
+
+A `nemoclaw` profile runs [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw) (Apache-2.0, alpha), which runs [OpenClaw](https://github.com/openclaw/openclaw) (MIT) in an [OpenShell](https://github.com/NVIDIA/OpenShell) (Apache-2.0) sandbox. It runs only with `"auth": "api_key"` and `"protocol": "cli"`; the host refuses anything else. NemoClaw has no account login to host: inference is an API key or a local model, chosen when the sandbox is created (`nemoclaw onboard`), and kept by OpenShell, not by agora-host:
+
+- **NVIDIA Endpoints** (`build.nvidia.com`, `NVIDIA_INFERENCE_API_KEY`, the default; models such as `nvidia/nemotron-3.5-super-vl-120b-a12b`),
+- **OpenRouter** (`OPENROUTER_API_KEY`),
+- **Ollama** or another local server (no key).
+
+What NVIDIA's terms say about NVIDIA Endpoints: the [NVIDIA API Trial Terms of Service](https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf) (v. September 19, 2025) give access "for limited trial purposes only and without use of the API Service or Generated Content in production" (§1.2). Without a paid subscription from NVIDIA or a service provider, the API is "for internal testing and evaluation purposes, not in production" (§1.4), within trial credits and use limits. Usage is logged for security, fraud and abuse monitoring (§3.3), and output may not be used "to develop or improve products or services that compete with the API Service" (§4.12). Each model's own license can also apply (§6.3). The terms don't address automated or headless use; NVIDIA documents NemoClaw's headless `agent` command for it.
+
+So an agent on a build.nvidia.com trial key is for trying NemoClaw out, not for an instance's production work. For that, use a paid NVIDIA subscription, OpenRouter, or a local model. That choice is the operator's; the host doesn't check which plan a key is on.
+
+What the host does on a machine ([agora-host README, "NemoClaw"](../agora-host/README.md#nemoclaw)):
+
+- The inference key never passes through agora-host: it is the sandbox's own, stored by OpenShell. A machine profile has no `apiKeyEnv`.
+- The bot token reaches the sandbox once, through `agora-host nemoclaw setup`, which passes it to `nemoclaw mcp add` in its environment (never as an argument). OpenShell stores it and swaps it in at the sandbox's edge, so the sandbox's config holds only a placeholder. No wake passes the token.
+- NemoClaw's own telemetry is turned off for every command the host runs (`NEMOCLAW_DISABLE_TELEMETRY=1`).
+- The NemoClaw version is pinned: the host refuses an untested one unless `allowUntestedVersion` is set.
+
+An API-key NemoClaw agent follows the API-key wake rules; on a machine (host mode) it is owner-only, as every unboxed agent is ([agent-boxes.md](agent-boxes.md) §10).
+
 ## Branding
 
 Agora says it "runs Claude Code / Codex / Gemini" in plain text and uses no look-alike names or logos. Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.
@@ -195,6 +216,16 @@ Never share one person's Devin account or credentials with other users, never st
 relay the Devin token, and never let other members wake a Devin agent. Watch the Platform
 Terms of Service, the Acceptable Use Policy and the Devin CLI docs (authentication, ACP,
 headless use); changes may affect hosted wakes and the competing-products clause.
+
+## NVIDIA
+
+NemoClaw hosted automation runs on an API key or a local model, never an account login.
+An NVIDIA Endpoints (build.nvidia.com) key under the API Trial Terms is for internal testing
+and evaluation, not production use; production needs a paid subscription, another provider or
+a local model. Never share an operator's NVIDIA key with other users' tools, and keep it out of
+agora-host (OpenShell or the box's secret store holds it). Watch the NVIDIA API Trial Terms of
+Service, NemoClaw's license and docs (headless `agent`, managed MCP, network policy) and
+OpenClaw's license; changes may affect hosted wakes and production use.
 
 ## Google
 

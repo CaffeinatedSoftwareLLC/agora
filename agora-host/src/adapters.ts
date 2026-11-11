@@ -21,6 +21,7 @@ import { geminiPolicy } from './acp/permissions.js';
 import { OMP_HOST_APPROVAL, ompArgs, ompDirs, ompModel, ompSettings } from './acp/omp.js';
 import { CODEX_BOX_QUIET, inBox, proxyVars } from './box.js';
 import { BOX_ADAPTERS, boxAdapter } from './box-adapters.js';
+import { NEMOCLAW_BOX_ONLY, NEMOCLAW_HOST_ONLY, NEMOCLAW_WAKE_NOTE, nemoclawAgentArgs, nemoclawCommand, nemoclawEnv, OPENCLAW_SESSION_ID, openclawSessionId, verifyNemoclaw, type NemoclawSettings } from './nemoclaw.js';
 
 export interface Launch {
     lurk?: boolean;
@@ -35,6 +36,8 @@ export interface Launch {
     appServer?: AppServerPlan;
     /** protocol "acp": one ACP session turn instead of the CLI's headless mode. */
     acp?: AcpPlan;
+    /** nemoclaw: the OpenClaw session this turn runs in, kept when its output names none. */
+    openclawSession?: string;
 }
 
 /** Where this host keeps Sign in with ChatGPT state (config `siwc.dir`). */
@@ -226,7 +229,10 @@ export function childEnv(profile: LocalProfile, source: NodeJS.ProcessEnv = proc
         }
         for (const [name, dir] of Object.entries(devinDirs(profile.stateDir, platform))) setVar(env, name, dir);
     } else if (profile.adapter === 'omp') Object.assign(env, ompEnv(profile, source));
-    else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
+    else if (profile.adapter === 'nemoclaw') {
+        // On a machine NemoClaw keeps its sandboxes in the user's own ~/.nemoclaw, so HOME stays;
+        // nothing of the agent's lives on this side of the sandbox
+    } else env[STATE_DIR_ENV[profile.adapter]] = profile.stateDir;
     // A profile's stateDir can be the user's own CLI folder (Codex runs often share it), so the
     // user's agora-mcp hooks may be configured there. They must never act in a hosted run: Stop
     // would keep a headless run going (docs/claude-code-hooks.md). Codex hands hooks the
@@ -288,6 +294,11 @@ export function ompProbeArgs(profile: LocalProfile, settingsFile: string, boxed 
 /** The Devin versions this host was tested with: 3000.11.x (Devin ships every few days). */
 export const DEVIN_TESTED = /^3000\.11\.\d+$/;
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
+    if (profile.adapter === 'nemoclaw') {
+        if (!profile.nemoclaw) throw new HostConfigError(NEMOCLAW_BOX_ONLY);
+        await mkdir(profile.stateDir, { recursive: true, mode: 0o700 });
+        return verifyNemoclaw(profile as LocalProfile & { nemoclaw: NemoclawSettings }, childEnv(profile));
+    }
     if (profile.adapter === 'omp') {
         // omp is pinned (it releases every few days): its version is checked as well as ACP's,
         // started outside the worktree as every run is (acp/omp.ts)
@@ -422,7 +433,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     // the edge never sees (Agora refuses one at box creation too)
     if (inBox() && model !== null && /:online$/i.test(model)) throw new Error('box_model_not_allowed');
     // ACP session IDs are the agent's own; the CLIs use UUIDs
-    const nativeId = acp ? SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const nativeId = acp ? SESSION_ID : local.adapter === 'nemoclaw' ? OPENCLAW_SESSION_ID : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (claim.session.nativeSessionId && !nativeId.test(claim.session.nativeSessionId)) throw new Error('invalid_native_session_id');
     await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
     const workspace = await ensureWorkspace(local, claim);
@@ -445,6 +456,23 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
     const box = yeet ? boxAdapter(local.adapter) : null;
     const allowAll = !!box?.yeet.acpAllowAll && acp;
     try {
+        if (local.adapter === 'nemoclaw') {
+            // OpenClaw has its own thinking levels, and no verified mapping from Agora's efforts
+            if (effort !== null) throw new Error('unsupported_effort');
+            const sessionId = openclawSessionId(claim);
+            if (!OPENCLAW_SESSION_ID.test(sessionId)) throw new Error('invalid_native_session_id');
+            if (local.nemoclaw) {
+                if (yeet) throw new HostConfigError(NEMOCLAW_HOST_ONLY);
+                // The agent is in its own sandbox: no worktree, browser preview or MCP config on
+                // this side, and no bot token in its environment (OpenShell holds it, nemoclaw.ts)
+                const text = prompt ?? wakePrompt(claim, undefined, undefined, [NEMOCLAW_WAKE_NOTE, ...handoffs]);
+                const cmd = nemoclawCommand(local, nemoclawAgentArgs(local.nemoclaw, sessionId, model, claim.run.timeoutSeconds));
+                return { ...cmd, env: nemoclawEnv(local, childEnv(local)), cwd: local.stateDir, workspace, adapter: 'nemoclaw', stdin: text, cleanup,
+                    lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, openclawSession: sessionId };
+            }
+            if (!yeet) throw new HostConfigError(NEMOCLAW_BOX_ONLY);
+            throw new HostConfigError(NEMOCLAW_BOX_ONLY);
+        }
         // This session's own preview ports: the only ones browser_preview will load
         const ports = config.preview ? await sessionPorts(config.preview, claim.session.id, new Set([...active, claim.session.id])) : undefined;
         const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: claim.session.channelId,

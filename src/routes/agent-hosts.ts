@@ -83,8 +83,9 @@ const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
     botId: ID,
     hostId: ID,
-    // gemini, opencode and omp: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/)
-    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin'] },
+    // gemini, opencode and omp: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/);
+    // nemoclaw: OpenClaw in a NemoClaw sandbox (machine) or OpenClaw itself (box), API key or local model only (agora-host src/nemoclaw.ts)
+    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin', 'nemoclaw'] },
     // As agora-host's claim schema accepts it (src/lib/boxes/service.ts MODEL_PATTERN): anything else never wakes
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64, pattern: MODEL_PATTERN },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
@@ -539,7 +540,10 @@ export async function agentHostRoutes(app: FastifyInstance) {
             return reply.send({ updated, unknown });
         }
         for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
-            if (p.authMode === 'api_key' && !p.apiKeyEnv) return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
+            // A NemoClaw sandbox on a machine holds its own inference key (OpenShell), so it reports none
+            if (p.authMode === 'api_key' && !p.apiKeyEnv && p.adapter !== 'nemoclaw') return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
+            // NemoClaw runs on an API key or a local model, never an account login (docs/provider-terms.md "NVIDIA NemoClaw")
+            if (p.adapter === 'nemoclaw' && p.authMode !== 'api_key') return reply.status(400).send({ error: 'nemoclaw runs only on an API key or a local model' });
             // Sign in with ChatGPT drives Codex app-server (docs/codex-chatgpt-plan.md)
             if (p.authMode === 'siwc' && p.adapter !== 'codex') return reply.status(400).send({ error: 'siwc is only for codex profiles' });
             // A Devin account is its holder's own (docs/provider-terms.md "Devin"): no API key mode

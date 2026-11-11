@@ -3,7 +3,8 @@ import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import { presetSchema } from './presets.js';
 import { VERIFY_COMMAND } from './verify.js';
-import { API_KEY_ENVS, apiKeyEnvAllowed, DEVIN_SUBSCRIPTION_ONLY, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError, OMP_ACP_ONLY, OPENCODE_ACP_ONLY, OPENROUTER_ADAPTERS, type Adapter } from './terms.js';
+import { NEMOCLAW_SANDBOX } from './nemoclaw.js';
+import { API_KEY_ENVS, apiKeyEnvAllowed, DEVIN_SUBSCRIPTION_ONLY, GEMINI_SUBSCRIPTION_REFUSAL, HostConfigError, NEMOCLAW_API_KEY_ONLY, OMP_ACP_ONLY, OPENCODE_ACP_ONLY, OPENROUTER_ADAPTERS, type Adapter } from './terms.js';
 
 const absolute = z.string().refine(isAbsolute, 'must be an absolute path');
 const executable = absolute.refine(p => !/\.(cmd|bat|ps1)$/i.test(p), 'use a native executable, not a shell shim');
@@ -25,7 +26,7 @@ function acpDefaults(raw: unknown): unknown {
 const profile = z.preprocess(acpDefaults, z.object({
     // gemini, opencode and omp run only with protocol "acp" and an API key, devin only over ACP
     // on the owner's login (terms.ts, acp/session.ts)
-    adapter: z.enum(['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin']), workdir: absolute, workdirAlias: z.string().min(1),
+    adapter: z.enum(['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin', 'nemoclaw']), workdir: absolute, workdirAlias: z.string().min(1),
     executable, stateDir: absolute,
     sandbox: z.enum(['read-only', 'workspace-write']).default('workspace-write'),
     // Codex's Windows sandbox mode. --ignore-user-config drops the user's [windows] sandbox
@@ -61,10 +62,28 @@ const profile = z.preprocess(acpDefaults, z.object({
     // Agent boxes (box.ts): pass HTTPS_PROXY/HTTP_PROXY/NO_PROXY to the CLI. Written only by
     // `agora-host box-config`, and ignored outside box mode.
     proxyEnv: z.boolean().default(false),
+    // NemoClaw on this machine (nemoclaw.ts): the sandbox each wake runs in, the HTTPS URL of
+    // Agora's MCP endpoint as the sandbox reaches it (docs/mcp-http.md), whether that host is a
+    // private address NemoClaw must be told to trust (a tailnet name), and on Windows the WSL
+    // distro and the nemoclaw path in it (the profile's executable is then wsl.exe).
+    nemoclaw: z.object({
+        sandbox: z.string().regex(NEMOCLAW_SANDBOX, 'a NemoClaw sandbox name: 1-19 lowercase letters, digits and single hyphens'),
+        mcpUrl: z.string().url().refine(s => { const u = new URL(s); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash; },
+            'mcpUrl must be an https URL without credentials, query or fragment (NemoClaw takes only HTTPS)'),
+        trustPrivateHost: z.boolean().default(false),
+        wsl: z.object({ distro: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/), nemoclawPath: z.string().regex(/^\/[^\0\r\n]*$/, 'an absolute path inside the distro') }).strict().optional(),
+    }).strict().optional(),
 }).strict().superRefine((p, ctx) => {
-    if (p.auth === 'api_key' && p.adapter !== 'devin' && (!p.apiKeyEnv || !apiKeyEnvAllowed(p.adapter, p.apiKeyEnv)))
+    if (p.adapter === 'nemoclaw') {
+        // On a machine (a nemoclaw block) the key is the sandbox's; in a box it is NVIDIA_API_KEY
+        if (p.protocol !== 'cli' || p.auth !== 'api_key' || (p.nemoclaw ? p.apiKeyEnv !== undefined : p.apiKeyEnv !== 'NVIDIA_API_KEY'))
+            ctx.addIssue({ code: 'custom', message: NEMOCLAW_API_KEY_ONLY });
+        if (p.nemoclaw?.wsl && !/(^|[\\/])wsl\.exe$/i.test(p.executable))
+            ctx.addIssue({ code: 'custom', message: 'nemoclaw.wsl needs the profile executable to be wsl.exe' });
+    } else if (p.nemoclaw) ctx.addIssue({ code: 'custom', message: 'the nemoclaw block applies only to a nemoclaw profile' });
+    if (p.auth === 'api_key' && p.adapter !== 'devin' && p.adapter !== 'nemoclaw' && (!p.apiKeyEnv || !apiKeyEnvAllowed(p.adapter, p.apiKeyEnv)))
         ctx.addIssue({ code: 'custom', message: `auth "api_key" needs apiKeyEnv set to one of ${API_KEY_ENVS[p.adapter].join(', ')}${OPENROUTER_ADAPTERS.has(p.adapter) ? ' or OPENROUTER_API_KEY_<NAME>' : ''} for ${p.adapter}` });
-    if (p.auth !== 'api_key' && p.apiKeyEnv !== undefined)
+    if (p.auth !== 'api_key' && p.apiKeyEnv !== undefined && p.adapter !== 'nemoclaw')
         ctx.addIssue({ code: 'custom', message: 'apiKeyEnv is only used with auth "api_key"' });
     if (p.auth === 'siwc' && p.adapter !== 'codex')
         ctx.addIssue({ code: 'custom', message: 'auth "siwc" (Sign in with ChatGPT) is only for codex profiles' });
@@ -134,7 +153,7 @@ export async function loadConfig(path: string): Promise<Config> {
         if (p.adapter === 'gemini' && p.auth === 'subscription' && !p.allowSubscriptionAtOwnRisk)
             throw new HostConfigError(`Profile "${name}": ${GEMINI_SUBSCRIPTION_REFUSAL}`);
         // The variable's name is printed, never its value
-        if (p.auth === 'api_key' && !process.env[p.apiKeyEnv!]?.trim())
+        if (p.auth === 'api_key' && p.apiKeyEnv !== undefined && !process.env[p.apiKeyEnv]?.trim())
             throw new HostConfigError(`Profile "${name}" uses auth "api_key" but ${p.apiKeyEnv} is not set in the host's environment`);
     }
     for (const p of Object.values(config.profiles)) {

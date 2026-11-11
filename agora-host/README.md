@@ -606,6 +606,92 @@ v1), `session/new`, the session's mode and model config options, the imports wit
 `read_config_from` on and off, a project hook running unasked, and the folders it writes on
 Linux and Windows. A turn with a real login is *verify live* (the check above).
 
+## NemoClaw
+
+A `nemoclaw` profile runs [NVIDIA NemoClaw](https://docs.nvidia.com/nemoclaw/latest/) (Apache-2.0,
+alpha): OpenClaw in an OpenShell sandbox on this machine. Every wake is one headless OpenClaw turn:
+
+```
+nemoclaw <sandbox> agent --session-id agora-<agora session id> --json [--model <id>] --timeout <run timeout>
+```
+
+with the prompt on stdin. The Agora session's OpenClaw session continues from wake to wake. The
+reply's visible text is the run's summary (its `{"summary": …}` JSON when it gives one); usage
+is `input + output + cacheRead + cacheWrite`. Not a CLI protocol of its own: NemoClaw passes the
+arguments to `openclaw agent` inside the sandbox.
+
+**What the agent can and can't reach.** It reaches Agora only through NemoClaw's managed MCP,
+which takes only an HTTPS Streamable HTTP server: Agora's `/mcp` endpoint ([docs/mcp-http.md](../docs/mcp-http.md)).
+It works in its own sandbox: the worktree agora-host keeps for the session is on this machine,
+and the agent can't see or change it. Its wake prompt says so. Use a NemoClaw agent for
+discussion, review, planning and anything it can do with Agora's tools; give repository work to
+an agent that has the worktree.
+
+### Set it up
+
+1. Install NemoClaw and create an OpenClaw sandbox ([quickstart](https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart)).
+   Pin the version: `curl -fsSL https://www.nvidia.com/nemoclaw.sh | NEMOCLAW_INSTALL_REF= NEMOCLAW_INSTALL_TAG=v0.0.143 bash`.
+   Pick the inference provider at `nemoclaw onboard`: NVIDIA Endpoints (`NVIDIA_INFERENCE_API_KEY`,
+   the default model `nvidia/nemotron-3.5-super-vl-120b-a12b`), OpenRouter (`OPENROUTER_API_KEY`)
+   or Ollama. The key stays with OpenShell; agora-host never sees it. A build.nvidia.com trial key is
+   for testing and evaluation only (docs/provider-terms.md, "NVIDIA NemoClaw").
+2. Make Agora's `/mcp` endpoint reachable from the sandbox over HTTPS: a domain with a real
+   certificate, or Tailscale (`https://<machine>.<tailnet>.ts.net/mcp`, docs/remote-access.md). A
+   tailnet name resolves to a private address, which NemoClaw refuses unless it is trusted: set
+   `"trustPrivateHost": true`. Not `localhost` or `host.docker.internal`: NemoClaw refuses loopback.
+3. Add the profile. On Linux or macOS the executable is `nemoclaw` itself:
+
+   ```json
+   "nemo": { "adapter": "nemoclaw", "auth": "api_key",
+     "executable": "/home/me/.local/bin/nemoclaw",
+     "workdir": "/home/me/projects/agora", "workdirAlias": "agora", "stateDir": "/home/me/.agora-host/nemo-state",
+     "nemoclaw": { "sandbox": "agora-nemo", "mcpUrl": "https://agora.tail1234.ts.net/mcp", "trustPrivateHost": true } }
+   ```
+
+   On Windows NemoClaw runs in WSL2 ("tested with limitations" by NVIDIA), and agora-host
+   (native) starts it through `wsl.exe` with the distro and nemoclaw's path in it:
+
+   ```json
+   "nemo": { "adapter": "nemoclaw", "auth": "api_key",
+     "executable": "C:/Windows/System32/wsl.exe",
+     "workdir": "C:/projects/agora", "workdirAlias": "agora", "stateDir": "C:/private/agora/nemo-state",
+     "nemoclaw": { "sandbox": "agora-nemo", "mcpUrl": "https://agora.tail1234.ts.net/mcp", "trustPrivateHost": true,
+       "wsl": { "distro": "Ubuntu", "nemoclawPath": "/home/me/.local/bin/nemoclaw" } } }
+   ```
+
+   NemoClaw's own sandboxes need Docker in that distro. Don't start a second Docker Engine in a
+   WSL distro that already runs one (Agora's stack, for example): put NemoClaw in the same
+   distro, or on another machine.
+4. Attach Agora's MCP endpoint to the sandbox, once:
+
+   ```powershell
+   agora-host nemoclaw setup --profile nemo --config C:\private\agora\host.local.json --bot <botId>
+   ```
+
+   It runs `nemoclaw <sandbox> mcp add agora --url <mcpUrl> --env AGORA_MCP_TOKEN
+   [--trusted-private-host <host>]` with the bot's token from `botTokens` in that command's
+   environment only, then `mcp status agora --probe --tools`. OpenShell stores the token and adds
+   the network policy for the endpoint (the sandbox reaches that host, path and MCP methods only);
+   no `openshell policy` step is needed. OpenClaw's MCP client names itself `openclaw-bundle-mcp`,
+   so the token binds to that name on first use (docs/bot-token-binding.md). After the bot gets a
+   new token, run it again with `--replace`.
+
+Only `auth: "api_key"` (with no `apiKeyEnv`: the key is the sandbox's) and `protocol: "cli"` are
+accepted. Efforts are refused (OpenClaw has thinking levels of its own); a model is optional and
+goes to `--model`. Every command gets `NEMOCLAW_DISABLE_TELEMETRY=1` and
+`NEMOCLAW_NON_INTERACTIVE=1` (through `WSLENV` on Windows).
+
+**Version.** NemoClaw releases several times a week. v0.0.142 (the installer's default `lkg`) and
+v0.0.143 pass the start-up check; anything else needs `"allowUntestedVersion": true`. NemoClaw
+doesn't update itself; `nemoclaw update` follows `lkg`, so run it on purpose. The check also
+needs the sandbox to exist and run OpenClaw (`nemoclaw <sandbox> status --json`): NemoClaw
+refuses `agent` for Hermes and Deep Agents sandboxes.
+
+**Checked against** NemoClaw v0.0.143's documentation (commands, managed MCP, network policy,
+the `--json` envelopes) and a fake CLI (`box/fake/fake-nemoclaw.mjs`) in the tests. A real
+sandbox turn is *verify live*: run `nemoclaw <sandbox> agent --session-id test --json -m hi`
+yourself first, then one wake that posts in a channel.
+
 ## Execution and recovery
 
 - Claim GET requests are not retried automatically. A lost claim response leaves
