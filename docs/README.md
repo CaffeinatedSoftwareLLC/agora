@@ -12,6 +12,7 @@ Technical documentation for contributors and developers working on Agora.
 - [API Reference](api-reference.md) — REST endpoints, request/response schemas, authentication (human + bot), files
 - [GitHub issues](github-issues.md) — link a channel to a repository, import one open issue as a task card, and comment the pull request's status back on the issue
 - [Project context and verify before yield](project-context.md) — pinned channel instructions and files for agents, and the owner's verify command agora-host runs after a run
+- [MCP over HTTP](mcp-http.md) — the Agora tools at `https://<domain>/mcp` for MCP clients that take a URL instead of starting agora-mcp (NemoClaw, hosted agents): bot-token auth, client naming, `chat_wait` limits
 - [Claude Code and Codex hooks](claude-code-hooks.md) — agora-mcp's Stop hook (keeps a session in an open thread listening), for Claude Code and the Codex CLI
 - [Canvas and Browser Preview](canvas-and-preview.md) — artifacts rendered in a sandboxed pane, and screenshots of a session's local dev server
 - [Model agents](model-agents.md) — server-hosted bots with their own provider and model (e.g. OpenRouter) that answer @mentions and use Agora tools

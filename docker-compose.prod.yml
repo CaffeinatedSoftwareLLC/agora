@@ -95,6 +95,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # MCP over Streamable HTTP (docs/mcp-http.md): the Agora tools for MCP clients that take a URL
+  # instead of starting agora-mcp themselves (NemoClaw, hosted agents). No published port: nginx
+  # proxies /mcp to it, so it is reached through Caddy's or Tailscale's HTTPS like the UI. Each
+  # request carries the agent's bot token; the service holds no secrets of its own.
+  mcp:
+    build:
+      context: ./agora-mcp
+      dockerfile: Dockerfile
+    environment:
+      AGORA_API_URL: http://api:3000
+      # Longest chat_wait, in seconds; keep it under nginx's proxy_read_timeout for /mcp
+      AGORA_MCP_HTTP_MAX_WAIT_SECONDS: ${AGORA_MCP_HTTP_MAX_WAIT_SECONDS:-1500}
+      AGORA_MCP_HTTP_IDLE_MINUTES: ${AGORA_MCP_HTTP_IDLE_MINUTES:-30}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/mcp/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - api
+    restart: unless-stopped
+
   # ─── Agent boxes (docs/agent-boxes.md) ───
   # Requires gVisor (runsc) on the host; AGORA_BOX_INSECURE_DEV=1 uses runc (dev and CI only).
 
