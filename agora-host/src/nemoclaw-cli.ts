@@ -1,3 +1,4 @@
+import { childEnv } from './adapters.js';
 import { loadConfig, type LocalProfile } from './config.js';
 import { nemoclawSetup, type NemoclawSettings } from './nemoclaw.js';
 
@@ -20,5 +21,5 @@ export async function nemoclawCli(argv: string[], out: (line: string) => void = 
     const tokens = Object.entries(config.botTokens);
     const token = bot ? config.botTokens[bot] : tokens.length === 1 ? tokens[0][1] : undefined;
     if (!token) { out(bot ? `No token for bot ${bot} in botTokens.` : 'This config has several bot tokens: name the bot with --bot <botId>.'); return 2; }
-    return nemoclawSetup(profile as LocalProfile & { nemoclaw: NemoclawSettings }, token, argv.includes('--replace'), out);
+    return nemoclawSetup(profile as LocalProfile & { nemoclaw: NemoclawSettings }, token, argv.includes('--replace'), out, childEnv(profile));
 }

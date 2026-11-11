@@ -472,7 +472,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
                 if (yeet) throw new HostConfigError(NEMOCLAW_HOST_ONLY);
                 // The agent is in its own sandbox: no worktree, browser preview or MCP config on
                 // this side, and no bot token in its environment (OpenShell holds it, nemoclaw.ts)
-                const text = prompt ?? wakePrompt(claim, undefined, undefined, [NEMOCLAW_WAKE_NOTE, ...handoffs]);
+                const text = prompt ?? wakePrompt(claim, undefined, undefined, [NEMOCLAW_WAKE_NOTE]);
                 const cmd = nemoclawCommand(local, nemoclawAgentArgs(local.nemoclaw, sessionId, model, claim.run.timeoutSeconds));
                 return { ...cmd, env: nemoclawEnv(local, childEnv(local)), cwd: local.stateDir, workspace, adapter: 'nemoclaw', stdin: text, cleanup,
                     lurk: isLurkRun(claim), unknownPresets: perms.unknownPresets, openclawSession: sessionId };

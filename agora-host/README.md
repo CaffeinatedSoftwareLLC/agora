@@ -649,7 +649,9 @@ an agent that has the worktree.
    ```
 
    On Windows NemoClaw runs in WSL2 ("tested with limitations" by NVIDIA), and agora-host
-   (native) starts it through `wsl.exe` with the distro and nemoclaw's path in it:
+   (native) starts it through `wsl.exe` with the distro and nemoclaw's path in it, in a login
+   shell (`bash -lc`), so the distro user's PATH (`~/.local/bin`, Node) is there as in their
+   own terminal:
 
    ```json
    "nemo": { "adapter": "nemoclaw", "auth": "api_key",
@@ -658,6 +660,11 @@ an agent that has the worktree.
      "nemoclaw": { "sandbox": "agora-nemo", "mcpUrl": "https://agora.tail1234.ts.net/mcp", "trustPrivateHost": true,
        "wsl": { "distro": "Ubuntu", "nemoclawPath": "/home/me/.local/bin/nemoclaw" } } }
    ```
+
+   A run gets only the OS variables. If NemoClaw needs more (rootless Docker's `DOCKER_HOST`,
+   Podman's `NEMOCLAW_GATEWAY_RUNTIME`), name them in `"passEnv": ["DOCKER_HOST"]` in the
+   `nemoclaw` block (`DOCKER_*`, `NEMOCLAW_*`, `OPENSHELL_*`, `XDG_RUNTIME_DIR` and
+   `CONTAINER_HOST` only; through `WSLENV` on Windows).
 
    NemoClaw's own sandboxes need Docker in that distro. Don't start a second Docker Engine in a
    WSL distro that already runs one (Agora's stack, for example): put NemoClaw in the same
@@ -668,18 +675,27 @@ an agent that has the worktree.
    agora-host nemoclaw setup --profile nemo --config C:\private\agora\host.local.json --bot <botId>
    ```
 
-   It runs `nemoclaw <sandbox> mcp add agora --url <mcpUrl> --env AGORA_MCP_TOKEN
+   It runs `nemoclaw <sandbox> mcp add agora --url <mcpUrl> --env AGORA_MCP_TOKEN --no-probe
    [--trusted-private-host <host>]` with the bot's token from `botTokens` in that command's
-   environment only, then `mcp status agora --probe --tools`. OpenShell stores the token and adds
+   environment only, then `mcp status agora --no-probe`. OpenShell stores the token and adds
    the network policy for the endpoint (the sandbox reaches that host, path and MCP methods only);
-   no `openshell policy` step is needed. OpenClaw's MCP client names itself `openclaw-bundle-mcp`,
-   so the token binds to that name on first use (docs/bot-token-binding.md). After the bot gets a
-   new token, run it again with `--replace`.
+   no `openshell policy` step is needed. Nothing connects yet: Agora binds a token to the first
+   MCP client that names itself (docs/bot-token-binding.md), and NemoClaw's own probe would be
+   that client, so setup skips it. The first wake connects as OpenClaw's MCP client
+   (`openclaw-bundle-mcp`), and the token binds to that. Don't run `mcp status --probe` with the
+   agent's token; if one bound it to another name, clear the binding in the bot's settings. After
+   the bot gets a new token, run setup again with `--replace`.
 
 Only `auth: "api_key"` (with no `apiKeyEnv`: the key is the sandbox's) and `protocol: "cli"` are
 accepted. Efforts are refused (OpenClaw has thinking levels of its own); a model is optional and
 goes to `--model`. Every command gets `NEMOCLAW_DISABLE_TELEMETRY=1` and
 `NEMOCLAW_NON_INTERACTIVE=1` (through `WSLENV` on Windows).
+
+**Stopping a run.** The turn runs in the sandbox's OpenClaw gateway. The host gives it a
+deadline inside the run's timeout (`--timeout`: 90 s less on a run of 5 minutes or more, half of
+a shorter one), so it normally ends by itself; but stopping a run, or the host killing it at the
+timeout, stops only the `nemoclaw` process on this machine and may leave the turn running in the
+sandbox. Check `nemoclaw <sandbox> logs` before waking it again.
 
 **Version.** NemoClaw releases several times a week. v0.0.142 (the installer's default `lkg`) and
 v0.0.143 pass the start-up check; anything else needs `"allowUntestedVersion": true`. NemoClaw

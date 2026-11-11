@@ -33,6 +33,13 @@ describe('NemoClaw agents', () => {
             .send({ hostModeAck: true, name: 'nemo', botId: bot.body.id, hostId: host.body.host.id, adapter: 'nemoclaw', workdirAlias: 'agora', model: null, effort: null });
         expect(profile.status, JSON.stringify(profile.body)).toBe(201);
         expect(profile.body).toMatchObject({ adapter: 'nemoclaw', hostMode: true, boxed: false });
+        // OpenClaw has its own thinking levels: an effort is refused at creation and on edit
+        const effortBot = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: 'nemo-effort' });
+        const withEffort = await ctx.request.post(`/servers/${serverId}/agent-profiles`).set(owner.auth)
+            .send({ hostModeAck: true, name: 'nemo-effort', botId: effortBot.body.id, hostId: host.body.host.id, adapter: 'nemoclaw', workdirAlias: 'agora', model: null, effort: 'high' });
+        expect(withEffort.status).toBe(400);
+        const edit = await ctx.request.patch(`/servers/${serverId}/agent-profiles/${profile.body.id}`).set(owner.auth).send({ effort: 'high' });
+        expect(edit.status).toBe(400);
 
         const report = (p: object) => ctx.request.post('/agent-hosts/@me/profiles').set(hostAuth)
             .send({ profiles: [{ name: 'nemo', adapter: 'nemoclaw', runApproval: false, ...p }] });

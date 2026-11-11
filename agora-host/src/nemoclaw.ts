@@ -43,6 +43,8 @@ export interface NemoclawSettings {
     sandbox: string;
     mcpUrl: string;
     trustPrivateHost: boolean;
+    /** Host variables NemoClaw also needs (DOCKER_HOST, NEMOCLAW_GATEWAY_RUNTIME, ...), passed by name. */
+    passEnv?: string[];
     wsl?: { distro: string; nemoclawPath: string };
 }
 
@@ -56,8 +58,11 @@ export const NEMOCLAW_NOT_OPENCLAW =
 /** The program and arguments that run `nemoclaw <args>` for this profile (through WSL on Windows). */
 export function nemoclawCommand(profile: Pick<LocalProfile, 'executable'> & { nemoclaw?: NemoclawSettings }, args: string[]): { executable: string; args: string[] } {
     const wsl = profile.nemoclaw?.wsl;
+    // Through a login shell, so the distro user's PATH (~/.local/bin, Node from nvm or the
+    // installer) is there as in their own terminal; `--exec` alone gives a bare PATH. The
+    // arguments stay separate words ($0 and $@), never shell text.
     return wsl
-        ? { executable: profile.executable, args: ['-d', wsl.distro, '--exec', wsl.nemoclawPath, ...args] }
+        ? { executable: profile.executable, args: ['-d', wsl.distro, '--exec', '/bin/bash', '-lc', 'exec "$0" "$@"', wsl.nemoclawPath, ...args] }
         : { executable: profile.executable, args };
 }
 
@@ -65,8 +70,13 @@ export function nemoclawCommand(profile: Pick<LocalProfile, 'executable'> & { ne
  * The environment of a nemoclaw command: the host's, plus NemoClaw's telemetry off and its
  * prompts off. Through WSL, WSLENV carries those variables (and `extra`) into the distro.
  */
-export function nemoclawEnv(profile: { nemoclaw?: NemoclawSettings }, base: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-    const own = { NEMOCLAW_DISABLE_TELEMETRY: '1', NEMOCLAW_NON_INTERACTIVE: '1', ...extra };
+export function nemoclawEnv(profile: { nemoclaw?: NemoclawSettings }, base: NodeJS.ProcessEnv, extra: Record<string, string> = {},
+    host: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    // The profile's passEnv names, from the host's own environment (agora-host passes a run only
+    // the OS variables): Docker's or Podman's settings NemoClaw's sandboxes need
+    const passed: Record<string, string> = {};
+    for (const name of profile.nemoclaw?.passEnv ?? []) { const v = host[name]; if (v !== undefined) passed[name] = v; }
+    const own = { ...passed, NEMOCLAW_DISABLE_TELEMETRY: '1', NEMOCLAW_NON_INTERACTIVE: '1', ...extra };
     const env: NodeJS.ProcessEnv = { ...base, ...own };
     if (profile.nemoclaw?.wsl) {
         const passed = Object.keys(own).map(name => `${name}/u`);
@@ -84,8 +94,18 @@ export function openclawSessionId(claim: Pick<Claim, 'session'>): string {
 export function nemoclawAgentArgs(settings: NemoclawSettings, sessionId: string, model: string | null, timeoutSeconds: number): string[] {
     return [settings.sandbox, 'agent', '--session-id', sessionId, '--json',
         ...(model !== null ? ['--model', model] : []),
-        // NemoClaw waits the timeout plus 30 s; the host's own run timeout stops it after that
-        ...(timeoutSeconds > 0 ? ['--timeout', String(timeoutSeconds)] : [])];
+        // The turn runs in the sandbox's gateway, which killing nemoclaw here may not stop: its own
+        // deadline ends it first (NemoClaw waits that plus 30 s), inside the host's run timeout
+        '--timeout', String(turnTimeout(timeoutSeconds))];
+}
+
+/**
+ * An OpenClaw turn's own deadline inside the host's run timeout: 90 s earlier on a long run
+ * (OpenClaw's deadline isn't strict: `exec --timeout 20` returned after 72 s with the model
+ * host unreachable, 2026.11.3), half of a short one, at least 30 s.
+ */
+export function turnTimeout(runSeconds: number): number {
+    return runSeconds >= 300 ? runSeconds - 90 : Math.max(30, Math.floor(runSeconds / 2));
 }
 
 /** The NVIDIA Endpoints model a box uses when the profile names none (NemoClaw's default too). */
@@ -112,10 +132,8 @@ export function openclawBoxConfig(server: { command: string; args: string[] }, e
 
 /** `openclaw agent exec` arguments of one box run (the prompt goes on stdin). */
 export function openclawExecArgs(configFile: string, cwd: string, model: string | null, timeoutSeconds: number): string[] {
-    // exec's own timeout ends the turn cleanly before the host's run timeout kills it. It isn't
-    // strict: with the model host unreachable, --timeout 20 returned after 72 s (2026.11.3)
-    const timeout = Math.max(60, timeoutSeconds - 90);
-    return ['agent', 'exec', '--json', '--config', configFile, '--cwd', cwd, '--model', openclawModel(model), '--timeout', String(timeout), '--message-file', '-'];
+    // exec's own deadline ends the turn cleanly before the host's run timeout kills it
+    return ['agent', 'exec', '--json', '--config', configFile, '--cwd', cwd, '--model', openclawModel(model), '--timeout', String(turnTimeout(timeoutSeconds)), '--message-file', '-'];
 }
 
 /** `openclaw --version` prints `OpenClaw 2026.11.3 (847611d)`. */
@@ -224,9 +242,14 @@ export async function verifyNemoclaw(profile: LocalProfile & { nemoclaw: Nemocla
 /** The MCP endpoint's host, for `--trusted-private-host`. */
 export function mcpHost(mcpUrl: string): string { return new URL(mcpUrl).hostname; }
 
-/** `nemoclaw <sandbox> mcp add agora --url <mcpUrl> --env AGORA_MCP_TOKEN [--trusted-private-host <host>]`. */
+/**
+ * `nemoclaw <sandbox> mcp add agora --url <mcpUrl> --env AGORA_MCP_TOKEN --no-probe [--trusted-private-host <host>]`.
+ * No probe: NemoClaw's probe would `initialize` from its own MCP client, and Agora binds the
+ * token to the first client that names itself (docs/bot-token-binding.md), which must be
+ * OpenClaw's (`openclaw-bundle-mcp`), the one every wake uses.
+ */
 export function mcpAddArgs(settings: NemoclawSettings): string[] {
-    return [settings.sandbox, 'mcp', 'add', NEMOCLAW_MCP_SERVER, '--url', settings.mcpUrl, '--env', NEMOCLAW_TOKEN_ENV,
+    return [settings.sandbox, 'mcp', 'add', NEMOCLAW_MCP_SERVER, '--url', settings.mcpUrl, '--env', NEMOCLAW_TOKEN_ENV, '--no-probe',
         ...(settings.trustPrivateHost ? ['--trusted-private-host', mcpHost(settings.mcpUrl)] : [])];
 }
 
@@ -235,10 +258,11 @@ export function mcpAddArgs(settings: NemoclawSettings): string[] {
  * endpoint to the profile's sandbox (agora-host README, "NemoClaw"). The bot token goes to
  * `nemoclaw mcp add` in its environment only (never as an argument); OpenShell keeps it, and the
  * sandbox's network policy for the endpoint is written by NemoClaw. Run again with --replace
- * after the bot's token changes. Then checks the server with `mcp status --probe`.
+ * after the bot's token changes. Nothing contacts Agora here (no probe): the token binds to
+ * OpenClaw's MCP client at the first wake. `env` is a run's environment (adapters.ts childEnv).
  */
 export async function nemoclawSetup(profile: LocalProfile & { nemoclaw: NemoclawSettings }, token: string, replace: boolean,
-    out: (line: string) => void, spawnFn: typeof spawn = spawn, env: NodeJS.ProcessEnv = process.env): Promise<number> {
+    out: (line: string) => void, env: NodeJS.ProcessEnv, spawnFn: typeof spawn = spawn): Promise<number> {
     const step = (args: string[], extra: Record<string, string> = {}) => new Promise<number | null>(resolve => {
         const cmd = nemoclawCommand(profile, args);
         const child = spawnFn(cmd.executable, cmd.args, { cwd: profile.stateDir, env: nemoclawEnv(profile, env, extra), stdio: ['ignore', 'inherit', 'inherit'], shell: false, windowsHide: true });
@@ -254,8 +278,8 @@ export async function nemoclawSetup(profile: LocalProfile & { nemoclaw: Nemoclaw
     out(`Attaching ${profile.nemoclaw.mcpUrl} to sandbox ${sb} as MCP server "${NEMOCLAW_MCP_SERVER}".`);
     const added = await step(mcpAddArgs(profile.nemoclaw), { [NEMOCLAW_TOKEN_ENV]: token });
     if (added !== 0) { out('nemoclaw mcp add did not finish. Nothing else was changed.'); return 1; }
-    const probed = await step([sb, 'mcp', 'status', NEMOCLAW_MCP_SERVER, '--probe', '--tools']);
-    out(probed === 0 ? `Done: ${sb} reaches Agora's tools. The token is bound to OpenClaw's MCP client (openclaw-bundle-mcp) on first use.`
-        : 'The server was added, but its probe failed: check the URL is reachable from the sandbox (docs/mcp-http.md).');
-    return probed === 0 ? 0 : 1;
+    const listed = await step([sb, 'mcp', 'status', NEMOCLAW_MCP_SERVER, '--no-probe']);
+    out(listed === 0 ? `Done: ${NEMOCLAW_MCP_SERVER} is attached to ${sb}. The first wake connects, and binds the token to OpenClaw's MCP client (openclaw-bundle-mcp).`
+        : `The server was added, but \`nemoclaw ${sb} mcp status\` failed: check it by hand.`);
+    return listed === 0 ? 0 : 1;
 }

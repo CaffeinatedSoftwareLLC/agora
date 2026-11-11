@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configSchema, loadConfig } from '../src/config.js';
-import { prepare, verifyProfile } from '../src/adapters.js';
+import { childEnv, prepare, verifyProfile } from '../src/adapters.js';
 import { boxConfig, boxMode } from '../src/box.js';
 import { ProcessRunner } from '../src/process.js';
 import { git } from '../src/workspaces.js';
 import { HostConfigError, NEMOCLAW_API_KEY_ONLY } from '../src/terms.js';
 import {
-    mcpAddArgs, NEMOCLAW_BOX_ONLY, openclawExecArgs, openclawModel, openclawVersion, NEMOCLAW_HOST_ONLY, NEMOCLAW_NOT_OPENCLAW, NEMOCLAW_WAKE_NOTE, nemoclawAgentArgs, nemoclawCommand,
+    mcpAddArgs, turnTimeout, NEMOCLAW_BOX_ONLY, openclawExecArgs, openclawModel, openclawVersion, NEMOCLAW_HOST_ONLY, NEMOCLAW_NOT_OPENCLAW, NEMOCLAW_WAKE_NOTE, nemoclawAgentArgs, nemoclawCommand,
     nemoclawEnv, nemoclawSetup, nemoclawVersion, openclawSessionId, parseOpenClaw,
 } from '../src/nemoclaw.js';
 import { claim, config, id, tempDir } from './helpers.js';
@@ -119,7 +119,7 @@ describe('nemoclaw commands', () => {
             .toEqual({ executable: '/usr/local/bin/nemoclaw', args: ['--version'] });
         expect(nemoclawCommand({ executable: 'C:\\Windows\\System32\\wsl.exe',
             nemoclaw: { ...NEMO, trustPrivateHost: false, wsl: { distro: 'Ubuntu', nemoclawPath: '/home/me/.local/bin/nemoclaw' } } }, ['--version']))
-            .toEqual({ executable: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--exec', '/home/me/.local/bin/nemoclaw', '--version'] });
+            .toEqual({ executable: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--exec', '/bin/bash', '-lc', 'exec "$0" "$@"', '/home/me/.local/bin/nemoclaw', '--version'] });
     });
 
     it('turns telemetry and prompts off, and through WSL passes those variables with WSLENV', () => {
@@ -129,12 +129,29 @@ describe('nemoclaw commands', () => {
         const wsl = nemoclawEnv({ nemoclaw: { ...NEMO, trustPrivateHost: false, wsl: { distro: 'Ubuntu', nemoclawPath: '/x' } } },
             { WSLENV: 'USERPROFILE/p' }, { AGORA_MCP_TOKEN: 'bot_x' });
         expect(wsl.WSLENV).toBe('USERPROFILE/p:NEMOCLAW_DISABLE_TELEMETRY/u:NEMOCLAW_NON_INTERACTIVE/u:AGORA_MCP_TOKEN/u');
+        // passEnv: the named host variables, and only those, through WSL too
+        const passing = nemoclawEnv({ nemoclaw: { ...NEMO, trustPrivateHost: false, passEnv: ['DOCKER_HOST', 'NEMOCLAW_GATEWAY_RUNTIME'],
+            wsl: { distro: 'Ubuntu', nemoclawPath: '/x' } } }, {}, {}, { DOCKER_HOST: 'unix:///run/user/1000/docker.sock', OTHER: 'x' });
+        expect(passing).toMatchObject({ DOCKER_HOST: 'unix:///run/user/1000/docker.sock' });
+        expect(passing.OTHER).toBeUndefined();
+        expect(passing.WSLENV).toBe('DOCKER_HOST/u:NEMOCLAW_DISABLE_TELEMETRY/u:NEMOCLAW_NON_INTERACTIVE/u');
+    });
+
+    it('passEnv takes container settings only, never a key', async () => {
+        const dir = await repo();
+        const ok = (names: string[]) => configSchema.safeParse({ ...config(dir), profiles: { builder: { ...bare(dir), adapter: 'nemoclaw', auth: 'api_key',
+            nemoclaw: { ...NEMO, passEnv: names } } } }).success;
+        expect(ok(['DOCKER_HOST', 'NEMOCLAW_GATEWAY_RUNTIME', 'XDG_RUNTIME_DIR'])).toBe(true);
+        for (const bad of ['NVIDIA_INFERENCE_API_KEY', 'OPENROUTER_API_KEY', 'AGORA_BOT_TOKEN', 'PATH']) expect(ok([bad]), bad).toBe(false);
     });
 
     it('one wake: the session id, JSON, the model and a timeout; the session is named after Agora\'s', () => {
         const settings = { ...NEMO, trustPrivateHost: false };
-        expect(nemoclawAgentArgs(settings, 'agora-01j', null, 900)).toEqual(['agora-nemo', 'agent', '--session-id', 'agora-01j', '--json', '--timeout', '900']);
-        expect(nemoclawAgentArgs(settings, 's', 'nvidia/nemotron-3-super-120b-a12b', 0)).toEqual(['agora-nemo', 'agent', '--session-id', 's', '--json', '--model', 'nvidia/nemotron-3-super-120b-a12b']);
+        expect(nemoclawAgentArgs(settings, 'agora-01j', null, 900)).toEqual(['agora-nemo', 'agent', '--session-id', 'agora-01j', '--json', '--timeout', '810']);
+        expect(nemoclawAgentArgs(settings, 's', 'nvidia/nemotron-3-super-120b-a12b', 120)).toEqual(['agora-nemo', 'agent', '--session-id', 's', '--json', '--model', 'nvidia/nemotron-3-super-120b-a12b', '--timeout', '60']);
+        // The turn's own deadline always ends inside the run's timeout
+        for (const t of [60, 120, 299, 300, 900, 7200]) expect(turnTimeout(t), String(t)).toBeLessThan(t);
+        expect(turnTimeout(60)).toBe(30);
         const c = delivery();
         expect(openclawSessionId(c)).toBe(`agora-${id(2).toLowerCase()}`);
         c.session.nativeSessionId = 'review-42';
@@ -142,7 +159,8 @@ describe('nemoclaw commands', () => {
     });
 
     it('attaches the MCP endpoint by its environment variable, trusting a private host only when told', () => {
-        expect(mcpAddArgs({ ...NEMO, trustPrivateHost: false })).toEqual(['agora-nemo', 'mcp', 'add', 'agora', '--url', NEMO.mcpUrl, '--env', 'AGORA_MCP_TOKEN']);
+        // --no-probe: NemoClaw's own probe would bind the token to its client, not OpenClaw's
+        expect(mcpAddArgs({ ...NEMO, trustPrivateHost: false })).toEqual(['agora-nemo', 'mcp', 'add', 'agora', '--url', NEMO.mcpUrl, '--env', 'AGORA_MCP_TOKEN', '--no-probe']);
         expect(mcpAddArgs({ ...NEMO, trustPrivateHost: true }).slice(-2)).toEqual(['--trusted-private-host', 'agora.tail1234.ts.net']);
         expect(nemoclawVersion('nemoclaw v0.0.143\n')).toBe('0.0.143');
         expect(nemoclawVersion('v0.0.143')).toBeNull();
@@ -185,7 +203,7 @@ describe('nemoclaw wakes on a machine', () => {
         const dir = await repo();
         const launch = await prepare(nemoclaw(dir, { executable: '/opt/nemoclaw/bin/nemoclaw' }), delivery()); cleanups.push(launch.cleanup);
         expect(launch.executable).toBe('/opt/nemoclaw/bin/nemoclaw');
-        expect(launch.args).toEqual(['agora-nemo', 'agent', '--session-id', `agora-${id(2).toLowerCase()}`, '--json', '--timeout', '900']);
+        expect(launch.args).toEqual(['agora-nemo', 'agent', '--session-id', `agora-${id(2).toLowerCase()}`, '--json', '--timeout', '810']);
         expect(launch.adapter).toBe('nemoclaw');
         expect(launch.acp).toBeUndefined();
         expect(launch.env.AGORA_BOT_TOKEN).toBeUndefined();
@@ -248,11 +266,13 @@ describe.skipIf(!unix)('nemoclaw with the fake CLI', () => {
         const dir = await repo(); const { exe, calls } = await fake();
         const p = nemoclaw(dir, { executable: exe }).profiles.builder as any;
         const lines: string[] = [];
-        expect(await nemoclawSetup(p, 'bot_selected.secret', true, l => lines.push(l))).toBe(0);
+        expect(await nemoclawSetup(p, 'bot_selected.secret', true, l => lines.push(l), childEnv(p))).toBe(0);
         const log = await calls();
         expect(log.map(c => c.argv.slice(1, 3).join(' '))).toEqual(['mcp remove', 'mcp add', 'mcp status']);
         const add = log.find(c => c.argv[2] === 'add');
-        expect(add.argv).toEqual(['agora-nemo', 'mcp', 'add', 'agora', '--url', NEMO.mcpUrl, '--env', 'AGORA_MCP_TOKEN']);
+        expect(add.argv).toEqual(['agora-nemo', 'mcp', 'add', 'agora', '--url', NEMO.mcpUrl, '--env', 'AGORA_MCP_TOKEN', '--no-probe']);
+        // Nothing probes the endpoint from NemoClaw's own client
+        expect(log.every(c => !c.argv.includes('--probe'))).toBe(true);
         expect(add).toMatchObject({ tokenInArgv: false });
         expect(add.set).toContain('AGORA_MCP_TOKEN');
         expect(log.filter(c => c.argv[2] !== 'add').every(c => !c.set.includes('AGORA_MCP_TOKEN'))).toBe(true);
@@ -290,7 +310,7 @@ describe('nemoclaw in a box: OpenClaw itself', () => {
         expect(openclawVersion('openclaw 2026.11.3')).toBeNull();
         expect(openclawExecArgs('/run/openclaw.json', '/work', null, 900)).toEqual(['agent', 'exec', '--json', '--config', '/run/openclaw.json', '--cwd', '/work',
             '--model', 'nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b', '--timeout', '810', '--message-file', '-']);
-        expect(openclawExecArgs('/c', '/w', null, 60)).toContain('60');
+        expect(openclawExecArgs('/c', '/w', null, 60)).toContain('30');
     });
 
     it('a box turn: exec in the worktree, agora-mcp on stdio through the edge, the box rules first, the NVIDIA key, quiet, no resume', async () => {

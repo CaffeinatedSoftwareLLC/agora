@@ -107,6 +107,9 @@ const profileFields = {
  */
 const OPENCODE_MODEL_REQUIRED = 'An opencode or omp profile needs a model, e.g. qwen/qwen3-coder (an OpenRouter model ID)';
 const missingModel = (adapter: string, model: string | null | undefined) => (adapter === 'opencode' || adapter === 'omp') && !model;
+/** OpenClaw has thinking levels of its own: agora-host refuses an effort for nemoclaw (src/nemoclaw.ts). */
+const NEMOCLAW_NO_EFFORT = 'A nemoclaw profile takes no effort (OpenClaw has its own thinking levels)';
+const effortRefused = (adapter: string, effort: string | null | undefined) => adapter === 'nemoclaw' && !!effort;
 
 /** The bot belongs to this server and the host is this server's and not revoked. */
 async function checkRefs(db: any, serverId: string, botId?: string, hostId?: string): Promise<string | null> {
@@ -271,6 +274,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
+        if (effortRefused(b.adapter, b.effort)) return reply.status(400).send({ error: NEMOCLAW_NO_EFFORT });
         // checkRefs only accepts machine hosts, so every profile made here runs unboxed
         if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         // A duplicate name aborts the INSERT; asService rolls back to its savepoint, so catch outside it
@@ -345,6 +349,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
             if (missingModel(b.adapter ?? p.adapter, 'model' in b ? b.model : p.model)) return { status: 400, body: { error: OPENCODE_MODEL_REQUIRED } };
+            if (effortRefused(b.adapter ?? p.adapter, 'effort' in b ? b.effort : p.effort)) return { status: 400, body: { error: NEMOCLAW_NO_EFFORT } };
             // Moving to another host (checkRefs: a machine one) runs it unboxed there: the owner acknowledges that
             const moved = b.hostId !== undefined && b.hostId !== p.host_id.trim();
             if (moved && b.hostModeAck !== true) return { status: 400, body: { error: HOST_MODE_ACK_REQUIRED } };
@@ -456,6 +461,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
+        if (effortRefused(b.adapter, b.effort)) return reply.status(400).send({ error: NEMOCLAW_NO_EFFORT });
         // checkRefs only accepts machine hosts, so every profile made here runs unboxed
         if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         const { tokenId, secretHash, raw } = await generateBotToken();

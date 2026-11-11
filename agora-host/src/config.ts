@@ -71,6 +71,10 @@ const profile = z.preprocess(acpDefaults, z.object({
         mcpUrl: z.string().url().refine(s => { const u = new URL(s); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash; },
             'mcpUrl must be an https URL without credentials, query or fragment (NemoClaw takes only HTTPS)'),
         trustPrivateHost: z.boolean().default(false),
+        // Host variables NemoClaw also needs, by name (a run gets only the OS ones): DOCKER_HOST,
+        // NEMOCLAW_GATEWAY_RUNTIME and the like. Never a key: the inference key is the sandbox's.
+        passEnv: z.array(z.string().regex(/^(DOCKER_[A-Z0-9_]+|NEMOCLAW_[A-Z0-9_]+|OPENSHELL_[A-Z0-9_]+|XDG_RUNTIME_DIR|CONTAINER_HOST)$/,
+            'passEnv takes DOCKER_*, NEMOCLAW_*, OPENSHELL_*, XDG_RUNTIME_DIR or CONTAINER_HOST')).max(20).default([]),
         wsl: z.object({ distro: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/), nemoclawPath: z.string().regex(/^\/[^\0\r\n]*$/, 'an absolute path inside the distro') }).strict().optional(),
     }).strict().optional(),
 }).strict().superRefine((p, ctx) => {
