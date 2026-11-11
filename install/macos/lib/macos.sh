@@ -142,6 +142,14 @@ vm_status() {
 # vm_sh <name> <command...>: run a command in the VM (limactl quotes each argument)
 vm_sh() { local n=$1; shift; limactl shell --workdir /tmp "$n" "$@"; }
 
+# vm_start_hint <name>: what to try when limactl start timed out. Seen on a real Mac (Ubuntu
+# 24.04, systemd 255, vz): systemd-logind spins from first boot, so Lima waits 10 minutes at
+# "user session is ready for ssh" and gives up. limactl shell waits on the same check; plain ssh
+# over Lima's config still gets in.
+vm_start_hint() {
+    printf '%s' "If it stopped at 'user session is ready for ssh', systemd-logind may be hung in the VM: ssh -F ~/.lima/$1/ssh.config lima-$1 sudo systemctl restart systemd-logind (it can take 90 seconds), then run this again"
+}
+
 # vm_copy_in <name> <mac file> <guest path>
 vm_copy_in() { limactl copy "$2" "$1:$3"; }
 vm_copy_out() { limactl copy "$1:$2" "$3"; }

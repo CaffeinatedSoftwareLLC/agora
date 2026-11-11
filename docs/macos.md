@@ -2,7 +2,7 @@
 
 On a Mac, Agora runs inside a small Linux virtual machine, the same way it runs inside WSL on Windows. Agent boxes and code runs need gVisor, which needs a Linux kernel. macOS has none, and the VM inside Docker Desktop or OrbStack can't take a runtime of your own. A [Lima](https://lima-vm.io) VM is a plain Ubuntu machine, so the Linux installer runs in it unchanged and owns Docker Engine and gVisor there like on any Linux host.
 
-> **Status (2026-11-09):** written and tested with Lima, Homebrew and launchd replaced by stubs (`test/install/macos.test.sh`, in CI on Linux and on a macOS runner). gVisor, the box images and the sandbox are tested on arm64 Linux in CI. **The whole installer has not yet run on a real Mac.** The first run on a Mac is [docs/testing/macos-test-plan.md](testing/macos-test-plan.md).
+> **Status (2026-11-11):** written and tested with Lima, Homebrew and launchd replaced by stubs (`test/install/macos.test.sh`, in CI on Linux and on a macOS runner). gVisor, the box images and the sandbox are tested on arm64 Linux in CI. **First run on a real Mac: 2026-11-10** (Mac mini, Apple Silicon, macOS 15.7, Lima 2.2.0): the install, gVisor in the VM, the firewall and the keep-alive passed, after fixes for two install blockers it found. Backup and restore on a Mac and the migration from Windows have not run yet ([docs/testing/macos-test-plan.md](testing/macos-test-plan.md)).
 
 ## What you need
 
@@ -51,7 +51,7 @@ What it does, step by step:
 5. **Copies the release in** and runs `install/linux/install.sh --lima` inside the VM with those ports. That installs Docker Engine and gVisor from their apt repositories, checks a `-gvisor` kernel, writes `.env.prod`, builds and starts the stack, creates your admin and your first agent's box ([docs/installing.md](installing.md#ubuntu-or-debian) describes each step). Password and key files you pass are copied into a private folder in the VM and deleted afterwards.
 6. **Keeps the VM running** with launchd (the counterpart of the Windows scheduled task). It is written before the VM is created, while the sudo that `--at-boot` asks for in step 1 is still fresh (macOS forgets it after 5 minutes), and leaves the VM alone while the installer creates or starts it:
    - By default a **LaunchAgent**, `~/Library/LaunchAgents/com.agora.vm.agora.plist`: when you log in and every 5 minutes it runs `~/.agora/macos/keepalive.sh`, which starts the VM if it isn't running. No sudo.
-   - With `--at-boot`, a **LaunchDaemon**, `/Library/LaunchDaemons/com.agora.vm.agora.plist`, that runs as your user from boot, before anyone logs in. It needs sudo once. Use it on a Mac mini that nobody logs in to.
+   - With `--at-boot`, a **LaunchDaemon**, `/Library/LaunchDaemons/com.agora.vm.agora.plist`, that runs as your user from boot, before anyone logs in. It needs sudo once. Use it on a Mac mini that nobody logs in to. **It needs FileVault off:** with FileVault on, a restarted Mac waits at the disk-unlock screen with no network and no launchd jobs, and unlocking it is a login, so the LaunchAgent does the same.
    - Inside the VM, systemd starts Docker, and the stack's `restart: unless-stopped` services start Agora.
 7. **Opens Agora:** `https://localhost:8443` (a local certificate, so your browser warns once). Then **Settings → Agents → Log in** on your agent's box.
 
@@ -81,7 +81,7 @@ Boxed agents need nothing on the Mac. For host mode (an agent CLI running on the
 
 ## What the VM can reach on the Mac
 
-Nothing that listens only on the Mac's `127.0.0.1`: the VM's firewall refuses new connections to `192.168.5.2`, Lima's address for it. The internet, DNS, the port forwards and `limactl shell` work as usual.
+Nothing that listens only on the Mac's `127.0.0.1`: the VM's firewall refuses new connections to `192.168.5.2`, Lima's address for it. The one exception is port 53: Lima's DNS server for the VM answers on that same address, so DNS (UDP and TCP) is always allowed. The internet, the port forwards and `limactl shell` work as usual.
 
 If Agora should use a service on the Mac, for example an Ollama for model agents, allow its port inside the VM:
 
@@ -112,7 +112,7 @@ Follow [remote-access.md](remote-access.md), **inside the VM**, as on Windows in
 A sleeping Mac stops the VM's clock and every agent. On a Mac that serves Agora:
 
 - System Settings → Energy (on a laptop: Battery → Options) → **Prevent automatic sleeping when the display is off**, or `sudo pmset -a sleep 0`.
-- **Start up automatically after a power failure** (same pane), or `sudo pmset -a autorestart 1`, together with `--at-boot`.
+- **Start up automatically after a power failure** (same pane), or `sudo pmset -a autorestart 1`, together with `--at-boot`. With FileVault on, someone still has to unlock the Mac after the restart before anything starts.
 
 ## Moving from Windows
 

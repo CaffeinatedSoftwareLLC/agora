@@ -2,7 +2,7 @@
 
 This moves an Agora install that runs in a WSL distro on Windows to a Mac, with everything it holds: the database, the encrypted files, every agent's box (logins and repos) and `.env.prod` with its `AGORA_ENCRYPTION_KEY`. It uses Agora's own backup and restore ([installing.md](installing.md#backups-upgrades-removal)): one bundle, encrypted with a passphrase you choose, carried from one machine to the other. Nothing is uploaded anywhere, and no secret is printed.
 
-> **Status (2026-11-09):** written, not yet run. Backup and restore are tested on Linux in CI; the Mac side is new ([macos.md](macos.md)). Keep the Windows install until the Mac one has run for a while (step 9).
+> **Status (2026-11-11):** written, not yet run. Backup and restore are tested on Linux in CI. The Mac installer itself ran on a real Mac on 2026-11-10 ([macos.md](macos.md)); a restore on a Mac has not. Keep the Windows install until the Mac one has run for a while (step 9).
 
 The commands below assume the distro is `Ubuntu` and the install is in `~/agora`, started with the tailnet override. Change those names if yours differ. PowerShell commands are for Windows PowerShell 5.1; the Mac ones for Terminal (zsh).
 
@@ -10,6 +10,7 @@ The commands below assume the distro is `Ubuntu` and the install is in `~/agora`
 
 - The Mac has Agora's prerequisites: [macos.md, "What you need"](macos.md#what-you-need).
 - About 30 minutes when Agora isn't needed: agents stop at step 3 and run again from step 6.
+- **A list of every agent that connects from outside a box, and the address it uses** (`AGORA_INSTANCE` in its `agora-mcp` config, or the URL in its host config). On the Mac, Agora listens on the Mac's `127.0.0.1` only, so the address decides what happens to each one. See [Agents that connect by an address](#agents-that-connect-by-an-address).
 - The Mac installs the latest Agora. Restore brings an older database forward (its migrations run), never back, so the Mac must not have an older release than Windows. It won't, unless you install an old one on purpose.
 
 ## 1. On Windows: note the install's name and settings
@@ -68,7 +69,7 @@ cd ~/agora-src
 bash install/macos/install.sh --instance agora --agent none --at-boot
 ```
 
-`--agent none`: the restore brings your agents and their boxes back. `--at-boot`: the VM starts at boot, before anyone logs in (sudo once); leave it out on a Mac you log in to. Give the VM memory for your boxes: 8 GiB is the default on a 16 GB Mac; on a 24 or 32 GB Mac that also runs local models, 10 to 12 is a reasonable start.
+`--agent none`: the restore brings your agents and their boxes back. `--at-boot`: the VM starts at boot, before anyone logs in (sudo once); leave it out on a Mac you log in to, and on a Mac with FileVault on, where nothing starts before someone unlocks the disk and that unlock is a login ([macos.md](macos.md#keep-the-mac-awake)). Give the VM memory for your boxes: 8 GiB is the default on a 16 GB Mac; on a 24 or 32 GB Mac that also runs local models, 10 to 12 is a reasonable start.
 
 The installer creates a throwaway admin for the fresh install; the restore replaces it with your own accounts. A generated password is fine here.
 
@@ -92,7 +93,9 @@ Log in with your **own** account (not the throwaway admin of step 5). Your chann
 
 **Box homes are moved as they were.** Things an agent built inside its box for an x86 CPU (a repo's `node_modules`, a Python `.venv`, binaries in `~/.local/bin`) won't run on the Mac's arm64 CPU. The CLIs themselves come with the new box image, so this only affects what the agents installed. Ask each agent to reinstall its repos' dependencies (`npm ci`, `pip install -r ...`) the first time a build fails.
 
-## 7. On the Mac: Tailscale in the VM (phone access)
+## 7. On the Mac: Tailscale in the VM (phone access, agents on other machines)
+
+This step is what brings back every agent and device that reached Agora by its tailnet name. Until it is done they can't connect.
 
 Do [remote-access.md](remote-access.md) steps 1, 4, 5 and 6 inside the VM (`bash install/macos/agora-vm.sh shell`). To keep the phone's address, give the VM the old machine name:
 
@@ -115,6 +118,23 @@ Only if you used `agora-host` on Windows. On the Mac, install the CLIs you host 
 ```bash
 agora-host autostart enable --config "$HOME/.agora-host/host.json"
 ```
+
+## Agents that connect by an address
+
+Bot tokens, host tokens and accounts move with the database, so no agent needs a new token. What can change is the address. On Windows an agent on another machine could reach Agora at the PC's address; on the Mac the three ports are forwarded to the Mac's own `127.0.0.1` and nothing else, so the Mac's LAN name, LAN address and its own Tailscale address don't reach Agora.
+
+| The agent connects to | After the move |
+|---|---|
+| The tailnet name (`https://agora-home.<tailnet>.ts.net`) | Works again after step 7, with no change, if the VM takes the old machine name. |
+| The Windows PC's LAN address or name, or `localhost` on the PC | Stops. Put the agent's machine on the tailnet and set its address to the tailnet name, after step 7. |
+| An agent now running on the Mac itself | `http://localhost:3000` (web: `https://localhost:8443`). |
+| A boxed agent | Nothing to do: it connects inside the VM, and the restore gives it a fresh token. |
+
+Also tied to the address:
+
+- **Passkeys** belong to the hostname they were added on. One added at the tailnet name works there again after step 7, not at `https://localhost:8443`; add another there if you want it. Passwords work at every address.
+- **Browser logins** are kept per address: log in again at a new one.
+- **Links sent before the move** (an invite, a link to a thread) carry the old hostname.
 
 ## 9. Later, on Windows: remove the old install
 

@@ -62,6 +62,7 @@ case "\$1" in
         case "\$*" in
             *iptables*DOCKER-USER*) [ "\${FAKE_FW_MISSING:-}" = DOCKER-USER ] && exit 1; exit 0 ;;
             *iptables*) exit 0 ;;
+            *getent*) [ "\${FAKE_DNS_FAIL:-0}" = 1 ] && exit 2; exit 0 ;;
             *systemctl*) exit 0 ;;
             *os-release*) printf '%s' "\${FAKE_GUEST:-ubuntu 24.04 aarch64}"; exit 0 ;;
             *working_dir*) echo "$T/guest/agora"; exit 0 ;;
@@ -126,6 +127,7 @@ printf 'hunter2hunter2\n' > "$T/pw"
     check_true 'template: no mounts, no containerd, no agent forwarding' 'printf "%s" "$tpl" | grep -q "^mounts: \[\]" && printf "%s" "$tpl" | grep -q "system: false" && printf "%s" "$tpl" | grep -q "forwardAgent: false"'
     check 'template: three forwards to 127.0.0.1, everything else ignored' '3 1' "$(printf '%s\n' "$tpl" | grep -c 'hostIP: "127.0.0.1"') $(printf '%s\n' "$tpl" | grep -c 'ignore: true')"
     check_true 'template: the guest firewall runs at every boot (provision, mode system)' 'printf "%s" "$tpl" | grep -q "^provision:" && printf "%s" "$tpl" | grep -q "^  - mode: system" && printf "%s" "$tpl" | grep -q "^      ipt -N AGORA-HOST-NEW"'
+    check_true 'template: the firewall accepts DNS (udp and tcp 53) before it rejects' '[ "$(printf "%s\n" "$tpl" | grep -n -e "--dport 53 -j ACCEPT" -e "-j REJECT" | sed "s/^[0-9]*: *ipt -A AGORA-HOST-NEW //; s/ ||.*//" | tr "\n" "|")" = "-p udp --dport 53 -j ACCEPT|-p tcp --dport 53 -j ACCEPT|-p tcp -j REJECT --reject-with tcp-reset|-j REJECT|" ]'
     if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
         check 'template parses as YAML; the provision script is the file, unindented' ok "$(printf '%s' "$tpl" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); s=d["provision"][0]["script"]; f=open(sys.argv[1]).read(); print("ok" if s.strip()==f.strip() and d["mounts"]==[] else "bad")' "$ROOT/install/macos/guest/host-firewall.sh")"
     fi
@@ -277,11 +279,13 @@ FAKE_ENV=()
 V="$ROOT/install/macos/agora-vm.sh"
 reset; with_lima; run "$I" --non-interactive --telemetry off
 FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000'); run "$V" doctor
-check_true 'doctor: forwards, health, the VM firewall and the Mac disk pass' '[ "$RC" = 0 ] && grep -q "ok      the VM can.t reach this Mac.s loopback" "$T/out" && grep -q "GB free on this Mac" "$T/out"'
+check_true 'doctor: forwards, health, the VM firewall and the Mac disk pass' '[ "$RC" = 0 ] && grep -q "ok      the VM can.t reach this Mac.s loopback" "$T/out" && grep -q "ok      the VM resolves names" "$T/out" && grep -q "GB free on this Mac" "$T/out"'
 FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000' FAKE_FREE_KB=5242880); run "$V" doctor
 check_true 'doctor: fails on a nearly full Mac disk' '[ "$RC" = 1 ] && grep -q "FAILED  only 5 GB free" "$T/out"'
 FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000' FAKE_FW_MISSING=DOCKER-USER); run "$V" doctor
 check_true 'doctor: fails when containers can reach the Mac (no DOCKER-USER jump)' '[ "$RC" = 1 ] && grep -q "FAILED  the VM.s containers can reach" "$T/out" && grep -q "ok      the VM can.t reach this Mac.s loopback (192.168.5.2, OUTPUT)" "$T/out"'
+FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000' FAKE_DNS_FAIL=1); run "$V" doctor
+check_true 'doctor: fails when the VM can.t resolve names (the firewall must leave DNS open)' '[ "$RC" = 1 ] && grep -q "FAILED  the VM can.t resolve names" "$T/out" && grep -q "ok      the VM can.t reach this Mac.s loopback (192.168.5.2, OUTPUT)" "$T/out"'
 FAKE_ENV=()
 run "$V" status
 check_true 'status: ports and keep-alive' '[ "$RC" = 0 ] && grep -q "https 8443, http 8000, api 3000" "$T/out" && grep -q "Keep-alive: agent" "$T/out"'

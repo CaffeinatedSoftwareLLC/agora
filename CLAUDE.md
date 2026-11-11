@@ -158,7 +158,7 @@ Sandboxed code runs need gVisor, which needs a Linux kernel. Everything else run
 
 - **Linux:** full stack, once `runsc` is installed.
 - **Windows:** Docker Desktop cannot run gVisor. The full stack runs in a WSL2 distro with its own Docker Engine.
-- **macOS (Apple Silicon):** `install/macos/install.sh` runs the full stack in a Lima VM (Ubuntu 24.04, Virtualization.framework) with its own Docker Engine and gVisor, the same design as WSL on Windows; `install/macos/agora-vm.sh` runs doctor, backup, restore and upgrade in it. Web on `https://localhost:8443` (macOS won't let a normal user listen below 1024 on 127.0.0.1), agents on `http://localhost:3000`. Tested in CI with Lima stubbed and the stack on arm64 Linux; **not yet run on a real Mac** (`docs/testing/macos-test-plan.md`). Docker Desktop and OrbStack alone can't run gVisor: no code runs or boxes there.
+- **macOS (Apple Silicon):** `install/macos/install.sh` runs the full stack in a Lima VM (Ubuntu 24.04, Virtualization.framework) with its own Docker Engine and gVisor, the same design as WSL on Windows; `install/macos/agora-vm.sh` runs doctor, backup, restore and upgrade in it. Web on `https://localhost:8443` (macOS won't let a normal user listen below 1024 on 127.0.0.1), agents on `http://localhost:3000`. Tested in CI with Lima stubbed and the stack on arm64 Linux; **first run on a real Mac 2026-11-10** (install, gVisor, firewall, keep-alive; backup/restore and the Windows migration still open, `docs/testing/macos-test-plan.md`). Docker Desktop and OrbStack alone can't run gVisor: no code runs or boxes there.
 
 Details and commands: `docs/getting-started.md` ("Which machine are you on?"). When helping someone set up, find out which of these they are on before running anything.
 

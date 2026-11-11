@@ -7,9 +7,11 @@
 # Without this, anything in the VM (root, the stack's containers, a box that got past its edge)
 # could reach services that listen only on the Mac's loopback: Ollama, dev servers, agora-host's
 # sign-in callback. This drops every NEW connection from the VM and its containers to that
-# address. Untouched: DNS (192.168.5.3), traffic through the gateway to the internet (its
-# destination isn't 192.168.5.2), Lima's own channel (the Mac connects in), the port forwards
-# (inside the VM they connect to 127.0.0.1) and replies to the Mac's connections.
+# address, except to port 53: with Lima's vz network the same address is the VM's DNS server
+# (the one DHCP hands out, and the upstream Docker gives containers), so DNS is the one port
+# always open on it. Untouched: traffic through the gateway to the internet (its destination
+# isn't 192.168.5.2), Lima's own channel (the Mac connects in), the port forwards (inside the VM
+# they connect to 127.0.0.1) and replies to the Mac's connections.
 #
 # To let the VM reach one port on the Mac (an Ollama for Agora's model agents, say), put the port
 # on a line of its own in /etc/agora/host-allow-ports and run: sudo systemctl restart agora-host-firewall
@@ -22,7 +24,8 @@ cat > /usr/local/sbin/agora-host-firewall <<'EOF'
 #!/bin/sh
 # Written by Agora's Lima provision script. Makes OUTPUT (the VM itself) and DOCKER-USER (its
 # containers) send traffic for the Mac's loopback through the AGORA-HOST chain, which refuses new
-# connections except to the ports in /etc/agora/host-allow-ports.
+# connections except DNS (port 53, Lima's resolver for the VM) and the ports in
+# /etc/agora/host-allow-ports.
 #
 # It never fails open: the new rules are built in AGORA-HOST-NEW and swapped in only when
 # complete, so any error leaves the rules that were there before. Bad lines in the allow list are
@@ -57,6 +60,9 @@ fail() { log "$1; the rules from before stay"; ipt -F AGORA-HOST-NEW 2>/dev/null
 ipt -N AGORA-HOST-NEW 2>/dev/null || ipt -F AGORA-HOST-NEW || fail "can't make AGORA-HOST-NEW"
 for p in $ports; do ipt -A AGORA-HOST-NEW -p tcp --dport "$p" -j ACCEPT || fail "can't allow port $p"; done
 ipt -A AGORA-HOST-NEW -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN || fail "can't add the conntrack rule"
+# DNS: Lima's resolver for the VM and its containers answers on this address
+ipt -A AGORA-HOST-NEW -p udp --dport 53 -j ACCEPT || fail "can't allow DNS (udp 53)"
+ipt -A AGORA-HOST-NEW -p tcp --dport 53 -j ACCEPT || fail "can't allow DNS (tcp 53)"
 ipt -A AGORA-HOST-NEW -p tcp -j REJECT --reject-with tcp-reset || fail "can't add the TCP reject"
 ipt -A AGORA-HOST-NEW -j REJECT || fail "can't add the reject"
 
@@ -68,7 +74,7 @@ done
 if ipt -n -L AGORA-HOST >/dev/null 2>&1; then ipt -F AGORA-HOST && ipt -X AGORA-HOST || { log "can't remove the old AGORA-HOST; the new rules are in AGORA-HOST-NEW"; exit 1; }; fi
 # A rename keeps the jumps: they now point at AGORA-HOST
 ipt -E AGORA-HOST-NEW AGORA-HOST || { log "can't rename AGORA-HOST-NEW; its rules are in force under that name"; exit 1; }
-log "new connections to $HOST refused${ports:+ (allowed:$ports)}"
+log "new connections to $HOST refused, except DNS${ports:+ (allowed:$ports)}"
 EOF
 chmod 755 /usr/local/sbin/agora-host-firewall
 
