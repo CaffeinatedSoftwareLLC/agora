@@ -163,6 +163,8 @@ EOF
     printf '999\n' > "$T/apt-busy-left"
     if (APT_WAIT_SECONDS=10; wait_for_apt) > /dev/null 2>&1; then r=returned; else r=stopped; fi
     check 'wait_for_apt stops with an error when apt never finishes' stopped "$r"
+    check 'apt_busy matches a running unattended-upgrade' yes "$(printf '%s\n' '/usr/bin/python3 /usr/bin/unattended-upgrade --download-only' '/usr/bin/python3 /usr/bin/unattended-upgrade' | grep -Ec "$APT_UU_RE" | sed 's/^2$/yes/')"
+    check '... but not its shutdown helper, which runs for as long as the machine is up' 0 "$(printf '%s\n' '/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal' | grep -Ec "$APT_UU_RE" || true)"
     printf 'n=%s\nfailed=%s\n' "$n" "$failed" > "$T/apt.counts"
 )
 . "$T/apt.counts"

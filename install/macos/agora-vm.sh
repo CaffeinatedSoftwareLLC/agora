@@ -104,6 +104,9 @@ case "$CMD" in
                 if vm_sh "$VM" sudo -n iptables -w -C "$chain" -d 192.168.5.2 -j AGORA-HOST >/dev/null 2>&1; then say "  ok      $who can't reach this Mac's loopback (192.168.5.2, $chain)"
                 else say "  FAILED  $who can reach this Mac's 127.0.0.1: no AGORA-HOST jump in $chain (in the VM: sudo systemctl restart agora-host-firewall; journalctl -u agora-host-firewall)"; fails=1; fi
             done
+            # Port 53 on that address is the VM's DNS server, the one port the firewall leaves open
+            if vm_sh "$VM" getent hosts github.com >/dev/null 2>&1; then say "  ok      the VM resolves names (DNS)"
+            else say "  FAILED  the VM can't resolve names (in the VM: resolvectl dns; sudo iptables -S AGORA-HOST must accept port 53; sudo systemctl restart agora-host-firewall)"; fails=1; fi
         fi
         for p in "$(state_get "$VM" https_port)" "$(state_get "$VM" api_port)"; do
             [ -n "$p" ] || continue

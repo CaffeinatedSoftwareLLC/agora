@@ -233,7 +233,7 @@ if [ -n "$STATUS" ]; then
     HTTP_PORT=$old_h HTTPS_PORT=$old_s API_PORT=$old_a
     if [ "$STATUS" != Running ]; then
         info "starting $VM (it was $STATUS)"
-        limactl start --tty=false "$VM" || die "limactl start $VM failed (limactl list; ~/.lima/$VM/ha.stderr.log)"
+        limactl start --tty=false "$VM" || die "limactl start $VM failed (limactl list; ~/.lima/$VM/ha.stderr.log). $(vm_start_hint "$VM")"
     fi
     ok "using $VM, made by an earlier run"
     # Agora is already in it: upgrade or stop, never a second install the VM doesn't forward
@@ -290,7 +290,7 @@ else
     add_cleanup "limactl delete --force $VM   # the VM this run created, with everything in it"
     # Its disks and config (the install's .env.prod and database end up in them) are this user's only
     chmod 700 "$HOME/.lima/$VM" 2>/dev/null || true
-    limactl start --tty=false "$VM" || die "limactl start $VM failed (~/.lima/$VM/ha.stderr.log)"
+    limactl start --tty=false "$VM" || die "limactl start $VM failed (~/.lima/$VM/ha.stderr.log). $(vm_start_hint "$VM")"
     CREATED_VM=1
     ok "created and started $VM"
 fi

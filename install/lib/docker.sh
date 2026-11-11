@@ -7,13 +7,17 @@ APT_PREREQS='ca-certificates curl gnupg'
 # A fresh Ubuntu (a new WSL distro especially) runs apt's daily update or unattended-upgrades
 # on first boot; wait for it instead of failing on the dpkg lock
 APT_WAIT_SECONDS=${APT_WAIT_SECONDS:-600}
-apt_busy() { pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null 2>&1; }
+# unattended-upgrade is matched by its command line, not its name: every Ubuntu also keeps
+# "unattended-upgrade-shutdown --wait-for-signal" running for as long as it is up, and both show
+# as unattended-upgr in the process table
+APT_UU_RE='/unattended-upgrade( |$)'
+apt_busy() { pgrep -x 'apt|apt-get|dpkg' >/dev/null 2>&1 || pgrep -f "$APT_UU_RE" >/dev/null 2>&1; }
 wait_for_apt() {
     local waited=0
     apt_busy || return 0
     info "waiting for another apt or dpkg process (often the first-boot update) to finish"
     while apt_busy; do
-        [ "$waited" -ge "$APT_WAIT_SECONDS" ] && die "another apt or dpkg process is still running after ${APT_WAIT_SECONDS}s. Wait for it to finish (ps -C apt-get,dpkg,unattended-upgr) and run the installer again."
+        [ "$waited" -ge "$APT_WAIT_SECONDS" ] && die "another apt or dpkg process is still running after ${APT_WAIT_SECONDS}s. Wait for it to finish (ps -ef | grep -E 'apt|dpkg|unattended-upgrade ') and run the installer again."
         sleep 5; waited=$((waited + 5))
     done
 }
