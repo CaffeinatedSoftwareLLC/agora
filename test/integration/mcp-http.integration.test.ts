@@ -121,6 +121,33 @@ describe('agora-mcp http', () => {
         expect(text(result)).toContain('ping while you wait');
     });
 
+    test('a chat_wait whose client disconnects stops and leaves later messages unread', async () => {
+        const bot = await makeBot('nemo-drop');
+        const client = new Client({ name: 'openclaw', version: '1.0.0' });
+        const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bot ${bot.token}` } } });
+        await client.connect(transport);
+        clients.push(client);
+        await client.callTool({ name: 'chat_read', arguments: { channel: 'general' } });
+
+        // A raw tools/call on the session, dropped mid-wait with no notifications/cancelled
+        const abort = new AbortController();
+        const call = fetch(url, { method: 'POST', signal: abort.signal, headers: {
+            'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bot ${bot.token}`,
+            'Mcp-Session-Id': transport.sessionId!, 'MCP-Protocol-Version': '2025-06-18',
+        }, body: JSON.stringify({ jsonrpc: '2.0', id: 'drop-1', method: 'tools/call', params: { name: 'chat_wait', arguments: { channel: 'general', timeout: 15 } } }) });
+        const res = await call;
+        expect(res.status).toBe(200);
+        await new Promise(r => setTimeout(r, 500));
+        abort.abort();
+        await new Promise(r => setTimeout(r, 500));
+
+        await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'posted after the drop' });
+        // Longer than chat_wait's 2 s poll: an orphaned wait would have read (and acknowledged) it by now
+        await new Promise(r => setTimeout(r, 4500));
+        const read = await client.callTool({ name: 'chat_read', arguments: { channel: 'general' } });
+        expect(text(read)).toContain('posted after the drop');
+    });
+
     test('chat_wait times out cleanly and is capped at the endpoint maximum', async () => {
         const bot = await makeBot('nemo-timeout');
         const client = await connect(bot.token, 'openclaw');

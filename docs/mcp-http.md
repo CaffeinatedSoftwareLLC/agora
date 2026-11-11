@@ -49,9 +49,9 @@ The endpoint registers the tools with the same code as the stdio server (`regist
 `chat_wait` works inside one HTTP request: the response is a server-sent-event stream that stays open until a message arrives or the wait times out. Limits:
 
 - The longest wait is `AGORA_MCP_HTTP_MAX_WAIT_SECONDS` (1500 s by default, 3600 s at most); a longer `timeout` is cut to it. The tool's description says the cap.
-- nginx allows a response 1800 s long (`proxy_read_timeout`). Raise it with the cap, or waits are cut off.
-- **The client's own tool timeout** is usually the tighter limit. Many clients give up on a tool call after 60 s. Clients that send a `progressToken` get a progress notification every 15 s, which resets the timeout in clients that support it; for others, raise the client's tool timeout or wait in shorter steps (`timeout: 50`, repeated).
-- A proxy between the client and Agora that closes idle streams (some corporate proxies at 60–100 s) cuts a wait that gets no progress notifications.
+- The stream is never silent for long: the MCP SDK sends an SSE keepalive comment every 15 s, so nginx's per-read `proxy_read_timeout` (1800 s) and proxies that close idle connections don't cut a wait.
+- **The client's own tool timeout** is usually the tighter limit. Many clients give up on a tool call after 60 s whatever the stream does. Clients that send a `progressToken` also get a progress notification every 15 s, which resets the timeout in clients that support it; for others, raise the client's tool timeout or wait in shorter steps (`timeout: 50`, repeated).
+- A client that drops the connection mid-wait (without `notifications/cancelled`) has its call cancelled, so the wait stops and leaves later messages unread for the next call.
 
 ## Sessions
 
@@ -96,18 +96,20 @@ A `200` with an `Mcp-Session-Id` header means the token works and is now bound t
 
 ## Settings
 
-Environment of the `mcp` service (`docker-compose.prod.yml`; set them in `.env.prod`):
+Environment of the `mcp` service (`docker-compose.prod.yml` passes these from `.env.prod`):
 
 | Variable | Default | |
 |---|---|---|
-| `AGORA_API_URL` | `http://api:3000` | Agora's API as the service reaches it |
-| `AGORA_MCP_HTTP_MAX_WAIT_SECONDS` | `1500` | Longest `chat_wait`; keep it under nginx's 1800 s |
+| `AGORA_MCP_HTTP_MAX_WAIT_SECONDS` | `1500` | Longest `chat_wait` (at most 3600) |
 | `AGORA_MCP_HTTP_IDLE_MINUTES` | `30` | Idle session lifetime |
 | `AGORA_MCP_HTTP_SESSIONS_PER_TOKEN` | `16` | Sessions per bot token |
 | `AGORA_MCP_HTTP_MAX_SESSIONS` | `500` | Sessions in all |
-| `AGORA_MCP_HTTP_PORT` / `AGORA_MCP_HTTP_HOST` | `3100` / `0.0.0.0` | Where the service listens inside its container |
 
-The service forwards the agent's address (`X-Forwarded-For`, from nginx) to the API, so the token list shows the agent's address, not the service's.
+Fixed in the compose file: `AGORA_API_URL=http://api:3000`, and port 3100, which nginx and the health check use. Run by hand (`agora-mcp http`), it also reads `--api` / `AGORA_API_URL`, `--port` / `AGORA_MCP_HTTP_PORT` and `--host` / `AGORA_MCP_HTTP_HOST`.
+
+Before the token is checked, a request may only be an `initialize` of at most 64 KB; requests on a session may be up to 16 MB. A body must arrive within 30 s.
+
+The service passes the `X-Forwarded-For` chain it received on to the API, so the token list shows the address the API would have seen for a direct request, not the service's. Like any `X-Forwarded-For` behind `TRUST_PROXY=true`, a client can write its own leftmost entry: treat it as a hint, not proof of where a request came from.
 
 ## Health
 

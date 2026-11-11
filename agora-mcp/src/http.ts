@@ -59,6 +59,11 @@ export const HTTP_DEFAULTS = {
     maxSessionsPerToken: 16,
     maxSessions: 500,
     maxBodyBytes: 16 * 1024 * 1024,
+    /** An `initialize` (no session yet, token not checked) may be this large. */
+    maxInitBodyBytes: 64 * 1024,
+    /** A request body must arrive within this long. */
+    bodyTimeoutMs: 30_000,
+    maxConnections: 2048,
 } as const;
 
 interface Session {
@@ -95,17 +100,38 @@ function jsonRpcError(res: ServerResponse, status: number, code: number, message
 }
 
 class BodyTooLarge extends Error {}
+class BodyTimeout extends Error {}
 
-async function readJsonBody(req: IncomingMessage, limit: number): Promise<unknown> {
+/** The JSON body, refused past `limit` bytes (Content-Length or streamed) or `timeoutMs`. */
+async function readJsonBody(req: IncomingMessage, limit: number, timeoutMs: number): Promise<unknown> {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > limit) throw new BodyTooLarge();
     const chunks: Buffer[] = [];
     let size = 0;
-    for await (const chunk of req) {
-        size += (chunk as Buffer).length;
-        if (size > limit) throw new BodyTooLarge();
-        chunks.push(chunk as Buffer);
-    }
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; req.destroy(); }, timeoutMs);
+    try {
+        for await (const chunk of req) {
+            size += (chunk as Buffer).length;
+            if (size > limit) throw new BodyTooLarge();
+            chunks.push(chunk as Buffer);
+        }
+    } catch (err) {
+        if (timedOut) throw new BodyTimeout();
+        throw err;
+    } finally { clearTimeout(timer); }
+    if (timedOut) throw new BodyTimeout();
     const text = Buffer.concat(chunks).toString('utf8');
     return text ? JSON.parse(text) : undefined;
+}
+
+/** The ids of the JSON-RPC requests in a body (one message or a batch). */
+function requestIds(body: unknown): (string | number)[] {
+    const messages = Array.isArray(body) ? body : [body];
+    return messages.flatMap(m => {
+        const msg = m as { id?: unknown; method?: unknown } | null;
+        return msg && typeof msg.method === 'string' && (typeof msg.id === 'string' || typeof msg.id === 'number') ? [msg.id] : [];
+    });
 }
 
 /** The agent's address chain as Agora should record it: what the proxy saw, then the proxy. */
@@ -118,6 +144,9 @@ function forwardedChain(req: IncomingMessage): string | null {
 
 export class AgoraHttpMcp {
     private sessions = new Map<string, Session>();
+    /** Initializes past the token check that hold a slot until their session exists (or fails). */
+    private pending = new Map<string, number>();
+    private pendingTotal = 0;
     private sweeper: NodeJS.Timeout | undefined;
     private http: Server | undefined;
     private opts: {
@@ -137,8 +166,7 @@ export class AgoraHttpMcp {
             maxSessions: options.maxSessions ?? HTTP_DEFAULTS.maxSessions,
             maxBodyBytes: options.maxBodyBytes ?? HTTP_DEFAULTS.maxBodyBytes,
             version: options.version ?? packageVersion(),
-            log: options.log ?? (line => process.stderr.write(`[agora-mcp http] ${line}
-`)),
+            log: options.log ?? (line => process.stderr.write(`[agora-mcp http] ${line}\n`)),
         };
     }
 
@@ -155,6 +183,7 @@ export class AgoraHttpMcp {
         // chat_wait holds a response open for minutes: no Node-side request timeout
         this.http.requestTimeout = 0;
         this.http.headersTimeout = 60_000;
+        this.http.maxConnections = HTTP_DEFAULTS.maxConnections;
         await new Promise<void>((resolve, reject) => {
             this.http!.once('error', reject);
             this.http!.listen(this.opts.port, this.opts.host, () => resolve());
@@ -211,39 +240,49 @@ export class AgoraHttpMcp {
             return;
         }
 
+        // Who the request is for is settled before its body is read: a request on a session needs
+        // that session's token, and one without may only be a small initialize
+        const sessionHeader = req.headers['mcp-session-id'];
+        const sessionId = Array.isArray(sessionHeader) ? sessionHeader[0] : sessionHeader;
+        let session: Session | undefined;
+        if (sessionId) {
+            session = this.sessions.get(sessionId);
+            if (!session) {
+                jsonRpcError(res, 404, -32001, 'Session not found; initialize a new one.');
+                return;
+            }
+            if (!timingSafeEqual(hashToken(token), session.tokenHash)) {
+                jsonRpcError(res, 403, -32001, 'This session belongs to another bot token.');
+                return;
+            }
+        } else if (req.method !== 'POST') {
+            jsonRpcError(res, 400, -32600, 'No session: send initialize first, then the Mcp-Session-Id it returns.');
+            return;
+        }
+
         let body: unknown;
         if (req.method === 'POST') {
-            try { body = await readJsonBody(req, this.opts.maxBodyBytes); } catch (err) {
+            const limit = session ? this.opts.maxBodyBytes : HTTP_DEFAULTS.maxInitBodyBytes;
+            try { body = await readJsonBody(req, limit, HTTP_DEFAULTS.bodyTimeoutMs); } catch (err) {
                 if (err instanceof BodyTooLarge) jsonRpcError(res, 413, -32600, 'Request body too large');
+                else if (err instanceof BodyTimeout) jsonRpcError(res, 408, -32600, 'Request body too slow');
                 else jsonRpcError(res, 400, -32700, 'Parse error');
                 return;
             }
         }
 
-        const sessionHeader = req.headers['mcp-session-id'];
-        const sessionId = Array.isArray(sessionHeader) ? sessionHeader[0] : sessionHeader;
-        if (sessionId) {
-            const session = this.sessions.get(sessionId);
-            if (!session) {
-                jsonRpcError(res, 404, -32001, 'Session not found; initialize a new one.');
-                return;
-            }
-            const presented = hashToken(token);
-            if (!timingSafeEqual(presented, session.tokenHash)) {
-                jsonRpcError(res, 403, -32001, 'This session belongs to another bot token.');
-                return;
-            }
+        if (session) {
             await this.serve(session, req, res, body);
             return;
         }
 
         const method = (body as { method?: unknown } | undefined)?.method;
-        if (req.method === 'POST' && method === 'initialize' && !initializeClientName(req.headers['x-agora-client'], body)) {
+        if (method === 'initialize' && !initializeClientName(req.headers['x-agora-client'], body)) {
             jsonRpcError(res, 400, -32602, 'Name your MCP client: send an X-Agora-Client header or clientInfo.name in initialize. '
                 + 'Agora binds the bot token to that name.');
             return;
         }
-        if (req.method !== 'POST' || !isInitializeRequest(body)) {
+        if (!isInitializeRequest(body)) {
             jsonRpcError(res, 400, -32600, 'No session: send initialize first, then the Mcp-Session-Id it returns.');
             return;
         }
@@ -266,8 +305,24 @@ export class AgoraHttpMcp {
             session.inFlight--;
             session.lastSeen = Date.now();
         };
-        res.once('close', done);
+        res.once('close', () => {
+            // The client went away before its answer (a dropped connection, no
+            // notifications/cancelled): cancel its requests, so a chat_wait stops polling and
+            // acknowledging messages nobody will receive
+            if (!res.writableFinished) this.cancel(session, requestIds(body));
+            done();
+        });
         try { await session.transport.handleRequest(req, res, body); } catch (err) { done(); throw err; }
+    }
+
+    private cancel(session: Session, ids: (string | number)[]): void {
+        const deliver = session.transport.onmessage;
+        if (!deliver) return;
+        for (const requestId of ids) {
+            try {
+                deliver({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId, reason: 'client disconnected' } });
+            } catch { /* the session may be closing */ }
+        }
     }
 
     private async initialize(req: IncomingMessage, res: ServerResponse, body: unknown, token: string): Promise<void> {
@@ -279,11 +334,6 @@ export class AgoraHttpMcp {
         }
 
         const tokenHash = hashToken(token);
-        if (!this.makeRoom(tokenHash)) {
-            jsonRpcError(res, 429, -32001, 'Too many open MCP sessions for this bot token; close one (DELETE) and try again.');
-            return;
-        }
-
         const api = new AgoraApi(this.opts.apiUrl, token);
         // Pinned to the name checked here; a later _meta clientInfo can't change it (src/client-session.ts)
         const client = new ClientSession({ initializeName: () => undefined, configured: name, onStart: () => {} });
@@ -306,6 +356,24 @@ export class AgoraHttpMcp {
             return;
         }
 
+        // Only a token Agora accepted takes a slot, reserved before the next await
+        const key = tokenHash.toString('hex');
+        const room = this.reserve(tokenHash, key);
+        if (room !== 'ok') {
+            jsonRpcError(res, 429, -32001, room === 'token'
+                ? 'Too many open MCP sessions for this bot token; close one (DELETE) and try again.'
+                : 'The MCP endpoint is at its session limit; try again later.');
+            return;
+        }
+        let reserved = true;
+        const release = () => {
+            if (!reserved) return;
+            reserved = false;
+            const left = (this.pending.get(key) ?? 1) - 1;
+            if (left > 0) this.pending.set(key, left); else this.pending.delete(key);
+            this.pendingTotal--;
+        };
+
         const server = new McpServer({ name: 'agora', version: this.opts.version });
         registerTools(server, api, new CursorTracker(api), { localFiles: false, maxWaitSeconds: this.opts.maxWaitSeconds });
         registerResources(server, api);
@@ -316,6 +384,7 @@ export class AgoraHttpMcp {
             onsessioninitialized: id => {
                 session = { id, tokenHash, transport, server, lastSeen: Date.now(), inFlight: 1 };
                 this.sessions.set(id, session);
+                release();
                 res.once('close', () => { if (session) { session.inFlight--; session.lastSeen = Date.now(); } });
             },
             onsessionclosed: id => {
@@ -324,24 +393,33 @@ export class AgoraHttpMcp {
             },
         });
         transport.onclose = () => { if (session) this.sessions.delete(session.id); };
-        await server.connect(transport);
-        observeTransport(transport, client);
-        await transport.handleRequest(req, res, body);
-        if (!session) await server.close().catch(() => {});
+        try {
+            await server.connect(transport);
+            observeTransport(transport, client);
+            await transport.handleRequest(req, res, body);
+        } finally {
+            release();
+            if (!session) await server.close().catch(() => {});
+        }
     }
 
-    /** Room for one more session of this token: false when it holds the cap and none is idle. */
-    private makeRoom(tokenHash: Buffer): boolean {
+    /**
+     * Take a slot for one more session of this token, synchronously (concurrent initializes can't
+     * all pass the check). At the token's cap its oldest idle session is closed to make room;
+     * another token's session never is: at the endpoint's cap the answer is 'all'.
+     */
+    private reserve(tokenHash: Buffer, key: string): 'ok' | 'token' | 'all' {
         const mine = [...this.sessions.values()].filter(s => s.tokenHash.equals(tokenHash));
-        const free = (list: Session[], cap: number): boolean => {
-            if (list.length < cap) return true;
-            const idle = list.filter(s => s.inFlight === 0).sort((a, b) => a.lastSeen - b.lastSeen)[0];
-            if (!idle) return false;
-            void this.end(idle);
-            return true;
-        };
-        if (!free(mine, this.opts.maxSessionsPerToken)) return false;
-        return free([...this.sessions.values()], this.opts.maxSessions);
+        let evict: Session | undefined;
+        if (mine.length + (this.pending.get(key) ?? 0) >= this.opts.maxSessionsPerToken) {
+            evict = mine.filter(s => s.inFlight === 0).sort((a, b) => a.lastSeen - b.lastSeen)[0];
+            if (!evict) return 'token';
+        }
+        if (this.sessions.size - (evict ? 1 : 0) + this.pendingTotal >= this.opts.maxSessions) return 'all';
+        if (evict) void this.end(evict);
+        this.pending.set(key, (this.pending.get(key) ?? 0) + 1);
+        this.pendingTotal++;
+        return 'ok';
     }
 }
 

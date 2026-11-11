@@ -182,6 +182,31 @@ describe('AgoraHttpMcp', () => {
         await expect(a.client.listTools()).rejects.toThrow();
     });
 
+    it('refuses an oversized initialize before reading it, without a session', async () => {
+        const big = { ...initBody('openclaw'), params: { ...initBody('openclaw').params, padding: 'x'.repeat(100 * 1024) } };
+        const res = await post(big, { Authorization: `Bot ${GOOD}` });
+        expect(res.status).toBe(413);
+        expect(seen).toHaveLength(0);
+    });
+
+    it('never lets a refused token close another bot\'s session at the endpoint cap', async () => {
+        await mcp.close();
+        mcp = new AgoraHttpMcp({ apiUrl, port: 0, host: '127.0.0.1', maxSessions: 1, log: () => {} });
+        url = new URL(`http://127.0.0.1:${await mcp.listen()}/mcp`);
+        const first = await connect(GOOD);
+        expect((await post(initBody('openclaw'), { Authorization: 'Bot garbage' })).status).toBe(401);
+        expect((await post(initBody('x'), { Authorization: `Bot ${BOUND}`, 'X-Agora-Client': 'codex-mcp-client' })).status).toBe(429);
+        expect(mcp.sessionCount).toBe(1);
+        expect((await first.client.listTools()).tools.length).toBeGreaterThan(5);
+    });
+
+    it('holds the per-token cap under concurrent initializes', async () => {
+        const results = await Promise.allSettled(Array.from({ length: 6 }, () => post(initBody('openclaw'), { Authorization: `Bot ${GOOD}` })));
+        const ok = results.filter(r => r.status === 'fulfilled' && r.value.status === 200).length;
+        expect(ok).toBeGreaterThan(0);
+        expect(mcp.sessionCount).toBeLessThanOrEqual(2);
+    });
+
     it('ends a session on DELETE and on idle', async () => {
         const { transport } = await connect(GOOD);
         expect(mcp.sessionCount).toBe(1);
