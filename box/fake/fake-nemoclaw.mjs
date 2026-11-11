@@ -7,8 +7,13 @@
 //   nemoclaw <sandbox> agent --session-id <id> --json ...    -> one OpenClaw turn (prompt on stdin),
 //                                                               printed as the gateway envelope
 //   nemoclaw <sandbox> mcp add|remove|status ...             -> exit 0 (add needs --env's variable set)
+// In an agent box (the image's /etc/agora-box marker, or settings.mode "openclaw") it plays
+// OpenClaw, which the nemoclaw adapter runs there (box/Dockerfile links it as /opt/agora/bin/nemoclaw):
+//   openclaw --version                                       -> "OpenClaw 2026.11.3 (0000000)"
+//   openclaw agent exec --json --config <f> --cwd <d> ...    -> one turn (prompt on stdin), the exec envelope;
+//                                                               the config must hold mcp.servers.agora
 // Settings come from `<this file>.json` next to it, not the environment (agora-host passes a run
-// only the OS variables): { log, version, agent, found, turn }.
+// only the OS variables): { log, version, agent, found, turn, mode }.
 //   log: append one JSON line per call (argv, stdin, which variables were set)
 //   version (default 0.0.143), agent (default openclaw), found (false = no such sandbox)
 //   turn: 'ok' (default), 'error' (meta.error incomplete_turn, exit 1), 'garbage'
@@ -18,6 +23,7 @@ const args = process.argv.slice(2);
 const env = process.env;
 const settingsFile = `${process.argv[1]}.json`;
 const settings = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, 'utf8')) : {};
+const openclaw = settings.mode === 'openclaw' || existsSync('/etc/agora-box');
 
 function readStdin() {
     return new Promise(resolve => {
@@ -44,7 +50,29 @@ const flag = name => { const i = args.indexOf(name); return i === -1 ? undefined
 
 if (args[0] === '--version' || args[0] === '-v') {
     log({});
-    console.log(`nemoclaw v${settings.version ?? '0.0.143'}`);
+    console.log(openclaw ? `OpenClaw ${settings.version ?? '2026.11.3'} (0000000)` : `nemoclaw v${settings.version ?? '0.0.143'}`);
+    process.exit(0);
+}
+
+if (args[0] === 'agent' && args[1] === 'exec') {
+    const prompt = await readStdin();
+    let config = null;
+    try { config = JSON.parse(readFileSync(flag('--config'), 'utf8')); } catch { /* checked below */ }
+    const server = config?.mcp?.servers?.agora;
+    log({ stdinBytes: Buffer.byteLength(prompt), stdinHead: prompt.slice(0, 200), model: flag('--model'), cwdFlag: flag('--cwd'),
+        mcp: server ? { command: server.command, args: server.args, envNames: Object.keys(server.env ?? {}).sort() } : null,
+        toolSearch: config?.tools?.toolSearch ?? null, nvidiaKey: env.NVIDIA_API_KEY !== undefined });
+    const fail = (message, code = 1) => {
+        console.log(JSON.stringify({ ok: false, status: 'error', final: '', payloads: [], model: null, provider: null, sessionId: 'f0000000-0000-4000-8000-000000000000', error: { kind: 'exception', message } }));
+        process.exit(code);
+    };
+    if (!server || !server.command) fail('no agora MCP server in the config');
+    if ((settings.turn ?? 'ok') === 'error') fail('Couldn\'t sign in to the AI service.');
+    const lurk = /passive lurk run/.test(prompt);
+    const text = lurk ? '[pass]' : JSON.stringify({ summary: 'Handled in a box' });
+    console.log(JSON.stringify({ ok: true, status: 'ok', final: text, payloads: [{ text, mediaUrl: null }],
+        usage: { input: 900, output: 60, cacheRead: 0, cacheWrite: 0, total: 960 }, assistantTurns: 1,
+        model: (flag('--model') ?? 'nvidia/x').replace(/^nvidia\//, ''), provider: 'nvidia', sessionId: 'f0000000-0000-4000-8000-000000000001' }));
     process.exit(0);
 }
 

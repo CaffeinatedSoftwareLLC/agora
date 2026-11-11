@@ -21,13 +21,14 @@ export interface BoxTelemetryHost {
 /**
  * Where box/Dockerfile gets a CLI. In a URL, `{version}` is the pinned version (the Dockerfile
  * writes its ARG there) and `{arch}` the release's name for the image's CPU.
- * - `npm`: the package, installed at the pinned version.
+ * - `npm`: the package, installed at the pinned version; with `node`, under a Node.js of its own
+ *   (the release tarball per CPU, checked against its sha256) when the image's Node is too old.
  * - `binary`: one release file per CPU, checked against its sha256 (amd64 and arm64).
  * - `tarball`: one release archive per CPU, checked against its sha256 (amd64 and arm64) and
  *   unpacked (Devin).
  */
 export type BoxImageSource =
-    | { npm: string }
+    | { npm: string; node?: { version: string; sha256: { amd64: string; arm64: string } } }
     | { binary: { url: string; sha256: { amd64: string; arm64: string } } }
     | { tarball: { url: string; sha256: { amd64: string; arm64: string } } };
 
@@ -198,6 +199,41 @@ export const BOX_ADAPTER_REGISTRY = {
             { domain: 'codeium-i5.sentry.io', what: 'error reports (named in the binary)' },
             { domain: 'static.devin.ai', what: 'update checks and downloads (`auto_update: false`; the CLI is pinned in the image)' },
             { domain: 'cli.devin.ai', what: 'the install script (updates)' },
+        ],
+    },
+    nemoclaw: {
+        label: 'NemoClaw (OpenClaw)',
+        // NVIDIA NemoClaw needs Docker for its OpenShell sandboxes, which can't run in a gVisor box,
+        // so a box runs OpenClaw itself (MIT), NemoClaw's agent, headless with `openclaw agent exec`.
+        // It needs Node 24.16+ and the image has Node 22: Node 24.22.2's release tarball, pinned
+        // by the sums in nodejs.org/dist/v24.22.2/SHASUMS256.txt
+        image: {
+            npm: 'openclaw', version: '2026.11.3', versionArg: 'OPENCLAW_VERSION',
+            node: {
+                version: '24.22.2',
+                sha256: {
+                    amd64: '48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75',
+                    arm64: 'eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8',
+                },
+            },
+        },
+        protocol: 'cli',
+        // NVIDIA Endpoints on the owner's own key (docs/provider-terms.md "NVIDIA NemoClaw": a
+        // build.nvidia.com trial key is for testing and evaluation, not production)
+        authModes: ['api_key'],
+        apiKeyEnv: 'NVIDIA_API_KEY',
+        // Defaults to Nemotron 3.5 Super VL, NemoClaw's own default (agora-host nemoclaw.ts)
+        modelRequired: false,
+        // Checked against openclaw 2026.11.3 through a logging proxy (2026-11-11): `agent exec`
+        // with the built-in nvidia provider reached integrate.api.nvidia.com and nothing else
+        allowlist: ['integrate.api.nvidia.com'],
+        loginDomains: [],
+        loginOnly: [],
+        telemetry: [
+            { domain: 'telemetry.openclaw.ai', what: 'version check and install ping (Gateway only, never `agent exec`; `OPENCLAW_NO_AUTO_UPDATE`, `DO_NOT_TRACK`)' },
+            { domain: 'clawhub.ai', what: 'skill and plugin hub (not used by `agent exec`)' },
+            { domain: 'catalog.openclaw.ai', what: 'plugin catalog (not used by `agent exec`)' },
+            { domain: 'assets.ngc.nvidia.com', what: 'NVIDIA featured-models list (model setup only)' },
         ],
     },
 } as const satisfies Record<string, BoxAdapterSpec>;

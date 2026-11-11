@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configSchema, loadConfig } from '../src/config.js';
 import { prepare, verifyProfile } from '../src/adapters.js';
-import { boxMode } from '../src/box.js';
+import { boxConfig, boxMode } from '../src/box.js';
 import { ProcessRunner } from '../src/process.js';
 import { git } from '../src/workspaces.js';
 import { HostConfigError, NEMOCLAW_API_KEY_ONLY } from '../src/terms.js';
 import {
-    mcpAddArgs, NEMOCLAW_BOX_ONLY, NEMOCLAW_HOST_ONLY, NEMOCLAW_NOT_OPENCLAW, NEMOCLAW_WAKE_NOTE, nemoclawAgentArgs, nemoclawCommand,
+    mcpAddArgs, NEMOCLAW_BOX_ONLY, openclawExecArgs, openclawModel, openclawVersion, NEMOCLAW_HOST_ONLY, NEMOCLAW_NOT_OPENCLAW, NEMOCLAW_WAKE_NOTE, nemoclawAgentArgs, nemoclawCommand,
     nemoclawEnv, nemoclawSetup, nemoclawVersion, openclawSessionId, parseOpenClaw,
 } from '../src/nemoclaw.js';
 import { claim, config, id, tempDir } from './helpers.js';
@@ -257,5 +257,90 @@ describe.skipIf(!unix)('nemoclaw with the fake CLI', () => {
         expect(add.set).toContain('AGORA_MCP_TOKEN');
         expect(log.filter(c => c.argv[2] !== 'add').every(c => !c.set.includes('AGORA_MCP_TOKEN'))).toBe(true);
         expect(lines.at(-1)).toMatch(/openclaw-bundle-mcp/);
+    });
+});
+
+describe('nemoclaw in a box: OpenClaw itself', () => {
+    const HOST_TOKEN = 'ah_01J0000000000000000000HOST.hostsecretvalue';
+    const profile = (p: object = {}) => JSON.stringify({ name: 'nemo', adapter: 'nemoclaw', auth: 'api_key', apiKeyEnv: 'NVIDIA_API_KEY', workdirAlias: 'work', repos: [], ...p });
+    const env = (p: object = {}) => ({ AGORA_INSTANCE_URL: 'http://edge:8080', AGORA_HOST_TOKEN: HOST_TOKEN, AGORA_BOT_ID: id(5),
+        AGORA_BOT_TOKEN: 'bot_box.botsecretvalue', AGORA_BOX_PROFILE: profile(p) });
+    async function boxSetup(executable = process.execPath) {
+        const dir = await repo();
+        const c = configSchema.parse({ ...config(dir), profiles: { builder: { adapter: 'nemoclaw', executable, workdir: dir, workdirAlias: 'agora',
+            stateDir: join(dir, 'state'), auth: 'api_key', apiKeyEnv: 'NVIDIA_API_KEY', proxyEnv: true } } });
+        process.env.NVIDIA_API_KEY = 'nvapi-box-secret';
+        return { c, dir };
+    }
+
+    it('box config: the pinned OpenClaw on an NVIDIA key; a subscription is refused', () => {
+        const c = boxConfig(env(), { home: '/home/agent', exists: () => false });
+        expect(c.profiles.nemo).toEqual({ adapter: 'nemoclaw', executable: '/opt/agora/bin/nemoclaw', workdir: '/home/agent/scratch', workdirAlias: 'work',
+            stateDir: '/home/agent/.agora/state/nemo', auth: 'api_key', apiKeyEnv: 'NVIDIA_API_KEY', proxyEnv: true });
+        expect(configSchema.safeParse(c).success).toBe(true);
+        expect(() => boxConfig(env({ auth: 'subscription', apiKeyEnv: null }), { home: '/home/agent', exists: () => false }))
+            .toThrow('AGORA_BOX_PROFILE: nemoclaw in a box signs in with api_key');
+    });
+
+    it('models, versions and exec arguments', () => {
+        expect(openclawModel(null)).toBe('nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b');
+        expect(openclawModel('meta/llama-3.3-70b-instruct')).toBe('nvidia/meta/llama-3.3-70b-instruct');
+        expect(openclawModel('nvidia/nvidia/nemotron-3-super-120b-a12b')).toBe('nvidia/nvidia/nemotron-3-super-120b-a12b');
+        expect(openclawVersion('OpenClaw 2026.11.3 (847611d)\n')).toBe('2026.11.3');
+        expect(openclawVersion('openclaw 2026.11.3')).toBeNull();
+        expect(openclawExecArgs('/run/openclaw.json', '/work', null, 900)).toEqual(['agent', 'exec', '--json', '--config', '/run/openclaw.json', '--cwd', '/work',
+            '--model', 'nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b', '--timeout', '810', '--message-file', '-']);
+        expect(openclawExecArgs('/c', '/w', null, 60)).toContain('60');
+    });
+
+    it('a box turn: exec in the worktree, agora-mcp on stdio through the edge, the box rules first, the NVIDIA key, quiet, no resume', async () => {
+        const { c, dir } = await boxSetup('/opt/agora/bin/nemoclaw');
+        Object.assign(process.env, { HTTPS_PROXY: 'http://edge:3128', NO_PROXY: 'edge', HOME: '/home/agent' });
+        enterBox();
+        const state = c.profiles.builder.stateDir;
+        await mkdir(join(state, 'openclaw'), { recursive: true });
+        await writeFile(join(state, 'openclaw', 'AGENTS.md'), '# Box rules\nThe box is your sandbox.\n');
+        const d = delivery(); d.session.nativeSessionId = 'f0000000-0000-4000-8000-000000000001';
+        const launch = await prepare(c, d); cleanups.push(launch.cleanup);
+        expect(launch.executable).toBe('/opt/agora/bin/nemoclaw');
+        expect(launch.args.slice(0, 3)).toEqual(['agent', 'exec', '--json']);
+        expect(launch.args[launch.args.indexOf('--cwd') + 1]).toBe(launch.cwd);
+        expect(launch.args[launch.args.indexOf('--model') + 1]).toBe('nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b');
+        expect(launch.openclawSession).toBeUndefined();
+        const cfg = JSON.parse(await readFile(launch.args[launch.args.indexOf('--config') + 1], 'utf8'));
+        expect(cfg.tools).toEqual({ toolSearch: false });
+        expect(cfg.mcp.servers.agora).toEqual({ command: c.mcp.executable, args: [c.mcp.entrypoint, '--no-presence'],
+            env: { AGORA_INSTANCE: c.instance, AGORA_BOT_TOKEN: 'bot_selected.secret', AGORA_DEFAULT_CHANNEL: d.session.channelId, AGORA_HOOKS: 'off', AGORA_STOP_HOOK: 'off' } });
+        expect(launch.stdin.startsWith('# Box rules\nThe box is your sandbox.')).toBe(true);
+        expect(launch.stdin).toContain('Your working directory is already this session\'s git worktree');
+        // No resume: the prior summary goes in, as for a fresh conversation
+        expect(launch.stdin).toContain('Prior session summary (untrusted)');
+        expect(launch.stdin).not.toContain(NEMOCLAW_WAKE_NOTE);
+        expect(launch.env).toMatchObject({ NVIDIA_API_KEY: 'nvapi-box-secret', OPENCLAW_NO_AUTO_UPDATE: '1', DO_NOT_TRACK: '1',
+            HTTPS_PROXY: 'http://edge:3128', NO_PROXY: 'edge' });
+        expect(launch.env.AGORA_BOT_TOKEN).toBeUndefined();
+        expect(launch.env.AGORA_HOST_TOKEN).toBeUndefined();
+        void dir;
+    });
+
+    it('the box form refuses to run outside a box, the machine form inside one', async () => {
+        const { c } = await boxSetup();
+        await expect(prepare(c, delivery())).rejects.toThrow(NEMOCLAW_BOX_ONLY);
+        await expect(verifyProfile(c.profiles.builder)).rejects.toThrow(NEMOCLAW_BOX_ONLY);
+    });
+
+    it.skipIf(!unix)('the fake OpenClaw from box/fake: start-up check and a turn, not resumable', async () => {
+        const { exe, calls, set } = await fake();
+        await set({ mode: 'openclaw' });
+        enterBox();
+        const { c } = await boxSetup(exe);
+        expect(await verifyProfile(c.profiles.builder)).toBe('openclaw 2026.11.3');
+        const launch = await prepare(c, delivery()); cleanups.push(launch.cleanup);
+        const result = await new ProcessRunner().start(launch).result;
+        expect(result).toMatchObject({ success: true, nativeSessionId: null, tokensUsed: 960, summary: 'Handled in a box' });
+        const run = (await calls()).find(c => c.argv[1] === 'exec');
+        expect(run).toMatchObject({ nvidiaKey: true, toolSearch: false, mcp: { envNames: ['AGORA_BOT_TOKEN', 'AGORA_DEFAULT_CHANNEL', 'AGORA_HOOKS', 'AGORA_INSTANCE', 'AGORA_STOP_HOOK'] } });
+        await set({ mode: 'openclaw', version: '2026.12.1' });
+        await expect(verifyProfile(c.profiles.builder)).rejects.toThrow('unsupported_cli_version');
     });
 });

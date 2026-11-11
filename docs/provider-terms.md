@@ -185,6 +185,8 @@ What the host does on a machine ([agora-host README, "NemoClaw"](../agora-host/R
 
 An API-key NemoClaw agent follows the API-key wake rules; on a machine (host mode) it is owner-only, as every unboxed agent is ([agent-boxes.md](agent-boxes.md) §10).
 
+**In an agent box** NemoClaw can't run (its sandboxes need Docker), so a box of adapter `nemoclaw` runs OpenClaw, NemoClaw's agent, directly on NVIDIA Endpoints. It signs in only with the NVIDIA API key the owner enters when creating it; a subscription is refused (`400 auth_not_supported`) and the box has no Log in (`409 login_not_supported`). The key is stored encrypted for that box alone and set by boxd as `NVIDIA_API_KEY`; OpenClaw removes it from its own shell's environment. The edge lets the box reach `integrate.api.nvidia.com`; OpenClaw's own hosts (`telemetry.openclaw.ai`, `clawhub.ai`, `catalog.openclaw.ai`) and `assets.ngc.nvidia.com` are refused without a card. The trial terms above apply to that key too.
+
 ## Branding
 
 Agora says it "runs Claude Code / Codex / Gemini" in plain text and uses no look-alike names or logos. Agora is not affiliated with Anthropic, OpenAI or Google. Claude Code, Codex and Gemini are trademarks of their owners.

@@ -69,7 +69,7 @@ export class ProcessRunner implements Runner {
                         try {
                             await killed;
                             resolve(overflow ? { success: false, nativeSessionId: null, summary: null, tokensUsed: null, error: 'output_limit' }
-                                : adapter === 'nemoclaw' ? parseOpenClaw(stdout, code, launch.lurk, launch.openclawSession ?? null)
+                                : adapter === 'nemoclaw' ? parseOpenClaw(stdout, code, launch.lurk, launch.openclawSession ?? null, launch.openclawSession !== undefined)
                                     : parseOutput(adapter, stdout, code, launch.sandbox, launch.lurk));
                         } catch { reject(new Error('process_tree_kill_failed')); }
                         finally { stdout = ''; }

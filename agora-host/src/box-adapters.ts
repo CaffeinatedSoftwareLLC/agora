@@ -173,6 +173,31 @@ export const BOX_ADAPTERS = {
             },
         },
     },
+    nemoclaw: {
+        // NemoClaw itself needs Docker for its OpenShell sandboxes, which a gVisor box can't run:
+        // in a box the adapter runs OpenClaw directly (`openclaw agent exec`, nemoclaw.ts). The
+        // image links its Node 24 wrapper here under the adapter's name.
+        executable: '/opt/agora/bin/nemoclaw',
+        version: '2026.11.3',
+        protocol: 'cli',
+        acpArgs: [],
+        // NVIDIA Endpoints on the owner's key (docs/provider-terms.md "NVIDIA NemoClaw"); OpenClaw's
+        // built-in nvidia provider reads NVIDIA_API_KEY and strips it from its shell's environment
+        authModes: ['api_key'],
+        apiKeyEnv: 'NVIDIA_API_KEY',
+        login: null,
+        // Its update check and install ping run only under OpenClaw's Gateway, which exec never
+        // starts (checked on 2026.11.3 through a logging proxy: exec reached the model host only);
+        // these turn them off anyway
+        quiet: { env: { OPENCLAW_NO_AUTO_UPDATE: '1', DO_NOT_TRACK: '1' }, args: [] },
+        noProxy: [],
+        // agent exec never waits for an approval: its shell runs commands unasked (the box is the
+        // sandbox) and its file tools are confined to --cwd. No provider-side web search on NVIDIA.
+        yeet: { args: [], noOpenWeb: [], acpAllowAll: false },
+        // OpenClaw reads no global rules file the host can name: the host puts this one at the top
+        // of every prompt (adapters.ts)
+        state: { rulesFile: 'openclaw/AGENTS.md', files: {} },
+    },
 } as const satisfies Record<string, BoxAdapterRuntime>;
 
 export type BoxAdapterName = keyof typeof BOX_ADAPTERS;

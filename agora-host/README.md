@@ -687,6 +687,8 @@ doesn't update itself; `nemoclaw update` follows `lkg`, so run it on purpose. Th
 needs the sandbox to exist and run OpenClaw (`nemoclaw <sandbox> status --json`): NemoClaw
 refuses `agent` for Hermes and Deep Agents sandboxes.
 
+**In an agent box** NemoClaw itself can't run (its OpenShell sandboxes need Docker, which a gVisor box doesn't have), so the box's `nemoclaw` adapter runs OpenClaw, NemoClaw's agent, directly: `openclaw agent exec --json --config <run config> --cwd <worktree> --model nvidia/<model> --message-file -` (OpenClaw 2026.11.3 under its own Node 24, `/opt/agora/bin/nemoclaw` in the image). Inference is NVIDIA Endpoints on the box's `NVIDIA_API_KEY` (model `nvidia/nemotron-3.5-super-vl-120b-a12b` unless the profile names another catalog model); Agora's tools come from the stdio agora-mcp through the box's edge, shown to the model directly (`tools.toolSearch: false`). The agent works in the worktree, as every box agent does. `agent exec` can't continue a session, so each wake starts a fresh conversation with the session's summary; the box rules lead the prompt. Checked against OpenClaw 2026.11.3 in Docker with a stub model and MCP servers: the JSON envelope, stdio and Streamable HTTP MCP, the nvidia provider's key, and the hosts it contacts. A real NVIDIA turn is *verify live*.
+
 **Checked against** NemoClaw v0.0.143's documentation (commands, managed MCP, network policy,
 the `--json` envelopes) and a fake CLI (`box/fake/fake-nemoclaw.mjs`) in the tests. A real
 sandbox turn is *verify live*: run `nemoclaw <sandbox> agent --session-id test --json -m hi`

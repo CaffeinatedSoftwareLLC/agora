@@ -91,8 +91,16 @@ describe('box/Dockerfile installs and links every adapter', () => {
             expect(box).toContain(`ARG ${image.versionArg}=${image.version}\n`);
             // A URL as the Dockerfile writes it: the version ARG and the `arch` variable
             const url = (u: string) => u.replaceAll('{version}', `\${${image.versionArg}}`).replaceAll('{arch}', '${arch}');
-            if ('npm' in image) expect(box).toContain(`"${image.npm}@\${${image.versionArg}}"`);
-            else if ('binary' in image) {
+            if ('npm' in image) {
+                expect(box).toContain(`"${image.npm}@\${${image.versionArg}}"`);
+                // A Node.js of its own (OpenClaw needs 24): the release tarball per CPU, checked first
+                if (image.node) {
+                    for (const sum of Object.values(image.node.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));
+                    expect(box).toContain(`node-v\${OPENCLAW_NODE_VERSION}-linux-\${arch}.tar.xz`);
+                    expect(box).toContain(`ARG OPENCLAW_NODE_VERSION=${image.node.version}\n`);
+                    expect(box).toContain('sha256sum -c -');
+                }
+            } else if ('binary' in image) {
                 // One release binary per CPU, each with its own sha256, checked before it is used
                 expect(box).toContain(url(image.binary.url));
                 for (const sum of Object.values(image.binary.sha256)) expect(box).toMatch(new RegExp(`sum=${sum}\\b`));

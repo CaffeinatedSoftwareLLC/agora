@@ -6,7 +6,7 @@ import { api } from '../../lib/api';
  */
 
 /** The CLIs a box can run (the server's box adapter registry, src/lib/boxes/adapters.ts). */
-export type BoxAdapter = 'claude' | 'codex' | 'opencode' | 'omp' | 'devin';
+export type BoxAdapter = 'claude' | 'codex' | 'opencode' | 'omp' | 'devin' | 'nemoclaw';
 export type BoxAuth = 'subscription' | 'api_key';
 export type BoxState = 'creating' | 'running' | 'stopped' | 'failed' | 'deleted';
 export type BoxDesiredState = 'running' | 'stopped' | 'deleted';

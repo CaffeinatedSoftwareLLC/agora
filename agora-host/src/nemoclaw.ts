@@ -88,6 +88,41 @@ export function nemoclawAgentArgs(settings: NemoclawSettings, sessionId: string,
         ...(timeoutSeconds > 0 ? ['--timeout', String(timeoutSeconds)] : [])];
 }
 
+/** The NVIDIA Endpoints model a box uses when the profile names none (NemoClaw's default too). */
+export const OPENCLAW_DEFAULT_MODEL = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
+
+/** OpenClaw's model ref for an NVIDIA catalog model: `nvidia/<catalog id>`. */
+export function openclawModel(model: string | null): string {
+    const id = model ?? OPENCLAW_DEFAULT_MODEL;
+    return id.startsWith('nvidia/nvidia/') ? id : `nvidia/${id}`;
+}
+
+/**
+ * The OpenClaw config of one box run (`--config`, JSON5, so JSON): Agora's tools from the
+ * stdio agora-mcp (through the box's edge like every box adapter's), shown to the model
+ * directly instead of behind OpenClaw's tool search. The built-in nvidia provider needs no
+ * entry. Written mode 0600 in the run's own folder and removed after it.
+ */
+export function openclawBoxConfig(server: { command: string; args: string[] }, env: Record<string, string>): string {
+    return JSON.stringify({
+        tools: { toolSearch: false },
+        mcp: { servers: { agora: { command: server.command, args: server.args, env } } },
+    });
+}
+
+/** `openclaw agent exec` arguments of one box run (the prompt goes on stdin). */
+export function openclawExecArgs(configFile: string, cwd: string, model: string | null, timeoutSeconds: number): string[] {
+    // exec's own timeout ends the turn cleanly before the host's run timeout kills it. It isn't
+    // strict: with the model host unreachable, --timeout 20 returned after 72 s (2026.11.3)
+    const timeout = Math.max(60, timeoutSeconds - 90);
+    return ['agent', 'exec', '--json', '--config', configFile, '--cwd', cwd, '--model', openclawModel(model), '--timeout', String(timeout), '--message-file', '-'];
+}
+
+/** `openclaw --version` prints `OpenClaw 2026.11.3 (847611d)`. */
+export function openclawVersion(stdout: string): string | null {
+    return /^OpenClaw (\d+\.\d+\.\d+)[\s(]/m.exec(stdout)?.[1] ?? null;
+}
+
 /** The line added to a wake prompt in host mode: where the agent is, and what it can't see. */
 export const NEMOCLAW_WAKE_NOTE =
     'You run in your own NemoClaw sandbox. Agora\'s session worktree is on the host and you can\'t see or change it: work through the Agora tools '
@@ -135,7 +170,7 @@ function usageTokens(usage: any): number | null {
  * - a CLI error: `{ ok: false, error: { type, message } }`
  * Success needs exit 0, no error, and a reply (or a lurk run's silence).
  */
-export function parseOpenClaw(stdout: string, exitCode: number | null, lurk = false, sessionId: string | null = null): Result {
+export function parseOpenClaw(stdout: string, exitCode: number | null, lurk = false, sessionId: string | null = null, resumable = true): Result {
     let text: string | null = null; let tokensUsed: number | null = null; let nativeSessionId: string | null = null; let failed = false;
     const env = lastJson(stdout);
     if (!env) failed = true;
@@ -155,7 +190,8 @@ export function parseOpenClaw(stdout: string, exitCode: number | null, lurk = fa
     const success = !failed && exitCode === 0 && (final !== null || lurk);
     return {
         success,
-        nativeSessionId: nativeSessionId ?? (sessionId && OPENCLAW_SESSION_ID.test(sessionId) ? sessionId : null),
+        // `agent exec` (a box) can't continue a session: no id, so the next wake gets the summary
+        nativeSessionId: !resumable ? null : nativeSessionId ?? (sessionId && OPENCLAW_SESSION_ID.test(sessionId) ? sessionId : null),
         tokensUsed, summary: final === '[pass]' ? null : final, changedPaths: [],
         ...(success ? {} : { error: 'cli_failed_or_invalid_output' }),
     };
