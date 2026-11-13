@@ -11,6 +11,7 @@ import { parseProtocol, refuseSelfYield, threadWaiting } from '../lib/protocol';
 import { ulidTime } from '../utils/ulid';
 import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
+import { handleControlMessage } from '../lib/session-commands';
 import { routeMessage } from '../lib/agent-sessions';
 import { recordMessage } from '../lib/receipts';
 import { sanitizeMessageText } from '../lib/sanitize-text';
@@ -239,7 +240,12 @@ export async function threadRoutes(app: FastifyInstance) {
         const artifactRef = artifact ? await attachArtifact(db, { channelId, messageId: replyId, authorId: userId, input: artifact }) : null;
 
         // Wake agents this reply is addressed to (same transaction as the reply)
-        const termsNotices = await routeMessage(db, {
+        // `@agent /compact` is a command for that agent's CLI, not chat: nothing wakes it (src/lib/session-commands.ts)
+        const controlNotices = protocol ? null : await handleControlMessage(db, {
+            channelId, messageId: replyId, threadId: msgId, authorId: userId, authorIsBot: !!request.isBot, couldDirect,
+            content: content ?? '', mentionedUsers,
+        });
+        const termsNotices = controlNotices ?? await routeMessage(db, {
             channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol,
             mentionedUserIds: mentionedUsers.map(u => u.id), authorTokenId: request.isBot ? request.botTokenId ?? null : null,
         });

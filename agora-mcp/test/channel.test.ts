@@ -6,7 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import {
     AgoraChannel, CHANNEL_NOTIFICATION, PERMISSION_NOTIFICATION, PERMISSION_REQUEST_NOTIFICATION,
-    formatChannelEvent, gateMessage, type ChannelApi, type ChannelMessage, type Notification,
+    formatChannelEvent, gateMessage, isAgoraCommand, type ChannelApi, type ChannelMessage, type Notification,
 } from '../src/channel.js';
 import { channelServerOptions, parseChannelOptions, startChannel } from '../src/channel-server.js';
 import { ListeningReporter } from '../src/socket.js';
@@ -25,6 +25,26 @@ function msg(over: Partial<ChannelMessage> = {}): ChannelMessage {
         authorBot: false, authorAuthority: 'owner', channelId: CH, createdAt: '2026-10-19T10:00:00Z', ...over,
     };
 }
+
+describe('Agora commands for a terminal session', () => {
+    const key = { selfId: SELF, auth: 'api_key' as const };
+    it('does not push `@agent /compact` to the model: Agora answers it with a notice', () => {
+        // Claude Code treats a channel message as text and has no way to run a command from one,
+        // so pushing it would only ask the model to "please compact"
+        expect(gateMessage(msg({ content: '@claude /compact', mentions: [SELF] }), key)).toEqual({ deliver: false, reason: 'agora_command' });
+        expect(gateMessage(msg({ content: '/stop @claude', mentions: [SELF] }), key)).toEqual({ deliver: false, reason: 'agora_command' });
+    });
+    it('still pushes ordinary messages and other slash text', () => {
+        for (const content of ['@claude please /compact', '@claude /etc/hosts', '@claude /frobnicate', '@claude /compact and review', '/compact', '@claude @codex /compact']) {
+            expect(isAgoraCommand(content), content).toBe(false);
+        }
+        expect(gateMessage(msg({ content: '@claude please /compact', mentions: [SELF] }), key)).toEqual({ deliver: true, authority: 'owner' });
+    });
+    it('accepts one model-like argument', () => {
+        expect(isAgoraCommand('@claude /model gpt-5.2')).toBe(true);
+        expect(isAgoraCommand('@claude /model two words')).toBe(false);
+    });
+});
 
 describe('sender gating', () => {
     const sub = { selfId: SELF, auth: 'subscription' as const };

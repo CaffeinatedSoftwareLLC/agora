@@ -192,6 +192,9 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           The user's own CLI, connected through agora-mcp{terminal.terminalMode === 'channel' ? ' as a Claude Code Channel' : terminal.terminalMode === 'mcp' ? ' (chat_wait)' : ''}.
           It answers here while it is connected and ends when agora-mcp disconnects. Only owner and director messages are instructions to it.
         </p>
+        <p data-testid="terminal-commands" className="text-text-muted">
+          Commands such as /compact can't be sent to it from Agora: type them in that terminal. (Claude Code treats a channel message as text and gives an MCP server no way to run a command.)
+        </p>
         {owner && (
           <p data-testid="terminal-owner-token" className={`rounded-lg border p-3 ${owner.counts ? 'border-online/40 text-text' : 'border-border text-text-muted'}`}>
             {owner.yours && <span className="font-medium">{owner.counts ? 'Counts as you. ' : "Doesn't count as you. "}</span>}
@@ -286,6 +289,28 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                 <option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="vocal">Vocal</option>
               </select>
             </label>}
+          </div>
+        )}
+
+        {live && current && !!current.commands?.length && (
+          <div className="space-y-2 rounded-lg border border-border p-3 text-sm" role="group" aria-label="Commands">
+            <p className="font-medium">Commands</p>
+            <p className="text-text-muted">
+              Run as {selected}'s own CLI commands, not as chat. They can't start during a run: one sent meanwhile waits for it
+              (Stop is the exception). You can also type <span className="font-mono">@{current.botUsername} /compact</span> in the message box.
+            </p>
+            {current.pendingCommand && <p className="text-text-muted">/{current.pendingCommand.command} is waiting for its turn.</p>}
+            <ul className="flex flex-wrap gap-2">
+              {current.commands.map(c => (
+                <li key={c.name}>
+                  <button type="button" className={BTN_SECONDARY} disabled={busy || (!!current.pendingCommand && c.name !== 'stop')}
+                    title={`${c.summary}${c.ownerOnly ? ' (owner only)' : ''}`}
+                    onClick={() => void run({ command: 'control', profile: selected, control: c.name })}>
+                    /{c.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

@@ -7,6 +7,7 @@ import { limitReached, postNotice, postSessionNotice, sessionUpdate, type Notice
 import { LIMIT_SCHEMA, limitOf, limitStopSummary } from '../lib/agent-budget-notice';
 import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
+import { CONTROLS, controlsOf, LIVE_COMMAND_SQL, runControl, type ControlName } from '../lib/session-commands';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, terminalOwnerStateSql, wakeAuthMode } from '../lib/provider-terms';
 
 /**
@@ -60,6 +61,8 @@ export function sessionJson(r: any, viewerId?: string) {
         authMode: r.auth_mode ?? 'subscription', runApproval: !!r.run_approval,
         // As in the profile JSON (docs/agent-boxes.md §10): hostMode drives the owner-only rule, boxed the label
         hostMode: !!r.host_mode, boxed: !!r.boxed,
+        // What `@agent /command` can do for this session's CLI (docs/agent-commands.md); a terminal session can't be driven from Agora
+        adapter: r.adapter ?? null, commands: r.kind === 'terminal' ? [] : controlsOf(r.adapter), pendingCommand: r.pending_command ?? null,
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
         workspaceId: r.workspace_id,
         threadId: r.thread_id?.trim() ?? null, parentSessionId: r.parent_session_id?.trim() ?? null, title: r.title ?? null,
@@ -86,7 +89,8 @@ export function sessionJson(r: any, viewerId?: string) {
 // running: a host has claimed a run for this session and is working on it now
 // A terminal session has no profile: it is named after its bot
 export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profile_name, u.username AS bot_username, COALESCE(s.token_budget, p.token_budget) AS effective_token_budget, p.wake_budget,
-        p.auth_mode, p.host_mode, p.run_approval, p.plan_owner_id,
+        p.auth_mode, p.host_mode, p.run_approval, p.plan_owner_id, p.adapter,
+        (SELECT json_build_object('command', c.command, 'status', c.status) FROM agent_session_commands c WHERE c.session_id = s.id AND ${LIVE_COMMAND_SQL('c.')} ORDER BY c.id DESC LIMIT 1) AS pending_command,
         COALESCE((SELECT h.kind = 'box' FROM agent_hosts h WHERE h.id = p.host_id), false) AS boxed,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
             'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
@@ -195,7 +199,10 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 required: ['command'],
                 additionalProperties: false,
                 properties: {
-                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget', 'wake', 'lurk'] },
+                    command: { type: 'string', enum: ['start', 'end', 'sessions', 'resume', 'budget', 'wake', 'lurk', 'control'] },
+                    // 'control': a command for the agent's CLI (docs/agent-commands.md), the same as `@agent /compact` in a message
+                    control: { type: 'string', enum: Object.keys(CONTROLS) },
+                    threadId: { type: 'string', minLength: 26, maxLength: 26 },
                     lurkMode: { type: ['string', 'null'], enum: ['quiet', 'balanced', 'vocal', null] },
                     profile: { type: 'string', minLength: 1, maxLength: 32 },
                     sessionId: { type: 'string', minLength: 26, maxLength: 26 },
@@ -209,7 +216,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
         },
     }, async (request, reply) => {
         const { id: channelId } = request.params as any;
-        const { command, profile: profileName, sessionId, onLive = 'ask', fresh = false, tokenBudget, lurkMode } = request.body as any;
+        const { command, profile: profileName, sessionId, onLive = 'ask', fresh = false, tokenBudget, lurkMode, control, threadId } = request.body as any;
         const db = request.dbClient!;
         const userId = request.userId;
 
@@ -231,6 +238,25 @@ export async function agentCommandRoutes(app: FastifyInstance) {
         if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {
             // Only the owner and directors can start, end or resume agent sessions
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
+        }
+        if (command === 'control') {
+            if (!profileName || !control) return reply.status(400).send({ error: 'profile and control are required' });
+            // Notices are queued as events like the other commands; a refused command answers 409 (the notice says why)
+            let profile: any;
+            try { profile = await asService(db, () => profileByName(db, channelId, profileName)); }
+            catch (err: any) { if (err instanceof CommandError) return reply.status(err.status).send(err.body); throw err; }
+            // A thread to answer in must be a live top-level message of this channel
+            if (threadId && !(await asService(db, () => db.query(
+                `SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2 AND thread_id IS NULL AND deleted_at IS NULL`, [threadId, channelId]))).rows.length) {
+                return reply.status(400).send({ error: 'invalid_thread' });
+            }
+            const run = await runControl(db, { channelId, messageId: null, threadId: threadId ?? null, authorId: userId, authorIsBot: !!request.isBot,
+                couldDirect: true, botId: profile.bot_id.trim(), agentName: profile.name, name: control as ControlName, arg: null });
+            request.pendingEvents ??= [];
+            for (const n of run.notices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
+            if (run.outcome === 'not_agent') return reply.status(404).send({ error: 'unknown_profile' });
+            // Refused: the notice in the channel says why
+            return reply.status(run.outcome === 'refused' ? 409 : 200).send({ ...(run.outcome === 'refused' ? { error: 'command_refused' } : {}), action: 'control', control, outcome: run.outcome });
         }
         if (['start', 'lurk'].includes(command) && !profileName) return reply.status(400).send({ error: 'profile is required' });
         if (command === 'end' && !profileName && !sessionId) return reply.status(400).send({ error: 'profile or sessionId is required' });

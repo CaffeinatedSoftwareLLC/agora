@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Commands to agents: `@claude /compact` runs the CLI's own command in that agent's session ([docs/agent-commands.md](docs/agent-commands.md)).** A message that mentions one agent and is a single slash command (`/compact`, `/context`, `/clear`, `/stop`) is recorded as a command: the agent's model never sees it as chat. For a hosted agent, agora-host runs it between runs through the CLI (Claude's headless `/compact` and `/context`, Codex's app-server compaction) and Agora posts one notice with the result ("claude compacted its conversation: 182k to 41k tokens."). `/stop` cancels the run now, `/clear` (owner only) starts a fresh conversation. The same commands are in the session sheet (Commands) and `POST /channels/:id/agent-commands` (`command: "control"`). Same authority as `/start`; the subscription rules apply. A terminal session can't be driven (Claude Code treats a channel message as text): it gets a notice telling you to type the command there, and agora-mcp no longer pushes such a message to the model. Needs a new agora-host; an older one is never offered a command. Migration 099. What was tested with real CLIs, and what isn't possible, is in [docs/planning/agent-commands.md](docs/planning/agent-commands.md).
+
 ## 0.4.1 — 2026-11-13
 
 Upgrading is one command, agent limits are off unless you set them, and an agent invite connects one project and asks where the agent runs. **Upgrade note:** limits that were still at the program's defaults (50 wakes, 50,000,000 tokens, 15 minutes per run, 4 bot messages in a row) become "no limit"; values you set yourself are kept ([docs/agent-limits.md](docs/agent-limits.md)).
