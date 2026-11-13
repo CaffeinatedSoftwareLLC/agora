@@ -102,13 +102,31 @@ test('pausing refreshes the list in place instead of blanking the page', async (
   expect(screen.getByText('bot-1999')).toBeInTheDocument();
 });
 
+test('Loop Guard is off for a channel with no limits, and takes a limit of any size', async () => {
+  vi.mocked(serverApi.getChannels).mockResolvedValue([{ id: 'C1', name: 'agents', channelType: 3, serverId: 'server', maxBotHops: null, maxThreadBotHops: null }]);
+  const patch = vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (channelId, data) =>
+    ({ channelId, maxBotHops: data.maxBotHops ?? null, maxThreadBotHops: data.maxThreadBotHops ?? null }));
+  render(<MemoryRouter><BotManagement /></MemoryRouter>);
+  const channelSwitch = await screen.findByRole('switch', { name: 'Channel loop guard in #agents' });
+  expect(channelSwitch).not.toBeChecked();
+  expect(screen.getByRole('switch', { name: 'Threads loop guard in #agents' })).not.toBeChecked();
+  expect(screen.getAllByText('No limit')).toHaveLength(2);
+  expect(screen.getByText(/Off unless you turn it on\. A guard stops bots after the number of bot posts in a row you set/)).toBeInTheDocument();
+  fireEvent.click(channelSwitch);
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 4 }));
+  const limit = screen.getByLabelText('Channel limit in #agents (bot messages)');
+  expect(limit).not.toHaveAttribute('max');
+  fireEvent.change(limit, { target: { value: '1000000' } });
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 1000000 }), { timeout: 2000 });
+});
+
 test('Loop Guard shows both limits per channel with on/off switches (#23)', async () => {
   vi.mocked(serverApi.getChannels).mockResolvedValue([
     { id: 'C1', name: 'agents', channelType: 3, serverId: 'server', maxBotHops: 4, maxThreadBotHops: 0 },
     { id: 'V1', name: 'voice', channelType: 5, serverId: 'server' },
   ]);
   const patch = vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (channelId, data) =>
-    ({ channelId, maxBotHops: data.maxBotHops ?? 4, maxThreadBotHops: data.maxThreadBotHops ?? 0 }));
+    ({ channelId, maxBotHops: 'maxBotHops' in data ? data.maxBotHops ?? null : 4, maxThreadBotHops: data.maxThreadBotHops ?? null }));
   render(<MemoryRouter><BotManagement /></MemoryRouter>);
   const channelSwitch = await screen.findByRole('switch', { name: 'Channel loop guard in #agents' });
   const threadSwitch = screen.getByRole('switch', { name: 'Threads loop guard in #agents' });
@@ -131,7 +149,9 @@ test('Loop Guard shows both limits per channel with on/off switches (#23)', asyn
   } finally { vi.useRealTimers(); }
   await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 9 }));
   fireEvent.click(channelSwitch);
-  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: 0 }));
+  // Off is "no limit": null, not a number
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('C1', { maxBotHops: null }));
+  expect(screen.getAllByText('No limit').length).toBeGreaterThan(0);
   expect(channelSwitch).not.toBeChecked();
   fireEvent.click(channelSwitch);
   await waitFor(() => expect(patch).toHaveBeenLastCalledWith('C1', { maxBotHops: 9 }));
@@ -169,7 +189,7 @@ describe('Loop Guard saves', () => {
   });
 
   it('sends a change still in its debounce after the save in flight when the page closes', async () => {
-    const calls: number[] = [];
+    const calls: (number | null)[] = [];
     let release: (() => void) | undefined;
     vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (_c, data) => {
       calls.push(data.maxBotHops!);
@@ -208,7 +228,7 @@ describe('Loop Guard saves', () => {
   });
 
   it('sends saves of one field in order, one at a time', async () => {
-    const calls: number[] = [];
+    const calls: (number | null)[] = [];
     let release: (() => void) | undefined;
     vi.spyOn(botApi, 'updateChannelBotConfig').mockImplementation(async (_c, data) => {
       calls.push(data.maxBotHops!);
@@ -218,12 +238,12 @@ describe('Loop Guard saves', () => {
     render(<MemoryRouter><BotManagement /></MemoryRouter>);
     const sw = await screen.findByRole('switch', { name: 'Channel loop guard in #agents' });
     fireEvent.click(sw); // off
-    await waitFor(() => expect(calls).toEqual([0]));
+    await waitFor(() => expect(calls).toEqual([null]));
     fireEvent.click(sw); // back on while the first save is still out
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
-    expect(calls).toEqual([0]);
+    expect(calls).toEqual([null]);
     release!();
-    await waitFor(() => expect(calls).toEqual([0, 4]));
+    await waitFor(() => expect(calls).toEqual([null, 4]));
     expect(sw).toBeChecked();
   });
 });

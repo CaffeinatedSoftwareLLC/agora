@@ -1112,22 +1112,27 @@ describe('host API (S2)', () => {
             expect(session.rows[0]).toMatchObject({ state: 'shelved', end_reason: 'budget' });
             expect(Number(session.rows[0].tokens_used)).toBe(150);
             const notice = await ctx.db.query("SELECT content FROM messages WHERE channel_id = $1 AND content LIKE 'Session for codex shelved:%' ORDER BY id DESC LIMIT 1", [channelId]);
-            expect(notice.rows[0].content).toContain('its token budget is used up (150 of 100 tokens)');
+            expect(notice.rows[0].content).toContain('its token limit is used up (150 of 100 tokens)');
         } finally {
             await ctx.db.query('UPDATE agent_profiles SET token_budget = 2000000 WHERE id = $1', [codex.profileId]);
         }
     });
 
-    it('shelves the session when its wake budget is used up', async () => {
+    it('shelves the session when its wake limit is used up', async () => {
         const s = await startSession(codex);
-        await ctx.db.query('UPDATE agent_sessions SET wakes_used = 50 WHERE id = $1', [s]);
-        await post(owner.auth, '@codex go');
-        expect((await claim()).status).toBe(204);
-        const session = await ctx.db.query('SELECT state, end_reason FROM agent_sessions WHERE id = $1', [s]);
-        expect(session.rows[0]).toMatchObject({ state: 'shelved', end_reason: 'budget' });
-        const notice = await ctx.db.query("SELECT content FROM messages WHERE channel_id = $1 AND content LIKE 'Session for codex shelved:%' ORDER BY id DESC LIMIT 1", [channelId]);
-        expect(notice.rows[0].content).toContain('its wake budget is used up (50 of 50 wakes)');
-        expect(notice.rows[0].content).toContain('[Agent settings](/settings/agents)');
+        await ctx.db.query('UPDATE agent_profiles SET wake_budget = 50 WHERE id = $1', [codex.profileId]);
+        try {
+            await ctx.db.query('UPDATE agent_sessions SET wakes_used = 50 WHERE id = $1', [s]);
+            await post(owner.auth, '@codex go');
+            expect((await claim()).status).toBe(204);
+            const session = await ctx.db.query('SELECT state, end_reason FROM agent_sessions WHERE id = $1', [s]);
+            expect(session.rows[0]).toMatchObject({ state: 'shelved', end_reason: 'budget' });
+            const notice = await ctx.db.query("SELECT content FROM messages WHERE channel_id = $1 AND content LIKE 'Session for codex shelved:%' ORDER BY id DESC LIMIT 1", [channelId]);
+            expect(notice.rows[0].content).toContain('its wake limit is used up (50 of 50 wakes)');
+            expect(notice.rows[0].content).toContain('[Agent settings](/settings/agents)');
+        } finally {
+            await ctx.db.query('UPDATE agent_profiles SET wake_budget = NULL WHERE id = $1', [codex.profileId]);
+        }
     });
 
     it('a retry batch whose thread closed is dropped', async () => {
@@ -1392,6 +1397,6 @@ describe('run visibility and session token budgets', () => {
         expect(row.error).toBeNull();
         expect((await ctx.db.query('SELECT state FROM agent_sessions WHERE id = $1', [id])).rows[0].state).toBe('shelved');
         const notice = await ctx.db.query("SELECT content FROM messages WHERE channel_id = $1 AND content LIKE 'Session for codex shelved:%' ORDER BY id DESC LIMIT 1", [channelId]);
-        expect(notice.rows[0].content).toContain('its token budget is used up (5 of 5 tokens)');
+        expect(notice.rows[0].content).toContain('its token limit is used up (5 of 5 tokens)');
     });
 });

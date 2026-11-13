@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { RunActivity } from './RunActivity';
 import { elapsedTime } from './agentSessions';
 import { SessionBudget } from './SessionBudget';
@@ -84,14 +85,14 @@ describe('run activity', () => {
     expect(elapsedTime('2026-01-01T00:00:00Z', Date.parse('2026-01-01T00:02:03Z'))).toBe('2m 3s');
     expect(elapsedTime('2026-01-01T00:00:00Z', 0)).toBe('0s');
   });
-  it('lets the owner save a session-specific budget', async () => {
+  it('lets the owner give a session its own token limit', async () => {
     useAuthStore.setState({ user: { id: 'owner' } as never });
     useChannelStore.setState({ channels: new Map([['channel', { id: 'channel', name: 'general', channelType: 0, serverId: 'server' }]]) });
     useServerStore.setState({ servers: new Map([['server', { id: 'server', name: 'server', ownerId: 'owner' }]]) });
     post.mockResolvedValue({ action: 'budget_updated' }); const onChanged = vi.fn();
-    render(<SessionBudget session={session()} channelId="channel" onChanged={onChanged} />);
+    render(<MemoryRouter><SessionBudget session={session()} channelId="channel" onChanged={onChanged} /></MemoryRouter>);
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '200' } });
-    fireEvent.click(screen.getByText('Save budget'));
+    fireEvent.click(screen.getByText('Save limit'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(post).toHaveBeenCalledWith('/channels/channel/agent-commands', { command: 'budget', sessionId: 'session', tokenBudget: 200 });
   });

@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034  # variables read inside check_true's eval
 # The macOS installer's decisions (install/macos), with the Mac and Lima replaced by stubs:
 # uname, sw_vers, sysctl, df, pmset, lsof, curl, brew, limactl, launchctl, sudo and open are
-# fakes on PATH that log their calls. "Guest" commands run on this machine. No VM, no Homebrew,
+# fakes on PATH that log their calls (curl also serves a release for the upgrade checks). "Guest" commands run on this machine. No VM, no Homebrew,
 # nothing outside a temp folder is changed.
 #
 #   bash test/install/macos.test.sh        (CI: also /bin/bash on macOS, which is bash 3.2)
@@ -34,7 +34,7 @@ stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/di
 stub pmset 'printf " standby 1\n sleep %s\n" "${FAKE_SLEEP:-0}"'
 # nc -z -w 1 127.0.0.1 <port>: "connects" (exit 0) to a busy port
 stub nc 'p=$(eval echo "\${$#}"); for b in ${FAKE_BUSY_PORTS:-}; do [ "$b" = "$p" ] && exit 0; done; exit 1'
-stub curl "case \"\$*\" in *release-20261101/SHA256SUMS*) exit 22 ;; */releases/noble/) printf '<a href=\"release-20261017/\">x</a> <a href=\"release-20261101/\">y</a> <a href=\"release/\">z</a>' ;; *SHA256SUMS*) printf '%s *ubuntu-24.04-server-cloudimg-amd64.img\n%s *ubuntu-24.04-server-cloudimg-arm64.img\n' ffff$DIGEST $DIGEST ;; *health*) echo '{\"status\":\"ok\"}' ;; *) exit 22 ;; esac"
+stub curl "a=\"\$*\"; o=''; while [ \$# -gt 0 ]; do [ \"\$1\" = -o ] && o=\$2; shift; done; case \"\$a\" in *agora.tar.gz.sha256) cp \"$T/rel/agora.tar.gz.sha256\" \"\$o\" ;; *agora.tar.gz) cp \"$T/rel/agora.tar.gz\" \"\$o\" ;; *release-20261101/SHA256SUMS*) exit 22 ;; */releases/noble/) printf '<a href=\"release-20261017/\">x</a> <a href=\"release-20261101/\">y</a> <a href=\"release/\">z</a>' ;; *SHA256SUMS*) printf '%s *ubuntu-24.04-server-cloudimg-amd64.img\n%s *ubuntu-24.04-server-cloudimg-arm64.img\n' ffff$DIGEST $DIGEST ;; *health*) echo '{\"status\":\"ok\"}' ;; *) exit 22 ;; esac"
 stub open ':'
 stub tmutil 'case "$1" in isexcluded) echo "[Included] $2" ;; esac'
 stub launchctl 'case "$1" in bootstrap) [ "${FAKE_NO_GUI:-0}" = 1 ] && [ "${2#gui/}" != "$2" ] && exit 5; exit 0 ;; *) exit 0 ;; esac'
@@ -73,7 +73,9 @@ case "\$1" in
                 mkdir -p "\$HOME/.agora"; echo "https://localhost:\$(printf '%s\n' "\$@" | sed -n '/^--https-port$/{n;p;}')" > "\$HOME/.agora/last-install-url"
                 exit "\${FAKE_LINUX_EXIT:-0}" ;;
             *install/backup.sh*) out=\$(printf '%s\n' "\$@" | sed -n '/^--out$/{n;p;}'); mkdir -p "\$(dirname "\$out")"; echo bundle > "\$out"; exit 0 ;;
-            *install/restore.sh*|*install/upgrade.sh*|*install/uninstall.sh*|*install/doctor.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit 0 ;;
+            *install/upgrade.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit "\${FAKE_UPGRADE_EXIT:-0}" ;;
+            "bash "*install/tailnet.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit "\${FAKE_TAILNET_EXIT:-0}" ;;
+            *install/restore.sh*|*install/uninstall.sh*|*install/doctor.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit 0 ;;
         esac
         if [ "\$1" = tar ]; then shift; [ "\$1" = --warning=no-unknown-keyword ] && shift; exec $REAL_TAR "\$@"; fi
         exec "\$@" ;;
@@ -310,6 +312,80 @@ run "$V" keepalive agent
 check_true 'keepalive agent: back to the LaunchAgent, no LaunchDaemon' '[ "$RC" = 0 ] && [ ! -f "$T/daemons/com.agora.vm.agora.plist" ] && [ -f "$T/home/Library/LaunchAgents/com.agora.vm.agora.plist" ]'
 run "$V" keepalive sometimes
 check 'keepalive with a bad mode: refused' 1 "$RC"
+FAKE_ENV=()
+
+# ─── agora-vm.sh upgrade: the latest release, downloaded and checked on the Mac ───
+mkdir -p "$T/relsrc/agora" "$T/rel" "$T/tmp"
+cp -R "$ROOT/install" "$T/relsrc/agora/"
+printf '{\n  "name": "agora",\n  "version": "9.9.9"\n}\n' > "$T/relsrc/agora/package.json"
+printf 'services: {}\n' > "$T/relsrc/agora/docker-compose.prod.yml"
+mk_rel() { # the release the curl stub serves, with a matching checksum
+    $REAL_TAR -czf "$T/rel/agora.tar.gz" -C "$T/relsrc" agora
+    if command -v sha256sum >/dev/null 2>&1; then (cd "$T/rel" && sha256sum agora.tar.gz > agora.tar.gz.sha256)
+    else (cd "$T/rel" && shasum -a 256 agora.tar.gz > agora.tar.gz.sha256); fi
+}
+mk_rel
+guest_args() { tr '\n' ' ' < "$T/guest-script-args" 2>/dev/null || true; }
+FAKE_ENV=(TMPDIR="$T/tmp")
+rm -f "$T/guest-script-args"; : > "$CALLS"; run "$V" upgrade --passphrase-file "$T/pp"
+ga=$(guest_args)
+check 'upgrade with no release given: exit 0' 0 "$RC"
+check_true 'upgrade: downloads agora.tar.gz and its SHA-256 from the fixed agora-latest release, over HTTPS only' 'grep -q "^curl -fsSL --proto =https -o .*/agora.tar.gz https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/agora.tar.gz$" "$CALLS" && grep -q "^curl .*releases/download/agora-latest/agora.tar.gz.sha256$" "$CALLS"'
+check_true 'upgrade: runs the downloaded release.s upgrade.sh in the VM, on the install, with the passphrase file' 'case "$ga" in "bash /tmp/agora-src."*"/install/upgrade.sh --dir $T/guest/agora --passphrase-file /tmp/agora-in."*"/pp "*) true ;; *) false ;; esac'
+check_true 'upgrade: checks Agora from the Mac afterwards' 'grep -q "ok      Agora answers on this Mac at http://127.0.0.1:3000/health" "$T/out"'
+check 'upgrade: the downloaded release becomes this Mac.s copy of the commands' 9.9.9 "$(sed -n 's/.*"version": "\(.*\)".*/\1/p' "$T/home/.agora/macos/release/package.json" 2>/dev/null)"
+check_true 'upgrade: says where they are' 'grep -q "Mac commands are in $T/home/.agora/macos/release" "$T/out"'
+check 'upgrade: nothing left in the temporary folder' '' "$(ls "$T/tmp")"
+rm -f "$T/guest-script-args"; : > "$CALLS"; run "$V" upgrade --ref v9.9.9
+check_true 'upgrade --ref: that release' '[ "$RC" = 0 ] && grep -q "releases/download/v9.9.9/agora.tar.gz$" "$CALLS" && ! grep -q agora-latest "$CALLS"'
+rm -f "$T/guest-script-args"; : > "$CALLS"; run "$V" upgrade --source "$T/relsrc/agora"
+check_true 'upgrade --source: a checkout, nothing downloaded' '[ "$RC" = 0 ] && ! grep -q "agora.tar.gz" "$CALLS" && [ -s "$T/guest-script-args" ]'
+run "$V" upgrade --source "$T/relsrc/agora" --ref v9.9.9
+check 'upgrade --source with --ref: refused' 1 "$RC"
+echo "0000000000000000000000000000000000000000000000000000000000000000  agora.tar.gz" > "$T/rel/agora.tar.gz.sha256"
+rm -f "$T/guest-script-args"; : > "$CALLS"; run "$V" upgrade
+check_true 'upgrade: a download that fails its SHA-256 is refused before anything reaches the VM' '[ "$RC" = 1 ] && grep -q "doesn.t match its SHA-256" "$T/out" && [ ! -e "$T/guest-script-args" ] && ! grep -q "^limactl copy" "$CALLS"'
+check 'upgrade: a refused download leaves nothing in the temporary folder' '' "$(ls "$T/tmp")"
+mk_rel
+FAKE_ENV=(TMPDIR="$T/tmp" FAKE_UPGRADE_EXIT=4); run "$V" upgrade
+check_true 'upgrade: a failure in the VM is reported with the way back, and the Mac.s copy is not replaced' '[ "$RC" = 1 ] && grep -q "install/upgrade.sh failed in agora (exit 4)" "$T/out" && grep -q -- "--rollback" "$T/out"'
+FAKE_ENV=()
+
+# ─── agora-vm.sh tailnet ───
+rm -f "$T/guest-script-args"; run "$V" tailnet on
+check_true 'tailnet with an install from before the command: says to upgrade first' '[ "$RC" = 1 ] && grep -q "upgrade it first" "$T/out" && [ ! -e "$T/guest-script-args" ]'
+mkdir -p "$T/guest/agora/install"; : > "$T/guest/agora/install/tailnet.sh"
+run "$V" tailnet on --hostname agora-home --install-tailscale
+check 'tailnet on: runs the install.s tailnet.sh in the VM with the name' "bash $T/guest/agora/install/tailnet.sh on --dir $T/guest/agora --hostname agora-home --install-tailscale " "$(guest_args)"
+run "$V" tailnet status
+check 'tailnet status: passed on' "bash $T/guest/agora/install/tailnet.sh status --dir $T/guest/agora " "$(guest_args)"
+FAKE_ENV=(FAKE_TAILNET_EXIT=1); run "$V" tailnet status
+check 'tailnet status: a failed check is this command.s exit code' 1 "$RC"
+FAKE_ENV=()
+run "$V" tailnet sideways
+check 'tailnet with another word: refused' 1 "$RC"
+
+# ─── upgrade-latest.sh (published as upgrade-macos.sh): one file, no checkout ───
+UL="$T/alone/upgrade-macos.sh"; mkdir -p "$T/alone"; cp "$ROOT/install/macos/upgrade-latest.sh" "$UL"
+rm -rf "$T/home/.agora/macos/release"; rm -f "$T/guest-script-args"; : > "$CALLS"
+FAKE_ENV=(TMPDIR="$T/tmp"); run "$UL"
+check_true 'upgrade-macos.sh without a terminal or --yes: explains, then stops before downloading' '[ "$RC" = 1 ] && grep -q "This upgrades the Agora install in the Lima VM" "$T/out" && ! grep -q "^curl" "$CALLS" && [ ! -e "$T/guest-script-args" ]'
+run "$UL" --yes --passphrase-file "$T/pp"
+ga=$(guest_args)
+check 'upgrade-macos.sh --yes: exit 0' 0 "$RC"
+check_true 'upgrade-macos.sh: downloads the latest release and its SHA-256' 'grep -q "^curl -fsSL --proto =https -o .*/agora.tar.gz https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/agora.tar.gz$" "$CALLS" && grep -q "agora-latest/agora.tar.gz.sha256$" "$CALLS"'
+check_true 'upgrade-macos.sh: that release.s upgrade.sh runs in the VM with the passphrase file' 'case "$ga" in "bash /tmp/agora-src."*"/install/upgrade.sh --dir $T/guest/agora --passphrase-file /tmp/agora-in."*"/pp "*) true ;; *) false ;; esac'
+check 'upgrade-macos.sh: keeps the release.s Mac commands' 9.9.9 "$(sed -n 's/.*"version": "\(.*\)".*/\1/p' "$T/home/.agora/macos/release/package.json" 2>/dev/null)"
+check_true 'upgrade-macos.sh: ends with the one command for next time and the way back' 'grep -q "bash $T/home/.agora/macos/release/install/macos/agora-vm.sh upgrade" "$T/out" && grep -q "limactl shell --workdir $T/guest/agora agora bash install/upgrade.sh --rollback" "$T/out"'
+check 'upgrade-macos.sh: the temporary folder is gone' '' "$(ls "$T/tmp")"
+echo "0000000000000000000000000000000000000000000000000000000000000000  agora.tar.gz" > "$T/rel/agora.tar.gz.sha256"
+rm -f "$T/guest-script-args"; run "$UL" --yes
+check_true 'upgrade-macos.sh: a download that fails its SHA-256 changes nothing' '[ "$RC" = 1 ] && grep -q "doesn.t match its SHA-256; nothing was changed" "$T/out" && [ ! -e "$T/guest-script-args" ] && [ -z "$(ls "$T/tmp")" ]'
+mk_rel
+FAKE_ENV=(TMPDIR="$T/tmp" FAKE_UPGRADE_EXIT=4); run "$UL" --yes
+check_true 'upgrade-macos.sh: a failed upgrade prints the rollback command and cleans up' '[ "$RC" != 0 ] && grep -q "limactl shell --workdir $T/guest/agora agora bash install/upgrade.sh --rollback" "$T/out" && [ -z "$(ls "$T/tmp")" ]'
+FAKE_ENV=(TMPDIR="$T/tmp"); run "$UL" --yes --vm nosuch
+check_true 'upgrade-macos.sh: a VM that isn.t there is refused before anything is asked or downloaded' '[ "$RC" = 1 ] && grep -q "no Lima VM named nosuch" "$T/out"'
 FAKE_ENV=()
 
 # ─── uninstall.sh ───

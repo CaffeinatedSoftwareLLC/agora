@@ -447,10 +447,11 @@ jobs:
       - name: macOS installer scripts (shellcheck, decisions with Lima stubbed)
         run: |
           command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq shellcheck; }
-          shellcheck -x -P SCRIPTDIR -S warning install/macos/*.sh install/macos/lib/macos.sh install/macos/guest/host-firewall.sh test/install/macos.test.sh
+          shellcheck -x -P SCRIPTDIR -S warning install/macos/*.sh install/macos/lib/macos.sh install/macos/guest/host-firewall.sh test/install/macos.test.sh             install/tailnet.sh install/lib/tailnet.sh test/install/tailnet.test.sh test/install/fake-tailscale.sh
           bash test/install/macos.test.sh
       - run: bash test/install/backup.test.sh
       - run: bash test/install/upgrade.test.sh
+      - run: bash test/install/tailnet.test.sh
       - run: bash test/install/db-password.test.sh
       - run: bash test/install/uninstall.test.sh
       # Adds a docker group to check the installer's group handling, so it needs root

@@ -9,7 +9,7 @@ import { useCanManageBots } from '../../hooks/useCanManageBots';
  */
 export function LoopGuardBadge({ channel }: { channel: Channel }) {
   const canManage = useCanManageBots(channel.serverId);
-  const top = channel.maxBotHops ?? 4;
+  const top = channel.maxBotHops ?? 0;
   const thread = channel.maxThreadBotHops ?? 0;
   if (top <= 0 && thread <= 0) return null;
 

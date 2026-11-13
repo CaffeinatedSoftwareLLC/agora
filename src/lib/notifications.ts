@@ -296,7 +296,7 @@ export async function notifySession(c: any, sessionId: string, alert: SessionAle
         )).rows[0];
         if (!s?.channel_id) return [];
         const to = s.starter_ok ? s.started_by.trim() : s.owner_id.trim();
-        const what = alert === 'budget' ? 'used up its budget' : alert === 'credit' ? 'hit its usage limit' : 'is blocked';
+        const what = alert === 'budget' ? 'was stopped by a limit you set' : alert === 'credit' ? 'hit its usage limit' : 'is blocked';
         return insertNotifications(c, {
             type: 'session', recipients: [to], channelId: s.channel_id,
             label: ch => `${s.name} ${what} in #${ch}`,

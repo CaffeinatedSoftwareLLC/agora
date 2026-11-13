@@ -390,7 +390,7 @@ describe('Sprint B: Coordination Core', () => {
 
             test('disabled by default: bots can reply past the channel limit', async () => {
                 const cfg = await ctx.db.query('SELECT max_thread_bot_hops FROM channels WHERE id = $1', [generalChannelId]);
-                expect(cfg.rows[0].max_thread_bot_hops).toBe(0);
+                expect(Number(cfg.rows[0].max_thread_bot_hops)).toBe(0);
 
                 for (let i = 0; i < 6; i++) {
                     const res = await botReply(`Unguarded reply ${i}`);
@@ -495,7 +495,7 @@ describe('Sprint B: Coordination Core', () => {
 
                 expect(res.status).toBe(200);
                 expect(res.body.maxBotHops).toBe(9);
-                expect(res.body.maxThreadBotHops).toBe(0);
+                expect(res.body.maxThreadBotHops).toBeNull();
             });
 
             test('rejects empty and unknown bodies', async () => {
@@ -526,7 +526,7 @@ describe('Sprint B: Coordination Core', () => {
                     .set(owner.auth);
                 const general = res.body.find((c: any) => c.id === generalChannelId);
                 expect(general.maxBotHops).toBe(4);
-                expect(general.maxThreadBotHops).toBe(0);
+                expect(general.maxThreadBotHops).toBeNull();
             });
         });
     });

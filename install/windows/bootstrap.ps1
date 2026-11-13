@@ -13,6 +13,9 @@
     powershell -ExecutionPolicy Bypass -File install.ps1
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install.ps1 -Ref v0.4.0 -Agent claude -Telemetry off
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File install.ps1 -Existing upgrade
+    Upgrades the Agora install already on this PC to the latest release.
 #>
 [CmdletBinding()]
 param(
@@ -54,5 +57,23 @@ try {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
 
-& (Join-Path $src 'install\windows\install.ps1') -SourceDir $src @InstallerArgs
+# Splatting the leftover arguments as an array would hand them over by position ("-Existing"
+# would become the first parameter's value), so turn them back into named ones: -Name value,
+# or -Name alone for a switch.
+$named = @{}
+$i = 0
+while ($i -lt $InstallerArgs.Count) {
+    $arg = $InstallerArgs[$i]
+    if ($arg -notmatch '^-([A-Za-z]+)$') { throw "Unexpected argument '$arg' (expected -Name or -Name value)." }
+    $name = $Matches[1]
+    if ($name -eq 'SourceDir') { throw 'This installer downloads the release itself; -SourceDir is for install\windows\install.ps1 in a checkout.' }
+    if (($i + 1) -lt $InstallerArgs.Count -and $InstallerArgs[$i + 1] -notmatch '^-[A-Za-z]+$') {
+        $named[$name] = $InstallerArgs[$i + 1]
+        $i += 2
+    } else {
+        $named[$name] = $true
+        $i += 1
+    }
+}
+& (Join-Path $src 'install\windows\install.ps1') -SourceDir $src @named
 exit $LASTEXITCODE

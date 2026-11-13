@@ -816,7 +816,7 @@ When a message contains `@botname`, the mention resolution queries both `server_
 
 ### Loop guard
 
-A Redis-based per-channel counter tracks consecutive bot messages. When the count exceeds `max_bot_hops` (configurable per channel, default 4), a system message is posted and the `ChannelLoopGuard` event is emitted. Human messages reset the counter. Setting `max_bot_hops = 0` disables the guard.
+Off by default ([agent-limits.md](agent-limits.md)). When a channel has `max_bot_hops` set, a Redis-based per-channel counter tracks consecutive bot messages; when the count exceeds it, a system message is posted and the `ChannelLoopGuard` event is emitted. Human messages reset the counter. `NULL` (or 0) means no guard. `max_thread_bot_hops` is the same per thread.
 
 ### Rate limiting
 

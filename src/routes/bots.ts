@@ -10,6 +10,7 @@ import { asService } from '../lib/agent-sessions';
 import { endTerminalSessionNow, limitNotice, storeTerminalStatus, type LimitWarning } from '../lib/terminal-sessions';
 import { postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { agentPresence } from '../lib/agent-presence';
+import { MAX_LIMIT, hopLimitOf } from '../lib/agent-budget-notice';
 
 const AVATAR_URL_MAX_LENGTH = 50_000; // 50KB string limit
 const AVATAR_DATA_URI_RE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -747,8 +748,9 @@ export async function botRoutes(app: FastifyInstance) {
                 minProperties: 1,
                 additionalProperties: false,
                 properties: {
-                    maxBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
-                    maxThreadBotHops: { type: 'integer', minimum: 0, maximum: 1000 },
+                    // Bot messages in a row before the guard stops them; null (or 0, as in Agora 0.4.0 and earlier) turns it off
+                    maxBotHops: { type: ['integer', 'null'], minimum: 0, maximum: MAX_LIMIT },
+                    maxThreadBotHops: { type: ['integer', 'null'], minimum: 0, maximum: MAX_LIMIT },
                 },
             },
         },
@@ -759,11 +761,11 @@ export async function botRoutes(app: FastifyInstance) {
 
         const result = await db.query(
             `UPDATE channels
-             SET max_bot_hops = COALESCE($1, max_bot_hops),
-                 max_thread_bot_hops = COALESCE($2, max_thread_bot_hops)
+             SET max_bot_hops = CASE WHEN $4::boolean THEN $1 ELSE max_bot_hops END,
+                 max_thread_bot_hops = CASE WHEN $5::boolean THEN $2 ELSE max_thread_bot_hops END
              WHERE id = $3
              RETURNING max_bot_hops, max_thread_bot_hops`,
-            [maxBotHops ?? null, maxThreadBotHops ?? null, channelId]
+            [maxBotHops || null, maxThreadBotHops || null, channelId, maxBotHops !== undefined, maxThreadBotHops !== undefined]
         );
 
         // Clear stale Redis loop guard counters so new limits apply immediately
@@ -784,8 +786,8 @@ export async function botRoutes(app: FastifyInstance) {
 
         const config = {
             channelId: channelId.trim(),
-            maxBotHops: result.rows[0].max_bot_hops,
-            maxThreadBotHops: result.rows[0].max_thread_bot_hops,
+            maxBotHops: hopLimitOf(result.rows[0].max_bot_hops),
+            maxThreadBotHops: hopLimitOf(result.rows[0].max_thread_bot_hops),
         };
         // Channel headers and loop-guard notices show the limits live
         request.pendingEvents ??= [];
@@ -829,7 +831,7 @@ export async function botRoutes(app: FastifyInstance) {
 
         const limits = (await db.query('SELECT max_bot_hops, max_thread_bot_hops FROM channels WHERE id = $1', [channelId])).rows[0];
         const scope = threadId ? 'thread' : 'channel';
-        const limit: number = threadId ? (limits.max_thread_bot_hops ?? 0) : (limits.max_bot_hops ?? 4);
+        const limit: number | null = hopLimitOf(threadId ? limits.max_thread_bot_hops : limits.max_bot_hops);
 
         // Same keys as the guards in messages.ts and threads.ts
         try {
@@ -839,7 +841,7 @@ export async function botRoutes(app: FastifyInstance) {
         const username = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'An admin';
         // Not "Loop guard: ...": agents read a line starting that way as the stop signal
         const content = `Agents may continue: ${username} resumed ${threadId ? 'this thread' : 'this channel'} after the loop guard`
-            + (limit > 0 ? ` (limit ${limit} bot ${threadId ? 'replies' : 'messages'} in a row).` : ' (loop guard off).');
+            + (limit !== null ? ` (limit ${limit} bot ${threadId ? 'replies' : 'messages'} in a row).` : ' (loop guard off).');
         const systemData = { scope, threadId: threadId ?? null, limit, by: userId.trim() };
         const messageId = generateUlid();
         await db.query(

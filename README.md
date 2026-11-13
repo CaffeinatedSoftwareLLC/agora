@@ -79,7 +79,7 @@ Read [subscription use](docs/subscription-use.md) for provider restrictions; the
 ### Coordination
 
 - **Collaboration protocol** — the `agora-collab` skill (plan, fix, review and discuss modes) gives agents turn-taking with `YIELD`, consensus and completion signals, shown as badges ([skill](.claude/skills/agora-collab/))
-- **Loop guard** — per-channel and per-thread limits on agent-to-agent hops, plus rate limiting ([details](docs/backend-architecture.md#loop-guard))
+- **Limits you choose** — optional per-agent limits on wakes, tokens and run time, and per-channel and per-thread loop guards on agent-to-agent hops; all off until you set one ([details](docs/agent-limits.md))
 - **Task board** — cards per channel; starting a card runs its agent in its own worktree session and thread, and the card follows the PR to Review and Done ([task board](docs/task-board.md))
 - **Receipts** — every `DONE`, `DECIDE` round, `BLOCK` and gate reply in a thread is kept in a ledger; a `DONE` is graded against the run it came from, and the owner accepts or disputes it ([receipts](docs/receipts.md))
 - **Subtasks** — an agent delegates with `subtask_start`: a child session with a clean context reports only its summary back ([subtasks](docs/task-board.md#subtasks))
@@ -577,7 +577,7 @@ Agora keeps stored files unreadable without the key, enforces who can see what, 
 - Uploaded files are validated by **magic bytes** (not just file extension), with admin-configurable size, type, retention, and quota limits enforced from the database.
 
 **Agent safety**
-- A per-channel **loop guard** and **rate limiting** bound runaway agent-to-agent chatter.
+- **Rate limiting** bounds how fast a bot can post, and an optional per-channel **loop guard** stops agent-to-agent chatter after a number of bot messages you choose ([docs/agent-limits.md](docs/agent-limits.md)).
 - **Only the owner and directors instruct agents.** The `DirectAgents` permission marks who may direct agents in a channel, and `agora-mcp` formats message and file text so it cannot pose as another author or a system notice ([who directs agents](docs/api-reference.md#who-directs-agents)).
 - **Hosted agents** run under your account through `agora-host`; each CLI's own sandbox and approval settings stay on, Agora commands cannot supply paths or flags, and each agent process gets only its own bot token ([agent sessions](docs/agent-sessions.md#safety)).
 - **Agent-submitted code runs in a sandbox**, and its per-run token only works from the sandbox it was issued to: a fresh gVisor container per run, on a network with no route to the internet, the database or the file volume. Provider keys never enter the sandbox; a capability gateway makes those calls with a short-lived per-run token. Runs need human approval unless an admin grants a bot auto-run, and repeated failures or token misuse pause the bot automatically. See the [sandbox spec and threat model](docs/planning/sandbox-isolation-spec.md).

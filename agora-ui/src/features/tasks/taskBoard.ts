@@ -1,5 +1,5 @@
 import { api, ApiError, inBackground } from '../../lib/api';
-import { ERRORS, NO_AUTHORITY, compactTokens } from '../agents/agentSessions';
+import { ERRORS, NO_AUTHORITY, limitStopText, type LimitStop } from '../agents/agentSessions';
 
 /**
  * Task board data and calls (docs/task-board.md). Server: src/routes/task-board.ts. A card's
@@ -21,7 +21,11 @@ export interface TaskCardSession {
   baseSha: string | null;
   headSha: string | null;
   tokensUsed: number;
-  tokenBudget: number;
+  /** Limits: null is none. limitStop: what stopped a session shelved as 'budget'. */
+  tokenBudget: number | null;
+  wakesUsed?: number;
+  wakeBudget?: number | null;
+  limitStop?: LimitStop | null;
   lastActiveAt: string;
   /** The latest run's changed files. */
   changedPaths: string[];
@@ -168,16 +172,14 @@ export function taskError(err: unknown): string {
 }
 
 /**
- * A failed Start/Resume as a sentence. budget_exhausted (409) names which budget the card's
- * session used up: its tokens (raised on the card) or its wakes (raised in Settings → Agents).
+ * A failed Start/Resume as a sentence. budget_exhausted (409) carries the limit that refused it
+ * (wakes or tokens, this session's or a parent's): say that one, never a guess from the card's numbers.
  */
 export function startError(err: unknown, card: TaskCard): string {
   const s = card.session;
   if (err instanceof ApiError && err.code === 'budget_exhausted' && s) {
-    if (s.tokensUsed >= s.tokenBudget) {
-      return `This card's session used its token budget (${compactTokens(s.tokensUsed)} / ${compactTokens(s.tokenBudget)}). Raise it, then start again.`;
-    }
-    return "This card's session used its wake budget. Raise it in Settings → Agents, then start again.";
+    const limit = (err.body as { limit?: LimitStop } | undefined)?.limit;
+    if (limit) return `This card's session can't start. ${limitStopText({ id: s.id, profile: s.profile, limitStop: limit })}`;
   }
   return taskError(err);
 }

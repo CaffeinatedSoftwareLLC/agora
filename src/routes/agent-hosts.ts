@@ -15,6 +15,7 @@ import { attachProjectDocs, verificationSchema } from '../lib/channel-projects';
 import { storage } from '../lib/storage';
 import { config } from '../config';
 import { MODEL_PATTERN } from '../lib/boxes/service';
+import { LIMIT_SCHEMA, limitOf } from '../lib/agent-budget-notice';
 import { serverSubscriptionWakes, SUBSCRIPTION_WAKES, type SubscriptionWakes } from '../lib/provider-terms';
 
 /**
@@ -53,7 +54,8 @@ function profileJson(r: any) {
     return {
         id: r.id.trim(), name: r.name, botId: r.bot_id.trim(), hostId: r.host_id.trim(),
         adapter: r.adapter, model: r.model ?? null, effort: r.effort ?? null, workdirAlias: r.workdir_alias, workspaceId: r.workspace_id,
-        wakeBudget: r.wake_budget, tokenBudget: Number(r.token_budget), runTimeoutSec: r.run_timeout_sec,
+        // The session limits; null: no limit (docs/agent-limits.md)
+        wakeBudget: limitOf(r.wake_budget), tokenBudget: limitOf(r.token_budget), runTimeoutSec: limitOf(r.run_timeout_sec),
         generation: r.generation, createdAt: r.created_at, updatedAt: r.updated_at,
         toolPresets: r.tool_presets ?? [], allowedTools: r.allowed_tools ?? [],
         // Reported by the host (provider-terms.ts); 'subscription' until it reports
@@ -90,9 +92,10 @@ const profileFields = {
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
     workdirAlias: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 64 },
     workspaceId: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' },
-    wakeBudget: { type: 'integer', minimum: 1, maximum: 100000 },
-    tokenBudget: { type: 'integer', minimum: 1 },
-    runTimeoutSec: { type: 'integer', minimum: 60, maximum: 7200 },
+    // Session limits: a positive integer, or null for no limit (the default)
+    wakeBudget: LIMIT_SCHEMA,
+    tokenBudget: LIMIT_SCHEMA,
+    runTimeoutSec: LIMIT_SCHEMA,
     // Tool presets and always-allowed rules (#73); the host reads them at every claim
     toolPresets: toolPresetsSchema,
     allowedTools: allowedToolsSchema,
@@ -281,7 +284,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias,
                                                  wake_budget, token_budget, run_timeout_sec, created_by, workspace_id, tool_presets, allowed_tools,
                                                  host_mode, host_mode_ack_at, host_mode_ack_by)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 50), COALESCE($11, 50000000), COALESCE($12, 900), $13, COALESCE($14, 'primary'),
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, 'primary'),
                              COALESCE($15, '{}'::text[]), COALESCE($16, '{}'::text[]),
                              $17, CASE WHEN $17 THEN NOW() END, CASE WHEN $17 THEN $13::char(26) END)
                      RETURNING ${PROFILE_COLS}`,
@@ -365,8 +368,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         effort = CASE WHEN $9::boolean THEN $10 ELSE effort END,
                         workdir_alias = COALESCE($11, workdir_alias),
                         workspace_id = COALESCE($16, workspace_id),
-                        wake_budget = COALESCE($12, wake_budget), token_budget = COALESCE($13, token_budget),
-                        run_timeout_sec = COALESCE($14, run_timeout_sec),
+                        wake_budget = CASE WHEN $22::boolean THEN $12 ELSE wake_budget END,
+                        token_budget = CASE WHEN $23::boolean THEN $13 ELSE token_budget END,
+                        run_timeout_sec = CASE WHEN $24::boolean THEN $14 ELSE run_timeout_sec END,
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
                         tool_presets = COALESCE($17, tool_presets), allowed_tools = COALESCE($18, allowed_tools),
                         host_mode = host_mode OR $19::boolean,
@@ -377,8 +381,20 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     [profileId, serverId, b.name ?? null, b.botId ?? null, b.hostId ?? null, b.adapter ?? null,
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
                      b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null,
-                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId, moved]
+                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId, moved,
+                     'wakeBudget' in b, 'tokenBudget' in b, 'runTimeoutSec' in b]
                 );
+                // A profile's limits reach its sessions: the wake and run time limits are read from the
+                // profile at every wake. A session's own token limit (set on its card, or given to a
+                // subtask) gives way when the profile's is now looser, so removing or raising the limit
+                // here lifts it everywhere; a higher limit set on one session survives a lower profile one.
+                if ('tokenBudget' in b) {
+                    await db.query(
+                        `UPDATE agent_sessions SET token_budget = NULL
+                         WHERE profile_id = $1 AND state <> 'ended' AND token_budget IS NOT NULL AND ($2::bigint IS NULL OR token_budget <= $2)`,
+                        [profileId, b.tokenBudget]
+                    );
+                }
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
                 }

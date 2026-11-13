@@ -68,7 +68,10 @@ describe('subtask_start', () => {
         const { api, call } = setup();
         const out = await call('subtask_start', { parent_session_id: 'S1', title: 'Tests', brief: 'Write them', thread: 'TH0', token_budget: 1500, client_key: 'dk_1:2' });
         expect(api.startSubtask).toHaveBeenCalledWith('ch1', { parentSessionId: 'S1', title: 'Tests', brief: 'Write them', reportThreadId: 'TH0', tokenBudget: 1500, client_key: 'dk_1:2' });
-        expect(out.content[0].text).toContain('Subtask started: session S3 (codex) in thread TH3, token budget 1500');
+        expect(out.content[0].text).toContain('Subtask started: session S3 (codex) in thread TH3, token limit 1500');
+        api.startSubtask.mockResolvedValueOnce({ action: 'started', session: { id: 'S4', profile: 'codex', threadId: 'TH4', tokenBudget: null } });
+        const unlimited = await call('subtask_start', { parent_session_id: 'S1', title: 'Tests', brief: 'Write them' });
+        expect(unlimited.content[0].text).toContain('Subtask started: session S4 (codex) in thread TH4, no token limit of its own');
         expect(out.content[0].text).toContain('finish your turn');
     });
 

@@ -70,12 +70,12 @@ describe('LoopGuardNotice', () => {
     expect(useChannelStore.getState().channels.get('ch')?.maxThreadBotHops).toBe(6);
   });
 
-  it('Turn off sets the channel guard to 0 and resumes', async () => {
+  it('Turn off removes the channel guard (null) and resumes', async () => {
     vi.spyOn(serverApi, 'getAccess').mockResolvedValue(access(MANAGE_BOTS));
     render(<LoopGuardNotice message={channelNotice()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Turn off in this channel' }));
     expect(await screen.findByText('Loop guard off in this channel. Agents may continue.')).toBeInTheDocument();
-    expect(botApi.updateChannelBotConfig).toHaveBeenCalledWith('ch', { maxBotHops: 0 });
+    expect(botApi.updateChannelBotConfig).toHaveBeenCalledWith('ch', { maxBotHops: null });
     expect(botApi.resumeLoopGuard).toHaveBeenCalledWith('ch', undefined);
   });
 
@@ -85,7 +85,7 @@ describe('LoopGuardNotice', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Turn off for threads here' }));
     expect(await screen.findByText('Loop guard off for threads in this channel.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
-    expect(botApi.updateChannelBotConfig).toHaveBeenCalledWith('ch', { maxThreadBotHops: 0 });
+    expect(botApi.updateChannelBotConfig).toHaveBeenCalledWith('ch', { maxThreadBotHops: null });
     expect(botApi.resumeLoopGuard).not.toHaveBeenCalled();
   });
 

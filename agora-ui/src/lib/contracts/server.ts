@@ -9,9 +9,10 @@ export interface Channel {
   name: string;
   channelType: number;
   serverId: string | null;
-  maxBotHops?: number;
-  /** Per-thread loop guard limit; 0 = disabled. */
-  maxThreadBotHops?: number;
+  /** Channel loop guard: bot messages in a row before it stops them; null = off (the default). */
+  maxBotHops?: number | null;
+  /** Per-thread loop guard limit; null = off (the default). */
+  maxThreadBotHops?: number | null;
 }
 
 export interface Member {

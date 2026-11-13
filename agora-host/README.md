@@ -443,7 +443,7 @@ credit limit. Raise the key's limit at https://openrouter.ai/settings/keys or wa
 to reset, then /resume *id*." At start the host reads the key's limit from
 `GET https://openrouter.ai/api/v1/key` and logs one line, e.g. `Profile qwen: OpenRouter key
 credit limit $10.00, $7.50 left, resets monthly.`, or a warning when the key has no limit.
-Agora's own wake and token budgets apply as for any agent.
+Agora's own wake and token limits apply as for any agent, when the owner has set any (none by default; docs/agent-limits.md).
 
 **Checked against** opencode 1.18.34 driven through this host's ACP runner, with a local
 mock of OpenRouter's API: model selection, permission requests for shell, read, write

@@ -1,3 +1,4 @@
+import { limitOf } from './agent-budget-notice';
 import type { Notice } from './agent-runs';
 import { notifyReview } from './notifications';
 import { reportToIssue } from './github-issues';
@@ -17,6 +18,7 @@ export type CardStatus = typeof CARD_STATUSES[number];
 export const CARD_SELECT = `SELECT t.*, p.name AS profile_name, sp.name AS session_profile,
         s.state AS session_state, s.end_reason AS session_end_reason, s.branch, s.base_sha, s.head_sha,
         s.tokens_used, COALESCE(s.token_budget, sp.token_budget) AS token_budget, s.last_active_at, s.sleeping_until,
+        s.wakes_used, sp.wake_budget, s.limit_stop,
         EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') AS running,
         (SELECT r.changed_paths FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS changed_paths
     FROM task_cards t
@@ -33,7 +35,9 @@ export function cardJson(r: any) {
             id: r.session_id.trim(), profile: r.session_profile, state: r.session_state, endReason: r.session_end_reason ?? null,
             running: !!r.running, sleepingUntil: r.sleeping_until ?? null,
             branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
-            tokensUsed: Number(r.tokens_used), tokenBudget: Number(r.token_budget), lastActiveAt: r.last_active_at,
+            // Limits: null is none (docs/agent-limits.md); limitStop: what stopped a session shelved as 'budget'
+            tokensUsed: Number(r.tokens_used), tokenBudget: limitOf(r.token_budget), wakesUsed: r.wakes_used, wakeBudget: limitOf(r.wake_budget),
+            limitStop: r.limit_stop ?? null, lastActiveAt: r.last_active_at,
             changedPaths: r.changed_paths ?? [],
         } : null,
         // The GitHub issue the card was made from (docs/github-issues.md)

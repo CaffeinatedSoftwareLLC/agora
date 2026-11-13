@@ -219,7 +219,7 @@ describe('agent sessions', () => {
             await c.query('COMMIT');
         } finally { c.release(); }
         const got = await notificationsOf(owner.userId, 'session');
-        expect(got.map(n => n.label)).toEqual(['codex used up its budget in #general']);
+        expect(got.map(n => n.label)).toEqual(['codex was stopped by a limit you set in #general']);
     });
 });
 

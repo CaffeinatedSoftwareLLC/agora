@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Config } from './config.js';
 import { prepare, type Launch } from './adapters.js';
 import { errorCode, fatalAuth, fenced, HttpError } from './client.js';
-import type { Claim, HostApi, Result, Verification } from './types.js';
+import { runTimeLimit, type Claim, type HostApi, type Result, type Verification } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
 import { reconcileWorkspaces, recoverWorkspaceGitLocks, workspaceHead } from './workspaces.js';
 import { GitLockError } from './git-owner.js';
@@ -68,7 +68,10 @@ export class Scheduler {
     private async execute(a: Active, sentAt: number): Promise<void> {
         const { claim } = a;
         let deadline = sentAt + claim.run.leaseSeconds * 1000 - this.safetyMs;
-        const timeout = this.now() + claim.run.timeoutSeconds * 1000;
+        // No run time limit: the run ends when the CLI exits, the owner ends or shelves the session
+        // (a heartbeat answers cancel), or the lease is lost. Nothing stops it by the clock.
+        const limit = runTimeLimit(claim.run);
+        const timeout = limit === null ? Infinity : this.now() + limit * 1000;
         let nextHeartbeat = this.now() + claim.run.heartbeatSeconds * 1000;
         let launch: Launch | undefined; let beat: Promise<void> | undefined;
         let result: Result | undefined; let finished = false;
