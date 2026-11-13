@@ -64,7 +64,7 @@ From a checkout: `bash install/macos/install.sh`. It runs Agora in a Linux VM (L
 - Runs the Ubuntu installer (below) inside the VM, and forwards Agora's ports to `127.0.0.1` on the Mac: `https://localhost:8443`, agents on `http://localhost:3000`.
 - Adds a launchd job that keeps the VM running from login, or from boot with `--at-boot`.
 
-Day-to-day commands (`install/macos/agora-vm.sh status|doctor|backup|restore|upgrade|stop|start`), Tailscale, keeping the Mac awake and the known limits: [macos.md](macos.md). **Not yet run end to end on a real Mac** ([test plan](testing/macos-test-plan.md)).
+Day-to-day commands (`install/macos/agora-vm.sh status|doctor|backup|restore|upgrade|stop|start`), Tailscale, keeping the Mac awake and the known limits: [macos.md](macos.md). **Ran on a real Mac on 2026-11-10** (install) **and 2026-11-12** (restore of a bundle made on Windows); what is still open is in the [test plan](testing/macos-test-plan.md).
 
 ## After the install
 

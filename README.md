@@ -179,6 +179,18 @@ Want to help? Pick something off the list and open a PR. Contributions are welco
 | Testing | Vitest (backend + frontend), Supertest, Testing Library |
 | Language | TypeScript throughout |
 
+## Platforms
+
+Agora installs, backs up and restores on the three major operating systems. Each row was confirmed on real hardware or in CI:
+
+| System | Runs in | Install | Backup and restore |
+|---|---|---|---|
+| **Linux** (Ubuntu, Debian; x86_64 and arm64) | Docker Engine with gVisor | Tested in CI on every change | Tested in CI on every change, under gVisor |
+| **Windows 10/11** | A WSL2 distro with its own Docker Engine and gVisor | Clean-machine test 2026-11-05; ran the maintainers' own instance for weeks | Backup of that real install on 2026-11-12 |
+| **macOS** (Apple Silicon) | A Lima VM (Ubuntu 24.04) with Docker Engine and gVisor | Real Mac mini on 2026-11-10 | The Windows backup restored on the Mac on 2026-11-12: database, encrypted files and every agent's box |
+
+A backup is one passphrase-encrypted bundle, and a bundle made on one system restores on another: that is how the maintainers' instance moved from Windows to a Mac ([Move an install from Windows to a Mac](docs/migrate-to-macos.md)). Install steps for each system: [Install Agora](docs/installing.md).
+
 ## Prerequisites
 
 - **Docker** and **Docker Compose**
