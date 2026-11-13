@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+## 0.4.1 — 2026-11-13
+
+Upgrading is one command, agent limits are off unless you set them, and an agent invite connects one project and asks where the agent runs. **Upgrade note:** limits that were still at the program's defaults (50 wakes, 50,000,000 tokens, 15 minutes per run, 4 bot messages in a row) become "no limit"; values you set yourself are kept ([docs/agent-limits.md](docs/agent-limits.md)).
+
 ### Added
 
 - **Upgrading is one command on every system ([docs/installing.md](docs/installing.md#upgrading-one-command)).** On a Mac, `install/macos/agora-vm.sh upgrade` with no arguments now upgrades to the latest release: it downloads `agora.tar.gz` and its SHA-256 from the fixed `agora-latest` release, refuses a mismatch, copies the release into the VM and runs its `install/upgrade.sh` there (`--ref <tag>` and `--source <checkout>` still work; before, it upgraded from the checkout it was in, so an upgrade was `git pull`, `upgrade` and a repair by hand). The downloaded release becomes the Mac's copy of the commands in `~/.agora/macos/release`. On Linux and in WSL, `install/upgrade.sh` run in the install folder (or with `--ref`) downloads the release as before and then hands over to **that release's own `upgrade.sh`**, so the new release does its own upgrade instead of the old one's script. Every upgrade ends with one line per check: Agora's health, with Tailscale access on also the web port, `tailscale serve`, `CORS_ORIGIN` and the tailnet address, and on a Mac the port forward. A failed check says what to run and never rolls the upgrade back. For a Mac install from 0.4.0 or earlier, whose own `agora-vm.sh` can't do this, releases carry `upgrade-macos.sh` (`install/macos/upgrade-latest.sh`): one file that explains, asks, downloads and checks the latest release, runs its `agora-vm.sh upgrade`, and prints the rollback command on failure.
