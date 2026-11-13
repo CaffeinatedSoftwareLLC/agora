@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Launch } from '../adapters.js';
 import { killTree, type RunningChild } from '../process.js';
 import { oneLine } from '../envelope.js';
+import { acpStep } from '../stream.js';
 import { parseReset, RATE_LIMIT_TEXT } from '../signals.js';
 import type { Progress, RateLimit, Result } from '../types.js';
 import { allowedCall, locationsInside, outcome, reportable, ruleForCall, type ToolCallInfo } from './permissions.js';
@@ -218,6 +219,8 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
     const answered = new Set<string>();
     const denied: string[] = [];
     const changed = new Set<string>();
+    /** Tool calls whose live-output step has started and not ended (stream.ts). */
+    const streaming = new Set<string>();
     let sessionId: string | null = null, stopping = false;
     let text = '', messageId: unknown, toolCalls = 0, step: string | null = null;
     let planDone: number | null = null, planTotal: number | null = null;
@@ -252,12 +255,25 @@ export function startAcp(launch: Launch & { acp: AcpPlan }): RunningChild {
                 if (u.content?.type !== 'text' || typeof u.content.text !== 'string') return;
                 if (u.messageId != null && u.messageId !== messageId) { messageId = u.messageId; text = ''; }
                 if (text.length < MAX_TEXT) text += u.content.text.slice(0, MAX_TEXT - text.length);
+                // Live output: the visible reply as it arrives (never agent_thought_chunk)
+                launch.stream?.({ type: 'text', message: `m${messageId ?? toolCalls}`, delta: u.content.text });
                 return;
             case 'tool_call':
                 // The final message is what the agent says after its last tool call
-                toolCalls++; text = ''; messageId = undefined; track(u); return;
+                toolCalls++; text = ''; messageId = undefined; track(u);
+                if (launch.stream && typeof u.toolCallId === 'string') {
+                    const step = acpStep(u, launch.cwd);
+                    if (step) {
+                        launch.stream({ type: 'step', step: u.toolCallId, state: 'start', ...step }); streaming.add(u.toolCallId);
+                        if (u.status === 'completed' || u.status === 'failed') { launch.stream({ type: 'step', step: u.toolCallId, state: u.status === 'failed' ? 'failed' : 'ok' }); streaming.delete(u.toolCallId); }
+                    }
+                }
+                return;
             case 'tool_call_update': {
                 const call = track(u);
+                if (launch.stream && streaming.has(u.toolCallId) && (u.status === 'completed' || u.status === 'failed')) {
+                    launch.stream({ type: 'step', step: u.toolCallId, state: u.status === 'failed' ? 'failed' : 'ok' }); streaming.delete(u.toolCallId);
+                }
                 if (call?.status === 'completed') for (const p of call.diffs ?? []) if (changed.size < 1000) changed.add(p);
                 return;
             }

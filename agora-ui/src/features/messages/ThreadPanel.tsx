@@ -13,6 +13,8 @@ import { latestProtocol } from './latestProtocol';
 import { threadWaiting } from './threadWaiting';
 import { closingNotice } from './closingNotice';
 import { ThreadWaitingBanner } from './ThreadWaitingBanner';
+import { useRunStreams } from '../agents/runStream';
+import { LiveWork } from '../agents/LiveWork';
 import { ThreadOwnerBadge } from '../agents/HandoffCard';
 import { useThreadOwner } from '../agents/handoffs';
 import { usePalette } from '../../theme';
@@ -31,6 +33,7 @@ export function ThreadPanel() {
   const P = usePalette();
   const openThreadId = useThreadStore(s => s.openThreadId);
   const openThreadChannelId = useThreadStore(s => s.openThreadChannelId);
+  const threadStreams = useRunStreams(openThreadChannelId ?? null);
   const repliesByThread = useThreadStore(s => s.repliesByThread);
   const sendReply = useThreadStore(s => s.sendReply);
   const editReply = useThreadStore(s => s.editReply);
@@ -333,6 +336,10 @@ export function ThreadPanel() {
           return runExpanded ? item : null;
         })}
       </div>
+
+      {/* Live output of an agent working on this thread (docs/live-output.md); gone when its run ends */}
+      {Object.values(threadStreams).filter(v => v.threadId === openThreadId).map(v =>
+        <div key={v.runId} className="shrink-0 px-3 pb-1"><LiveWork stream={v} name={v.profile ?? 'Agent'} /></div>)}
 
       {/* Reply input or closed banner */}
       {isClosed ? (

@@ -5,6 +5,7 @@ import type { ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import { REPO, type GithubCommand, type GithubResult } from './github.js';
 import { BOX_ADAPTER_NAMES } from './box-adapters.js';
+import type { StreamEvent } from './stream.js';
 
 export class HttpError extends Error {
     /** The server's own error code (`{ "error": "box_token_outside_box" }`), when it is one. */
@@ -184,6 +185,12 @@ export class Client implements HostApi {
         // progress: what an ACP run is doing; older servers ignore it
         return heartbeatSchema.parse(await this.request('POST', `runs/${claim.run.id}/heartbeat`,
             { claimToken: claim.run.claimToken, tokensUsed, ...(progress ? { progress } : {}) }, signal));
+    }
+    /** A short request, never retried: a lost batch of live output is just dropped (stream.ts). */
+    async stream(claim: Claim, events: StreamEvent[], signal?: AbortSignal): Promise<boolean> {
+        const r = z.object({ ok: z.literal(true), enabled: z.boolean() }).parse(await this.request('POST', `runs/${claim.run.id}/stream`,
+            { claimToken: claim.run.claimToken, events }, signal, 5000));
+        return r.enabled;
     }
     private async report(claim: Claim, action: 'complete' | 'fail', body: Completion | Failure, signal?: AbortSignal) {
         for (let attempt = 0; ; attempt++) {

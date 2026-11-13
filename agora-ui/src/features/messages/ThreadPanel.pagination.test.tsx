@@ -10,6 +10,8 @@ import { ThreadPanel } from './ThreadPanel';
 
 vi.hoisted(() => vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() }));
 vi.mock('../agents/handoffs', () => ({ useThreadOwner: () => null }));
+// These tests count the panel's own requests; live output (its tail request) has its own tests
+vi.mock('../agents/runStream', () => ({ useRunStreams: () => ({}) }));
 vi.mock('../voice/MicButton', () => ({ MicButton: () => null }));
 // Each reply's action buttons, rendered 66 times and walked by every role query, pushed the first test to
 // 3–6 s, past vitest's 5 s timeout. Scrolling never uses them; MessageItem's real .prose-msg anchor stays.

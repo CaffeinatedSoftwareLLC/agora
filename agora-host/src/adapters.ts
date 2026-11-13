@@ -21,12 +21,15 @@ import { geminiPolicy } from './acp/permissions.js';
 import { OMP_HOST_APPROVAL, ompArgs, ompDirs, ompModel, ompSettings } from './acp/omp.js';
 import { CODEX_BOX_QUIET, inBox, proxyVars } from './box.js';
 import { BOX_ADAPTERS, boxAdapter } from './box-adapters.js';
+import type { StreamSink } from './stream.js';
 
 export interface Launch {
     lurk?: boolean;
     workspace?: Workspace;
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
     adapter: Adapter; cleanup(): Promise<void>;
+    /** Live output (stream.ts): set by the scheduler; adapters that can stream call it as the run goes. */
+    stream?: StreamSink;
     /** Codex's sandbox for this run, so denials can be read from its output. */
     sandbox?: 'read-only' | 'workspace-write';
     /** Preset names the claim used that this host doesn't define. */
@@ -549,7 +552,7 @@ export async function prepare(config: Config, claim: Claim, prompt?: string, act
             const claudeBox = BOX_ADAPTERS.claude;
             const policy = yeet ? [...claudeBox.yeet.args, ...claudeBox.yeet.noOpenWeb, ...claudeBox.quiet.args]
                 : ['--permission-mode', 'manual', '--permission-prompts', 'none'];
-            args = ['-p', '--output-format', 'stream-json', '--verbose', ...policy,
+            args = ['-p', '--output-format', 'stream-json', '--verbose', ...(claim.profile.liveOutput !== false ? ['--include-partial-messages'] : []), ...policy,
                 '--strict-mcp-config', '--mcp-config', paths[0],
                 ...(model !== null ? ['--model', model] : []),
                 ...(effort !== null ? ['--effort', effort] : []),
