@@ -25,9 +25,9 @@ export function loopGuardScope(message: Pick<Message, 'content' | 'systemData'>)
   return { scope, threadId, limit };
 }
 
-/** The channel and thread loop guard limits in words; 0 means off. */
+/** The channel and thread loop guard limits in words; null (or 0) means off, the default. */
 export function loopGuardSummary(channel: Pick<Channel, 'maxBotHops' | 'maxThreadBotHops'>): string {
-  const top = channel.maxBotHops ?? 4;
+  const top = channel.maxBotHops ?? 0;
   const thread = channel.maxThreadBotHops ?? 0;
   return `Loop guard: ${top > 0 ? `pauses after ${top} bot messages in a row` : 'off in the channel'}; `
     + `${thread > 0 ? `threads pause after ${thread} bot replies in a row` : 'off in threads'}.`;

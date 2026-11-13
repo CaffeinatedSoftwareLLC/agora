@@ -149,6 +149,8 @@ async function startedShelvedResumed(): Promise<string> {
     const started = await command({ command: 'start', profile: 'cci', fresh: true });
     expect(started.status, JSON.stringify(started.body)).toBe(201);
     const id = started.body.session.id;
+    // The 50,000,000 limit cci's profile had when this was reported (the default before migration 097)
+    await ctx.db.query('UPDATE agent_profiles SET token_budget = 50000000 WHERE id = $1', [box.profileId]);
     await ctx.db.query('UPDATE agent_sessions SET tokens_used = 60000000 WHERE id = $1', [id]);
     expect((await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(box.hostAuth)).status).toBe(204);
     expect((await ctx.db.query('SELECT state FROM agent_sessions WHERE id = $1', [id])).rows[0].state).toBe('shelved');
@@ -266,16 +268,17 @@ describe("the owner's terminal bot wakes the owner's task card sessions", () => 
 });
 
 /**
- * The second live report's actual cause: the diakrisis card runs hit the profile's default 900 s
- * run time limit (`run_timeout`); each was retried, with a generic notice at the end.
+ * The second live report's actual cause: the diakrisis card runs hit the profile's 900 s run time
+ * limit (`run_timeout`, the default before migration 097); each was retried, with a generic notice at the end.
  */
 describe('a run stopped at its time limit', () => {
     it('is not retried, and the notice says which limit it hit and where to raise it', async () => {
+        await ctx.db.query(`UPDATE agent_profiles SET run_timeout_sec = 900 WHERE id = $1`, [worker.profileId]);
         const card = await startedCard('long job');
         await post(owner.auth, 'run the full evaluation', card.threadId);
         const c = await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(worker.hostAuth);
         expect(c.status, JSON.stringify(c.body)).toBe(200);
-        expect(c.body.run.timeoutSeconds).toBe(900);
+        expect(c.body.run).toMatchObject({ timeLimitSeconds: 900, timeoutSeconds: 900 });
         // The owner raises it while the run is going: the notice names the limit this run had
         const raised = await ctx.request.patch(`/servers/${serverId}/agent-profiles/${worker.profileId}`).set(owner.auth).send({ runTimeoutSec: 3600 });
         expect(raised.status, JSON.stringify(raised.body)).toBe(200);
@@ -284,12 +287,11 @@ describe('a run stopped at its time limit', () => {
             .send({ claimToken: c.body.run.claimToken, error: 'run_timeout', retryable: true });
         expect(failed.status, JSON.stringify(failed.body)).toBe(200);
         expect(await notices(since)).toEqual([runTimeoutNotice('diakrisis', 900)]);
-        expect(runTimeoutNotice('diakrisis', 900)).toBe("diakrisis's run hit its 15-minute limit, and its last wake was dropped: raise the limit in Settings → Agents, then send it again.");
         const batch = await ctx.db.query(`SELECT status FROM agent_batches WHERE id = (SELECT batch_id FROM agent_runs WHERE id = $1)`, [c.body.run.id]);
         expect(batch.rows[0].status).toBe('failed');
         expect((await ctx.request.get('/agent-hosts/@me/runs/next?wait=0').set(worker.hostAuth)).status).toBe(204);
         await ctx.db.query(`UPDATE agent_sessions SET state = 'ended', ended_at = NOW() WHERE id = $1`, [card.sessionId]);
-        await ctx.db.query(`UPDATE agent_profiles SET run_timeout_sec = 900 WHERE id = $1`, [worker.profileId]);
+        await ctx.db.query(`UPDATE agent_profiles SET run_timeout_sec = NULL WHERE id = $1`, [worker.profileId]);
     });
 
     it("a box's run time limit and budgets are set from Settings → Agents; the rest of its profile stays the box's", async () => {
@@ -305,6 +307,6 @@ describe('a run stopped at its time limit', () => {
         // Owner only, as for any profile
         const member = await authedUser(ctx.request, 'diakmember');
         expect((await patch({ runTimeoutSec: 600 }, member.auth)).status).toBe(403);
-        expect((await ctx.db.query(`SELECT run_timeout_sec FROM agent_profiles WHERE id = $1`, [box.profileId])).rows[0].run_timeout_sec).toBe(2700);
+        expect((await ctx.db.query(`SELECT run_timeout_sec FROM agent_profiles WHERE id = $1`, [box.profileId])).rows[0].run_timeout_sec).toBe('2700');
     });
 });

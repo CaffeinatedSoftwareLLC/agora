@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { generateUlid } from '../utils/ulid';
 import { DEFAULT_EVERYONE_PERMS, Permissions } from '../permissions';
 import { loadAndComputePermissions } from './bots';
+import { hopLimitOf } from '../lib/agent-budget-notice';
 
 export async function serverRoutes(app: FastifyInstance) {
 
@@ -97,8 +98,8 @@ export async function serverRoutes(app: FastifyInstance) {
             id: row.id.trim(),
             name: row.name,
             channelType: row.channel_type,
-            maxBotHops: row.max_bot_hops ?? 4,
-            maxThreadBotHops: row.max_thread_bot_hops ?? 0,
+            maxBotHops: hopLimitOf(row.max_bot_hops),
+            maxThreadBotHops: hopLimitOf(row.max_thread_bot_hops),
         }));
 
         return reply.status(200).send(channels);
@@ -258,8 +259,8 @@ export async function serverRoutes(app: FastifyInstance) {
                 name: c.name,
                 channelType: c.channel_type,
                 serverId: serverId.trim(),
-                maxBotHops: c.max_bot_hops ?? 4,
-                maxThreadBotHops: c.max_thread_bot_hops ?? 0,
+                maxBotHops: hopLimitOf(c.max_bot_hops),
+                maxThreadBotHops: hopLimitOf(c.max_thread_bot_hops),
             }));
 
             request.pendingEvents = request.pendingEvents || [];

@@ -4,6 +4,15 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Changed
+
+- **Agent limits are your choice: off by default, and any number when you set one ([docs/agent-limits.md](docs/agent-limits.md)).** Wakes per session, tokens per session, time per run and both loop guards (channel and thread) now default to **no limit**. Each stays visible in settings as a row with *No limit* selected and one line saying what it does; pick *Limit to* and type a number to turn one on. The old caps on what you could type are gone (100,000 wakes, 120 minutes per run, 1,000 bot messages): a limit is any positive whole number. In the API and the database "no limit" is `null`. **Upgrade note:** migration 097 turns every limit that still had the value Agora chose into "no limit": 50 wakes, 2,000,000 or 50,000,000 tokens, 15 minutes per run, a channel loop guard of 4. A limit you changed to another number stays. To set a limit again: Settings → Agents → the agent → **Limits**, and Server settings → Bots → **Loop Guard**. Sessions that a limit had shelved stay shelved until you resume them (`/resume <session>`, or Resume in the session sheet or on the card); the resume now succeeds on the same session. Update agora-host on machines that run it: an agora-host from Agora 0.4.0 or earlier still stops every run after a day at the latest.
+- **A change to an agent's limits reaches its existing sessions.** Wakes and run time are read from the agent at every wake. Raising or removing the agent's token limit also lifts a lower limit that one of its sessions had of its own; a higher one set on a session stays.
+
+### Fixed
+
+- **A stopped agent says which limit stopped it.** A session stopped by the wake limit, by a token limit or because its API key was out of credit was shelved the same way ("shelved (budget)"), and the session sheet described all three as the token budget ("Paused: session budget used up", with the token numbers and a token field). An agent at the 50-wake default therefore looked out of tokens while it had used a fraction of them, and raising its tokens changed nothing. Now the notice, the session sheet, the task card, the working line and `session_list` name the limit (wakes, tokens, the session's own or a parent's, or the provider's credit), with the used and limit numbers and the one place to lift it. A refused resume (`409 budget_exhausted`) carries the limit too. Run time and loop guard notices name the limit and where to change it.
+
 ## 0.4.0 — 2026-11-12
 
 The first release with installers. The download links in [docs/installing.md](docs/installing.md) (`agora-latest`) point at this release. Install, backup and restore are confirmed on Linux, Windows (WSL 2) and macOS (Apple Silicon).

@@ -184,7 +184,8 @@ describe('PATCH /channels/:id/bot-config', () => {
     test('a ManageBots member can turn the thread guard on and the channel guard off', async () => {
         const res = await ctx.request.patch(`/channels/${channelId}/bot-config`).set(botManager.auth).send({ maxBotHops: 0, maxThreadBotHops: 6 });
         expect(res.status).toBe(200);
-        expect(res.body).toEqual({ channelId, maxBotHops: 0, maxThreadBotHops: 6 });
+        // 0 still turns a guard off, as in Agora 0.4.0 and earlier; it is stored and reported as null ("no limit")
+        expect(res.body).toEqual({ channelId, maxBotHops: null, maxThreadBotHops: 6 });
         expect((await ctx.request.patch(`/channels/${channelId}/bot-config`).set(member.auth).send({ maxBotHops: 1 })).status).toBe(403);
     });
 });

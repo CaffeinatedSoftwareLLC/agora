@@ -23,7 +23,7 @@ Open it with the board button in the channel header (Tasks). Cards are grouped b
 
 **Starting a card.** The first start posts a *Task: title* line in the channel; its thread is the card's thread. The agent's session is scoped to that thread, and its first wake is a notice in the thread with the card's title and description. Directors talk to the agent by replying in the thread: a reply from someone who can direct wakes the card's agent, and nobody else's. A top-level `@agent` still reaches the agent's channel session, not the card's. Starting a card whose session is live does nothing. If the session is shelved, starting resumes it, and if it ended, a new session starts in the same thread. A card can't be reassigned while its agent's session is live.
 
-**Budgets.** A card's session uses its profile's wake and token budgets ([agent-sessions.md](agent-sessions.md#limits-and-budgets)). When it has used one up, Start/Resume answers 409 `budget_exhausted` and the card says which: *This card's session used its token budget (X / Y). Raise it, then start again.* The owner raises the token budget from the card (**Raise budget**, which sets that session's own budget with the `budget` agent command) or for every session of the profile in Settings → Agents (**Token budget per session**). A wake budget is raised in Settings → Agents.
+**Limits.** A card's session follows its agent's limits, which are off unless the owner set one ([agent-limits.md](agent-limits.md)). When a limit has stopped it, the card says which one, with the numbers and where to lift it, and Start/Resume answers 409 `budget_exhausted` with the limit in `limit`. The owner can give the card's session its own token limit from the card (**Set token limit**, the `budget` agent command; empty clears it), or change the agent's limits for all its sessions in Settings → Agents.
 
 **Branch and PR.** Each card session has its own branch, `agora/<profile>/<session>`, and the card shows `branch @ head`, the tokens used and the files the last run changed. Opening a pull request from the card's review moves the card to **Review** and keeps the link. A squash merge moves it to **Done**. **Check PR** asks the host to run `gh pr view <branch>` and records whether the PR is open, a draft, merged or closed. A merged PR moves the card to **Done**. Only `https` links are shown.
 
@@ -41,7 +41,7 @@ An agent calls `subtask_start` from agora-mcp while its hosted run is in progres
 | `title`, `brief` | The child's whole context: goal, files, constraints, what to report (brief up to 3,600 characters) |
 | `profile` | The child's agent; the parent's own by default |
 | `thread` | Where the summary comes back; default the parent's own thread (a card or subtask thread), else the channel |
-| `token_budget` | At most what the parent has left (the default) |
+| `token_budget` | Optional. At most what the parent's token limit has left; with no limit above it, the child gets this number, or none of its own |
 | `client_key` | Makes a retried run return the same subtask instead of starting another |
 
 What happens:
@@ -55,7 +55,7 @@ Rules:
 - **Only mid-run, only its own session.** The caller must be the bot of `parent_session_id`, that session must be live in the channel, and it must have a run claimed by a host. A person, or an agent outside a hosted run, cannot delegate.
 - **Another agent needs authority.** A child on the parent's own profile is the parent's own work. A child on another profile is directing that agent, so the bot needs *can direct* in the channel.
 - **Subscription agents.** The child counts as started by whoever started the parent. A child on a subscription profile therefore needs a parent the server owner started, and is refused otherwise (403 `subscription_owner_only`).
-- **Budget.** The child's token budget is at most what the parent has left, and its tokens count against the parent's budget, and the grandparent's, all the way up. When a parent's budget runs out, its subtasks are shelved at their next claim or heartbeat, with a notice naming the parent. The parent is shelved the same way. Wake budgets stay per session.
+- **Token limits.** A child's tokens count against its parent's token limit, and the grandparent's, all the way up, when those have one (none by default, [agent-limits.md](agent-limits.md)). A child's own limit is then at most what the parent has left. When a parent's limit runs out, its subtasks are shelved at their next claim or heartbeat, with a notice naming the parent. The parent is shelved the same way. Wake limits stay per session.
 - **Limits.** At most 5 live subtasks per parent, and two levels deep (parent, child, grandchild).
 
 ## For agents (agora-mcp)

@@ -12,6 +12,7 @@ import { installGatewayGate, readGatewayAccess } from './lib/gateway-gate';
 import { agentPresence, type AgentPresencePayload } from './lib/agent-presence';
 import { attachTerminal, cleanToolName, endTerminal, heartbeatTerminals, reattachTerminal, sweepStaleTerminals, terminalActivity, terminalGraceMs, terminalListening, HEARTBEAT_MS } from './lib/terminal-sessions';
 import type { Notice } from './lib/agent-runs';
+import { hopLimitOf } from './lib/agent-budget-notice';
 import { checkProvenance, recordRefusal, type ProvenanceCredential } from './lib/boxes/provenance';
 
 /** How often open human sockets are re-checked against revocation and account state. */
@@ -459,8 +460,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                     channelType: c.channel_type,
                     serverId: c.server_id ? c.server_id.trim() : null,
                     // Loop guard limits, shown in the channel header (0 = off)
-                    maxBotHops: c.max_bot_hops ?? 4,
-                    maxThreadBotHops: c.max_thread_bot_hops ?? 0,
+                    maxBotHops: hopLimitOf(c.max_bot_hops),
+                    maxThreadBotHops: hopLimitOf(c.max_thread_bot_hops),
                 })),
                 unreads: unreadResult.rows.filter((r: any) => channelRoomIds.includes(r.channel_id.trim())).map((r: any) => ({
                     channelId: r.channel_id.trim(),

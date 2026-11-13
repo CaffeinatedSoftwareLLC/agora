@@ -69,3 +69,26 @@ describe('task and subtask wake prompts', () => {
         expect(claimSchema.safeParse(c).success).toBe(false);
     });
 });
+
+describe('claim limits (docs/agent-limits.md)', () => {
+    it('a claim with no limits parses: null limits, and nothing required of the old budget fields', async () => {
+        const { runTimeLimit } = await import('../src/types.js');
+        const c: any = claim();
+        c.run.timeLimitSeconds = null; c.run.timeoutSeconds = 86400;
+        c.session.wakeLimit = null; c.session.tokenLimit = null; c.session.wakeBudget = 0; c.session.tokenBudget = 0;
+        const parsed = claimSchema.parse(c);
+        expect(runTimeLimit(parsed.run)).toBeNull();
+        expect(parsed.session).toMatchObject({ wakeLimit: null, tokenLimit: null });
+        delete c.session.wakeBudget; delete c.session.tokenBudget;
+        expect(claimSchema.safeParse(c).success).toBe(true);
+    });
+    it('limits of any size parse, and a claim from a server on Agora 0.4.0 or earlier still uses timeoutSeconds', async () => {
+        const { runTimeLimit } = await import('../src/types.js');
+        const c: any = claim();
+        c.run.timeLimitSeconds = Number.MAX_SAFE_INTEGER; c.session.wakeLimit = Number.MAX_SAFE_INTEGER; c.session.tokenLimit = Number.MAX_SAFE_INTEGER;
+        expect(runTimeLimit(claimSchema.parse(c).run)).toBe(Number.MAX_SAFE_INTEGER);
+        const old: any = claim();
+        expect(old.run.timeLimitSeconds).toBeUndefined();
+        expect(runTimeLimit(claimSchema.parse(old).run)).toBe(900);
+    });
+});

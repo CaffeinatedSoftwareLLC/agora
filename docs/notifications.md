@@ -13,7 +13,7 @@ A notification carries a type, a short label such as "Approval waiting in #gener
 | `approval` | A tool approval card is posted | The owner and every director of the channel. A live request on a `subscription` profile goes to the owner only, on a `siwc` profile to its plan owner only. |
 | `approval` | A code run waits for approval | Members with Manage Bots or Administrator |
 | `mention` | Someone @mentions a person by name, in a channel or a thread | The person mentioned, not the author. `@everyone` notifies nobody. |
-| `session` | An agent session is shelved by its budget, hits its provider's usage or rate limit, fails a wake after its retries, or finishes a run without posting | The person who started the session, or the owner when nobody did or that account is no longer active |
+| `session` | An agent session is shelved by a limit the owner set, hits its provider's usage or rate limit, fails a wake after its retries, or finishes a run without posting | The person who started the session, or the owner when nobody did or that account is no longer active |
 | `review` | A task card moves to Review (by hand or when a pull request is opened) | The person who created the card, unless they moved it |
 | `collab` | An `agora-collab` message with `STATE=DONE`, `STATE=BLOCK` or a `DECIDE` of `BLOCK` is posted in a thread | The person who started the thread, unless they wrote it |
 

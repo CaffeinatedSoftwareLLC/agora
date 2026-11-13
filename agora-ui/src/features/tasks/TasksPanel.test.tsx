@@ -205,31 +205,36 @@ describe('TasksPanel', () => {
   });
 });
 
-describe('card session budget', () => {
-  const shelved = { ...session, state: 'shelved' as const, endReason: 'budget', running: false, tokensUsed: 2_000_000, tokenBudget: 2_000_000 };
+describe('card session limits', () => {
+  const tokenStop = { kind: 'token' as const, used: 2_000_000, limit: 2_000_000, sessionId: session.id };
+  const shelved = { ...session, state: 'shelved' as const, endReason: 'budget', running: false, tokensUsed: 2_000_000, tokenBudget: 2_000_000, limitStop: tokenStop };
+  const TOKEN_STOP = `Stopped by the token limit: 2,000,000 of 2,000,000 tokens. Raise or remove "Tokens per session" for ${session.profile} in Settings → Agents, then resume.`;
 
-  it('says the session used its token budget, lets the owner raise it, then resumes', async () => {
+  it('says the token limit stopped the session, lets the owner raise it, then resumes', async () => {
     serve(board([card({ status: 'in_progress', session: shelved, threadId: 'TH' })]));
     render(<TasksPanel />);
     fireEvent.click(await screen.findByText('Fix login'));
-    post.mockRejectedValueOnce(new ApiError(409, 'budget_exhausted'));
+    // On the card before anything is pressed
+    expect(screen.getByRole('alert')).toHaveTextContent(TOKEN_STOP);
+    post.mockRejectedValueOnce(new ApiError(409, 'budget_exhausted', { error: 'budget_exhausted', limit: tokenStop }));
     fireEvent.click(screen.getByText('Resume'));
-    expect(await screen.findByText("This card's session used its token budget (2M / 2M). Raise it, then start again.")).toBeTruthy();
+    expect(await screen.findByText(`This card's session can't start. ${TOKEN_STOP}`)).toBeTruthy();
 
-    fireEvent.click(screen.getByText('Raise budget'));
-    const input = screen.getByLabelText('Card session token budget');
+    fireEvent.click(screen.getByText('Set token limit'));
+    const input = screen.getByLabelText('Card session token limit');
     expect(input).toHaveProperty('value', '2000000');
+    expect(input).not.toHaveAttribute('max');
     // Unchanged or invalid: nothing to save
-    expect(screen.getByText('Save budget')).toHaveProperty('disabled', true);
+    expect(screen.getByText('Save limit')).toHaveProperty('disabled', true);
     fireEvent.change(input, { target: { value: '0' } });
-    expect(screen.getByText('Save budget')).toHaveProperty('disabled', true);
+    expect(screen.getByText('Save limit')).toHaveProperty('disabled', true);
     fireEvent.change(input, { target: { value: '50000000' } });
     post.mockResolvedValueOnce({ action: 'budget_updated', session: { id: shelved.id, tokenBudget: 50_000_000 } });
-    fireEvent.click(screen.getByText('Save budget'));
+    fireEvent.click(screen.getByText('Save limit'));
     await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${CH}/agent-commands`, { command: 'budget', sessionId: shelved.id, tokenBudget: 50_000_000 }));
-    expect(await screen.findByText('Budget saved. Press Resume to continue.')).toBeTruthy();
+    expect(await screen.findByText('Limit saved. Press Resume to continue.')).toBeTruthy();
     expect(screen.getByText('2M / 50M')).toBeTruthy();
-    expect(screen.queryByLabelText('Card session token budget')).toBeNull();
+    expect(screen.queryByLabelText('Card session token limit')).toBeNull();
 
     post.mockResolvedValueOnce({ action: 'resumed', card: card({ status: 'in_progress', threadId: 'TH', session: { ...shelved, state: 'live', endReason: null, tokenBudget: 50_000_000 } }) });
     fireEvent.click(screen.getByText('Resume'));
@@ -241,21 +246,41 @@ describe('card session budget', () => {
     serve(board([card({ status: 'in_progress', session: shelved, threadId: 'TH' })]));
     render(<TasksPanel />);
     fireEvent.click(await screen.findByText('Fix login'));
-    fireEvent.click(screen.getByText('Raise budget'));
-    fireEvent.change(screen.getByLabelText('Card session token budget'), { target: { value: '9000000' } });
+    fireEvent.click(screen.getByText('Set token limit'));
+    fireEvent.change(screen.getByLabelText('Card session token limit'), { target: { value: '9000000' } });
     post.mockRejectedValueOnce(new ApiError(403, 'forbidden'));
-    fireEvent.click(screen.getByText('Save budget'));
+    fireEvent.click(screen.getByText('Save limit'));
     await waitFor(() => expect(screen.getByText(/Only the owner and directors/)).toBeTruthy());
-    expect(screen.getByLabelText('Card session token budget')).toBeTruthy();
+    expect(screen.getByLabelText('Card session token limit')).toBeTruthy();
   });
 
-  it('names the wake budget when the tokens are not used up', async () => {
-    serve(board([card({ status: 'in_progress', session: { ...shelved, tokensUsed: 1_000 }, threadId: 'TH' })]));
+  it('names the wake limit when that is what stopped it, whatever the token numbers say', async () => {
+    const wakeStop = { kind: 'wake' as const, used: 50, limit: 50, sessionId: session.id };
+    serve(board([card({ status: 'in_progress', session: { ...shelved, tokensUsed: 2_000_000, limitStop: wakeStop }, threadId: 'TH' })]));
     render(<TasksPanel />);
     fireEvent.click(await screen.findByText('Fix login'));
-    post.mockRejectedValueOnce(new ApiError(409, 'budget_exhausted'));
+    const WAKE_STOP = `Stopped by the wake limit: 50 of 50 wakes. Raise or remove "Wakes per session" for ${session.profile} in Settings → Agents, then resume.`;
+    expect(screen.getByRole('alert')).toHaveTextContent(WAKE_STOP);
+    expect(screen.getByText(/shelved \(wake limit 50\/50\)/)).toBeTruthy();
+    post.mockRejectedValueOnce(new ApiError(409, 'budget_exhausted', { error: 'budget_exhausted', limit: wakeStop }));
     fireEvent.click(screen.getByText('Resume'));
-    expect(await screen.findByText("This card's session used its wake budget. Raise it in Settings → Agents, then start again.")).toBeTruthy();
+    expect(await screen.findByText(`This card's session can't start. ${WAKE_STOP}`)).toBeTruthy();
+  });
+
+  it('a session with no token limit shows its usage with "no limit", and the owner can still give it one or clear it', async () => {
+    serve(board([card({ status: 'in_progress', session: { ...session, tokensUsed: 3_000_000, tokenBudget: null }, threadId: 'TH' })]));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Fix login'));
+    expect(screen.getByText('3M · no limit')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByText('Set token limit'));
+    const input = screen.getByLabelText('Card session token limit');
+    expect(input).toHaveProperty('value', '');
+    expect(screen.getByText('Save limit')).toHaveProperty('disabled', true);
+    fireEvent.change(input, { target: { value: '9007199254740991' } });
+    post.mockResolvedValueOnce({ action: 'budget_updated', session: { id: session.id, tokenBudget: 9007199254740991 } });
+    fireEvent.click(screen.getByText('Save limit'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${CH}/agent-commands`, { command: 'budget', sessionId: session.id, tokenBudget: 9007199254740991 }));
   });
 
   it('only the owner gets the control, and not on an ended session', async () => {
@@ -263,11 +288,11 @@ describe('card session budget', () => {
     const { unmount } = render(<TasksPanel />);
     fireEvent.click(await screen.findByText('Fix login'));
     expect(screen.getByText('Resume')).toBeTruthy();
-    expect(screen.queryByText('Raise budget')).toBeNull();
+    expect(screen.queryByText('Set token limit')).toBeNull();
     unmount();
     serve(board([card({ status: 'in_progress', session: { ...shelved, state: 'ended' }, threadId: 'TH' })]));
     render(<TasksPanel />);
     fireEvent.click(await screen.findByText('Fix login'));
-    expect(screen.queryByText('Raise budget')).toBeNull();
+    expect(screen.queryByText('Set token limit')).toBeNull();
   });
 });

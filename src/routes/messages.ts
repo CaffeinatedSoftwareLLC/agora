@@ -13,6 +13,7 @@ import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { notifyMentions } from '../lib/notifications';
+import { hopLimitOf, loopGuardNotice } from '../lib/agent-budget-notice';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact, removeArtifactVersion } from '../lib/artifacts';
 
 export async function messageRoutes(app: FastifyInstance) {
@@ -86,7 +87,8 @@ export async function messageRoutes(app: FastifyInstance) {
             [channelId]
         );
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-        const maxBotHops = channelRow.rows[0]?.max_bot_hops ?? 4;
+        // NULL: no loop guard, the default (docs/agent-limits.md)
+        const maxBotHops = hopLimitOf(channelRow.rows[0]?.max_bot_hops);
         const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
 
         // ─── Bot rate limiting (per-bot, per-channel, Redis sliding window) ───
@@ -108,8 +110,7 @@ export async function messageRoutes(app: FastifyInstance) {
         }
 
         // ─── Loop guard (per-channel, consecutive bot messages) ───
-        // maxBotHops === 0 means loop guard is disabled
-        if (isBot && maxBotHops > 0) {
+        if (isBot && maxBotHops !== null) {
             try {
                 const redis = getRedis();
                 const guardKey = `loopguard:${channelId}`;
@@ -123,11 +124,12 @@ export async function messageRoutes(app: FastifyInstance) {
                     const sysId = generateUlid();
                     // The notice's Continue / Raise limit / Turn off controls read the scope and limit
                     const guardData = { scope: 'channel', threadId: null, limit: maxBotHops };
+                    const guardText = loopGuardNotice('channel', maxBotHops);
                     await db.query(
                         `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data)
                          VALUES ($1, $2, NULL, $3, 'loop_guard', $4)`,
                         [sysId, channelId,
-                         `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`,
+                         guardText,
                          JSON.stringify(guardData)]
                     );
 
@@ -137,7 +139,7 @@ export async function messageRoutes(app: FastifyInstance) {
                         event: 'Message',
                         data: {
                             id: sysId.trim(),
-                            content: `Loop guard: ${maxBotHops} consecutive bot messages. Human input required to continue.`,
+                            content: guardText,
                             authorId: null,
                             authorUsername: null,
                             channelId: channelId.trim(),
