@@ -6,6 +6,7 @@ import { readAuthorities } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
 import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
+import { SESSION_COMMAND_HOLDS_SQL } from './session-commands';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { onRunFinished } from './receipts';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
@@ -229,6 +230,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const session = s.rows[0];
     if (!session || session.state !== 'live' || session.asleep) return null;
     if ((await c.query(`SELECT 1 FROM agent_workspace_commands WHERE session_id=$1 AND status IN ('queued','claimed')`, [sessionId])).rows.length) return null;
+    // A queued /compact or /clear goes before the next run (src/lib/session-commands.ts)
+    if ((await c.query(SESSION_COMMAND_HOLDS_SQL('$1'), [sessionId])).rows.length) return null;
     const active = await c.query(`SELECT 1 FROM agent_runs WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     if (active.rows.length > 0) return null;
     // The host may have been revoked while its long poll was waiting

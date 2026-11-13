@@ -35,12 +35,27 @@ export interface ChannelMessage extends Message {
 
 export type GateResult =
     | { deliver: true; authority: 'owner' | 'director' }
-    | { deliver: false; reason: 'system' | 'deleted' | 'self' | 'empty' | 'no_authority' | 'owner_only' | 'addressed_elsewhere' };
+    | { deliver: false; reason: 'system' | 'deleted' | 'self' | 'empty' | 'no_authority' | 'owner_only' | 'addressed_elsewhere' | 'agora_command' };
 
 /** Who may push into this session: the server's authority stamp, narrowed to the owner on a subscription. */
 export function allowedAuthority(authority: Authority | undefined, auth: AuthMode): authority is 'owner' | 'director' {
     if (authority === 'owner') return true;
     return auth === 'api_key' && authority === 'director';
+}
+
+/**
+ * The commands Agora itself answers for an @mentioned agent (src/lib/session-commands.ts CONTROLS).
+ * A terminal session can't be driven from here, so Agora posts a notice telling the person to type
+ * the command there; the message must not also reach the model as if it were a request.
+ */
+export const AGORA_COMMANDS = ['compact', 'context', 'clear', 'stop', 'model'];
+
+/** `@agent /compact`: exactly one @mention, and the rest a single known slash command. */
+export function isAgoraCommand(content: string | null | undefined): boolean {
+    const text = content ?? '';
+    if ((text.match(/@[\w-]+/g) ?? []).length !== 1) return false;
+    const m = /^\/([a-z]{2,16})(?:[ \t]+[A-Za-z0-9][A-Za-z0-9._:\/-]{0,63})?$/.exec(text.replace(/@[\w-]+/, ' ').trim());
+    return !!m && AGORA_COMMANDS.includes(m[1]);
 }
 
 export function gateMessage(m: ChannelMessage, ctx: { selfId: string; auth: AuthMode }): GateResult {
@@ -56,6 +71,7 @@ export function gateMessage(m: ChannelMessage, ctx: { selfId: string; auth: Auth
     if (mentions.length > 0 && !m.mentionsEveryone && !mentions.includes(ctx.selfId.trim())) {
         return { deliver: false, reason: 'addressed_elsewhere' };
     }
+    if (mentions.includes(ctx.selfId.trim()) && !m.mentionsEveryone && isAgoraCommand(m.content)) return { deliver: false, reason: 'agora_command' };
     return { deliver: true, authority };
 }
 

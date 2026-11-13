@@ -32,6 +32,7 @@ import { fileReservationRoutes } from './routes/file-reservations';
 import { handoffRoutes } from './routes/handoffs';
 import { agentCommandRoutes } from './routes/agent-commands';
 import { workspaceReviewRoutes } from './routes/workspace-review';
+import { sessionCommandRoutes } from './routes/session-commands';
 import { agentToolRequestRoutes } from './routes/agent-tool-requests';
 import { permissionRelayRoutes } from './routes/permission-relays';
 import { channelProjectRoutes } from './routes/channel-projects';
@@ -409,6 +410,7 @@ export async function buildApp(opts?: {
     await app.register(agentHostRoutes);
     await app.register(agentCommandRoutes);
     await app.register(workspaceReviewRoutes);
+    await app.register(sessionCommandRoutes);
     await app.register(fileReservationRoutes);
     await app.register(handoffRoutes);
     await app.register(agentToolRequestRoutes);

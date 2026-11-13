@@ -5,6 +5,7 @@ import type { ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import { REPO, type GithubCommand, type GithubResult } from './github.js';
 import { BOX_ADAPTER_NAMES } from './box-adapters.js';
+import { COMMAND_NAMES, type CommandResult, type SessionCommand } from './session-commands.js';
 import type { StreamEvent } from './stream.js';
 
 export class HttpError extends Error {
@@ -124,6 +125,26 @@ export class Client implements HostApi {
         // Retrying the report is safe; never retry the GitHub call (a comment would post twice).
         for (let attempt = 0; ; attempt++) {
             try { await this.request('POST', `github-commands/${cmd.id}/result`, { claimToken: cmd.claimToken, success, result }, signal); return; }
+            catch (e) { if (attempt >= 2 || signal?.aborted || e instanceof HttpError && e.status < 500) throw e; await sleep(this.retryDelayMs, signal); }
+        }
+    }
+    /**
+     * A command sent to an agent from Agora (`v=1` tells the server this host knows the item). Only
+     * hosts that ask are offered one, so an older host never sees a type it can't read.
+     */
+    async claimSessionCommand(signal?: AbortSignal): Promise<SessionCommand | null> {
+        const data = await this.request('GET', 'session-commands/next?v=1', undefined, signal);
+        if (data === null) return null;
+        return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), claimToken: z.string().min(10),
+            sessionId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), profile: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
+            adapter: z.string().min(1).max(40), workdirAlias: z.string().min(1),
+            nativeSessionId: z.string().min(1).max(128).nullable(), command: z.enum(COMMAND_NAMES), arg: z.string().max(100).nullable(),
+        }).parse(data);
+    }
+    async sessionCommandResult(cmd: SessionCommand, success: boolean, result: CommandResult, signal?: AbortSignal): Promise<void> {
+        // Retrying the report is safe; the command itself is never run twice
+        for (let attempt = 0; ; attempt++) {
+            try { await this.request('POST', `session-commands/${cmd.id}/result`, { claimToken: cmd.claimToken, success, result }, signal); return; }
             catch (e) { if (attempt >= 2 || signal?.aborted || e instanceof HttpError && e.status < 500) throw e; await sleep(this.retryDelayMs, signal); }
         }
     }

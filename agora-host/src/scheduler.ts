@@ -17,6 +17,7 @@ import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
 import { runPreview } from './preview.js';
 import { runGithub } from './github.js';
 import { cardAsker } from './siwc/approvals.js';
+import { executeSessionCommand } from './session-commands.js';
 import { Streamer, type StreamSink } from './stream.js';
 
 interface Active {
@@ -34,6 +35,8 @@ export interface SchedulerOptions {
     /** Runs a verify command; tests replace it (verify.ts runVerify). */
     runVerify?: typeof runVerify;
     log?: (code: string) => void;
+    /** Replaces how session commands run; tests use it (session-commands.ts). */
+    commandDeps?: import('./session-commands.js').CommandDeps;
 }
 const empty: Result = { success: false, nativeSessionId: null, tokensUsed: null, summary: null };
 
@@ -341,10 +344,37 @@ export class Scheduler {
             }
         }
     }
+    /**
+     * Commands sent to an agent from Agora (session-commands.ts): compact and the like, run on the
+     * agent's conversation between wakes. Their own loop, so one doesn't wait behind a run claim.
+     * The server hands one out only while no run is claimed for the session.
+     */
+    private async sessionCommandLoop(): Promise<void> {
+        const api = this.api;
+        if (!api.claimSessionCommand || !api.sessionCommandResult) return;
+        while (!this.stopping) {
+            try {
+                const cmd = await api.claimSessionCommand(this.abort.signal);
+                if (!cmd) { await this.pause(this.options.commandPollMs ?? 2000); continue; }
+                const outcome = this.active.has(cmd.sessionId)
+                    ? { success: false, result: { error: 'session_busy' } }
+                    : await executeSessionCommand(this.config, cmd, AbortSignal.any([this.abort.signal, AbortSignal.timeout(150000)]), this.options.commandDeps);
+                if (!outcome.success) this.log(`session_command_${outcome.result.error ?? 'failed'}`);
+                // A command gone from the server (its session ended) is no reason to stop polling
+                try { await api.sessionCommandResult(cmd, outcome.success, outcome.result, this.abort.signal); }
+                catch (err) { if (!(err instanceof HttpError && (err.status === 404 || err.status === 409))) throw err; this.log('session_command_result_rejected'); }
+            } catch (err) {
+                if (fatalAuth(err)) { this.log(`host_auth_rejected ${errorCode(err)}`); await this.stop(); }
+                // An older server without session commands: stop polling for them
+                else if (err instanceof HttpError && err.status === 404) { this.log('session_commands_unsupported'); return; }
+                else if (!this.stopping) { this.log(`session_command_failed ${errorCode(err)}`); await this.pause(2000); }
+            }
+        }
+    }
     async run(): Promise<void> {
         let nextReconcile = 0;
         await recoverWorkspaceGitLocks(this.config, this.log);
-        const commands = this.commandLoop(), previews = this.previewLoop(), github = this.githubLoop();
+        const commands = this.commandLoop(), previews = this.previewLoop(), github = this.githubLoop(), sessionCommands = this.sessionCommandLoop();
         // Settings → Agents "Continue with ChatGPT": sign-ins run on this machine (siwc/requests.ts)
         const plans = planLoop(this.config, this.api, { signal: this.abort.signal, log: this.log, pause: ms => this.pause(ms), stopping: () => this.stopping });
         // Agent boxes: Log in runs the CLI's own login inside the box (box-login.ts); box mode only
@@ -372,7 +402,7 @@ export class Scheduler {
                 }
             }
         }
-        await commands; await previews; await github;
+        await commands; await previews; await github; await sessionCommands;
         await plans; await logins;
         await this.drain();
     }

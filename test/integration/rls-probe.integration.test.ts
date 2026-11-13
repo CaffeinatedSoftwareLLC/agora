@@ -47,6 +47,7 @@ interface Seed {
     toolRequestId: string;
     approvalId: string;
     commandId: string;
+    sessionCommandId: string;
     checkpointId: string;
     relayId: string;
     cardId: string;
@@ -164,7 +165,7 @@ async function seedServer(serverId: string, channelId: string, ownerId: string, 
         serverId, channelId,
         messageId: id(), fileId: '', tagDefId: id(), hostId: id(), profileId: id(), sessionId: id(),
         batchId: id(), runId: id(), reservationId: id(), toolRequestId: id(), approvalId: id(),
-        commandId: id(), checkpointId: id(), relayId: id(), cardId: id(), artifactId: id(),
+        commandId: id(), sessionCommandId: id(), checkpointId: id(), relayId: id(), cardId: id(), artifactId: id(),
         previewId: id(), handoffId: id(), inboxId: id(),
     } as Seed;
 
@@ -201,6 +202,9 @@ async function seedServer(serverId: string, channelId: string, ownerId: string, 
     await q(`INSERT INTO agent_run_approvals (id, server_id, session_id) VALUES ($1, $2, $3)`, [s.approvalId, serverId, s.sessionId]);
     await q(`INSERT INTO agent_workspace_commands (id, session_id, host_id, profile_generation, requested_by, action)
              VALUES ($1, $2, $3, 1, $4, 'diff')`, [s.commandId, s.sessionId, s.hostId, ownerId]);
+    // 099 agent commands
+    await q(`INSERT INTO agent_session_commands (id, session_id, host_id, profile_generation, requested_by, command)
+             VALUES ($1, $2, $3, 1, $4, 'compact')`, [s.sessionCommandId, s.sessionId, s.hostId, ownerId]);
     await q(`INSERT INTO agent_checkpoints (id, session_id, run_id, sha, ref) VALUES ($1, $2, $3, repeat('c', 40), 'refs/agora/probe')`,
         [s.checkpointId, s.sessionId, s.runId]);
 
@@ -599,6 +603,7 @@ const serviceOnly: ServiceOnly[] = [
     { table: 'agent_run_images', migration: '045', ledger: 'S0535', key: 'run_id', id: (s) => s.runId },
     { table: 'agent_run_approvals', migration: '046', ledger: 'S0536', key: 'id', id: (s) => s.approvalId },
     { table: 'agent_workspace_commands', migration: '047', ledger: 'S0537', key: 'id', id: (s) => s.commandId },
+    { table: 'agent_session_commands', migration: '099', ledger: 'S0599', key: 'id', id: (s) => s.sessionCommandId },
     { table: 'agent_checkpoints', migration: '047', ledger: 'S0537', key: 'id', id: (s) => s.checkpointId },
     { table: 'permission_relays', migration: '049', ledger: 'S0539', key: 'id', id: (s) => s.relayId },
     { table: 'agent_plan_connections', migration: '050', ledger: 'S0540', key: 'profile_id', id: (s) => s.profileId },

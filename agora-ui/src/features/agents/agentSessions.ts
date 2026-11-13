@@ -16,6 +16,8 @@ export interface AgentRun {
   changedPaths: string[];
 }
 
+export interface AgentCommandInfo { name: string; summary: string; ownerOnly: boolean }
+
 export interface AgentSession {
   /**
    * 'terminal' (#112): the user's own CLI connected through agora-mcp with presence. It has
@@ -86,6 +88,12 @@ export interface AgentSession {
   limitStop?: LimitStop | null;
   run?: AgentRun | null;
   recentRuns?: AgentRun[];
+  /** The agent's CLI: which commands it supports depends on it. */
+  adapter?: string | null;
+  /** What `@agent /command` can do for this session's CLI (docs/agent-commands.md); empty for a terminal session. */
+  commands?: AgentCommandInfo[];
+  /** A command waiting for its turn (it never starts during a run). */
+  pendingCommand?: { command: string; status: 'queued' | 'claimed' } | null;
   /** A task card's or subtask's session works only in this thread (docs/task-board.md). */
   threadId?: string | null;
   /** A subtask's parent session. */
@@ -160,7 +168,9 @@ export type CommandBody =
   | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number | null }
   // The session's own token limit; null clears it, so its agent's setting applies
   | { command: 'budget'; sessionId: string; tokenBudget: number | null }
-  | { command: 'wake'; sessionId: string };
+  | { command: 'wake'; sessionId: string }
+  // A command for the agent's own CLI, the same as `@agent /compact` in a message (docs/agent-commands.md)
+  | { command: 'control'; profile: string; control: string };
 
 export interface CommandResponse {
   action?: string;
@@ -184,6 +194,7 @@ export const ERRORS: Record<string, string> = {
   no_assignee: 'Assign an agent to the card first.',
   empty_title: 'Give the card a title.',
   terminal_connected: 'That agent is already connected from a terminal, which answers here. A hosted session would wait on standby until the terminal disconnects.',
+  command_refused: 'Not sent. The reason is posted in the channel.',
   terminal_session: "That is the user's own terminal session. It ends when they close their CLI.",
 };
 
@@ -366,6 +377,7 @@ const ACTION_TEXT: Record<string, string> = {
   kept_terminal: 'Kept the terminal session; no hosted session started.',
   ended: 'Session ended.',
   woken: 'Woken. Held messages go out on its next run.',
+  control: 'Command sent. The result is posted in the channel.',
 };
 
 export function actionText(action: string | undefined): string {
