@@ -42,6 +42,11 @@ const BOT_ALLOWED_ROUTES = new Set([
     'POST /channels/:id/tasks/:taskId/start',
     // Subtask delegation: only during the bot's own hosted run in the channel
     'POST /channels/:id/subtasks',
+    // Receipts ledger (docs/receipts.md): reading is open to the channel; a claim's author may
+    // attach self-reported evidence. The verdict route is for people only.
+    'GET /channels/:id/threads/:threadId/receipts',
+    'GET /channels/:id/receipts',
+    'POST /channels/:id/receipts/:receiptId/attach',
     // File search returns names, tags and scores, never file content
     'GET /channels/:id/files/search',
     // Files in channels the bot can access: the extracted text, the image (scaled for a model),

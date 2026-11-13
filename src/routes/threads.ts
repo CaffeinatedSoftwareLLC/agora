@@ -12,6 +12,7 @@ import { ulidTime } from '../utils/ulid';
 import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
+import { recordMessage } from '../lib/receipts';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { hopLimitOf, loopGuardNotice } from '../lib/agent-budget-notice';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact } from '../lib/artifacts';
@@ -242,6 +243,12 @@ export async function threadRoutes(app: FastifyInstance) {
             channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol,
             mentionedUserIds: mentionedUsers.map(u => u.id), authorTokenId: request.isBot ? request.botTokenId ?? null : null,
         });
+        // The ledger (src/lib/receipts.ts): a DECIDE, DONE, BLOCK or CANCEL, a file in a protocol
+        // thread or a gate reply leaves a receipt. Never fails the reply.
+        const receiptNotices = await recordMessage(db, {
+            channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol, content,
+            authorTokenId: request.isBot ? request.botTokenId ?? null : null, attachments: resolvedAttachments,
+        }, request.log);
 
         const userRow = await db.query(
             'SELECT username, bot, avatar_url FROM users WHERE id = $1',
@@ -311,6 +318,7 @@ export async function threadRoutes(app: FastifyInstance) {
         });
         // Wakes the subscription rule refused (src/lib/provider-terms.ts), after the message itself
         for (const n of termsNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: 'Message', data: n.event });
+        for (const n of receiptNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
         request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ThreadMetadataUpdate',

@@ -71,6 +71,30 @@ export interface TaskCard {
     prUrl: string | null; prState: 'open' | 'draft' | 'merged' | 'closed' | null;
 }
 
+/** One entry of a thread's ledger (docs/receipts.md). `summary`, vote reasons and self-reported evidence are the authors' own words. */
+export interface Receipt {
+    id: string; channelId: string; threadId: string;
+    kind: 'claim' | 'decision' | 'stop' | 'artifact' | 'gate';
+    messageId: string | null;
+    author: { id: string; username: string | null; bot: boolean } | null;
+    mode: string | null; summary: string | null;
+    grade: 'verified' | 'unverified' | 'contradicted' | null; gradeReason: string | null; basis: 'tested' | 'assumed' | null;
+    outcome: string | null;
+    sessionId: string | null; runId: string | null; fileId: string | null; refReceiptId: string | null;
+    evidence: {
+        run?: { id: string; status: string; headSha: string | null; changedPathCount: number; verification: { status: string | null } | null };
+        selfReported?: Array<{ sha?: string; paths?: string[]; tested?: boolean; note?: string }>;
+        filename?: string; authority?: string; byBot?: boolean;
+    };
+    /** Gates: false when a later gate on the same artifact exists (`supersededBy`); null for other kinds. */
+    isLatest: boolean | null; supersededBy: string | null;
+    /** `source_edited`: the post was edited after the receipt copied its text; `source_removed`: it was deleted and the copied text blanked. */
+    sourceState: 'source_edited' | 'source_removed' | null;
+    verdict: { value: 'accepted' | 'disputed'; by: { id: string; username: string | null } | null; note: string | null; at: string } | null;
+    votes: Array<{ voterId: string | null; username: string | null; bot: boolean; vote: 'agree' | 'block'; reason: string | null; sourceState: 'source_edited' | 'source_removed' | null }>;
+    createdAt: string; updatedAt: string;
+}
+
 export interface SubtaskRequest {
     parentSessionId: string; title: string; brief: string;
     profile?: string; reportThreadId?: string; tokenBudget?: number; client_key?: string;
@@ -526,6 +550,19 @@ export class AgoraApi {
     }
     async startSubtask(channelId: string, body: SubtaskRequest): Promise<{ action: string; session: AgentSession }> {
         return this.request('POST', `/channels/${channelId}/subtasks`, body);
+    }
+    /** The receipts ledger (docs/receipts.md): a thread's receipts oldest first, or the channel's most recently changed first. */
+    async receipts(channelId: string, opts: { threadId?: string; kind?: Receipt['kind']; since?: string; limit?: number } = {}): Promise<{ receipts: Receipt[] }> {
+        const query = new URLSearchParams();
+        if (opts.kind) query.set('kind', opts.kind);
+        if (!opts.threadId && opts.since) query.set('since', opts.since);
+        if (!opts.threadId && opts.limit) query.set('limit', String(opts.limit));
+        const qs = query.toString();
+        const path = opts.threadId ? `/channels/${channelId}/threads/${encodeURIComponent(opts.threadId)}/receipts` : `/channels/${channelId}/receipts`;
+        return this.request('GET', `${path}${qs ? `?${qs}` : ''}`);
+    }
+    async attachReceiptEvidence(channelId: string, receiptId: string, body: { sha?: string; paths?: string[]; tested?: boolean; note?: string }): Promise<{ receipt: Receipt }> {
+        return this.request('POST', `/channels/${channelId}/receipts/${encodeURIComponent(receiptId)}/attach`, body);
     }
     /** agent_status (#230): context and usage-window use, stored on this bot's live terminal sessions. */
     async reportStatus(body: AgentStatusReport): Promise<{ sessions: string[]; warned: boolean }> {

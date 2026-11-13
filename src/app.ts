@@ -38,6 +38,7 @@ import { channelProjectRoutes } from './routes/channel-projects';
 import { taskBoardRoutes } from './routes/task-board';
 import { githubIssueRoutes } from './routes/github-issues';
 import { subtaskRoutes } from './routes/subtasks';
+import { receiptRoutes } from './routes/receipts';
 import { artifactRoutes } from './routes/artifacts';
 import { browserPreviewRoutes } from './routes/browser-previews';
 import { voiceRoutes } from './routes/voice';
@@ -415,6 +416,7 @@ export async function buildApp(opts?: {
     await app.register(taskBoardRoutes);
     await app.register(githubIssueRoutes);
     await app.register(subtaskRoutes);
+    await app.register(receiptRoutes);
     await app.register(artifactRoutes);
     await app.register(browserPreviewRoutes);
     await app.register(voiceRoutes);
