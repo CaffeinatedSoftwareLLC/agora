@@ -352,9 +352,19 @@ export function registerTools(
     server: McpServer,
     api: AgoraApi,
     cursors: CursorTracker,
-    config: UploadConfig & { defaultChannel?: string; listening?: { start(): void; stop(): void }; activity?: ToolActivity },
+    config: UploadConfig & {
+        defaultChannel?: string; listening?: { start(): void; stop(): void }; activity?: ToolActivity;
+        /**
+         * false: leave out file_upload. It reads files from the disk agora-mcp runs on, which is
+         * the agent's own machine for stdio but the server's for the HTTP endpoint (src/http.ts).
+         */
+        localFiles?: boolean;
+        /** Longest chat_wait, in seconds (default and ceiling MAX_WAIT_SECONDS). */
+        maxWaitSeconds?: number;
+    },
 ) {
     if (config.activity) server = withActivity(server, config.activity);
+    const maxWaitSeconds = Math.min(Math.max(Math.floor(config.maxWaitSeconds ?? MAX_WAIT_SECONDS), 1), MAX_WAIT_SECONDS);
     let botInfo: BotInfo | null = null;
     // Threads this agent owes a reply in, from what the tools showed it (src/turns.ts)
     const turns = new TurnTracker();
@@ -624,10 +634,10 @@ export function registerTools(
         'chat_wait',
         'Wait for new messages in a channel or the selected thread, plus direct @mentions and valid protocol YIELDs to you anywhere in that same channel. It also returns new replies from others in the other threads you started or posted in. Cross-thread notifications identify their source and do not advance that thread\'s read cursor. Blocks until a message needs you or the timeout expires. '
         + 'Use this to "listen" for incoming messages: one long wait keeps the agent idle without spending tokens. '
-        + `Timeouts up to ${MAX_WAIT_SECONDS}s are allowed, but your MCP client must allow a tool call that long (see the agora-collab skill's setup notes). ` + FORMAT_NOTE,
+        + `Timeouts up to ${maxWaitSeconds}s are allowed, but your MCP client must allow a tool call that long (see the agora-collab skill's setup notes). ` + FORMAT_NOTE,
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
-            timeout: z.number().optional().describe(`Max seconds to wait (default: 30, max: ${MAX_WAIT_SECONDS})`),
+            timeout: z.number().optional().describe(`Max seconds to wait (default: 30, max: ${maxWaitSeconds})`),
             thread: threadParam.describe('Thread whose replies to read in full. Direct attention anywhere in the same channel is still watched.'),
             until: z.enum(['any', 'turn']).optional().describe(
                 '"any" (default): return on any new message. "turn": keep waiting through bot messages that '
@@ -638,7 +648,7 @@ export function registerTools(
         },
         async ({ channel, timeout, thread, until }, extra) => {
             const ch = await resolveChannel(channel);
-            const maxWait = Math.min(Math.max(timeout || 30, 1), MAX_WAIT_SECONDS) * 1000;
+            const maxWait = Math.min(Math.max(timeout || 30, 1), maxWaitSeconds) * 1000;
             const start = Date.now();
             const deadline = start + maxWait;
             if (!botInfo) botInfo = await api.getMe();
@@ -1214,7 +1224,7 @@ export function registerTools(
         },
     );
 
-    server.tool(
+    if (config.localFiles !== false) server.tool(
         'file_upload',
         'Upload a local file and share it as an attachment in a channel or thread. Paths are restricted to the configured working folder (including symlink targets) unless the operator enables outside access. Server file-size, extension, quota and channel permissions apply; a 413 means the server size limit was exceeded. Do not blindly retry an upload whose outcome is unknown.',
         {

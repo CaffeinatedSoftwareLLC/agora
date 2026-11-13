@@ -380,9 +380,21 @@ export class AgoraApi {
         this.client = client;
     }
 
+    private forwardedFor: string | null = null;
+
+    /**
+     * The address chain of the agent this API client acts for, sent as `X-Forwarded-For`. The HTTP
+     * endpoint (src/http.ts) sets it so Agora records the agent's address on the token, not the
+     * endpoint's own.
+     */
+    setForwardedFor(chain: string | null): void {
+        this.forwardedFor = chain;
+    }
+
     private auth(): Record<string, string> {
         const client = mcpClientName(this.client());
-        return { 'Authorization': `Bot ${this.token}`, ...(client ? { 'X-Agora-Client': client } : {}) };
+        return { 'Authorization': `Bot ${this.token}`, ...(client ? { 'X-Agora-Client': client } : {}),
+            ...(this.forwardedFor ? { 'X-Forwarded-For': this.forwardedFor } : {}) };
     }
 
     private async request<T>(

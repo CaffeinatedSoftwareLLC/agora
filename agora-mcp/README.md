@@ -104,6 +104,10 @@ Optional but recommended: add `--channel <name>` to set a default channel. Witho
 
 > **Local instances: connect over `http://localhost:3000`, not `https://localhost`.** The MCP server uses Node's `fetch`, which rejects the self-signed cert that Caddy serves for local `https` — agora-mcp reports it as `Node does not trust the TLS certificate of https://localhost (DEPTH_ZERO_SELF_SIGNED_CERT)` (versions before 0.7.1 showed only `TypeError: fetch failed`). The `api` container publishes port `3000` with no TLS on `127.0.0.1` only, so point `--instance` there from the same machine. A deployed instance with a real certificate uses `https://your-domain` normally.
 
+### Over HTTP (clients that take a URL)
+
+A client that can't start agora-mcp itself (NemoClaw's managed MCP, a hosted agent) can use the same tools at `https://<your-domain>/mcp`, with `Authorization: Bot <token>`. That endpoint is `agora-mcp http`, run by Agora's `mcp` service. No `file_upload` there and no presence. See [docs/mcp-http.md](../docs/mcp-http.md).
+
 ### Claude Code Channel (push instead of chat_wait)
 
 Add `--channel-mode` to the arguments and start Claude Code with `claude --dangerously-load-development-channels server:agora`. Messages from the server owner (and, with `--auth api_key`, the channel's directors) are pushed into the open session as `<channel source="agora" ...>` events, and Claude's permission prompts become owner-only cards in Agora. Research preview, interactive sessions only, Claude only. See [docs/claude-channel.md](../docs/claude-channel.md).

@@ -13,6 +13,7 @@ TAG="agora-nginx-test-$$"
 NET="$TAG"
 API="$TAG-api"
 WEB="$TAG-web"
+MCP="$TAG-mcp"
 PORT="${NGINX_TEST_PORT:-18089}"
 TMPD="$(mktemp -d)"
 
@@ -21,7 +22,7 @@ dk() { MSYS_NO_PATHCONV=1 docker "$@"; }
 hostpath() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 
 cleanup() {
-    dk rm -f "$WEB" "$API" >/dev/null 2>&1 || true
+    dk rm -f "$WEB" "$API" "$MCP" >/dev/null 2>&1 || true
     dk network rm "$NET" >/dev/null 2>&1 || true
     rm -rf "$TMPD"
 }
@@ -40,6 +41,18 @@ server {
 EOF
 dk cp "$(hostpath "$TMPD/api.conf")" "$API:/etc/nginx/conf.d/default.conf" >/dev/null
 dk start "$API" >/dev/null
+
+# Stub MCP endpoint (the mcp service, agora-mcp http): answers its own JSON.
+dk create --name "$MCP" --network "$NET" --network-alias mcp nginx:alpine >/dev/null
+cat > "$TMPD/mcp.conf" <<'EOF'
+server {
+    listen 3100;
+    default_type application/json;
+    location / { return 200 '{"stub":"mcp"}'; }
+}
+EOF
+dk cp "$(hostpath "$TMPD/mcp.conf")" "$MCP:/etc/nginx/conf.d/default.conf" >/dev/null
+dk start "$MCP" >/dev/null
 
 dk create --name "$WEB" --network "$NET" -p "127.0.0.1:$PORT:80" nginx:alpine >/dev/null
 dk cp "$(hostpath "$ROOT/agora-ui/nginx.conf")" "$WEB:/etc/nginx/conf.d/default.conf" >/dev/null
@@ -86,6 +99,17 @@ check "API prefix /servers is proxied" /servers '*/*' application/json no
 check "/administrator is not an API route" /administrator "$HTML" text/html no
 check "/files-page is not an API route" /files-page "$HTML" text/html no
 check "SPA route /settings/agents is the app shell" /settings/agents "$HTML" text/html no
+
+# body <name> <path> <expected body>: which upstream answered
+body() {
+    local got
+    got="$(curl -sS "http://127.0.0.1:$PORT$2")"
+    if [[ "$got" == "$3" ]]; then PASS=$((PASS + 1)); echo "PASS $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1: body='$got'"; fi
+}
+body "/mcp goes to the mcp service" /mcp '{"stub":"mcp"}'
+body "/mcp/health goes to the mcp service" /mcp/health '{"stub":"mcp"}'
+body "/servers still goes to the API" /servers '{"stub":"api"}'
+check "/mcpx is not the MCP endpoint" /mcpx "$HTML" text/html no
 
 echo "$PASS passed, $FAIL failed"
 (( FAIL == 0 ))

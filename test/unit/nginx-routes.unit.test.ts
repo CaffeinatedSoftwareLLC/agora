@@ -108,6 +108,20 @@ describe('nginx route prefix coverage', () => {
         expect(locationBody(/location\s+=\s+\/index\.html\s*\{/)).toMatch(/add_header\s+Vary\s+Accept\s+always;/);
     });
 
+    it('/mcp goes to the mcp service, unbuffered, with a read timeout above the longest chat_wait', () => {
+        // agora-mcp http (docs/mcp-http.md), not the API: it must not be in the API regex
+        expect(getNginxPrefixes().has('mcp')).toBe(false);
+        expect(nginxConf).toMatch(/set\s+\$mcp\s+http:\/\/mcp:3100;/);
+        const mcp = locationBody(/location\s+~\s+\^\/mcp\(\/\|\$\)\s*\{/);
+        expect(mcp).toMatch(/proxy_pass\s+\$mcp;/);
+        expect(mcp).toMatch(/proxy_buffering\s+off;/);
+        const timeout = Number(/proxy_read_timeout\s+(\d+)s;/.exec(mcp)?.[1]);
+        const compose = readFileSync(join(projectRoot, 'docker-compose.prod.yml'), 'utf-8');
+        const maxWait = Number(/AGORA_MCP_HTTP_MAX_WAIT_SECONDS:-(\d+)/.exec(compose)?.[1]);
+        expect(maxWait).toBeGreaterThan(0);
+        expect(timeout).toBeGreaterThan(maxWait);
+    });
+
     it('nginx regex does not contain stale prefixes with no backend routes', () => {
         const nginxPrefixes = getNginxPrefixes();
         const backendPrefixes = getBackendPrefixes();
