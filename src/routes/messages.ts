@@ -10,6 +10,7 @@ import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol, refuseSelfYield } from '../lib/protocol';
 import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
+import { handleControlMessage } from '../lib/session-commands';
 import { routeMessage } from '../lib/agent-sessions';
 import { markSourceEdited, markSourceRemoved, recordMessage } from '../lib/receipts';
 import { sanitizeMessageText } from '../lib/sanitize-text';
@@ -207,7 +208,12 @@ export async function messageRoutes(app: FastifyInstance) {
 
         // Wake agents this post is addressed to, in the message's transaction. Placed after
         // every validation gate: a rejected post must not wake anyone.
-        const termsNotices = await routeMessage(db, {
+        // `@agent /compact` is a command for that agent's CLI, not chat: nothing wakes it (src/lib/session-commands.ts)
+        const controlNotices = protocol ? null : await handleControlMessage(db, {
+            channelId, messageId, threadId: null, authorId: userId, authorIsBot: !!request.isBot, couldDirect,
+            content: content ?? '', mentionedUsers,
+        });
+        const termsNotices = controlNotices ?? await routeMessage(db, {
             channelId, messageId, threadId: null, authorId: userId, couldDirect, protocol,
             mentionedUserIds: mentionedUsers.map(u => u.id), authorTokenId: request.isBot ? request.botTokenId ?? null : null,
         });

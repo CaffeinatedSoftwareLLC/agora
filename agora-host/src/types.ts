@@ -3,6 +3,7 @@ import type { Checkpoint, ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import type { GithubCommand, GithubResult } from './github.js';
 import type { BoxAdapterName } from './box-adapters.js';
+import type { CommandResult, SessionCommand } from './session-commands.js';
 import type { StreamEvent } from './stream.js';
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
@@ -134,6 +135,9 @@ export interface HostApi {
     /** GitHub issues bridge: `gh` calls for a channel's linked repository (github.ts). */
     claimGithubCommand?(signal?: AbortSignal): Promise<GithubCommand | null>;
     githubCommandResult?(cmd: GithubCommand, success: boolean, result: GithubResult, signal?: AbortSignal): Promise<void>;
+    /** Commands sent to an agent from Agora (`@claude /compact`, session-commands.ts). */
+    claimSessionCommand?(signal?: AbortSignal): Promise<SessionCommand | null>;
+    sessionCommandResult?(cmd: SessionCommand, success: boolean, result: CommandResult, signal?: AbortSignal): Promise<void>;
     previewResult?(cmd: PreviewCommand, outcome: PreviewOutcome, signal?: AbortSignal): Promise<void>;
     imageMessages?(claim: Claim, signal?: AbortSignal): Promise<{ maxBytes: number; messages: Array<{ id: string; content: string }> }>;
     uploadImage?(claim: Claim, image: { messageId: string; reference: string; filename: string; buffer: Buffer }, signal?: AbortSignal): Promise<void>;

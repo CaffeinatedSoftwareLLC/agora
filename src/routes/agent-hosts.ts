@@ -17,6 +17,7 @@ import { storage } from '../lib/storage';
 import { config } from '../config';
 import { MODEL_PATTERN } from '../lib/boxes/service';
 import { LIMIT_SCHEMA, limitOf } from '../lib/agent-budget-notice';
+import { SESSION_COMMAND_HOLDS_SQL } from '../lib/session-commands';
 import { serverSubscriptionWakes, SUBSCRIPTION_WAKES, type SubscriptionWakes } from '../lib/provider-terms';
 
 /**
@@ -597,7 +598,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
             WHERE s.id = ANY($1) AND s.server_id = $2 AND s.state = 'ended'
             AND (p.host_id = $3 OR EXISTS (SELECT 1 FROM agent_runs owned WHERE owned.session_id = s.id AND owned.host_id = $3))
             AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed')
-            AND NOT EXISTS (SELECT 1 FROM agent_workspace_commands c WHERE c.session_id=s.id AND c.status IN ('queued','claimed'))`,
+            AND NOT EXISTS (SELECT 1 FROM agent_workspace_commands c WHERE c.session_id=s.id AND c.status IN ('queued','claimed'))
+            AND NOT EXISTS (${SESSION_COMMAND_HOLDS_SQL('s.id')})`,
             [(request.body as any).sessionIds, host.serverId, host.id]);
         return reply.send(rows.rows.map(r => r.id.trim()));
     });

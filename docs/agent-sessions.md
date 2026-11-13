@@ -153,6 +153,8 @@ Type these in a channel's message box:
 | `/lurk codex [quiet\|balanced\|vocal]` | Enables passive listening for codex's live session here; default is balanced |
 | `/lurk codex off` | Disables passive listening and drops pending unclaimed lurk observations |
 
+**Commands for the agent's own CLI** (new): `@claude /compact`, `/context`, `/clear` (owner only) and `/stop` run as the CLI's native commands in that agent's hosted session instead of reaching the model as chat; a terminal session gets a notice telling you to type it there. See [agent-commands.md](agent-commands.md).
+
 Then talk to it: `@codex look at the failing test in auth.spec.ts`. With only one agent live in the channel, you can leave the mention out.
 
 - **Mentions are case-insensitive**: `@codex` and `@Codex` are the same agent, everywhere mentions are parsed.
