@@ -24,13 +24,14 @@ import { useAuthStore } from './authStore';
 
 const user = { id: 'U1', username: 'eryk' };
 // State right after the store module loaded, before any test touched it
-const atLoad = { keys: [...values.keys()], status: useAuthStore.getState().status };
+const atLoad = { keys: [...values.keys()], status: useAuthStore.getState().status, fetchCalls: [...fetchMock.mock.calls] };
 
 test('a legacy localStorage token is revoked and removed, and the user signs in again', () => {
   expect(atLoad.keys).toEqual([]);
-  expect(fetchMock).toHaveBeenCalledWith('/auth/logout', {
+  // Vitest 5 resets mock call history before each test, so read the calls captured at load
+  expect(atLoad.fetchCalls).toContainEqual(['/auth/logout', {
     method: 'POST', headers: { Authorization: 'Bearer legacy-token' },
-  });
+  }]);
   expect(atLoad.status).toBe('idle');
 });
 

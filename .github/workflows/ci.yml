@@ -45,7 +45,7 @@ jobs:
       skills: ${{ steps.filter.outputs.skills }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           # A change to this workflow runs everything.
