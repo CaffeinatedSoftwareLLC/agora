@@ -6,6 +6,7 @@ name: Agora release
 #   agora.tar.gz.sha256  `sha256sum agora.tar.gz`; the installer checks it before unpacking
 #   install.sh           install/linux/install.sh, so a bare `curl … install.sh` works
 #   install-macos.sh     install/macos/install.sh, which run on its own downloads agora.tar.gz the same way
+#   upgrade-macos.sh     install/macos/upgrade-latest.sh: upgrades a Mac install of any release to this one
 #   install.ps1          install/windows/bootstrap.ps1: downloads agora.tar.gz, checks it, runs
 #                        install\windows\install.ps1 from it
 # and copies them to the fixed release agora-latest, so the installers' "latest" link never
@@ -56,9 +57,10 @@ jobs:
           cp install/linux/install.sh install.sh
           cp install/windows/bootstrap.ps1 install.ps1
           cp install/macos/install.sh install-macos.sh
+          cp install/macos/upgrade-latest.sh upgrade-macos.sh
 
       - name: Upload release assets
-        run: gh release upload "${TAG}" agora.tar.gz agora.tar.gz.sha256 install.sh install-macos.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"
+        run: gh release upload "${TAG}" agora.tar.gz agora.tar.gz.sha256 install.sh install-macos.sh upgrade-macos.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"
 
       - name: Update the agora-latest install link
         run: |
@@ -69,4 +71,4 @@ jobs:
           else
             gh release edit agora-latest --repo "${GITHUB_REPOSITORY}" --notes "${notes}"
           fi
-          gh release upload agora-latest agora.tar.gz agora.tar.gz.sha256 install.sh install-macos.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"
+          gh release upload agora-latest agora.tar.gz agora.tar.gz.sha256 install.sh install-macos.sh upgrade-macos.sh install.ps1 --clobber --repo "${GITHUB_REPOSITORY}"

@@ -4,8 +4,31 @@ import { generateUlid } from '../utils/ulid';
 import { generateBotToken } from '../auth/bot-tokens';
 import { loadAndComputePermissions } from './bots';
 import { Permissions } from '../permissions';
+import { config } from '../config';
 
 const hashCode = (code: string) => createHash('sha256').update(code).digest('hex');
+
+const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+/**
+ * The addresses an agent can reach this instance at, for the Invite Agent dialog.
+ * `local` is the plain-HTTP API port, which only an agent on the same machine can use.
+ * `remote` is every HTTPS CORS_ORIGIN that is not localhost (a domain or a Tailscale name).
+ * The values go into a shell command, so anything but a bare origin is dropped.
+ */
+export function agentAddresses(corsOrigin: string | undefined, apiPort: number): { local: string; remote: string[] } {
+    const remote: string[] = [];
+    for (const raw of (corsOrigin ?? '').split(',')) {
+        let url: URL;
+        try { url = new URL(raw.trim()); } catch { continue; }
+        if (url.protocol !== 'https:' || LOCAL_HOSTS.includes(url.hostname)) continue;
+        if (url.username || url.password || url.search || url.hash || url.pathname !== '/') continue;
+        if (!/^https:\/\/[a-z0-9.:[\]-]+$/i.test(url.origin)) continue;
+        if (!remote.includes(url.origin)) remote.push(url.origin);
+    }
+    const port = Number.isInteger(apiPort) && apiPort > 0 && apiPort < 65536 ? apiPort : 3000;
+    return { local: `http://localhost:${port}`, remote };
+}
 
 export async function agentInviteRoutes(app: FastifyInstance) {
     app.post('/servers/:serverId/agent-invites', {
@@ -52,6 +75,28 @@ export async function agentInviteRoutes(app: FastifyInstance) {
             VALUES ($1,$2,$3,'agent_invite_create','bot',$4,$5)`,
             [generateUlid(), serverId, request.userId, botId, JSON.stringify({ inviteId: id, ip: request.ip })]);
         return reply.code(201).send({ id, code, botId, expiresAt: result.rows[0].expires_at });
+    });
+
+    // Where an agent can reach this instance. Only for someone who may create an agent invite
+    // here: an administrator, or the owner of one of the server's bots.
+    app.get('/servers/:serverId/agent-invites/addresses', {
+        config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+        schema: { params: {
+            type: 'object', required: ['serverId'],
+            properties: { serverId: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' } },
+        } },
+    }, async (request, reply) => {
+        const { serverId } = request.params as { serverId: string };
+        const db = request.dbClient!;
+        if (request.isBot) return reply.code(403).send({ error: 'forbidden' });
+        const member = await db.query('SELECT 1 FROM server_members WHERE server_id=$1 AND user_id=$2', [serverId, request.userId]);
+        if (!member.rowCount) return reply.code(403).send({ error: 'forbidden' });
+        const perms = await loadAndComputePermissions(db, request.userId, serverId);
+        if (!(perms & Permissions.Administrator)) {
+            const owned = await db.query('SELECT 1 FROM users WHERE server_id=$1 AND bot=true AND bot_owner_id=$2 LIMIT 1', [serverId, request.userId]);
+            if (!owned.rowCount) return reply.code(403).send({ error: 'forbidden' });
+        }
+        return agentAddresses(config.corsOrigin, config.agentApiPort);
     });
 
     // Public exact route. Keep the secret out of request URLs and access logs.
