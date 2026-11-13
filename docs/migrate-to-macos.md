@@ -2,7 +2,7 @@
 
 This moves an Agora install that runs in a WSL distro on Windows to a Mac, with everything it holds: the database, the encrypted files, every agent's box (logins and repos) and `.env.prod` with its `AGORA_ENCRYPTION_KEY`. It uses Agora's own backup and restore ([installing.md](installing.md#backups-upgrades-removal)): one bundle, encrypted with a passphrase you choose, carried from one machine to the other. Nothing is uploaded anywhere, and no secret is printed.
 
-> **Status (2026-11-11):** written, not yet run. Backup and restore are tested on Linux in CI. The Mac installer itself ran on a real Mac on 2026-11-10 ([macos.md](macos.md)); a restore on a Mac has not. Keep the Windows install until the Mac one has run for a while (step 9).
+> **Status (2026-11-12):** run once, for real: the maintainers' instance moved from Windows 11 (WSL) to a Mac mini (Apple Silicon) with these steps, and the notes marked *From the first run* come from it. Backup and restore are also tested on Linux in CI. Not yet run: step 8 (host-mode agents on the Mac) and step 9 (removing the Windows install). Keep the Windows install until the Mac one has run for a while (step 9).
 
 The commands below assume the distro is `Ubuntu` and the install is in `~/agora`, started with the tailnet override. Change those names if yours differ. PowerShell commands are for Windows PowerShell 5.1; the Mac ones for Terminal (zsh).
 
@@ -40,9 +40,11 @@ Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.Co
 wsl -d Ubuntu --cd ~/agora --exec bash install/backup.sh
 ```
 
-It asks for a passphrase twice. **Choose a new one and keep it out of the file's way**: it's the only thing that opens the bundle, and the bundle holds your encryption key. Agora stops while the backup runs and starts again after. The last line names the file, `backups/agora-agora-<time>.agorabk`.
+It asks for a passphrase twice (nothing shows while you type). **Choose a new one and keep it out of the file's way**: it's the only thing that opens the bundle, and the bundle holds your encryption key. Agora stops while the backup runs and starts again after.
 
-Then stop the Windows install, so nothing changes there after the backup (its data stays; step 9 removes it):
+**Wait for the last line.** The backup prints the file's name, `backups/agora-agora-<time>.agorabk`, as soon as it starts, then works for a few minutes (the first time it also downloads a small `alpine` image, which is not a reinstall). It is finished only when it prints `Keep the passphrase somewhere safe: the bundle is useless without it.` *From the first run:* stopping the install before that line makes the backup fail at `backup.reconcile` and keep no bundle. Nothing is lost; start the stack again and run the backup again.
+
+Only then stop the Windows install, so nothing changes there after the backup (its data stays; step 9 removes it):
 
 ```powershell
 wsl -d Ubuntu --cd ~/agora --exec sh -c "docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod stop; docker ps -q --filter label=org.agora.instance=agora | xargs -r docker stop"
@@ -62,6 +64,8 @@ scp "$HOME\Downloads\<file>" <mac user>@<mac name>.local:Downloads/
 `scp` needs **Remote Login** on the Mac (System Settings → General → Sharing). Over Tailscale, use the Mac's tailnet name instead of `<mac name>.local`. A USB stick works too. Never send the passphrase with the file. Delete the Windows copy afterwards: `Remove-Item "$HOME\Downloads\<file>"`.
 
 ## 5. On the Mac: install Agora with the same name and no agent
+
+If the Mac already has an Agora VM from a trial (`limactl list` shows `agora`), remove it first with `bash install/macos/uninstall.sh --delete-vm`, so the restore goes into a fresh install.
 
 ```bash
 git clone https://github.com/CaffeinatedSoftwareLLC/agora.git ~/agora-src
@@ -101,12 +105,13 @@ Do [remote-access.md](remote-access.md) steps 1, 4, 5 and 6 inside the VM (`bash
 
 1. In the Tailscale admin console, **rename** the old WSL machine (for example to `agora-home-wsl`), so its name is free. Renaming rather than removing keeps a way back (see "If something goes wrong"); remove it in step 9.
 2. In the VM: `curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up --hostname agora-home` (the name from step 1).
-3. In the policy (Access controls), set `agora-home` in `hosts` to the VM's new address (`tailscale ip -4` in the VM).
+3. In the policy (Access controls), set the Agora entry in `hosts` to the VM's new address (`tailscale ip -4` in the VM). The entry is the destination of the rule that allows port 443, and its name need not match the machine's. *From the first run:* while it still holds the old address, the VM answers `tailscale ping` but `https://<name>.<tailnet>.ts.net` times out.
 4. `.env.prod` already has your `CORS_ORIGIN` and `TAILNET_WEB_PORT`. Restart with the override, in the install folder in the VM:
    ```bash
-   docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d
+   sudo env AGORA_BOX_BUILD=$(sh scripts/box-build-id.sh) docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d
    sudo tailscale serve --bg http://127.0.0.1:8080
    ```
+   These run in the VM's shell (`agora-vm.sh shell`), not in the Mac's Terminal. Docker in the VM needs `sudo`, and `AGORA_BOX_BUILD` is the box image's build ID, which the installer's own commands pass too: without it boxd takes the boxes for out of date and rebuilds them.
 5. Check from the phone, on Wi-Fi and on mobile data.
 
 The push relay and the phone apps keep working: their registration is in the restored database and `.env.prod`.
@@ -126,7 +131,7 @@ Bot tokens, host tokens and accounts move with the database, so no agent needs a
 | The agent connects to | After the move |
 |---|---|
 | The tailnet name (`https://agora-home.<tailnet>.ts.net`) | Works again after step 7, with no change, if the VM takes the old machine name. |
-| The Windows PC's LAN address or name, or `localhost` on the PC | Stops. Put the agent's machine on the tailnet and set its address to the tailnet name, after step 7. |
+| The Windows PC's LAN address or name, or `localhost` on the PC | Stops. Put the agent's machine on the tailnet and set its address to the tailnet name, after step 7. *From the first run:* this is every agent on the Windows PC itself, `agora-host` included (they used `http://localhost:3000`), and Tailscale inside WSL doesn't count: Windows needs its own Tailscale. An agent set up with `--invite` keeps its saved login under the old address (`~/.agora/credentials`), so give it a fresh invite or a `--token`. |
 | An agent now running on the Mac itself | `http://localhost:3000` (web: `https://localhost:8443`). |
 | A boxed agent | Nothing to do: it connects inside the VM, and the restore gives it a fresh token. |
 
