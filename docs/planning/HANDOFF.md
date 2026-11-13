@@ -4,7 +4,7 @@
 
 This section is current. Everything below "Snapshot of 2026-10-01" is history: kept for the audit findings, design decisions and test notes, but its "current state", "waiting on" and "next up" lists describe the 0.2.0 era and are superseded here.
 
-- **Releases:** Agora **0.3.5** (2026-10-30, tag `v0.3.5`). `agora-mcp` **0.8.1** (2026-11-02, tag `agora-mcp-v0.8.1`). Release tags are `v*` for the app and `agora-mcp-v*` for the MCP server.
+- **Releases:** Agora **0.4.0** (2026-11-12, tag `v0.4.0`; the first with installers, feeds `agora-latest`). `agora-mcp` **0.8.1** (2026-11-02, tag `agora-mcp-v0.8.1`). Release tags are `v*` for the app and `agora-mcp-v*` for the MCP server.
 - **agora-mcp ships through GitHub Releases only, by design.** Install with `npm install -g https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-mcp-latest/agora-mcp.tgz`; the fixed `agora-mcp-latest` release always holds the newest build. It is not published to the npm registry, and is not waiting to be: the `agora-mcp` package there is an old, unrelated 0.1.2.
 - **Database:** 73 migrations (`001` to `073`).
 - **Live stack:** WSL2 Ubuntu `~/agora`, on main (last deploy `d1de3d6`, 2026-11-02). A self-healing keep-alive task holds the distro open ([getting started, step 7](../getting-started.md)). agora-host runs from a detached `main` worktree.

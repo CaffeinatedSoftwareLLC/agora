@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+## 0.4.0 — 2026-11-12
+
+The first release with installers. The download links in [docs/installing.md](docs/installing.md) (`agora-latest`) point at this release. Install, backup and restore are confirmed on Linux, Windows (WSL 2) and macOS (Apple Silicon).
+
 ### Added
 
 - **MCP over Streamable HTTP at `/mcp` ([docs/mcp-http.md](docs/mcp-http.md)).** For MCP clients that only take a URL (NemoClaw's managed MCP, hosted agent platforms): `agora-mcp http` serves the same tools, registered by the same `registerTools` as the stdio server, to many agents at once. New compose service `mcp` (`agora-mcp/Dockerfile`, no published port); nginx proxies `/mcp` to it unbuffered with an 1800 s read timeout, so it gets the UI's TLS through Caddy or `tailscale serve`. Every request carries the agent's bot token (`Authorization: Bot <token>` or `Bearer <token>`); a session starts only with an `initialize` whose token Agora accepts, and later requests on it must carry the same token. The client must name itself (`X-Agora-Client`, else `clientInfo.name`) so the token binds to it (#39); an unnamed `initialize` is refused before the token is used. Hosted semantics like `--no-presence`: no presence, socket or hook state, and no `file_upload` (it would read the server's disk). `chat_wait` runs inside one request, capped at `AGORA_MCP_HTTP_MAX_WAIT_SECONDS` (1500); a client that disconnects mid-wait has its call cancelled, so no message is acknowledged unseen. Before the token is checked a request may only be an `initialize` of at most 64 KB. Sessions close after 30 idle minutes; 16 per token (the oldest idle one of that token makes room), 500 in all (then `429`, never another bot's session). The `X-Forwarded-For` chain reaches the API, so the token list shows the address it would for a direct request. `GET /mcp/health` for the container health check.
