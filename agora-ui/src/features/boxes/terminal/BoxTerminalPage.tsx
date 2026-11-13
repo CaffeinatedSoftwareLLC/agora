@@ -9,7 +9,7 @@ import { createShellSocket } from '../../../lib/socketFactory';
 import { Button } from '../../../components/ui/Button';
 import { boxApi, type TerminalLimits, type TerminalStatus } from '../api';
 import { INPUT } from '../boxRules';
-import { TOOLBAR_KEYS, binaryToBytes, closeText, inputChunks, readiness, socketError, ticketError } from './terminalRules';
+import { GESTURE_EVENTS, GESTURE_WINDOW_MS, TOOLBAR_KEYS, binaryToBytes, closeText, inputChunks, needsPasteConfirm, plainHttpProblem, readiness, socketError, ticketError } from './terminalRules';
 
 /**
  * The terminal in a box (docs/box-terminal.md), on a route of its own that renders nothing a
@@ -20,6 +20,13 @@ import { TOOLBAR_KEYS, binaryToBytes, closeText, inputChunks, readiness, socketE
  * what it means, and types their password again. The server then issues a 30-second single-use
  * ticket and this page opens its own socket with it. Nothing about a terminal survives the page:
  * leaving it, or closing the tab, ends the shell.
+ *
+ * Idle time counts only what the owner does. xterm's `onData` carries both the owner's keys and the
+ * widget's automatic answers to queries the shell prints (device attributes, cursor position, focus
+ * reports), so data is sent as `shell:input` only within a moment of a browser event of the owner's
+ * (a key, composition, paste, pointer, wheel or touch: `onKey` alone misses paste, IME and soft
+ * keyboards) and as `shell:reply` otherwise. The server writes both to the shell but only the first
+ * resets the idle clock.
  *
  * What the terminal widget will not do with what the shell prints: it never writes the clipboard
  * (no clipboard addon, so OSC 52 is ignored), never changes this page's title, never opens a link
@@ -41,10 +48,15 @@ export function BoxTerminalPage() {
   const [limits, setLimits] = useState<TerminalLimits | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const gestureAt = useRef(0);
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setPhase('loading');
     setMessage('');
+    const insecure = plainHttpProblem(window.isSecureContext, window.location.hostname);
+    if (insecure) { setStatus(null); setMessage(insecure); setPhase('blocked'); return; }
     try {
       const s = await boxApi.terminalStatus(boxId);
       setStatus(s);
@@ -106,19 +118,37 @@ export function BoxTerminalPage() {
     fit.fit();
     // A title the shell sets is ignored: nothing the box says changes this page
     term.onTitleChange(() => {});
+    termRef.current = term;
     const socket = createShellSocket(ticket);
     socketRef.current = socket;
+    const markGesture = () => { gestureAt.current = Date.now(); };
+    const box = container.current;
+    for (const ev of GESTURE_EVENTS) box.addEventListener(ev, markGesture, true);
+    // A multi-line paste into a shell that did not ask for bracketed paste runs line by line at once: ask first
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData('text') ?? '';
+      if (needsPasteConfirm(text, !!term.modes?.bracketedPasteMode)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPendingPaste(text);
+      }
+    };
+    box.addEventListener('paste', onPaste, true);
+    const forward = (payload: string | Uint8Array) => {
+      const owner = Date.now() - gestureAt.current <= GESTURE_WINDOW_MS;
+      socket.emit(owner ? 'shell:input' : 'shell:reply', payload);
+    };
     socket.on('connect', () => socket.emit('shell:start', { cols: term.cols, rows: term.rows }));
     socket.on('shell:ready', (m: { limits?: TerminalLimits }) => { setLimits(m?.limits ?? null); setPhase('live'); term.focus(); });
     socket.on('shell:output', (d: ArrayBuffer | Uint8Array) => term.write(new Uint8Array(d)));
     socket.on('shell:exit', (m: { reason?: string }) => end(closeText(m?.reason)));
     socket.on('connect_error', (err: Error) => end(socketError(err.message)));
     socket.on('disconnect', () => end('The connection to Agora ended.'));
-    term.onData(d => { if (socket.connected) for (const piece of inputChunks(d)) socket.emit('shell:input', piece); });
+    term.onData(d => { if (socket.connected) for (const piece of inputChunks(d)) forward(piece); });
     term.onBinary(b => {
       if (!socket.connected) return;
       const bytes = binaryToBytes(b);
-      for (let i = 0; i < bytes.length; i += 16384) socket.emit('shell:input', bytes.slice(i, i + 16384));
+      for (let i = 0; i < bytes.length; i += 16384) forward(bytes.slice(i, i + 16384));
     });
     term.onResize(({ cols, rows }) => { if (socket.connected) socket.emit('shell:resize', { cols, rows }); });
     const observer = new ResizeObserver(() => { try { fit.fit(); } catch { /* not laid out yet */ } });
@@ -126,9 +156,13 @@ export function BoxTerminalPage() {
     socket.connect();
     return () => {
       finished = true;
+      for (const ev of GESTURE_EVENTS) box.removeEventListener(ev, markGesture, true);
+      box.removeEventListener('paste', onPaste, true);
       observer.disconnect();
       socket.disconnect();
       socketRef.current = null;
+      termRef.current = null;
+      setPendingPaste(null);
       term.dispose();
     };
   }, [ticket]);
@@ -138,6 +172,14 @@ export function BoxTerminalPage() {
     if (socket?.connected) socket.emit('shell:close');
   };
   const send = (seq: string) => { const s = socketRef.current; if (s?.connected) s.emit('shell:input', seq); };
+  const confirmPaste = () => {
+    const text = pendingPaste;
+    setPendingPaste(null);
+    if (text === null) return;
+    gestureAt.current = Date.now();
+    termRef.current?.paste(text);
+    termRef.current?.focus();
+  };
 
   const name = status?.box.name ?? 'this box';
   const takeover = !!status?.open;
@@ -147,6 +189,7 @@ export function BoxTerminalPage() {
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface px-4 py-2">
         <span className="text-sm font-semibold" data-testid="terminal-box-name">Terminal in {name}</span>
         {status && <span className="text-xs text-text-muted">{status.box.adapter} box</span>}
+        {phase === 'live' && <span className="text-xs text-warn" data-testid="terminal-shared-warning">You share this box with the agent. Treat what you type as visible to it.</span>}
         {phase === 'live' && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none text-warn" data-testid="terminal-live">live</span>}
         <span className="grow" />
         {(phase === 'live' || phase === 'connecting') && <Button variant="danger" onClick={close} className="min-h-11 md:min-h-9">Close terminal</Button>}
@@ -166,8 +209,13 @@ export function BoxTerminalPage() {
         <form onSubmit={e => void open(e)} className="flex max-w-xl flex-col gap-3 p-4 text-sm md:p-6" data-testid="terminal-confirm">
           <h1 className="text-base font-semibold">Open a terminal in {name}</h1>
           <ul className="list-disc space-y-1 pl-5 text-text-muted">
-            <li>It is a real shell inside the box, as the box&apos;s user, in the agent&apos;s workspace folder, with the agent&apos;s login and the box&apos;s network rules. It reaches nothing more than the agent can.</li>
-            <li>New wakes for this agent pause while it is open{status.activeRun ? '; a run in progress keeps going, so you share the box with it' : ''}. The channel is told that a terminal is open.</li>
+            <li>This shell is in the same box, as the same user, as an autonomous agent that may be running now.</li>
+            <li>That agent can read or change what you type and what you see (shell startup files, programs on the PATH, project hooks, other processes).</li>
+            <li>It can show a fake prompt. Agora asks for your password only on this page, before the terminal opens, never inside the terminal.</li>
+            <li>Do not type passwords, tokens, login codes or git credentials you would not give the agent.</li>
+            <li>New wakes for this agent are paused while the terminal is open{status.activeRun ? '; a run already working keeps going, so you share the box with it' : '; a run already working keeps going'}. The channel is told that a terminal is open.</li>
+            <li>Closing the tab ends the shell; anything started with <code>setsid</code>, <code>nohup</code> or <code>disown</code> keeps running.</li>
+            <li>For an agent that runs on an API key, that key is in this shell&apos;s environment.</li>
             <li>
               It closes after {status.limits.idleMinutes} minutes without a keystroke, after {status.limits.maxHours} hours at most, and if the shell prints more than {status.limits.rateKbps} KiB a second. You can change these in the box&apos;s settings.
             </li>
@@ -192,6 +240,13 @@ export function BoxTerminalPage() {
       {(phase === 'connecting' || phase === 'live') && (
         <>
           <div ref={container} className="min-h-0 flex-1 p-2" style={{ background: THEME.background }} data-testid="terminal-container" aria-label={`Terminal in ${name}`} />
+          {pendingPaste !== null && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-warn/40 bg-warn/10 px-4 py-2 text-xs text-warn" role="alert" data-testid="terminal-paste-confirm">
+              <span>This paste has {pendingPaste.split(/\r\n|\r|\n/).length} lines and the shell did not ask for bracketed paste, so each line runs as soon as it arrives. Send it?</span>
+              <Button variant="danger" onClick={confirmPaste} className="min-h-11 md:min-h-8">Send paste</Button>
+              <Button variant="secondary" onClick={() => { setPendingPaste(null); termRef.current?.focus(); }} className="min-h-11 md:min-h-8">Cancel</Button>
+            </div>
+          )}
           {phase === 'connecting' && <p className="px-4 py-1 text-xs text-text-muted" role="status">Starting the shell…</p>}
           {limits && phase === 'live' && (
             <p className="px-4 py-1 text-[11px] text-text-muted" data-testid="terminal-limits">

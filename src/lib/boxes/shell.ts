@@ -24,12 +24,19 @@ export const MAX_ROWS = 200;
 /** The host has this long to start the shell; the browser this long to say its size. */
 export const OPEN_TIMEOUT_MS = 15_000;
 export const START_TIMEOUT_MS = 15_000;
+/** What the hub will hold for a browser that reads slowly before it closes the terminal. */
+export const MAX_BROWSER_BUFFER_BYTES = 4 * 1024 * 1024;
+/** Refusals are written to the audit log at most this often per person, box and reason. */
+export const REFUSAL_AUDIT_MINUTES = 1;
+/** A notice that a second connection claimed to be a box's host, or that a terminal is still open, at most this often per box. */
+export const NOTICE_INTERVAL_MINUTES = 60;
 
 /** Why a terminal ended: the codes in the audit log, the owner's list and the notice. */
 export const CLOSE_REASONS = [
     'closed_by_owner', 'shell_exited', 'browser_gone', 'taken_over', 'idle_timeout', 'max_duration',
     'output_flood', 'input_flood', 'box_disconnected', 'box_changed', 'box_not_ready', 'host_error',
     'host_timeout', 'no_start', 'session_ended', 'server_restarted', 'server_stopped', 'access_changed',
+    'host_changed', 'browser_stalled',
 ] as const;
 export type CloseReason = typeof CLOSE_REASONS[number];
 
@@ -53,6 +60,8 @@ export const CLOSE_TEXT: Record<CloseReason, string> = {
     server_restarted: 'Agora restarted',
     server_stopped: 'Agora stopped',
     access_changed: 'the owner\'s access changed',
+    host_changed: 'the connection to the box changed, so the terminal was closed for safety',
+    browser_stalled: 'the browser stopped reading what the shell printed',
 };
 
 /**
@@ -139,6 +148,23 @@ export async function shellAudit(db: any, a: { serverId: string | null; actorId:
          VALUES ($1, $2, $3, $4, 'box', $5, $6)`,
         [generateUlid(), a.serverId, a.actorId, a.action, a.boxId, JSON.stringify(a.changes)]
     );
+}
+
+/**
+ * A refusal on the owner's record, at most once a minute per person, box and reason: any signed-in
+ * account can ask, and a refusal is not worth a row each time. Returns whether a row was written.
+ */
+export async function shellRefusal(db: any, a: { serverId: string | null; actorId: string | null; boxId: string | null; code: string; via: string }): Promise<boolean> {
+    if (a.actorId && a.boxId) {
+        const recent = await db.query(
+            `SELECT 1 FROM audit_log WHERE action = 'box_terminal_refused' AND actor_id = $1 AND target_id = $2
+               AND changes->>'code' = $3 AND created_at > NOW() - make_interval(mins => $4) LIMIT 1`,
+            [a.actorId, a.boxId, a.code, REFUSAL_AUDIT_MINUTES]
+        );
+        if (recent.rows.length > 0) return false;
+    }
+    await shellAudit(db, { serverId: a.serverId, actorId: a.actorId, action: 'box_terminal_refused', boxId: a.boxId, changes: { code: a.code, via: a.via } });
+    return true;
 }
 
 export interface ShellSessionRow {

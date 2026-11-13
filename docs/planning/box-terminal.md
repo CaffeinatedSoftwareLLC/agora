@@ -41,9 +41,9 @@ Re-checked while it runs (every 15 seconds): the box is still running at the sam
 
 ## What the terminal can and cannot reach
 
-A shell inside the box as `agent` (uid 1000), in the agent's workspace folder (else `~/scratch`, else home), with the environment the agent's CLI gets (`childEnv`: an OS allowlist, the CLI's state directory so `claude`/`codex`/`devin` find the agent's login, the proxy variables) plus `TERM`. The same network allowlist applies: the edge sees only the box's address, so an unlisted domain is refused (and appears as a card for the owner, exactly as for the agent). Same home volume, same read-only root, no capabilities, no `sudo`, same limits.
+A shell inside the box as `agent` (uid 1000), starting in the home folder (the agent's workspace is named in a banner line), with the environment the agent's CLI gets (`childEnv`: an OS allowlist, the CLI's state directory so `claude`/`codex`/`devin` find the agent's login, the proxy variables) plus `TERM`. The same network allowlist applies: the edge sees only the box's address, so an unlisted domain is refused (and appears as a card for the owner, exactly as for the agent). Same home volume, same read-only root, no capabilities, no `sudo`, same limits.
 
-The host token and bot token are not in the shell's environment. They are **not** hidden from the shell's user: `/run/agora/host.json` and PID 1's environment are readable by uid 1000, as they are for the agent (agent-boxes.md §3.2, "accepted"). A terminal adds no reach beyond what the agent already has; what it adds is a person at the keyboard. Running the CLI by hand is not yeet mode: Claude asks for permissions interactively.
+The host token and bot token are not in the shell's environment (an agent that runs on an API key has its provider key there, as its own runs do). They are **not** hidden from the shell's user: `/run/agora/host.json` and PID 1's environment are readable by uid 1000, as they are for the agent (agent-boxes.md §3.2, "accepted"). The terminal does not widen what the box can reach. What it adds is **a person's keystrokes inside the agent's reach**: the owner types into a shell that an autonomous agent, running as the same user, can read, poison (startup files, PATH, hooks) or impersonate (a fake prompt). That is stated on the confirm page, in the terminal header and in the docs; the mitigations are in "Review fixes" below, and the real fix is a separate uid. Running the CLI by hand is not yeet mode: Claude asks for permissions interactively.
 
 ## Lifecycle
 
@@ -94,6 +94,32 @@ A terminal for an unboxed agent is a shell on the owner's own computer opened fr
 ## Not in this slice
 
 Reattach after a dropped connection; passkey step-up (every account has a password, so password re-entry always works); recording or replay (deliberately never); per-user terminal quotas across boxes; sharing a terminal.
+
+## Review fixes (security review of PR #393)
+
+- **Host socket takeover.** `registerHost` and the host handshake refuse a second socket for a box while the first is connected at the same generation (`host_already_connected`). The refusal is audited (`box_host_conflict`, once a minute per box), announced in the agent's home channel (once an hour per box, like the provenance notices) and closes an open terminal with its own reason (`host_changed`: "the connection to the box changed, so the terminal was closed for safety"). A real reconnect arrives after the old socket's disconnect, or after Socket.IO's ping timeout (25 s interval + 20 s timeout, about 45 s, for a connection that died uncleanly); agora-host treats the refusal as "retry in 5 s", not a growing backoff and not fatal. A socket registered at an older generation is replaced, not defended.
+- **Shared shell.** The confirm page lists seven plain facts (same box and user as a running agent, it can read or change what you type, fake prompts, no secrets, wakes paused, `setsid`/`nohup` survive, API key in the environment); the live header carries a one-line reminder. The shell starts in the box user's home, not the agent's worktree, with a banner naming the workspace; `/opt/agora/bin` is first on the shell's PATH (the shell's environment only: the agent's own runs resolve tools as before); the child of `agora-pty` closes every descriptor above 2, so the resize pipe (fd 3) is not in the shell.
+- **Idle clock.** xterm's `onData` carries the owner's keys and the widget's automatic answers (device attributes, cursor reports, focus reports). The page sends data as `shell:input` only within 150 ms of a browser event of the owner's (key, composition, paste, pointer, wheel, touch; `onKey` alone misses paste, IME and soft keyboards) and as `shell:reply` otherwise. The hub writes both to the shell under the same size and rate limits but only `shell:input` resets the idle clock, and only the paired browser socket can send either. A terminal open for an hour posts "still open; wakes are paused", then again each hour.
+- **Audit flood.** Refusals are written at most once a minute per person, box and reason; the status, close and history routes are rate limited (60, 30, 60 a minute) like the ticket route (10); a ticket that does not redeem writes no row (the hub counts them); a missing box and a box that is not yours both answer `404 box_not_found`.
+- **Generation.** A host socket counts only at the box's current generation, in the ticket check, the handshake and `attachBrowser`; the sweep drops sockets of an older generation.
+- **Ownership.** `refreshGatewayAccess` (run after every committed change under `/servers`, `/admin`, `/users` ...) now also re-checks open terminals at once; the 15-second sweep stays as the backstop. Agora has no ownership-transfer route yet, so this hook is what an ownership change or a suspension would reach.
+- **Origin scheme.** The ticket route and the shell handshake also require the Origin's scheme to match the request's (`X-Forwarded-Proto` only when `TRUST_PROXY` is on). Other routes keep the host-only check.
+- **Backpressure.** The hub closes a terminal (`browser_stalled`) when more than 4 MiB are queued for a browser that is not reading.
+- **Paste and plain http.** A multi-line paste with bracketed paste off asks first; the page refuses to open when `window.isSecureContext` is false away from localhost.
+
+## Residual risk: the box user can reach the box's host
+
+Read from `box/agora-box-start` and `box/Dockerfile`, not exercised in a running gVisor box: the in-box agora-host is started by the entrypoint as `exec node` under `tini`, as uid 1000 (`USER 1000:1000`), the same user and the same PID namespace as the shell and the agent. So the box user **can signal it**. `SIGKILL` ends the container (the host is tini's only child), which restarts the box and kills the attacker's own processes with it, so that is self-defeating. `SIGSTOP` (or an attached debugger, if gVisor allows `ptrace`) is not: a stopped host stops answering pings, the server drops its socket after the ping timeout, and a process that read the host token from `/run/agora/host.json` can then connect as "the host" and receive the owner's keystrokes. The fixes above make that attempt visible (audit, a channel notice, the terminal closes if one was open when the real socket dropped) and stop the trivial replacement while the real host is live; they do not stop this one.
+
+**Real fix, future work:** run the terminal relay under a different uid from the agent, with a credential the agent cannot read (not `/run/agora/host.json`), in a process the agent cannot signal or trace. Until then, treat the shell as sharing a trust boundary with the agent.
+
+## Follow-ups (not in this PR)
+
+- A Content-Security-Policy and `frame-ancestors` for the whole app.
+- Passkey or out-of-band step-up in place of the password.
+- Running the relay under a separate uid (the residual risk above).
+- Reattach after a dropped connection.
+- Terminals for unboxed agents.
 
 ## Migration
 

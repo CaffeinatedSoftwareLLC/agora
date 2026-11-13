@@ -1,12 +1,12 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { originAllowed, sessionTokenFromHeaders } from '../auth/session-cookie';
+import { originAllowed, originSchemeMatches, sessionTokenFromHeaders } from '../auth/session-cookie';
 import { verifyToken } from '../auth/tokens';
 import { passwordReauth } from './account-deletion';
 import { shellHub } from '../lib/boxes/shell-hub';
 import {
-    SHELL_PROTOCOL, TICKET_TTL_SECONDS, activeRunOf, issueTicket, limitsOf, openSessionOf, recentSessions, shellAudit, shellBox,
+    SHELL_PROTOCOL, TICKET_TTL_SECONDS, activeRunOf, issueTicket, limitsOf, openSessionOf, recentSessions, shellBox, shellRefusal,
 } from '../lib/boxes/shell';
 
 /**
@@ -39,21 +39,24 @@ async function ownedShellBox(request: FastifyRequest, db: any): Promise<{ box: a
     if (!request.userId || request.isBot) return { refusal: { status: 403, body: { error: 'forbidden' } } };
     const { boxId } = request.params as { boxId: string };
     const box = await shellBox(db, boxId);
-    if (!box) return { refusal: { status: 404, body: { error: 'box_not_found' } } };
+    // "No such box" and "not your box" answer the same, so the route is not a way to find boxes
+    const notFound: Out = { status: 404, body: { error: 'box_not_found' } };
+    if (!box) return { refusal: notFound };
     if (!await isServerOwner(db, box.server_id.trim(), request.userId)) {
-        // A member, a director or another server's owner asked: on the record, with no detail back
-        await shellAudit(db, {
-            serverId: box.server_id.trim(), actorId: request.userId.trim(), action: 'box_terminal_refused', boxId: box.id.trim(),
-            changes: { code: 'not_owner', via: `${request.method} ${request.routeOptions.url}` },
+        // A member, a director or another server's owner asked: on the record (once a minute per
+        // person and box), with no detail back
+        await shellRefusal(db, {
+            serverId: box.server_id.trim(), actorId: request.userId.trim(), boxId: box.id.trim(), code: 'not_owner',
+            via: `${request.method} ${request.routeOptions.url}`,
         });
-        return { refusal: { status: 403, body: { error: 'forbidden' } } };
+        return { refusal: notFound };
     }
     return { box };
 }
 
 export async function boxTerminalRoutes(app: FastifyInstance) {
     // GET /boxes/:boxId/terminal → what Settings needs to show the button and who has a terminal open
-    app.get('/boxes/:boxId/terminal', { schema: { params: { type: 'object', properties: { boxId: ID } } } }, (request, reply) => serve(request, reply, async db => {
+    app.get('/boxes/:boxId/terminal', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } }, schema: { params: { type: 'object', properties: { boxId: ID } } } }, (request, reply) => serve(request, reply, async db => {
         const owned = await ownedShellBox(request, db);
         if ('refusal' in owned) return owned.refusal;
         const box = owned.box;
@@ -66,7 +69,7 @@ export async function boxTerminalRoutes(app: FastifyInstance) {
                 // supported: the box's agora-host has spoken the terminal protocol at least once.
                 // An older box image never has: it needs its update first.
                 supported: !!box.shell_protocol,
-                hostConnected: !!shellHub()?.hostConnected(box.id.trim()),
+                hostConnected: !!shellHub()?.hostConnected(box.id.trim(), box.generation),
                 running: box.desired_state === 'running' && box.state === 'running',
                 open: open && { id: open.id, openedByName: open.openedByName, openedAt: open.openedAt, mine: open.openedBy === request.userId!.trim() },
                 activeRun: await activeRunOf(db, box.profile_id.trim()),
@@ -93,19 +96,19 @@ export async function boxTerminalRoutes(app: FastifyInstance) {
         const boxId = box.id.trim();
         const userId = request.userId!.trim();
         const refuse = async (status: number, code: string, extra: object = {}): Promise<Out> => {
-            await shellAudit(db, { serverId: box.server_id.trim(), actorId: userId, action: 'box_terminal_refused', boxId, changes: { code, via: 'ticket' } });
+            await shellRefusal(db, { serverId: box.server_id.trim(), actorId: userId, boxId, code, via: 'ticket' });
             return { status, body: { error: code, ...extra } };
         };
         // A person with a browser session: not a bearer token someone copied out of a script, and
         // from this site's own pages (the cookie is SameSite=Strict and CSRF-checked already)
         if (!request.cookieAuth) return refuse(403, 'cookie_session_required');
-        if (!request.headers.origin || !originAllowed(request.headers)) return refuse(403, 'origin_not_allowed');
+        if (!request.headers.origin || !originAllowed(request.headers) || !originSchemeMatches(request.headers, !!(request.raw.socket as any).encrypted)) return refuse(403, 'origin_not_allowed');
         const jti = jtiOf(request, app.jwtSecret);
         if (!jti) return refuse(403, 'cookie_session_required');
 
         if (box.desired_state !== 'running' || box.state !== 'running') return refuse(409, 'box_not_running');
         if (!box.shell_protocol) return refuse(409, 'box_needs_update');
-        if (!shellHub()?.hostConnected(boxId)) return refuse(409, 'box_not_ready');
+        if (!shellHub()?.hostConnected(boxId, box.generation)) return refuse(409, 'box_not_ready');
 
         // The owner's password again, counted against the login limit: a stolen cookie or a script
         // in the page does not know it
@@ -132,7 +135,7 @@ export async function boxTerminalRoutes(app: FastifyInstance) {
     }));
 
     // DELETE /boxes/:boxId/terminal → 204: end the open terminal, if any
-    app.delete('/boxes/:boxId/terminal', { schema: { params: { type: 'object', properties: { boxId: ID } } } }, (request, reply) => serve(request, reply, async db => {
+    app.delete('/boxes/:boxId/terminal', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, schema: { params: { type: 'object', properties: { boxId: ID } } } }, (request, reply) => serve(request, reply, async db => {
         const owned = await ownedShellBox(request, db);
         if ('refusal' in owned) return owned.refusal;
         const open = await openSessionOf(db, owned.box.id.trim());
@@ -141,7 +144,7 @@ export async function boxTerminalRoutes(app: FastifyInstance) {
     }));
 
     // GET /boxes/:boxId/terminal/sessions → { sessions }: the owner's record (who, when, how long, bytes)
-    app.get('/boxes/:boxId/terminal/sessions', { schema: { params: { type: 'object', properties: { boxId: ID } } } }, (request, reply) => serve(request, reply, async db => {
+    app.get('/boxes/:boxId/terminal/sessions', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } }, schema: { params: { type: 'object', properties: { boxId: ID } } } }, (request, reply) => serve(request, reply, async db => {
         const owned = await ownedShellBox(request, db);
         if ('refusal' in owned) return owned.refusal;
         return { status: 200, body: { sessions: await recentSessions(db, owned.box.id.trim()) } };

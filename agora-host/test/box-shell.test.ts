@@ -206,10 +206,16 @@ describe('the shell\'s folder and environment', () => {
                 HTTPS_PROXY: 'http://edge:3128', NO_PROXY: 'edge', ANTHROPIC_API_KEY: 'sk-should-not-leak', GITHUB_TOKEN: 'ghp_nope',
             };
             const spec = shellSpec(cfg, env, () => true);
-            expect(spec.command).toEqual(['/bin/bash', '-i']);
-            expect(spec.cwd).toBe(cfg.profiles.builder.workdir);
+            // Neutral ground: the box user's home, not the agent's worktree; one line says where the workspace is
+            expect(spec.command.slice(0, 2)).toEqual(['/bin/bash', '-c']);
+            expect(spec.command[2]).toContain('exec /bin/bash -i');
+            expect(spec.command[2]).toContain('the same box, as the same user, as the agent');
+            expect(spec.cwd).toBe('/home/agent');
+            expect(spec.env.AGORA_WORKSPACE).toBe(cfg.profiles.builder.workdir);
+            // The root-owned CLI directory comes first, ahead of the agent-writable ones
+            expect(spec.env.PATH).toBe('/opt/agora/bin:/home/agent/.npm-global/bin:/usr/bin');
             expect(spec.env).toMatchObject({
-                PATH: `${env.PATH}:/opt/agora/bin`, HOME: '/home/agent', TERM: 'xterm-256color', LANG: 'en_US.UTF-8', SHELL: '/bin/bash',
+                HOME: '/home/agent', TERM: 'xterm-256color', LANG: 'en_US.UTF-8', SHELL: '/bin/bash',
                 CLAUDE_CONFIG_DIR: cfg.profiles.builder.stateDir, HTTPS_PROXY: 'http://edge:3128', https_proxy: 'http://edge:3128',
             });
             const all = JSON.stringify(spec.env);
@@ -217,11 +223,13 @@ describe('the shell\'s folder and environment', () => {
         } finally { await t.cleanup(); }
     });
 
-    it('starts in the scratch folder, then home, when the workspace folder is not there', async () => {
+    it('always starts in the home folder; the workspace named in the banner is the scratch folder, then home, when the worktree is not there', async () => {
         const cfg = config('/home/agent/work/o/r');
         const env = { PATH: '/usr/bin', HOME: '/home/agent' };
-        expect(shellSpec(cfg, env, p => p === '/home/agent/scratch' || p === '/home/agent').cwd).toBe('/home/agent/scratch');
-        expect(shellSpec(cfg, env, p => p === '/home/agent').cwd).toBe('/home/agent');
+        const a = shellSpec(cfg, env, p => p === '/home/agent/scratch' || p === '/home/agent');
+        expect([a.cwd, a.env.AGORA_WORKSPACE]).toEqual(['/home/agent', '/home/agent/scratch']);
+        const b = shellSpec(cfg, env, p => p === '/home/agent');
+        expect([b.cwd, b.env.AGORA_WORKSPACE]).toEqual(['/home/agent', '/home/agent']);
     });
 });
 
@@ -284,6 +292,46 @@ describe('the connection to Agora', () => {
     });
 });
 
+describe('a second socket refused because the real one is still connected', () => {
+    class QuietSocket extends EventEmitter {
+        connected = false;
+        connect() { return this; }
+        disconnect() { queueMicrotask(() => this.emit('disconnect')); return this; }
+    }
+    const saved = { marker: boxMode.marker, flag: process.env.AGORA_HOST_IN_BOX };
+    afterEach(() => {
+        boxMode.marker = saved.marker;
+        if (saved.flag === undefined) delete process.env.AGORA_HOST_IN_BOX; else process.env.AGORA_HOST_IN_BOX = saved.flag;
+    });
+
+    it('is a retry-soon, not a fatal error and not a growing backoff: a genuine reconnect gets in once the server drops the dead socket', async () => {
+        const t = await tempDir();
+        try {
+            const marker = join(t.dir, 'agora-box');
+            await writeFile(marker, 'agora-box 6\n');
+            boxMode.marker = marker; process.env.AGORA_HOST_IN_BOX = '1';
+            const ctl = new AbortController();
+            const sockets: QuietSocket[] = [];
+            const stamps: number[] = [];
+            const loop = boxShellLoop(config(t.dir), {
+                signal: ctl.signal, log: () => {}, retryMinMs: 20, retryMaxMs: 10_000,
+                connect: (() => { const s = new QuietSocket(); sockets.push(s); stamps.push(Date.now()); return s; }) as any,
+            });
+            const until = async (check: () => boolean) => { for (let i = 0; i < 600 && !check(); i++) await new Promise(r => setTimeout(r, 5)); expect(check()).toBe(true); };
+            for (let i = 0; i < 4; i++) {
+                await until(() => sockets.length === i + 1);
+                sockets[i].emit('connect_error', new Error('host_already_connected'));
+            }
+            await until(() => sockets.length === 5);
+            // Every retry waited the minimum (20 ms), never 40, 80, 160 ...
+            for (let i = 1; i < 5; i++) expect(stamps[i] - stamps[i - 1]).toBeLessThan(120);
+            sockets[4].connected = true; sockets[4].emit('connect');
+            ctl.abort();
+            await loop;
+        } finally { await t.cleanup(); }
+    });
+});
+
 describe('the loop does not keep the host alive', () => {
     class QuietSocket extends EventEmitter {
         connected = false; disconnected = 0;
@@ -323,8 +371,8 @@ describe('the loop does not keep the host alive', () => {
 });
 
 describe.skipIf(!hasPython)('the real pseudo-terminal (box/agora-pty, Python\'s pty)', () => {
-    const run = (command: string[], cwd = '/tmp') => {
-        const pty = makeHelperPty(HELPER)({ cols: 90, rows: 20, cwd, env: { PATH: process.env.PATH, TERM: 'xterm' }, command });
+    const run = (command: string[], cwd = '/tmp', env: NodeJS.ProcessEnv = { PATH: process.env.PATH, TERM: 'xterm' }) => {
+        const pty = makeHelperPty(HELPER)({ cols: 90, rows: 20, cwd, env, command });
         let out = '';
         const exited = new Promise<number | null>(resolve => pty.onExit(resolve));
         pty.onData(d => { out += d.toString('utf8'); });
@@ -381,6 +429,32 @@ describe.skipIf(!hasPython)('the real pseudo-terminal (box/agora-pty, Python\'s 
     it('a command that does not exist is an error code from the helper or the shell, not a hang', async () => {
         const r = run(['/nonexistent/command']);
         expect(await r.exited).toBe(127);
+    });
+
+    it('the shell does not inherit the resize pipe (fd 3), while resizing still works', async () => {
+        const r = run(['/bin/sh', '-c', 'if [ -e /proc/self/fd/3 ] || [ -e /dev/fd/3 ]; then echo fd3-open; else echo fd3-closed; fi; read x; stty size']);
+        await until(() => r.out().includes('fd3-'));
+        expect(r.out()).toContain('fd3-closed');
+        r.pty.resize(101, 33);
+        await new Promise(res => setTimeout(res, 150));
+        r.pty.write(Buffer.from('\n'));
+        await r.exited;
+        expect(r.out()).toContain('33 101');
+    });
+
+    it('the shell shellSpec describes: starts in the neutral folder, says where the workspace is, has the image\'s CLI directory first', async () => {
+        const t = await tempDir();
+        try {
+            await mkdir(join(t.dir, 'home'), { recursive: true });
+            await mkdir(join(t.dir, 'ws'), { recursive: true });
+            const cfg = config(join(t.dir, 'ws'));
+            const spec = shellSpec(cfg, { PATH: '/usr/bin:/bin', HOME: join(t.dir, 'home') }, () => true);
+            const r = run([...spec.command.slice(0, 2), spec.command[2].replace('exec /bin/bash -i', 'pwd; echo "PATH=$PATH"; exit')], spec.cwd, spec.env);
+            await r.exited;
+            const out = r.out();
+            expect(out).toContain(`The agent workspace is ${join(t.dir, 'ws')}`);
+            expect(out).toContain(join(t.dir, 'home'));
+        } finally { await t.cleanup(); }
     });
 
     it('starts in the folder asked', async () => {

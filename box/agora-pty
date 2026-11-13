@@ -80,6 +80,12 @@ def main(argv):
         # SIGPIPE, and this process ignores SIGINT): without it Ctrl-C would not stop a job.
         for sig in (signal.SIGINT, signal.SIGPIPE, signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT):
             signal.signal(sig, signal.SIG_DFL)
+        # The control pipe (fd 3) and anything else inherited stays in the helper: the shell, and
+        # whatever the agent leaves running in it, must not hold the resize channel
+        try:
+            os.closerange(3, 4096)
+        except OSError:
+            pass
         try:
             os.chdir(cwd)
             os.execvp(command[0], command)

@@ -15,10 +15,13 @@ import { errorCode } from './client.js';
  * on the owner's own computer, started from a web page. (Allowing it would need an explicit
  * opt-in in the machine's own host config that the server can never switch on.)
  *
- * The shell is the box user's, in the agent's workspace folder, with the same environment the
- * agent's CLI gets (childEnv: an allowlist, the CLI's state directory, the proxy variables), so
- * `claude`, `codex` and the rest run in it and are logged in as the agent. It does not get the
- * host or bot token: they reach this process by the config file and are not in anyone's environment.
+ * The shell is the box user's, in the box user's home folder (not the agent's worktree: the owner
+ * chooses to `cd` there), with the environment the agent's CLI gets (childEnv: an allowlist, the
+ * CLI's state directory, the proxy variables), so `claude`, `codex` and the rest run in it and are
+ * logged in as the agent. The image's root-owned CLI directory comes first on its PATH. It does not
+ * get the host or bot token: they reach this process by the config file and are not in anyone's
+ * environment (an agent that runs on an API key has that provider key there, as its own runs do).
+ * The shell shares the box with an autonomous agent that runs as the same user: see docs/box-terminal.md.
  */
 
 /** The terminal protocol this host speaks; the server's SHELL_PROTOCOL is the same number. */
@@ -207,9 +210,13 @@ export const makeHelperPty = (helper: string): SpawnPty => o => {
 export const spawnHelperPty: SpawnPty = makeHelperPty(PTY_HELPER);
 
 /**
- * The shell and where it starts, for this box's one profile: bash, interactive, in the agent's
- * workspace folder (or its scratch folder, or home, in that order of what exists), with the same
- * environment the agent's CLI gets plus a terminal type.
+ * The shell and where it starts, for this box's one profile: bash, interactive, in the box user's
+ * home folder (neutral ground: the agent's worktree can hold hooks and files the agent wrote), with
+ * the same environment the agent's CLI gets plus a terminal type. One line on open says where the
+ * agent's workspace is. `/opt/agora/bin` (root-owned: the image's own claude, codex ...) is FIRST on
+ * the PATH, ahead of the agent-writable ~/.npm-global/bin and ~/.local/bin, so a name the agent
+ * could shadow resolves to the image's copy. Only this shell's environment changes; the agent's
+ * own runs resolve tools as before.
  */
 export function shellSpec(config: Config, source: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync) {
     const local: LocalProfile = Object.values(config.profiles)[0]!;
@@ -219,11 +226,14 @@ export function shellSpec(config: Config, source: NodeJS.ProcessEnv = process.en
     env.LANG = source.LANG && /^[A-Za-z0-9_.@-]{1,40}$/.test(source.LANG) ? source.LANG : 'C.UTF-8';
     env.SHELL = '/bin/bash';
     env.HOME ??= BOX_HOME;
-    // The image's CLI links (claude, codex, devin ...) are in /opt/agora/bin; last, so nothing in the home folder is shadowed by them
-    if (inBox(source)) env.PATH = [env.PATH, '/opt/agora/bin'].filter(Boolean).join(':');
-    const cwd = [local.workdir, scratchDir(env.HOME), env.HOME].find(p => exists(p)) ?? env.HOME;
+    // The image's CLI links (claude, codex, devin ...) are in /opt/agora/bin, which only root can write
+    if (inBox(source)) env.PATH = ['/opt/agora/bin', ...(env.PATH ?? '').split(':').filter(p => p && p !== '/opt/agora/bin')].join(':');
+    const workspace = [local.workdir, scratchDir(env.HOME)].find(p => exists(p)) ?? env.HOME;
+    env.AGORA_WORKSPACE = workspace;
+    const cwd = exists(env.HOME) ? env.HOME : '/';
     // Non-login: a login shell's /etc/profile would replace the PATH the image set (npm and pip installs live in the home folder)
-    return { env, cwd, command: ['/bin/bash', '-i'] };
+    const banner = 'printf \'\\033[33magora: this shell is in the same box, as the same user, as the agent. The agent workspace is %s (you start in your home folder; cd there on purpose).\\033[0m\\n\' "$AGORA_WORKSPACE"; exec /bin/bash -i';
+    return { env, cwd, command: ['/bin/bash', '-c', banner] };
 }
 
 // ─── The connection to Agora ───
@@ -269,6 +279,8 @@ export async function boxShellLoop(config: Config, o: ShellLoopOptions): Promise
         socket.disconnect();
         if (o.signal.aborted) return;
         await new Promise<void>(r => { const t = setTimeout(r, delay); o.signal.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true }); });
-        delay = outcome === 'refused' ? Math.min(delay * 2, o.retryMaxMs ?? 5 * 60 * 1000) : (o.retryMinMs ?? 5000);
+        // A second-socket refusal means the server still holds the old socket (until its ping timeout): try again soon, not after a long backoff
+        delay = lastCode === 'host_already_connected' ? (o.retryMinMs ?? 5000)
+            : outcome === 'refused' ? Math.min(delay * 2, o.retryMaxMs ?? 5 * 60 * 1000) : (o.retryMinMs ?? 5000);
     }
 }

@@ -4,6 +4,8 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
 import { shellHub } from '../../src/lib/boxes/shell-hub';
+import { config } from '../../src/config';
+import { refreshGatewayAccess } from '../../src/lib/gateway-access';
 
 /**
  * The terminal in a box (docs/box-terminal.md, docs/planning/box-terminal.md): every refusal of
@@ -223,19 +225,20 @@ describe('the happy path', () => {
 });
 
 describe('threat 1: someone other than the owner', () => {
-    test('a member, a director and another server\'s owner get 403 and the refusal is on record', async () => {
+    test('a member, a director and another server\'s owner are answered as if the box did not exist, and the refusal is on record', async () => {
+        const notFound = { error: 'box_not_found' };
         for (const who of [member, director]) {
             const s = await cookieLogin(who === member ? 'termmember' : 'termdirector');
             const r = await ticketFor(box, s);
-            expect([who === member ? 'member' : 'director', r.status, r.body]).toEqual([who === member ? 'member' : 'director', 403, { error: 'forbidden' }]);
-            expect((await api.get(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie)).status).toBe(403);
-            expect((await api.get(`/boxes/${box.id}/terminal/sessions`).set('Cookie', s.cookie)).status).toBe(403);
-            expect((await api.delete(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie).set('X-CSRF-Token', s.csrf)).status).toBe(403);
+            expect([who === member ? 'member' : 'director', r.status, r.body]).toEqual([who === member ? 'member' : 'director', 404, notFound]);
+            expect((await api.get(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie)).status).toBe(404);
+            expect((await api.get(`/boxes/${box.id}/terminal/sessions`).set('Cookie', s.cookie)).status).toBe(404);
+            expect((await api.delete(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie).set('X-CSRF-Token', s.csrf)).status).toBe(404);
         }
         const stranger = await authedUser(api, 'termstranger');
         await createServer(api, stranger.auth, 'Elsewhere');
         const s = await cookieLogin('termstranger');
-        expect((await ticketFor(box, s)).status).toBe(403);
+        expect((await ticketFor(box, s)).status).toBe(404);
         expect((await rows(`SELECT 1 FROM box_shell_tickets`))).toHaveLength(0);
         const refused = await audits('box_terminal_refused');
         expect(refused.length).toBeGreaterThanOrEqual(3);
@@ -305,11 +308,16 @@ describe('threat 1: someone other than the owner', () => {
         expect(host.opened).toHaveLength(0);
     });
 
-    test('a missing, garbage or ticket-less handshake gets nothing', async () => {
+    test('a missing, garbage or ticket-less handshake gets nothing, and writes no audit row (it is counted)', async () => {
+        const hub = shellHub()!;
+        const before = hub.refusedTickets;
+        const auditBefore = (await rows(`SELECT 1 FROM audit_log`)).length;
         for (const t of [null, '', 'x', 'A'.repeat(43), 'A'.repeat(500)]) {
             expect([t, await refusal(browser(ownerSession, t))]).toEqual([t, 'ticket_invalid']);
         }
         expect(await rows(`SELECT 1 FROM box_shell_sessions`)).toHaveLength(0);
+        expect(hub.refusedTickets - before).toBe(5);
+        expect((await rows(`SELECT 1 FROM audit_log`)).length).toBe(auditBefore);
     });
 
     test('ownership is checked again at redemption', async () => {
@@ -623,4 +631,256 @@ describe('the owner\'s view of the box', () => {
         const st = await api.get(`/boxes/${old.id}/terminal`).set('Cookie', ownerSession.cookie);
         expect(st.body).toMatchObject({ supported: false, hostConnected: false });
     });
+});
+
+
+// ─── Security review fixes (PR #393) ───
+
+const hubOf = () => shellHub() as any;
+
+describe('review 1: a second socket with the host token cannot replace the real host', () => {
+    test('refused while the real host is connected, audited and announced once; the real host keeps its terminal until the attempt, which closes it', async () => {
+        const term = await openTerminal(box, ownerSession);
+        const exit = wait(term, 'shell:exit');
+        const intruder = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'host', token: box.hostToken, shellProtocol: 1 } });
+        sockets.push(intruder);
+        const stolen: any[] = [];
+        intruder.on('shell:input', m => stolen.push(m));
+        expect(await refusal(intruder)).toBe('host_already_connected');
+        // The owner's terminal is closed with its own reason and the shell told to stop
+        expect(await exit).toEqual({ reason: 'host_changed' });
+        await settle(300);
+        expect(host.socket.connected).toBe(true);
+        expect(host.closed).toHaveLength(1);
+        expect(stolen).toHaveLength(0);
+        expect((await sessionRows())[0].close_reason).toBe('host_changed');
+        expect((await audits('box_host_conflict'))).toHaveLength(1);
+        const said = (await rows(`SELECT content FROM messages WHERE channel_id = $1 AND content LIKE '%second connection claimed%'`, [channelId]));
+        expect(said).toHaveLength(1);
+        expect(said[0].content).toContain('host_already_connected');
+        // More attempts inside the hour add no second notice (and no second audit row inside the minute)
+        for (let i = 0; i < 3; i++) {
+            const again = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'host', token: box.hostToken, shellProtocol: 1 } });
+            sockets.push(again);
+            expect(await refusal(again)).toBe('host_already_connected');
+        }
+        await settle(200);
+        expect(await rows(`SELECT content FROM messages WHERE channel_id = $1 AND content LIKE '%second connection claimed%'`, [channelId])).toHaveLength(1);
+        expect(await audits('box_host_conflict')).toHaveLength(1);
+        // And the real host can still open a terminal afterwards
+        const next = await openTerminal(box, ownerSession);
+        const out = wait(next, 'shell:output');
+        next.emit('shell:input', 'ok\r');
+        expect(Buffer.from(await out).toString()).toBe('echo:ok\r');
+    });
+
+    test('a genuine reconnect after the old socket went away works, and the terminal that was on the old one is closed as box_disconnected', async () => {
+        const term = await openTerminal(box, ownerSession);
+        const exit = wait(term, 'shell:exit');
+        host.socket.disconnect();
+        expect(await exit).toEqual({ reason: 'box_disconnected' });
+        await settle();
+        const fresh = await connectHost(box);
+        expect(fresh.socket.connected).toBe(true);
+        expect(await audits('box_host_conflict')).toHaveLength(0);
+        const t2 = browser(ownerSession, await getTicket(box, ownerSession));
+        await connected(t2);
+        const ready = wait(t2, 'shell:ready');
+        t2.emit('shell:start', { cols: 80, rows: 24 });
+        await ready;
+        expect(fresh.opened).toHaveLength(1);
+    });
+
+    test('registerHost itself refuses a second connected socket (the race the handshake check can lose)', async () => {
+        const hub = hubOf();
+        const fake = () => { const e: any = new (require('node:events').EventEmitter)(); e.connected = true; e.disconnect = vi.fn(() => { e.connected = false; }); return e; };
+        const info = { hostId: 'H', boxId: box.id, serverId, generation: box.generation };
+        const second = fake();
+        expect(hub.registerHost(second, info)).toBe(false);
+        expect(second.disconnect).toHaveBeenCalled();
+        expect(host.socket.connected).toBe(true);
+        await hub.drain();
+        expect(await audits('box_host_conflict')).toHaveLength(1);
+    });
+});
+
+describe('review 3: the widget\'s automatic replies are not owner activity', () => {
+    test('periodic replies do not keep an idle terminal alive; real input does; both reach the shell', async () => {
+        const hub = hubOf();
+        const term = await openTerminal(box, ownerSession);
+        const stale = () => { for (const l of hub.live.values()) l.lastInputMs = Date.now() - 16 * 60_000; };
+        stale();
+        term.emit('shell:reply', '\x1b[?1;2c');
+        term.emit('shell:reply', '\x1b[I');
+        await settle(200);
+        expect(host.input.map(b => b.toString())).toEqual(['\x1b[?1;2c', '\x1b[I']);
+        const idle = wait(term, 'shell:exit');
+        await hub.sweep();
+        expect(await idle).toEqual({ reason: 'idle_timeout' });
+        await settle();
+
+        const second = await openTerminal(box, ownerSession);
+        stale();
+        second.emit('shell:input', 'ls\r');
+        await settle(200);
+        await hub.sweep();
+        await settle(100);
+        expect((await sessionRows())[1].state).toBe('open');
+    });
+
+    test('replies obey the same size limit, and only the paired browser can send them', async () => {
+        const term = await openTerminal(box, ownerSession);
+        const exit = wait(term, 'shell:exit');
+        term.emit('shell:reply', Buffer.alloc(70 * 1024, 66));
+        expect(await exit).toEqual({ reason: 'input_flood' });
+        // A host socket sending the browser's event does nothing
+        const t2 = await openTerminal(box, ownerSession);
+        const before = host.input.length;
+        host.socket.emit('shell:reply', { sessionId: host.opened.at(-1).sessionId, data: Buffer.from('forged') });
+        await settle(200);
+        expect(host.input.length).toBe(before);
+        t2.disconnect();
+    });
+
+    test('a terminal open for an hour posts one "still open" notice, then waits another hour', async () => {
+        const hub = hubOf();
+        await openTerminal(box, ownerSession);
+        for (const l of hub.live.values()) { l.openedAtMs = Date.now() - 3_600_000; l.nextReminderMs = Date.now() - 1; }
+        await hub.sweep();
+        await hub.sweep();
+        await hub.drain();
+        const still = (await notices()).filter(n => n.content.includes('It is still open; wakes for **alpha** are paused'));
+        expect(still).toHaveLength(1);
+        expect(still[0].content).toContain('has been open for 1 h');
+    });
+});
+
+describe('review 4: refusals cannot flood the audit log, and a box is not an existence oracle', () => {
+    test('a non-owner hammering the four routes leaves one audit row; a missing box and another\'s box answer alike', async () => {
+        const s = await cookieLogin('termmember');
+        for (let i = 0; i < 6; i++) {
+            await ticketFor(box, s);
+            await api.get(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie);
+            await api.get(`/boxes/${box.id}/terminal/sessions`).set('Cookie', s.cookie);
+            await api.delete(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie).set('X-CSRF-Token', s.csrf);
+        }
+        expect((await audits('box_terminal_refused')).filter(a => a.changes.code === 'not_owner')).toHaveLength(1);
+        // After the minute, the next refusal is written again
+        await ctx.db.query(`UPDATE audit_log SET created_at = NOW() - interval '2 minutes' WHERE action = 'box_terminal_refused'`);
+        await api.get(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie);
+        expect((await audits('box_terminal_refused')).filter(a => a.changes.code === 'not_owner')).toHaveLength(2);
+
+        const theirs = await api.get(`/boxes/${box.id}/terminal`).set('Cookie', s.cookie);
+        const nothing = await api.get(`/boxes/${'Z'.repeat(26)}/terminal`).set('Cookie', s.cookie);
+        expect([nothing.status, nothing.body]).toEqual([theirs.status, theirs.body]);
+        expect(theirs.status).toBe(404);
+        // The owner's own wrong-password refusals are throttled the same way
+        for (let i = 0; i < 4; i++) await ticketFor(box, ownerSession, { password: 'wrong' });
+        expect((await audits('box_terminal_refused')).filter(a => a.changes.code === 'reauth_failed')).toHaveLength(1);
+    });
+});
+
+describe('review 5: a host socket from an older generation does not count', () => {
+    test('after a rebuild the old socket is not "connected", gets no ticket, and is dropped by the next checks', async () => {
+        const hub = hubOf();
+        const t = await rotateBoxTokens(ctx.db, box.id);
+        expect(hub.hostConnected(box.id, box.generation)).toBe(true);
+        expect(hub.hostConnected(box.id, t.generation)).toBe(false);
+        expect((await ticketFor(box, ownerSession)).body.error).toBe('box_not_ready');
+        const gone = wait(host.socket, 'disconnect');
+        for (let i = 0; i < 3; i++) await hub.sweep();
+        await gone;
+        expect(hub.hostConnected(box.id)).toBe(false);
+    });
+
+    test('the rebuilt box\'s own host replaces the stale socket instead of being refused', async () => {
+        const t = await rotateBoxTokens(ctx.db, box.id);
+        await ctx.db.query(`UPDATE agent_boxes SET state = 'running' WHERE id = $1`, [box.id]);
+        const rebuilt = await connectHost({ ...box, generation: t.generation, hostToken: t.hostToken, botToken: t.botToken });
+        expect(rebuilt.socket.connected).toBe(true);
+        expect(hubOf().hostConnected(box.id, t.generation)).toBe(true);
+        expect(await audits('box_host_conflict')).toHaveLength(0);
+    });
+
+    test('a terminal attached with a stale host would not be paired to it', async () => {
+        const hub = hubOf();
+        const t = await rotateBoxTokens(ctx.db, box.id);
+        await ctx.db.query(`UPDATE agent_boxes SET state = 'running' WHERE id = $1`, [box.id]);
+        const closes: string[] = [];
+        const fakeBrowser: any = new (require('node:events').EventEmitter)();
+        fakeBrowser.connected = true; fakeBrowser.emit2 = fakeBrowser.emit;
+        const emitted: string[] = [];
+        const emit = fakeBrowser.emit.bind(fakeBrowser);
+        fakeBrowser.emit = (e: string, ...a: any[]) => { emitted.push(e); if (e === 'shell:exit') closes.push(a[0].reason); return emit(e, ...a); };
+        fakeBrowser.disconnect = () => {};
+        const info = { sessionId: '01HZZZZZZZZZZZZZZZZZZZZZZ8', boxId: box.id, serverId, userId: owner.userId, generation: t.generation, limits: { idleMinutes: 15, maxHours: 8, rateKbps: 512 } };
+        await ctx.db.query(`INSERT INTO box_shell_sessions (id, box_id, server_id, opened_by, generation) VALUES ($1, $2, $3, $4, $5)`, [info.sessionId, box.id, serverId, owner.userId, t.generation]);
+        hub.attachBrowser(fakeBrowser, info, Date.now() + 60_000);
+        await settle(100);
+        expect(closes).toEqual(['box_not_ready']);
+        expect(host.opened).toHaveLength(0);
+    });
+});
+
+describe('review 6: ownership changes close an open terminal at once', () => {
+    test('the gateway\'s access refresh (run after authorization changes commit) ends it without waiting for the sweep', async () => {
+        const term = await openTerminal(box, ownerSession);
+        const exit = wait(term, 'shell:exit');
+        await ctx.db.query(`UPDATE servers SET owner_id = $1 WHERE id = $2`, [member.userId, serverId]);
+        await refreshGatewayAccess((ctx.app as any).io, ctx.db);
+        expect(await exit).toEqual({ reason: 'access_changed' });
+    });
+});
+
+describe('review 7: the Origin\'s scheme must match the request\'s', () => {
+    const httpsOrigin = () => origin.replace('http:', 'https:');
+
+    test('the ticket route and the socket refuse https Origin on a plain-http request, and take it behind a trusted proxy that says https', async () => {
+        const s = ownerSession;
+        const refused = await ticketFor(box, s, { password: PASSWORD }, { origin: httpsOrigin() });
+        expect([refused.status, refused.body]).toEqual([403, { error: 'origin_not_allowed' }]);
+        expect(await refusal(browser(s, await getTicket(box, s), { origin: httpsOrigin() }))).toBe('origin_not_allowed');
+        // Same host, right scheme: fine
+        expect((await ticketFor(box, s)).status).toBe(200);
+
+        const saved = config.trustProxy;
+        (config as any).trustProxy = true;
+        try {
+            const viaProxy = await ticketFor(box, s, { password: PASSWORD }, { origin: httpsOrigin() }).set('X-Forwarded-Proto', 'https');
+            expect(viaProxy.status, JSON.stringify(viaProxy.body)).toBe(200);
+            // The proxy says https but the Origin says http: refused
+            const wrong = await ticketFor(box, s).set('X-Forwarded-Proto', 'https');
+            expect(wrong.body).toEqual({ error: 'origin_not_allowed' });
+            const sock = browser(s, viaProxy.body.ticket, { origin: httpsOrigin(), headers: { 'x-forwarded-proto': 'https' } });
+            expect(await refusal(sock)).toBe('connected');
+        } finally {
+            (config as any).trustProxy = saved;
+        }
+        // Without trusting the proxy, the header is ignored
+        const ignored = await ticketFor(box, s, { password: PASSWORD }, { origin: httpsOrigin() }).set('X-Forwarded-Proto', 'https');
+        expect(ignored.status).toBe(403);
+    });
+});
+
+describe('review 8: a browser that stops reading cannot make the hub queue without bound', () => {
+    test('the terminal is closed with browser_stalled once the buffered bytes pass the cap', async () => {
+        await api.patch(`/boxes/${box.id}`).set(owner.auth).send({ terminalRateKbps: 8192 });
+        const hub = hubOf();
+        hub.maxBrowserBuffer = 256 * 1024;
+        const term = await openTerminal(box, ownerSession);
+        // The client stops reading its TCP socket: the server's writes pile up
+        const raw = (term.io.engine as any).transport?.ws?._socket;
+        expect(raw).toBeTruthy();
+        raw.pause();
+        const sid = host.opened[0].sessionId;
+        const chunk = Buffer.alloc(32 * 1024, 65);
+        let closed = false;
+        for (let i = 0; i < 1500 && !closed; i++) {
+            host.socket.emit('shell:output', { sessionId: sid, data: chunk });
+            if (i % 25 === 0) { await settle(15); closed = (await sessionRows())[0].state === 'closed'; }
+        }
+        await settle(300);
+        expect((await sessionRows())[0]).toMatchObject({ state: 'closed', close_reason: 'browser_stalled' });
+        raw.resume();
+    }, 30_000);
 });

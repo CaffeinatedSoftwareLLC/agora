@@ -4,11 +4,11 @@ import { generateUlid } from '../../utils/ulid';
 import { verifyToken, sessionEndsAt, sessionLimitError } from '../../auth/tokens';
 import { isTokenBlacklisted } from '../../auth/token-blacklist';
 import { verifyBotSecret } from '../../auth/bot-tokens';
-import { originAllowed, sessionTokenFromHeaders } from '../../auth/session-cookie';
+import { originAllowed, originSchemeMatches, sessionTokenFromHeaders } from '../../auth/session-cookie';
 import { postNotice, type Notice } from '../agent-runs';
 import type { ProvenanceCredential } from './provenance';
 import {
-    ByteMeter, CLOSE_TEXT, INPUT_BURST_BYTES, INPUT_RATE_BYTES, MAX_COLS, MAX_INPUT_CHUNK, MAX_ROWS, OPEN_TIMEOUT_MS,
+    ByteMeter, CLOSE_TEXT, MAX_BROWSER_BUFFER_BYTES, NOTICE_INTERVAL_MINUTES, shellRefusal, INPUT_BURST_BYTES, INPUT_RATE_BYTES, MAX_COLS, MAX_INPUT_CHUNK, MAX_ROWS, OPEN_TIMEOUT_MS,
     SHELL_PROTOCOL, START_TIMEOUT_MS, activeRunOf, limitsOf, redeemTicket, shellAudit, shellBox, type CloseReason, type ShellLimits,
 } from './shell';
 
@@ -48,6 +48,8 @@ interface Live {
     sessionEndsMs: number;
     startTimer: ReturnType<typeof setTimeout> | null;
     openTimer: ReturnType<typeof setTimeout> | null;
+    /** When the next "still open" reminder is due (ms) */
+    nextReminderMs: number;
 }
 
 type Emit = (notices: Notice[]) => void;
@@ -57,6 +59,19 @@ const RECHECK_EVERY = 3;
 const dims = (v: unknown, max: number) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= max ? v as number : null;
 const isBytes = (d: unknown): d is Buffer | Uint8Array => d instanceof Uint8Array;
 
+/** Bytes the transport still holds for this browser socket (queued packets plus the websocket's own buffer). */
+export function bufferedBytes(socket: Socket): number {
+    const conn = (socket as any).conn;
+    let n = 0;
+    for (const p of conn?.writeBuffer ?? []) {
+        const d = p?.data;
+        n += typeof d === 'string' ? d.length : (d?.byteLength ?? d?.length ?? 0);
+    }
+    const ws = conn?.transport?.socket;
+    if (typeof ws?.bufferedAmount === 'number') n += ws.bufferedAmount;
+    return n;
+}
+
 export class ShellHub {
     private hosts = new Map<string, { socket: Socket; info: ShellHostInfo }>();
     private live = new Map<string, Live>();
@@ -64,6 +79,10 @@ export class ShellHub {
     private sweeps = 0;
     /** Database work in flight (an ending, an opening): stop() and tests wait for it */
     private pending = new Set<Promise<unknown>>();
+    /** Handshakes refused for a ticket that did not redeem (a count, never a row or a line) */
+    refusedTickets = 0;
+    /** What a stalled browser may leave queued before its terminal is closed (tests lower it) */
+    maxBrowserBuffer = MAX_BROWSER_BUFFER_BYTES;
 
     constructor(private db: Pool, private emit: Emit) {}
 
@@ -96,7 +115,11 @@ export class ShellHub {
 
     // ─── Queries the routes use ───
 
-    hostConnected(boxId: string): boolean { return this.hosts.has(boxId); }
+    /** Is this box's host connected, at this generation (when given)? A socket from an older generation doesn't count. */
+    hostConnected(boxId: string, generation?: number): boolean {
+        const h = this.hosts.get(boxId);
+        return !!h && h.socket.connected && (generation === undefined || h.info.generation === generation);
+    }
     liveSessionOf(boxId: string): string | null {
         for (const [id, l] of this.live) if (l.info.boxId === boxId) return id;
         return null;
@@ -105,12 +128,24 @@ export class ShellHub {
 
     // ─── Host sockets ───
 
-    registerHost(socket: Socket, info: ShellHostInfo): void {
+    /**
+     * Take a box's host socket. One host per box: while the registered socket is connected at the
+     * same generation, a second one is refused. The box's user can read the host token, so a
+     * second socket with it could otherwise take the owner's keystrokes. A genuine reconnect comes
+     * after the old socket's disconnect or ping timeout. Returns false when refused.
+     */
+    registerHost(socket: Socket, info: ShellHostInfo): boolean {
         const old = this.hosts.get(info.boxId);
+        if (old && old.socket !== socket && old.socket.connected && old.info.generation === info.generation) {
+            this.hostConflict(info, 'second_socket');
+            socket.emit('shell:refused', { code: 'host_already_connected' });
+            socket.disconnect(true);
+            return false;
+        }
         this.hosts.set(info.boxId, { socket, info });
-        // One host per box: a reconnect replaces the old socket, and a terminal on the old one ends
+        // The old socket was dead or from an older generation: a terminal on it ends
         if (old && old.socket !== socket) {
-            for (const [id, l] of this.live) if (l.info.boxId === info.boxId && l.host === old.socket) void this.close(id, 'box_disconnected');
+            for (const [id, l] of this.live) if (l.info.boxId === info.boxId && l.host === old.socket) void this.close(id, old.info.generation === info.generation ? 'host_changed' : 'box_changed');
             old.socket.disconnect(true);
         }
         socket.on('shell:opened', (m: { sessionId?: unknown }) => this.fromHost(socket, m?.sessionId, l => this.onOpened(l)));
@@ -119,7 +154,10 @@ export class ShellHub {
             l.bytesOut += m.data.byteLength;
             // The host paces itself to the limit; a host that doesn't is closed
             if (l.outMeter && !l.outMeter.add(m.data.byteLength)) { void this.close(l.info.sessionId, 'output_flood'); return; }
-            if (l.browser.connected) l.browser.emit('shell:output', Buffer.from(m.data));
+            if (l.browser.connected) {
+                if (bufferedBytes(l.browser) > this.maxBrowserBuffer) { void this.close(l.info.sessionId, 'browser_stalled'); return; }
+                l.browser.emit('shell:output', Buffer.from(m.data));
+            }
         }));
         socket.on('shell:exited', (m: { sessionId?: unknown }) => this.fromHost(socket, m?.sessionId, l => { void this.close(l.info.sessionId, 'shell_exited'); }));
         socket.on('shell:failed', (m: { sessionId?: unknown }) => this.fromHost(socket, m?.sessionId, l => { void this.close(l.info.sessionId, 'host_error'); }));
@@ -127,6 +165,75 @@ export class ShellHub {
             if (this.hosts.get(info.boxId)?.socket === socket) this.hosts.delete(info.boxId);
             for (const [id, l] of this.live) if (l.host === socket) void this.close(id, 'box_disconnected');
         });
+        return true;
+    }
+
+    /**
+     * A second connection claimed to be this box's host. Closes an open terminal (the owner is told
+     * the connection changed), writes an audit entry (at most one a minute) and tells the agent's
+     * channel (at most one an hour per box).
+     */
+    hostConflict(info: { boxId: string; serverId: string }, how: string): void {
+        for (const [id, l] of this.live) if (l.info.boxId === info.boxId) void this.close(id, 'host_changed');
+        void this.track(this.recordConflict(info, how)).catch(() => {});
+    }
+
+    private async recordConflict(info: { boxId: string; serverId: string }, how: string): Promise<void> {
+        const client = await this.db.connect();
+        let notices: Notice[] = [];
+        try {
+            await client.query('BEGIN');
+            await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`box-host-conflict:${info.boxId}`]);
+            const recentAudit = await client.query(
+                `SELECT 1 FROM audit_log WHERE action = 'box_host_conflict' AND target_id = $1 AND created_at > NOW() - interval '1 minute' LIMIT 1`, [info.boxId]);
+            if (!recentAudit.rows.length) {
+                await shellAudit(client, { serverId: info.serverId, actorId: null, action: 'box_host_conflict', boxId: info.boxId, changes: { how } });
+            }
+            const box = (await client.query(
+                `SELECT b.home_channel_id, p.name FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id WHERE b.id = $1`, [info.boxId])).rows[0];
+            if (box?.home_channel_id) {
+                const recent = await client.query(
+                    `SELECT 1 FROM audit_log WHERE action = 'box_host_conflict_notice' AND target_id = $1 AND created_at > NOW() - make_interval(mins => $2) LIMIT 1`,
+                    [info.boxId, NOTICE_INTERVAL_MINUTES]);
+                if (!recent.rows.length) {
+                    await shellAudit(client, { serverId: info.serverId, actorId: null, action: 'box_host_conflict_notice', boxId: info.boxId, changes: {} });
+                    notices = [await postNotice(client, box.home_channel_id.trim(),
+                        `Box **${box.name}**: a second connection claimed to be this box's host while the real one was connected, and was refused (\`host_already_connected\`). Any open terminal was closed for safety. It is in the audit log; further attempts are not posted for an hour.`)];
+                }
+            }
+            await client.query('COMMIT');
+        } catch {
+            await client.query('ROLLBACK').catch(() => {});
+            notices = [];
+        } finally {
+            client.release();
+        }
+        if (notices.length) this.emit(notices);
+    }
+
+    /** Drop host sockets registered at a generation the box has left (a rebuild keeps the old socket alive otherwise). */
+    private async dropStaleHosts(): Promise<void> {
+        if (!this.hosts.size) return;
+        const ids = [...this.hosts.keys()];
+        const rows = (await this.db.query(`SELECT id, generation FROM agent_boxes WHERE id = ANY($1)`, [ids])).rows;
+        const current = new Map<string, number>(rows.map((r: any) => [r.id.trim(), Number(r.generation)]));
+        for (const [boxId, h] of [...this.hosts]) {
+            if (current.get(boxId) !== h.info.generation) {
+                this.hosts.delete(boxId);
+                for (const [id, l] of this.live) if (l.host === h.socket) void this.close(id, 'box_changed');
+                h.socket.disconnect(true);
+            }
+        }
+    }
+
+    /** Re-check every open terminal's access now (called when authorization changes commit). */
+    async recheckAccess(): Promise<void> {
+        for (const [id, l] of [...this.live]) {
+            if (l.closing) continue;
+            const reason = await this.accessProblem(l).catch(() => null);
+            if (reason) await this.close(id, reason);
+        }
+        await this.dropStaleHosts().catch(() => {});
     }
 
     /** An event from a host socket counts only for a terminal that socket was given. */
@@ -151,11 +258,12 @@ export class ShellHub {
 
     /** A browser that passed its handshake (the session row exists). */
     attachBrowser(socket: Socket, info: ShellBrowserInfo, sessionEndsMs: number): void {
-        const host = this.hosts.get(info.boxId)?.socket ?? null;
+        const reg = this.hosts.get(info.boxId);
+        const host = reg && reg.socket.connected && reg.info.generation === info.generation ? reg.socket : null;
         const l: Live = {
             info, browser: socket, host, started: false, opened: false, closing: false, openedAtMs: Date.now(), lastInputMs: Date.now(),
             bytesIn: 0, bytesOut: 0, outMeter: null, inMeter: new ByteMeter(INPUT_RATE_BYTES, INPUT_BURST_BYTES, INPUT_BURST_BYTES),
-            sessionEndsMs, startTimer: null, openTimer: null,
+            sessionEndsMs, startTimer: null, openTimer: null, nextReminderMs: Date.now() + 3_600_000,
         };
         this.live.set(info.sessionId, l);
         // Gone between the handshake and now: its disconnect event already fired, so nothing else would end this
@@ -172,16 +280,22 @@ export class ShellHub {
             l.openTimer = setTimeout(() => { if (!l.opened) void this.close(info.sessionId, 'host_timeout'); }, OPEN_TIMEOUT_MS);
             host.emit('shell:open', { sessionId: info.sessionId, cols, rows, rateBytesPerSecond: info.limits.rateKbps * 1024 });
         });
-        socket.on('shell:input', (data: unknown) => {
+        // `shell:input` is what the owner typed or pasted and counts as activity. `shell:reply` is
+        // the terminal widget's own automatic answers (to queries and focus reports the shell
+        // printed): written to the shell just the same, and under the same limits, but it never
+        // resets the idle clock, so a shell cannot keep itself alive by asking questions.
+        const forward = (data: unknown, activity: boolean) => {
             if (!l.opened || l.closing || !l.host) return;
             const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : isBytes(data) ? Buffer.from(data) : null;
             if (!bytes || bytes.length === 0) return;
             if (bytes.length > MAX_INPUT_CHUNK) { void this.close(info.sessionId, 'input_flood'); return; }
             if (!l.inMeter.add(bytes.length)) { void this.close(info.sessionId, 'input_flood'); return; }
             l.bytesIn += bytes.length;
-            l.lastInputMs = Date.now();
+            if (activity) l.lastInputMs = Date.now();
             l.host.emit('shell:input', { sessionId: info.sessionId, data: bytes });
-        });
+        };
+        socket.on('shell:input', (data: unknown) => forward(data, true));
+        socket.on('shell:reply', (data: unknown) => forward(data, false));
         socket.on('shell:resize', (m: { cols?: unknown; rows?: unknown }) => {
             if (!l.opened || l.closing || !l.host) return;
             const cols = dims(m?.cols, MAX_COLS), rows = dims(m?.rows, MAX_ROWS);
@@ -300,11 +414,40 @@ export class ShellHub {
             if (l.opened && now - l.lastInputMs > l.info.limits.idleMinutes * 60_000) { await this.close(id, 'idle_timeout'); continue; }
             if (now - l.openedAtMs > l.info.limits.maxHours * 3_600_000) { await this.close(id, 'max_duration'); continue; }
             if (l.sessionEndsMs <= now) { await this.close(id, 'session_ended'); continue; }
+            if (l.opened && now >= l.nextReminderMs) {
+                l.nextReminderMs = now + 3_600_000;
+                await this.remind(l).catch(() => {});
+            }
             if (this.sweeps % RECHECK_EVERY === 0) {
                 const reason = await this.accessProblem(l).catch(() => null);
                 if (reason) await this.close(id, reason);
             }
         }
+        if (this.sweeps % RECHECK_EVERY === 0) await this.dropStaleHosts().catch(() => {});
+    }
+
+    /** One channel notice an hour while a terminal stays open: it is still pausing wakes. */
+    private async remind(l: Live): Promise<void> {
+        const client = await this.db.connect();
+        let notices: Notice[] = [];
+        try {
+            await client.query('BEGIN');
+            const box = (await client.query(
+                `SELECT b.home_channel_id, p.name, u.username FROM agent_boxes b JOIN agent_profiles p ON p.id = b.profile_id
+                 LEFT JOIN users u ON u.id = $2 WHERE b.id = $1`, [l.info.boxId, l.info.userId])).rows[0];
+            if (box?.home_channel_id) {
+                const hours = Math.max(1, Math.round((Date.now() - l.openedAtMs) / 3_600_000));
+                notices = [await postNotice(client, box.home_channel_id.trim(),
+                    `**${box.username ?? 'The owner'}**'s terminal in **${box.name}**'s box has been open for ${hours} h. It is still open; wakes for **${box.name}** are paused.`)];
+            }
+            await client.query('COMMIT');
+        } catch {
+            await client.query('ROLLBACK').catch(() => {});
+            notices = [];
+        } finally {
+            client.release();
+        }
+        if (notices.length) this.emit(notices);
     }
 
     /** The box and the owner are still what the ticket said they were. */
@@ -375,6 +518,12 @@ async function hostHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: Erro
     if (row.kind !== 'box' || !row.box_id || row.desired_state === 'deleted') return next(new Error('box_hosts_only'));
     const protocol = Number.isInteger(auth.shellProtocol) ? Math.min(auth.shellProtocol as number, SHELL_PROTOCOL) : 0;
     if (protocol < 1) return next(new Error('unsupported_protocol'));
+    // The box's user can read this token. A second socket while the real host is connected is
+    // refused, audited and announced, and any open terminal is closed (shell-hub.ts registerHost)
+    if (d.hub.hostConnected(row.box_id.trim(), Number(row.box_generation))) {
+        d.hub.hostConflict({ boxId: row.box_id.trim(), serverId: row.server_id.trim() }, 'handshake');
+        return next(new Error('host_already_connected'));
+    }
     await d.db.query(`UPDATE agent_hosts SET shell_protocol = $2 WHERE id = $1`, [row.id, protocol]);
     socket.data.shellHost = { hostId: row.id.trim(), boxId: row.box_id.trim(), serverId: row.server_id.trim(), generation: Number(row.box_generation) } satisfies ShellHostInfo;
     next();
@@ -385,7 +534,7 @@ async function browserHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: E
     const ticket = (h.auth as { ticket?: unknown })?.ticket;
     // A browser always sends Origin on a WebSocket handshake, and it must be this site's. Unlike the
     // chat socket, a handshake without one is refused: only a browser opens a terminal.
-    if (!h.headers.origin || !originAllowed(h.headers)) return next(new Error('origin_not_allowed'));
+    if (!h.headers.origin || !originAllowed(h.headers) || !originSchemeMatches(h.headers, h.secure)) return next(new Error('origin_not_allowed'));
     // The cookie session only: a bearer token, a bot token or a host token never opens a terminal
     const token = sessionTokenFromHeaders(h.headers);
     if (!token) return next(new Error('Authentication required'));
@@ -404,12 +553,14 @@ async function browserHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: E
     const userId = payload.userId.trim();
 
     const refuse = async (code: string, boxId: string | null, serverId: string | null) => {
-        await shellAudit(d.db, { serverId, actorId: userId, action: 'box_terminal_refused', boxId, changes: { code, via: 'socket' } }).catch(() => {});
+        await shellRefusal(d.db, { serverId, actorId: userId, boxId, code, via: 'socket' }).catch(() => {});
         return next(new Error(code));
     };
     // Redeemed first, so a probe can't tell a wrong ticket from a ticket for another box or person
     const redeemed = await redeemTicket(d.db, typeof ticket === 'string' ? ticket : '', { userId, jti: payload.jti });
-    if (!redeemed) return refuse('ticket_invalid', null, null);
+    // A ticket that does not redeem has no box and no owner to attach a row to, and anyone signed in can
+    // try: it is counted, not written down
+    if (!redeemed) { d.hub.refusedTickets++; return next(new Error('ticket_invalid')); }
 
     const box = await shellBox(d.db, redeemed.boxId);
     if (!box || box.desired_state === 'deleted') return refuse('box_not_found', redeemed.boxId, null);
@@ -418,7 +569,7 @@ async function browserHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: E
     if (box.generation !== redeemed.generation || box.state !== 'running' || box.desired_state !== 'running' || box.revoked_at) {
         return refuse('box_not_ready', redeemed.boxId, box.server_id.trim());
     }
-    if (!d.hub.hostConnected(redeemed.boxId)) return refuse(box.shell_protocol ? 'box_not_ready' : 'box_needs_update', redeemed.boxId, box.server_id.trim());
+    if (!d.hub.hostConnected(redeemed.boxId, box.generation)) return refuse(box.shell_protocol ? 'box_not_ready' : 'box_needs_update', redeemed.boxId, box.server_id.trim());
 
     const sessionId = generateUlid();
     try {

@@ -12,6 +12,8 @@ const { terms, sockets, FakeTerm, FakeFit, FakeSocket } = vi.hoisted(() => {
     cols = 100; rows = 30; options: any;
     written: Uint8Array[] = []; addons: unknown[] = []; disposed = false; focused = false;
     handlers: Record<string, (...a: any[]) => void> = {};
+    modes = { bracketedPasteMode: false }; pasted: string[] = [];
+    paste(t: string) { this.pasted.push(t); }
     constructor(options: any) { this.options = options; terms.push(this); }
     loadAddon(a: unknown) { this.addons.push(a); }
     open() {}
@@ -93,8 +95,20 @@ it('tells the owner what it means before asking for the password, and shows the 
   expect(confirm).toHaveTextContent('15 minutes without a keystroke');
   expect(confirm).toHaveTextContent('8 hours at most');
   expect(confirm).toHaveTextContent('512 KiB a second');
-  expect(confirm).toHaveTextContent('a run in progress keeps going');
+  expect(confirm).toHaveTextContent('a run already working keeps going');
   expect(confirm).toHaveTextContent('not stored or logged');
+  // The sharing warning is on the page, not behind a link, and the old safety claim is gone
+  for (const line of [
+    'in the same box, as the same user, as an autonomous agent that may be running now',
+    'can read or change what you type and what you see',
+    'It can show a fake prompt. Agora asks for your password only on this page',
+    'Do not type passwords, tokens, login codes or git credentials you would not give the agent',
+    'New wakes for this agent are paused while the terminal is open',
+    'anything started with setsid, nohup or disown keeps running',
+    'that key is in this shell',
+  ]) expect(confirm).toHaveTextContent(line);
+  expect(confirm.textContent).not.toContain('reaches nothing more than the agent can');
+  expect(confirm.querySelectorAll('li').length).toBeLessThanOrEqual(10);
   expect(screen.getByRole('button', { name: 'Open terminal' })).toBeDisabled();
   expect(screen.queryByTestId('terminal-takeover')).toBeNull();
 });
@@ -128,9 +142,12 @@ it('opening: ticket, its own socket, the size, the shell, typing, output, resize
   expect(screen.getByTestId('terminal-limits')).toHaveTextContent('15 min without a keystroke');
   const term = terms[0];
   expect(term.focused).toBe(true);
+  expect(screen.getByTestId('terminal-shared-warning')).toHaveTextContent('You share this box with the agent. Treat what you type as visible to it.');
 
   act(() => sockets[0].fire('shell:output', new Uint8Array([104, 105]).buffer));
   expect(Array.from(term.written[0])).toEqual([104, 105]);
+  // The owner types: a key event, then the data it produces
+  fireEvent.keyDown(screen.getByTestId('terminal-container'));
   term.handlers.data('ls\r');
   term.handlers.binary('\xff\x01');
   term.handlers.resize({ cols: 120, rows: 40 });
@@ -158,6 +175,7 @@ it('a large paste goes in pieces the server accepts, never splitting a character
   act(() => sockets[0].fire('shell:ready', {}));
   // 20,000 characters: the 16,384th is the first half of an emoji
   const text = 'a'.repeat(16383) + '\u{1F600}' + 'b'.repeat(3600);
+  fireEvent.keyDown(screen.getByTestId('terminal-container'));
   terms[0].handlers.data(text);
   const pieces = sockets[0].emitted.filter(([e]) => e === 'shell:input').map(([, p]) => p as string);
   expect(pieces.length).toBe(2);
@@ -252,4 +270,86 @@ it('the page imports nothing that renders what a user wrote: no messages, channe
   const imports = [...source.matchAll(/^import .* from '([^']+)'/gm)].map(m => m[1]);
   expect(imports.filter(i => /messages|stores|SocketProvider|shell\/|servers\/|markdown|Message/i.test(i))).toEqual([]);
   expect(imports).toEqual(expect.arrayContaining(['@xterm/xterm', '@xterm/addon-fit']));
+});
+
+async function openLive() {
+  renderPage();
+  await screen.findByTestId('terminal-confirm');
+  fillPassword();
+  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  await waitFor(() => expect(sockets).toHaveLength(1));
+  await waitFor(() => expect(sockets[0].connected).toBe(true));
+  act(() => sockets[0].fire('shell:ready', {}));
+  return terms[0];
+}
+
+it('the widget\'s own answers are sent as replies and the owner\'s keys, paste and touches as input', async () => {
+  const term = await openLive();
+  const box = screen.getByTestId('terminal-container');
+  // A query the shell printed, answered by the widget with no event of the owner's: not activity
+  term.handlers.data('\x1b[?1;2c');
+  term.handlers.data('\x1b[I');
+  // A key, then a paste, then a soft-keyboard composition each make what follows the owner's
+  fireEvent.keyDown(box); term.handlers.data('a');
+  fireEvent.paste(box); term.handlers.data('pasted');
+  fireEvent.compositionEnd(box); term.handlers.data('é');
+  const sent = sockets[0].emitted.filter(([e]) => e !== 'shell:start').map(([e, p]) => [e, p]);
+  expect(sent).toEqual([
+    ['shell:reply', '\x1b[?1;2c'], ['shell:reply', '\x1b[I'],
+    ['shell:input', 'a'], ['shell:input', 'pasted'], ['shell:input', 'é'],
+  ]);
+  // The owner's activity lapses: the next automatic answer is a reply again
+  const now = Date.now();
+  vi.spyOn(Date, 'now').mockReturnValue(now + 5000);
+  term.handlers.data('\x1b[0n');
+  expect(sockets[0].emitted.at(-1)).toEqual(['shell:reply', '\x1b[0n']);
+});
+
+it('a multi-line paste is asked about when bracketed paste is off, and sent only on yes', async () => {
+  const term = await openLive();
+  const box = screen.getByTestId('terminal-container');
+  const paste = (text: string) => fireEvent.paste(box, { clipboardData: { getData: () => text } });
+  // One line goes straight to the widget (no confirm)
+  paste('ls -la');
+  expect(screen.queryByTestId('terminal-paste-confirm')).toBeNull();
+  // Several lines: held back until the owner says so
+  paste('rm -rf x\nls\n');
+  expect(await screen.findByTestId('terminal-paste-confirm')).toHaveTextContent('each line runs as soon as it arrives');
+  expect(term.pasted).toEqual([]);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(term.pasted).toEqual([]);
+  expect(screen.queryByTestId('terminal-paste-confirm')).toBeNull();
+  paste('a\nb');
+  fireEvent.click(await screen.findByRole('button', { name: 'Send paste' }));
+  expect(term.pasted).toEqual(['a\nb']);
+  // With bracketed paste on, the shell can tell a paste from typing: no question
+  term.modes.bracketedPasteMode = true;
+  paste('x\ny');
+  expect(screen.queryByTestId('terminal-paste-confirm')).toBeNull();
+});
+
+it('refuses to open on plain http away from localhost, with the reason, and asks the server nothing', async () => {
+  vi.stubGlobal('isSecureContext', false);
+  vi.stubGlobal('location', { ...window.location, hostname: 'agora.example.com' });
+  renderPage();
+  expect(await screen.findByTestId('terminal-blocked')).toHaveTextContent('only opens on a secure (https) connection');
+  expect(getStatus).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText(/Your password/)).toBeNull();
+});
+
+it('plain http on localhost is allowed, and a secure page is never blocked', async () => {
+  vi.stubGlobal('isSecureContext', false);
+  renderPage();
+  expect(await screen.findByTestId('terminal-confirm')).toBeInTheDocument();
+  cleanup();
+  vi.stubGlobal('isSecureContext', true);
+  vi.stubGlobal('location', { ...window.location, hostname: 'agora.example.com' });
+  renderPage();
+  expect(await screen.findByTestId('terminal-confirm')).toBeInTheDocument();
+});
+
+it('a terminal closed because the connection to the box changed says so', async () => {
+  await openLive();
+  act(() => sockets[0].fire('shell:exit', { reason: 'host_changed' }));
+  expect(await screen.findByTestId('terminal-ended')).toHaveTextContent('connection to the box changed, so the terminal was closed for safety');
 });

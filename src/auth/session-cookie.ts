@@ -135,3 +135,23 @@ export function deliverToken(
     setSessionCookies(reply, token, jti, exp, secret);
     return {};
 }
+
+/**
+ * Is the Origin's scheme the one this request arrived on? `originAllowed` compares hosts only, so
+ * `http://site` and `https://site` look alike to it. Behind a proxy the scheme the browser used is
+ * the one in X-Forwarded-Proto, which the app trusts only when TRUST_PROXY is on (as Fastify does
+ * for `request.protocol`). Used by the box terminal's ticket route and socket (docs/box-terminal.md);
+ * other routes keep the host-only check.
+ */
+export function originSchemeMatches(headers: IncomingHttpHeaders, secure: boolean): boolean {
+    const origin = headers.origin;
+    if (!origin) return false;
+    const forwarded = config.trustProxy ? headers['x-forwarded-proto'] : undefined;
+    const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim().toLowerCase();
+    const scheme = first === 'http' || first === 'https' ? first : secure ? 'https' : 'http';
+    try {
+        return new URL(origin).protocol === `${scheme}:`;
+    } catch {
+        return false;
+    }
+}

@@ -97,14 +97,20 @@ afterEach(async () => {
 afterAll(() => { for (const s of sockets.splice(0)) s.disconnect(); });
 
 describe('a terminal in a real box', () => {
-    it('starts a shell as the box user, in its workspace, with the CLI environment and no token', async () => {
+    it('starts a shell as the box user, in its home folder (not the agent worktree), with the CLI environment and no token', async () => {
         const status = await api(`/boxes/${box.id}/terminal`, { headers: { Cookie: cookie } });
         expect(status.body).toMatchObject({ supported: true, hostConnected: true, running: true, open: null });
 
         const t = await openTerminal();
         const who = await t.run('echo "uid=$(id -u) cwd=$(pwd) term=$TERM"');
         expect(who).toContain('uid=1000');
-        expect(who).toContain('cwd=/home/agent/scratch');
+        // Neutral ground: the home folder, with a line naming the agent's workspace; the image's CLI directory first on PATH; no resize pipe
+        expect(who).toContain('cwd=/home/agent ');
+        expect(t.out()).toContain('The agent workspace is /home/agent/');
+        expect((await t.run('echo "path=${PATH%%:*}"'))).toContain('path=/opt/agora/bin');
+        // Only the terminal and bash's own descriptor 255: the resize pipe (fd 3) did not reach the shell
+        await t.run('ls /proc/$$/fd > ~/.fds');
+        expect(await t.run('echo fds=$(tr "\n" , < ~/.fds)')).toContain('fds=0,1,2,255,');
         expect(who).toContain('term=xterm-256color');
         // The CLI's own state directory: the agent's login is the one `claude` finds here
         expect(await t.run('echo state=$CLAUDE_CONFIG_DIR')).toContain('state=/home/agent/.agora/state/term-a');
