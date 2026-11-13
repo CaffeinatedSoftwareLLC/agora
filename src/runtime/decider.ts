@@ -49,7 +49,7 @@ export class RulesDecider implements Decider {
         const maxQueued = this.opts.maxQueuedPerServer ?? MAX_QUEUED_PER_SERVER;
 
         if (!req.submitterIsBot) return deny('Only bots can submit code in this version');
-        if (req.runtimeAccess === 'none') return deny('This bot is not allowed to run code (an admin can enable it in Bot Management)');
+        if (req.runtimeAccess === 'none') return deny('This bot is not allowed to run code (an admin can enable it in Settings → Agents)');
         if (req.submitterPaused) return deny('This bot is paused');
         if (Buffer.byteLength(req.code, 'utf8') > maxCode) return deny(`Code exceeds ${maxCode} bytes`);
         if (req.code.trim().length === 0) return deny('Code is empty');

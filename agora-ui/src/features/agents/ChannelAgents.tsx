@@ -126,7 +126,7 @@ export function ChannelAgentsDialog({ channelId, onMembershipChange, onClose }: 
     </form>
     {error && <div role="alert" className="text-sm text-danger mb-3">{error} <button type="button" className="min-h-11 underline" disabled={loading || !!saving} onClick={() => setRequest({ query: request.query })}>Refresh list</button></div>}
     {loading ? <p className="text-text-muted">Loading agents…</p> : <>
-      {!bots.length && !error && <p className="text-sm text-text-muted">{request.query ? 'No matching agents.' : 'No agents on this server yet. Create or invite one in Settings → Bots.'}</p>}
+      {!bots.length && !error && <p className="text-sm text-text-muted">{request.query ? 'No matching agents.' : 'No agents on this server yet. Create or invite one in Settings → Agents → Add an agent.'}</p>}
       <ul className="max-h-[50dvh] overflow-y-auto divide-y divide-border">
         {bots.map(bot => {
           const present = bot.inChannel;

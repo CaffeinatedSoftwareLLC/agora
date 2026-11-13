@@ -155,7 +155,7 @@ export async function uploadFile(channelId: string, file: File): Promise<{
 }
 
 
-// ─── Bot Management API ───
+// ─── Bot accounts API (the account behind an agent) ───
 
 export interface Bot {
   id: string;

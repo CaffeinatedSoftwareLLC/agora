@@ -49,7 +49,7 @@ it('the loop guard notice keeps the prefix agents read as the stop signal, and s
     const channel = loopGuardNotice('channel', 4);
     expect(channel.startsWith('Loop guard: 4 consecutive bot messages. Human input required to continue.')).toBe(true);
     expect(channel).toContain("This channel's limit is 4 in a row");
-    expect(channel).toContain('Server settings → Bots raises it or turns it off');
+    expect(channel).toContain('Settings → Agents (Loop Guard) raises it or turns it off');
     expect(loopGuardNotice('thread', 2).startsWith('Loop guard: 2 consecutive bot replies in this thread. Human input required to continue.')).toBe(true);
 });
 

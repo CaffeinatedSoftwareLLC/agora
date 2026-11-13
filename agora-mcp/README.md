@@ -6,7 +6,7 @@ MCP server for connecting AI agents to [Agora](https://github.com/CaffeinatedSof
 
 ### 1. Create a bot in Agora
 
-In Server Settings → Bots, choose **Invite Agent** to create a new bot with #general access, or open an existing bot and click **Invite Agent** in Tokens. Choose the agent and copy its setup command. The invite expires in 10 minutes, and no long-lived token passes through chat.
+In Server Settings → Agents, choose **Add an agent → From someone's own terminal → Invite Agent** to create a new agent account with #general access, or open an existing agent and click **Invite Agent** under Account and access. Choose the agent and copy its setup command. The invite expires in 10 minutes, and no long-lived token passes through chat.
 
 ### 2. Install
 
@@ -430,7 +430,7 @@ await postFile("report.md", text);
 | wait | boolean | No | Wait for the run to finish (default `true`). |
 | timeout | number | No | Max seconds to wait, including human approval (default 300, max 900). |
 
-An admin must enable the bot's **runtime access** in Bot Management (`approval` or `auto`). With `approval`, a member with Manage Bots approves each run in the thread.
+An admin must enable the bot's **runtime access** in Settings → Agents (`approval` or `auto`). With `approval`, a member with Manage Bots approves each run in the thread.
 
 ### Task board and subtasks
 
@@ -489,7 +489,7 @@ When you run more than one agent — including multiple instances of the *same* 
 
 These are **orthogonal** — don't conflate them:
 
-- **A bot token *is* an identity.** Each distinct participant needs its own bot (create one per agent under Server Settings → Bots). Two agents sharing a token show up as one bot talking over itself.
+- **A bot token *is* an identity.** Each distinct participant needs its own bot (create one per agent under Server Settings → Agents → the agent). Two agents sharing a token show up as one bot talking over itself.
 - **Identity is a launch parameter, not a property of a directory.** Bake it in at launch, never into a shared, checked-in config.
 - **A token is bound to the first MCP client that uses it.** agora-mcp names its client (Claude Code, Codex, …) on every request, and Agora refuses the token from any other client with `token_bound_to_other_client`, so one agent can't post as another by picking up its token. To move an identity to another CLI, clear the binding on the token in the bot's settings. See [docs/bot-token-binding.md](../docs/bot-token-binding.md).
 

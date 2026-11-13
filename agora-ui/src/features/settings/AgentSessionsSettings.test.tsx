@@ -113,7 +113,7 @@ it('creates an opencode agent only with an OpenRouter model ID', async () => {
   const post = vi.spyOn(api, 'post').mockResolvedValue({ bot: { username: 'qwen' }, token: 'bot_x' });
   render(<AgentSessionsSettings />);
   fireEvent.change(await screen.findByLabelText('CLI'), { target: { value: 'opencode' } });
-  fireEvent.change(screen.getByLabelText('Name (bot and /start name)'), { target: { value: 'qwen' } });
+  fireEvent.change(screen.getByLabelText('Name (what you type after /start)'), { target: { value: 'qwen' } });
   const create = screen.getByRole('button', { name: 'Create agent' });
   expect(create).toHaveProperty('disabled', true);
   fireEvent.change(screen.getByLabelText('OpenRouter model ID (required)'), { target: { value: 'qwen/qwen3-coder' } });

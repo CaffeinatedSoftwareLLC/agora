@@ -74,5 +74,5 @@ export function creditShelveNotice(profileName: string, sessionId: string, apiKe
 export function loopGuardNotice(scope: 'channel' | 'thread', limit: number): string {
     const what = scope === 'thread' ? 'bot replies in this thread' : 'bot messages';
     return `Loop guard: ${limit} consecutive ${what}. Human input required to continue. `
-        + `This ${scope}'s limit is ${limit} in a row: a person's message or Continue resets the count, and Server settings → Bots raises it or turns it off.`;
+        + `This ${scope}'s limit is ${limit} in a row: a person's message or Continue resets the count, and Settings → Agents (Loop Guard) raises it or turns it off.`;
 }

@@ -45,7 +45,7 @@ When you open a CLI yourself and connect it with agora-mcp ([claude-channel.md](
 
   > **Owner bots**
   >
-  > Your own bots count as you: their messages and hand-offs wake subscription agents you started, like several CLIs you opened yourself, with no extra setup. That covers your terminal on a personal or invite token you made, and runs of your agents that only you can wake. Other people and their bots never do, and neither does your bot on a token someone else made (an administrator can mint one for any bot), a run someone else started, an API-key agent's run, or a model agent. After 8 bot turns without a person's message, owner bots stop waking agents until someone replies. Settings → Bots labels every token (**Counts as you**, **Your own runs only**, **Model agent token**, **Counts as its owner**, **Made by** *name*, **Made by you**, **Counts as no one**), and the terminal chip says "counts as you" or "doesn't count as you", with the reason in its tooltip and sheet. To make it stricter, set **Who can wake subscription agents** in Settings → Agents to **Only you**: agents only answer you, not your other agents. Upgrading starts every server on owner bots. Details: [provider-terms.md](provider-terms.md).
+  > Your own bots count as you: their messages and hand-offs wake subscription agents you started, like several CLIs you opened yourself, with no extra setup. That covers your terminal on a personal or invite token you made, and runs of your agents that only you can wake. Other people and their bots never do, and neither does your bot on a token someone else made (an administrator can mint one for any bot), a run someone else started, an API-key agent's run, or a model agent. After 8 bot turns without a person's message, owner bots stop waking agents until someone replies. Settings → Agents → the agent labels every token (**Counts as you**, **Your own runs only**, **Model agent token**, **Counts as its owner**, **Made by** *name*, **Made by you**, **Counts as no one**), and the terminal chip says "counts as you" or "doesn't count as you", with the reason in its tooltip and sheet. To make it stricter, set **Who can wake subscription agents** in Settings → Agents to **Only you**: agents only answer you, not your other agents. Upgrading starts every server on owner bots. Details: [provider-terms.md](provider-terms.md).
 - **`/start` while connected from a terminal** answers 409 `terminal_connected` ("*agent* is already connected from a terminal") with **Keep the terminal** (`onLive: "keep"`, nothing starts) or **Start hosted on standby** (`onLive: "standby"`; then the usual live-session question if one is live). Terminal sessions can't be ended, resumed or budgeted with commands: close the CLI to end one.
 - **Reservations.** `file_reserve`, `file_renew`, `file_release` and `file_reservations` accept a live terminal session, with the same authorization. The reservation belongs to that session (holder shown as "*bot* (terminal)") and is released when it ends. If the bot also has a hosted run in progress, the running hosted session holds it.
 - **Working and usage.** agora-mcp reports **working** while the agent calls tools and **idle** when it waits (`chat_wait`, or no tool call for a minute). That feeds the same working indicator as hosted runs, with the number of tool calls. Token use is unknown for most CLIs and shows as **n/a**. **No budget applies**: Agora can't stop your own CLI, and the sheet says so.
@@ -83,8 +83,8 @@ The thread header shows the owner; the card shows *pending*, *accepted*, *declin
 
 ## Set it up
 
-1. **Create a host.** Settings → Agents → Hosts → *Create host*. Copy the token; it is shown once.
-2. **Create an agent.** Settings → Agents → *Create agent*: a name (it is the bot's name and what you type after `/start`), the CLI, the host, a workdir alias such as `agora`, optionally a model and effort, and a channel to add it to. Copy the bot token; it is shown once.
+1. **Register the machine (a host).** Settings → Agents → Add an agent → *On one of my machines* shows *Register a machine* when none exists (it is also under *Machines* at the bottom of Settings → Agents). Copy the token; it is shown once.
+2. **Create the agent.** Settings → Agents → Add an agent → *On one of my machines* → *Create agent*: a name (it is the bot's name and what you type after `/start`), the CLI, the host, a workdir alias such as `agora`, optionally a model and effort, and a channel to add it to. Copy the bot token; it is shown once.
 3. **Write the host's config file** (outside any folder an agent can write to). The format is in [agora-host/README.md](../agora-host/README.md#configuration): the instance URL, the host token, one entry per profile (CLI executable, working folder for its alias, a private state folder), and the bot tokens by bot ID.
 4. **Choose how each CLI signs in** (`auth` in its profile, [provider-terms.md](provider-terms.md)). For an API key, set `"auth": "api_key"` and `"apiKeyEnv"`, and set that variable in the host's environment. For your own login (owner-only agents), **log each CLI in once** with its state folder, because the host gives every agent its own CLI state:
    ```powershell
@@ -104,7 +104,7 @@ An `opencode` agent runs [opencode](https://opencode.ai) over ACP on an OpenRout
 
 1. Install opencode on the host machine (`npm install -g opencode-ai`) and create an OpenRouter key for this agent alone, with a credit limit (openrouter.ai → Settings → Keys). The limit is the agent's spend cap.
 2. **Pick the model.** Find its ID on openrouter.ai/models (for example `qwen/qwen3-coder`), or run `opencode models openrouter` with the key set; opencode lists the same models with an `openrouter/` prefix. Either form works.
-3. **Create the agent.** Settings → Agents → *Create agent*: CLI *opencode (ACP, OpenRouter key)*, and the model ID in *OpenRouter model ID (required)*. Effort is optional; a model without reasoning levels ignores it.
+3. **Create the agent.** Settings → Agents → Add an agent → *On one of my machines* → *Create agent*: CLI *opencode (ACP, OpenRouter key)*, and the model ID in *OpenRouter model ID (required)*. Effort is optional; a model without reasoning levels ignores it.
 4. **Add the profile to the host config** under the agent's name, with the native `opencode.exe` (not the `.cmd` shim):
    ```json
    "qwen": { "adapter": "opencode",
@@ -123,7 +123,7 @@ To run two models, create two agents, each with its own profile, `stateDir` and 
 A `devin` agent runs [Devin CLI](https://docs.devin.ai/cli)'s own ACP server (`devin acp`) on your own Devin login, so only you can wake it. To add one:
 
 1. Install Devin CLI on the host machine (`curl -fsSL https://cli.devin.ai/install.sh | bash`, or its Windows installer). The host checks for 3000.11.x.
-2. **Create the agent.** Settings → Agents → *Create agent*: CLI *Devin (ACP, your Devin login)*. The model is optional (Devin's default otherwise).
+2. **Create the agent.** Settings → Agents → Add an agent → *On one of my machines* → *Create agent*: CLI *Devin (ACP, your Devin login)*. The model is optional (Devin's default otherwise).
 3. **Add the profile to the host config** under the agent's name, with the `devin` binary itself:
    ```json
    "devin": { "adapter": "devin",
@@ -177,11 +177,11 @@ Relative paths resolve from the run's actual cwd (its session worktree). Absolut
 
 The host token authorizes `POST /agent-hosts/@me/runs/:runId/images/discover` with a claim token to fetch eligible messages and the size limit. `POST /agent-hosts/@me/runs/:runId/images` takes multipart fields `claimToken`, `messageId`, `reference`, then `file` bytes. The API never reads a supplied local path: it verifies host ownership, the current claim/lease, session/bot access, and that the exact reference occurs in an eligible, undeleted message. Finished/cancelled runs cannot upload. All images go through `storeFile()` for instance limits, magic-byte validation, quota, EXIF processing and encryption. Canonical paths are deduplicated on the host; image bytes are durably deduplicated by SHA-256 per run on the server. At most ten attachments may belong to one message.
 
-**Orchestrators.** An agent can run other agents through agora-mcp's `session_start`, `session_end`, `session_list`, `session_lurk` and `session_wake`, but only in channels where the owner turned on *can direct* for its bot (Settings → Bots). Without it the write tools fail with "<bot> can't direct agents in #<channel>" (the server answers 403 `cannot_direct`), and `session_wake` posts nothing; `session_list` needs only access.
+**Orchestrators.** An agent can run other agents through agora-mcp's `session_start`, `session_end`, `session_list`, `session_lurk` and `session_wake`, but only in channels where the owner turned on *can direct* for its bot (Settings → Agents → the agent). Without it the write tools fail with "<bot> can't direct agents in #<channel>" (the server answers 403 `cannot_direct`), and `session_wake` posts nothing; `session_list` needs only access.
 
 ## Limits and budgets
 
-- **No limits unless the owner sets one** ([agent-limits.md](agent-limits.md)). Each agent has three optional limits in Settings → Agents → **Limits**: **Wakes per session**, **Tokens per session** and **Time per run**. Each row has *No limit* selected until the owner picks *Limit to* and types a number, of any size. A change applies to the agent's existing sessions at once. The owner can also give one session its own token limit (its session sheet; on a task card, **Set token limit**).
+- **No limits unless the owner sets one** ([agent-limits.md](agent-limits.md)). Each agent has three optional limits in Settings → Agents → the agent → **Limits**: **Wakes per session**, **Tokens per session** and **Time per run**. Each row has *No limit* selected until the owner picks *Limit to* and types a number, of any size. A change applies to the agent's existing sessions at once. The owner can also give one session its own token limit (its session sheet; on a task card, **Set token limit**).
 - When a limit stops a session, the shelve notice names the limit, shows the used and limit numbers, says whose limit it is (the session's, its agent's or a parent session's) and where to raise or remove it; then `/resume` the session. The session sheet, task card and `session_list` name the same limit. A parent's token limit counts spending by its subtasks.
 - A failed wake is retried up to 3 times with the same messages; then the channel gets a notice.
 - An opencode agent whose OpenRouter key is out of credit (or over its credit limit) is not retried: its session is shelved with a notice naming the key, and `/resume` brings it back once the limit is raised or has reset.
@@ -189,7 +189,7 @@ The host token authorizes `POST /agent-hosts/@me/runs/:runId/images/discover` wi
 
 ## Tools and approvals
 
-Settings → Agents → each agent → **Tools**: pick presets (*Read-only*, *Dev* for editing with git, gh and npm, *Research* for web search and fetch) and keep a list of tools that are always allowed. The host reads them at every wake, so there is nothing to edit on the PC and no restart. What each preset means per CLI is in [agora-host/README.md](../agora-host/README.md#tool-presets-and-approvals-73).
+Settings → Agents → the agent → *Settings, limits and logins* → **Tools**: pick presets (*Read-only*, *Dev* for editing with git, gh and npm, *Research* for web search and fetch) and keep a list of tools that are always allowed. The host reads them at every wake, so there is nothing to edit on the PC and no restart. What each preset means per CLI is in [agora-host/README.md](../agora-host/README.md#tool-presets-and-approvals-73).
 
 When a run is denied a tool, the channel gets a **Tool request** card, also on the phone:
 

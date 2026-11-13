@@ -14,6 +14,10 @@ interface Props {
   budget: ModelAgentBudget;
   channels: Channel[];
   onChanged: () => void;
+  /** Open with the add form showing (the Add an agent page). */
+  startAdding?: boolean;
+  /** Hide the list: the form alone. */
+  hideList?: boolean;
 }
 
 const TOOL_INFO: Record<ModelAgentTool, string> = {
@@ -34,11 +38,11 @@ const errorText = (err: unknown, fallback: string) =>
   err instanceof ApiError ? (err.message || err.code) : fallback;
 
 /**
- * Settings → AI → Model agents: named bots with their own provider and model that
+ * Settings → Agents → Add an agent → A model on an API key: named agents with their own provider and model that
  * answer @mentions on the server and can use tools (docs/model-agents.md).
  */
-export function AgentsSection({ serverId, adapters, providers, agents, budget, channels, onChanged }: Props) {
-  const [adding, setAdding] = useState(false);
+export function AgentsSection({ serverId, adapters, providers, agents, budget, channels, onChanged, startAdding = false, hideList = false }: Props) {
+  const [adding, setAdding] = useState(startAdding);
   // Only adapters that implement function calling can serve an agent; today that is the OpenAI-compatible one
   const usable = providers.filter(p => p.enabled && p.adapter === 'openai');
 
@@ -71,7 +75,7 @@ export function AgentsSection({ serverId, adapters, providers, agents, budget, c
         />
       )}
 
-      {agents.length === 0 && !adding ? (
+      {hideList ? null : agents.length === 0 && !adding ? (
         <p className="text-text-muted text-sm">No model agents yet.</p>
       ) : (
         <div className="flex flex-col gap-2">
@@ -137,7 +141,7 @@ function BudgetControl({ serverId, budget, onChanged }: { serverId: string; budg
   );
 }
 
-function AgentRow({ serverId, agent, providers, adapters, channels, onChanged }: {
+export function AgentRow({ serverId, agent, providers, adapters, channels, onChanged }: {
   serverId: string; agent: ModelAgent; providers: AIProvider[]; adapters: AIAdapter[]; channels: Channel[]; onChanged: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -301,7 +305,7 @@ function AgentForm({ serverId, agent, providers, channels, onCancel, onSaved }: 
               </label>
             ))}
           </div>
-          <p className="text-xs text-text-muted mt-1">More channels can be added later from the channel's agent list, like any bot.</p>
+          <p className="text-xs text-text-muted mt-1">More channels can be added later from the channel's agent list, like any agent.</p>
         </fieldset>
       )}
 

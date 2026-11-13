@@ -209,7 +209,7 @@ const GUARD_DEFAULT: Limits = { maxBotHops: 4, maxThreadBotHops: 4 };
  * and the thread guard (bot replies in a row inside one thread). Each has an on/off switch and is
  * off unless someone turns it on. Here off is 0; the API says null ("no limit").
  */
-function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
+export function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   const [channels, setChannels] = useState<Channel[]>([]);
   // Limits as loaded or last confirmed by a save here
   const [loaded, setLoaded] = useState<Record<string, Limits>>({});
@@ -386,6 +386,70 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   );
 }
 
+/** Pause or resume an account, and set whether it may run code. Shared by the list row and the agent detail. */
+export function BotControls({ bot, serverId, onChanged, onError }: { bot: Bot; serverId: string; onChanged: () => void; onError: (message: string) => void }) {
+  const [pausing, setPausing] = useState(false);
+  const [savingAccess, setSavingAccess] = useState(false);
+  const isPaused = !!bot.pausedAt;
+
+  async function changeAccess(access: RuntimeAccess) {
+    if (access === 'auto' && !confirm(`Let ${bot.username} run code without approval? Runs still execute in the sandbox with its limits.`)) return;
+    setSavingAccess(true);
+    onError('');
+    try {
+      await runtimeApi.setBotAccess(serverId, bot.id, access);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.code : 'Failed to update code run access');
+    } finally {
+      setSavingAccess(false);
+    }
+  }
+
+  async function togglePause() {
+    setPausing(true);
+    onError('');
+    try {
+      if (isPaused) {
+        await botApi.setPaused(serverId, bot.id, false);
+      } else {
+        const reason = prompt('Pause this bot? It will be read-only until resumed.\n\nReason (optional):');
+        if (reason === null) return;
+        await botApi.setPaused(serverId, bot.id, true, reason.trim() || undefined);
+      }
+      onChanged();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.code : 'Failed to update pause state');
+    } finally {
+      setPausing(false);
+    }
+  }
+
+  return (
+    <>
+      <label className="flex items-center gap-1 pr-3 text-xs text-text-muted" title="Whether this bot may run code in the sandbox">
+        Code runs
+        <select
+          className="min-h-11 md:min-h-8 bg-surface border border-border rounded px-2 py-1 text-xs text-text"
+          value={bot.runtimeAccess ?? 'none'}
+          disabled={savingAccess}
+          onChange={e => changeAccess(e.target.value as RuntimeAccess)}
+          aria-label={`Code run access for ${bot.username}`}
+        >
+          <option value="none">Off</option>
+          <option value="approval">Need approval</option>
+          <option value="auto">Auto-run</option>
+        </select>
+      </label>
+      <div className="pr-3">
+        <Button variant="secondary" onClick={togglePause} loading={pausing}>
+          {isPaused ? 'Resume' : 'Pause'}
+        </Button>
+      </div>
+    </>
+  );
+}
+
 // ─── Bot Row (expandable) ─────────────────────────────────────────────────
 
 // Memoized with stable callbacks: opening one bot re-renders that row, not the whole list
@@ -402,44 +466,8 @@ const BotRow = memo(function BotRow({
   onToggle: (botId: string) => void;
   onChanged: () => void;
 }) {
-  const [pausing, setPausing] = useState(false);
   const [pauseError, setPauseError] = useState('');
-  const [savingAccess, setSavingAccess] = useState(false);
   const isPaused = !!bot.pausedAt;
-
-  async function changeAccess(access: RuntimeAccess) {
-    if (access === 'auto' && !confirm(`Let ${bot.username} run code without approval? Runs still execute in the sandbox with its limits.`)) return;
-    setSavingAccess(true);
-    setPauseError('');
-    try {
-      await runtimeApi.setBotAccess(serverId, bot.id, access);
-      onChanged();
-    } catch (err) {
-      setPauseError(err instanceof ApiError ? err.code : 'Failed to update code run access');
-    } finally {
-      setSavingAccess(false);
-    }
-  }
-
-  async function togglePause() {
-    setPausing(true);
-    setPauseError('');
-    try {
-      if (isPaused) {
-        await botApi.setPaused(serverId, bot.id, false);
-      } else {
-        const reason = prompt('Pause this bot? It will be read-only until resumed.\n\nReason (optional):');
-        if (reason === null) return;
-        await botApi.setPaused(serverId, bot.id, true, reason.trim() || undefined);
-      }
-      onChanged();
-    } catch (err) {
-      setPauseError(err instanceof ApiError ? err.code : 'Failed to update pause state');
-    } finally {
-      setPausing(false);
-    }
-  }
-
   return (
     <div className="border border-border rounded-lg overflow-hidden">
       <div className="flex items-center hover:bg-surface-hover">
@@ -474,25 +502,7 @@ const BotRow = memo(function BotRow({
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
-      <label className="flex items-center gap-1 pr-3 text-xs text-text-muted" title="Whether this bot may run code in the sandbox">
-        Code runs
-        <select
-          className="min-h-11 md:min-h-8 bg-surface border border-border rounded px-2 py-1 text-xs text-text"
-          value={bot.runtimeAccess ?? 'none'}
-          disabled={savingAccess}
-          onChange={e => changeAccess(e.target.value as RuntimeAccess)}
-          aria-label={`Code run access for ${bot.username}`}
-        >
-          <option value="none">Off</option>
-          <option value="approval">Need approval</option>
-          <option value="auto">Auto-run</option>
-        </select>
-      </label>
-      <div className="pr-3">
-        <Button variant="secondary" onClick={togglePause} loading={pausing}>
-          {isPaused ? 'Resume' : 'Pause'}
-        </Button>
-      </div>
+      <BotControls bot={bot} serverId={serverId} onChanged={onChanged} onError={setPauseError} />
       </div>
       {isExpanded && (
         <BotDetailPanel botId={bot.id} serverId={serverId} onDeleted={onChanged} />
@@ -503,14 +513,16 @@ const BotRow = memo(function BotRow({
 
 // ─── Bot Detail Panel ─────────────────────────────────────────────────────
 
-function BotDetailPanel({
+export function BotDetailPanel({
   botId,
   serverId,
   onDeleted,
+  deleteLabel = 'Delete Bot',
 }: {
   botId: string;
   serverId: string;
   onDeleted: () => void;
+  deleteLabel?: string;
 }) {
   const [detail, setDetail] = useState<BotDetail | null>(null);
   const [allChannels, setAllChannels] = useState<Channel[]>([]);
@@ -843,7 +855,7 @@ function BotDetailPanel({
       {/* ── Delete Bot ── */}
       <div className="pt-2 border-t border-border">
         <Button variant="danger" onClick={handleDelete} loading={deleting}>
-          Delete Bot
+          {deleteLabel}
         </Button>
       </div>
     </div>

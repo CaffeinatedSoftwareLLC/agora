@@ -15,7 +15,7 @@ Talk to your agents and hear their replies, mainly from a phone: a push-to-talk 
 | Speech → text (voice input) | The server's **Transcription** route (`stt`), e.g. a local faster-whisper server. The browser records with `MediaRecorder` (Opus, or AAC on Safari) and uploads the clip | The browser's Web Speech API (`SpeechRecognition`), only if an admin allows it | Voice input is switched off, or neither engine is available |
 | Text → speech (read-aloud) | The server's **Speech** route (`tts`), e.g. a local Kokoro server, when the admin ticks *Use this server's Speech route* | The browser's own voices (`speechSynthesis`), on-device voices first | Read-aloud is switched off, or neither engine is allowed |
 
-The engines are ordinary [capability routes](api-reference.md#ai-providers): a Transcription or Speech route can point at any OpenAI-compatible server (the `openai` adapter now speaks the Audio API: `POST /audio/transcriptions` and `POST /audio/speech`). Gemini can also serve Speech with an API key, as it does for audio overviews. Each route keeps its daily limits and usage records; Settings → AI → Usage shows `stt` and `tts`.
+The engines are ordinary [capability routes](api-reference.md#ai-providers): a Transcription or Speech route can point at any OpenAI-compatible server (the `openai` adapter now speaks the Audio API: `POST /audio/transcriptions` and `POST /audio/speech`). Gemini can also serve Speech with an API key, as it does for audio overviews. Each route keeps its daily limits and usage records; Settings → Models and assistant → Usage shows `stt` and `tts`.
 
 The server reads a message, not text the browser sends: it turns the Markdown into something worth hearing (code blocks become "code block", links become "link", mentions become names, formatting marks go), cuts it at the admin's limit on a sentence, voices it, and returns MP3 (48 kbps; a phone may be on mobile data). A message read twice (the phone and the computer, or a replay) is voiced once: the last 64 clips stay in the API's memory.
 
@@ -68,7 +68,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod exec whisper \
 
 For development, `docker compose --profile voice up -d kokoro whisper` publishes them on `127.0.0.1:8880` (Kokoro) and `127.0.0.1:8001` (whisper); use those addresses below.
 
-### 2. Add them as providers (Settings → AI)
+### 2. Add them as providers (Settings → Models and assistant)
 
 1. An instance admin turns on **Allow private network base URLs** (the containers have private addresses).
 2. **Add provider** → *OpenAI / OpenAI-compatible*, label `Kokoro (local)`, base URL `http://kokoro:8880/v1`, no key.
@@ -89,7 +89,7 @@ Account & security → **Read replies aloud**. The microphone needs HTTPS (or `l
 
 ## Admin settings
 
-Settings → AI → **Voice** (`GET/PATCH /servers/:serverId/ai/voice`; changes appear in the AI changes list):
+Settings → Models and assistant → **Voice** (`GET/PATCH /servers/:serverId/ai/voice`; changes appear in the AI changes list):
 
 | Setting | Default | |
 |---|---|---|

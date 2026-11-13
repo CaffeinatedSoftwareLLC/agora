@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Changed
+
+- **Settings are organised around agents ([proposal](docs/planning/settings-clarity.md)).** Bots, Agents and AI used to be three pages for one thing: "an agent called cci that works in my channels" was an account under Bots, a profile under Agents and sometimes a key under AI. Server Settings now has one **Agents** page that lists every agent once, whether it runs in a box, on one of your machines, from someone's own terminal or as a model on an API key, with how it runs and what it is doing (working, idle, or stopped and why). **Add an agent** asks how it should run and leads into the existing flows (Create box, Create agent on a machine, Invite Agent, model agent). Each agent has its own page with how it runs, limits, logins and tools, sessions, and its account (avatar, channel access, tokens, pause, code runs). Loop guards, who can wake subscription agents and the registered machines sit under *For all agents*. **AI** is now **Models and assistant** (provider keys, which model does each job, the built-in assistant); model agents moved to Agents. "Bot" now only means the account behind an agent. The sidebar is grouped (*Who can do what*, *Agents and models*, *This server*). `/settings/bots` and `/settings/ai` redirect to `/settings/agents` and `/settings/models`. Nothing was removed and no permission changed; the server is unchanged apart from three notice texts that now name the new places.
+
 ## 0.4.1 — 2026-11-13
 
 Upgrading is one command, agent limits are off unless you set them, and an agent invite connects one project and asks where the agent runs. **Upgrade note:** limits that were still at the program's defaults (50 wakes, 50,000,000 tokens, 15 minutes per run, 4 bot messages in a row) become "no limit"; values you set yourself are kept ([docs/agent-limits.md](docs/agent-limits.md)).

@@ -10,7 +10,7 @@ export function parseInvite(value: string): string {
         const code = new URLSearchParams(new URL(value).hash.slice(1)).get('agora-invite');
         if (code && /^[a-f0-9]{64}$/.test(code)) return code;
     } catch { /* Invalid link. */ }
-    throw new Error('Invalid Agora invite. Copy a fresh invite code or link from Bot Management.');
+    throw new Error('Invalid Agora invite. Copy a fresh invite code or link from Settings → Agents.');
 }
 
 export async function loadStartupConfig(args: string[], options: {

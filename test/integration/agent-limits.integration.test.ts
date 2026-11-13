@@ -160,7 +160,7 @@ describe('a limit the owner sets', () => {
         expect(third.status).toBe(429);
         const notice = (await ctx.db.query(`SELECT content FROM messages WHERE channel_id = $1 AND system_event = 'loop_guard' ORDER BY id DESC LIMIT 1`, [channelId])).rows[0].content;
         expect(notice).toBe("Loop guard: 2 consecutive bot messages. Human input required to continue. This channel's limit is 2 in a row: "
-            + "a person's message or Continue resets the count, and Server settings → Bots raises it or turns it off.");
+            + "a person's message or Continue resets the count, and Settings → Agents (Loop Guard) raises it or turns it off.");
         // Turning it off lets them go on
         expect((await ctx.request.patch(`/channels/${channelId}/bot-config`).set(owner.auth).send({ maxBotHops: null })).status).toBe(200);
         for (let i = 0; i < 4; i++) expect((await post(cci.auth, `again ${i}`)).status).toBe(201);

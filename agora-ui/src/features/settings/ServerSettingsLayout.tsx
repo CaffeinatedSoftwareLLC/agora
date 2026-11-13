@@ -27,7 +27,7 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
     if (atIndex) {
       const section = lastSection.current;
       if (section) [...(navRef.current?.querySelectorAll<HTMLAnchorElement>('a') ?? [])]
-        .find(link => link.getAttribute('href') === section)?.focus();
+        .find(link => { const href = link.getAttribute('href') ?? ''; return section === href || section.startsWith(`${href}/`); })?.focus();
     } else backRef.current?.focus();
   }, [narrow, atIndex, pathname, instanceServerId]);
 
@@ -39,20 +39,22 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  const navItems: { to: string; label: string; end: boolean }[] = [
-    { to: '/settings/roles', label: 'Roles', end: false },
-    { to: '/settings/role-assign', label: 'Role Assignment', end: false },
-    { to: '/settings/overrides', label: 'Channel Overrides', end: false },
-    { to: '/settings/bots', label: 'Bots', end: false },
-    { to: '/settings/agents', label: 'Agents', end: false },
-    { to: '/settings/ai', label: 'AI', end: false },
+  const groups: { heading: string; items: { to: string; label: string }[] }[] = [
+    { heading: 'Who can do what', items: [
+      { to: '/settings/roles', label: 'Roles' },
+      { to: '/settings/role-assign', label: 'Role Assignment' },
+      { to: '/settings/overrides', label: 'Channel Overrides' },
+    ] },
+    { heading: 'Agents and models', items: [
+      { to: '/settings/agents', label: 'Agents' },
+      { to: '/settings/models', label: 'Models and assistant' },
+    ] },
   ];
-
   if (isAdmin) {
-    navItems.push(
-      { to: '/settings/instance', label: 'Instance Settings', end: false },
-      { to: '/settings/storage', label: 'File Storage', end: false },
-    );
+    groups.push({ heading: 'This server', items: [
+      { to: '/settings/instance', label: 'Instance Settings' },
+      { to: '/settings/storage', label: 'File Storage' },
+    ] });
   }
 
   return (
@@ -65,11 +67,13 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
           </Link>
         </div>
         <nav ref={navRef} aria-label="Settings sections" className="flex flex-col p-2 gap-1">
-          {navItems.map((item) => (
+          {groups.map(group => (
+            <div key={group.heading} className="flex flex-col gap-1">
+              <p className="px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-text-muted">{group.heading}</p>
+          {group.items.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.end}
               className={({ isActive }) =>
                 `min-h-11 md:min-h-9 flex items-center px-3 py-2 rounded text-sm ${
                   isActive
@@ -80,6 +84,8 @@ export function ServerSettingsLayout({ children }: { children: ReactNode }) {
             >
               {item.label}
             </NavLink>
+          ))}
+            </div>
           ))}
         </nav>
       </aside>}

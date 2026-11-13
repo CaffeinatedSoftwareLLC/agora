@@ -150,7 +150,7 @@ test.describe('mobile touch targets and width', () => {
         results.push({ where: 'thread', overflow: await overflowX(page) });
 
         const pages = [
-            '/settings/roles', '/settings/role-assign', '/settings/overrides', '/settings/bots', '/settings/agents', '/settings/ai',
+            '/settings/roles', '/settings/role-assign', '/settings/overrides', '/settings/bots', '/settings/agents', '/settings/agents/new', '/settings/ai', '/settings/models',
             '/settings/instance', '/settings/storage', '/account', '/admin', '/admin/users', '/admin/pending', '/admin/provider-terms',
         ];
         for (const p of pages) {

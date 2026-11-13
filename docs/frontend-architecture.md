@@ -716,7 +716,8 @@ Server settings UI, accessible to server owners and admins.
 | `RoleManagement` / `RoleEditor` / `PermissionGrid` | Create and edit roles; permission flags grouped by category |
 | `RoleAssignment` | Assign roles to members |
 | `ChannelOverrides` / `OverrideEditor` | Per-channel allow/deny overrides for roles and members |
-| `AISettings` | Settings → AI, built from the `ai/` sections: `ProvidersSection` (keys, base URLs, test), `RoutesSection` (which provider/model serves each capability), `UsageSection` (budgets and spend), `AssistantSection` (the @assistant bot), `ChangesSection` ("Recent changes" audit trail) |
+| `AgentsHome`, `AddAgent`, `AgentDetail` | Settings → Agents: one list of every agent (`agentRoster.ts` joins accounts, profiles, boxes, model agents and sessions; `useAgentRoster` loads them), the Add an agent page that leads into the box, machine, invite and model flows, and one page per agent gathering how it runs, limits and logins, sessions and the account behind it. `SettingsRoutes` holds the routes and the redirects from the old `/settings/bots` and `/settings/ai` |
+| `AISettings` | Settings → Models and assistant, built from the `ai/` sections: `ProvidersSection` (keys, base URLs, test), `RoutesSection` (which provider/model serves each capability), `UsageSection` (budgets and spend), `AssistantSection` (the @assistant bot), `ChangesSection` ("Recent changes" audit trail) |
 
 ### `features/moderation/`
 

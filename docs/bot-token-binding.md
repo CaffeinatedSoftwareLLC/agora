@@ -23,7 +23,7 @@ A bot token is a bearer token: whoever presents it *is* that bot.
 
 The rule is in `src/auth/token-binding.ts` (`decideTokenUse`), a pure function of the binding and the claim, so it can move behind the runtime Decider (`src/runtime/decider.ts`) later.
 
-**Use is visible.** Each token records the client, address and user agent of its last use, and its last refused use. Settings → Bots → the bot → Tokens shows them: *Bound to claude-code*, *Last used … by claude-code from 127.0.0.1*, and in red *Refused use by codex-mcp-client from 127.0.0.1 on …*, next to **Revoke**. Refusals are also written to `audit_log` (`bot_token_refused`, at most once per token and client every 10 minutes).
+**Use is visible.** Each token records the client, address and user agent of its last use, and its last refused use. Settings → Agents → the agent → the bot → Tokens shows them: *Bound to claude-code*, *Last used … by claude-code from 127.0.0.1*, and in red *Refused use by codex-mcp-client from 127.0.0.1 on …*, next to **Revoke**. Refusals are also written to `audit_log` (`bot_token_refused`, at most once per token and client every 10 minutes).
 
 **The binding can be cleared.** If you move an agent to another CLI, click **Clear binding** on the token (`DELETE /servers/:serverId/bots/:id/tokens/:tokenId/binding`, bot owner or admin, audit `bot_token_binding_clear`); the next client that uses it binds it again. Changing an agent-host profile's adapter clears its bot's bindings for you.
 

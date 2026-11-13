@@ -9,20 +9,13 @@ import { AdminLayout } from './features/admin/AdminLayout';
 import { AdminDashboard } from './features/admin/AdminDashboard';
 import { PendingQueue } from './features/admin/PendingQueue';
 import { UserTable } from './features/admin/UserTable';
-import { InstanceSettings } from './features/admin/InstanceSettings';
-import { StorageSettings } from './features/admin/StorageSettings';
 import { ProviderTerms } from './features/admin/ProviderTerms';
 import { SocketProvider } from './features/shell/SocketProvider';
 import { AppShell } from './features/shell/AppShell';
 import { ServerSettingsLayout } from './features/settings/ServerSettingsLayout';
 import { ServerAdminGuard } from './features/settings/ServerAdminGuard';
-import { BotManagement } from './features/settings/BotManagement';
-import { AgentSessionsSettings } from './features/settings/AgentSessionsSettings';
+import { SettingsRoutes } from './features/settings/SettingsRoutes';
 import { useApplyPalette } from './theme/useApplyPalette';
-import { AISettings } from './features/settings/AISettings';
-import { RoleManagement } from './features/settings/RoleManagement';
-import { RoleAssignment } from './features/settings/RoleAssignment';
-import { ChannelOverrides } from './features/settings/ChannelOverrides';
 import { ModerationGuard } from './features/moderation/ModerationGuard';
 import { ModerationLayout } from './features/moderation/ModerationLayout';
 import { MemberList } from './features/moderation/MemberList';
@@ -72,17 +65,7 @@ export default function App() {
                     <SocketProvider>
                       <ServerAdminGuard>
                         <ServerSettingsLayout>
-                          <Routes>
-                            <Route index element={<Navigate to="/settings/roles" replace />} />
-                            <Route path="roles" element={<RoleManagement />} />
-                            <Route path="role-assign" element={<RoleAssignment />} />
-                            <Route path="overrides" element={<ChannelOverrides />} />
-                            <Route path="bots" element={<BotManagement />} />
-                            <Route path="agents" element={<AgentSessionsSettings />} />
-                            <Route path="ai" element={<AISettings />} />
-                            <Route path="instance" element={<AdminGuard><InstanceSettings /></AdminGuard>} />
-                            <Route path="storage" element={<AdminGuard><StorageSettings /></AdminGuard>} />
-                          </Routes>
+                          <SettingsRoutes />
                         </ServerSettingsLayout>
                       </ServerAdminGuard>
                     </SocketProvider>
