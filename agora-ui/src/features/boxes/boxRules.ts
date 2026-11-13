@@ -81,6 +81,8 @@ export const BOX_ADAPTER_OPTIONS: readonly BoxAdapterOption[] = [
     model: { label: 'OpenRouter model ID (required)', placeholder: 'qwen/qwen3-coder' } },
   // Your own Devin login only (Cognition's terms: the account holder); no API key mode
   { value: 'devin', label: 'Devin', auth: ['subscription'], keyLabel: 'Devin API key', login: { kind: 'paste', provider: 'Devin' } },
+  // NemoClaw's agent, OpenClaw, on an NVIDIA Endpoints key (build.nvidia.com); its model is Nemotron 3.5 Super VL
+  { value: 'nemoclaw', label: 'NemoClaw (OpenClaw)', auth: ['api_key'], keyLabel: 'NVIDIA API key (nvapi-…)' },
 ];
 
 export const ADAPTER_LABEL: Record<string, string> = Object.fromEntries(BOX_ADAPTER_OPTIONS.map(o => [o.value, o.label]));

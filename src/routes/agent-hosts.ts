@@ -85,8 +85,9 @@ const profileFields = {
     name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]*$', minLength: 1, maxLength: 32 },
     botId: ID,
     hostId: ID,
-    // gemini, opencode and omp: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/)
-    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin'] },
+    // gemini, opencode and omp: hosted over ACP with an API key only; devin over ACP on the owner's login (agora-host src/acp/);
+    // nemoclaw: OpenClaw in a NemoClaw sandbox (machine) or OpenClaw itself (box), API key or local model only (agora-host src/nemoclaw.ts)
+    adapter: { type: 'string', enum: ['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin', 'nemoclaw'] },
     // As agora-host's claim schema accepts it (src/lib/boxes/service.ts MODEL_PATTERN): anything else never wakes
     model: { type: ['string', 'null'], minLength: 1, maxLength: 64, pattern: MODEL_PATTERN },
     effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', null] },
@@ -109,6 +110,9 @@ const profileFields = {
  */
 const OPENCODE_MODEL_REQUIRED = 'An opencode or omp profile needs a model, e.g. qwen/qwen3-coder (an OpenRouter model ID)';
 const missingModel = (adapter: string, model: string | null | undefined) => (adapter === 'opencode' || adapter === 'omp') && !model;
+/** OpenClaw has thinking levels of its own: agora-host refuses an effort for nemoclaw (src/nemoclaw.ts). */
+const NEMOCLAW_NO_EFFORT = 'A nemoclaw profile takes no effort (OpenClaw has its own thinking levels)';
+const effortRefused = (adapter: string, effort: string | null | undefined) => adapter === 'nemoclaw' && !!effort;
 
 /** The bot belongs to this server and the host is this server's and not revoked. */
 async function checkRefs(db: any, serverId: string, botId?: string, hostId?: string): Promise<string | null> {
@@ -273,6 +277,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
+        if (effortRefused(b.adapter, b.effort)) return reply.status(400).send({ error: NEMOCLAW_NO_EFFORT });
         // checkRefs only accepts machine hosts, so every profile made here runs unboxed
         if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         // A duplicate name aborts the INSERT; asService rolls back to its savepoint, so catch outside it
@@ -347,6 +352,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
             if (missingModel(b.adapter ?? p.adapter, 'model' in b ? b.model : p.model)) return { status: 400, body: { error: OPENCODE_MODEL_REQUIRED } };
+            if (effortRefused(b.adapter ?? p.adapter, 'effort' in b ? b.effort : p.effort)) return { status: 400, body: { error: NEMOCLAW_NO_EFFORT } };
             // Moving to another host (checkRefs: a machine one) runs it unboxed there: the owner acknowledges that
             const moved = b.hostId !== undefined && b.hostId !== p.host_id.trim();
             if (moved && b.hostModeAck !== true) return { status: 400, body: { error: HOST_MODE_ACK_REQUIRED } };
@@ -471,6 +477,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const b = request.body as any;
         const db = request.dbClient!;
         if (missingModel(b.adapter, b.model)) return reply.status(400).send({ error: OPENCODE_MODEL_REQUIRED });
+        if (effortRefused(b.adapter, b.effort)) return reply.status(400).send({ error: NEMOCLAW_NO_EFFORT });
         // checkRefs only accepts machine hosts, so every profile made here runs unboxed
         if (b.hostModeAck !== true) return reply.status(400).send({ error: HOST_MODE_ACK_REQUIRED });
         const { tokenId, secretHash, raw } = await generateBotToken();
@@ -555,7 +562,10 @@ export async function agentHostRoutes(app: FastifyInstance) {
             return reply.send({ updated, unknown });
         }
         for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
-            if (p.authMode === 'api_key' && !p.apiKeyEnv) return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
+            // A NemoClaw sandbox on a machine holds its own inference key (OpenShell), so it reports none
+            if (p.authMode === 'api_key' && !p.apiKeyEnv && p.adapter !== 'nemoclaw') return reply.status(400).send({ error: 'apiKeyEnv is required for api_key' });
+            // NemoClaw runs on an API key or a local model, never an account login (docs/provider-terms.md "NVIDIA NemoClaw")
+            if (p.adapter === 'nemoclaw' && p.authMode !== 'api_key') return reply.status(400).send({ error: 'nemoclaw runs only on an API key or a local model' });
             // Sign in with ChatGPT drives Codex app-server (docs/codex-chatgpt-plan.md)
             if (p.authMode === 'siwc' && p.adapter !== 'codex') return reply.status(400).send({ error: 'siwc is only for codex profiles' });
             // A Devin account is its holder's own (docs/provider-terms.md "Devin"): no API key mode

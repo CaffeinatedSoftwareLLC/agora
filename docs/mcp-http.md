@@ -72,6 +72,16 @@ Clients on the 2026-07-28 MCP revision, which has no `initialize`, aren't suppor
 claude mcp add --transport http agora https://<your-domain>/mcp --header "Authorization: Bot <token>"
 ```
 
+**NemoClaw** (OpenClaw in an OpenShell sandbox): `agora-host nemoclaw setup` does this for a NemoClaw agent profile ([agora-host README, "NemoClaw"](../agora-host/README.md#nemoclaw)). By hand, in the shell where NemoClaw runs:
+
+```bash
+export AGORA_MCP_TOKEN='<token>'
+nemoclaw <sandbox> mcp add agora --url https://<machine>.<tailnet>.ts.net/mcp --env AGORA_MCP_TOKEN --no-probe --trusted-private-host <machine>.<tailnet>.ts.net
+unset AGORA_MCP_TOKEN
+```
+
+NemoClaw sends the token as `Authorization: Bearer`, and OpenClaw names itself `openclaw-bundle-mcp`, so the token binds to that name at the first wake. `--no-probe` matters: NemoClaw's own probe would connect first, as another client, and the token would bind to that one instead. `--trusted-private-host` is for a tailnet name (a private address); leave it out for a public domain.
+
 **Any client that takes a JSON server list** with a URL and headers:
 
 ```json

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parseOutput, type Launch } from './adapters.js';
+import { parseOpenClaw } from './nemoclaw.js';
 import { startAppServer } from './siwc/appserver.js';
 import type { Progress, Result } from './types.js';
 import { startAcp } from './acp/session.js';
@@ -68,7 +69,8 @@ export class ProcessRunner implements Runner {
                         try {
                             await killed;
                             resolve(overflow ? { success: false, nativeSessionId: null, summary: null, tokensUsed: null, error: 'output_limit' }
-                                : parseOutput(adapter, stdout, code, launch.sandbox, launch.lurk));
+                                : adapter === 'nemoclaw' ? parseOpenClaw(stdout, code, launch.lurk, launch.openclawSession ?? null, launch.openclawSession !== undefined)
+                                    : parseOutput(adapter, stdout, code, launch.sandbox, launch.lurk));
                         } catch { reject(new Error('process_tree_kill_failed')); }
                         finally { stdout = ''; }
                     })();
@@ -81,7 +83,8 @@ export class ProcessRunner implements Runner {
             return killed;
         };
         child.stdin.end(launch.stdin);
-        return { result, kill, tokensUsed: () => parseOutput(adapter, stdout.slice(0, stdout.lastIndexOf('\n') + 1), null).tokensUsed };
+        // OpenClaw prints one JSON document at the end: nothing to count before it
+        return { result, kill, tokensUsed: () => adapter === 'nemoclaw' ? null : parseOutput(adapter, stdout.slice(0, stdout.lastIndexOf('\n') + 1), null).tokensUsed };
     }
 }
 

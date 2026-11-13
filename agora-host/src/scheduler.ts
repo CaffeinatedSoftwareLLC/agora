@@ -105,8 +105,8 @@ export class Scheduler {
             launch = await (this.options.prepare ?? prepare)(this.config, claim, undefined, new Set(this.active.keys()));
             if (launch.unknownPresets?.length) this.log('unknown_tool_preset');
             if (this.stopping || a.stop || this.now() >= deadline) return;
-            // Codex reports its file changes; Claude and ACP agents are compared against the disk
-            const snapshot = launch.adapter === 'claude' || !!launch.acp;
+            // Codex reports its file changes; Claude, ACP agents and OpenClaw (nemoclaw) are compared against the disk
+            const snapshot = launch.adapter === 'claude' || launch.adapter === 'nemoclaw' || !!launch.acp;
             const before = snapshot ? await worktreeSnapshot(launch.cwd) : null;
             if (launch.workspace) beforeTree = await snapshotTree(launch.workspace);
             if (this.stopping || a.stop || this.now() >= deadline) return;

@@ -49,7 +49,7 @@ export const claimSchema = z.object({
         scope: z.object({ kind: z.enum(['task', 'subtask']), title: z.string().max(200) }).nullable().default(null),
     }),
     // gemini, opencode and omp run only over ACP with an API key, devin over ACP on the owner's login (acp/session.ts, terms.ts)
-    profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin']),
+    profile: z.object({ id, name: z.string().min(1), botId: id, adapter: z.enum(['codex', 'claude', 'gemini', 'opencode', 'omp', 'devin', 'nemoclaw']),
         // null: leave the model or effort to the CLI's own default
         model: z.string().max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).nullable(),
         effort: z.string().min(1).max(30).nullable(), workdirAlias: z.string().min(1),

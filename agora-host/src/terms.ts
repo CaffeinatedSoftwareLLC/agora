@@ -28,7 +28,7 @@ import type { Claim } from './types.js';
 
 export const TERMS_DOC = 'https://github.com/CaffeinatedSoftwareLLC/agora/blob/main/docs/provider-terms.md';
 
-export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
+export type Adapter = 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin' | 'nemoclaw';
 
 /** The environment variables each CLI reads its API key from. */
 export const API_KEY_ENVS: Record<Adapter, string[]> = {
@@ -40,6 +40,9 @@ export const API_KEY_ENVS: Record<Adapter, string[]> = {
     omp: ['OPENROUTER_API_KEY'],
     // None: Devin signs in only with the owner's own account (DEVIN_SUBSCRIPTION_ONLY)
     devin: [],
+    // In a box, OpenClaw on NVIDIA Endpoints (box-adapters.ts). On a machine none: the inference
+    // key is the NemoClaw sandbox's own, kept by OpenShell (nemoclaw.ts)
+    nemoclaw: ['NVIDIA_API_KEY'],
 };
 
 /**
@@ -73,6 +76,10 @@ export const GEMINI_NOT_HOSTED =
 
 export const OMP_ACP_ONLY =
     'oh-my-pi (omp) is hosted only over ACP with an OpenRouter key: set "protocol": "acp", "acpArgs": ["acp"], "auth": "api_key" and "apiKeyEnv": "OPENROUTER_API_KEY" (agora-host README, "oh-my-pi"). Its subscription logins (Claude, ChatGPT, Copilot, Cursor, Devin) are never used.';
+
+export const NEMOCLAW_API_KEY_ONLY =
+    'NemoClaw is hosted only with an API key or a local model: set "auth": "api_key" and "protocol": "cli". On a machine the inference key is the sandbox\'s own '
+    + '(NVIDIA Endpoints, OpenRouter or Ollama, chosen at `nemoclaw onboard`), so leave apiKeyEnv out; in a box it is NVIDIA_API_KEY (agora-host README, "NemoClaw").';
 
 export const OPENCODE_ACP_ONLY =
     'opencode is hosted only over ACP with an API key: set "protocol": "acp", "acpArgs": ["acp"], "auth": "api_key" and "apiKeyEnv": "OPENROUTER_API_KEY" (agora-host README, "opencode and OpenRouter").';

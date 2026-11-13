@@ -2,7 +2,7 @@
 #   docker build -f box/Dockerfile --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION) .
 #   docker build -f box/Dockerfile --target test --build-arg BOX_VERSION=$(cat box/VERSION) -t agora/box:$(cat box/VERSION)-test .
 # Targets: "box" (the default, last stage) has the pinned CLIs of every box adapter (Claude
-# Code, Codex, opencode, oh-my-pi, Devin); "test" has fake CLIs (box/fake) for the isolation and clean-install
+# Code, Codex, opencode, oh-my-pi, Devin, OpenClaw for NemoClaw); "test" has fake CLIs (box/fake) for the isolation and clean-install
 # tests. The pins are also in the box adapter registry (src/lib/boxes/adapters.ts,
 # agora-host/src/box-adapters.ts); test/unit/box-adapters.unit.test.ts checks they agree.
 # A change to this file, the pinned CLIs or the in-box scripts bumps box/VERSION.
@@ -70,6 +70,9 @@ RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/f
  && ln -s /opt/agora/fake/devin.mjs /opt/agora/bin/devin
 COPY box/fake/fake-omp.mjs /opt/agora/fake/omp.mjs
 RUN chmod 0755 /opt/agora/fake/omp.mjs && ln -s /opt/agora/fake/omp.mjs /opt/agora/bin/omp
+# nemoclaw in a box runs OpenClaw: the fake answers `openclaw --version` and `agent exec`
+COPY box/fake/fake-nemoclaw.mjs /opt/agora/fake/nemoclaw.mjs
+RUN chmod 0755 /opt/agora/fake/nemoclaw.mjs && ln -s /opt/agora/fake/nemoclaw.mjs /opt/agora/bin/nemoclaw
 USER 1000:1000
 # What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
 # box whose container has another build than the current image. Last, so it busts no cache.
@@ -77,7 +80,7 @@ ARG BOX_BUILD=
 LABEL org.agora.box.build=${BOX_BUILD}
 
 # ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x, Codex 0.163.x, omp
-# 18.17.x and Devin 3000.11.x; opencode is checked by its ACP protocol version). One ARG and one install block per
+# 18.17.x, Devin 3000.11.x and OpenClaw 2026.11.3; opencode is checked by its ACP protocol version). One ARG and one install block per
 # box adapter.
 FROM base AS box
 ARG CLAUDE_CODE_VERSION=2.1.311
@@ -85,6 +88,8 @@ ARG CODEX_VERSION=0.163.0
 ARG OPENCODE_VERSION=1.18.34
 ARG OMP_VERSION=18.17.0
 ARG DEVIN_VERSION=3000.11.234
+ARG OPENCLAW_VERSION=2026.11.3
+ARG OPENCLAW_NODE_VERSION=24.22.2
 # HOME=/root: nothing the install or the version checks write may land in the agent's home
 RUN export HOME=/root \
  && npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
@@ -138,6 +143,31 @@ RUN export HOME=/root \
  && ln -s /opt/devin/bin/devin /opt/agora/bin/devin \
  && /opt/agora/bin/devin --version \
  && rm -rf /root/.config/devin /root/.local/share/devin /root/.cache/devin
+# OpenClaw (MIT), NemoClaw's agent: NemoClaw itself needs Docker for its sandboxes, which a box
+# can't run, so the nemoclaw adapter runs OpenClaw directly (agora-host nemoclaw.ts). It needs
+# Node 24.16+; the image's Node is 22, so it gets Node's own release tarball, checked against the
+# release's SHASUMS256.txt, in /opt/openclaw/node, and runs only under it (the wrapper below).
+# The package's install scripts are not run (it works without them, checked on 2026.11.3).
+RUN export HOME=/root \
+ && case "$(dpkg --print-architecture)" in \
+      amd64) arch=x64; sum=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75 ;; \
+      arm64) arch=arm64; sum=eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8 ;; \
+      *) echo "Node.js has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL --retry 3 --proto '=https' -o /tmp/node.tar.xz "https://nodejs.org/dist/v${OPENCLAW_NODE_VERSION}/node-v${OPENCLAW_NODE_VERSION}-linux-${arch}.tar.xz" \
+ && echo "${sum}  /tmp/node.tar.xz" | sha256sum -c - \
+ && mkdir -p /opt/openclaw/node \
+ && tar -xJf /tmp/node.tar.xz -C /opt/openclaw/node --strip-components=1 \
+ && rm /tmp/node.tar.xz \
+ && PATH=/opt/openclaw/node/bin:$PATH npm install -g --prefix /opt/openclaw --ignore-scripts --no-audit --no-fund "openclaw@${OPENCLAW_VERSION}" \
+ && PATH=/opt/openclaw/node/bin:$PATH npm cache clean --force \
+ && printf '#!/bin/sh\nexec /opt/openclaw/node/bin/node /opt/openclaw/lib/node_modules/openclaw/openclaw.mjs "$@"\n' > /opt/openclaw/openclaw \
+ && chmod 0755 /opt/openclaw/openclaw \
+ && chown -R root:root /opt/openclaw \
+ && ln -s /opt/openclaw/openclaw /opt/agora/bin/nemoclaw \
+ && /opt/agora/bin/nemoclaw --version \
+ && rm -rf /root/.npm /root/.openclaw /root/.cache/openclaw /tmp/openclaw
 RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
 USER 1000:1000
 # What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
