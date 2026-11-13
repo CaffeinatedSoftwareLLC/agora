@@ -118,11 +118,11 @@ export interface ThreadMetadataUpdatePayload {
   successorId?: string | null;
 }
 
-/** A channel's loop guard limits changed (0 = off). */
+/** A channel's loop guard limits changed (null = off). */
 export interface ChannelBotConfigPayload {
   channelId: string;
-  maxBotHops: number;
-  maxThreadBotHops: number;
+  maxBotHops: number | null;
+  maxThreadBotHops: number | null;
 }
 
 export interface ServerJoinPayload {
@@ -199,6 +199,8 @@ export interface AgentSessionUpdatePayload {
   toolCalls?: number;
   state?: 'live' | 'shelved' | 'ended';
   endReason?: string | null;
+  /** What stopped a session shelved with endReason 'budget' (which limit, or the API key's credit). */
+  limitStop?: import('../../features/agents/agentSessions').LimitStop | null;
   /** Set while the agent sleeps through a rate limit (#87). */
   sleepingUntil?: string | null;
   run?: import('../../features/agents/agentSessions').AgentRun | null;

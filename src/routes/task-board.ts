@@ -4,11 +4,11 @@ import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { wakeAuthMode } from '../lib/provider-terms';
-import { budgetExhausted, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { sessionUpdate, type Notice } from '../lib/agent-runs';
 import { CARD_SELECT, CARD_STATUSES, cardJson, cardUpdate, kickoffText, notifyCardReview } from '../lib/task-cards';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import {
-    CommandError, SESSION_SELECT, announce, botInChannel, profileByName, requireOwnerForSubscription,
+    CommandError, SESSION_SELECT, announce, botInChannel, profileByName, refuseAtLimit, requireOwnerForSubscription,
 } from './agent-commands';
 
 /**
@@ -85,10 +85,10 @@ export async function startCard(db: any, channelId: string, taskId: string, user
     let sessionId: string, action: string;
     if (same && previous.state === 'shelved') {
         sessionId = previous.id.trim();
-        if (previous.wakes_used >= previous.wake_budget || await budgetExhausted(db, sessionId)) throw new CommandError(409, { error: 'budget_exhausted' });
+        await refuseAtLimit(db, sessionId);
         // Resuming makes it the resumer's session: started_by decides the subscription rule
         await db.query(
-            `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
+            `UPDATE agent_sessions SET state = 'live', end_reason = NULL, limit_stop = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
             [sessionId, userId]
         );
         await announce(db, channelId, sessionId, `${who} resumed ${profile.name} on task "${card.title}" (session ${sessionId}).`, notices, threadId);

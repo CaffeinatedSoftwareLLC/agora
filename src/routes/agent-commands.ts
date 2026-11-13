@@ -3,7 +3,8 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { budgetExhausted, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { limitReached, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { LIMIT_SCHEMA, limitOf, limitStopSummary } from '../lib/agent-budget-notice';
 import { expireLiveRequests } from '../lib/agent-permissions';
 import { noticeStandby } from '../lib/terminal-sessions';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, terminalOwnerStateSql, wakeAuthMode } from '../lib/provider-terms';
@@ -53,6 +54,8 @@ export function sessionJson(r: any, viewerId?: string) {
     return {
         id: r.id.trim(), kind: r.kind ?? 'hosted', profile: r.profile_name, botId: r.bot_id.trim(), botUsername: r.bot_username, state: r.state,
         endReason: r.end_reason ?? null, wakesUsed: r.wakes_used, tokensUsed: Number(r.tokens_used),
+        // What stopped a session shelved with endReason 'budget': { kind: 'wake' | 'token', used, limit, sessionId } or { kind: 'credit' }
+        limitStop: r.limit_stop ?? null,
         lurkMode: r.lurk_mode ?? null,
         authMode: r.auth_mode ?? 'subscription', runApproval: !!r.run_approval,
         // As in the profile JSON (docs/agent-boxes.md §10): hostMode drives the owner-only rule, boxed the label
@@ -61,7 +64,7 @@ export function sessionJson(r: any, viewerId?: string) {
         workspaceId: r.workspace_id,
         threadId: r.thread_id?.trim() ?? null, parentSessionId: r.parent_session_id?.trim() ?? null, title: r.title ?? null,
         createdAt: r.created_at, lastActiveAt: r.last_active_at, shelvedAt: r.shelved_at ?? null, endedAt: r.ended_at ?? null,
-        running: !!r.running, sleepingUntil: r.sleeping_until ?? null, tokenBudget: Number(r.effective_token_budget), wakeBudget: r.wake_budget, run: r.run ?? null, recentRuns: r.recent_runs ?? [],
+        running: !!r.running, sleepingUntil: r.sleeping_until ?? null, tokenBudget: limitOf(r.effective_token_budget), wakeBudget: limitOf(r.wake_budget), run: r.run ?? null, recentRuns: r.recent_runs ?? [],
         // Terminal sessions: what agora-mcp reports. No budget applies to a user's own CLI.
         ...(r.kind === 'terminal' ? {
             tokenBudget: null, wakeBudget: null, toolCalls: r.tool_calls, usageKnown: !!r.usage_known,
@@ -199,7 +202,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                     // 'standby': start even though the agent is connected from a terminal (#112)
                     onLive: { type: 'string', enum: ['ask', 'shelve', 'keep', 'standby'] },
                     fresh: { type: 'boolean' },
-                    tokenBudget: { type: 'integer', minimum: 1, maximum: 9007199254740991 },
+                    // The session's own token limit; null: none of its own, its profile's applies
+                    tokenBudget: LIMIT_SCHEMA,
                 },
             },
         },
@@ -331,11 +335,10 @@ async function startSession(db: any, channelId: string, profileName: string, onL
         if (shelved.rows[0]) {
             const previous = shelved.rows[0];
             const id = previous.id.trim();
-            if (previous.wakes_used >= previous.wake_budget || await budgetExhausted(db, id))
-                throw new CommandError(409, { error: 'budget_exhausted' });
+            await refuseAtLimit(db, id);
             // Resuming makes it the resumer's session: started_by decides the subscription rule
             await db.query(
-                `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
+                `UPDATE agent_sessions SET state = 'live', end_reason = NULL, limit_stop = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
                 [id, userId]
             );
             await announce(db, channelId, id, `${who} resumed ${profile.name}'s session (${id}).`, notices);
@@ -356,6 +359,15 @@ async function startSession(db: any, channelId: string, profileName: string, onL
     if (terminal) await noticeStandby(db, channelId, botId, notices);
     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [id]);
     return { status: 201, body: { action: 'started', session: sessionJson(row.rows[0]) } };
+}
+
+/**
+ * A session at one of its limits can't be resumed: 409 budget_exhausted, with the limit
+ * (`limit.kind` 'wake' or 'token', the numbers, whose it is) so the caller can name it.
+ */
+export async function refuseAtLimit(db: any, sessionId: string): Promise<void> {
+    const limit = await limitReached(db, sessionId);
+    if (limit) throw new CommandError(409, { error: 'budget_exhausted', limit, message: limitStopSummary(limit, sessionId.trim()) });
 }
 
 /** End one session by ID: how a task card's or subtask's session is stopped. */
@@ -385,7 +397,7 @@ async function endSession(db: any, channelId: string, profileName: string, who: 
     return { status: 200, body: { action: 'ended', session: sessionJson(row.rows[0]) } };
 }
 
-async function resumeSession(db: any, channelId: string, sessionId: string, onLive: string, userId: string, who: string, notices: Notice[], tokenBudget?: number) {
+async function resumeSession(db: any, channelId: string, sessionId: string, onLive: string, userId: string, who: string, notices: Notice[], tokenBudget?: number | null) {
     // Profile before session, as everywhere else
     const profileOf = await db.query(`SELECT profile_id FROM agent_sessions WHERE id = $1`, [sessionId]);
     if (profileOf.rows[0]) {
@@ -401,8 +413,7 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
         await db.query('UPDATE agent_sessions SET token_budget = $2 WHERE id = $1', [sessionId, tokenBudget]);
         t.effective_token_budget = tokenBudget;
     }
-    if (t.wakes_used >= t.wake_budget || await budgetExhausted(db, sessionId))
-        throw new CommandError(409, { error: 'budget_exhausted' });
+    await refuseAtLimit(db, sessionId);
     const botId = t.bot_id.trim();
     await botInChannel(db, botId, channelId);
 
@@ -415,7 +426,7 @@ async function resumeSession(db: any, channelId: string, sessionId: string, onLi
         await stopSession(db, live.id.trim(), 'shelved', 'replaced', notices);
     }
     await db.query(
-        `UPDATE agent_sessions SET state = 'live', end_reason = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
+        `UPDATE agent_sessions SET state = 'live', end_reason = NULL, limit_stop = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
         [sessionId, userId]
     );
     await announce(db, channelId, sessionId, `${who} resumed ${t.profile_name}'s session (${sessionId}).`, notices, threadId);

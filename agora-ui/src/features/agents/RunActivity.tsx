@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentRunProgressPayload, AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
-import { elapsedTime, listSessions, terminalUsage, type AgentSession } from './agentSessions';
+import { elapsedTime, limitStopText, listSessions, terminalUsage, type AgentSession } from './agentSessions';
 import { useAuthStore } from '../../stores/authStore';
 import { useExpandedNoticeRuns } from '../messages/useExpandedNoticeRuns';
 import { AgentMessageRunToggle, AgentRunCollapse } from '../messages/AgentMessageRun';
@@ -68,7 +68,7 @@ export function RunActivity({ channelId }: { channelId: string }) {
       if (!working && !paused && !blocked && !failed && !run?.changedPaths.length) return null;
       const step = working ? progress[s.id] : undefined;
       return <div key={s.id} className={isHistorical(s) ? 'px-3 py-1' : 'py-1'}>
-        <p role="status">{s.profile}{paused ? ' paused: session budget used up.' : working ? ` is working\u2026 ${elapsedTime(run.startedAt, now)}` : blocked ? ' finished without posting a reply (possibly blocked).' : failed ? ` run failed: ${run.error ?? 'lease expired'}.` : ' finished.'}</p>
+        <p role="status">{s.profile}{paused ? ` paused. ${limitStopText(s)}` : working ? ` is working\u2026 ${elapsedTime(run.startedAt, now)}` : blocked ? ' finished without posting a reply (possibly blocked).' : failed ? ` run failed: ${run.error ?? 'lease expired'}.` : ' finished.'}</p>
         {step && step.runId === run?.id && <p className="truncate text-xs" aria-label={`${s.profile} progress`}>
           {[step.step, `${step.toolCalls} tool ${step.toolCalls === 1 ? 'call' : 'calls'}`,
             step.planTotal ? `plan ${step.planDone ?? 0}/${step.planTotal}` : null].filter(Boolean).join(' \u00b7 ')}

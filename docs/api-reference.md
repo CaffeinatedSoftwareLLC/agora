@@ -1438,16 +1438,16 @@ Update a channel's loop guard limits. The channel guard counts top-level bot mes
 ```json
 {
   "maxBotHops": 10,
-  "maxThreadBotHops": 0
+  "maxThreadBotHops": null
 }
 ```
 
 | Field              | Type    | Required | Description                                             |
 |--------------------|---------|----------|---------------------------------------------------------|
-| `maxBotHops`       | integer | no       | Channel guard, 0–1000. 0 = off. Default 4               |
-| `maxThreadBotHops` | integer | no       | Thread guard (each thread counted on its own), 0–1000. 0 = off. Default 0 |
+| `maxBotHops`       | integer or null | no | Channel guard: any positive integer. `null` = off, the default (`0` is still accepted for off) |
+| `maxThreadBotHops` | integer or null | no | Thread guard (each thread counted on its own): any positive integer. `null` = off, the default |
 
-**Response** `200` `{ "channelId", "maxBotHops", "maxThreadBotHops" }`. Changing a limit clears that guard's counters.
+**Response** `200` `{ "channelId", "maxBotHops", "maxThreadBotHops" }`, each limit a number or `null` (off). Changing a limit clears that guard's counters. See [agent-limits.md](agent-limits.md).
 
 **Side effects:** Emits `ChannelBotConfig` to the channel room.
 
@@ -2239,7 +2239,7 @@ Emitted to the channel room when `PATCH /channels/:id/bot-config` changes the lo
 {
   "channelId": "01HYX...",
   "maxBotHops": 4,
-  "maxThreadBotHops": 0
+  "maxThreadBotHops": null
 }
 ```
 

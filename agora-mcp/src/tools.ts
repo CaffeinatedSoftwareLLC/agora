@@ -978,9 +978,14 @@ export function registerTools(
         + (c.threadId ? `, thread ${c.threadId}` : '')
         + (c.prUrl ? `, PR ${c.prState ?? 'open'} ${oneLine(c.prUrl)}` : '');
 
+    // A session shelved as 'budget' says which limit stopped it; a limit is shown only when the owner set one
+    const stoppedBy = (s: AgentSession) => !s.limitStop ? s.endReason
+        : s.limitStop.kind === 'credit' ? 'API key out of credit'
+        : `${s.limitStop.kind} limit${s.limitStop.sessionId !== s.id ? ` of parent ${s.limitStop.sessionId}` : ''}: ${s.limitStop.used} of ${s.limitStop.limit}`;
+    const of = (limit?: number | null) => limit == null ? '' : ` of ${limit}`;
     const formatSession = (s: AgentSession) =>
-        `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${s.endReason})` : ''}${s.sleepingUntil && s.state === 'live' && Date.parse(s.sleepingUntil) > Date.now() ? ` (rate limited, sleeping until ${s.sleepingUntil})` : ''}, `
-        + `${s.wakesUsed} wakes, ${s.tokensUsed} tokens, last active ${s.lastActiveAt}`
+        `${s.id} ${oneLine(s.profile)} (@${oneLine(s.botUsername)}) ${s.state}${s.endReason ? ` (${stoppedBy(s)})` : ''}${s.sleepingUntil && s.state === 'live' && Date.parse(s.sleepingUntil) > Date.now() ? ` (rate limited, sleeping until ${s.sleepingUntil})` : ''}, `
+        + `${s.wakesUsed}${of(s.wakeBudget)} wakes, ${s.tokensUsed}${of(s.tokenBudget)} tokens, last active ${s.lastActiveAt}`
         + (s.branch && s.headSha ? `, ${oneLine(s.branch)} @ ${s.headSha.slice(0, 12)}` : '')
         + (s.parentSessionId ? `, subtask of ${s.parentSessionId}` : s.threadId ? `, in thread ${s.threadId}` : '');
 
@@ -1024,7 +1029,7 @@ export function registerTools(
 
     server.tool(
         'session_lurk',
-        'Set or clear passive listening for an existing live session. Requires can_direct, like session_start. Lurkers reply only for important corrections and consume the session budget.',
+        'Set or clear passive listening for an existing live session. Requires can_direct, like session_start. Lurkers reply only for important corrections and count against any limits the owner set on the session.',
         { channel: z.string().optional(), profile: z.string(), lurk: z.enum(['quiet', 'balanced', 'vocal', 'off']) },
         async ({ channel, profile, lurk }) => {
             const ch = await resolveChannel(channel);
@@ -1182,7 +1187,7 @@ export function registerTools(
     server.tool(
         'subtask_start',
         'Delegate a self-contained piece of your current work to a child agent session, during your hosted run. The child starts with a clean context in a new thread that holds only your brief, '
-        + 'works in its own worktree, and spends your token budget. When it finishes, only its summary is posted back (to `thread`, else your own thread or the channel) and you are woken with it. '
+        + 'works in its own worktree, and its tokens count against your token limit when the owner set one. When it finishes, only its summary is posted back (to `thread`, else your own thread or the channel) and you are woken with it. '
         + 'Write a complete brief: the child sees nothing else. Another agent\'s profile needs can_direct.',
         {
             parent_session_id: z.string().describe('Your session ID: the sessionId in your wake prompt\'s delivery metadata'),
@@ -1190,7 +1195,7 @@ export function registerTools(
             brief: z.string().min(1).max(3600).describe('Everything the child needs: goal, files, constraints, what to report'),
             profile: z.string().optional().describe('Agent profile for the child (default: your own)'),
             thread: z.string().optional().describe('Thread parent message ID where the summary should come back'),
-            token_budget: z.number().int().positive().optional().describe('Most tokens the child may spend (default and cap: what your budget has left)'),
+            token_budget: z.number().int().positive().optional().describe('Most tokens the child may spend. Default: what your own token limit has left, or no limit of its own when you have none; never more than you have left'),
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             client_key: clientKeyParam,
         },
@@ -1202,7 +1207,7 @@ export function registerTools(
                 ...(token_budget ? { tokenBudget: token_budget } : {}), ...(client_key ? { client_key } : {}) }));
             const s = res.session;
             return { content: [{ type: 'text' as const, text: `Subtask ${res.action === 'repeated' ? 'already started' : 'started'}: session ${s.id} (${oneLine(s.profile)}) in thread ${s.threadId ?? '?'}, `
-                + `token budget ${s.tokenBudget ?? '?'}. Its summary comes back as a later wake; finish your turn instead of waiting for it.` }] };
+                + `${s.tokenBudget == null ? 'no token limit of its own' : `token limit ${s.tokenBudget}`}. Its summary comes back as a later wake; finish your turn instead of waiting for it.` }] };
         },
     );
 

@@ -54,7 +54,11 @@ export interface AgentSession {
     /** A subtask's parent session. */
     parentSessionId?: string | null;
     title?: string | null;
-    tokenBudget?: number;
+    /** The session's limits; null: no limit (the default). */
+    tokenBudget?: number | null;
+    wakeBudget?: number | null;
+    /** What stopped a session shelved with endReason 'budget': which limit and its numbers, or the API key's credit. */
+    limitStop?: { kind: 'wake' | 'token'; used: number; limit: number; sessionId: string; source?: 'session' | 'agent' } | { kind: 'credit' } | null;
 }
 
 /** A card on a channel's task board (docs/task-board.md). */
@@ -63,7 +67,7 @@ export interface TaskCard {
     status: 'todo' | 'in_progress' | 'review' | 'done';
     profile: { id: string; name: string } | null;
     threadId: string | null;
-    session: { id: string; state: 'live' | 'shelved' | 'ended'; running: boolean; branch: string | null; headSha: string | null; tokensUsed: number; tokenBudget: number } | null;
+    session: { id: string; state: 'live' | 'shelved' | 'ended'; running: boolean; branch: string | null; headSha: string | null; tokensUsed: number; tokenBudget: number | null } | null;
     prUrl: string | null; prState: 'open' | 'draft' | 'merged' | 'closed' | null;
 }
 

@@ -13,6 +13,7 @@ import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
 import { sanitizeMessageText } from '../lib/sanitize-text';
+import { hopLimitOf, loopGuardNotice } from '../lib/agent-budget-notice';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact } from '../lib/artifacts';
 import { messageAttachmentsSchema, prepareMessageAttachments, bindMessageAttachments } from '../lib/message-attachments';
 
@@ -106,7 +107,8 @@ export async function threadRoutes(app: FastifyInstance) {
             [channelId]
         );
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-        const maxThreadBotHops = channelRow.rows[0]?.max_thread_bot_hops ?? 0;
+        // NULL: no loop guard, the default (docs/agent-limits.md)
+        const maxThreadBotHops = hopLimitOf(channelRow.rows[0]?.max_thread_bot_hops);
         const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
 
         // Bot rate limiting (same channel context as regular messages)
@@ -124,9 +126,9 @@ export async function threadRoutes(app: FastifyInstance) {
             } catch { /* Redis failure is non-fatal */ }
         }
 
-        // Loop guard — per thread, independent of the channel guard; 0 = disabled
+        // Loop guard — per thread, independent of the channel guard
         const guardKey = `loopguard:${channelId.trim()}:${msgId.trim()}`;
-        if (isBot && maxThreadBotHops > 0) {
+        if (isBot && maxThreadBotHops !== null) {
             try {
                 const redis = getRedis();
                 const count = await redis.incr(guardKey);
@@ -135,7 +137,7 @@ export async function threadRoutes(app: FastifyInstance) {
                 if (count > maxThreadBotHops) {
                     await redis.del(guardKey);
                     const sysId = generateUlid();
-                    const sysContent = `Loop guard: ${maxThreadBotHops} consecutive bot replies in this thread. Human input required to continue.`;
+                    const sysContent = loopGuardNotice('thread', maxThreadBotHops);
                     // The notice's Continue / Raise limit / Turn off controls read the scope and limit
                     const guardData = { scope: 'thread', threadId: msgId.trim(), limit: maxThreadBotHops };
                     await db.query(

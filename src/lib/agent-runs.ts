@@ -9,7 +9,7 @@ import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
-import { budgetShelveNotice, creditShelveNotice, type ExhaustedBudget } from './agent-budget-notice';
+import { budgetShelveNotice, creditShelveNotice, limitOf, type ExhaustedBudget } from './agent-budget-notice';
 import { notifySession, type SessionAlert } from './notifications';
 
 /**
@@ -105,7 +105,7 @@ export async function postSessionNotice(c: PoolClient | any, channelId: string, 
 // ─── Claim ───
 
 export async function sessionUpdate(c: PoolClient, sessionId: string, running: boolean): Promise<Notice> {
-    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason, s.sleeping_until, s.kind, s.working, s.tool_calls,
+    const result = await c.query(`SELECT s.channel_id, s.state, s.end_reason, s.limit_stop, s.sleeping_until, s.kind, s.working, s.tool_calls,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
             'finishedAt', r.finished_at, 'error', r.error, 'changedPaths', r.changed_paths)
          FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS run
@@ -117,13 +117,17 @@ export async function sessionUpdate(c: PoolClient, sessionId: string, running: b
     return { channelId, eventName: 'AgentSessionUpdate', event: { channelId, sessionId: sessionId.trim(), kind: row.kind,
         running: terminal ? row.state === 'live' && !!row.working : row.run?.status === 'claimed' && running,
         ...(terminal ? { toolCalls: row.tool_calls } : {}),
-        run: row.run, state: row.state, endReason: row.end_reason, sleepingUntil: row.sleeping_until ?? null } };
+        run: row.run, state: row.state, endReason: row.end_reason, limitStop: row.limit_stop ?? null, sleepingUntil: row.sleeping_until ?? null } };
 }
 
 export interface ClaimResult {
     run: {
         id: string; claimToken: string; attempt: number; deliveryKey: string;
-        leaseSeconds: number; leaseUntil: string; heartbeatSeconds: number; timeoutSeconds: number;
+        leaseSeconds: number; leaseUntil: string; heartbeatSeconds: number;
+        /** The run time limit in seconds; null: none (docs/agent-limits.md). */
+        timeLimitSeconds: number | null;
+        /** For an agora-host from Agora 0.4.0 or earlier, which needs a number of at most a day here; a newer host reads timeLimitSeconds. */
+        timeoutSeconds: number;
         grantedTools: string[];
         /** The owner approved this run on its card (profiles with run approval). */
         ownerApproved: boolean;
@@ -131,7 +135,11 @@ export interface ClaimResult {
     session: {
         id: string; channelId: string; channelName: string;
         nativeSessionId: string | null; summary: string | null;
-        wakesUsed: number; wakeBudget: number; tokensUsed: number; tokenBudget: number;
+        wakesUsed: number; tokensUsed: number;
+        /** The session's limits; null: none. */
+        wakeLimit: number | null; tokenLimit: number | null;
+        /** For an agora-host from Agora 0.4.0 or earlier, which needs numbers here (0 when there is no limit); nothing reads them. */
+        wakeBudget: number; tokenBudget: number;
         wokeFromSleep: boolean;
         lurkMode: 'quiet' | 'balanced' | 'vocal' | null;
         /** The profile's plan owner started or last resumed this session (provider-terms.ts). */
@@ -224,9 +232,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const botId = session.bot_id.trim();
 
     // 2. Budgets; a subtask also stops when a parent's budget is used up
-    const exhausted: ExhaustedBudget | null = session.wakes_used >= session.wake_budget
-        ? { sessionId, kind: 'wake', used: session.wakes_used, limit: session.wake_budget }
-        : await exhaustedTokenBudget(c, sessionId);
+    const exhausted = await limitReached(c, sessionId);
     if (exhausted) {
         await shelveForBudget(c, sessionId, channelId, session.profile_name, notices, exhausted);
         return null;
@@ -360,13 +366,15 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     await c.query(`UPDATE agent_sessions SET wakes_used = wakes_used + 1 WHERE id = $1`, [sessionId]);
     if (takeApproval) await consumeRunApproval(c, sessionId, batchId);
 
+    const timeLimit = limitOf(session.run_timeout_sec);
+    const wakeLimit = limitOf(session.wake_budget), tokenLimit = limitOf(session.token_budget);
     const runId = generateUlid();
     const claimToken = 'rt_' + randomBytes(32).toString('hex');
     const lease = await c.query(
         `INSERT INTO agent_runs (id, batch_id, session_id, host_id, claim_token_hash, attempt, profile_generation, lease_until, timeout_sec)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8), $9)
          RETURNING lease_until`,
-        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS, session.run_timeout_sec]
+        [runId, batchId, sessionId, host.id, hashClaimToken(claimToken), attempt, session.generation, LEASE_SECONDS, timeLimit]
     );
 
     const grantedTools = await takeGrants(c, sessionId, batchId, runId);
@@ -381,13 +389,14 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         run: {
             id: runId, claimToken, attempt, deliveryKey,
             leaseSeconds: LEASE_SECONDS, leaseUntil: new Date(lease.rows[0].lease_until).toISOString(),
-            heartbeatSeconds: HEARTBEAT_SECONDS, timeoutSeconds: session.run_timeout_sec, grantedTools, ownerApproved,
+            heartbeatSeconds: HEARTBEAT_SECONDS, timeLimitSeconds: timeLimit,
+            timeoutSeconds: Math.min(timeLimit ?? LEGACY_HOST_MAX_SECONDS, LEGACY_HOST_MAX_SECONDS), grantedTools, ownerApproved,
         },
         session: {
             id: sessionId, channelId, channelName: session.channel_name,
             nativeSessionId: session.native_session_id ?? null, summary: session.summary ?? null,
-            wakesUsed: session.wakes_used + 1, wakeBudget: session.wake_budget,
-            tokensUsed: Number(session.tokens_used), tokenBudget: Number(session.token_budget), wokeFromSleep,
+            wakesUsed: session.wakes_used + 1, tokensUsed: Number(session.tokens_used),
+            wakeLimit, tokenLimit, wakeBudget: wakeLimit ?? 0, tokenBudget: tokenLimit ?? 0, wokeFromSleep,
             lurkMode: session.lurk_mode ?? null, startedByOwner: !!session.started_by_owner,
             threadId: session.thread_id?.trim() ?? null, parentSessionId: session.parent_session_id?.trim() ?? null,
             scope: session.task_title != null ? { kind: 'task', title: session.task_title }
@@ -539,7 +548,8 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
     return kept;
 }
 
-interface Spend { id: string; depth: number; budget: number; spent: number }
+/** `budget` null: that session has no token limit. */
+interface Spend { id: string; depth: number; budget: number | null; spent: number; /** The limit is the session's own, not its profile's. */ own: boolean }
 
 /**
  * This session and each parent above it (depth 0 is the session), with its token budget and
@@ -558,7 +568,7 @@ async function familySpend(c: PoolClient | any, sessionId: string): Promise<Spen
              UNION ALL
              SELECT down.root, s.id, down.depth + 1 FROM agent_sessions s JOIN down ON s.parent_session_id = down.id WHERE down.depth < ${MAX_SUBTASK_DEPTH}
          )
-         SELECT btrim(r.id) AS id, up.depth, COALESCE(r.token_budget, p.token_budget) AS budget, SUM(s.tokens_used) AS spent
+         SELECT btrim(r.id) AS id, up.depth, COALESCE(r.token_budget, p.token_budget) AS budget, r.token_budget IS NOT NULL AS own, SUM(s.tokens_used) AS spent
          FROM down
          JOIN agent_sessions s ON s.id = down.id
          JOIN agent_sessions r ON r.id = down.root JOIN agent_profiles p ON p.id = r.profile_id
@@ -567,29 +577,40 @@ async function familySpend(c: PoolClient | any, sessionId: string): Promise<Spen
          ORDER BY up.depth`,
         [sessionId]
     );
-    return r.rows.map((row: any) => ({ id: row.id, depth: row.depth, budget: Number(row.budget), spent: Number(row.spent) }));
+    return r.rows.map((row: any) => ({ id: row.id, depth: row.depth, budget: limitOf(row.budget), spent: Number(row.spent), own: !!row.own }));
 }
 
-/** The ID of the session whose budget is used up (this one, or a parent it spends from), or null. */
-export async function budgetExhausted(c: PoolClient | any, sessionId: string): Promise<string | null> {
-    return (await exhaustedTokenBudget(c, sessionId))?.sessionId ?? null;
+/**
+ * The limit that stops this session now, or null: its profile's wake limit, else a token limit
+ * (its own, or a parent's it spends from). Read from the profile each time, so a limit the owner
+ * raises or removes in Settings → Agents applies to sessions that already exist.
+ */
+export async function limitReached(c: PoolClient | any, sessionId: string): Promise<ExhaustedBudget | null> {
+    const w = (await c.query(`SELECT s.wakes_used, p.wake_budget FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [sessionId])).rows[0];
+    const wakeLimit = limitOf(w?.wake_budget);
+    if (wakeLimit !== null && w.wakes_used >= wakeLimit) return { sessionId: sessionId.trim(), kind: 'wake', used: w.wakes_used, limit: wakeLimit };
+    return exhaustedTokenBudget(c, sessionId);
 }
 
 async function exhaustedTokenBudget(c: PoolClient | any, sessionId: string): Promise<ExhaustedBudget | null> {
-    const spent = (await familySpend(c, sessionId)).find(s => s.spent >= s.budget);
-    return spent ? { sessionId: spent.id, kind: 'token', used: spent.spent, limit: spent.budget } : null;
+    const spent = (await familySpend(c, sessionId)).find(s => s.budget !== null && s.spent >= s.budget);
+    return spent ? { sessionId: spent.id, kind: 'token', used: spent.spent, limit: spent.budget!, source: spent.own ? 'session' : 'agent' } : null;
 }
 
-/** Tokens this session may still spend: the least any budget in its family has left. */
-export async function budgetRemaining(c: PoolClient | any, sessionId: string): Promise<number> {
-    return Math.min(...(await familySpend(c, sessionId)).map(s => s.budget - s.spent));
+/** Tokens this session may still spend: the least any limit in its family has left; null when none has a limit. */
+export async function budgetRemaining(c: PoolClient | any, sessionId: string): Promise<number | null> {
+    const left = (await familySpend(c, sessionId)).filter(s => s.budget !== null).map(s => s.budget! - s.spent);
+    return left.length ? Math.min(...left) : null;
 }
+
+/** The longest run time an agora-host from Agora 0.4.0 or earlier accepts in a claim. */
+const LEGACY_HOST_MAX_SECONDS = 86400;
 
 /** How deep subtasks may nest: a parent, its child and a grandchild. */
 export const MAX_SUBTASK_DEPTH = 2;
 
 async function shelveForBudget(c: PoolClient, sessionId: string, channelId: string, profileName: string, notices: Notice[], exhausted: ExhaustedBudget) {
-    await shelveWithNotice(c, sessionId, channelId, notices, 'budget', budgetShelveNotice(profileName, sessionId, exhausted));
+    await shelveWithNotice(c, sessionId, channelId, notices, 'budget', budgetShelveNotice(profileName, sessionId, exhausted), exhausted);
 }
 
 /**
@@ -602,13 +623,18 @@ async function shelveForCredit(c: PoolClient, run: any, notices: Notice[]) {
         JOIN agent_profiles p ON p.id = s.profile_id WHERE s.id = $1`, [run.session_id]);
     const session = s.rows[0];
     if (run.cancel_requested || session?.state !== 'live') return;
-    await shelveWithNotice(c, run.session_id.trim(), session.channel_id.trim(), notices, 'credit', creditShelveNotice(session.name, run.session_id.trim(), session.api_key_env ?? null));
+    await shelveWithNotice(c, run.session_id.trim(), session.channel_id.trim(), notices, 'credit', creditShelveNotice(session.name, run.session_id.trim(), session.api_key_env ?? null), { kind: 'credit' });
 }
 
-async function shelveWithNotice(c: PoolClient, sessionId: string, channelId: string, notices: Notice[], alert: SessionAlert, text: string) {
+/**
+ * `stop` is what stopped the session (agent_sessions.limit_stop): both stops shelve with
+ * end_reason 'budget', and the UI and session_list name the real one from it. A resume clears it.
+ */
+async function shelveWithNotice(c: PoolClient, sessionId: string, channelId: string, notices: Notice[], alert: SessionAlert, text: string,
+    stop: ExhaustedBudget | { kind: 'credit' }) {
     await c.query(
-        `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW() WHERE id = $1 AND state = 'live'`,
-        [sessionId]
+        `UPDATE agent_sessions SET state = 'shelved', end_reason = 'budget', shelved_at = NOW(), limit_stop = $2 WHERE id = $1 AND state = 'live'`,
+        [sessionId, JSON.stringify(stop)]
     );
     await c.query(`UPDATE agent_runs SET cancel_requested = true, cancel_reason = 'budget' WHERE session_id = $1 AND status = 'claimed'`, [sessionId]);
     await expireLiveRequests(c, { sessionIds: [sessionId] }, 'stopped', notices);
@@ -867,9 +893,11 @@ async function recordVerification(c: PoolClient, run: any, v: VerificationReport
  * The notice for a run the host stopped at its run time limit (agora-host `run_timeout`), with
  * the limit the run was claimed with. Every profile's limit, a box's too, is set in Settings → Agents.
  */
-export function runTimeoutNotice(profile: string, seconds: number): string {
-    const limit = seconds % 60 === 0 ? `${seconds / 60}-minute` : `${seconds}-second`;
-    return `${profile}'s run hit its ${limit} limit, and its last wake was dropped: raise the limit in Settings → Agents, then send it again.`;
+export function runTimeoutNotice(profile: string, seconds: number | null): string {
+    // No limit on the profile, yet the host stopped the run: an agora-host from Agora 0.4.0 or earlier, which stops every run after a day
+    if (seconds === null) return `${profile}'s run was stopped after 24 hours by its agora-host, which is older than this server and cannot run without a time limit; its last wake was dropped. Update agora-host on that machine, then send it again.`;
+    const limit = seconds % 60 === 0 ? `${(seconds / 60).toLocaleString('en-US')}-minute` : `${seconds.toLocaleString('en-US')}-second`;
+    return `${profile}'s run was stopped by its run time limit (${limit}), and its last wake was dropped. Raise or remove "Time per run" for ${profile} in [Agent settings](/settings/agents), then send it again.`;
 }
 
 /**
@@ -903,7 +931,7 @@ async function settleBatch(c: PoolClient, run: any, retryable: boolean, error: s
     const text = error === 'subscription_owner_only' ? hostRefusalNotice(session.profile_name)
         : Object.hasOwn(SIWC_ERRORS, error) ? `${session.profile_name} ${SIWC_ERRORS[error]}`
         : error === 'run_not_approved' ? `${session.profile_name} needs the owner's approval for every run; its host refused a run without one.`
-        : error === 'run_timeout' ? runTimeoutNotice(session.profile_name, run.timeout_sec ?? session.run_timeout_sec)
+        : error === 'run_timeout' ? runTimeoutNotice(session.profile_name, limitOf(run.timeout_sec ?? session.run_timeout_sec))
         : `${session.profile_name} couldn't handle its last wake after ${attempts} attempt(s): ${error}.`;
     notices.push(await postNotice(c, session.channel_id.trim(), text));
     await notifySession(c, run.session_id, error === 'siwc_usage_limit' ? 'credit' : 'blocked');

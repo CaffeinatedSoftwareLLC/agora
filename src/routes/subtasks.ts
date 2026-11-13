@@ -3,7 +3,8 @@ import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
-import { budgetRemaining, MAX_SUBTASK_DEPTH, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { budgetRemaining, limitReached, MAX_SUBTASK_DEPTH, sessionUpdate, type Notice } from '../lib/agent-runs';
+import { MAX_LIMIT, limitStopSummary } from '../lib/agent-budget-notice';
 import { insertBotMessage, MAX_LIVE_SUBTASKS } from '../lib/agent-subtasks';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
@@ -37,7 +38,7 @@ export async function subtaskRoutes(app: FastifyInstance) {
             profile: { type: 'string', minLength: 1, maxLength: 32 },
             // Where the summary goes: a thread the parent is working in (default: the parent's own thread, else the channel)
             reportThreadId: ID,
-            tokenBudget: { type: 'integer', minimum: 1, maximum: 9007199254740991 },
+            tokenBudget: { type: 'integer', minimum: 1, maximum: MAX_LIMIT },
             client_key: { type: 'string', minLength: 1, maxLength: 100 },
         } } },
     }, async (request, reply) => {
@@ -97,8 +98,12 @@ export async function subtaskRoutes(app: FastifyInstance) {
                 await botInChannel(db, childBot, channelId);
 
                 const remaining = await budgetRemaining(db, parent.id.trim());
-                if (remaining <= 0) throw new CommandError(409, { error: 'budget_exhausted' });
-                const tokenBudget = Math.min(b.tokenBudget ?? remaining, remaining);
+                if (remaining !== null && remaining <= 0) {
+                    const limit = await limitReached(db, parent.id.trim());
+                    throw new CommandError(409, { error: 'budget_exhausted', ...(limit ? { limit, message: limitStopSummary(limit, parent.id.trim()) } : {}) });
+                }
+                // No limit above it: the child gets what the parent asked for, else its own profile's limit (NULL)
+                const tokenBudget: number | null = remaining === null ? b.tokenBudget ?? null : Math.min(b.tokenBudget ?? remaining, remaining);
 
                 let reportThreadId: string | null = b.reportThreadId ?? parent.thread_id?.trim() ?? null;
                 if (reportThreadId) {

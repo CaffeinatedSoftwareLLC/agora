@@ -8,8 +8,6 @@ import { botApi, ApiError } from '../../lib/api';
 import { NoticeText } from './SystemNoticeRun';
 import { loopGuardScope, loopGuardSettled } from './loopGuard';
 
-const MAX_LIMIT = 1000;
-const DEFAULT_CHANNEL_LIMIT = 4;
 
 type Busy = 'continue' | 'raise' | 'off' | null;
 
@@ -31,8 +29,9 @@ export function LoopGuardNotice({ message, channelId }: { message: Message; chan
   const settledInThread = useThreadStore(s => scope === 'thread' && !!threadId && loopGuardSettled(s.repliesByThread.get(threadId), message.id));
   const settled = settledInChannel || settledInThread;
 
-  const current = scope === 'thread' ? channel?.maxThreadBotHops ?? 0 : channel?.maxBotHops ?? DEFAULT_CHANNEL_LIMIT;
-  const raiseTo = Math.min(MAX_LIMIT, Math.max(current, firedAt ?? 0, 1) * 2);
+  // null: the guard is off now (someone turned it off after this notice)
+  const current = (scope === 'thread' ? channel?.maxThreadBotHops : channel?.maxBotHops) ?? 0;
+  const raiseTo = Math.max(current, firedAt ?? 0, 1) * 2;
   // A thread notice from before #23 has no thread id: the guard can be changed, not resumed
   const canResume = scope === 'channel' || !!threadId;
   const field = scope === 'thread' ? 'maxThreadBotHops' : 'maxBotHops';
@@ -43,7 +42,7 @@ export function LoopGuardNotice({ message, channelId }: { message: Message; chan
     let saved = false;
     try {
       if (kind !== 'continue') {
-        const value = kind === 'raise' ? raiseTo : 0;
+        const value = kind === 'raise' ? raiseTo : null;
         const config = await botApi.updateChannelBotConfig(id, { [field]: value });
         useChannelStore.getState().patchChannel(id, { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops });
         saved = true;

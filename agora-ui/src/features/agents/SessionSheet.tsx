@@ -6,7 +6,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
-  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState,
+  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState, stopLabel,
   ownerTokenNote, terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
 
@@ -278,7 +278,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                 onChange={e => void run({ command: 'lurk', profile: selected, lurkMode: e.target.checked ? 'balanced' : null })} />
               Lurk mode
             </label>
-            <p className="text-text-muted">Read channel activity and reply only when there is something important to add. Uses this session's budget.</p>
+            <p className="text-text-muted">Read channel activity and reply only when there is something important to add. Its wakes and tokens count against this session's limits, if you set any.</p>
             {current.lurkMode && <label className="flex items-center gap-2">Speak up
               <select aria-label="Lurk dial" value={current.lurkMode} disabled={busy}
                 onChange={e => void run({ command: 'lurk', profile: selected, lurkMode: e.target.value as 'quiet' | 'balanced' | 'vocal' })}
@@ -380,7 +380,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                   <span className="min-w-0 flex-1 truncate text-sm text-text-muted">
                     <span className="font-mono text-text" title={s.id}>{shortId(s.id)}</span>
                     {' · '}{STATE_LABEL[sessionState(s)].toLowerCase()}
-                    {s.endReason ? ` (${s.endReason})` : ''}
+                    {s.endReason ? ` (${stopLabel(s)})` : ''}
                     {' · '}<span className="font-mono">{s.wakesUsed}w · {compactTokens(s.tokensUsed)}</span>
                   </span>
                   {s.state === 'shelved' && (

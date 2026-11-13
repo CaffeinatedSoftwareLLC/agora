@@ -79,7 +79,11 @@ export interface AgentSession {
   running?: boolean;
   /** The agent hit its rate limit and sleeps until then; its messages are held (#87). */
   sleepingUntil?: string | null;
+  /** The session's limits; null: no limit, the default (docs/agent-limits.md). */
   tokenBudget?: number | null;
+  wakeBudget?: number | null;
+  /** What stopped a session shelved with endReason 'budget'. */
+  limitStop?: LimitStop | null;
   run?: AgentRun | null;
   recentRuns?: AgentRun[];
   /** A task card's or subtask's session works only in this thread (docs/task-board.md). */
@@ -129,14 +133,33 @@ export interface AgentProfile {
   hostMode?: boolean;
 }
 
+/**
+ * Which limit stopped a session: the wake limit or a token limit (`sessionId` says whose: this
+ * session's or a parent's), or the provider's (the agent's API key is out of credit).
+ */
+export type LimitStop = { kind: 'wake' | 'token'; used: number; limit: number; sessionId: string;
+  /** Token limits: 'session' when it is that session's own limit (changed in its session controls), else its agent's setting. */
+  source?: 'session' | 'agent' } | { kind: 'credit' };
+
+/** A limit field's text as the API takes it: empty is "no limit" (null). */
+export function limitValue(text: string): number | null {
+  return text.trim() === '' ? null : Number(text);
+}
+/** A limit is any positive whole number JSON can carry exactly; there is no product cap. */
+export function validLimit(text: string, emptyOk = false): boolean {
+  if (text.trim() === '') return emptyOk;
+  return /^\d+$/.test(text.trim()) && Number(text) >= 1 && Number.isSafeInteger(Number(text));
+}
+
 export type CommandBody =
   | { command: 'start'; profile: string; fresh?: boolean; onLive?: 'shelve' | 'keep' | 'standby' }
   | { command: 'end'; profile: string }
   | { command: 'end'; sessionId: string }
   | { command: 'lurk'; profile: string; lurkMode: 'quiet' | 'balanced' | 'vocal' | null }
   | { command: 'sessions' }
-  | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number }
-  | { command: 'budget'; sessionId: string; tokenBudget: number }
+  | { command: 'resume'; sessionId: string; onLive?: 'shelve' | 'keep'; tokenBudget?: number | null }
+  // The session's own token limit; null clears it, so its agent's setting applies
+  | { command: 'budget'; sessionId: string; tokenBudget: number | null }
   | { command: 'wake'; sessionId: string };
 
 export interface CommandResponse {
@@ -146,7 +169,7 @@ export interface CommandResponse {
 }
 
 export const ERRORS: Record<string, string> = {
-  budget_exhausted: 'This session has used its budget. The owner can raise its token budget, or start a fresh session.',
+  budget_exhausted: 'This session is at a limit the owner set. Its status says which one (wakes or tokens); raise or remove it in Settings → Agents, then resume.',
   unknown_profile: 'No agent profile with that name on this server.',
   bot_not_in_channel: "That agent isn't in this channel yet. Choose Add agent in this channel, or ask the server owner or an administrator.",
   no_live_session: 'That agent has no live session here.',
@@ -193,6 +216,9 @@ export function classifyCommandError(err: unknown, command: CommandBody['command
   if (code === 'terminal_connected' && command === 'start') return { kind: 'terminal' };
   if (code === 'subscription_owner_only' || code === 'plan_owner_only') return { kind: 'error', text: ERRORS[code] };
   if (err instanceof ApiError && err.status === 403) return { kind: 'error', text: NO_AUTHORITY };
+  // The server says which limit refused a resume ("Wake limit reached: 50 of 50 wakes.")
+  const said = err instanceof ApiError && code === 'budget_exhausted' ? (err.body as { message?: unknown } | undefined)?.message : null;
+  if (typeof said === 'string') return { kind: 'error', text: `${said} The session's status says where to raise or remove it; then resume.` };
   return { kind: 'error', text: ERRORS[code] ?? `Command failed (${code}).` };
 }
 
@@ -292,11 +318,39 @@ export function terminalUsage(s: AgentSession): string {
   return `${calls} tool ${calls === 1 ? 'call' : 'calls'} · ${s.usageKnown ? `${compactTokens(s.tokensUsed)} tokens` : 'tokens n/a'}`;
 }
 
+/**
+ * Why a session shelved with endReason 'budget' stopped, as a sentence: the limit, its numbers,
+ * whose it is and the one action that lifts it. Three different stops share that end reason (the
+ * wake limit, a token limit, the API key's credit), so this never guesses from the token numbers.
+ */
+export function limitStopText(s: Pick<AgentSession, 'id' | 'profile' | 'limitStop'>): string {
+  const stop = s.limitStop;
+  const count = (n: number) => n.toLocaleString('en-US');
+  if (!stop) return 'Stopped by a session limit before this server recorded which one. Resume it: limits are off unless you set one in Settings → Agents.';
+  if (stop.kind === 'credit') return "Stopped because the agent's API key is out of credit. This is the provider's limit, not one set in Agora: add credit or raise the key's limit, then resume.";
+  const own = stop.sessionId === s.id;
+  const whose = own ? '' : ` of its parent session ${stop.sessionId}`;
+  const agent = own ? s.profile : "the parent's agent";
+  if (stop.kind === 'wake') return `Stopped by the wake limit${whose}: ${count(stop.used)} of ${count(stop.limit)} wakes. Raise or remove "Wakes per session" for ${agent} in Settings → Agents, then resume.`;
+  const tokens = `Stopped by the token limit${whose}: ${count(stop.used)} of ${count(stop.limit)} tokens.`;
+  return stop.source === 'session'
+    ? `${tokens} That is ${own ? "this session's" : "the parent session's"} own token limit: raise or clear it in ${own ? 'its' : "the parent's"} session controls, then resume.`
+    : `${tokens} Raise or remove "Tokens per session" for ${agent} in Settings → Agents, then resume.`;
+}
+
+/** A session's end reason for a list: a 'budget' stop names the limit that caused it. */
+export function stopLabel(s: Pick<AgentSession, 'endReason' | 'limitStop'>): string {
+  const stop = s.endReason === 'budget' ? s.limitStop : null;
+  if (!stop) return s.endReason === 'budget' ? 'limit' : s.endReason ?? '';
+  if (stop.kind === 'credit') return 'API key out of credit';
+  return `${stop.kind} limit ${compactTokens(stop.used)}/${compactTokens(stop.limit)}`;
+}
+
 export function describeSession(s: AgentSession): string {
   if (s.kind === 'terminal') {
     return `${s.profile} · terminal · ${s.state}${s.state === 'live' ? (s.running ? ' (working)' : ' (idle)') : ''} · ${terminalUsage(s)} · no budget (own CLI)`;
   }
-  const reason = s.endReason ? ` (${s.endReason})` : '';
+  const reason = s.endReason ? ` (${stopLabel(s)})` : '';
   const mode = boxModeLabel(s);
   return `${s.profile}${mode ? ` (${mode})` : ''} · ${s.state}${reason} · ${s.wakesUsed} wakes · ${s.tokensUsed.toLocaleString()} tokens`
     + (s.authMode ? ` · ${authLabel(s.authMode, s.runApproval)}` : '')
@@ -305,7 +359,7 @@ export function describeSession(s: AgentSession): string {
 
 const ACTION_TEXT: Record<string, string> = {
   lurk_updated: 'Lurk mode updated.',
-  budget_updated: 'Token budget updated. Resume the session when ready.',
+  budget_updated: 'Token limit updated.',
   started: 'Session started.',
   resumed: 'Session resumed.',
   kept: 'Kept the live session.',
