@@ -87,4 +87,15 @@ done
 curl -fsS "$BOXTEST_API/health" >/dev/null
 
 echo "==> box suites"
-npx vitest run --config vitest.box.config.ts "$@"
+status=0
+npx vitest run --config vitest.box.config.ts "$@" || status=$?
+if [ "$status" != 0 ]; then
+    # A suite that times out waiting for a box says nothing about why: show what the stack said
+    echo "==> the suites failed; the stack's last log lines"
+    docker ps -a --filter "label=org.agora.instance=$INSTANCE" --format '{{.Names}} {{.Status}}' || true
+    for service in boxd box-edge api; do
+        echo "--- $service"
+        "${DC[@]}" logs --no-color --tail 80 "$service" 2>&1 | cut -c1-300 || true
+    done
+fi
+exit "$status"
