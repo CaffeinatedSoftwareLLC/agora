@@ -57,7 +57,7 @@ The host token and bot token are not in the shell's environment. They are **not*
 
 ## One person and one agent in a box
 
-New wakes for that agent **pause** while a terminal is open: `claimNext` offers the box's host nothing for that profile, and queued wakes are claimed when it closes. A run already working is not stopped: that would lose work, and the page, the notice and the Settings card say so ("a run in progress keeps going, so you share the box with it"). Running both at once would have two writers in one worktree and, for a subscription agent, two processes on one CLI login directory. The channel is told when it opens and closes ("**eryk** has a terminal open in **cci**'s box. New wakes for this agent are paused until it closes").
+New wakes for that agent **pause** while a terminal is open: `claimNext` offers the box's host nothing for that profile, and queued wakes are claimed when it closes. A run already working is not stopped: that would lose work, and the terminal page and the channel notice say so ("a run in progress keeps going, so you share the box with it"); the Settings card shows that a terminal is open. Running both at once would have two writers in one worktree and, for a subscription agent, two processes on one CLI login directory. The channel is told when it opens and closes ("**eryk** has a terminal open in **cci**'s box. New wakes for this agent are paused until it closes").
 
 ## What is recorded
 
