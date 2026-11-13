@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import type { Launch } from '../adapters.js';
 import type { RunningChild } from '../process.js';
 import type { RateLimit, Result } from '../types.js';
+import { appServerStream } from '../stream.js';
 import { AGENT_NAME } from './oauth.js';
 import { answerServerRequest, type ApprovalContext, type Ask } from './approvals.js';
 
@@ -211,7 +212,9 @@ export function startAppServer(launch: Launch & { appServer: AppServerPlan }): R
         let done!: (v: { status: string; error: any }) => void;
         const completed = new Promise<{ status: string; error: any }>(r => { done = r; });
         const early: Array<{ status: string; error: any; id: string }> = [];
+        const live = launch.stream ? appServerStream(launch.cwd) : null;
         rpc.onNotification((method, params) => {
+            if (live) { try { for (const e of live.push(method, params)) launch.stream!(e); } catch { /* live output never fails a run */ } }
             if (method === 'item/started') {
                 // A fileChange's paths come with its item, before the approval request
                 const item = params?.item;

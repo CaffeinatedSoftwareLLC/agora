@@ -4,6 +4,7 @@ import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import type { GithubCommand, GithubResult } from './github.js';
 import type { BoxAdapterName } from './box-adapters.js';
 import type { CommandResult, SessionCommand } from './session-commands.js';
+import type { StreamEvent } from './stream.js';
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 const seconds = z.number().finite().positive().max(86400);
@@ -61,7 +62,9 @@ export const claimSchema = z.object({
         authMode: z.enum(['subscription', 'api_key', 'siwc']).default('subscription'),
         // Whose plan a subscription or siwc profile runs on; `startedByOwner` means started by them
         planOwnerId: id.nullable().default(null),
-        runApproval: z.boolean().default(false) }),
+        runApproval: z.boolean().default(false),
+        // "Show live output" (docs/live-output.md): older servers don't send it, and don't take the stream either
+        liveOutput: z.boolean().default(true) }),
     // The channel's pinned instructions and files (docs/project-context.md). `docs` holds the
     // files' text only when `changed`: a fresh conversation, or a version this session hasn't had.
     // The server counts characters, zod UTF-16 units: limits are twice the server's.
@@ -141,6 +144,8 @@ export interface HostApi {
     workspaceStates?(sessionIds: string[]): Promise<string[]>;
     workspaceWarning?(sessionId: string, paths: string[]): Promise<void>;
     claim(signal?: AbortSignal): Promise<{ claim: Claim; sentAt: number } | null>;
+    /** Live output: a batch of text and step events; resolves false when the owner turned it off (stream.ts). */
+    stream?(claim: Claim, events: StreamEvent[], signal?: AbortSignal): Promise<boolean>;
     heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null, progress?: Progress | null): Promise<Heartbeat>;
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;

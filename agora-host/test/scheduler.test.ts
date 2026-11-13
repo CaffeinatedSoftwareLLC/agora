@@ -172,3 +172,44 @@ describe('Codex app-server approvals (#93)', () => {
         children[0].finish.resolve(successful); await work;
     });
 });
+
+describe('live output in the scheduler', () => {
+    const live = (liveOutput: boolean) => { const c = claim(); c.profile.liveOutput = liveOutput; return c; };
+    it('gives the child a stream sink, sends what it wrote before the run is reported, and never fails the run', async () => {
+        const s = setup(); const order: string[] = [];
+        const batches: unknown[] = [];
+        (s.api as any).stream = vi.fn(async (_c: unknown, events: unknown) => { order.push('stream'); batches.push(events); return true; });
+        s.api.complete.mockImplementation(async () => { order.push('complete'); });
+        const work = s.scheduler.submit(live(true), 0); await vi.advanceTimersByTimeAsync(0);
+        const launch = (s.runner.start.mock.calls as any)[0][0];
+        expect(typeof launch.stream).toBe('function');
+        launch.stream({ type: 'text', message: 'm', delta: 'Hello' });
+        s.children[0].finish.resolve(successful); await vi.advanceTimersByTimeAsync(0); await work;
+        expect(batches).toEqual([[{ type: 'text', message: 'm', delta: 'Hello' }]]);
+        expect(order).toEqual(['stream', 'complete']);
+    });
+    it('a server that refuses the stream (404) does not stop or fail the run', async () => {
+        const s = setup();
+        (s.api as any).stream = vi.fn(async () => { throw new HttpError(404); });
+        const work = s.scheduler.submit(live(true), 0); await vi.advanceTimersByTimeAsync(0);
+        (s.runner.start.mock.calls as any)[0][0].stream({ type: 'text', message: 'm', delta: 'a' });
+        await vi.advanceTimersByTimeAsync(500);
+        (s.runner.start.mock.calls as any)[0][0].stream({ type: 'text', message: 'm', delta: 'b' });
+        await vi.advanceTimersByTimeAsync(500);
+        s.children[0].finish.resolve(successful); await work;
+        expect((s.api as any).stream).toHaveBeenCalledTimes(1);
+        expect(s.api.complete).toHaveBeenCalled(); expect(s.children[0].kill).not.toHaveBeenCalled();
+    });
+    it('sends nothing, and gives no sink, when the owner turned "Show live output" off', async () => {
+        const s = setup(); (s.api as any).stream = vi.fn(async () => true);
+        const work = s.scheduler.submit(live(false), 0); await vi.advanceTimersByTimeAsync(0);
+        expect((s.runner.start.mock.calls as any)[0][0].stream).toBeUndefined();
+        s.children[0].finish.resolve(successful); await work;
+        expect((s.api as any).stream).not.toHaveBeenCalled();
+    });
+    it('an older client API without stream() runs as before', async () => {
+        const s = setup(); const work = s.scheduler.submit(live(true), 0); await vi.advanceTimersByTimeAsync(0);
+        expect((s.runner.start.mock.calls as any)[0][0].stream).toBeUndefined();
+        s.children[0].finish.resolve(successful); await work; expect(s.api.complete).toHaveBeenCalled();
+    });
+});

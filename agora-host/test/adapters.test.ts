@@ -27,6 +27,11 @@ describe('profiles without a model or effort, and /start notices', () => {
         c.profiles.builder.adapter = 'claude'; delivery.profile.adapter = 'claude';
         const claude = await prepare(c, delivery); cleanups.push(claude.cleanup);
         expect(claude.args).not.toContain('--model'); expect(claude.args).not.toContain('--effort');
+        // Live output (docs/live-output.md): partial messages only while the owner has it on
+        delivery.profile.liveOutput = true; const on = await prepare(c, delivery); cleanups.push(on.cleanup);
+        expect(on.args).toContain('--include-partial-messages');
+        delivery.profile.liveOutput = false; const off = await prepare(c, delivery); cleanups.push(off.cleanup);
+        expect(off.args).not.toContain('--include-partial-messages');
     });
     it('accepts a server claim with a command row and null model/effort', async () => {
         const { claimSchema } = await import('../src/types.js');
