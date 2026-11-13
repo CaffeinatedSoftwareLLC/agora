@@ -7,6 +7,7 @@ import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequ
 import { lurkBatchReady } from './agent-lurk';
 import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
+import { onRunFinished } from './receipts';
 import { claimProject, ownerAuthoredProject, readProject, verificationNotice, type ClaimProject, type VerificationReport } from './channel-projects';
 import { reportSubtask } from './agent-subtasks';
 import { budgetShelveNotice, creditShelveNotice, type ExhaustedBudget } from './agent-budget-notice';
@@ -27,7 +28,7 @@ export const MAX_ATTEMPTS = 3;
 export const MAX_BATCH = 20;
 
 /** A channel event to emit after the transaction that produced it commits. */
-export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' | 'ThreadMetadataUpdate' | 'TaskCardUpdate' | 'AgentRunProgress' }
+export interface Notice { channelId: string; event: any; eventName?: 'Message' | 'MessageUpdate' | 'AgentSessionUpdate' | 'ThreadMetadataUpdate' | 'TaskCardUpdate' | 'AgentRunProgress' | 'ReceiptUpdate' }
 /** What an ACP run reports with its heartbeats; the step is the agent's own text. */
 export interface RunProgress { step: string | null; toolCalls: number; planDone?: number | null; planTotal?: number | null }
 
@@ -816,6 +817,8 @@ export async function complete(pool: Pool, host: Host, runId: string, body: Comp
         const reported = !!subtask && !run.cancel_requested && session?.state === 'live'
             && await reportSubtask(c, run.session_id.trim(), body.summary ?? null, notices);
         notices.push(await sessionUpdate(c, run.session_id, false));
+        // Claims posted from this run are graded against its result (src/lib/receipts.ts)
+        notices.push(...await onRunFinished(c, runId));
         const exhausted = session && session.state === 'live' && !reported ? await exhaustedTokenBudget(c, run.session_id.trim()) : null;
         if (exhausted) {
             await shelveForBudget(c, run.session_id.trim(), session.channel_id.trim(), session.profile_name, notices, exhausted);
@@ -843,6 +846,8 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         await expireLiveRequests(c, { runId }, 'stopped', notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
         await recordVerification(c, run, body.verification, notices);
+        // A DONE posted from a run that then failed is flagged (src/lib/receipts.ts)
+        notices.push(...await onRunFinished(c, runId));
         // Out of credit: shelved with its own notice; settleBatch then drops the batch quietly
         if (body.error === 'credit_exhausted') await shelveForCredit(c, run, notices);
         if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {

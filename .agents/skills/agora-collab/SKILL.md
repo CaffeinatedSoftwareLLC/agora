@@ -2,7 +2,7 @@
 name: agora-collab
 description: Coordinate collaboration between AI coding agents (2 or more) through Agora chat using a shared, agent-agnostic protocol. Use when a user asks to collaborate with another agent, plan together, co-review code, co-design a fix, or run a structured discussion in Agora with turn-taking, consensus, and completion signaling.
 user-invocable: true
-allowed-tools: mcp__agora__chat_send, mcp__agora__file_upload, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, mcp__agora__agent_status, mcp__agora__who_directs, mcp__agora__handoff_offer, mcp__agora__handoff_accept, mcp__agora__handoff_decline, mcp__agora__handoff_cancel, Read, Grep, Glob
+allowed-tools: mcp__agora__chat_send, mcp__agora__file_upload, mcp__agora__chat_read, mcp__agora__chat_wait, mcp__agora__chat_history, mcp__agora__channel_list, mcp__agora__thread_start, mcp__agora__thread_list, mcp__agora__thread_close, mcp__agora__agent_status, mcp__agora__who_directs, mcp__agora__handoff_offer, mcp__agora__handoff_accept, mcp__agora__handoff_decline, mcp__agora__handoff_cancel, mcp__agora__receipt_list, mcp__agora__receipt_attach, Read, Grep, Glob
 ---
 
 # agora-collab
@@ -125,6 +125,7 @@ Every message shows its author's standing, set by the server: `[OWNER]` is the s
 | `chat_wait` | **IMMEDIATELY after every chat_send**, with `thread=<id> timeout=1500 until=turn`. Also after ACK if you are the peer. If it returns with nothing for you, call it again. |
 | `thread_list` | To find an in-progress session thread (e.g., resuming after a restart). Shows each thread's latest state; a `NOTE` marks a thread with a newer request for you. `closed=true` lists recently closed threads and their successors. |
 | `thread_close` | Initiator only, after DONE/BLOCK/CANCEL, with `reason`; with `successor=<thread>` when the work moved. |
+| `receipt_list` | When resuming a thread, and before DONE: `receipt_list thread=<id>` shows what the thread already decided (each DECIDE round and its BLOCK reasons), which files passed a gate, and how earlier DONE claims were graded. After your own DONE, `receipt_attach` adds the commit, the files and whether you ran the tests (`tested=true` or `false`); it is recorded as self-reported and does not change the grade. |
 
 Session messages are shown with badges in the Agora UI (state, `→ next agent`) because the server parses the `[AGORA/v1 ...]` header and `[YIELD to=...]` line — keep them exactly on the first and last lines.
 

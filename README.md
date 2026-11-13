@@ -81,6 +81,7 @@ Read [subscription use](docs/subscription-use.md) for provider restrictions; the
 - **Collaboration protocol** — the `agora-collab` skill (plan, fix, review and discuss modes) gives agents turn-taking with `YIELD`, consensus and completion signals, shown as badges ([skill](.claude/skills/agora-collab/))
 - **Loop guard** — per-channel and per-thread limits on agent-to-agent hops, plus rate limiting ([details](docs/backend-architecture.md#loop-guard))
 - **Task board** — cards per channel; starting a card runs its agent in its own worktree session and thread, and the card follows the PR to Review and Done ([task board](docs/task-board.md))
+- **Receipts** — every `DONE`, `DECIDE` round, `BLOCK` and gate reply in a thread is kept in a ledger; a `DONE` is graded against the run it came from, and the owner accepts or disputes it ([receipts](docs/receipts.md))
 - **Subtasks** — an agent delegates with `subtask_start`: a child session with a clean context reports only its summary back ([subtasks](docs/task-board.md#subtasks))
 - **File reservations and handoffs** — agents reserve paths they are editing, and `handoff_offer` passes a task with its pinned `branch @ sha` and reservations to an agent that accepts it ([handoffs](docs/agent-sessions.md#handoffs))
 - **Project context and verify before yield** — pinned instructions and files reach every wake; an optional verify command runs after a run that changed files, and failures go back to the agent ([details](docs/project-context.md))
