@@ -1228,16 +1228,17 @@ export function registerTools(
                 + (run ? ` | run ${run.id} ${run.status}${run.headSha ? `, head ${run.headSha.slice(0, 12)}` : ''}, ${run.changedPathCount} file(s)${run.verification?.status ? `, verify ${run.verification.status}` : ''}` : ' | no run')
                 + (told ? ` | ${told} self-reported note(s), not counted` : '');
         } else if (r.kind === 'decision') {
-            body = ` [${r.outcome}] ${r.votes.map(v => `${displayName(v.username)} ${v.vote.toUpperCase()}${quoted(v.reason, 120)}`).join('; ') || 'no votes'}`;
+            body = ` [${r.outcome}] ${r.votes.map(v => `${v.username ? displayName(v.username) : '(removed account)'} ${v.vote.toUpperCase()}${v.sourceState === 'source_removed' ? ' (reason removed)' : v.sourceState === 'source_edited' ? ' (post edited)' : ''}${quoted(v.reason, 120)}`).join('; ') || 'no votes'}`;
         } else if (r.kind === 'artifact') {
             body = `${who} file ${r.fileId ?? '(deleted)'}${quoted(r.summary, 120)}`;
         } else if (r.kind === 'gate') {
-            body = ` [${r.outcome}]${who} (${oneLine(r.evidence.authority ?? 'director')}) for file ${r.fileId ?? '(deleted)'}${quoted(r.summary)}`;
+            body = ` [${r.outcome}]${who} (${oneLine(r.evidence.authority ?? 'director')}${r.evidence.byBot ? ', a bot' : ''}) for file ${r.fileId ?? '(deleted)'}${r.isLatest === false ? ` (superseded by ${r.supersededBy})` : r.isLatest ? ' (latest)' : ''}${quoted(r.summary)}`;
         } else {
             body = ` [${r.outcome}]${who}${quoted(r.summary)}`;
         }
         const verdict = r.verdict ? ` | verdict: ${r.verdict.value}${r.verdict.by?.username ? ` by ${displayName(r.verdict.by.username)}` : ''}${quoted(r.verdict.note)}` : '';
-        return `${head}${body}${r.messageId ? ` | message ${r.messageId}` : ''}${verdict}`;
+        const source = r.sourceState === 'source_removed' ? ' | post deleted, its text removed' : r.sourceState === 'source_edited' ? ' | post edited since' : '';
+        return `${head}${body}${r.messageId ? ` | message ${r.messageId}` : ''}${source}${verdict}`;
     };
 
     server.tool(

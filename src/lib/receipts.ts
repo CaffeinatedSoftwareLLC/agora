@@ -22,7 +22,10 @@ import type { Notice } from './agent-runs';
  *   could not be written (recordMessage, onRunFinished).
  * - Everything an author wrote (summary, reasons, file names, self-reported evidence) is
  *   untrusted data. It is stored and returned as data and never put into a notice or a prompt.
- * - A receipt records the post as first made. Editing or deleting the post changes nothing here.
+ * - A receipt records the post as first made. Editing the post leaves the copied text alone and
+ *   marks the receipt `source_edited`; deleting it (by its author, or with the account) blanks
+ *   the copied text and marks the receipt `source_removed`. The receipt itself stays: that a
+ *   claim was made matters (markSourceEdited, markSourceRemoved).
  */
 
 export type ReceiptKind = 'claim' | 'decision' | 'stop' | 'artifact' | 'gate';
@@ -45,6 +48,17 @@ export interface RunFacts {
     cancelRequested?: boolean;
     headSha?: string | null;
     baseSha?: string | null;
+    /**
+     * Where the branch stood when this run began: the previous finished run's head in the same
+     * session, else the session's base. A commit counts for a run only when `headSha` moved
+     * past it. Unset (older callers, unit tests): `baseSha`.
+     */
+    startSha?: string | null;
+    /**
+     * Was the run woken for the claim's thread (or does it belong to it)? `false` grades the
+     * claim `other_thread`: a run's work is only evidence for the thread it was doing. Unset: yes.
+     */
+    sameThread?: boolean;
     changedPaths?: string[] | null;
     verification?: { status: 'passed' | 'failed' | 'skipped' | string } | null;
 }
@@ -59,18 +73,20 @@ const INTERRUPTED = new Set(['rate_limited', 'credit_exhausted', 'host_stopped',
  * not an input.
  *
  * - no run (a terminal agent, a person, a post outside a hosted run): unverified `no_run`;
+ * - the run was doing another thread's work: unverified `other_thread`, whatever happened to it;
  * - the run is still going: unverified `run_in_progress`, graded again when it finishes;
  * - the owner's verify command failed: contradicted `verification_failed`;
  * - the run failed: contradicted `run_failed` (unverified `run_interrupted` when it was
  *   cancelled, expired or stopped by a limit);
  * - a `fix` claim from a run that committed nothing and changed no file: contradicted `no_changes`;
- * - nothing committed on the session's branch: unverified `not_committed` (files changed) or
- *   `no_commit`;
+ * - this run added no commit (its head is where the run started, which is the previous run's
+ *   head, not the session's base): unverified `not_committed` (files changed) or `no_commit`;
  * - a commit and a passed verify command: verified `tests_passed`, basis `tested`;
  * - a commit without a passed verify command: verified `committed`, basis `assumed`.
  */
 export function gradeClaim(mode: ProtocolMode | string | null, run: RunFacts | null): GradeResult {
     if (!run) return { grade: 'unverified', reason: 'no_run', basis: 'assumed' };
+    if (run.sameThread === false) return { grade: 'unverified', reason: 'other_thread', basis: 'assumed' };
     if (run.status === 'claimed') return { grade: 'unverified', reason: 'run_in_progress', basis: 'assumed' };
     if (run.verification?.status === 'failed') return { grade: 'contradicted', reason: 'verification_failed', basis: 'tested' };
     if (run.status === 'failed') {
@@ -80,7 +96,8 @@ export function gradeClaim(mode: ProtocolMode | string | null, run: RunFacts | n
     }
     if (run.status !== 'succeeded') return { grade: 'unverified', reason: 'run_interrupted', basis: 'assumed' };
 
-    const committed = !!run.headSha && !!run.baseSha && run.headSha !== run.baseSha;
+    const since = run.startSha ?? run.baseSha;
+    const committed = !!run.headSha && !!since && run.headSha !== since;
     const changed = (run.changedPaths ?? []).length > 0;
     if (!committed) {
         if (mode === 'fix' && !changed) return { grade: 'contradicted', reason: 'no_changes', basis: 'assumed' };
@@ -173,11 +190,17 @@ export function roundOutcome(votes: VoteTally[], expected: string[], closing: 'd
 const RECEIPT_SELECT = `
     SELECT r.*, a.username AS author_username, a.bot AS author_bot, vb.username AS verdict_username,
            COALESCE((SELECT json_agg(json_build_object(
-                         'voterId', btrim(rv.voter_id), 'username', vu.username, 'bot', vu.bot, 'vote', rv.vote,
-                         'reason', rv.reason, 'messageId', btrim(rv.message_id), 'votedAt', rv.voted_at)
+                         'voterId', btrim(rv.voter_id), 'username', vu.username, 'bot', COALESCE(vu.bot, false), 'vote', rv.vote,
+                         'reason', rv.reason, 'messageId', btrim(rv.message_id), 'votedAt', rv.voted_at, 'sourceState', rv.source_state)
                          ORDER BY rv.voted_at, rv.voter_id)
-                     FROM receipt_votes rv JOIN users vu ON vu.id = rv.voter_id
-                     WHERE rv.receipt_id = r.id), '[]'::json) AS votes
+                     FROM receipt_votes rv LEFT JOIN users vu ON vu.id = rv.voter_id
+                     WHERE rv.receipt_id = r.id), '[]'::json) AS votes,
+           -- Gates only: the gate after this one on the same artifact, if any. Every gate stays;
+           -- the latest one is the artifact's current state.
+           (SELECT btrim(g2.id) FROM thread_receipts g2
+             WHERE r.kind = 'gate' AND g2.kind = 'gate' AND g2.thread_id = r.thread_id AND g2.id > r.id
+               AND g2.ref_receipt_id IS NOT DISTINCT FROM r.ref_receipt_id AND g2.file_id IS NOT DISTINCT FROM r.file_id
+             ORDER BY g2.id DESC LIMIT 1) AS superseded_by
     FROM thread_receipts r
     LEFT JOIN users a ON a.id = r.author_id
     LEFT JOIN users vb ON vb.id = r.verdict_by`;
@@ -205,11 +228,18 @@ export function receiptJson(r: any) {
         refReceiptId: trimmed(r.ref_receipt_id),
         evidence: r.evidence ?? {},
         history: r.history ?? [],
+        /** Gates: false when a later gate on the same artifact exists (`supersededBy`). Null for other kinds. */
+        isLatest: r.kind === 'gate' ? !r.superseded_by : null,
+        supersededBy: trimmed(r.superseded_by),
+        /** `source_edited`: the post was edited after the receipt copied its text. `source_removed`: the post was deleted and the copied text blanked. */
+        sourceState: (r.source_state ?? null) as 'source_edited' | 'source_removed' | null,
         verdict: r.verdict
             ? { value: r.verdict as 'accepted' | 'disputed', by: r.verdict_by ? { id: r.verdict_by.trim(), username: r.verdict_username ?? null } : null,
                 note: r.verdict_note ?? null, at: r.verdict_at }
             : null,
-        votes: (r.votes ?? []) as Array<{ voterId: string; username: string; bot: boolean; vote: 'agree' | 'block'; reason: string | null; messageId: string | null; votedAt: string }>,
+        /** `voterId` and `username` are null once the voter's account is gone: the vote stays. */
+        votes: (r.votes ?? []) as Array<{ voterId: string | null; username: string | null; bot: boolean; vote: 'agree' | 'block'; reason: string | null; messageId: string | null; votedAt: string;
+                                         sourceState: 'source_edited' | 'source_removed' | null }>,
         createdAt: r.created_at,
         updatedAt: r.updated_at,
     };
@@ -275,6 +305,26 @@ async function quietly<T>(db: any, log: Logger, what: string, fallback: T, fn: (
         await db.query('RELEASE SAVEPOINT receipts_write').catch(() => {});
         log?.warn({ err, what }, 'receipt not written');
         return fallback;
+    }
+}
+
+/**
+ * Like `quietly`, but an error rolls back to the savepoint and propagates: for the changes that
+ * must not be skipped silently (blanking a deleted post's text), so the delete fails with it.
+ */
+async function strictly<T>(db: any, fn: () => Promise<T>): Promise<T> {
+    const role = (await db.query('SELECT current_user AS role')).rows[0].role as string;
+    await db.query('SAVEPOINT receipts_source');
+    try {
+        await db.query('SET LOCAL ROLE NONE');
+        const result = await fn();
+        await db.query(`SET LOCAL ROLE "${role.split('"').join('""')}"`);
+        await db.query('RELEASE SAVEPOINT receipts_source');
+        return result;
+    } catch (err) {
+        await db.query('ROLLBACK TO SAVEPOINT receipts_source');
+        await db.query('RELEASE SAVEPOINT receipts_source');
+        throw err;
     }
 }
 
@@ -415,7 +465,7 @@ async function recordVote(db: any, ctx: WriteContext): Promise<string[]> {
     const vote = decision === 'AGREE' ? 'agree' : 'block';
     await db.query(
         `INSERT INTO receipt_votes (receipt_id, voter_id, vote, reason, message_id) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (receipt_id, voter_id) DO UPDATE SET vote = EXCLUDED.vote, reason = EXCLUDED.reason, message_id = EXCLUDED.message_id, voted_at = NOW()`,
+         ON CONFLICT (receipt_id, voter_id) DO UPDATE SET vote = EXCLUDED.vote, reason = EXCLUDED.reason, message_id = EXCLUDED.message_id, source_state = NULL, voted_at = NOW()`,
         [receiptId, ctx.authorId, vote, voteReason(ctx.content), ctx.messageId]
     );
     const outcome = roundOutcome(await roundVotes(db, receiptId), expected, null);
@@ -458,8 +508,32 @@ function runEvidence(run: any, checkpoint: any | null) {
     };
 }
 
-function runFacts(run: any): RunFacts {
+/**
+ * What the server holds about a run, for grading the claim of `threadId` by `botId`.
+ *
+ * - `startSha`: where the branch stood when the run began. The host reports `base_sha` as the
+ *   session's original base, which never moves, so a run that changes nothing after an earlier
+ *   run committed would otherwise look committed. The start is the head the session's previous
+ *   successful run ended at (a failed run reports none), else the base.
+ * - `sameThread`: the run was woken for the claim's thread (a message of it is in the run's batch),
+ *   its session is bound to that thread, or the agent started the thread during the run. A
+ *   channel-wide session's run belongs to the thread it was woken for, not to every thread the
+ *   agent posts in meanwhile.
+ */
+async function runFactsFor(db: any, run: any, threadId: string, botId: string): Promise<RunFacts> {
+    const prev = (await db.query(
+        `SELECT head_sha FROM agent_runs WHERE session_id = $1 AND id < $2 AND status = 'succeeded' AND head_sha IS NOT NULL ORDER BY id DESC LIMIT 1`,
+        [run.session_id, run.id]
+    )).rows[0];
+    const scope = (await db.query(
+        `SELECT (s.thread_id = $2
+                 OR EXISTS (SELECT 1 FROM agent_inbox i WHERE i.batch_id = r.batch_id AND (i.thread_id = $2 OR i.message_id = $2))
+                 OR EXISTS (SELECT 1 FROM messages t WHERE t.id = $2 AND t.author_id = $3 AND t.created_at >= r.created_at)) AS same
+         FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id WHERE r.id = $1`,
+        [run.id, threadId, botId]
+    )).rows[0];
     return { status: run.status, error: run.error, cancelRequested: !!run.cancel_requested, headSha: run.head_sha, baseSha: run.base_sha,
+        startSha: prev?.head_sha ?? run.base_sha ?? null, sameThread: !!scope?.same,
         changedPaths: run.changed_paths, verification: run.verification };
 }
 
@@ -498,7 +572,7 @@ async function recordClaim(db: any, ctx: WriteContext): Promise<string[]> {
     await lockThread(db, ctx.threadId);
     const live = await liveRunOf(db, ctx);
     const held = live ? await runWithCheckpoint(db, live.runId) : null;
-    const grade = gradeClaim(ctx.protocol?.mode ?? null, held ? runFacts(held.run) : null);
+    const grade = gradeClaim(ctx.protocol?.mode ?? null, held ? await runFactsFor(db, held.run, ctx.threadId, ctx.authorId) : null);
     const id = await insertReceipt(db, ctx, {
         kind: 'claim', summary: claimSummary(ctx.content), grade,
         sessionId: live?.sessionId ?? null, runId: live?.runId ?? null,
@@ -540,9 +614,12 @@ async function recordGate(db: any, ctx: WriteContext, gate: GateReply): Promise<
         [ctx.threadId, gate.fileId]
     )).rows[0];
     if (!artifact || artifact.author_id === ctx.authorId) return [];
+    // Who passed it, precisely: a bot the owner lets direct may pass a gate, and a reader must be able to tell
+    // that from a person's approval (`byBot`)
+    const byBot = !!(await db.query(`SELECT bot FROM users WHERE id = $1`, [ctx.authorId])).rows[0]?.bot;
     const id = await insertReceipt(db, ctx, {
         kind: 'gate', outcome: gate.word, summary: gate.reason, fileId: gate.fileId, refReceiptId: artifact.id,
-        evidence: { authority: ctx.authorId === ctx.ownerId ? 'owner' : 'director' },
+        evidence: { authority: ctx.authorId === ctx.ownerId ? 'owner' : 'director', byBot },
     });
     return id ? [id] : [];
 }
@@ -550,33 +627,70 @@ async function recordGate(db: any, ctx: WriteContext, gate: GateReply): Promise<
 // ─── Re-grading when a run finishes ───
 
 async function regrade(db: any, receipt: any, held: { run: any; checkpoint: any | null }): Promise<boolean> {
-    const next = gradeClaim(receipt.mode, runFacts(held.run));
+    const next = gradeClaim(receipt.mode, await runFactsFor(db, held.run, receipt.thread_id.trim(), receipt.author_id.trim()));
     const entry = { type: 'grade', at: new Date().toISOString(), from: { grade: receipt.grade, reason: receipt.grade_reason }, to: { grade: next.grade, reason: next.reason } };
     const changed = next.grade !== receipt.grade || next.reason !== receipt.grade_reason;
     await db.query(
-        `UPDATE thread_receipts SET grade = $2, grade_reason = $3, basis = $4,
+        `UPDATE thread_receipts SET grade = $2, grade_reason = $3, basis = $4, run_id = $7,
                 evidence = jsonb_set(evidence, '{run}', $5::jsonb),
                 history = history || $6::jsonb, updated_at = NOW()
          WHERE id = $1`,
-        [receipt.id, next.grade, next.reason, next.basis, JSON.stringify(runEvidence(held.run, held.checkpoint)), JSON.stringify(changed ? [entry] : [])]
+        [receipt.id, next.grade, next.reason, next.basis, JSON.stringify(runEvidence(held.run, held.checkpoint)), JSON.stringify(changed ? [entry] : []), held.run.id]
     );
     return changed;
 }
 
 /**
- * A run finished (succeeded, failed or expired): grade the claims posted from it again, now
- * against its result. Called from the run's own transaction (agent-runs.ts complete and fail).
+ * A claim whose run failed but whose batch will be tried again: still open. It reads
+ * `unverified` `run_retrying` until the retry's own run ends and grades it.
+ */
+async function holdForRetry(db: any, receipt: any, held: { run: any; checkpoint: any | null }): Promise<boolean> {
+    if (receipt.grade_reason === 'run_retrying') return false;
+    const entry = { type: 'grade', at: new Date().toISOString(), from: { grade: receipt.grade, reason: receipt.grade_reason }, to: { grade: 'unverified', reason: 'run_retrying' } };
+    await db.query(
+        `UPDATE thread_receipts SET grade = 'unverified', grade_reason = 'run_retrying', basis = 'assumed',
+                evidence = jsonb_set(evidence, '{run}', $2::jsonb), history = history || $3::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [receipt.id, JSON.stringify(runEvidence(held.run, held.checkpoint)), JSON.stringify([entry])]
+    );
+    return true;
+}
+
+/**
+ * A run ended (succeeded, failed or expired): grade the claims posted from it, now against its
+ * result. Called from the run's own transaction (agent-runs.ts complete, fail and expireRun),
+ * after the batch has been settled.
+ *
+ * A failed or expired run whose batch will be tried again (it is waiting to retry, or a newer
+ * attempt exists) does not close its claims: they are held as `run_retrying`, and the retry's
+ * run grades them, whichever way it ends. The claims of a batch are found through the batch,
+ * so a claim made in the first attempt is graded by the last.
  * Never throws; returns the events to emit after commit.
  */
 export async function onRunFinished(db: any, runId: string, log?: Logger): Promise<Notice[]> {
     return quietly(db, log, `run ${runId}`, [], async () => {
-        const receipts = await db.query(`SELECT * FROM thread_receipts WHERE run_id = $1 AND kind = 'claim' AND grade_reason = 'run_in_progress' ORDER BY id FOR UPDATE`, [runId]);
-        if (receipts.rows.length === 0) return [];
         const held = await runWithCheckpoint(db, runId);
         if (!held || held.run.status === 'claimed') return [];
+        const receipts = await db.query(
+            `SELECT r.* FROM thread_receipts r
+             WHERE r.kind = 'claim' AND r.grade_reason IN ('run_in_progress', 'run_retrying')
+               AND (r.run_id = $1 OR r.run_id IN (SELECT id FROM agent_runs WHERE batch_id = $2))
+             ORDER BY r.id FOR UPDATE OF r`,
+            [runId, held.run.batch_id]
+        );
+        if (receipts.rows.length === 0) return [];
+        let retrying = false;
+        if (held.run.status !== 'succeeded') {
+            const batch = (await db.query(
+                `SELECT b.status, EXISTS (SELECT 1 FROM agent_runs n WHERE n.batch_id = b.id AND n.id > $2) AS newer FROM agent_batches b WHERE b.id = $1`,
+                [held.run.batch_id, runId]
+            )).rows[0];
+            retrying = !!batch && (batch.status === 'retry' || batch.newer);
+        }
         const notices: Notice[] = [];
         for (const row of receipts.rows) {
-            await regrade(db, row, held);
+            const touched = retrying ? await holdForRetry(db, row, held) : (await regrade(db, row, held), true);
+            if (!touched) continue;
             const receipt = await readReceipt(db, row.id);
             if (receipt) notices.push(receiptUpdate(receipt));
         }
@@ -586,19 +700,69 @@ export async function onRunFinished(db: any, runId: string, log?: Logger): Promi
 
 /**
  * Claims in this channel still waiting on a run that has since finished: the run ended without
- * its hook seeing the claim (it expired, or finished while the DONE was still being posted).
- * The read routes call this first, so a list never shows a stale "run in progress".
+ * its hook seeing the claim (it finished while the DONE was still being posted, or the hook
+ * failed), or its batch was given up after a retry was expected. The read routes call this
+ * first, so a list never shows a stale "run in progress".
  */
 export async function settleFinishedRuns(db: any, channelId: string, log?: Logger): Promise<Notice[]> {
     return quietly(db, log, `channel ${channelId}`, [], async () => {
         const stale = await db.query(
-            `SELECT DISTINCT btrim(r.run_id) AS run_id FROM thread_receipts r JOIN agent_runs ar ON ar.id = r.run_id
-             WHERE r.channel_id = $1 AND r.kind = 'claim' AND r.grade_reason = 'run_in_progress' AND ar.status <> 'claimed'`,
+            `SELECT DISTINCT btrim(r.run_id) AS run_id FROM thread_receipts r
+             JOIN agent_runs ar ON ar.id = r.run_id JOIN agent_batches b ON b.id = ar.batch_id
+             WHERE r.channel_id = $1 AND r.kind = 'claim'
+               AND ((r.grade_reason = 'run_in_progress' AND ar.status <> 'claimed')
+                    OR (r.grade_reason = 'run_retrying' AND b.status NOT IN ('retry', 'running')))`,
             [channelId]
         );
         const notices: Notice[] = [];
         for (const row of stale.rows) notices.push(...await onRunFinished(db, row.run_id, log));
         return notices;
+    });
+}
+
+// ─── Editing and deleting the post a receipt copied from ───
+
+function sourceNotices(receipts: Receipt[]): Notice[] { return receipts.map(receiptUpdate); }
+
+/**
+ * A post was edited: its receipts keep the text they copied when it was first made, and are
+ * marked `source_edited` so a reader knows. Does nothing for a post that made no receipt.
+ * Never throws; returns the events to emit after commit.
+ */
+export async function markSourceEdited(db: any, messageId: string, log?: Logger): Promise<Notice[]> {
+    return quietly(db, log, `edit ${messageId}`, [], async () => {
+        const ids = new Set<string>();
+        const own = await db.query(
+            `UPDATE thread_receipts SET source_state = 'source_edited', updated_at = NOW() WHERE message_id = $1 AND source_state IS NULL RETURNING btrim(id) AS id`, [messageId]);
+        for (const r of own.rows) ids.add(r.id);
+        const votes = await db.query(
+            `UPDATE receipt_votes SET source_state = 'source_edited' WHERE message_id = $1 AND source_state IS NULL RETURNING btrim(receipt_id) AS id`, [messageId]);
+        for (const r of votes.rows) ids.add(r.id);
+        if (votes.rows.length > 0) await db.query(`UPDATE thread_receipts SET updated_at = NOW() WHERE id = ANY($1)`, [votes.rows.map((r: any) => r.id)]);
+        return sourceNotices((await Promise.all([...ids].map(id => readReceipt(db, id)))).filter((r): r is Receipt => !!r));
+    });
+}
+
+/**
+ * Posts were deleted (by their author, or with their account): every receipt and vote made
+ * from them loses the copied text (a claim's summary, a vote's reason, a gate's rejection
+ * reason, an artifact's file name) and is marked `source_removed`. The receipts stay: that a
+ * claim, vote or gate was made is the record. Runs as the service role in the delete's own
+ * transaction and propagates errors, so a delete never commits with the text still in the ledger.
+ */
+export async function markSourceRemoved(db: any, messageIds: string[]): Promise<Notice[]> {
+    if (messageIds.length === 0) return [];
+    return strictly(db, async () => {
+        const ids = new Set<string>();
+        const own = await db.query(
+            `UPDATE thread_receipts SET summary = NULL, evidence = evidence - 'filename', source_state = 'source_removed', updated_at = NOW()
+             WHERE message_id = ANY($1) RETURNING btrim(id) AS id`, [messageIds]);
+        for (const r of own.rows) ids.add(r.id);
+        const votes = await db.query(
+            `UPDATE receipt_votes SET reason = NULL, source_state = 'source_removed' WHERE message_id = ANY($1) RETURNING btrim(receipt_id) AS id`, [messageIds]);
+        for (const r of votes.rows) ids.add(r.id);
+        if (votes.rows.length > 0) await db.query(`UPDATE thread_receipts SET updated_at = NOW() WHERE id = ANY($1)`, [votes.rows.map((r: any) => r.id)]);
+        return sourceNotices((await Promise.all([...ids].map(id => readReceipt(db, id)))).filter((r): r is Receipt => !!r));
     });
 }
 

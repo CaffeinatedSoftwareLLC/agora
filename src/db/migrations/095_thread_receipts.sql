@@ -54,6 +54,10 @@ CREATE TABLE thread_receipts (
     verdict_note  TEXT CHECK (length(verdict_note) <= 1000),
     verdict_at    TIMESTAMPTZ,
 
+    -- Set when the post this receipt copied its text from is edited ('source_edited': the copy is
+    -- the original) or deleted ('source_removed': the copied text is blanked, the receipt stays)
+    source_state  VARCHAR(14) CHECK (source_state IN ('source_edited', 'source_removed')),
+
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -75,14 +79,19 @@ CREATE INDEX idx_thread_receipts_file ON thread_receipts (file_id) WHERE file_id
 
 CREATE TABLE receipt_votes (
     receipt_id  CHAR(26) NOT NULL REFERENCES thread_receipts(id) ON DELETE CASCADE,
-    voter_id    CHAR(26) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- Like every author column, kept when the account goes: the vote stays, the voter is null
+    voter_id    CHAR(26) REFERENCES users(id) ON DELETE SET NULL,
     vote        VARCHAR(5) NOT NULL CHECK (vote IN ('agree', 'block')),
     -- A BLOCK's reason, in the voter's words: untrusted data
     reason      TEXT CHECK (length(reason) <= 1000),
     message_id  CHAR(26) REFERENCES messages(id) ON DELETE SET NULL,
-    voted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (receipt_id, voter_id)
+    -- As on thread_receipts: the vote post was edited / deleted (the reason is blanked)
+    source_state VARCHAR(14) CHECK (source_state IN ('source_edited', 'source_removed')),
+    voted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- One vote per voter and round (a null voter, an erased account, is distinct from every other)
+CREATE UNIQUE INDEX idx_receipt_votes_voter ON receipt_votes (receipt_id, voter_id);
+CREATE INDEX idx_receipt_votes_message ON receipt_votes (message_id) WHERE message_id IS NOT NULL;
 
 ALTER TABLE thread_receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE receipt_votes ENABLE ROW LEVEL SECURITY;

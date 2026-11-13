@@ -54,6 +54,24 @@ describe('gradeClaim', () => {
         expect(gradeClaim('review', { status: 'succeeded', verification: { status: 'passed' } })).toMatchObject({ grade: 'unverified', reason: 'no_commit' });
     });
 
+    it('credits a commit to the run only when the head moved past where the run started, not past the session base', () => {
+        // A later run, after an earlier run committed B: the head is still B, so this run added nothing
+        expect(gradeClaim('plan', { status: 'succeeded', baseSha: A, startSha: B, headSha: B })).toMatchObject({ grade: 'unverified', reason: 'no_commit' });
+        expect(gradeClaim('fix', { status: 'succeeded', baseSha: A, startSha: B, headSha: B, changedPaths: [] })).toMatchObject({ grade: 'contradicted', reason: 'no_changes' });
+        // The same run that did commit
+        const C = 'c'.repeat(40);
+        expect(gradeClaim('fix', { status: 'succeeded', baseSha: A, startSha: B, headSha: C })).toMatchObject({ grade: 'verified', reason: 'committed' });
+    });
+
+    it('a run woken for another thread says nothing about the claim, whatever happened to it', () => {
+        for (const status of ['claimed', 'succeeded', 'failed']) {
+            expect(gradeClaim('fix', { status, baseSha: A, headSha: B, sameThread: false, verification: { status: 'passed' } }))
+                .toEqual({ grade: 'unverified', reason: 'other_thread', basis: 'assumed' });
+        }
+        expect(gradeClaim('fix', { status: 'failed', sameThread: false, verification: { status: 'failed' } })).toMatchObject({ reason: 'other_thread' });
+        expect(gradeClaim('fix', { status: 'succeeded', baseSha: A, headSha: B, sameThread: true })).toMatchObject({ grade: 'verified' });
+    });
+
     it('has no input for self-reported evidence', () => {
         // The signature is the guarantee: a run's facts and the mode, nothing the author attached
         expect(gradeClaim.length).toBe(2);

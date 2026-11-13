@@ -80,10 +80,14 @@ export interface Receipt {
     evidence: {
         run?: { id: string; status: string; headSha: string | null; changedPathCount: number; verification: { status: string | null } | null };
         selfReported?: Array<{ sha?: string; paths?: string[]; tested?: boolean; note?: string }>;
-        filename?: string; authority?: string;
+        filename?: string; authority?: string; byBot?: boolean;
     };
+    /** Gates: false when a later gate on the same artifact exists (`supersededBy`); null for other kinds. */
+    isLatest: boolean | null; supersededBy: string | null;
+    /** `source_edited`: the post was edited after the receipt copied its text; `source_removed`: it was deleted and the copied text blanked. */
+    sourceState: 'source_edited' | 'source_removed' | null;
     verdict: { value: 'accepted' | 'disputed'; by: { id: string; username: string | null } | null; note: string | null; at: string } | null;
-    votes: Array<{ voterId: string; username: string; bot: boolean; vote: 'agree' | 'block'; reason: string | null }>;
+    votes: Array<{ voterId: string | null; username: string | null; bot: boolean; vote: 'agree' | 'block'; reason: string | null; sourceState: 'source_edited' | 'source_removed' | null }>;
     createdAt: string; updatedAt: string;
 }
 

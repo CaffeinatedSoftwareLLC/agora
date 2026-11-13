@@ -11,7 +11,7 @@ import { parseProtocol, refuseSelfYield } from '../lib/protocol';
 import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
-import { recordMessage } from '../lib/receipts';
+import { markSourceEdited, markSourceRemoved, recordMessage } from '../lib/receipts';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { notifyMentions } from '../lib/notifications';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact, removeArtifactVersion } from '../lib/artifacts';
@@ -445,8 +445,13 @@ export async function messageRoutes(app: FastifyInstance) {
         const updated = result.rows[0];
         const threadId = msg.rows[0].thread_id?.trim() || undefined;
 
+        // A receipt made from this post keeps the text it copied and is marked source_edited
+        // (src/lib/receipts.ts). Never fails the edit.
+        const receiptNotices = await markSourceEdited(db, msgId, request.log);
+
         // Stash for post-commit broadcast (emitted in onResponse after COMMIT)
         request.pendingEvents = request.pendingEvents || [];
+        for (const n of receiptNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
         request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'MessageUpdate',
@@ -502,6 +507,10 @@ export async function messageRoutes(app: FastifyInstance) {
         const threadId = msg.rows[0].thread_id?.trim() || undefined;
         // The artifact version this post carried goes with it
         await removeArtifactVersion(db, msgId);
+        // So does the text its receipts copied from it (src/lib/receipts.ts); the receipts stay
+        const receiptNotices = await markSourceRemoved(db, [msgId.trim()]);
+        request.pendingEvents = request.pendingEvents || [];
+        for (const n of receiptNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
 
         // If this was a thread reply, update the parent's metadata
         if (threadId) {

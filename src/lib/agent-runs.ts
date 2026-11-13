@@ -846,16 +846,17 @@ export async function fail(pool: Pool, host: Host, runId: string, body: FailBody
         await expireLiveRequests(c, { runId }, 'stopped', notices);
         await fileDeniedTools(c, run, body.deniedTools, notices);
         await recordVerification(c, run, body.verification, notices);
-        // A DONE posted from a run that then failed is flagged (src/lib/receipts.ts)
-        notices.push(...await onRunFinished(c, runId));
         // Out of credit: shelved with its own notice; settleBatch then drops the batch quietly
         if (body.error === 'credit_exhausted') await shelveForCredit(c, run, notices);
         if (body.error === 'rate_limited' && await sleepForRateLimit(c, run, body.rateLimit?.resetAt ?? null, notices)) {
             notices.push(await sessionUpdate(c, run.session_id, false));
+            notices.push(...await onRunFinished(c, runId));
             return { status: 200, body: { ok: true, sleeping: true } };
         }
         notices.push(await sessionUpdate(c, run.session_id, false));
         await settleBatch(c, run, !!body.retryable && !run.cancel_requested, body.error, notices);
+        // A DONE posted from this run is graded once its batch is settled: a retry keeps it open (src/lib/receipts.ts)
+        notices.push(...await onRunFinished(c, runId));
         return { status: 200, body: { ok: true } };
     });
 }
@@ -954,6 +955,7 @@ async function expireRun(c: PoolClient, run: any, notices: Notice[]) {
     await expireLiveRequests(c, { runId: run.id }, 'stopped', notices);
     notices.push(await sessionUpdate(c, run.session_id, false));
     await settleBatch(c, run, true, 'lease_expired', notices);
+    notices.push(...await onRunFinished(c, run.id));
 }
 
 /** Sweeper: expire every claimed run past its lease. Returns how many it expired. */

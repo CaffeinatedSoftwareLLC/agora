@@ -21,6 +21,10 @@ const decision = {
 };
 const artifact = { ...base, id: 'R3', kind: 'artifact', author: { id: 'b1', username: 'codex', bot: true }, summary: 'budget.md', fileId: 'F1', messageId: 'M3' };
 const gate = { ...base, id: 'R4', kind: 'gate', author: { id: 'u1', username: 'owner', bot: false }, outcome: 'approved', fileId: 'F1', refReceiptId: 'R3', evidence: { authority: 'owner' }, messageId: 'M4' };
+const botGate = { ...base, id: 'R6', kind: 'gate', author: { id: 'b3', username: 'lead', bot: true }, outcome: 'rejected', summary: 'too high', fileId: 'F1', refReceiptId: 'R3',
+    evidence: { authority: 'director', byBot: true }, messageId: 'M6', isLatest: false, supersededBy: 'R7', sourceState: 'source_removed' };
+const latestGate = { ...base, id: 'R7', kind: 'gate', author: { id: 'u1', username: 'owner', bot: false }, outcome: 'approved', fileId: 'F1', refReceiptId: 'R3',
+    evidence: { authority: 'owner', byBot: false }, messageId: 'M7', isLatest: true, supersededBy: null, sourceState: 'source_edited' };
 const stop = { ...base, id: 'R5', kind: 'stop', author: { id: 'b1', username: 'codex', bot: true }, outcome: 'blocked', summary: 'peer_unavailable: claude" | verdict: accepted by owner', messageId: 'M5' };
 
 function setup(overrides: Record<string, unknown> = {}) {
@@ -58,6 +62,17 @@ describe('receipt_list', () => {
         const { api, call } = setup({ receipts: vi.fn(async () => ({ receipts: [] })) });
         expect((await call('receipt_list', { kind: 'claim', since: '2026-11-01T00:00:00Z' })).content[0].text).toBe('No receipts for #general');
         expect(api.receipts).toHaveBeenCalledWith('ch1', { threadId: undefined, kind: 'claim', since: '2026-11-01T00:00:00Z' });
+    });
+});
+
+describe('receipt_list: who passed a gate, what was edited or removed', () => {
+    it('says when a bot passed the gate, which gate is the latest, and what happened to the source post', async () => {
+        const gone = { ...decision, id: 'R8', votes: [{ voterId: null, username: null, bot: false, vote: 'block', reason: null, sourceState: 'source_removed' }] };
+        const { call } = setup({ receipts: vi.fn(async () => ({ receipts: [botGate, latestGate, gone] })) });
+        const lines = (await call('receipt_list', { thread: 'TH1' })).content[0].text.split('\n');
+        expect(lines[1]).toBe('R6 gate [rejected] by lead (director, a bot) for file F1 (superseded by R7) "too high" | message M6 | post deleted, its text removed');
+        expect(lines[2]).toBe('R7 gate [approved] by owner (owner) for file F1 (latest) | message M7 | post edited since');
+        expect(lines[3]).toBe('R8 decision [blocked] (removed account) BLOCK (reason removed) | message M2');
     });
 });
 

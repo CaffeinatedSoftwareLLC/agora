@@ -36,7 +36,7 @@ function clean(text: string | undefined, max: number): string | null {
     return out ? out.slice(0, max) : null;
 }
 
-export interface DisputeWake { woke: boolean; sessionId?: string; reason?: 'no_live_session' | 'terminal_session' | 'plan_owner_only' | 'not_an_agent' }
+export interface DisputeWake { woke: boolean; sessionId?: string; reason?: 'no_live_session' | 'terminal_session' | 'plan_owner_only' | 'not_an_agent' | 'already_disputed' }
 
 /**
  * Post the dispute where the claim was made and wake the agent that made it. The post is the
@@ -77,6 +77,16 @@ async function postDispute(db: any, receipt: Receipt, userId: string, note: stri
     };
     const wake = await wakeAuthor(db, receipt, userId, messageId, threadId, say);
     return { messageId, wake };
+}
+
+/** The message this person's dispute of the receipt was posted as, the latest if there are several. */
+async function disputeMessageOf(db: any, receiptId: string, userId: string): Promise<string | null> {
+    const row = (await db.query(
+        `SELECT btrim(id) AS id FROM messages WHERE system_event = 'receipt_verdict' AND author_id = $2 AND system_data->>'receiptId' = $1
+         ORDER BY id DESC LIMIT 1`,
+        [receiptId, userId]
+    )).rows[0];
+    return row?.id ?? null;
 }
 
 async function wakeAuthor(db: any, receipt: Receipt, userId: string, messageId: string, threadId: string | null,
@@ -187,8 +197,18 @@ export async function receiptRoutes(app: FastifyInstance) {
 
         const notices: Notice[] = [];
         const result = await asService(db, async () => {
+            // The same person disputing the same receipt again (a double submit, a retry) posts nothing
+            // and wakes nobody: it returns the dispute already made. A changed note replaces the stored one.
+            const again = verdict === 'disputed' && receipt.verdict?.value === 'disputed' && receipt.verdict.by?.id === userId.trim();
+            if (again && receipt.verdict!.note === note) {
+                return { receipt, messageId: await disputeMessageOf(db, receiptId, userId), wake: { woke: false, reason: 'already_disputed' } as DisputeWake };
+            }
             const updated = await setVerdict(db, { receiptId, channelId, userId, verdict, note });
             if (!updated) return null;
+            if (again) {
+                notices.push(receiptUpdate(updated));
+                return { receipt: updated, messageId: await disputeMessageOf(db, receiptId, userId), wake: { woke: false, reason: 'already_disputed' } as DisputeWake };
+            }
             const dispute = verdict === 'disputed' ? await postDispute(db, updated, userId, note!, notices) : null;
             notices.push(receiptUpdate(updated));
             return { receipt: updated, ...(dispute ?? {}) };
