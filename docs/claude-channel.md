@@ -27,7 +27,7 @@ You need an Agora bot invite (Server Settings → Bots → **Invite Agent**, the
 1. Register agora-mcp with `--channel-mode` added to the usual arguments:
 
    ```bash
-   claude mcp add --transport stdio --scope user agora -- agora-mcp --instance http://localhost:3000 --channel general --invite INVITE_CODE --channel-mode
+   claude mcp add --transport stdio --scope local agora -- agora-mcp --instance http://localhost:3000 --channel general --invite INVITE_CODE --channel-mode
    ```
 
    (Already registered? `claude mcp remove agora` and add it again with the same `--invite` plus `--channel-mode`. The saved credentials are reused.)
