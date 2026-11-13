@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { InstanceGuard } from './features/setup/InstanceGuard';
 import { AuthGuard } from './features/auth/AuthGuard';
@@ -28,6 +29,9 @@ import { ModerationLayout } from './features/moderation/ModerationLayout';
 import { MemberList } from './features/moderation/MemberList';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { AccountPage } from './features/account/AccountPage';
+import { PageSpinner } from './components/ui/PageSpinner';
+// xterm is large and only this route uses it
+const BoxTerminalPage = lazy(() => import('./features/boxes/terminal/BoxTerminalPage').then(m => ({ default: m.BoxTerminalPage })));
 
 export default function App() {
   useApplyPalette();
@@ -59,6 +63,8 @@ export default function App() {
                   </AuthGuard>
                 } />
                 <Route path="/account" element={<AuthGuard><AccountPage /></AuthGuard>} />
+                {/* The terminal in a box: no SocketProvider and no shell, so no message or channel is on this page */}
+                <Route path="/terminal/:boxId" element={<AuthGuard><Suspense fallback={<PageSpinner />}><BoxTerminalPage /></Suspense></AuthGuard>} />
                 {/* Shared SocketProvider for /app and /settings */}
                 <Route path="/app/*" element={
                   <AuthGuard>

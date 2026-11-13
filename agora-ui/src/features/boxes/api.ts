@@ -43,6 +43,10 @@ export interface Box {
   loginError?: string | null;
   /** What the login waits on or failed on: domains the edge refuses the box until they're allowed */
   loginBlockedHosts?: string[];
+  /** The terminal's limits, the owner's to change (older servers leave them out) */
+  terminalIdleMinutes?: number;
+  terminalMaxHours?: number;
+  terminalRateKbps?: number;
 }
 
 export interface CreateBoxBody {
@@ -63,6 +67,27 @@ export interface BoxPatch {
   memoryMb?: number;
   pids?: number;
   homeChannelId?: string;
+  terminalIdleMinutes?: number;
+  terminalMaxHours?: number;
+  terminalRateKbps?: number;
+}
+
+/** The terminal in a box (docs/box-terminal.md; server: src/routes/box-terminal.ts). */
+export interface TerminalLimits { idleMinutes: number; maxHours: number; rateKbps: number }
+export interface TerminalStatus {
+  box: { id: string; name: string; adapter: BoxAdapter };
+  /** The box's agora-host speaks the terminal protocol; false: the box needs its update first */
+  supported: boolean;
+  hostConnected: boolean;
+  running: boolean;
+  open: { id: string; openedByName: string | null; openedAt: string; mine: boolean } | null;
+  /** A run of this agent is working now: a terminal shares the box with it */
+  activeRun: boolean;
+  limits: TerminalLimits;
+}
+export interface TerminalSession {
+  id: string; openedByName: string | null; state: string; openedAt: string; startedAt: string | null; closedAt: string | null;
+  closeReason: string | null; durationSeconds: number | null; bytesIn: number; bytesOut: number;
 }
 
 export type LoginStatus = 'requested' | 'claimed' | 'awaiting_user' | 'awaiting_code' | 'code_sent' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
@@ -99,6 +124,13 @@ export const boxApi = {
   getLogin: (boxId: string) => api.get<{ login: BoxLogin | null }>(`/boxes/${boxId}/login`),
   sendLoginCode: (boxId: string, code: string) => api.post<unknown>(`/boxes/${boxId}/login/code`, { code }),
   cancelLogin: (boxId: string) => api.delete<unknown>(`/boxes/${boxId}/login`),
+
+  terminalStatus: (boxId: string) => api.get<TerminalStatus>(`/boxes/${boxId}/terminal`),
+  /** A ticket for one terminal: needs the owner's password again; `takeover` ends the terminal open now */
+  terminalTicket: (boxId: string, password: string, takeover: boolean) =>
+  api.post<{ ticket: string; expiresInSeconds: number; activeRun: boolean }>(`/boxes/${boxId}/terminal/ticket`, takeover ? { password, takeover } : { password }),
+  closeTerminal: (boxId: string) => api.delete<unknown>(`/boxes/${boxId}/terminal`),
+  terminalSessions: (boxId: string) => api.get<{ sessions: TerminalSession[] }>(`/boxes/${boxId}/terminal/sessions`),
 
   decideEdgeRequest: (requestId: string, decision: EdgeDecision) =>
   api.post<{ status: string }>(`/box-edge-requests/${requestId}`, { decision }),

@@ -47,6 +47,8 @@ export function boxJson(r: any, loginBlocked: string[] = []) {
         deletedAt: r.deleted_at ?? null, volumePurgeAfter: r.volume_purge_after ?? null, policies: r.policies ?? [],
         loginError: r.login_state === 'failed' ? (r.login_error ?? null) : null,
         loginBlockedHosts: loginBlocked,
+        // The terminal's limits, owner-editable (docs/box-terminal.md)
+        terminalIdleMinutes: r.terminal_idle_minutes, terminalMaxHours: r.terminal_max_hours, terminalRateKbps: r.terminal_rate_kbps,
     };
 }
 
@@ -193,6 +195,9 @@ export async function boxRoutes(app: FastifyInstance) {
                     memoryMb: { type: 'integer', minimum: 512, maximum: 65536 },
                     pids: { type: 'integer', minimum: 64, maximum: 16384 },
                     homeChannelId: ID,
+                    terminalIdleMinutes: { type: 'integer', minimum: 1, maximum: 240 },
+                    terminalMaxHours: { type: 'integer', minimum: 1, maximum: 24 },
+                    terminalRateKbps: { type: 'integer', minimum: 16, maximum: 8192 },
                 },
             },
         },

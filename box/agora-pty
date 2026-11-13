@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""agora-pty: run one command in a pseudo-terminal for the box terminal (docs/box-terminal.md).
+
+    agora-pty COLS ROWS CWD -- COMMAND [ARGS...]
+
+agora-host (in the box) starts this with its stdin, stdout and a control pipe on fd 3:
+  stdin   bytes for the command's terminal (what the owner types)
+  stdout  bytes the terminal produced
+  fd 3    lines "R COLS ROWS": resize the terminal
+  stderr  a fixed error code if the command could not start (exec_failed, bad_arguments, pty_failed)
+  exit    the command's exit status (128+N when a signal N ended it)
+
+Why Python and not a native Node module: the box image already has python3 and its `pty` module
+is in the standard library, so there is nothing to compile for amd64 or arm64 and nothing to keep
+in step with Node. This process only moves bytes: it never reads, logs or stores them.
+
+Closing stdin, or SIGHUP/SIGTERM, hangs the command's process group up; a command that ignores
+that is killed after two seconds.
+"""
+import errno
+import fcntl
+import os
+import pty
+import select
+import signal
+import struct
+import sys
+import termios
+import time
+
+MAX_TO_CHILD = 1 << 20      # unwritten input kept before we stop reading stdin
+MAX_TO_NODE = 1 << 18       # unwritten output kept before we stop reading the terminal
+CHUNK = 1 << 14
+KILL_AFTER = 2.0
+
+stop_requested = False
+
+
+def request_stop(_signum, _frame):
+    global stop_requested
+    stop_requested = True
+
+
+def set_size(fd, cols, rows):
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+    except OSError:
+        pass
+
+
+def fail(code, status=2):
+    os.write(2, (code + '\n').encode())
+    sys.exit(status)
+
+
+def main(argv):
+    if '--' not in argv or len(argv) < 6:
+        fail('bad_arguments')
+    split = argv.index('--')
+    try:
+        cols, rows, cwd = int(argv[1]), int(argv[2]), argv[3]
+    except (ValueError, IndexError):
+        fail('bad_arguments')
+    command = argv[split + 1:]
+    if split != 4 or not command or not (1 <= cols <= 500 and 1 <= rows <= 200):
+        fail('bad_arguments')
+
+    signal.signal(signal.SIGHUP, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
+    try:
+        pid, master = pty.fork()
+    except OSError:
+        fail('pty_failed')
+    if pid == 0:
+        # The child: session leader with the terminal as its controlling terminal. Ignored signals
+        # stay ignored across exec, so give the shell and its jobs the defaults back (Python ignores
+        # SIGPIPE, and this process ignores SIGINT): without it Ctrl-C would not stop a job.
+        for sig in (signal.SIGINT, signal.SIGPIPE, signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT):
+            signal.signal(sig, signal.SIG_DFL)
+        try:
+            os.chdir(cwd)
+            os.execvp(command[0], command)
+        except OSError:
+            os.write(2, b'exec_failed\n')
+            os._exit(127)
+    set_size(master, cols, rows)
+
+    for fd in (0, 1, 3, master):
+        try:
+            os.set_blocking(fd, False)
+        except OSError:
+            pass
+
+    to_child = bytearray()
+    to_node = bytearray()
+    ctl = bytearray()
+    stdin_open = True
+    ctl_open = True
+    master_open = True
+    hung_up_at = None
+    status = None
+    status_at = None
+
+    def hang_up():
+        nonlocal hung_up_at
+        if hung_up_at is None:
+            hung_up_at = time.monotonic()
+            try:
+                os.killpg(pid, signal.SIGHUP)
+            except OSError:
+                pass
+
+    while True:
+        if stop_requested or not stdin_open:
+            hang_up()
+        if hung_up_at is not None and time.monotonic() - hung_up_at > KILL_AFTER:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+        if status is None:
+            try:
+                done, st = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    status = (os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
+                    status_at = time.monotonic()
+            except ChildProcessError:
+                status = 0
+                status_at = time.monotonic()
+        # Done once the command is gone and its output delivered; a background process that kept
+        # the terminal open gets a short grace to say its last words, then goes with the group
+        if status is not None and not to_node and (not master_open or time.monotonic() - status_at > 0.3):
+            break
+
+        readers = []
+        writers = []
+        if stdin_open and len(to_child) < MAX_TO_CHILD:
+            readers.append(0)
+        if ctl_open:
+            readers.append(3)
+        if master_open and len(to_node) < MAX_TO_NODE:
+            readers.append(master)
+        if master_open and to_child:
+            writers.append(master)
+        if to_node:
+            writers.append(1)
+        try:
+            r, w, _ = select.select(readers, writers, [], 0.2)
+        except (InterruptedError, OSError):
+            continue
+
+        if 0 in r:
+            try:
+                data = os.read(0, CHUNK)
+                if data:
+                    to_child += data
+                else:
+                    stdin_open = False
+            except BlockingIOError:
+                pass
+            except OSError:
+                stdin_open = False
+        if 3 in r:
+            try:
+                data = os.read(3, 256)
+                if data:
+                    ctl += data
+                else:
+                    ctl_open = False
+            except BlockingIOError:
+                pass
+            except OSError:
+                ctl_open = False
+            while b'\n' in ctl:
+                line, _, rest = bytes(ctl).partition(b'\n')
+                ctl = bytearray(rest)
+                parts = line.split()
+                if len(parts) == 3 and parts[0] == b'R':
+                    try:
+                        c, rw = int(parts[1]), int(parts[2])
+                        if 1 <= c <= 500 and 1 <= rw <= 200:
+                            set_size(master, c, rw)
+                    except ValueError:
+                        pass
+            if len(ctl) > 1024:
+                ctl = bytearray()
+        if master in r:
+            try:
+                data = os.read(master, CHUNK)
+                if data:
+                    to_node += data
+                else:
+                    master_open = False
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                # EIO: every process on the terminal has gone
+                master_open = False if e.errno in (errno.EIO, errno.EBADF) else master_open
+        if master in w and to_child:
+            try:
+                n = os.write(master, to_child[:CHUNK])
+                del to_child[:n]
+            except BlockingIOError:
+                pass
+            except OSError:
+                to_child.clear()
+        if 1 in w and to_node:
+            try:
+                n = os.write(1, to_node[:CHUNK])
+                del to_node[:n]
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                if e.errno == errno.EPIPE:
+                    # The reader is gone: nothing to deliver to
+                    to_node.clear()
+                    stdin_open = False
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    sys.exit(status if status is not None else 0)
+
+
+if __name__ == '__main__':
+    main(sys.argv)

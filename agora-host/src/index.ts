@@ -9,6 +9,7 @@ import { siwcCommand } from './siwc/cli.js';
 import { autostartCommand } from './autostart.js';
 import { creditLine } from './openrouter.js';
 import { boxConfigCommand, inBox } from './box.js';
+import { boxShellLoop } from './box-shell.js';
 import { devinCommand } from './devin.js';
 
 async function main() {
@@ -37,8 +38,11 @@ async function main() {
     // Agora applies the subscription rule from this report; the host enforces it too
     try { await client.reportProfiles(profileReport(config.profiles)); } catch (err) { console.error(`profile_report_failed ${errorCode(err)}`); }
     const scheduler = new Scheduler(config, client, new ProcessRunner(), { log: code => console.error(code) });
-    process.once('SIGINT', () => { void scheduler.stop(); });
-    process.once('SIGTERM', () => { void scheduler.stop(); });
+    // The terminal in a box (docs/box-terminal.md): box mode only, on a socket of its own, so it never delays a run
+    const shell = new AbortController();
+    void boxShellLoop(config, { signal: shell.signal, log: code => console.error(code) }).catch(() => console.error('box_shell_loop_failed'));
+    process.once('SIGINT', () => { shell.abort(); void scheduler.stop(); });
+    process.once('SIGTERM', () => { shell.abort(); void scheduler.stop(); });
     await scheduler.run();
 }
 main().catch(err => {

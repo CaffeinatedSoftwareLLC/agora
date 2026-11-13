@@ -473,6 +473,7 @@ These run with `scripts/test-boxes.sh` on any Linux Docker engine with `runsc`, 
 - Firecracker or VM boxes; GPU boxes (host mode covers GPU work).
 - Running agora-host and the CLI as different users inside the box (would keep the host token from the agent; accepted residual, §3.2).
 - Prebuilt images from a registry: the installer builds them locally.
+- A terminal for an unboxed agent ([§17](#17-the-owners-terminal)).
 
 ## 16. Adding a box adapter
 
@@ -491,3 +492,23 @@ To add one (opencode, oh-my-pi and Devin followed these steps):
 4. **Agora:** if `agent_profiles.adapter`'s check constraint doesn't list it yet, a migration (opencode needed none: 068 added it; Devin's is 089; add the value to whatever list is there, never restate it, as 088 and 089 do). A CLI with a login also needs its sign-in hosts in `LOGIN_HOSTS` (`src/routes/box-hosts.ts`, which the unit test checks against the relay's hosts, and `boxRules.ts`), and its Log in kind in `BOX_ADAPTER_OPTIONS`. The UI's Create box list is `BOX_ADAPTER_OPTIONS` in `agora-ui/src/features/boxes/boxRules.ts` (with the `BoxAdapter` type in `api.ts`).
 5. **Tests:** `test/unit/box-adapters.unit.test.ts` fails until both halves, the Dockerfile and the UI list agree; `test/boxes/adapters.box.test.ts` starts a box of every registry entry on the test image. Add host tests for its launch in a box (`agora-host/test/box.test.ts`: the yeet arguments, the environment it gets, a turn with its fake) and, if it has a login, for the relay (`agora-host/test/box-login.test.ts`).
 6. **Docs:** its allowlist (§4.2), telemetry (§4.2.1), yeet switches (§8.1) and login (§8.2) here.
+
+## 17. The owner's terminal
+
+The owner can open a real terminal in the browser, attached to one box ([box-terminal.md](box-terminal.md); design and threat list in [planning/box-terminal.md](planning/box-terminal.md)). It is a remote shell, so it is built on what this document already has, and widens nothing:
+
+- **Not a `docker exec`.** boxd's socket proxy still allows no exec and no attach (§7.2). The in-box agora-host starts the pseudo-terminal (`box/agora-pty`, Python's `pty`) and relays its bytes over a socket it opens **out** through the edge, with the box's own host token. The gateway checks it like every other box credential (§4.1, both ways: a box credential works only through its own edge at its current generation), and the hub accepts a host's events only for a terminal it was given. A box credential's reach grows by exactly this socket and no REST route.
+- **Who.** The server owner, on a cookie session, with this site's `Origin`, a CSRF token and **their password again**, for a 30-second single-use ticket bound to the person, that browser session and the box; then the browser's own socket, which refuses any other `Origin`, any bearer, bot or host token, and a login that arrived through a box's edge, redeems the ticket in one statement and checks ownership again. One terminal per box (a unique index); a second needs a confirmed takeover.
+- **What it reaches.** A bash shell as the box's user in the agent's workspace, with the environment the agent's CLI gets (`childEnv`: no host token, no bot token). The same network allowlist, home folder and limits as the agent; the tokens stay readable to the box's user through `/run/agora/host.json` and PID 1, as for the agent (§3.2).
+- **Beside the agent.** While a terminal is open, `claimNext` offers the box's host no new wake for that profile; a run already working is not stopped. The home channel is told when it opens and closes.
+- **Recorded.** `box_shell_sessions` and the audit log: who, when, how long, bytes in and out, why it closed. Never the bytes themselves.
+- **Limits** (per box, the owner's to change): idle 15 minutes, longest 8 hours, output 512 KiB/s. Output is paced at the host and closed at the server if ignored.
+- **Version skew.** `agent_hosts.shell_protocol` is set when a host connects its terminal socket. A box from an older image has none, so Settings says "this box needs its update first" and the ticket route answers `409 box_needs_update`.
+- **Unboxed agents.** None, by design. agora-host refuses to open a terminal outside box mode. It would need an explicit opt-in in the machine's own host config that the server can never switch on.
+
+| # | Threat | Stopped by | Test |
+|---|---|---|---|
+| B12 | Someone other than the owner gets a shell in a box | owner-only ticket with password re-entry, cookie session, `Origin`, CSRF; single-use ticket bound to person, session and box; ownership re-checked at the socket; host events only for its own terminals | `test/integration/box-terminal.integration.test.ts` (member, director, other owner, bot, host token, bearer, wrong password, reused / expired / other-session ticket, other `Origin`, no CSRF) |
+| B13 | The terminal is a way around the box's limits | the shell is the box user's, in the box, behind the same edge | `test/boxes/terminal.box.test.ts` (uid 1000, no token in the environment, an unlisted domain refused, nothing direct) |
+| B14 | A terminal's bytes are kept | the hub passes bytes and counts them | the integration test searches every table and every log write for a typed marker |
+

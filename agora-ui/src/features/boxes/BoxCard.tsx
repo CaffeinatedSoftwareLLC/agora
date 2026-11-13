@@ -8,6 +8,7 @@ import {
 } from './boxRules';
 import { LoginDialog } from './LoginDialog';
 import { ResetBoxDialog } from './ResetBoxDialog';
+import { TerminalControls } from './terminal/TerminalControls';
 
 /**
  * One box in Settings → Agents (docs/agent-boxes.md §9): its state, the owner's lifecycle
@@ -103,6 +104,7 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
               <Button variant="danger" onClick={remove} loading={busy === 'delete'} disabled={disabled}>Delete</Button>
             </div>
           )}
+          {isOwner && <TerminalControls box={box} onChange={onChange} />}
           <details className="mt-2">
             <summary className="flex min-h-11 md:min-h-8 cursor-pointer select-none items-center text-xs font-semibold text-text-muted">
               Network, repositories and resources

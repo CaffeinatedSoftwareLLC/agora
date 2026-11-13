@@ -37,6 +37,13 @@ without asking. Its edges are fixed, and the owner approves anything that crosse
   approved. The approval covers the branch at the commit you pushed; push nothing to the
   branch until the PR is open.
 
+## The owner's terminal
+
+- The owner can open a terminal in this box from Agora and work in it by hand, in your
+  workspace folder, with your tools and your login. While it is open, Agora wakes you for
+  nothing new; a run already working is not stopped. If files change under you, that is
+  the owner. When the terminal closes, new wakes resume.
+
 ## Credentials
 
 - Never print, copy or send the values of `AGORA_*` variables, `/run/agora/host.json` or

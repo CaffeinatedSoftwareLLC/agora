@@ -48,8 +48,11 @@ COPY --from=build /build/agora-mcp/node_modules /opt/agora/agora-mcp/node_module
 COPY --from=build /build/agora-mcp/dist /opt/agora/agora-mcp/dist
 COPY box/agora-box-start /opt/agora/agora-box-start
 COPY box/agora-pr /usr/local/bin/agora-pr
+# The pseudo-terminal behind the owner's terminal in Agora (docs/box-terminal.md): Python's own pty
+# module, so nothing native to build for amd64 or arm64. Root-owned and read-only like the rest of /opt/agora.
+COPY box/agora-pty /opt/agora/agora-pty
 COPY box/AGENTS.md /opt/agora/AGENTS.md
-RUN chmod 0755 /opt/agora/agora-box-start /usr/local/bin/agora-pr && chmod 0644 /opt/agora/AGENTS.md
+RUN chmod 0755 /opt/agora/agora-box-start /usr/local/bin/agora-pr /opt/agora/agora-pty && chmod 0644 /opt/agora/AGENTS.md
 ENV HOME=/home/agent \
     PATH=/home/agent/.npm-global/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     NPM_CONFIG_UPDATE_NOTIFIER=false
