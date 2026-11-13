@@ -64,7 +64,7 @@ From a checkout: `bash install/macos/install.sh`. It runs Agora in a Linux VM (L
 - Runs the Ubuntu installer (below) inside the VM, and forwards Agora's ports to `127.0.0.1` on the Mac: `https://localhost:8443`, agents on `http://localhost:3000`.
 - Adds a launchd job that keeps the VM running from login, or from boot with `--at-boot`.
 
-Day-to-day commands (`install/macos/agora-vm.sh status|doctor|backup|restore|upgrade|stop|start`), Tailscale, keeping the Mac awake and the known limits: [macos.md](macos.md). **Ran on a real Mac on 2026-11-10** (install) **and 2026-11-12** (restore of a bundle made on Windows); what is still open is in the [test plan](testing/macos-test-plan.md).
+Day-to-day commands (`install/macos/agora-vm.sh status|doctor|backup|restore|upgrade|tailnet|stop|start`), Tailscale, keeping the Mac awake and the known limits: [macos.md](macos.md). **Ran on a real Mac on 2026-11-10** (install) **and 2026-11-12** (restore of a bundle made on Windows); what is still open is in the [test plan](testing/macos-test-plan.md).
 
 ## After the install
 
@@ -88,15 +88,40 @@ At any time:
 
 In Agora, Admin → Instance → **Report setup problem** does the same from the browser.
 
-## Backups, upgrades, removal
+## Upgrading: one command
 
-All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Agora`; on a Mac, `install/macos/agora-vm.sh backup`, `restore <file>`, `upgrade` run them in the VM and move the bundle to and from the Mac):
+| | Command |
+|---|---|
+| Linux | `bash ~/agora/install/upgrade.sh` |
+| Windows (PowerShell) | `wsl -d Agora --cd ~/agora --exec bash install/upgrade.sh` (`Agora`: the distro Agora runs in) |
+| macOS | `bash ~/.agora/macos/release/install/macos/agora-vm.sh upgrade` (from a checkout: `bash install/macos/agora-vm.sh upgrade`) |
+
+Each one downloads the latest release (`agora.tar.gz` from the fixed `agora-latest` release), checks its SHA-256 and hands over to that release's own `install/upgrade.sh`, which:
+
+1. backs up the running install first (it asks for a passphrase; `--passphrase-file <file>` gives one);
+2. replaces the release and keeps the old one in `.releases/` for `--rollback`. Settings, data and boxes stay, and boxes keep their home folders;
+3. starts the stack **with the compose override files the install was running with**. An install with Tailscale access ([remote-access.md](remote-access.md)) comes back with `docker-compose.tailnet.yml`: the list is in `.agora-install` in the install folder (`compose_overrides=`), and an install that was started by hand is read once from its running containers;
+4. prints one line per check: Agora's health and, with Tailscale access on, that `tailscale serve` still publishes it. A failed check says what to run; it never undoes the upgrade.
+
+`--ref v0.5.0` installs that release instead of the latest, `--source <folder>` a checkout or an unpacked release. To go back: `bash ~/agora/install/upgrade.sh --rollback`.
+
+On Windows, the one-file installer does the same from Windows itself, and checks WSL's memory and the keep-alive task on the way: `powershell -ExecutionPolicy Bypass -File $HOME\Downloads\install.ps1 -Existing upgrade`. Download it again first: the `install.ps1` of 0.4.0 didn't pass its options on (run without options, it asks and then upgrades).
+
+**From 0.4.0 or earlier,** the scripts already in the install are the old ones:
+
+- Linux and Windows: the same command works. If the install has Tailscale access, the old script starts the stack without the tailnet override; run `bash install/tailnet.sh on` afterwards (the upgrade brings it), which puts it back and records it for every later upgrade.
+- macOS: download and run [`upgrade-macos.sh`](https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/upgrade-macos.sh) once ([macos.md](macos.md#upgrading)); it keeps Tailscale access by itself.
+- An install from before agent boxes has no `install/` folder: unpack the new release anywhere and run `bash <new release>/install/upgrade.sh --dir ~/agora`.
+
+## Backups, removal
+
+All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Agora`; on a Mac, `install/macos/agora-vm.sh backup` and `restore <file>` run them in the VM and move the bundle to and from the Mac):
 
 | | Command | |
 |---|---|---|
 | Back up | `bash install/backup.sh` | One encrypted file in `backups/` with the database, files, every agent's box (logins and repos) and `.env.prod`. You choose its passphrase; without it the backup can't be restored. Agora stops for the length of the backup. |
 | Restore | `bash install/restore.sh backups/<file>.agorabk` | Into an install with the same name. Tokens and approvals from before the backup stop working; boxes are rebuilt with fresh ones. |
-| Upgrade | `bash install/upgrade.sh` | Backs up first, then installs the latest release. Boxes keep their home folders. The replaced release is kept in `.releases/` for `--rollback`. An install from before agent boxes has no `install/` folder: unpack the new release anywhere and run `bash <new release>/install/upgrade.sh --dir ~/agora`. |
+| Tailscale access | `bash install/tailnet.sh on` (`off`, `status`) | Reach Agora from your phone over your own tailnet, in one command: [remote-access.md](remote-access.md). |
 | Remove | `bash install/uninstall.sh` | Removes the containers and keeps all data. `--purge` deletes the data too, after you type the install's name. On Windows, `install\windows\uninstall.ps1` also removes the scheduled task and, if the installer created it and you confirm, the `Agora` distro. |
 
 ## Unattended installs

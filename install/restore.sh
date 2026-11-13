@@ -18,6 +18,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib/common.sh"
 # shellcheck source=lib/bundle.sh
 . "$HERE/lib/bundle.sh"
+# shellcheck source=lib/tailnet.sh
+. "$HERE/lib/tailnet.sh"
 
 DIR=$(cd "$HERE/.." && pwd) BUNDLE='' PASS_ARG='' YES=0 CRYPT_ARG=''
 while [ $# -gt 0 ]; do
@@ -162,3 +164,7 @@ done
 rm -rf "$WORK"
 FINISHED=1
 ok "restored; boxd now rebuilds the boxes with fresh tokens"
+# The stack came back with this machine's compose overrides (.agora-install), whatever the
+# bundle's machine used; with the tailnet override on, .env.prod is the bundle's and may not
+# allow this machine's tailnet address yet: the checks say so
+post_start_checks "$DIR" || true
