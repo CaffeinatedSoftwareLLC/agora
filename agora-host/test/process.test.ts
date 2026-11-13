@@ -6,6 +6,9 @@ import type { Launch } from '../src/adapters.js';
 const mocked = vi.hoisted(() => ({ spawn: vi.fn(), execFile: vi.fn() }));
 vi.mock('node:child_process', () => mocked);
 import { ProcessRunner } from '../src/process.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { StreamEvent } from '../src/stream.js';
 
 function fakeChild() {
     const c = Object.assign(new EventEmitter(), { pid: 12345, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
@@ -70,4 +73,47 @@ it('snapshots renamed and untracked paths with spaces using nul-delimited git st
     });
     const snapshot = await worktreeSnapshot('nonexistent-test-dir');
     expect([...snapshot!.keys()]).toEqual(['new name.txt', 'old name.txt', 'untracked file']);
+});
+
+describe('live output through the process runner', () => {
+    const lines = readFileSync(join(__dirname, 'fixtures', 'claude-partial-read.jsonl'), 'utf8');
+    it('streams a Claude run from chunks that split lines, and keeps partial-message events out of the parsed output', async () => {
+        const c = fakeChild(); mocked.spawn.mockReturnValue(c);
+        const events: StreamEvent[] = [];
+        const running = new ProcessRunner().start({ ...launch, adapter: 'claude', cwd: '/work', lurk: true, stream: e => events.push(e) });
+        for (let i = 0; i < lines.length; i += 700) c.stdout.write(lines.slice(i, i + 700));
+        c.emit('close', 0);
+        const result = await running.result;
+        expect(result).toMatchObject({ success: true, nativeSessionId: '8e99695a-d3d2-47e2-bb3d-22be61b41075' });
+        expect(events.filter(e => e.type === 'step').map(e => (e as { state: string }).state)).toEqual(['start', 'ok']);
+        expect(events.filter(e => e.type === 'text').map(e => (e as { delta: string }).delta).join('')).toBe('`notes.txt` has one line: "hello world".');
+    });
+    it('streams a Codex run (real codex exec --json output) and still parses the result', async () => {
+        const c = fakeChild(); mocked.spawn.mockReturnValue(c);
+        const events: StreamEvent[] = [];
+        const running = new ProcessRunner().start({ ...launch, cwd: 'C:\work', lurk: true, stream: e => events.push(e) });
+        c.stdout.write(readFileSync(join(__dirname, 'fixtures', 'codex-exec-command.jsonl'), 'utf8')); c.emit('close', 0);
+        expect(await running.result).toMatchObject({ success: true, nativeSessionId: '01a1d634-b320-73b0-a5ef-9d7a81053a48' });
+        expect(events.map(e => e.type + ':' + ((e as { state?: string }).state ?? ''))).toEqual(['text:', 'step:start', 'step:ok', 'text:']);
+    });
+    it('a throwing stream sink never fails the run', async () => {
+        const c = fakeChild(); mocked.spawn.mockReturnValue(c);
+        const running = new ProcessRunner().start({ ...launch, cwd: 'C:\work', lurk: true, stream: () => { throw new Error('boom'); } });
+        c.stdout.write(readFileSync(join(__dirname, 'fixtures', 'codex-exec-command.jsonl'), 'utf8')); c.emit('close', 0);
+        expect(await running.result).toMatchObject({ success: true });
+    });
+    it('a run without a stream sink behaves as before', async () => {
+        const c = fakeChild(); mocked.spawn.mockReturnValue(c);
+        const running = new ProcessRunner().start({ ...launch, adapter: 'claude', cwd: '/work', lurk: true });
+        c.stdout.write(lines); c.emit('close', 0);
+        expect(await running.result).toMatchObject({ success: true });
+    });
+    it('a flood of partial-message events cannot hit the output limit', async () => {
+        const c = fakeChild(); mocked.spawn.mockReturnValue(c);
+        const running = new ProcessRunner().start({ ...launch, adapter: 'claude', cwd: '/work', lurk: true });
+        const delta = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x'.repeat(1000) } } }) + '\n';
+        for (let i = 0; i < 10000; i++) c.stdout.write(delta);
+        c.stdout.write(lines); c.emit('close', 0);
+        expect(await running.result).toMatchObject({ success: true });
+    });
 });

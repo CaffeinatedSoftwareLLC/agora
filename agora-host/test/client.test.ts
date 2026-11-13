@@ -18,6 +18,19 @@ async function fake(handler: (path: string, body: string, auth: string | undefin
     return `http://127.0.0.1:${address.port}`;
 }
 describe('HTTP contract against a fake local server', () => {
+    it('posts a live-output batch once with the claim token, and reads whether it is still on', async () => {
+        const seen: Array<{ path: string; body: any }> = [];
+        const url = await fake((path, body) => { seen.push({ path, body: JSON.parse(body) }); return { status: 200, body: { ok: true, enabled: seen.length < 2 } }; });
+        const client = new Client(url, 'ah_test', fetch, undefined, 1);
+        const run = claim();
+        expect(await client.stream(run, [{ type: 'text', message: 'm', delta: 'hi' }])).toBe(true);
+        expect(await client.stream(run, [{ type: 'step', step: 's', state: 'start', tool: 'Read', label: 'Read a' }])).toBe(false);
+        expect(seen[0]).toEqual({ path: `/agent-hosts/@me/runs/${id(1)}/stream`, body: { claimToken: 'rt_test', events: [{ type: 'text', message: 'm', delta: 'hi' }] } });
+    });
+    it('a 404 from an older server surfaces as an HttpError the streamer treats as "stop"', async () => {
+        const url = await fake(() => ({ status: 404, body: { error: 'not_found' } }));
+        await expect(new Client(url, 'ah_test', fetch, undefined, 1).stream(claim(), [{ type: 'text', message: 'm', delta: 'x' }])).rejects.toMatchObject({ status: 404 });
+    });
     it('claims workspace commands once and retries only their result report',async()=>{
         const cmd={id:id(20),claimToken:'claim-token',sessionId:id(2),profile:'builder',workdirAlias:'agora',action:'diff',payload:{path:'a.ts'}};
         let claims=0,reports=0;const bodies:string[]=[];

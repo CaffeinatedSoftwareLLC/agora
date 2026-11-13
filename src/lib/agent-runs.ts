@@ -157,6 +157,8 @@ export interface ClaimResult {
         planOwnerId: string | null;
         model: string | null; effort: string | null; workdirAlias: string;
         toolPresets: string[]; allowedTools: string[];
+        /** "Show live output" is on for this agent (docs/live-output.md). */
+        liveOutput: boolean;
     };
     /** The channel's pinned instructions and files (channel-projects.ts); null when there are none. */
     project: ClaimProject | null;
@@ -207,7 +209,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     const s = await c.query(
         `SELECT s.*, p.name AS profile_name, p.adapter, p.model, p.effort, p.workdir_alias, p.wake_budget,
                 COALESCE(s.token_budget, p.token_budget) AS token_budget, p.run_timeout_sec, p.generation, p.host_id, ch.name AS channel_name,
-                p.tool_presets, p.allowed_tools, (s.sleeping_until > NOW()) AS asleep,
+                p.tool_presets, p.allowed_tools, p.show_live_output, (s.sleeping_until > NOW()) AS asleep,
                 ${WAKE_AUTH_SQL} AS auth_mode, p.run_approval, ${PLAN_OWNER_SQL} AS plan_owner_id,
                 (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner, srv.subscription_wakes,
                 (SELECT t.title FROM task_cards t WHERE t.session_id = s.id) AS task_title
@@ -408,6 +410,8 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
             planOwnerId: subscription ? planOwnerId : null,
             model: session.model ?? null, effort: session.effort ?? null, workdirAlias: session.workdir_alias,
             toolPresets: session.tool_presets ?? [], allowedTools: session.allowed_tools ?? [],
+            // The owner's "Show live output" switch (docs/live-output.md); older hosts ignore it
+            liveOutput: session.show_live_output !== false,
         },
         project,
         // Lurk runs only read along; they never get a verify step

@@ -189,6 +189,29 @@ export interface AgentRunProgressPayload {
   planTotal: number | null;
 }
 
+/** One event of a run's live output (docs/live-output.md). A text event with `replace` sets the text instead of adding to it. */
+export type RunStreamEvent =
+  | { type: 'text'; message: string; delta: string; replace?: boolean }
+  | { type: 'step'; step: string; state: 'start' | 'ok' | 'failed'; tool?: string; label?: string };
+
+/** A batch of a hosted run's live output, sent to the channel's room while the run goes. Never stored. */
+export interface AgentRunStreamPayload {
+  channelId: string;
+  sessionId: string;
+  runId: string;
+  threadId: string | null;
+  profile: string | null;
+  seq: number;
+  events: RunStreamEvent[];
+}
+
+/** The run is over: remove its live block. */
+export interface AgentRunStreamEndPayload {
+  channelId: string;
+  sessionId: string;
+  runId: string;
+}
+
 export interface AgentSessionUpdatePayload {
   channelId: string;
   sessionId: string;
