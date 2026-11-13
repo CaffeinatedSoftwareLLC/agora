@@ -7,6 +7,7 @@ import { parseOutput, type Launch } from './adapters.js';
 import { startAppServer } from './siwc/appserver.js';
 import type { Progress, Result } from './types.js';
 import { startAcp } from './acp/session.js';
+import { claudeStream, codexStream, lineSplitter } from './stream.js';
 
 export interface RunningChild { result: Promise<Result>; kill(): Promise<void>; tokensUsed?(): number | null; progress?(): Progress | null }
 export interface Runner { start(launch: Launch): RunningChild }
@@ -53,15 +54,35 @@ export class ProcessRunner implements Runner {
         const result = new Promise<Result>((resolve, reject) => {
             child.on('error', () => resolve({ success: false, nativeSessionId: null, summary: null, tokensUsed: null, error: 'spawn_failed' }));
             child.stdout.setEncoding('utf8');
+            // Live output (stream.ts): parse the lines as they arrive. Claude's partial-message events
+            // exist only for that, so they are never kept in stdout (they would fill its 8 MB limit)
+            const parser = adapter === 'claude' ? claudeStream(launch.cwd) : codexStream(launch.cwd);
+            const feed = lineSplitter(line => {
+                if (launch.stream) { try { for (const e of parser.push(line)) launch.stream(e); } catch { /* a bad line is not a failed run */ } }
+            });
+            let pending = '';
+            const keep = (text: string) => {
+                size += Buffer.byteLength(text);
+                if (size <= 8 * 1024 * 1024) stdout += text;
+                else if (!overflow) { overflow = true; void kill().catch(() => reject(new Error('process_tree_kill_failed'))); }
+            };
             child.stdout.on('data', (chunk: string) => {
-                size += Buffer.byteLength(chunk);
-                if (size <= 8 * 1024 * 1024) stdout += chunk;
-                else { overflow = true; void kill().catch(() => reject(new Error('process_tree_kill_failed'))); }
+                feed.push(chunk);
+                if (adapter !== 'claude') { keep(chunk); return; }
+                pending += chunk;
+                if (pending.length > 8 * 1024 * 1024) { keep(pending); pending = ''; }
+                const cut = pending.lastIndexOf('\n') + 1;
+                if (cut === 0) return;
+                const lines = pending.slice(0, cut).split('\n'); pending = pending.slice(cut);
+                keep(lines.filter(l => l && !l.startsWith('{"type":"stream_event"')).map(l => `${l}\n`).join(''));
             });
             // Drain stderr, but never forward it: a CLI may echo secrets or user content.
             child.stderr.resume(); child.stdin.on('error', () => {});
             child.on('close', code => {
                 closed = true; notifyClose();
+                feed.end();
+                if (pending && !pending.startsWith('{"type":"stream_event"')) keep(pending);
+                pending = '';
                 // A close caused by root-only fallback must not conceal failed tree termination.
                 queueMicrotask(() => {
                     void (async () => {

@@ -25,6 +25,8 @@ export interface Profile {
   /** Session limits; null: no limit, the default (docs/agent-limits.md). */
   wakeBudget: number | null; tokenBudget: number | null; runTimeoutSec: number | null;
   toolPresets?: string[]; allowedTools?: string[];
+  /** Show the agent's live text and steps in the channel while it runs (docs/live-output.md); on unless false. */
+  showLiveOutput?: boolean;
   /** Reported by the host at start (docs/provider-terms.md); subscription until then. */
   authMode?: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
   /** 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md). */
@@ -433,6 +435,16 @@ export function ProfileRow({ serverId, profile, host, plan, onChange, onError }:
           A change applies to this agent's existing sessions at once. A session a limit already stopped stays shelved until you resume it.
         </p>
       </section>
+      <label className="mt-2 flex min-h-11 items-start gap-2 text-sm text-text" data-testid={`live-output-${profile.name}`}>
+        <input type="checkbox" className="mt-1" aria-label={`Show live output for ${profile.name}`} checked={profile.showLiveOutput !== false}
+          onChange={e => void (async () => {
+            try { await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { showLiveOutput: e.target.checked }); onChange(); }
+            catch (err) { onError(errorText(err)); }
+          })()} />
+        <span>Show live output
+          <span className="block text-xs text-text-muted">While this agent works, people in the channel see its text as it is written and its steps (reading a file, running a command). Its reasoning, file contents and command output are never shown. Turn it off to see nothing until its final post.</span>
+        </span>
+      </label>
       {dirty && (
         <div className="mt-2">
           <Button variant="secondary" disabled={!validWakeBudget || !validTokenBudget || !validRunMinutes || !validModel} onClick={() => void save()}>Save</Button>

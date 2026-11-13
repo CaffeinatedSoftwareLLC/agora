@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
+import { snapshots } from '../lib/run-stream';
 import { asService } from '../lib/agent-sessions';
 import { limitReached, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { LIMIT_SCHEMA, limitOf, limitStopSummary } from '../lib/agent-budget-notice';
@@ -187,6 +188,20 @@ export async function announce(db: any, channelId: string, sessionId: string, te
 }
 
 export async function agentCommandRoutes(app: FastifyInstance) {
+    // GET /channels/:id/agent-run-streams → 200 { streams } (live output, docs/live-output.md)
+    // The tails of this channel's runs that are going now, for a person who opens it mid-run.
+    // Same access as the channel's messages; the live events go to its room only.
+    app.get('/channels/:id/agent-run-streams', async (request, reply) => {
+        const { id: channelId } = request.params as any;
+        const db = request.dbClient!;
+        const access = await canViewChannel(db, channelId, request.userId, !!request.isBot);
+        if (!access.allowed) return reply.status(403).send({ error: 'Channel access denied' });
+        const runs = await asService(db, () => db.query(
+            `SELECT r.id FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id
+             WHERE s.channel_id = $1 AND r.status = 'claimed' AND r.lease_until > NOW()`, [channelId]));
+        return reply.send({ streams: snapshots(runs.rows.map((r: any) => r.id.trim())) });
+    });
+
     // POST /channels/:id/agent-commands
     app.post('/channels/:id/agent-commands', {
         schema: {

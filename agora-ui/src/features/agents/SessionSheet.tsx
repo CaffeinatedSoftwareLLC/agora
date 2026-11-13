@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionBudget } from './SessionBudget';
+import { LiveWork } from './LiveWork';
+import { useRunStreams } from './runStream';
 import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
@@ -64,6 +66,8 @@ function shortId(id: string): string {
 
 export function SessionSheet({ open, onClose, channelId, mode, sessions, profiles, profilesError, onChanged }: SessionSheetProps) {
   const titleId = useId();
+  // The running agent's live output, the same stream the channel shows (docs/live-output.md)
+  const streams = useRunStreams(channelId, open);
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; });
@@ -270,6 +274,8 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
             </span>
           )}
         </p>
+
+        {state === 'working' && current?.run && streams[current.run.id] && <LiveWork stream={streams[current.run.id]} name={current.profile} />}
 
         {live && current && (
           <div className="space-y-2 rounded-lg border border-border p-3 text-sm">

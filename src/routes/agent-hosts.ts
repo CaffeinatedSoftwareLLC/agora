@@ -6,7 +6,8 @@ import { generateBotToken } from '../auth/bot-tokens';
 import { isServerOwner } from '../lib/direct-agents';
 import { asService } from '../lib/agent-sessions';
 import { noticePathList } from '../lib/file-reservations';
-import { claimNext, complete, fail, heartbeat, liveToolRequest, openToolRequest, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
+import { applyBatch, endRunStream, STREAM_LIMITS, type WireEvent } from '../lib/run-stream';
+import { claimNext, complete, fail, hashClaimToken, heartbeat, liveToolRequest, openToolRequest, postNotice, HostRevokedError, type Notice } from '../lib/agent-runs';
 import { allowedToolsSchema, deniedToolsSchema, LIVE_WAIT_MAX_SECONDS, LIVE_WAIT_MIN_SECONDS, MAX_DETAIL, TOOL_RULE, toolPresetsSchema } from '../lib/agent-permissions';
 import { agentImageRoutes } from './agent-images';
 import { agentPlanRoutes } from './agent-plans';
@@ -66,6 +67,8 @@ function profileJson(r: any) {
         // Host mode (docs/agent-boxes.md §10): the flag drives the owner-only wake rule; `boxed`
         // (the host is a box) is what the UI labels, so a profile is "unboxed" whenever it isn't boxed
         hostMode: !!r.host_mode, boxed: !!r.boxed,
+        // "Show live output": the channel sees this agent's text and steps while it runs (docs/live-output.md)
+        showLiveOutput: r.show_live_output !== false,
     };
 }
 
@@ -99,6 +102,8 @@ const profileFields = {
     // Tool presets and always-allowed rules (#73); the host reads them at every claim
     toolPresets: toolPresetsSchema,
     allowedTools: allowedToolsSchema,
+    // Show the agent's live text and steps in the channel while it runs (default on)
+    showLiveOutput: { type: 'boolean' },
     hostModeAck,
 } as const;
 
@@ -126,7 +131,7 @@ async function checkRefs(db: any, serverId: string, botId?: string, hostId?: str
 
 const BOX_PROFILE = 'This profile belongs to a box; change it in the box settings';
 /** What Settings → Agents may still change on a box's profile: its session limits. */
-const BOX_PROFILE_FIELDS: ReadonlySet<string> = new Set(['wakeBudget', 'tokenBudget', 'runTimeoutSec']);
+const BOX_PROFILE_FIELDS: ReadonlySet<string> = new Set(['wakeBudget', 'tokenBudget', 'runTimeoutSec', 'showLiveOutput']);
 async function isBoxProfile(db: any, profileId: string): Promise<boolean> {
     return (await db.query(`SELECT 1 FROM agent_boxes WHERE profile_id = $1`, [profileId])).rows.length > 0;
 }
@@ -138,6 +143,16 @@ function queueNotices(request: FastifyRequest, notices: Notice[]) {
     for (const n of notices) {
         request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
     }
+}
+
+/** The run is over: drop its live-output tail and tell the channel's viewers to remove the block. */
+async function endStream(request: FastifyRequest, db: any, runId: string) {
+    endRunStream(runId);
+    const r = await db.query(`SELECT s.channel_id, s.id AS session_id FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id WHERE r.id = $1`, [runId]);
+    if (!r.rows[0]) return;
+    const channelId = r.rows[0].channel_id.trim();
+    request.pendingEvents ??= [];
+    request.pendingEvents.push({ room: `channel:${channelId}`, event: 'AgentRunStreamEnd', data: { channelId, sessionId: r.rows[0].session_id.trim(), runId } });
 }
 
 /** Host routes don't use the per-request transaction: commit it now and give the client back. */
@@ -283,14 +298,14 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 const row = await db.query(
                     `INSERT INTO agent_profiles (id, server_id, name, bot_id, host_id, adapter, model, effort, workdir_alias,
                                                  wake_budget, token_budget, run_timeout_sec, created_by, workspace_id, tool_presets, allowed_tools,
-                                                 host_mode, host_mode_ack_at, host_mode_ack_by)
+                                                 host_mode, host_mode_ack_at, host_mode_ack_by, show_live_output)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, 'primary'),
                              COALESCE($15, '{}'::text[]), COALESCE($16, '{}'::text[]),
-                             $17, CASE WHEN $17 THEN NOW() END, CASE WHEN $17 THEN $13::char(26) END)
+                             $17, CASE WHEN $17 THEN NOW() END, CASE WHEN $17 THEN $13::char(26) END, COALESCE($18, true))
                      RETURNING ${PROFILE_COLS}`,
                     [generateUlid(), serverId, b.name, b.botId, b.hostId, b.adapter, b.model ?? null, b.effort ?? null,
                      b.workdirAlias, b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, request.userId, b.workspaceId ?? null,
-                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true]
+                     b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, b.showLiveOutput ?? null]
                 );
                 return { status: 201, body: profileJson(row.rows[0]) };
             });
@@ -371,6 +386,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         wake_budget = CASE WHEN $22::boolean THEN $12 ELSE wake_budget END,
                         token_budget = CASE WHEN $23::boolean THEN $13 ELSE token_budget END,
                         run_timeout_sec = CASE WHEN $24::boolean THEN $14 ELSE run_timeout_sec END,
+                        show_live_output = COALESCE($25, show_live_output),
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
                         tool_presets = COALESCE($17, tool_presets), allowed_tools = COALESCE($18, allowed_tools),
                         host_mode = host_mode OR $19::boolean,
@@ -382,7 +398,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
                      b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null,
                      b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId, moved,
-                     'wakeBudget' in b, 'tokenBudget' in b, 'runTimeoutSec' in b]
+                     'wakeBudget' in b, 'tokenBudget' in b, 'runTimeoutSec' in b, b.showLiveOutput ?? null]
                 );
                 // A profile's limits reach its sessions: the wake and run time limits are read from the
                 // profile at every wake. A session's own token limit (set on its card, or given to a
@@ -652,7 +668,59 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const body = request.body as any;
         const r = await heartbeat(app.db, request.agentHost!, runId, body.claimToken, notices, body.tokensUsed, body.progress);
         queueNotices(request, notices);
+        if (r.status === 200 && (r.body as any).cancel) await endStream(request, app.db, runId);
         return reply.status(r.status).send(r.body);
+    });
+
+    // POST /agent-hosts/@me/runs/:runId/stream → 200 { ok, enabled } (live output, docs/live-output.md)
+    // A short request with a small batch of the run's text deltas and step events. Authorized as the
+    // heartbeat is (this host, this claim, run still claimed), read without locks: a stream batch must
+    // never queue behind the run's own transaction. Nothing is stored; the tail lives in memory and the
+    // batch is emitted to the run's channel room only.
+    app.post('/agent-hosts/@me/runs/:runId/stream', {
+        bodyLimit: 128 * 1024,
+        schema: { body: { type: 'object', required: ['claimToken', 'events'], additionalProperties: false, properties: {
+            ...claimBody,
+            events: { type: 'array', minItems: 1, maxItems: STREAM_LIMITS.maxEvents, items: { oneOf: [
+                { type: 'object', required: ['type', 'message', 'delta'], additionalProperties: false, properties: {
+                    type: { const: 'text' }, message: { type: 'string', minLength: 1, maxLength: 64 },
+                    delta: { type: 'string', minLength: 1, maxLength: STREAM_LIMITS.maxDelta } } },
+                { type: 'object', required: ['type', 'step', 'state'], additionalProperties: false, properties: {
+                    type: { const: 'step' }, step: { type: 'string', minLength: 1, maxLength: 64 },
+                    state: { enum: ['start', 'ok', 'failed'] }, tool: { type: 'string', maxLength: 40 },
+                    label: { type: 'string', maxLength: STREAM_LIMITS.maxLabel } } },
+            ] } },
+        } } },
+    }, async (request, reply) => {
+        const host = request.agentHost!;
+        await releaseRequestClient(request);
+        const { runId } = request.params as any;
+        const body = request.body as { claimToken: string; events: WireEvent[] };
+        const r = await app.db.query(
+            `SELECT r.status, r.claim_token_hash, (r.lease_until <= NOW()) AS lease_over, s.id AS session_id, s.channel_id,
+                    COALESCE(s.thread_id, (SELECT MIN(i.thread_id) FROM agent_inbox i WHERE i.batch_id = r.batch_id
+                        HAVING COUNT(*) = COUNT(i.thread_id) AND COUNT(DISTINCT i.thread_id) = 1)) AS thread_id,
+                    p.name AS profile_name, p.show_live_output
+             FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id JOIN agent_profiles p ON p.id = s.profile_id
+             WHERE r.id = $1 AND r.host_id = $2 AND s.server_id = $3`,
+            [runId, host.id, host.serverId]
+        );
+        const run = r.rows[0];
+        if (!run) return reply.status(404).send({ error: 'not_found' });
+        if (run.claim_token_hash !== hashClaimToken(body.claimToken)) return reply.status(409).send({ error: 'stale_claim' });
+        if (run.status !== 'claimed') return reply.status(409).send({ error: run.status === 'expired' ? 'lease_expired' : 'already_finished', status: run.status });
+        if (run.lease_over) return reply.status(409).send({ error: 'lease_expired' });
+        // The owner turned "Show live output" off: say so, so the host stops sending
+        if (run.show_live_output === false) return reply.send({ ok: true, enabled: false });
+        const channelId = run.channel_id.trim();
+        const sessionId = run.session_id.trim();
+        const { seq, events } = applyBatch(runId, { channelId, sessionId, threadId: run.thread_id?.trim() ?? null, profile: run.profile_name }, body.events);
+        if (events.length) {
+            request.pendingEvents ??= [];
+            request.pendingEvents.push({ room: `channel:${channelId}`, event: 'AgentRunStream', data: {
+                channelId, sessionId, runId, threadId: run.thread_id?.trim() ?? null, profile: run.profile_name, seq, events } });
+        }
+        return reply.send({ ok: true, enabled: true });
     });
 
     // POST /agent-hosts/@me/runs/:runId/tool-requests → 200 { id, status }
@@ -722,6 +790,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const { runId } = request.params as any;
         const r = await complete(app.db, request.agentHost!, runId, request.body as any, notices);
         queueNotices(request, notices);
+        if (r.status === 200) await endStream(request, app.db, runId);
         return reply.status(r.status).send(r.body);
     });
 
@@ -751,6 +820,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         const { runId } = request.params as any;
         const r = await fail(app.db, request.agentHost!, runId, request.body as any, notices);
         queueNotices(request, notices);
+        if (r.status === 200) await endStream(request, app.db, runId);
         return reply.status(r.status).send(r.body);
     });
 }

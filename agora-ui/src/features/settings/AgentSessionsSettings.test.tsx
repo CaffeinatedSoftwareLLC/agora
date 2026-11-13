@@ -109,6 +109,24 @@ describe('agent limits are shown, off by default, and the owner\'s choice', () =
   });
 });
 
+describe('Show live output (docs/live-output.md)', () => {
+  it('is on by default, says what it shows and never shows, and saves at once when the owner turns it off', async () => {
+    profiles();
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    const box = await screen.findByRole('checkbox', { name: 'Show live output for claude' });
+    expect(box).toBeChecked();
+    expect(screen.getByText(/Its reasoning, file contents and command output are never shown/)).toBeTruthy();
+    fireEvent.click(box);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { showLiveOutput: false }));
+  });
+  it('shows an agent that has it off as off, for a box profile too', async () => {
+    profiles({}, { showLiveOutput: false, boxed: true });
+    render(<AgentSessionsSettings />);
+    expect(await screen.findByRole('checkbox', { name: 'Show live output for claude' })).not.toBeChecked();
+  });
+});
+
 it('creates an opencode agent only with an OpenRouter model ID', async () => {
   const post = vi.spyOn(api, 'post').mockResolvedValue({ bot: { username: 'qwen' }, token: 'bot_x' });
   render(<AgentSessionsSettings />);
