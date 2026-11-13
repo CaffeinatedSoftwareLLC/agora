@@ -62,11 +62,15 @@ async function openTerminal() {
         socket,
         out: () => out,
         exit: () => exit,
-        /** Type a line and wait for what it prints after a marker the shell computes */
-        async run(line: string, expectIn: string | RegExp, ms = 20_000): Promise<string> {
+        /**
+         * Type a line and wait for the shell to finish it. The end marker is computed by the shell
+         * (`$((40+2))`), so it appears only in the output, never in the echo of what was typed;
+         * returns everything printed since, the echo of the line included.
+         */
+        async run(line: string, ms = 20_000): Promise<string> {
             const before = out.length;
-            socket.emit('shell:input', `${line}\n`);
-            await until(`output of ${line}`, async () => (typeof expectIn === 'string' ? out.slice(before).includes(expectIn) : expectIn.test(out.slice(before))), ms, 100);
+            socket.emit('shell:input', `${line}; echo "__end$((40+2))__"\n`);
+            await until(`output of ${line}`, async () => out.slice(before).includes('__end42__'), ms, 100);
             return out.slice(before);
         },
     };
@@ -98,16 +102,16 @@ describe('a terminal in a real box', () => {
         expect(status.body).toMatchObject({ supported: true, hostConnected: true, running: true, open: null });
 
         const t = await openTerminal();
-        const who = await t.run('echo "uid=$(id -u) cwd=$(pwd) term=$TERM"', /uid=\d+ cwd=\S+ term=\S+/);
+        const who = await t.run('echo "uid=$(id -u) cwd=$(pwd) term=$TERM"');
         expect(who).toContain('uid=1000');
         expect(who).toContain('cwd=/home/agent/scratch');
         expect(who).toContain('term=xterm-256color');
         // The CLI's own state directory: the agent's login is the one `claude` finds here
-        expect(await t.run('echo state=$CLAUDE_CONFIG_DIR', /state=\S+/)).toContain('state=/home/agent/.agora/state/term-a');
+        expect(await t.run('echo state=$CLAUDE_CONFIG_DIR')).toContain('state=/home/agent/.agora/state/term-a');
         // Its commands are on the PATH by name
-        expect(await t.run('command -v claude codex; echo done-path', 'done-path')).toMatch(/\/claude\s*\r?\n.*\/codex/s);
+        expect(await t.run('command -v claude codex')).toMatch(/\/claude\s*\r?\n.*\/codex/s);
         // The environment is the CLI's allowlist plus the proxy: no host token, no bot token, no instance URL
-        const env = await t.run('env | sort; echo done-env', 'done-env');
+        const env = await t.run('env | sort');
         expect(env).toContain('HTTPS_PROXY=http://edge:3128');
         for (const secret of [box.hostToken.slice(box.hostToken.indexOf('.') + 1), box.botToken.slice(box.botToken.indexOf('.') + 1)]) expect(env).not.toContain(secret);
         expect(env).not.toMatch(/AGORA_(HOST|BOT)_TOKEN|AGORA_INSTANCE_URL/);
@@ -115,24 +119,24 @@ describe('a terminal in a real box', () => {
         // Output and input are bytes: a resize reaches the terminal
         t.socket.emit('shell:resize', { cols: 132, rows: 43 });
         await new Promise(r => setTimeout(r, 300));
-        expect(await t.run('stty size', /43 132/)).toContain('43 132');
+        expect(await t.run('stty size')).toContain('43 132');
 
         // It is the same box: the repo-free home folder, writable, kept
-        await t.run('echo from-terminal > ~/terminal-was-here; cat ~/terminal-was-here', 'from-terminal');
+        expect(await t.run('echo from-$((6*7)) > ~/terminal-was-here; cat ~/terminal-was-here')).toContain('from-42');
 
         const closed = new Promise<void>(resolve => t.socket.once('shell:exit', () => resolve()));
         t.socket.emit('shell:close');
         await closed;
         expect(t.exit()).toEqual({ reason: 'closed_by_owner' });
         await until('the shell to be gone from the box', async () => (await shellsInBox()) === '0', 20_000, 500);
-        expect((await inBox(box.container, 'cat ~/terminal-was-here')).stdout.trim()).toBe('from-terminal');
+        expect((await inBox(box.container, 'cat ~/terminal-was-here')).stdout.trim()).toBe('from-42');
     }, 300_000);
 
     it('the box\'s network allowlist applies to it: an unlisted domain is refused by the edge, and there is no way around', async () => {
         const t = await openTerminal();
-        const viaProxy = await t.run('curl -sS -m 10 https://example.org/ 2>&1 | head -2; echo done-proxy', 'done-proxy', 30_000);
+        const viaProxy = await t.run('curl -sS -m 10 https://example.org/ 2>&1 | head -2', 30_000);
         expect(viaProxy).toMatch(/403|CONNECT tunnel failed/);
-        const direct = await t.run('curl -sS -m 6 --noproxy "*" https://1.1.1.1/ 2>&1 | head -2; echo done-direct', 'done-direct', 30_000);
+        const direct = await t.run('curl -sS -m 6 --noproxy "*" https://1.1.1.1/ 2>&1 | head -2', 30_000);
         expect(direct).toMatch(/Could not|Failed to connect|timed out|Network is unreachable|Connection refused|Couldn.t connect/i);
         // The edge recorded a pending domain request for the owner, as it does for the agent
         expect(await psql(`SELECT count(*) FROM box_edge_requests WHERE box_id = '${box.id}' AND subject->>'host' = 'example.org'`)).toBe('1');
@@ -152,15 +156,15 @@ describe('a terminal in a real box', () => {
         expect(t.out().length).toBeGreaterThan(32 * 1024);
         expect(t.exit()).toBeNull();
         t.socket.emit('shell:input', Buffer.from([3]));
-        const after = await t.run('echo interrupted-ok', 'interrupted-ok', 30_000);
-        expect(after).toContain('interrupted-ok');
+        const after = await t.run('echo interrupted-$((6*7))', 30_000);
+        expect(after).toContain('interrupted-42');
         t.socket.emit('shell:close');
         await api(`/boxes/${box.id}`, { method: 'PATCH', auth: inst.admin, body: { terminalRateKbps: 512 } });
     }, 300_000);
 
     it('the browser disappearing ends the shell in the box and everything it started', async () => {
         const t = await openTerminal();
-        await t.run('sleep 600 & echo started-bg', 'started-bg');
+        await t.run('sleep 600 & true');
         expect(await shellsInBox()).not.toBe('0');
         t.socket.disconnect();
         await until('the shell and its job to be gone', async () => (await shellsInBox()) === '0' && (await inBoxCount('[s]leep 600')) === '0', 30_000, 500);
@@ -185,7 +189,7 @@ describe('a terminal in a real box', () => {
         await waitRunning(inst, box.id);
         await until('the host to reconnect', async () => (await api(`/boxes/${box.id}/terminal`, { headers: { Cookie: cookie } })).body.hostConnected === true, 120_000, 2000);
         const again = await openTerminal();
-        await again.run('echo back-again', 'back-again');
+        expect(await again.run('echo back-$((6*7))')).toContain('back-42');
         again.socket.emit('shell:close');
     }, 600_000);
 
@@ -205,7 +209,7 @@ describe('a terminal in a real box', () => {
         expect(sessions.body.sessions.every((s: any) => s.state === 'closed')).toBe(true);
         expect(JSON.stringify(sessions.body)).not.toContain('terminal-was-here');
         expect(await psql(`SELECT count(*) FROM audit_log WHERE action = 'box_terminal_open' AND target_id = '${box.id}'`)).not.toBe('0');
-        const dump = await psql(`SELECT count(*) FROM (SELECT row_to_json(a)::text AS t FROM audit_log a UNION ALL SELECT row_to_json(m)::text FROM messages m UNION ALL SELECT row_to_json(s)::text FROM box_shell_sessions s) x WHERE t LIKE '%flood-flood%' OR t LIKE '%terminal-was-here%' OR t LIKE '%back-again%'`);
+        const dump = await psql(`SELECT count(*) FROM (SELECT row_to_json(a)::text AS t FROM audit_log a UNION ALL SELECT row_to_json(m)::text FROM messages m UNION ALL SELECT row_to_json(s)::text FROM box_shell_sessions s) x WHERE t LIKE '%flood-flood%' OR t LIKE '%terminal-was-here%' OR t LIKE '%back-42%'`);
         expect(dump).toBe('0');
     }, 120_000);
 });
