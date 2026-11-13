@@ -3,6 +3,8 @@
 #
 #   bash <new release>/install/upgrade.sh --dir <install folder> [--passphrase-file <file>]
 #   bash install/upgrade.sh [--dir <install folder>] [--source <checkout> | --ref <tag>] ...
+#     (in the install folder, with neither: the latest release. It is downloaded, checked against
+#     its SHA-256, and its own upgrade.sh then does the upgrade)
 #   bash install/upgrade.sh --rollback [--dir <install folder>] [--passphrase-file <file>]
 #
 # Run from a new release (or with --source / --ref) it upgrades the install in --dir to that
@@ -31,6 +33,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib/release.sh"
 # shellcheck source=lib/sandbox-net.sh
 . "$HERE/lib/sandbox-net.sh"
+# shellcheck source=lib/tailnet.sh
+. "$HERE/lib/tailnet.sh"
 
 SELF=$(cd "$HERE/.." && pwd)
 DIR='' SOURCE='' REF='' PASS_ARG='' ROLLBACK=0 NO_BACKUP=0
@@ -43,7 +47,7 @@ while [ $# -gt 0 ]; do
         --rollback) ROLLBACK=1 ;;
         --no-backup) NO_BACKUP=1 ;;
         --non-interactive) NON_INTERACTIVE=1 ;;
-        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
         *) echo "upgrade.sh: unknown option $1" >&2; exit 2 ;;
     esac
     shift
@@ -52,6 +56,26 @@ DIR=$(cd "${DIR:-$SELF}" && pwd)
 ENV="$DIR/$ENV_FILE_NAME"
 [ -f "$ENV" ] || die "no $ENV_FILE_NAME in $DIR"
 pick_docker || die "Docker isn't reachable"
+pass_args=(); [ -z "$PASS_ARG" ] || pass_args=(--passphrase-file "$PASS_ARG")
+ni_args=(); [ "$NON_INTERACTIVE" = 0 ] || ni_args=(--non-interactive)
+
+# No release given (run in the install folder itself), or --ref: download it, check it, and let
+# that release's own upgrade.sh do the upgrade, as when it is run from an unpacked release. The
+# scripts in the install folder are the old release's and know nothing the new one needs.
+if [ "$ROLLBACK" = 0 ] && [ -z "$SOURCE" ] && { [ -n "$REF" ] || [ "$SELF" = "$DIR" ]; }; then
+    REF=${REF:-latest}
+    say "${BOLD}Getting Agora ($REF)${RESET}"
+    FETCHED=$(mktemp -d)
+    trap 'rm -rf "$FETCHED"' EXIT
+    fetch_release_or_die "$REF" "$FETCHED"
+    [ -f "$FETCHED/install/upgrade.sh" ] && [ -f "$FETCHED/$COMPOSE_FILE_NAME" ] || die "the download is not an Agora release; nothing was changed"
+    ok "Agora $(agora_version "$FETCHED"), checked against its SHA-256"
+    nb_args=(); [ "$NO_BACKUP" = 0 ] || nb_args=(--no-backup)
+    rc=0
+    bash "$FETCHED/install/upgrade.sh" --dir "$DIR" --source "$FETCHED" "${pass_args[@]}" "${ni_args[@]}" "${nb_args[@]}" || rc=$?
+    exit "$rc"
+fi
+
 INSTALL_DIR=$DIR DOCTOR_SCRIPT="$SELF/install/doctor.sh"
 trap 'on_exit $?' EXIT
 TELEMETRY=$(env_get "$ENV" AGORA_TELEMETRY); TELEMETRY=${TELEMETRY:-off}
@@ -59,8 +83,6 @@ AGORA_TELEMETRY_URL=$(env_get "$ENV" AGORA_TELEMETRY_URL)
 OLD_VERSION=$(agora_version "$DIR"); OLD_VERSION=${OLD_VERSION:-unknown}
 STATE="$DIR/.agora-upgrade"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-pass_args=(); [ -z "$PASS_ARG" ] || pass_args=(--passphrase-file "$PASS_ARG")
-ni_args=(); [ "$NON_INTERACTIVE" = 0 ] || ni_args=(--non-interactive)
 state_get() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | tail -n 1; }
 
 wait_up() {
@@ -121,27 +143,20 @@ AGORA_VERSION=$OLD_VERSION
 # volumes and networks and boxd finds the edge under that name
 pin_identity "$DIR"
 say "${BOLD}Upgrading $(env_get "$ENV" AGORA_INSTANCE) from $OLD_VERSION${RESET}"
+# Also before anything changes: the compose override files the install runs with (the tailnet
+# override), read from its record or, the first time, from its containers, and written down
+install_overrides "$DIR"
+[ -z "$OVERRIDES" ] || info "keeping its compose override: $OVERRIDES ($([ "$OVERRIDES_SOURCE" = record ] && printf 'recorded' || printf 'found on its containers, now recorded') in $INSTALL_RECORD_NAME)"
 
 step upgrade.fetch 'Getting the new release'
 STAGE="$DIR/.releases/incoming-$STAMP"
 mkdir -p "$DIR/.releases"
-if [ -z "$SOURCE" ] && [ -z "$REF" ] && [ "$SELF" != "$DIR" ]; then SOURCE=$SELF; fi
-if [ -n "$SOURCE" ]; then
-    SOURCE=$(cd "$SOURCE" && pwd)
-    [ -f "$SOURCE/$COMPOSE_FILE_NAME" ] || die "$SOURCE is not an Agora checkout"
-    [ "$SOURCE" != "$DIR" ] || die "--source is this install folder; give the new release"
-    mkdir -p "$STAGE"
-    place_release "$SOURCE" "$STAGE"
-else
-    if [ -z "$REF" ] || [ "$REF" = latest ]; then url="$AGORA_RELEASE_BASE/download/agora-latest"; else url="$AGORA_RELEASE_BASE/download/$REF"; fi
-    dl=$(mktemp -d)
-    curl -fsSL -o "$dl/agora.tar.gz" "$url/agora.tar.gz"
-    curl -fsSL -o "$dl/agora.tar.gz.sha256" "$url/agora.tar.gz.sha256"
-    (cd "$dl" && sha256sum -c agora.tar.gz.sha256 >/dev/null) || die "the download doesn't match its SHA-256"
-    mkdir -p "$STAGE"
-    tar -xzf "$dl/agora.tar.gz" -C "$STAGE" --strip-components=1
-    rm -rf "$dl"
-fi
+[ -n "$SOURCE" ] || SOURCE=$SELF
+SOURCE=$(cd "$SOURCE" && pwd)
+[ -f "$SOURCE/$COMPOSE_FILE_NAME" ] || die "$SOURCE is not an Agora checkout"
+[ "$SOURCE" != "$DIR" ] || die "--source is this install folder; give the new release"
+mkdir -p "$STAGE"
+place_release "$SOURCE" "$STAGE"
 [ -f "$STAGE/install/backup.sh" ] || die "the new release has no install/backup.sh"
 NEW_VERSION=$(agora_version "$STAGE")
 ok "Agora $NEW_VERSION (box image $(box_version "$STAGE"))"
@@ -211,3 +226,4 @@ send_install_report ok null
 say ''
 say "  Upgraded to $NEW_VERSION. boxd rebuilds boxes on an older image one at a time; each posts a notice in its home channel."
 say "  To go back: bash $DIR/install/upgrade.sh --rollback --dir $DIR"
+post_start_checks "$DIR" || true

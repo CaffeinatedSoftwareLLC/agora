@@ -20,6 +20,9 @@
 #   sandbox_nets    sandbox networks: "<name> <inhibit_ipv4 option or ->" per line; `compose up`
 #                   creates <project>_sandbox with the option its compose file declares
 #   sandbox_attached  containers on a sandbox network other than this install's (one name per line)
+#   config_files    what `ps` prints for the com.docker.compose.project.config_files label: one
+#                   line per container, the comma-separated compose files it was started with
+#   up_files        the -f files of the last `compose up` (one per line)
 # boxd, while in `running`, recreates a box container that is removed (its reconcile loop); a
 # network can't be removed while box-edge runs; a volume can't be removed while a container of
 # the same box exists. `compose build` refuses when box/VERSION and AGORA_BOX_VERSION differ, as
@@ -84,6 +87,7 @@ case "$1" in
         add images "$tag"; add crypt_images "$tag"; echo "sha256:fake"; exit 0 ;;
     ps)
         case "$args" in
+            *config_files*) cat "$F/config_files" 2>/dev/null; exit 0 ;;
             *com.docker.compose.service=api*) cat "$F/projects"; exit 0 ;;
             *label=com.docker.compose.project=*working_dir*)
                 p=$(printf '%s' "$args" | sed -n 's/.*com.docker.compose.project=\([^ ]*\).*/\1/p')
@@ -177,8 +181,19 @@ case "$1" in
         esac
         exit 0 ;;
     compose)
-        # docker compose -f F --env-file E <sub> ...
-        shift 5
+        # docker compose -f F [-f OVERRIDE ...] --env-file E <sub> ...
+        shift
+        cfiles=()
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -f) cfiles+=("$2"); shift 2 ;;
+                --env-file) shift 2 ;;
+                *) break ;;
+            esac
+        done
+        [ "$1" = version ] && { echo "${FAKE_COMPOSE_VERSION:-2.40.0}"; exit 0; }
+        # As Compose does: a file that isn't there is an error
+        for cf in "${cfiles[@]}"; do [ -f "$PWD/$cf" ] || { echo "fake compose: no such file $cf" >&2; exit 14; }; done
         sub=$1; shift
         case "$sub" in
             ps)
@@ -197,6 +212,7 @@ case "$1" in
                 if printf '%s ' "$@" | grep -q 'postgres'; then add running postgres
                 else cp "$F/services" "$F/running"; fi
                 p=$(env_project); add projects "$p"; add pgdata "$p"; printf '%s\n' "$PWD" > "$F/dir_$p"
+                printf '%s\n' "${cfiles[@]}" > "$F/up_files"
                 if ! grep -q "^${p}_sandbox " "$F/sandbox_nets"; then
                     if grep -q inhibit_ipv4 "$PWD/docker-compose.prod.yml" 2>/dev/null; then o=true; else o=-; fi
                     printf '%s %s\n' "${p}_sandbox" "$o" >> "$F/sandbox_nets"

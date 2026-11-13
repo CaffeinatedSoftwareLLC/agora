@@ -8,11 +8,19 @@
 #   agora-vm.sh backup [--out FILE]          install/backup.sh inside, then the bundle to this Mac
 #                                            (default ~/Agora Backups/<name>.agorabk)
 #   agora-vm.sh restore FILE [--yes]         a bundle from this Mac into the VM's install
-#   agora-vm.sh upgrade [--source DIR]       install/upgrade.sh inside, from this checkout (or DIR)
+#   agora-vm.sh upgrade                      to the latest release: downloads it, checks its SHA-256,
+#                                            copies it in and runs its install/upgrade.sh inside
+#                                            (--ref TAG: that release; --source DIR: a checkout)
+#   agora-vm.sh tailnet on|off|status        Tailscale access (docs/remote-access.md): runs the
+#                                            install's install/tailnet.sh inside ([--hostname NAME]
+#                                            [--install-tailscale] for on)
 #   agora-vm.sh stop | start                 stop the VM (and its keep-alive) / start both again
 #   agora-vm.sh keepalive agent|daemon|off   start the VM at login (LaunchAgent), at boot
 #                                            (LaunchDaemon, sudo once), or not at all
 #   Options for all: --vm NAME (default agora), --passphrase-file F (backup, restore, upgrade)
+#
+# An upgrade keeps the compose override files the install runs with (the tailnet override), and
+# ends with checks: Agora's health and, with Tailscale access on, that it is still published.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -21,11 +29,12 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/macos.sh
 . "$HERE/lib/macos.sh"
 # Copies of a passphrase or bundle in the VM go however this ends
-trap guest_cleanup EXIT
+FETCHED=''
+trap 'guest_cleanup; [ -z "$FETCHED" ] || rm -rf "$FETCHED"' EXIT
 
 CMD=${1:-}
 [ $# -eq 0 ] || shift
-VM=agora OUT='' FILE='' YES=0 REPORT=0 SRC='' PASS_FILE=''
+VM=agora OUT='' FILE='' YES=0 REPORT=0 SRC='' PASS_FILE='' REF='' TS_ARGS=() NI=()
 REST=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -34,8 +43,12 @@ while [ $# -gt 0 ]; do
         --yes) YES=1 ;;
         --report) REPORT=1 ;;
         --source) SRC=${2:?--source needs a folder}; shift ;;
+        --ref) REF=${2:?--ref needs a release tag}; shift ;;
+        --hostname) TS_ARGS+=(--hostname "${2:?--hostname needs a name}"); shift ;;
+        --install-tailscale) TS_ARGS+=("$1") ;;
+        --non-interactive) NI=(--non-interactive) ;;
         --passphrase-file) PASS_FILE=${2:?--passphrase-file needs a file}; shift ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
         *) if [ "$CMD" = restore ] && [ -z "$FILE" ]; then FILE=$1; else REST+=("$1"); fi ;;
     esac
     shift
@@ -154,16 +167,50 @@ case "$CMD" in
     upgrade)
         need_vm
         d=$(install_dir)
-        [ -n "$SRC" ] || SRC=$(cd "$HERE/../.." && pwd)
+        [ -z "$SRC" ] || [ -z "$REF" ] || die "give --source or --ref, not both"
+        if [ -z "$SRC" ]; then
+            # No checkout given: the latest release (or --ref TAG), checked against its SHA-256
+            REF=${REF:-latest}
+            info "downloading Agora ($REF) from $AGORA_RELEASE_BASE"
+            FETCHED=$(mktemp -d)
+            fetch_release_or_die "$REF" "$FETCHED"
+            SRC=$FETCHED
+        fi
         SRC=$(cd "$SRC" && pwd)
         [ -f "$SRC/install/upgrade.sh" ] || die "$SRC is not an Agora release"
         info "copying $(agora_version "$SRC") into $VM"
         gs=$(copy_source_in "$VM" "$SRC") || die "copying $SRC into $VM failed"
         guest_tmp_add "$VM" "$gs"
         g=$(guest_tmp); guest_tmp_add "$VM" "$g"; pass_args "$g"
-        set +e; vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" ${GPASS[@]+"${GPASS[@]}"} ${REST[@]+"${REST[@]}"}; c=$?; set -e
+        set +e; vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} ${REST[@]+"${REST[@]}"}; c=$?; set -e
         guest_cleanup
-        [ "$c" = 0 ] || die "install/upgrade.sh failed in $VM (exit $c)"
+        [ "$c" = 0 ] || die "install/upgrade.sh failed in $VM (exit $c). To go back: bash $0 shell bash install/upgrade.sh --rollback"
+        # From the Mac's side: Lima's forward to the API (the checks above ran inside the VM)
+        a=$(state_get "$VM" api_port)
+        if [ -n "$a" ]; then
+            if curl -fsS -m 10 "http://127.0.0.1:$a/health" 2>/dev/null | grep -q '"ok"'; then say "  ok      Agora answers on this Mac at http://127.0.0.1:$a/health"
+            else say "  FAILED  nothing answers on this Mac at http://127.0.0.1:$a/health, though the upgrade in $VM finished. Run: bash $0 doctor"; fi
+        fi
+        if [ -n "$FETCHED" ]; then
+            # The downloaded release becomes this Mac's copy of the scripts (where a stand-alone
+            # install keeps them), so agora-vm.sh is the new release's from now on
+            rel="$MAC_STATE_DIR/release"
+            mkdir -p "$MAC_STATE_DIR"; chmod 700 "$MAC_STATE_DIR"
+            rm -rf "$rel.new"
+            if mv "$FETCHED" "$rel.new" && rm -rf "$rel" && mv "$rel.new" "$rel"; then
+                FETCHED=''
+                [ "$(cd "$HERE/../.." && pwd -P)" = "$(cd "$rel" && pwd -P)" ] || info "this release's Mac commands are in $rel (the copy you ran is $(agora_version "$HERE/../..")): bash $rel/install/macos/agora-vm.sh"
+            fi
+        fi
+        ;;
+    tailnet)
+        sub=${REST[0]:-}
+        case "$sub" in on|off|status) ;; *) die "tailnet on, off or status" ;; esac
+        need_vm
+        d=$(install_dir)
+        vm_sh "$VM" test -f "$d/install/tailnet.sh" || die "the install in $VM is from before this command; upgrade it first: bash $0 upgrade"
+        set +e; vm_sh "$VM" bash "$d/install/tailnet.sh" "$sub" --dir "$d" ${TS_ARGS[@]+"${TS_ARGS[@]}"} ${NI[@]+"${NI[@]}"}; c=$?; set -e
+        [ "$c" = 0 ] || exit "$c"
         ;;
     stop)
         k=$(keepalive_kind "$VM")
@@ -192,6 +239,6 @@ case "$CMD" in
             *) die "keepalive agent, daemon or off" ;;
         esac
         ;;
-    ''|-h|--help) sed -n '2,18p' "$0"; [ -n "$CMD" ] ;;
-    *) die "unknown command $CMD (status, shell, doctor, backup, restore, upgrade, stop, start, keepalive)" ;;
+    ''|-h|--help) sed -n '2,23p' "$0"; [ -n "$CMD" ] ;;
+    *) die "unknown command $CMD (status, shell, doctor, backup, restore, upgrade, tailnet, stop, start, keepalive)" ;;
 esac

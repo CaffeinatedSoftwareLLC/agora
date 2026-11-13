@@ -106,6 +106,9 @@ done
 
 head_ 'Stack'
 if [ "${#DOCKER[@]}" -gt 0 ] && [ -f "$ENV" ]; then
+    # File names only; Tailscale's own state is in: bash install/tailnet.sh status
+    install_overrides "$DIR"
+    line "compose overrides: ${OVERRIDES:-none}"
     ps_out=$(compose_in "$DIR" ps -a --format '{{.Service}}|{{.State}}|{{.Status}}' 2>/dev/null || true)
     if [ -z "$ps_out" ]; then fail 'no containers for this install (not started?)'; fi
     while IFS='|' read -r svc state status; do

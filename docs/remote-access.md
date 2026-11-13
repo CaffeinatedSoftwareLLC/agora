@@ -18,11 +18,43 @@ This page puts your Agora on your own devices over [Tailscale](https://tailscale
 
 - **Phone lost:** in the Tailscale admin console, remove the phone (Machines → the phone → Remove). It is cut off at once.
 - **Then** log in to Agora from the computer and use **Log out all sessions** in the user menu, so a copied login stops working too.
-- **Turn remote access off:** on the Agora machine, `sudo tailscale serve reset`.
+- **Turn remote access off:** on the Agora machine, `bash install/tailnet.sh off` (on a Mac: `bash install/macos/agora-vm.sh tailnet off`). It stops publishing Agora and starts the stack without the tailnet override. `sudo tailscale serve reset` alone also cuts the tailnet off at once; it removes everything the machine serves.
 
 ## Setup
 
-About 30 minutes. You need a Tailscale account (free for personal use).
+You need a Tailscale account (free for personal use).
+
+### One command
+
+On the machine Agora runs on, in the install folder:
+
+| | Command |
+|---|---|
+| Linux | `bash install/tailnet.sh on --hostname agora-home` |
+| Windows (PowerShell) | `wsl -d Agora --cd ~/agora --exec bash install/tailnet.sh on --hostname agora-home` (`Agora`: the distro Agora runs in) |
+| macOS | `bash install/macos/agora-vm.sh tailnet on --hostname agora-home` (it runs in Agora's VM) |
+
+It does steps 1, 4 and 5 below and the checks of step 6 that the machine can run on itself:
+
+1. installs Tailscale with its official script if it is missing, after asking;
+2. logs the machine in (`tailscale up --hostname agora-home`, never `--ssh`) and shows the login link;
+3. adds `https://agora-home.<your-tailnet>.ts.net` to `CORS_ORIGIN` (and to `WEBAUTHN_ORIGINS` when you have set it), keeping the values already there;
+4. records `docker-compose.tailnet.yml` as this install's compose override (`compose_overrides=` in `.agora-install` in the install folder), so **every upgrade, restore and backup starts the stack with it again**, and starts the stack;
+5. runs `tailscale serve` for the web port (never Funnel), and prints one line per check.
+
+Three things only you can do:
+
+- **Approve the login link** it prints (the command waits for you).
+- **Your phone** (step 2) and **the access rule** in Tailscale's admin console (step 3). Under **DNS**, MagicDNS and HTTPS Certificates must be on before the command can finish; it says so and changes nothing if they are not. It ends by printing the machine's address for the rule's `hosts` entry.
+- **The checks from the phone** in step 6.
+
+Run again, it changes nothing and reports the status. `bash install/tailnet.sh status` runs the checks alone, `off` turns it off again. If the address times out from the phone while `tailscale ping agora-home` answers there, the `hosts` entry in your policy probably still holds an old address: set it to the one `status` prints (`tailscale ip -4`).
+
+An install that was set up by hand with the steps below needs nothing: the installer's scripts find the override on its running containers the first time they run, and record it.
+
+### By hand: what the command does
+
+About 30 minutes.
 
 ### 1. Install Tailscale where Agora runs
 
@@ -128,5 +160,5 @@ If the page stops loading after you turn Tailscale off and on again on the phone
 
 ## What this doesn't cover
 
-- A Mac host: the same steps work where Docker and Tailscale run on the same machine. Not yet tried.
+- A Mac: Tailscale runs inside Agora's VM, not on macOS ([macos.md](macos.md#reaching-it-from-your-phone-tailscale)).
 - Several people: this guide assumes one owner reaching their own instance. For others, give each their own Agora account and decide who directs agents before you share the tailnet.
