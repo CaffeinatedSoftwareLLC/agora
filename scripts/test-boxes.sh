@@ -97,5 +97,10 @@ if [ "$status" != 0 ]; then
         echo "--- $service"
         "${DC[@]}" logs --no-color --tail 80 "$service" 2>&1 | cut -c1-300 || true
     done
+    # The boxes' own agora-host output: a box that never checks in says why here
+    for box in $(docker ps -aq --filter "label=org.agora.instance=$INSTANCE" --filter "label=org.agora.box"); do
+        echo "--- box $(docker inspect -f '{{.Name}} {{.State.Status}} restarts={{.RestartCount}}' "$box")"
+        docker logs --tail 25 "$box" 2>&1 | cut -c1-300 || true
+    done
 fi
 exit "$status"
