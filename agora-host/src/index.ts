@@ -43,7 +43,11 @@ async function main() {
     void boxShellLoop(config, { signal: shell.signal, log: code => console.error(code) }).catch(() => console.error('box_shell_loop_failed'));
     process.once('SIGINT', () => { shell.abort(); void scheduler.stop(); });
     process.once('SIGTERM', () => { shell.abort(); void scheduler.stop(); });
-    await scheduler.run();
+    try { await scheduler.run(); } finally {
+        // The host is done (stopped, or its token was refused): the terminal socket goes with it, so the
+        // process ends as it always did and a box's restart policy can start it again
+        shell.abort();
+    }
 }
 main().catch(err => {
     // Never print raw config, API responses, CLI output or exceptions containing credentials.

@@ -284,6 +284,44 @@ describe('the connection to Agora', () => {
     });
 });
 
+describe('the loop does not keep the host alive', () => {
+    class QuietSocket extends EventEmitter {
+        connected = false; disconnected = 0;
+        connect() { return this; }
+        disconnect() { this.disconnected++; queueMicrotask(() => this.emit('disconnect')); return this; }
+    }
+    const saved = { marker: boxMode.marker, flag: process.env.AGORA_HOST_IN_BOX };
+    afterEach(() => {
+        boxMode.marker = saved.marker;
+        if (saved.flag === undefined) delete process.env.AGORA_HOST_IN_BOX; else process.env.AGORA_HOST_IN_BOX = saved.flag;
+    });
+
+    it('returns at once when the host is done, even while it waits to retry for a long time', async () => {
+        // The host quits when its token is refused, and a box's restart policy starts it again. A terminal
+        // loop that outlived the scheduler would keep the process, and the box, stuck unregistered.
+        const t = await tempDir();
+        try {
+            const marker = join(t.dir, 'agora-box');
+            await writeFile(marker, 'agora-box 6\n');
+            boxMode.marker = marker; process.env.AGORA_HOST_IN_BOX = '1';
+            const ctl = new AbortController();
+            const sockets: QuietSocket[] = [];
+            const started = Date.now();
+            const loop = boxShellLoop(config(t.dir), {
+                signal: ctl.signal, log: () => {}, retryMinMs: 60_000, retryMaxMs: 60_000,
+                connect: (() => { const s = new QuietSocket(); sockets.push(s); return s; }) as any,
+            });
+            await new Promise(r => setTimeout(r, 30));
+            sockets[0].emit('connect_error', new Error('Invalid host token'));
+            await new Promise(r => setTimeout(r, 30));
+            ctl.abort();
+            await loop;
+            expect(Date.now() - started).toBeLessThan(2000);
+            expect(sockets).toHaveLength(1);
+        } finally { await t.cleanup(); }
+    });
+});
+
 describe.skipIf(!hasPython)('the real pseudo-terminal (box/agora-pty, Python\'s pty)', () => {
     const run = (command: string[], cwd = '/tmp') => {
         const pty = makeHelperPty(HELPER)({ cols: 90, rows: 20, cwd, env: { PATH: process.env.PATH, TERM: 'xterm' }, command });
