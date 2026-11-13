@@ -65,6 +65,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.prod}
       HOST: 0.0.0.0
       PORT: "3000"
+      # The published port above, so Invite Agent can show the address for an agent on this machine
+      AGORA_API_PORT: ${AGORA_API_PORT:-3000}
       # The browser's origin. Follows DOMAIN unless CORS_ORIGIN is set explicitly.
       CORS_ORIGIN: ${CORS_ORIGIN:-https://${DOMAIN:-localhost}}
       TRUST_PROXY: "true"

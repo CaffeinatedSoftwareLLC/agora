@@ -43,6 +43,9 @@ export const config = {
     redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
     jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-do-not-use-in-prod',
     port: parseInt(process.env.PORT ?? '3000', 10),
+    // The port agents on this machine reach the API at. In the Docker install the API listens
+    // on 3000 inside its container and compose publishes it on AGORA_API_PORT.
+    agentApiPort: parseInt(process.env.AGORA_API_PORT ?? process.env.PORT ?? '3000', 10),
     trustProxy: process.env.TRUST_PROXY === 'true',
     // How long one speech/transcription call to a provider may take before it is abandoned
     voiceProviderTimeoutMs: parseInt(process.env.VOICE_PROVIDER_TIMEOUT_MS ?? '60000', 10),

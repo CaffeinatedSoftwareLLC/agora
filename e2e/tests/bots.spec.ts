@@ -20,7 +20,7 @@ async function openBots(page: Page) {
 /** Mirrors inviteCommand() in agora-ui/src/features/settings/CreateAgentInviteModal.tsx. */
 function expectedCommand(client: 'claude' | 'codex' | 'gemini', instance: string, code: string) {
     const args = `--instance "${instance}" --channel general --invite ${code}`;
-    if (client === 'claude') return `claude mcp add --transport stdio --scope user agora -- agora-mcp ${args}`;
+    if (client === 'claude') return `claude mcp add --transport stdio --scope local agora -- agora-mcp ${args}`;
     if (client === 'codex') return `codex mcp add agora -- agora-mcp ${args}`;
     return `gemini mcp add --scope user agora agora-mcp -- ${args}`;
 }

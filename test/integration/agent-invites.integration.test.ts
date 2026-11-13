@@ -4,6 +4,8 @@ import { buildApp } from '../../src/app';
 import { Permissions } from '../../src/permissions';
 import { generateUlid } from '../../src/utils/ulid';
 import * as botTokens from '../../src/auth/bot-tokens';
+import { config } from '../../src/config';
+import { agentAddresses } from '../../src/routes/agent-invites';
 
 let ctx: Awaited<ReturnType<typeof setupTestApp>>;
 let owner: Awaited<ReturnType<typeof authedUser>>;
@@ -166,4 +168,48 @@ test('rate limits public redemption and authenticated creation', async () => {
         expect((await app.inject({ method: 'POST', url: '/agent-invites/redeem', payload: { code: '0'.repeat(64) } })).statusCode).toBe(429);
         expect((await app.inject({ method: 'POST', url: `/servers/${serverId}/agent-invites`, headers: owner.auth, payload: { botId } })).statusCode).toBe(429);
     } finally { await app.close(); await db.end(); }
+});
+
+describe('GET /servers/:serverId/agent-invites/addresses', () => {
+    const saved = { corsOrigin: config.corsOrigin, agentApiPort: config.agentApiPort };
+    afterEach(() => { Object.assign(config, saved); });
+    const addresses = (auth: Record<string, string>, id = serverId) => ctx.request.get(`/servers/${id}/agent-invites/addresses`).set(auth);
+
+    test('gives the same-machine address with the real API port and every non-localhost HTTPS origin', async () => {
+        config.corsOrigin = 'https://localhost:8443, https://name.tailnet.ts.net/ ,http://plain.example,https://agora.example:8443';
+        config.agentApiPort = 3100;
+        const res = await addresses(owner.auth);
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ local: 'http://localhost:3100', remote: ['https://name.tailnet.ts.net', 'https://agora.example:8443'] });
+    });
+
+    test('with only a localhost origin configured there is no remote address', async () => {
+        config.corsOrigin = 'https://localhost';
+        config.agentApiPort = 3000;
+        expect((await addresses(owner.auth)).body).toEqual({ local: 'http://localhost:3000', remote: [] });
+        config.corsOrigin = undefined;
+        expect((await addresses(owner.auth)).body).toEqual({ local: 'http://localhost:3000', remote: [] });
+    });
+
+    test('drops origins that are not safe to put in a shell command', () => {
+        expect(agentAddresses('https://$(id).example,https://user:pw@a.example,https://a.example/path,https://a.example?x=1,not a url,https://ok.example', 0))
+            .toEqual({ local: 'http://localhost:3000', remote: ['https://ok.example'] });
+    });
+
+    test('only someone who may create an agent invite sees the addresses', async () => {
+        config.corsOrigin = 'https://agora.example';
+        const plain = await authedUser(ctx.request, 'addr-plain-member');
+        await joinViaInvite(ctx.request, owner.auth, plain.auth, serverId);
+        expect((await addresses(plain.auth)).status).toBe(403);
+        expect((await addresses(outsider.auth)).status).toBe(403);
+        expect((await ctx.request.get(`/servers/${serverId}/agent-invites/addresses`)).status).toBe(401);
+        const token = await redeem((await createInvite()).body.code);
+        expect((await addresses({ Authorization: `Bot ${token.body.token}` })).status).toBe(403);
+        expect((await addresses(owner.auth, 'not-a-ulid')).status).toBe(400);
+        // A member who owns a bot here may invite it, so may see the addresses
+        await ctx.db.query('INSERT INTO users (id,username,bot,bot_owner_id,server_id) VALUES ($1,$2,true,$3,$4)', [generateUlid(), 'addr-owned-bot', plain.userId, serverId]);
+        const res = await addresses(plain.auth);
+        expect(res.status).toBe(200);
+        expect(res.body.remote).toEqual(['https://agora.example']);
+    });
 });

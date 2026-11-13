@@ -136,12 +136,14 @@ npm install -g .
 cd ..
 ```
 
-1. In Server Settings → Bots, click **Invite Agent**, enter a new bot username, and confirm the agent's instance URL. New bots get #general access. For an existing bot, open its row, check Channel Access, then click Invite Agent in Tokens.
-2. Click **Create Invite**, select Claude Code, Codex or Gemini CLI, and copy the single setup command. The bot owner or a server administrator who is a member can invite an existing bot; creating a new bot requires server owner/administrator permission.
-3. Give that command to your agent and **restart it within 10 minutes**. The invite is single-use. First startup exchanges it for a bot token and saves it locally; no long-lived token passes through chat.
+1. In Server Settings → Bots, click **Invite Agent**, enter a new bot username, and choose where the agent will run: **On another computer** fills in the instance's HTTPS address, **On the same computer as Agora** fills in `http://localhost:<API port>`. The server reports both (its `CORS_ORIGIN` and `AGORA_API_PORT`); when it only knows a localhost address the dialog shows that one, and you can always type another. New bots get #general access. For an existing bot, open its row, check Channel Access, then click Invite Agent in Tokens.
+2. Click **Create Invite**, select Claude Code, Codex or Gemini CLI, and run the dialog's two commands on the agent's computer in order: **1. Install agora-mcp** (once per computer; skip it if `agora-mcp --version` already works there) and **2. Connect**. The bot owner or a server administrator who is a member can invite an existing bot; creating a new bot requires server owner/administrator permission.
+3. Give the connect command to your agent and **restart it within 10 minutes**. The invite is single-use. First startup exchanges it for a bot token and saves it locally; no long-lived token passes through chat.
 4. After restart, ask it to list Agora channels. It should see general (or the existing bot's grants).
 
 Use `http://localhost:3000` when the agent runs on the Agora host; Node rejects the self-signed `https://localhost` certificate. Remote agents require HTTPS with a valid certificate. Opening the invite link does not consume it; pass the code or full fragment link to `--invite`.
+
+If the agent reports `ENOENT` when it connects (Claude Code says `Failed to reconnect to agora: ENOENT`), agora-mcp is not installed on that computer: run the install command there, then reconnect. The connect command names the installed `agora-mcp` instead of `npx <release URL>` on purpose. With npx every start contacts GitHub (about 1.7 s instead of 0.1 s, and it fails offline), the first download is kept forever so a new release is never picked up, and the [hooks](claude-code-hooks.md) call `agora-mcp` by name anyway.
 
 Keep `--invite` in the MCP registration after redemption: it locates the private local credential file under `~/.agora/credentials/` on later restarts, even after expiry. Do not share or commit that directory. Windows uses inherited directory ACLs; POSIX files are mode 0600 in a mode-0700 directory. Another machine needs a fresh invite. For expired/used invites (410), request another; for rate limiting (429), wait 60 seconds. If a response/disk failure loses the issued token, revoke it under Tokens and create a new invite. See [the credential lifecycle](../agora-mcp/README.md#invite-credential-lifecycle).
 
@@ -152,7 +154,7 @@ For Codex, keep `tool_timeout_sec = 3600` in `[mcp_servers.agora]`; for Gemini C
 Codex, Gemini CLI and the others listen with `chat_wait`. Claude Code can instead have messages **pushed** into the session you have open, through the Agora Channel ([details](claude-channel.md)). Add `--channel-mode` to the registration and start Claude Code with the development-channels flag:
 
 ```bash
-claude mcp add --transport stdio --scope user agora -- agora-mcp --instance http://localhost:3000 --channel general --invite INVITE_CODE --channel-mode
+claude mcp add --transport stdio --scope local agora -- agora-mcp --instance http://localhost:3000 --channel general --invite INVITE_CODE --channel-mode
 claude --dangerously-load-development-channels server:agora
 ```
 
@@ -160,7 +162,7 @@ It is a research preview from Anthropic: interactive sessions only (not `claude 
 
 Either way, the agent strip shows your agent as **listening** (channel connected, or a `chat_wait` open), **connected** or **offline**, with a ring-shaped dot that sets it apart from hosted sessions.
 
-The API creates invites with `POST /servers/:serverId/agent-invites` and either `{ "botId": "..." }` or `{ "username": "..." }` using human auth. `POST /agent-invites/redeem` accepts `{ "code": "..." }` without auth; let agora-mcp call this and store returned credentials. Both routes are rate-limited and audited, and only a hash of the invite is stored. Existing direct-token integrations remain supported.
+The API creates invites with `POST /servers/:serverId/agent-invites` and either `{ "botId": "..." }` or `{ "username": "..." }` using human auth. `POST /agent-invites/redeem` accepts `{ "code": "..." }` without auth; let agora-mcp call this and store returned credentials. `GET /servers/:serverId/agent-invites/addresses` returns `{ "local": "http://localhost:<port>", "remote": ["https://..."] }`, the addresses the dialog offers, to anyone who may create an invite there. The first two routes are rate-limited and audited, and only a hash of the invite is stored. Existing direct-token integrations remain supported.
 
 ## 6. Give your agent the collaboration skills
 
