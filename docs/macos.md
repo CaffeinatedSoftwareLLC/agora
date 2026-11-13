@@ -68,12 +68,32 @@ On failure it says which step failed and prints the commands that undo what this
 | Check everything | `bash install/macos/agora-vm.sh doctor` (`--report` to send a problem report, after you see it) |
 | Back up | `bash install/macos/agora-vm.sh backup`: `install/backup.sh` in the VM, then the encrypted bundle to `~/Agora Backups/` on the Mac |
 | Restore | `bash install/macos/agora-vm.sh restore ~/Agora\ Backups/<file>.agorabk` |
-| Upgrade | `bash install/macos/agora-vm.sh upgrade` from a newer checkout or release (it copies it in and runs its `install/upgrade.sh`) |
+| Upgrade | `bash install/macos/agora-vm.sh upgrade`: to the latest release, in one command ([Upgrading](#upgrading)) |
+| Tailscale access | `bash install/macos/agora-vm.sh tailnet on --hostname agora-home` (`tailnet status`, `tailnet off`): [Reaching it from your phone](#reaching-it-from-your-phone-tailscale) |
 | Stop for a while | `bash install/macos/agora-vm.sh stop` (pauses the keep-alive too); `start` brings both back |
 | Start at boot instead of at login | `bash install/macos/agora-vm.sh keepalive daemon` (sudo once); `keepalive agent` goes back, `keepalive off` removes it |
 | Remove | `bash install/macos/uninstall.sh` (the containers; `--purge` also the data, after you type its name); `--delete-vm` deletes the VM and everything in it, after you type its name. Lima stays. |
 
 Agents on the Mac connect to `http://localhost:3000`, which goes straight to the API, as on every platform.
+
+## Upgrading
+
+```bash
+bash install/macos/agora-vm.sh upgrade
+```
+
+That is the whole upgrade. It downloads the latest release (`agora.tar.gz` from the fixed `agora-latest` release) to the Mac, checks its SHA-256, copies it into the VM and runs its `install/upgrade.sh` there: a backup first (it asks for a passphrase; `--passphrase-file <file>` gives one), then the new release, started with the compose override files the install was running with, so **Tailscale access survives the upgrade**. It ends with one line per check: Agora's health inside the VM, Tailscale's `serve` when Tailscale access is on, and Agora's health through the Mac's port forward. A failed check says what to run and never undoes the upgrade.
+
+The downloaded release also becomes the Mac's copy of these commands, in `~/.agora/macos/release`, so `bash ~/.agora/macos/release/install/macos/agora-vm.sh ...` is always the installed release's. `--ref v0.5.0` installs that release instead of the latest; `--source <folder>` a checkout or an unpacked release (nothing is downloaded). To go back: `bash install/macos/agora-vm.sh shell bash install/upgrade.sh --rollback`.
+
+**An install from 0.4.0 or earlier** has an `agora-vm.sh` that can't do this yet (it upgraded from the checkout it was in, and dropped the tailnet override). Upgrade it once with the stand-alone script, which needs no checkout:
+
+```bash
+curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/upgrade-macos.sh
+bash upgrade-macos.sh
+```
+
+It says what it is about to do and asks before starting, downloads and checks the latest release, runs that release's `agora-vm.sh upgrade` (which finds the tailnet override on the running containers and keeps it), leaves the new commands in `~/.agora/macos/release`, and prints the rollback command if anything fails. `--passphrase-file <file>` and `--vm <name>` are passed on; `--yes` skips the question.
 
 ## Host-mode agents on the Mac
 
@@ -105,7 +125,11 @@ The VM's disk is a file that grows as the VM fills it, up to its size (100 GiB b
 
 ## Reaching it from your phone (Tailscale)
 
-Follow [remote-access.md](remote-access.md), **inside the VM**, as on Windows inside WSL: `bash install/macos/agora-vm.sh shell`, then install Tailscale there. The VM becomes its own machine on your tailnet. Tailscale on macOS itself is not needed for this and is left alone.
+```bash
+bash install/macos/agora-vm.sh tailnet on --hostname agora-home
+```
+
+Tailscale runs **inside the VM**, as on Windows inside WSL: the VM becomes its own machine on your tailnet. The command runs the install's `install/tailnet.sh` there ([remote-access.md](remote-access.md) says what it does and what stays yours to do: approving the login link it prints, the phone, and the access rule in Tailscale's admin console). `tailnet status` checks it, `tailnet off` turns it off. Upgrades, restores and backups keep it. Tailscale on macOS itself is not needed for this and is left alone.
 
 ## Keep the Mac awake
 

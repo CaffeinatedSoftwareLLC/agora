@@ -79,13 +79,109 @@ pick_docker() {
 
 dk() { "${DOCKER[@]}" "$@"; }
 
+# ─── Compose override files an install uses (docker-compose.tailnet.yml, docs/remote-access.md) ───
+#
+# An install started with `-f docker-compose.prod.yml -f docker-compose.tailnet.yml` must come
+# back with both from an upgrade, a restore or a backup's restart, or its tailnet address stops
+# answering. The list is this machine's own record, in .agora-install (compose_overrides=...):
+# not in .env.prod, because a backup carries .env.prod to other machines and a restore replaces
+# it, while Tailscale belongs to the machine. install/tailnet.sh writes it. An install without
+# the record (set up by hand) is read once from its containers: Compose labels each one with the
+# files it was started with (com.docker.compose.project.config_files), and what is found is
+# written down, so a stopped or removed stack still knows.
+INSTALL_RECORD_NAME=.agora-install
+OVERRIDES_RECORD_KEY=compose_overrides
+# Only a file name of this shape that exists in the install folder is ever used: never a path
+OVERRIDE_NAME_RE='^docker-compose\.[a-z0-9][a-z0-9_-]{0,40}\.yml$'
+TAILNET_OVERRIDE=docker-compose.tailnet.yml
+
+record_has() { grep -q "^$2=" "$1/$INSTALL_RECORD_NAME" 2>/dev/null; }
+record_get() { sed -n "s/^$2=//p" "$1/$INSTALL_RECORD_NAME" 2>/dev/null | tail -n 1 | tr -d '\r'; }
+# record_set <dir> <key> <value>: replace or append one line of .agora-install
+record_set() {
+    local f="$1/$INSTALL_RECORD_NAME" tmp
+    tmp=$(mktemp "$f.XXXXXX") || return 1
+    { [ ! -f "$f" ] || grep -v "^$2=" "$f" || true; printf '%s=%s\n' "$2" "$3"; } > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 644 "$tmp"
+    mv "$tmp" "$f"
+}
+
+# override_ok <dir> <name>: a safe override file name that is a file in the install folder
+override_ok() {
+    printf '%s' "$2" | grep -Eq "$OVERRIDE_NAME_RE" || return 1
+    [ "$2" != "$COMPOSE_FILE_NAME" ] || return 1
+    [ -f "$1/$2" ] && [ ! -L "$1/$2" ]
+}
+
+# detected_overrides <dir>: the compose file names this install's containers were started with,
+# one per line, not yet checked. Only the names: the folder in a label is never used. Fails when
+# Docker can't be asked.
+detected_overrides() {
+    local dir=$1 project filter out
+    [ "${#DOCKER[@]}" -gt 0 ] || return 1
+    project=$(env_get "$dir/$ENV_FILE_NAME" COMPOSE_PROJECT_NAME)
+    if [ -n "$project" ]; then filter="label=com.docker.compose.project=$project"
+    else filter="label=com.docker.compose.project.working_dir=$dir"; fi
+    out=$(dk ps -a --filter "$filter" --format '{{.Label "com.docker.compose.project.config_files"}}' 2>/dev/null) || return 1
+    # Containers of one project can differ (after `up` with another file list only the changed
+    # services are recreated), so every file any of them names counts
+    printf '%s\n' "$out" | tr ',' '\n' | sed -e 's/[[:space:]]*$//' -e 's#.*/##' -e '/^$/d' | awk '!seen[$0]++'
+}
+
+# install_overrides <dir>: sets OVERRIDES to the install's override files (space-separated, each
+# one checked with override_ok). The record wins, also an empty one (tailnet off); without a
+# record the containers are asked, and a find is recorded.
+OVERRIDES=''
+OVERRIDES_SOURCE=none
+_OVR_DIR='' _OVR_DETECTED=''
+install_overrides() {
+    local dir=$1 raw='' name keep=''
+    OVERRIDES='' OVERRIDES_SOURCE=none
+    if record_has "$dir" "$OVERRIDES_RECORD_KEY"; then
+        raw=$(record_get "$dir" "$OVERRIDES_RECORD_KEY")
+        OVERRIDES_SOURCE=record
+    else
+        if [ "$_OVR_DIR" != "$dir" ]; then
+            _OVR_DETECTED=$(detected_overrides "$dir" | tr '\n' ' ') || _OVR_DETECTED=''
+            _OVR_DIR=$dir
+        fi
+        raw=$_OVR_DETECTED
+    fi
+    for name in $raw; do
+        override_ok "$dir" "$name" || continue
+        case " $keep " in *" $name "*) ;; *) keep="$keep${keep:+ }$name" ;; esac
+    done
+    OVERRIDES=$keep
+    if [ "$OVERRIDES_SOURCE" = none ] && [ -n "$keep" ]; then
+        OVERRIDES_SOURCE=detected
+        # Best effort: a folder this user can't write to still gets the override from the labels
+        record_set "$dir" "$OVERRIDES_RECORD_KEY" "$keep" 2>/dev/null || true
+    fi
+}
+
+# set_overrides <dir> <names...>: record the install's override files (none: an empty record,
+# which also stops the containers being asked)
+set_overrides() {
+    local dir=$1; shift
+    record_set "$dir" "$OVERRIDES_RECORD_KEY" "$*"
+}
+
+# rejected_overrides <dir>: recorded names that can't be used (unsafe, or not in this release)
+rejected_overrides() {
+    local name
+    for name in $(record_get "$1" "$OVERRIDES_RECORD_KEY"); do override_ok "$1" "$name" || printf '%s\n' "$name"; done
+}
+
 # compose in an install's folder: compose_in <dir> <args...>
 compose_in() {
     local dir=$1; shift
     # The box image's build ID (scripts/box-build-id.sh): boxd rebuilds boxes on an older build
-    local build=
+    local build='' f files
     [ -f "$dir/scripts/box-build-id.sh" ] && build=$(sh "$dir/scripts/box-build-id.sh" 2>/dev/null || true)
-    (cd "$dir" && AGORA_BOX_BUILD="${AGORA_BOX_BUILD:-$build}" "${DOCKER[@]}" compose -f "$COMPOSE_FILE_NAME" --env-file "$ENV_FILE_NAME" "$@")
+    files=(-f "$COMPOSE_FILE_NAME")
+    install_overrides "$dir"
+    for f in $OVERRIDES; do files+=(-f "$f"); done
+    (cd "$dir" && AGORA_BOX_BUILD="${AGORA_BOX_BUILD:-$build}" "${DOCKER[@]}" compose "${files[@]}" --env-file "$ENV_FILE_NAME" "$@")
 }
 
 # An install's name: the Compose project and AGORA_INSTANCE are one name (#209). Installs made
@@ -120,7 +216,51 @@ pin_identity() {
     [ -n "$inst" ] || env_set "$env" AGORA_INSTANCE "$project"
 }
 
-compose_cmd_text() { printf 'cd %s && docker compose -f %s --env-file %s %s' "$1" "$COMPOSE_FILE_NAME" "$ENV_FILE_NAME" "$2"; }
+# The same command as text, for a message (with the install's override files)
+compose_cmd_text() {
+    local f flist="-f $COMPOSE_FILE_NAME"
+    install_overrides "$1" 2>/dev/null || true
+    for f in $OVERRIDES; do flist="$flist -f $f"; done
+    printf 'cd %s && docker compose %s --env-file %s %s' "$1" "$flist" "$ENV_FILE_NAME" "$2"
+}
+
+# ─── A release from GitHub ───
+
+# sha256_ok <dir>: agora.tar.gz in <dir> matches agora.tar.gz.sha256 (sha256sum, or macOS's shasum)
+sha256_ok() {
+    if have sha256sum; then (cd "$1" && sha256sum -c agora.tar.gz.sha256 >/dev/null 2>&1)
+    else (cd "$1" && shasum -a 256 -c agora.tar.gz.sha256 >/dev/null 2>&1); fi
+}
+
+# fetch_release <tag|latest> <dest>: downloads agora.tar.gz and its SHA-256 from that release
+# (latest: the fixed agora-latest release), checks it and unpacks it into <dest>, an existing
+# empty folder. Returns 1 when the download fails, 2 when it doesn't match its SHA-256 (nothing
+# is unpacked), 3 when it can't be unpacked.
+fetch_release() {
+    local ref=${1:-latest} dest=$2 url dl proto=()
+    printf '%s' "$ref" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$' || return 1
+    if [ "$ref" = latest ]; then url="$AGORA_RELEASE_BASE/download/agora-latest"; else url="$AGORA_RELEASE_BASE/download/$ref"; fi
+    case "$url" in https://*) proto=(--proto '=https') ;; esac
+    dl=$(mktemp -d) || return 1
+    if ! curl -fsSL ${proto[@]+"${proto[@]}"} -o "$dl/agora.tar.gz" "$url/agora.tar.gz" \
+        || ! curl -fsSL ${proto[@]+"${proto[@]}"} -o "$dl/agora.tar.gz.sha256" "$url/agora.tar.gz.sha256"; then
+        rm -rf "$dl"; return 1
+    fi
+    sha256_ok "$dl" || { rm -rf "$dl"; return 2; }
+    tar -xzf "$dl/agora.tar.gz" -C "$dest" --strip-components=1 || { rm -rf "$dl"; return 3; }
+    rm -rf "$dl"
+}
+# fetch_release_or_die <tag|latest> <dest>
+fetch_release_or_die() {
+    local rc=0
+    fetch_release "$1" "$2" || rc=$?
+    case "$rc" in
+        0) ;;
+        2) die "the download of Agora ($1) doesn't match its SHA-256; nothing was changed" ;;
+        3) die "the download of Agora ($1) can't be unpacked; nothing was changed" ;;
+        *) die "can't download Agora ($1) from $AGORA_RELEASE_BASE; nothing was changed" ;;
+    esac
+}
 
 # env_get <file> <KEY>: a value from .env.prod, for the installer's own use. Never printed.
 env_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n 1 | tr -d '\r'; }

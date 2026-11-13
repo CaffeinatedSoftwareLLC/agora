@@ -1,6 +1,6 @@
 # Move an install from Windows (WSL) to a Mac
 
-This moves an Agora install that runs in a WSL distro on Windows to a Mac, with everything it holds: the database, the encrypted files, every agent's box (logins and repos) and `.env.prod` with its `AGORA_ENCRYPTION_KEY`. It uses Agora's own backup and restore ([installing.md](installing.md#backups-upgrades-removal)): one bundle, encrypted with a passphrase you choose, carried from one machine to the other. Nothing is uploaded anywhere, and no secret is printed.
+This moves an Agora install that runs in a WSL distro on Windows to a Mac, with everything it holds: the database, the encrypted files, every agent's box (logins and repos) and `.env.prod` with its `AGORA_ENCRYPTION_KEY`. It uses Agora's own backup and restore ([installing.md](installing.md#backups-removal)): one bundle, encrypted with a passphrase you choose, carried from one machine to the other. Nothing is uploaded anywhere, and no secret is printed.
 
 > **Status (2026-11-12):** run once, for real: the maintainers' instance moved from Windows 11 (WSL) to a Mac mini (Apple Silicon) with these steps, and the notes marked *From the first run* come from it. Backup and restore are also tested on Linux in CI. Not yet run: step 8 (host-mode agents on the Mac) and step 9 (removing the Windows install). Keep the Windows install until the Mac one has run for a while (step 9).
 
@@ -101,18 +101,18 @@ Log in with your **own** account (not the throwaway admin of step 5). Your chann
 
 This step is what brings back every agent and device that reached Agora by its tailnet name. Until it is done they can't connect.
 
-Do [remote-access.md](remote-access.md) steps 1, 4, 5 and 6 inside the VM (`bash install/macos/agora-vm.sh shell`). To keep the phone's address, give the VM the old machine name:
+One command does it; to keep the phone's address, give the VM the old machine name:
 
 1. In the Tailscale admin console, **rename** the old WSL machine (for example to `agora-home-wsl`), so its name is free. Renaming rather than removing keeps a way back (see "If something goes wrong"); remove it in step 9.
-2. In the VM: `curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up --hostname agora-home` (the name from step 1).
-3. In the policy (Access controls), set the Agora entry in `hosts` to the VM's new address (`tailscale ip -4` in the VM). The entry is the destination of the rule that allows port 443, and its name need not match the machine's. *From the first run:* while it still holds the old address, the VM answers `tailscale ping` but `https://<name>.<tailnet>.ts.net` times out.
-4. `.env.prod` already has your `CORS_ORIGIN` and `TAILNET_WEB_PORT`. Restart with the override, in the install folder in the VM:
+2. On the Mac, with the name from step 1:
    ```bash
-   sudo env AGORA_BOX_BUILD=$(sh scripts/box-build-id.sh) docker compose -f docker-compose.prod.yml -f docker-compose.tailnet.yml --env-file .env.prod up -d
-   sudo tailscale serve --bg http://127.0.0.1:8080
+   bash install/macos/agora-vm.sh tailnet on --hostname agora-home
    ```
-   These run in the VM's shell (`agora-vm.sh shell`), not in the Mac's Terminal. Docker in the VM needs `sudo`, and `AGORA_BOX_BUILD` is the box image's build ID, which the installer's own commands pass too: without it boxd takes the boxes for out of date and rebuilds them.
-5. Check from the phone, on Wi-Fi and on mobile data.
+   It installs Tailscale in the VM after asking, prints the login link for you to approve, adds the tailnet address to `CORS_ORIGIN` if the restored `.env.prod` doesn't have it, starts the stack with the tailnet override (and records it, so later upgrades keep it), runs `tailscale serve`, and checks the result ([remote-access.md](remote-access.md#one-command)). It ends by printing the VM's tailnet address.
+3. In the policy (Access controls), set the Agora entry in `hosts` to that address. The entry is the destination of the rule that allows port 443, and its name need not match the machine's. *From the first run:* while it still holds the old address, the VM answers `tailscale ping` but `https://<name>.<tailnet>.ts.net` times out.
+4. Check from the phone, on Wi-Fi and on mobile data. `bash install/macos/agora-vm.sh tailnet status` repeats the machine's own checks at any time.
+
+*From the first run:* this step was five commands typed in the VM's shell, with `sudo` and `AGORA_BOX_BUILD` set by hand, and the next upgrade started the stack without the override. `tailnet on` and the upgrade's own record of the override replace both.
 
 The push relay and the phone apps keep working: their registration is in the restored database and `.env.prod`.
 
