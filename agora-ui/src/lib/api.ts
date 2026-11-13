@@ -11,11 +11,14 @@ import type {
 export class ApiError extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string) {
+  /** The error response's JSON body, for errors that carry details (e.g. budget_exhausted's `limit`). */
+  body?: unknown;
+  constructor(status: number, code: string, body?: unknown) {
     super(code);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.body = body;
   }
 }
 
@@ -81,7 +84,7 @@ async function requestWithHeaders<T>(method: string, path: string, body?: unknow
     const gatewayError = res.status === 504
       ? 'The server did not answer in time. Try again.'
       : [502, 503].includes(res.status) ? 'The server is temporarily unavailable. Try again in a few seconds.' : 'unknown_error';
-    throw new ApiError(res.status, (typeof data?.error === 'string' && data.error) || gatewayError);
+    throw new ApiError(res.status, (typeof data?.error === 'string' && data.error) || gatewayError, data);
   }
   return { data: data as T, headers: res.headers };
 }
@@ -210,10 +213,11 @@ export interface CreateTokenResponse {
   name: string | null;
 }
 
+/** A channel's loop guard limits; null: that guard is off (the default). */
 export interface ChannelBotConfig {
   channelId: string;
-  maxBotHops: number;
-  maxThreadBotHops: number;
+  maxBotHops: number | null;
+  maxThreadBotHops: number | null;
 }
 
 export const botApi = {
@@ -269,8 +273,8 @@ export const botApi = {
   setCanDirect: (channelId: string, botId: string, canDirect: boolean) =>
     api.put<{ botId: string; channelId: string; canDirect: boolean }>(`/channels/${channelId}/bots/${botId}/direct`, { canDirect }),
 
-  /** Loop guard limits; 0 turns a guard off. Needs ManageBots. */
-  updateChannelBotConfig: (channelId: string, data: { maxBotHops?: number; maxThreadBotHops?: number }) =>
+  /** Loop guard limits; null turns a guard off. Needs ManageBots. */
+  updateChannelBotConfig: (channelId: string, data: { maxBotHops?: number | null; maxThreadBotHops?: number | null }) =>
     api.patch<ChannelBotConfig>(`/channels/${channelId}/bot-config`, data),
 
   /** After the loop guard fires: reset its counter and post a notice that wakes the agents. Needs ManageBots. */

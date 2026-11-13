@@ -3,6 +3,7 @@ import type { Checkpoint, ReviewCommand } from './review.js';
 import type { PreviewCommand, PreviewOutcome } from './preview.js';
 import type { GithubCommand, GithubResult } from './github.js';
 import type { BoxAdapterName } from './box-adapters.js';
+import type { StreamEvent } from './stream.js';
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 const seconds = z.number().finite().positive().max(86400);
@@ -13,11 +14,19 @@ const seconds = z.number().finite().positive().max(86400);
  */
 export const TOOL_RULE = /^[A-Za-z][A-Za-z0-9_]{0,99}(\([^(),\r\n]{1,200}\))?$/;
 const rule = z.string().regex(TOOL_RULE);
+/** The run time limit of a claim in seconds, or null when the profile has none (docs/agent-limits.md). */
+export function runTimeLimit(run: { timeLimitSeconds?: number | null; timeoutSeconds: number }): number | null {
+    return run.timeLimitSeconds !== undefined ? run.timeLimitSeconds : run.timeoutSeconds;
+}
 export const claimSchema = z.object({
     run: z.object({
         id, claimToken: z.string().min(1), attempt: z.number().int().min(1).max(3),
         deliveryKey: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), leaseSeconds: seconds,
-        leaseUntil: z.string().datetime(), heartbeatSeconds: seconds, timeoutSeconds: seconds,
+        leaseUntil: z.string().datetime(), heartbeatSeconds: seconds,
+        // The profile's run time limit: null means none, and a number has no upper bound. Servers up
+        // to Agora 0.4.0 don't send it; then timeoutSeconds (always a number, at most a day) is the limit.
+        timeLimitSeconds: z.number().finite().positive().nullable().optional(),
+        timeoutSeconds: seconds,
         // Tools the owner approved once for this run after a denial (#73)
         grantedTools: z.array(rule).max(50).default([]),
         // The owner approved this run on its card (profiles with run approval)
@@ -25,8 +34,10 @@ export const claimSchema = z.object({
     }),
     session: z.object({
         id, channelId: id, channelName: z.string(), nativeSessionId: z.string().min(1).nullable(),
-        summary: z.string().nullable(), wakesUsed: z.number().nonnegative(), wakeBudget: z.number().nonnegative(),
-        tokensUsed: z.number().nonnegative(), tokenBudget: z.number().nonnegative(),
+        summary: z.string().nullable(), wakesUsed: z.number().nonnegative(), tokensUsed: z.number().nonnegative(),
+        // The session's limits, null for none. wakeBudget and tokenBudget are the same for servers up to Agora 0.4.0 (0: none); nothing reads them
+        wakeLimit: z.number().positive().nullable().optional(), tokenLimit: z.number().positive().nullable().optional(),
+        wakeBudget: z.number().nonnegative().optional(), tokenBudget: z.number().nonnegative().optional(),
         // The session slept through a rate limit; the batch holds what arrived meanwhile (#87)
         wokeFromSleep: z.boolean().default(false),
         lurkMode: z.enum(['quiet', 'balanced', 'vocal']).nullable().default(null),
@@ -50,7 +61,9 @@ export const claimSchema = z.object({
         authMode: z.enum(['subscription', 'api_key', 'siwc']).default('subscription'),
         // Whose plan a subscription or siwc profile runs on; `startedByOwner` means started by them
         planOwnerId: id.nullable().default(null),
-        runApproval: z.boolean().default(false) }),
+        runApproval: z.boolean().default(false),
+        // "Show live output" (docs/live-output.md): older servers don't send it, and don't take the stream either
+        liveOutput: z.boolean().default(true) }),
     // The channel's pinned instructions and files (docs/project-context.md). `docs` holds the
     // files' text only when `changed`: a fresh conversation, or a version this session hasn't had.
     // The server counts characters, zod UTF-16 units: limits are twice the server's.
@@ -127,6 +140,8 @@ export interface HostApi {
     workspaceStates?(sessionIds: string[]): Promise<string[]>;
     workspaceWarning?(sessionId: string, paths: string[]): Promise<void>;
     claim(signal?: AbortSignal): Promise<{ claim: Claim; sentAt: number } | null>;
+    /** Live output: a batch of text and step events; resolves false when the owner turned it off (stream.ts). */
+    stream?(claim: Claim, events: StreamEvent[], signal?: AbortSignal): Promise<boolean>;
     heartbeat(claim: Claim, signal?: AbortSignal, tokensUsed?: number | null, progress?: Progress | null): Promise<Heartbeat>;
     complete(claim: Claim, body: Completion, signal?: AbortSignal): Promise<void>;
     fail(claim: Claim, body: Failure, signal?: AbortSignal): Promise<void>;

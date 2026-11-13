@@ -4,7 +4,7 @@ import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentSessionUpdatePayload, TaskCardDeletePayload, TaskCardUpdatePayload } from '../../lib/contracts/ws-events';
-import { compactTokens, listProfiles, runAgentCommand, type AgentProfile } from '../agents/agentSessions';
+import { compactTokens, limitStopText, limitValue, listProfiles, runAgentCommand, stopLabel, validLimit, type AgentProfile } from '../agents/agentSessions';
 import { SessionWorkspace } from '../agents/SessionWorkspace';
 import {
   SESSION_LABEL, STATUSES, STATUS_LABEL, cardSessionState, githubApi, groupCards, safeUrl, startError, taskApi, taskError, upsertCard,
@@ -405,14 +405,17 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
           {card.session && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
               <dt className="text-text-muted">Session</dt>
-              <dd className="break-all font-mono">{card.session.id.slice(0, 10)}… · {card.session.state}{card.session.endReason ? ` (${card.session.endReason})` : ''}</dd>
+              <dd className="break-all font-mono">{card.session.id.slice(0, 10)}… · {card.session.state}{card.session.endReason ? ` (${stopLabel(card.session)})` : ''}</dd>
               {card.session.branch && <><dt className="text-text-muted">Branch</dt>
                 <dd className="break-all font-mono">{card.session.branch}{card.session.headSha ? ` @ ${card.session.headSha.slice(0, 12)}` : ''}</dd></>}
               <dt className="text-text-muted">Tokens</dt>
-              <dd className="font-mono">{compactTokens(card.session.tokensUsed)} / {compactTokens(card.session.tokenBudget)}</dd>
+              <dd className="font-mono">{compactTokens(card.session.tokensUsed)}{card.session.tokenBudget == null ? ' · no limit' : ` / ${compactTokens(card.session.tokenBudget)}`}</dd>
               {card.session.changedPaths.length > 0 && <><dt className="text-text-muted">Last run</dt>
                 <dd>{card.session.changedPaths.length} changed {card.session.changedPaths.length === 1 ? 'file' : 'files'}</dd></>}
             </dl>
+          )}
+          {card.session?.state === 'shelved' && card.session.endReason === 'budget' && (
+            <p role="alert" className="rounded-lg border border-border bg-bg/60 p-2 text-xs">{limitStopText(card.session)}</p>
           )}
           {board.isOwner && card.session && card.session.state !== 'ended' && (
             <RaiseBudget key={`budget-${card.session.id}`} card={card} busy={busy}
@@ -420,9 +423,9 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
                 let saved = false;
                 await act(async () => {
                   const r = await runAgentCommand(card.channelId, { command: 'budget', sessionId: card.session!.id, tokenBudget });
-                  onChanged({ ...card, session: { ...card.session!, tokenBudget: r.session?.tokenBudget ?? tokenBudget } });
+                  onChanged({ ...card, session: { ...card.session!, tokenBudget: r.session ? r.session.tokenBudget ?? null : tokenBudget } });
                   saved = true;
-                  return card.session!.state === 'shelved' ? 'Budget saved. Press Resume to continue.' : 'Budget saved.';
+                  return card.session!.state === 'shelved' ? 'Limit saved. Press Resume to continue.' : 'Limit saved.';
                 });
                 return saved;
               }} />
@@ -501,25 +504,25 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
 }
 
 /**
- * The owner sets the card session's own token budget (the agent-commands `budget` command), so
- * a session shelved on its budget can be resumed with more. The profile's budget, in Settings →
- * Agents, is for sessions without their own.
+ * The owner gives the card's session its own token limit (the agent-commands `budget` command),
+ * or clears it (empty) so the agent's "Tokens per session" in Settings → Agents applies, which is
+ * no limit unless the owner set one. Any positive whole number is accepted.
  */
-function RaiseBudget({ card, busy, onSave }: { card: TaskCard; busy: boolean; onSave: (tokenBudget: number) => Promise<boolean> }) {
+function RaiseBudget({ card, busy, onSave }: { card: TaskCard; busy: boolean; onSave: (tokenBudget: number | null) => Promise<boolean> }) {
   const current = card.session!.tokenBudget;
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState(String(current));
-  const valid = /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) >= 1 && Number(value) !== current;
+  const [value, setValue] = useState(current == null ? '' : String(current));
+  const valid = validLimit(value, true) && limitValue(value) !== current;
   if (!open) {
-    return <button type="button" className={BTN} disabled={busy} onClick={() => { setValue(String(current)); setOpen(true); }}>Raise budget</button>;
+    return <button type="button" className={BTN} disabled={busy} onClick={() => { setValue(current == null ? '' : String(current)); setOpen(true); }}>Set token limit</button>;
   }
   return (
-    <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); if (valid) void onSave(Number(value)).then(saved => { if (saved) setOpen(false); }); }}>
-      <label className="flex min-w-0 flex-1 flex-col text-xs text-text-muted">Session token budget
-        <input className={INPUT} type="number" min={1} step={1} value={value} aria-label="Card session token budget"
+    <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); if (valid) void onSave(limitValue(value)).then(saved => { if (saved) setOpen(false); }); }}>
+      <label className="flex min-w-0 flex-1 flex-col text-xs text-text-muted">This session's token limit (empty: follows the agent's setting)
+        <input className={INPUT} type="number" min={1} step={1} inputMode="numeric" value={value} placeholder="No limit of its own" aria-label="Card session token limit"
           onChange={e => setValue(e.target.value)} />
       </label>
-      <button type="submit" className={BTN_PRIMARY} disabled={busy || !valid}>Save budget</button>
+      <button type="submit" className={BTN_PRIMARY} disabled={busy || !valid}>Save limit</button>
       <button type="button" className={BTN} onClick={() => setOpen(false)}>Cancel</button>
     </form>
   );

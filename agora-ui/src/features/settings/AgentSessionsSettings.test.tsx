@@ -15,84 +15,116 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); useServerStore.setState({ instanceServerId: null }); });
 
-it('lets the owner raise the wake budget from the notice destination', async () => {
-  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
-  render(<AgentSessionsSettings />);
-  const input = await screen.findByLabelText('Wake budget for claude');
-  expect(input).toHaveProperty('value', '50');
-  fireEvent.change(input, { target: { value: '125' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', expect.objectContaining({ wakeBudget: 125 })));
-});
-
-it.each(['', '0', '-1', '1.5', '100001'])('does not save an invalid wake budget: %s', async value => {
-  const patch = vi.spyOn(api, 'patch');
-  render(<AgentSessionsSettings />);
-  fireEvent.change(await screen.findByLabelText('Wake budget for claude'), { target: { value } });
-  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
-  expect(patch).not.toHaveBeenCalled();
-});
-
-it('lets the owner set the token budget per session next to the wake budget', async () => {
-  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
-  render(<AgentSessionsSettings />);
-  const input = await screen.findByLabelText('Token budget for claude');
-  expect(input).toHaveProperty('value', '2000000');
-  expect(screen.getByText('Sessions without their own budget use this. Claude counts cached context, so long runs use millions.')).toBeTruthy();
-  fireEvent.change(input, { target: { value: '50000000' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', expect.objectContaining({ tokenBudget: 50_000_000, wakeBudget: 50 })));
-});
-
-it.each(['', '0', '-5', '2.5', '1e9', '9007199254740993'])('does not save an invalid token budget: %s', async value => {
-  const patch = vi.spyOn(api, 'patch');
-  render(<AgentSessionsSettings />);
-  fireEvent.change(await screen.findByLabelText('Token budget for claude'), { target: { value } });
-  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
-  expect(patch).not.toHaveBeenCalled();
-});
-
-it('lets the owner set the run time limit in minutes next to the budgets, saved in seconds', async () => {
-  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
-  render(<AgentSessionsSettings />);
-  const input = await screen.findByLabelText('Run time limit for claude');
-  expect(input).toHaveProperty('value', '15');
-  expect(screen.getByText('A run longer than this is stopped. Long jobs should run detached and be checked on later.')).toBeTruthy();
-  expect(screen.getByText(/15 min per run/)).toBeTruthy();
-  fireEvent.change(input, { target: { value: '60' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', expect.objectContaining({ runTimeoutSec: 3600, wakeBudget: 50 })));
-});
-
-it('leaves the run time limit out of a save that did not change it', async () => {
-  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
-  render(<AgentSessionsSettings />);
-  fireEvent.change(await screen.findByLabelText('Wake budget for claude'), { target: { value: '60' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(patch).toHaveBeenCalled());
-  expect(patch.mock.calls[0][1]).not.toHaveProperty('runTimeoutSec');
-});
-
-it("sends only the session limits for a box's profile (its model and the rest are the box's)", async () => {
+/** The profile list with one profile; `limits` overrides the mock's old program defaults. */
+function profiles(limits: object = {}, over: object = {}, host: object = {}) {
   vi.mocked(api.get).mockImplementation(async (path: string) => (path.endsWith('/agent-hosts')
-    ? [{ id: 'H', name: 'box-cci', revokedAt: null, kind: 'box' }]
-    : path.endsWith('/agent-profiles') ? [{ id: 'P', name: 'cci', botId: 'B', hostId: 'H', adapter: 'codex', boxed: true,
-      model: 'gpt-x', effort: null, workdirAlias: 'work', workspaceId: 'primary', wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 900 }]
+    ? [{ id: 'H', name: 'desktop', revokedAt: null, ...host }]
+    : path.endsWith('/agent-profiles') ? [{ id: 'P', name: 'claude', botId: 'B', hostId: 'H', adapter: 'claude',
+      model: null, effort: null, workdirAlias: 'agora', workspaceId: 'primary', wakeBudget: null, tokenBudget: null, runTimeoutSec: null, ...limits, ...over }]
     : []) as never);
-  const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
-  render(<AgentSessionsSettings />);
-  fireEvent.change(await screen.findByLabelText('Run time limit for cci'), { target: { value: '45' } });
-  expect(screen.queryByLabelText('Model for cci')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 2700 }));
+}
+const LIMITS = ['Wakes per session', 'Tokens per session', 'Time per run'] as const;
+
+describe('agent limits are shown, off by default, and the owner\'s choice', () => {
+  it('a profile with no limits shows each limit as a row with "No limit" selected, one line on what it does, and no number field', async () => {
+    profiles();
+    render(<AgentSessionsSettings />);
+    for (const limit of LIMITS) {
+      expect(await screen.findByRole('radio', { name: `No limit: ${limit} for claude` })).toBeChecked();
+      expect(screen.getByRole('radio', { name: `Set a limit: ${limit} for claude` })).not.toBeChecked();
+      expect(screen.queryByRole('spinbutton', { name: `${limit} for claude` })).toBeNull();
+    }
+    expect(screen.getByText('Shelves a session after this many wakes. A wake is one run the agent starts to handle new messages.')).toBeTruthy();
+    expect(screen.getByText('Shelves a session once it and its subtasks have used this many tokens. Claude counts cached context, so long runs use millions.')).toBeTruthy();
+    expect(screen.getByText('Stops a single run after this long. With no limit a run ends when the agent finishes or you end its session.')).toBeTruthy();
+    expect(screen.getByText("A change applies to this agent's existing sessions at once. A session a limit already stopped stays shelved until you resume it.")).toBeTruthy();
+    expect(screen.getByText(/workdir agora · no limits/)).toBeTruthy();
+    // Nothing to save until the owner changes something
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('choosing "Limit to" opens a number field; the limit is saved as typed, however large', async () => {
+    profiles();
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'Set a limit: Wakes per session for claude' }));
+    const wakes = screen.getByRole('spinbutton', { name: 'Wakes per session for claude' });
+    expect(wakes).not.toHaveAttribute('max');
+    // Chosen but still empty: not saveable yet
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(wakes, { target: { value: '100001' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'Set a limit: Tokens per session for claude' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tokens per session for claude' }), { target: { value: '9007199254740991' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'Set a limit: Time per run for claude' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Time per run for claude' }), { target: { value: '100000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P',
+      expect.objectContaining({ wakeBudget: 100001, tokenBudget: 9007199254740991, runTimeoutSec: 6_000_000 })));
+  });
+
+  it('a profile with limits shows them, and "No limit" removes one (saved as null)', async () => {
+    profiles({ wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 900 });
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    expect(await screen.findByRole('spinbutton', { name: 'Wakes per session for claude' })).toHaveValue(50);
+    expect(screen.getByRole('spinbutton', { name: 'Tokens per session for claude' })).toHaveValue(2000000);
+    expect(screen.getByRole('spinbutton', { name: 'Time per run for claude' })).toHaveValue(15);
+    expect(screen.getByText(/50 wakes per session · 2,000,000 tokens per session · 15 min per run/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No limit: Wakes per session for claude' }));
+    expect(screen.queryByRole('spinbutton', { name: 'Wakes per session for claude' })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'No limit: Time per run for claude' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P',
+      expect.objectContaining({ wakeBudget: null, tokenBudget: 2000000, runTimeoutSec: null })));
+  });
+
+  it.each(LIMITS.flatMap(limit => ['', '0', '-1', '1.5', '1e9', '9007199254740993'].map(value => [limit, value] as const)))(
+    'does not save %s as "%s": a limit is a positive whole number', async (limit, value) => {
+      profiles({ wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 900 });
+      const patch = vi.spyOn(api, 'patch');
+      render(<AgentSessionsSettings />);
+      fireEvent.change(await screen.findByRole('spinbutton', { name: `${limit} for claude` }), { target: { value } });
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+      expect(patch).not.toHaveBeenCalled();
+    });
+
+  it('leaves the run time limit out of a save that did not change it', async () => {
+    profiles({ wakeBudget: 50, tokenBudget: 2000000, runTimeoutSec: 905 });
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Wakes per session for claude' }), { target: { value: '60' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('runTimeoutSec');
+  });
+
+  it("sends only the session limits for a box's profile (its model and the rest are the box's)", async () => {
+    profiles({ wakeBudget: 50, tokenBudget: null, runTimeoutSec: 900 }, { name: 'cci', adapter: 'codex', boxed: true, model: 'gpt-x', workdirAlias: 'work' }, { name: 'box-cci', kind: 'box' });
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Time per run for cci' }), { target: { value: '45' } });
+    expect(screen.queryByLabelText('Model for cci')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { wakeBudget: 50, tokenBudget: null, runTimeoutSec: 2700 }));
+  });
 });
 
-it.each(['', '0', '1.5', '121', '-5'])('does not save an invalid run time limit: %s', async value => {
-  const patch = vi.spyOn(api, 'patch');
-  render(<AgentSessionsSettings />);
-  fireEvent.change(await screen.findByLabelText('Run time limit for claude'), { target: { value } });
-  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
-  expect(patch).not.toHaveBeenCalled();
+describe('Show live output (docs/live-output.md)', () => {
+  it('is on by default, says what it shows and never shows, and saves at once when the owner turns it off', async () => {
+    profiles();
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    const box = await screen.findByRole('checkbox', { name: 'Show live output for claude' });
+    expect(box).toBeChecked();
+    expect(screen.getByText(/Its reasoning, file contents and command output are never shown/)).toBeTruthy();
+    fireEvent.click(box);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { showLiveOutput: false }));
+  });
+  it('shows an agent that has it off as off, for a box profile too', async () => {
+    profiles({}, { showLiveOutput: false, boxed: true });
+    render(<AgentSessionsSettings />);
+    expect(await screen.findByRole('checkbox', { name: 'Show live output for claude' })).not.toBeChecked();
+  });
 });
 
 it('creates an opencode agent only with an OpenRouter model ID', async () => {

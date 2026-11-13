@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionBudget } from './SessionBudget';
+import { LiveWork } from './LiveWork';
+import { useRunStreams } from './runStream';
 import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
-  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState,
+  ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState, stopLabel,
   ownerTokenNote, terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
 
@@ -64,6 +66,8 @@ function shortId(id: string): string {
 
 export function SessionSheet({ open, onClose, channelId, mode, sessions, profiles, profilesError, onChanged }: SessionSheetProps) {
   const titleId = useId();
+  // The running agent's live output, the same stream the channel shows (docs/live-output.md)
+  const streams = useRunStreams(channelId, open);
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; });
@@ -271,6 +275,8 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           )}
         </p>
 
+        {state === 'working' && current?.run && streams[current.run.id] && <LiveWork stream={streams[current.run.id]} name={current.profile} />}
+
         {live && current && (
           <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
             <label className="flex min-h-[44px] items-center gap-2">
@@ -278,7 +284,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                 onChange={e => void run({ command: 'lurk', profile: selected, lurkMode: e.target.checked ? 'balanced' : null })} />
               Lurk mode
             </label>
-            <p className="text-text-muted">Read channel activity and reply only when there is something important to add. Uses this session's budget.</p>
+            <p className="text-text-muted">Read channel activity and reply only when there is something important to add. Its wakes and tokens count against this session's limits, if you set any.</p>
             {current.lurkMode && <label className="flex items-center gap-2">Speak up
               <select aria-label="Lurk dial" value={current.lurkMode} disabled={busy}
                 onChange={e => void run({ command: 'lurk', profile: selected, lurkMode: e.target.value as 'quiet' | 'balanced' | 'vocal' })}
@@ -380,7 +386,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
                   <span className="min-w-0 flex-1 truncate text-sm text-text-muted">
                     <span className="font-mono text-text" title={s.id}>{shortId(s.id)}</span>
                     {' · '}{STATE_LABEL[sessionState(s)].toLowerCase()}
-                    {s.endReason ? ` (${s.endReason})` : ''}
+                    {s.endReason ? ` (${stopLabel(s)})` : ''}
                     {' · '}<span className="font-mono">{s.wakesUsed}w · {compactTokens(s.tokensUsed)}</span>
                   </span>
                   {s.state === 'shelved' && (

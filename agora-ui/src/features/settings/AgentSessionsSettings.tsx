@@ -4,7 +4,8 @@ import { api, serverApi, ApiError } from '../../lib/api';
 import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
 import { NotAffiliated } from '../../components/ui/NotAffiliated';
-import { authLabel } from '../agents/agentSessions';
+import { authLabel, validLimit } from '../agents/agentSessions';
+import { LimitRow } from './LimitRow';
 import { ChatGPTPlanConnect, type PlanConnection } from './ChatGPTPlanConnect';
 import { useAuthStore } from '../../stores/authStore';
 import { BoxesSection } from '../boxes/BoxesSection';
@@ -21,8 +22,11 @@ interface Host { id: string; name: string; createdAt: string; lastSeenAt: string
 interface Profile {
   id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
-  wakeBudget: number; tokenBudget: number; runTimeoutSec: number;
+  /** Session limits; null: no limit, the default (docs/agent-limits.md). */
+  wakeBudget: number | null; tokenBudget: number | null; runTimeoutSec: number | null;
   toolPresets?: string[]; allowedTools?: string[];
+  /** Show the agent's live text and steps in the channel while it runs (docs/live-output.md); on unless false. */
+  showLiveOutput?: boolean;
   /** Reported by the host at start (docs/provider-terms.md); subscription until then. */
   authMode?: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
   /** 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md). */
@@ -331,9 +335,19 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
   );
 }
 
-/** The run time limit's range in minutes: the profile API takes runTimeoutSec 60..7200. */
-const MIN_RUN_MINUTES = 1;
-const MAX_RUN_MINUTES = 120;
+/** A limit as its field's text: null stays null ("no limit"). */
+const limitText = (n: number | null) => n === null ? null : String(n);
+/** A limit field is fine when it is "no limit" or a positive whole number; nothing caps the number. */
+const limitOk = (text: string | null) => text === null || validLimit(text);
+/** The limits a profile has, for its summary line. */
+function limitSummary(p: Pick<Profile, 'wakeBudget' | 'tokenBudget' | 'runTimeoutSec'>): string {
+  const set = [
+    p.wakeBudget !== null ? `${p.wakeBudget.toLocaleString('en-US')} wakes per session` : null,
+    p.tokenBudget !== null ? `${p.tokenBudget.toLocaleString('en-US')} tokens per session` : null,
+    p.runTimeoutSec !== null ? `${Math.round(p.runTimeoutSec / 60).toLocaleString('en-US')} min per run` : null,
+  ].filter(Boolean);
+  return set.length ? set.join(' · ') : 'no limits';
+}
 
 function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   serverId: string; profile: Profile; host: Host | undefined; plan?: PlanConnection; onChange: () => void; onError: (e: string) => void;
@@ -341,16 +355,17 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   const [model, setModel] = useState(profile.model ?? '');
   const [effort, setEffort] = useState(profile.effort ?? '');
   const [workspaceId, setWorkspaceId] = useState(profile.workspaceId ?? 'primary');
-  const [wakeBudget, setWakeBudget] = useState(String(profile.wakeBudget));
-  const validWakeBudget = Number.isInteger(Number(wakeBudget)) && Number(wakeBudget) >= 1 && Number(wakeBudget) <= 100000;
-  const [tokenBudget, setTokenBudget] = useState(String(profile.tokenBudget));
-  const validTokenBudget = /^\d+$/.test(tokenBudget) && Number.isSafeInteger(Number(tokenBudget)) && Number(tokenBudget) >= 1;
-  // The host stops a run after this long (agent_profiles.run_timeout_sec, 60..7200 s); shown in minutes
-  const savedMinutes = String(Math.round(profile.runTimeoutSec / 60));
+  // Each limit: null is "no limit", else the field's text
+  const [wakeBudget, setWakeBudget] = useState(limitText(profile.wakeBudget));
+  const validWakeBudget = limitOk(wakeBudget);
+  const [tokenBudget, setTokenBudget] = useState(limitText(profile.tokenBudget));
+  const validTokenBudget = limitOk(tokenBudget);
+  // The host stops a run after this long (agent_profiles.run_timeout_sec, in seconds); shown in minutes
+  const savedMinutes = profile.runTimeoutSec === null ? null : String(Math.round(profile.runTimeoutSec / 60));
   const [runMinutes, setRunMinutes] = useState(savedMinutes);
-  const validRunMinutes = /^\d+$/.test(runMinutes) && Number(runMinutes) >= MIN_RUN_MINUTES && Number(runMinutes) <= MAX_RUN_MINUTES;
+  const validRunMinutes = limitOk(runMinutes) && (runMinutes === null || Number.isSafeInteger(Number(runMinutes) * 60));
   const dirty = model !== (profile.model ?? '') || effort !== (profile.effort ?? '') || workspaceId !== (profile.workspaceId ?? 'primary')
-    || wakeBudget !== String(profile.wakeBudget) || tokenBudget !== String(profile.tokenBudget) || runMinutes !== savedMinutes;
+    || wakeBudget !== limitText(profile.wakeBudget) || tokenBudget !== limitText(profile.tokenBudget) || runMinutes !== savedMinutes;
   // opencode's own default is an OpenCode Zen model, so an opencode (or omp) agent always names one
   const opencode = profile.adapter === 'opencode' || profile.adapter === 'omp';
   const boxed = !!profile.boxed;
@@ -362,9 +377,9 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
       // A box's profile takes only its session limits here; the rest is in the box's settings
       await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, {
         ...(boxed ? {} : { model: model.trim() || null, effort: effort || null, workspaceId: workspaceId.trim().toLowerCase() }),
-        wakeBudget: Number(wakeBudget), tokenBudget: Number(tokenBudget),
+        wakeBudget: wakeBudget === null ? null : Number(wakeBudget), tokenBudget: tokenBudget === null ? null : Number(tokenBudget),
         // Only when changed: a limit that isn't whole minutes stays as it is
-        ...(runMinutes !== savedMinutes ? { runTimeoutSec: Number(runMinutes) * 60 } : {}) });
+        ...(runMinutes !== savedMinutes ? { runTimeoutSec: runMinutes === null ? null : Number(runMinutes) * 60 } : {}) });
       onChange();
     } catch (err) { onError(errorText(err)); }
   };
@@ -380,7 +395,7 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
           <span className="font-medium">{profile.name}</span>
           <BoxModeBadge profile={profile} className="ml-2" />
           <span className="ml-2 text-xs text-text-muted">
-            {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {profile.wakeBudget} wakes · {profile.tokenBudget.toLocaleString()} tokens per session · {savedMinutes} min per run
+            {profile.adapter} · {host?.name ?? 'revoked host'} · workdir {profile.workdirAlias} · {limitSummary(profile)}
           </span>
           <AuthBadge profile={profile} />
         </span>
@@ -397,22 +412,34 @@ function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
             {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
           </select>
         </>}
-        <label className="flex flex-col text-xs text-text-muted">Wake budget per session
-          <input className={input} type="number" min={1} max={100000} step={1} value={wakeBudget}
-            onChange={e => setWakeBudget(e.target.value)} aria-label={`Wake budget for ${profile.name}`} />
-        </label>
-        <label className="flex flex-col text-xs text-text-muted">Token budget per session
-          <input className={input} type="number" min={1} step={1} value={tokenBudget}
-            onChange={e => setTokenBudget(e.target.value)} aria-label={`Token budget for ${profile.name}`} />
-        </label>
-        <label className="flex flex-col text-xs text-text-muted">Run time limit per session (minutes)
-          <input className={input} type="number" min={MIN_RUN_MINUTES} max={MAX_RUN_MINUTES} step={1} value={runMinutes}
-            onChange={e => setRunMinutes(e.target.value)} aria-label={`Run time limit for ${profile.name}`} />
-        </label>
-        {dirty && <Button variant="secondary" disabled={!validWakeBudget || !validTokenBudget || !validRunMinutes || !validModel} onClick={() => void save()}>Save</Button>}
       </div>
-      <p className="mt-1 text-xs text-text-muted">Sessions without their own budget use this. Claude counts cached context, so long runs use millions.</p>
-      <p className="mt-1 text-xs text-text-muted">A run longer than this is stopped. Long jobs should run detached and be checked on later.</p>
+      <section className="mt-2" aria-label={`Limits for ${profile.name}`}>
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-muted">Limits (optional)</h4>
+        <LimitRow label="Wakes per session" unit="wakes" name={`Wakes per session for ${profile.name}`} value={wakeBudget} onChange={setWakeBudget} invalid={!validWakeBudget}
+          hint="Shelves a session after this many wakes. A wake is one run the agent starts to handle new messages." />
+        <LimitRow label="Tokens per session" unit="tokens" name={`Tokens per session for ${profile.name}`} value={tokenBudget} onChange={setTokenBudget} invalid={!validTokenBudget}
+          hint="Shelves a session once it and its subtasks have used this many tokens. Claude counts cached context, so long runs use millions." />
+        <LimitRow label="Time per run" unit="minutes" name={`Time per run for ${profile.name}`} value={runMinutes} onChange={setRunMinutes} invalid={!validRunMinutes}
+          hint="Stops a single run after this long. With no limit a run ends when the agent finishes or you end its session." />
+        <p className="mt-1 text-xs text-text-muted">
+          A change applies to this agent's existing sessions at once. A session a limit already stopped stays shelved until you resume it.
+        </p>
+      </section>
+      <label className="mt-2 flex min-h-11 items-start gap-2 text-sm text-text" data-testid={`live-output-${profile.name}`}>
+        <input type="checkbox" className="mt-1" aria-label={`Show live output for ${profile.name}`} checked={profile.showLiveOutput !== false}
+          onChange={e => void (async () => {
+            try { await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { showLiveOutput: e.target.checked }); onChange(); }
+            catch (err) { onError(errorText(err)); }
+          })()} />
+        <span>Show live output
+          <span className="block text-xs text-text-muted">While this agent works, people in the channel see its text as it is written and its steps (reading a file, running a command). Its reasoning, file contents and command output are never shown. Turn it off to see nothing until its final post.</span>
+        </span>
+      </label>
+      {dirty && (
+        <div className="mt-2">
+          <Button variant="secondary" disabled={!validWakeBudget || !validTokenBudget || !validRunMinutes || !validModel} onClick={() => void save()}>Save</Button>
+        </div>
+      )}
       {/* A box logs its CLI in from its Boxes entry instead */}
       {profile.adapter === 'codex' && host && host.kind !== 'box' && !profile.boxed && (
         <ChatGPTPlanConnect serverId={serverId} profileId={profile.id} hostName={host.name} plan={plan}

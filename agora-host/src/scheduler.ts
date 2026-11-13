@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Config } from './config.js';
 import { prepare, type Launch } from './adapters.js';
 import { errorCode, fatalAuth, fenced, HttpError } from './client.js';
-import type { Claim, HostApi, Result, Verification } from './types.js';
+import { runTimeLimit, type Claim, type HostApi, type Result, type Verification } from './types.js';
 import { worktreeSnapshot, changedSince, type Runner, type RunningChild } from './process.js';
 import { reconcileWorkspaces, recoverWorkspaceGitLocks, workspaceHead } from './workspaces.js';
 import { GitLockError } from './git-owner.js';
@@ -17,6 +17,7 @@ import { AGENT_TAIL, NOTICE_TAIL, runVerify, verifyArgv } from './verify.js';
 import { runPreview } from './preview.js';
 import { runGithub } from './github.js';
 import { cardAsker } from './siwc/approvals.js';
+import { Streamer, type StreamSink } from './stream.js';
 
 interface Active {
     claim: Claim; child?: RunningChild; stop?: string; noReport: boolean; done: Promise<void>;
@@ -24,6 +25,8 @@ interface Active {
     verifyAbort?: AbortController;
     /** Tokens of earlier turns in this run (verify fix turns), added to the current child's. */
     tokenBase: number;
+    /** Live output sink, when on (stream.ts); the verify fix turns use it too. */
+    stream?: StreamSink;
 }
 export interface SchedulerOptions {
     now?: () => number; tickMs?: number; safetyMs?: number; commandPollMs?: number;
@@ -68,13 +71,21 @@ export class Scheduler {
     private async execute(a: Active, sentAt: number): Promise<void> {
         const { claim } = a;
         let deadline = sentAt + claim.run.leaseSeconds * 1000 - this.safetyMs;
-        const timeout = this.now() + claim.run.timeoutSeconds * 1000;
+        // No run time limit: the run ends when the CLI exits, the owner ends or shelves the session
+        // (a heartbeat answers cancel), or the lease is lost. Nothing stops it by the clock.
+        const limit = runTimeLimit(claim.run);
+        const timeout = limit === null ? Infinity : this.now() + limit * 1000;
         let nextHeartbeat = this.now() + claim.run.heartbeatSeconds * 1000;
         let launch: Launch | undefined; let beat: Promise<void> | undefined;
         let result: Result | undefined; let finished = false;
         let beforeTree: string | undefined, savedCheckpoint: Checkpoint | undefined;
         let interval: ReturnType<typeof setInterval> | undefined;
         const beatAbort = new AbortController();
+        // Live output (docs/live-output.md): on unless the owner turned it off for this agent. Never
+        // retried and never fatal: an older server's 404 or a finished run's 409 just stops it.
+        const streamAbort = new AbortController();
+        const streamer = claim.profile.liveOutput && this.api.stream
+            ? new Streamer(events => this.api.stream!(claim, events, streamAbort.signal), this.log) : null;
         const stopChild = async (reason: string, noReport = false) => {
             a.stop ??= reason; a.noReport ||= noReport; a.verifyAbort?.abort();
             try { await a.child?.kill(); } catch { a.noReport = true; this.log('process_tree_kill_failed'); await this.stop(); }
@@ -109,6 +120,7 @@ export class Scheduler {
             if (this.stopping || a.stop || this.now() >= deadline) return;
             // Codex app-server approvals outside the rules wait for a tool-request card (#93)
             if (launch.appServer) launch.appServer.ask = cardAsker(this.api, claim, { waitMs: (this.config.approvalWaitSeconds ?? 300) * 1000 });
+            if (streamer) { launch.stream = streamer.emit; a.stream = streamer.emit; }
             a.child = this.runner.start(launch);
             result = await a.child.result; finished = true;
             if (snapshot) result.changedPaths = [...new Set([...changedSince(before, await worktreeSnapshot(launch.cwd)), ...(result.changedPaths ?? [])])].slice(0, 1000);
@@ -150,6 +162,11 @@ export class Scheduler {
                 }
             }
             if (interval) clearInterval(interval);
+            // Send the last live output before the run is reported (the server drops it at the report)
+            if (streamer) {
+                const give = setTimeout(() => streamAbort.abort(), 2000);
+                try { await streamer.stop(); } catch { /* ephemeral */ } finally { clearTimeout(give); streamAbort.abort(); }
+            }
             // Finish any heartbeat before reporting; no post-completion heartbeat race.
             beatAbort.abort(); await beat;
             if (!a.noReport && !this.stopping && this.now() < deadline && result) {
@@ -220,6 +237,7 @@ export class Scheduler {
                 try {
                     if (a.stop || this.stopping) return done({ status: 'skipped', reason: 'stopped' });
                     a.tokenBase = tokens ?? 0;
+                    if (a.stream) next.stream = a.stream;
                     a.child = this.runner.start(next);
                     r = await a.child.result;
                 } finally { try { await next.cleanup(); } catch { this.log('run_cleanup_failed'); } }

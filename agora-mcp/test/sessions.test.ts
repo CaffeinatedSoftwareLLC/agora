@@ -64,6 +64,25 @@ describe('session tools', () => {
         const out = await call('session_list', {});
         expect(out.content[0].text).toContain('S1 codex (@Codex) live, 2 wakes, 900 tokens');
     });
+    it('shows a limit only when the owner set one, and says which limit stopped a session', async () => {
+        const shelved = { ...live, state: 'shelved', endReason: 'budget' };
+        const { call } = setup([
+            { ...live, id: 'S0', wakeBudget: null, tokenBudget: null },
+            { ...live, id: 'S2', wakeBudget: 50, tokenBudget: 2000000 },
+            { ...shelved, id: 'S3', wakesUsed: 50, wakeBudget: 50, tokenBudget: 50000000, limitStop: { kind: 'wake', used: 50, limit: 50, sessionId: 'S3' } },
+            { ...shelved, id: 'S4', tokenBudget: 800, limitStop: { kind: 'token', used: 11000, limit: 10000, sessionId: 'S9' } },
+            { ...shelved, id: 'S5', limitStop: { kind: 'credit' } },
+            { ...shelved, id: 'S6' },
+        ]);
+        const text = (await call('session_list', {})).content[0].text;
+        expect(text).toContain('S0 codex (@Codex) live, 2 wakes, 900 tokens,');
+        expect(text).toContain('S2 codex (@Codex) live, 2 of 50 wakes, 900 of 2000000 tokens,');
+        // Stopped by wakes: the tokens were nowhere near their limit, and the line says so
+        expect(text).toContain('S3 codex (@Codex) shelved (wake limit: 50 of 50), 50 of 50 wakes, 900 of 50000000 tokens,');
+        expect(text).toContain('S4 codex (@Codex) shelved (token limit of parent S9: 11000 of 10000), 2 wakes, 900 of 800 tokens,');
+        expect(text).toContain('S5 codex (@Codex) shelved (API key out of credit),');
+        expect(text).toContain('S6 codex (@Codex) shelved (budget),');
+    });
 
     it('starts with the on_live choice', async () => {
         const { api, call } = setup([live]);

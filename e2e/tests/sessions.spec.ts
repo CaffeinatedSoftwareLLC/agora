@@ -151,15 +151,18 @@ test.describe('agent sessions with the fake host', () => {
         await openChannel(page, ch.id, ch.name);
         await agentChip(page, a.name).click();
         const sh = sheet(page, a.name);
-        await sh.getByLabel('Session token budget').fill('1000');
-        await sh.getByRole('button', { name: 'Save budget' }).click();
-        await expect(sh.getByText('Budget saved. Resume the session when ready.')).toBeVisible();
+        // No limit by default: the owner opens the optional control and sets one
+        expect((await sessionOf(owner, ch.id, a.name, sid)).tokenBudget).toBeNull();
+        await sh.getByText('Give this session its own token limit').click();
+        await sh.getByLabel("This session's own token limit").fill('1000');
+        await sh.getByRole('button', { name: 'Save limit' }).click();
+        await expect(sh.getByText('Limit saved.')).toBeVisible();
         await sh.getByRole('button', { name: 'Close' }).click();
         expect((await sessionOf(owner, ch.id, a.name, sid)).tokenBudget).toBe(1000);
 
         await compose(page, ch.name, `@${a.name} expensive #fake-tokens=2000`);
-        // Before and after #185's wording ("its token budget is used up (N of M tokens)")
-        const shelved = new RegExp(`Session for ${a.name} shelved: its (?:token )?budget is used up.*/resume ${sid}`);
+        // "its token limit is used up (N of M tokens). That is this session's own token limit: ..."
+        const shelved = new RegExp(`Session for ${a.name} shelved: its token limit is used up \\(.* of 1,000 tokens\\)\\. That is this session's own token limit.*/resume ${sid}`);
         await expectNotice(page, shelved);
         const s = await sessionOf(owner, ch.id, a.name, sid);
         expect([s.state, s.endReason]).toEqual(['shelved', 'budget']);
@@ -168,17 +171,17 @@ test.describe('agent sessions with the fake host', () => {
         const pausedToggle = pausedActivity.getByRole('button', { name: /^\d+ agent updates?/ });
         await expect(pausedToggle).toBeVisible();
         if ((await pausedToggle.getAttribute('aria-expanded')) === 'false') await pausedToggle.click();
-        await expect(pausedActivity.getByText(`${a.name} paused: session budget used up.`)).toBeVisible();
+        await expect(pausedActivity.getByText(new RegExp(`${a.name} paused\\. Stopped by the token limit: .* of 1,000 tokens\\.`))).toBeVisible();
 
         // /resume refused: 409 budget_exhausted, still shelved, no notice, no run
         const runsBefore = fh.traces('budget').length;
         const msgsBefore = await messages(owner, ch.id);
         await compose(page, ch.name, `/resume ${sid}`, { refused: true });
-        const refusal = page.getByText('This session has used its budget. The owner can raise its token budget, or start a fresh session.');
+        const refusal = page.getByText(/Token limit \(that session's own\) reached: .* of 1,000 tokens\. The session's status says where to raise or remove it; then resume\./);
         await expect(refusal).toBeVisible();
-        await snap(page, ti, 'AG-01.budget', '01-resume-refused', 'A shelved-for-budget notice in the channel and an error above the message box saying the session has used its budget', { ready: refusal });
+        await snap(page, ti, 'AG-01.budget', '01-resume-refused', 'A shelved-for-budget notice in the channel and an error above the message box saying the session reached its own token limit, with the numbers', { ready: refusal });
         const api = await owner.req('POST', `/channels/${ch.id}/agent-commands`, { command: 'resume', sessionId: sid });
-        expect([api.status, api.data.error]).toEqual([409, 'budget_exhausted']);
+        expect([api.status, api.data.error, api.data.limit?.kind, api.data.limit?.source]).toEqual([409, 'budget_exhausted', 'token', 'session']);
         expect((await sessionOf(owner, ch.id, a.name, sid)).state).toBe('shelved');
         expect((await messages(owner, ch.id))[0].id).toBe(msgsBefore[0].id);
         await new Promise(r => setTimeout(r, 3000));

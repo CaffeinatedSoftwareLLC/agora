@@ -197,13 +197,13 @@ describe('task board', () => {
         expect(resumed.body).toMatchObject({ action: 'resumed', card: { session: { id: again.body.card.session.id, state: 'live' } } });
     });
 
-    it('a new profile gets a 50M token budget; raising the profile budget lets a budget-exhausted card resume', async () => {
-        // Migration 093: the column default for new profiles (existing rows keep theirs)
+    it('a new profile has no token limit; raising a profile limit lets a card it stopped resume', async () => {
+        // Migration 097: no limit unless the owner sets one
         await setHostKind(ctx.db, hostId, 'machine'); // agents are created on machine hosts
         const roomy = await makeAgent('roomy');
         await setHostKind(ctx.db, hostId, 'box');
         const profiles = await ctx.request.get(`/servers/${serverId}/agent-profiles`).set(owner.auth);
-        expect(profiles.body.find((p: any) => p.id === roomy.profileId)).toMatchObject({ tokenBudget: 50_000_000 });
+        expect(profiles.body.find((p: any) => p.id === roomy.profileId)).toMatchObject({ tokenBudget: null, wakeBudget: null, runTimeoutSec: null });
         expect((await ctx.request.delete(`/servers/${serverId}/agent-profiles/${roomy.profileId}`).set(owner.auth)).status).toBe(204);
 
         // builder's profile is on 2,000,000 (beforeEach); the card's session has no budget of its own
@@ -212,6 +212,7 @@ describe('task board', () => {
         const refused = await start(card.id);
         expect(refused.status).toBe(409);
         expect(refused.body.error).toBe('budget_exhausted');
+        expect(refused.body.limit).toEqual({ sessionId: card.session.id, kind: 'token', used: 2_000_000, limit: 2_000_000, source: 'agent' });
 
         // Only the owner raises it, through the profile PATCH that Settings → Agents uses
         const path = `/servers/${serverId}/agent-profiles/${builder.profileId}`;
@@ -376,7 +377,9 @@ describe('subtasks', () => {
         expect(beat.body).toMatchObject({ cancel: true });
         expect(await session(childId)).toMatchObject({ state: 'shelved', end_reason: 'budget' });
         const notice = (await ctx.db.query(`SELECT content FROM messages WHERE content LIKE 'Subtask session for builder%' ORDER BY id DESC LIMIT 1`)).rows[0];
-        expect(notice.content).toContain(`the budget of its parent session ${parentId} (token budget) is used up (11,000 of 10,000 tokens)`);
+        expect(notice.content).toContain(`the token limit of its parent session ${parentId} is used up (11,000 of 10,000 tokens)`);
+        // The parent's limit here is one set on that session itself, so that is where it is lifted
+        expect(notice.content).toContain("That is the parent session's own token limit: raise or clear it in the parent's session controls");
 
         // The parent's own next wake finds its family budget gone
         await ctx.request.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@builder next' });

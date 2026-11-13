@@ -11,8 +11,8 @@ const CANARY = 'https://egress-canary.agora-e2e.test';
 const page1 = (h: string) => `<!doctype html><html><body style="font-family:sans-serif;background:#f4f1ea;color:#222"><h1 id="h">${h}</h1><p>Canvas version test.</p></body></html>`;
 
 test.describe('canvas versions, source, download and navigation escapes', () => {
-    // These tests post as the seeded bot in the shared agents channel. The loop guard allows 4
-    // consecutive bot messages per channel (max_bot_hops), so a human message before and after
+    // These tests post as the seeded bot in the shared agents channel. When that channel has a loop
+    // guard (max_bot_hops; off by default since migration 097), a human message before and after
     // each test keeps this spec and later bot-posting specs (canvas.spec.ts) under it.
     const humanBreak = async (seed: Parameters<typeof apis>[0]) => {
         await apis(seed).owner.ok('POST', `/channels/${seed.channels.agents}/messages`, { content: 'e2e: human break for the loop guard' }, [201]);

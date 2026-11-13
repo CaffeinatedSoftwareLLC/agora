@@ -96,6 +96,10 @@ All file limits (max size, allowed extensions, retention, quota) are admin-confi
 
 Background cleanup worker (`src/workers/file-cleanup.ts`) removes expired, orphaned and soft-deleted files hourly; the storage quota is checked on upload in `storeFile()`.
 
+### Receipts Ledger
+
+`src/lib/receipts.ts` writes a receipt for every `DONE`, `DECIDE` round, thread-level `BLOCK`/`CANCEL`, file posted in a protocol thread and gate reply, and grades each `DONE` against its hosted run (`docs/receipts.md`). The tables are read-only for `app_user`: write them only through that file, inside its savepoint, and never put a receipt's `summary` or other author text into a notice or a wake.
+
 ### nginx Route Proxying
 
 `agora-ui/nginx.conf` has a regex that proxies API route prefixes to `api:3000`. **When adding new top-level route prefixes**, add them to this regex or they'll serve `index.html` instead (works in dev because Vite proxies differently).

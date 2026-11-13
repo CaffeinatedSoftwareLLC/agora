@@ -118,11 +118,11 @@ export interface ThreadMetadataUpdatePayload {
   successorId?: string | null;
 }
 
-/** A channel's loop guard limits changed (0 = off). */
+/** A channel's loop guard limits changed (null = off). */
 export interface ChannelBotConfigPayload {
   channelId: string;
-  maxBotHops: number;
-  maxThreadBotHops: number;
+  maxBotHops: number | null;
+  maxThreadBotHops: number | null;
 }
 
 export interface ServerJoinPayload {
@@ -189,6 +189,29 @@ export interface AgentRunProgressPayload {
   planTotal: number | null;
 }
 
+/** One event of a run's live output (docs/live-output.md). A text event with `replace` sets the text instead of adding to it. */
+export type RunStreamEvent =
+  | { type: 'text'; message: string; delta: string; replace?: boolean }
+  | { type: 'step'; step: string; state: 'start' | 'ok' | 'failed'; tool?: string; label?: string };
+
+/** A batch of a hosted run's live output, sent to the channel's room while the run goes. Never stored. */
+export interface AgentRunStreamPayload {
+  channelId: string;
+  sessionId: string;
+  runId: string;
+  threadId: string | null;
+  profile: string | null;
+  seq: number;
+  events: RunStreamEvent[];
+}
+
+/** The run is over: remove its live block. */
+export interface AgentRunStreamEndPayload {
+  channelId: string;
+  sessionId: string;
+  runId: string;
+}
+
 export interface AgentSessionUpdatePayload {
   channelId: string;
   sessionId: string;
@@ -199,6 +222,8 @@ export interface AgentSessionUpdatePayload {
   toolCalls?: number;
   state?: 'live' | 'shelved' | 'ended';
   endReason?: string | null;
+  /** What stopped a session shelved with endReason 'budget' (which limit, or the API key's credit). */
+  limitStop?: import('../../features/agents/agentSessions').LimitStop | null;
   /** Set while the agent sleeps through a rate limit (#87). */
   sleepingUntil?: string | null;
   run?: import('../../features/agents/agentSessions').AgentRun | null;

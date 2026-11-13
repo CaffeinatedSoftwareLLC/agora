@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { asService } from './agent-sessions';
+import { markSourceRemoved } from './receipts';
 import { denyApprovalCards } from './run-cards';
 import { removeArtifactVersion } from './artifacts';
 import { decryptString } from './encryption';
@@ -184,6 +185,8 @@ async function removeMessages(db: any, userId: string, result: DeletionResult): 
         await db.query('DELETE FROM message_mentions WHERE message_id = ANY($1)', [ids]);
         const withArtifacts = await db.query('SELECT DISTINCT message_id FROM artifact_versions WHERE message_id = ANY($1)', [ids]);
         for (const row of withArtifacts.rows) await removeArtifactVersion(db, row.message_id.trim());
+        // The text their receipts copied from those posts goes too; the receipts stay (src/lib/receipts.ts)
+        for (const n of await markSourceRemoved(db, ids)) result.events.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
     }
 
     // Thread parents the person started stay as deleted placeholders, so other people's

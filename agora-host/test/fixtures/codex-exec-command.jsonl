@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a1d634-b320-73b0-a5ef-9d7a81053a48"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Read `notes.txt` next; step 1 of 1, about 5 seconds.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Get-Content -LiteralPath notes.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Get-Content -LiteralPath notes.txt'","aggregated_output":"hello world\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Read complete: `notes.txt` contains “hello world.”"}}
+{"type":"turn.completed","usage":{"input_tokens":46934,"cached_input_tokens":36992,"cache_write_input_tokens":0,"output_tokens":76,"reasoning_output_tokens":0}}

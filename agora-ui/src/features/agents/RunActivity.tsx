@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentRunProgressPayload, AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
-import { elapsedTime, listSessions, terminalUsage, type AgentSession } from './agentSessions';
+import { elapsedTime, limitStopText, listSessions, terminalUsage, type AgentSession } from './agentSessions';
 import { useAuthStore } from '../../stores/authStore';
 import { useExpandedNoticeRuns } from '../messages/useExpandedNoticeRuns';
 import { AgentMessageRunToggle, AgentRunCollapse } from '../messages/AgentMessageRun';
+import { useRunStreams } from './runStream';
+import { LiveWork } from './LiveWork';
 
 const isWorking = (s: AgentSession) => s.kind === 'terminal' ? s.state === 'live' && !!s.running
   : s.run?.status === 'claimed' && !(s.state === 'shelved' && s.endReason === 'budget');
@@ -23,6 +25,8 @@ export function RunActivity({ channelId }: { channelId: string }) {
   const [now, setNow] = useState(() => Date.now());
   // Latest progress per session, from ACP agents' heartbeats; kept only for the run it names
   const [progress, setProgress] = useState<Record<string, AgentRunProgressPayload>>({});
+  // Live output of the channel's running runs (docs/live-output.md): text and steps while they work
+  const streams = useRunStreams(channelId);
   const refresh = useCallback(() => { void listSessions(channelId).then(setSessions).catch(() => {}); }, [channelId]);
   useEffect(() => {
     let active = true;
@@ -68,11 +72,12 @@ export function RunActivity({ channelId }: { channelId: string }) {
       if (!working && !paused && !blocked && !failed && !run?.changedPaths.length) return null;
       const step = working ? progress[s.id] : undefined;
       return <div key={s.id} className={isHistorical(s) ? 'px-3 py-1' : 'py-1'}>
-        <p role="status">{s.profile}{paused ? ' paused: session budget used up.' : working ? ` is working\u2026 ${elapsedTime(run.startedAt, now)}` : blocked ? ' finished without posting a reply (possibly blocked).' : failed ? ` run failed: ${run.error ?? 'lease expired'}.` : ' finished.'}</p>
+        <p role="status">{s.profile}{paused ? ` paused. ${limitStopText(s)}` : working ? ` is working\u2026 ${elapsedTime(run.startedAt, now)}` : blocked ? ' finished without posting a reply (possibly blocked).' : failed ? ` run failed: ${run.error ?? 'lease expired'}.` : ' finished.'}</p>
         {step && step.runId === run?.id && <p className="truncate text-xs" aria-label={`${s.profile} progress`}>
           {[step.step, `${step.toolCalls} tool ${step.toolCalls === 1 ? 'call' : 'calls'}`,
             step.planTotal ? `plan ${step.planDone ?? 0}/${step.planTotal}` : null].filter(Boolean).join(' \u00b7 ')}
         </p>}
+        {working && run && streams[run.id] && <LiveWork stream={streams[run.id]} name={s.profile} />}
         {run && run.changedPaths.length > 0 && <details>
           <summary className="min-h-11 cursor-pointer content-center">{run.changedPaths.length} changed {run.changedPaths.length === 1 ? 'file' : 'files'}</summary>
           <ul className="max-h-40 overflow-y-auto font-mono text-xs">{run.changedPaths.map(path => <li className="break-all" key={path}>{path}</li>)}</ul>

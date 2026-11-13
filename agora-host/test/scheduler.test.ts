@@ -4,7 +4,7 @@ import { HttpError } from '../src/client.js';
 import type { Result, HostApi } from '../src/types.js';
 import { claim, config, deferred, id, successful } from './helpers.js';
 
-function setup() {
+function setup(tickMs = 10) {
     const children: ReturnType<typeof child>[] = [];
     function child() {
         const finish = deferred<Result>();
@@ -17,7 +17,7 @@ function setup() {
         complete: vi.fn(async () => {}), fail: vi.fn(async () => {}),
     };
     const cleanup = vi.fn(async () => {});
-    const scheduler = new Scheduler(config(), api as HostApi, runner, { now: () => Date.now(), tickMs: 10,
+    const scheduler = new Scheduler(config(), api as HostApi, runner, { now: () => Date.now(), tickMs,
         prepare: async () => ({ executable: 'fake', args: [], env: {}, cwd: '', stdin: '', adapter: 'codex', cleanup }) });
     return { scheduler, api, runner, children, cleanup };
 }
@@ -59,6 +59,40 @@ describe('scheduler with fake processes', () => {
         const s = setup(); const c = claim(); c.run.timeoutSeconds = 2;
         const work = s.scheduler.submit(c, 0); await vi.advanceTimersByTimeAsync(2010); await work;
         expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'run_timeout', retryable: true }), expect.anything());
+    });
+    it('a run time limit over a day is kept: timeLimitSeconds wins over the day-capped timeoutSeconds', { timeout: 60000 }, async () => {
+        const s = setup(1000); const c = claim(); c.run.timeoutSeconds = 86400; c.run.timeLimitSeconds = 2 * 86400;
+        const work = s.scheduler.submit(c, 0);
+        await vi.advanceTimersByTimeAsync(86400_000 + 60_000);
+        expect(s.children[0].kill).not.toHaveBeenCalled(); expect(s.api.fail).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(86400_000); await work;
+        expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'run_timeout' }), expect.anything());
+    });
+    it('no run time limit: the clock never stops the run; it heartbeats and ends when the CLI finishes', { timeout: 60000 }, async () => {
+        const s = setup(1000); const c = claim(); c.run.timeLimitSeconds = null;
+        const work = s.scheduler.submit(c, 0);
+        // 26 hours: far past the 900 s in timeoutSeconds, which is only there for older servers
+        await vi.advanceTimersByTimeAsync(26 * 3600_000);
+        expect(s.children[0].kill).not.toHaveBeenCalled(); expect(s.api.fail).not.toHaveBeenCalled();
+        expect(s.api.heartbeat.mock.calls.length).toBeGreaterThan(3000);
+        s.children[0].finish.resolve(successful); await work;
+        expect(s.api.complete).toHaveBeenCalledOnce();
+    });
+    it('no run time limit: the owner ending the session still stops a hung run, at the next heartbeat', async () => {
+        const s = setup(); const c = claim(); c.run.timeLimitSeconds = null;
+        const work = s.scheduler.submit(c, 0);
+        await vi.advanceTimersByTimeAsync(7200_000);
+        expect(s.children[0].kill).not.toHaveBeenCalled();
+        s.api.heartbeat.mockResolvedValue({ cancel: true, reason: 'ended' } as never);
+        await vi.advanceTimersByTimeAsync(30010); await work;
+        expect(s.children[0].kill).toHaveBeenCalled();
+        expect(s.api.fail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: 'cancelled', retryable: false }), expect.anything());
+    });
+    it('no run time limit: a lost lease still stops the run (the host is cut off from the server)', async () => {
+        const s = setup(); const c = claim(); c.run.timeLimitSeconds = null;
+        s.api.heartbeat.mockRejectedValue(new Error('network down'));
+        const work = s.scheduler.submit(c, 0); await vi.advanceTimersByTimeAsync(120_000); await work;
+        expect(s.children[0].kill).toHaveBeenCalled(); expect(s.api.fail).not.toHaveBeenCalled(); expect(s.api.complete).not.toHaveBeenCalled();
     });
     it('409 fencing stops without any terminal report', async () => {
         const s = setup(); s.api.heartbeat.mockRejectedValue(new HttpError(409));
@@ -136,5 +170,46 @@ describe('Codex app-server approvals (#93)', () => {
         expect(api.openToolRequest).toHaveBeenCalledWith(expect.objectContaining({ run: expect.objectContaining({ id: id(1) }) }),
             { tool: 'Bash(gh:*)', requestKey: 'b'.repeat(64), waitSeconds: 120, detail: 'gh pr list', cwd: null });
         children[0].finish.resolve(successful); await work;
+    });
+});
+
+describe('live output in the scheduler', () => {
+    const live = (liveOutput: boolean) => { const c = claim(); c.profile.liveOutput = liveOutput; return c; };
+    it('gives the child a stream sink, sends what it wrote before the run is reported, and never fails the run', async () => {
+        const s = setup(); const order: string[] = [];
+        const batches: unknown[] = [];
+        (s.api as any).stream = vi.fn(async (_c: unknown, events: unknown) => { order.push('stream'); batches.push(events); return true; });
+        s.api.complete.mockImplementation(async () => { order.push('complete'); });
+        const work = s.scheduler.submit(live(true), 0); await vi.advanceTimersByTimeAsync(0);
+        const launch = (s.runner.start.mock.calls as any)[0][0];
+        expect(typeof launch.stream).toBe('function');
+        launch.stream({ type: 'text', message: 'm', delta: 'Hello' });
+        s.children[0].finish.resolve(successful); await vi.advanceTimersByTimeAsync(0); await work;
+        expect(batches).toEqual([[{ type: 'text', message: 'm', delta: 'Hello' }]]);
+        expect(order).toEqual(['stream', 'complete']);
+    });
+    it('a server that refuses the stream (404) does not stop or fail the run', async () => {
+        const s = setup();
+        (s.api as any).stream = vi.fn(async () => { throw new HttpError(404); });
+        const work = s.scheduler.submit(live(true), 0); await vi.advanceTimersByTimeAsync(0);
+        (s.runner.start.mock.calls as any)[0][0].stream({ type: 'text', message: 'm', delta: 'a' });
+        await vi.advanceTimersByTimeAsync(500);
+        (s.runner.start.mock.calls as any)[0][0].stream({ type: 'text', message: 'm', delta: 'b' });
+        await vi.advanceTimersByTimeAsync(500);
+        s.children[0].finish.resolve(successful); await work;
+        expect((s.api as any).stream).toHaveBeenCalledTimes(1);
+        expect(s.api.complete).toHaveBeenCalled(); expect(s.children[0].kill).not.toHaveBeenCalled();
+    });
+    it('sends nothing, and gives no sink, when the owner turned "Show live output" off', async () => {
+        const s = setup(); (s.api as any).stream = vi.fn(async () => true);
+        const work = s.scheduler.submit(live(false), 0); await vi.advanceTimersByTimeAsync(0);
+        expect((s.runner.start.mock.calls as any)[0][0].stream).toBeUndefined();
+        s.children[0].finish.resolve(successful); await work;
+        expect((s.api as any).stream).not.toHaveBeenCalled();
+    });
+    it('an older client API without stream() runs as before', async () => {
+        const s = setup(); const work = s.scheduler.submit(live(true), 0); await vi.advanceTimersByTimeAsync(0);
+        expect((s.runner.start.mock.calls as any)[0][0].stream).toBeUndefined();
+        s.children[0].finish.resolve(successful); await work; expect(s.api.complete).toHaveBeenCalled();
     });
 });

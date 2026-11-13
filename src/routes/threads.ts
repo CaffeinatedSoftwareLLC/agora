@@ -12,7 +12,9 @@ import { ulidTime } from '../utils/ulid';
 import { readAuthorities, stampAuthority } from '../lib/direct-agents';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { routeMessage } from '../lib/agent-sessions';
+import { recordMessage } from '../lib/receipts';
 import { sanitizeMessageText } from '../lib/sanitize-text';
+import { hopLimitOf, loopGuardNotice } from '../lib/agent-budget-notice';
 import { artifactBodySchema, artifactsForMessages, attachArtifact, checkArtifact } from '../lib/artifacts';
 import { messageAttachmentsSchema, prepareMessageAttachments, bindMessageAttachments } from '../lib/message-attachments';
 
@@ -106,7 +108,8 @@ export async function threadRoutes(app: FastifyInstance) {
             [channelId]
         );
         const serverId = channelRow.rows[0]?.server_id?.trim() || null;
-        const maxThreadBotHops = channelRow.rows[0]?.max_thread_bot_hops ?? 0;
+        // NULL: no loop guard, the default (docs/agent-limits.md)
+        const maxThreadBotHops = hopLimitOf(channelRow.rows[0]?.max_thread_bot_hops);
         const botRateLimit = channelRow.rows[0]?.bot_rate_limit ?? 10;
 
         // Bot rate limiting (same channel context as regular messages)
@@ -124,9 +127,9 @@ export async function threadRoutes(app: FastifyInstance) {
             } catch { /* Redis failure is non-fatal */ }
         }
 
-        // Loop guard — per thread, independent of the channel guard; 0 = disabled
+        // Loop guard — per thread, independent of the channel guard
         const guardKey = `loopguard:${channelId.trim()}:${msgId.trim()}`;
-        if (isBot && maxThreadBotHops > 0) {
+        if (isBot && maxThreadBotHops !== null) {
             try {
                 const redis = getRedis();
                 const count = await redis.incr(guardKey);
@@ -135,7 +138,7 @@ export async function threadRoutes(app: FastifyInstance) {
                 if (count > maxThreadBotHops) {
                     await redis.del(guardKey);
                     const sysId = generateUlid();
-                    const sysContent = `Loop guard: ${maxThreadBotHops} consecutive bot replies in this thread. Human input required to continue.`;
+                    const sysContent = loopGuardNotice('thread', maxThreadBotHops);
                     // The notice's Continue / Raise limit / Turn off controls read the scope and limit
                     const guardData = { scope: 'thread', threadId: msgId.trim(), limit: maxThreadBotHops };
                     await db.query(
@@ -240,6 +243,12 @@ export async function threadRoutes(app: FastifyInstance) {
             channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol,
             mentionedUserIds: mentionedUsers.map(u => u.id), authorTokenId: request.isBot ? request.botTokenId ?? null : null,
         });
+        // The ledger (src/lib/receipts.ts): a DECIDE, DONE, BLOCK or CANCEL, a file in a protocol
+        // thread or a gate reply leaves a receipt. Never fails the reply.
+        const receiptNotices = await recordMessage(db, {
+            channelId, messageId: replyId, threadId: msgId, authorId: userId, couldDirect, protocol, content,
+            authorTokenId: request.isBot ? request.botTokenId ?? null : null, attachments: resolvedAttachments,
+        }, request.log);
 
         const userRow = await db.query(
             'SELECT username, bot, avatar_url FROM users WHERE id = $1',
@@ -309,6 +318,7 @@ export async function threadRoutes(app: FastifyInstance) {
         });
         // Wakes the subscription rule refused (src/lib/provider-terms.ts), after the message itself
         for (const n of termsNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: 'Message', data: n.event });
+        for (const n of receiptNotices) request.pendingEvents.push({ room: `channel:${n.channelId}`, event: n.eventName ?? 'Message', data: n.event });
         request.pendingEvents.push({
             room: `channel:${channelId.trim()}`,
             event: 'ThreadMetadataUpdate',

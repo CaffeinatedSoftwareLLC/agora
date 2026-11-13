@@ -206,8 +206,8 @@ const GUARD_DEFAULT: Limits = { maxBotHops: 4, maxThreadBotHops: 4 };
 
 /**
  * Both loop guards per channel (#23): the channel guard (top-level bot messages in a row)
- * and the thread guard (bot replies in a row inside one thread). Each has an on/off switch;
- * off is a limit of 0.
+ * and the thread guard (bot replies in a row inside one thread). Each has an on/off switch and is
+ * off unless someone turns it on. Here off is 0; the API says null ("no limit").
  */
 function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -232,7 +232,7 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
       setChannels(textChannels);
       const initial: Record<string, Limits> = {};
       for (const ch of textChannels) {
-        initial[ch.id] = { maxBotHops: ch.maxBotHops ?? 4, maxThreadBotHops: ch.maxThreadBotHops ?? 0 };
+        initial[ch.id] = { maxBotHops: ch.maxBotHops ?? 0, maxThreadBotHops: ch.maxThreadBotHops ?? 0 };
       }
       setLoaded(initial);
     }).catch(() => setError('Failed to load channels'));
@@ -260,7 +260,10 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
 
   const shown = (channelId: string, field: GuardField): number => {
     const key = `${channelId}:${field}`;
-    return dirty[key] ?? live.get(channelId)?.[field] ?? loaded[channelId]?.[field] ?? GUARD_DEFAULT[field];
+    if (key in dirty) return dirty[key];
+    // undefined: the store has no limits for this channel yet; null: that guard is off
+    const now = live.get(channelId)?.[field];
+    return now !== undefined ? now ?? 0 : loaded[channelId]?.[field] ?? 0;
   };
 
   function change(channelId: string, field: GuardField, value: number, delay: number) {
@@ -285,7 +288,7 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
   function handleNumber(channelId: string, field: GuardField, raw: string) {
     const num = parseInt(raw, 10);
     // 0 would be "off": that is the switch's job, so the box keeps a limit while typing
-    if (isNaN(num) || num < 1 || num > 1000) return;
+    if (!Number.isSafeInteger(num) || num < 1) return;
     change(channelId, field, num, 600);
   }
 
@@ -305,10 +308,10 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
       return next;
     };
     try {
-      const config = await botApi.updateChannelBotConfig(channelId, { [field]: value });
+      const config = await botApi.updateChannelBotConfig(channelId, { [field]: value || null });
       useChannelStore.getState().patchChannel(channelId, { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops });
       if (!mounted.current) return;
-      setLoaded(l => ({ ...l, [channelId]: { maxBotHops: config.maxBotHops, maxThreadBotHops: config.maxThreadBotHops } }));
+      setLoaded(l => ({ ...l, [channelId]: { maxBotHops: config.maxBotHops ?? 0, maxThreadBotHops: config.maxThreadBotHops ?? 0 } }));
       setDirty(settle);
     } catch (err) {
       if (!mounted.current) return;
@@ -343,15 +346,15 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
           <input
             type="number"
             min={1}
-            max={1000}
+            inputMode="numeric"
             value={value}
             onChange={e => handleNumber(ch.id, field, e.target.value)}
             aria-label={`${label} limit in #${ch.name} (${unit})`}
             title={`Pause after this many ${unit} in a row`}
-            className="min-h-11 md:min-h-8 w-16 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
+            className="min-h-11 md:min-h-8 w-24 px-2 py-1 rounded border border-border bg-surface text-text text-sm text-right"
           />
         ) : (
-          <span className="w-16 text-text-muted text-xs">Off</span>
+          <span className="w-24 text-text-muted text-xs">No limit</span>
         )}
         <span className="w-12 text-text-muted text-xs" aria-live="polite">{saving[key] ? 'Saving…' : ''}</span>
       </div>
@@ -362,9 +365,9 @@ function ChannelLoopGuardSection({ serverId }: { serverId: string }) {
     <section className="mb-6">
       <h3 className="text-sm font-semibold text-text mb-2">Loop Guard</h3>
       <p className="text-text-muted text-xs mb-3">
-        Pauses agents after this many bot posts in a row with no human message. The channel guard counts top-level
-        messages; the thread guard counts replies inside each thread. A human message resets both, and the notice
-        it posts has Continue, Raise limit and Turn off buttons.
+        Off unless you turn it on. A guard stops bots after the number of bot posts in a row you set, until a person
+        posts or presses Continue on its notice. The channel guard counts top-level messages; the thread guard counts
+        replies inside each thread.
       </p>
       {error && <p className="text-danger text-xs mb-2" role="alert">{error}</p>}
       <div className="flex flex-col gap-1">
