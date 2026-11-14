@@ -296,3 +296,127 @@ describe('card session limits', () => {
     expect(screen.queryByText('Set token limit')).toBeNull();
   });
 });
+
+describe('GitHub automation', () => {
+  const RULE = (over: Record<string, unknown> = {}) => ({
+    import: { mode: 'off', label: null }, authors: [], autostart: { profile: null, confirmedOpen: false }, pollMinutes: 5, commentOnPickup: false,
+    status: { lastPolledAt: null, lastCheckedAt: null, result: null, found: null, created: null },
+    limits: { defaultPollMinutes: 5, minPollMinutes: 2, maxPollMinutes: 1440, scanLimit: 200 }, ...over,
+  });
+  const OPTIONS = [{ name: 'codex', planOwned: false, allowed: true, reason: null }, { name: 'claude', planOwned: true, allowed: false, reason: 'Set the author filter first' }];
+  const owner = (rule = RULE(), canConfigure = true) => serve(board([]), {
+    '/github': { link: LINK, canLink: true, canImport: true },
+    '/github/automation': { rule, canConfigure, autostartOptions: OPTIONS },
+  });
+  const openForm = async () => fireEvent.click(await screen.findByRole('button', { name: /^(Automation|Details)$/ }));
+
+  it('shows everything off by default, with one plain line each, and nothing saved until asked', async () => {
+    owner();
+    render(<TasksPanel />);
+    expect(await screen.findByText('Automation: Off')).toBeTruthy();
+    expect(screen.getByText('Issues become cards only when you import them by hand.')).toBeTruthy();
+    await openForm();
+    expect((screen.getByRole('radio', { name: 'Off' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/Off is the default: nothing is imported/)).toBeTruthy();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('saves a label rule, with the interval and the fixed comment off', async () => {
+    owner();
+    put.mockResolvedValue({ rule: RULE({ import: { mode: 'label', label: 'agora' } }) });
+    render(<TasksPanel />);
+    await openForm();
+    fireEvent.click(screen.getByLabelText('Issues with the label'));
+    expect((screen.getByLabelText('Label') as HTMLInputElement).value).toBe('agora');
+    fireEvent.click(screen.getByText('Save automation'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith(`/channels/${CH}/github/automation`, {
+      import: { mode: 'label', label: 'agora' }, authors: [], autostart: { profile: null }, pollMinutes: 5, commentOnPickup: false,
+    }));
+    expect(await screen.findByText('Automation: Issues labelled "agora"')).toBeTruthy();
+  });
+
+  it('refuses an interval under the floor and a bad login before sending anything', async () => {
+    owner(RULE({ import: { mode: 'label', label: 'agora' } }));
+    render(<TasksPanel />);
+    await openForm();
+    fireEvent.change(screen.getByLabelText('Check every (minutes)'), { target: { value: '1' } });
+    expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Check every (minutes)'), { target: { value: '2' } });
+    fireEvent.click(screen.getByLabelText('Only these'));
+    fireEvent.change(screen.getByLabelText('GitHub logins'), { target: { value: 'ann, -bad' } });
+    expect(screen.getByRole('alert').textContent).toContain('"-bad" is not a GitHub login');
+    expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(true);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('warns before every-issue + no filter + auto-start, and saves only after the owner confirms', async () => {
+    owner();
+    put.mockResolvedValue({ rule: RULE({ import: { mode: 'all', label: null }, autostart: { profile: 'codex', confirmedOpen: true } }) });
+    render(<TasksPanel />);
+    await openForm();
+    fireEvent.click(screen.getByLabelText('Every new open issue'));
+    fireEvent.click(screen.getByLabelText('Start'));
+    expect(screen.getByText(/text will reach the agent without anyone reading it first/)).toBeTruthy();
+    const save = screen.getByText('Save automation') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText('I understand, start it on every issue'));
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(put).toHaveBeenCalledWith(`/channels/${CH}/github/automation`, expect.objectContaining({
+      import: { mode: 'all' }, autostart: { profile: 'codex', confirmOpen: true },
+    })));
+  });
+
+  it('keeps an agent on a personal login blocked until authors are set, with the reason', async () => {
+    owner(RULE({ import: { mode: 'label', label: 'agora' } }));
+    render(<TasksPanel />);
+    await openForm();
+    fireEvent.click(screen.getByLabelText('Start'));
+    fireEvent.change(screen.getByLabelText('Agent to start'), { target: { value: 'claude' } });
+    expect(screen.getByRole('alert').textContent).toContain('Set the author filter first');
+    expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('Check now asks the host and shows the latest result; directors get it too but cannot save', async () => {
+    serve(board([]), {
+      '/github': { link: LINK, canLink: false, canImport: true },
+      '/github/automation': { rule: RULE({ import: { mode: 'label', label: 'agora' }, status: { lastPolledAt: null, lastCheckedAt: new Date().toISOString(), result: 'gh_not_signed_in', found: null, created: null } }),
+        canConfigure: false, autostartOptions: [] },
+    });
+    post.mockResolvedValue({ id: 'X', status: 'queued' });
+    render(<TasksPanel />);
+    expect(await screen.findByText(/gh is not signed in on the host/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Check now'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/channels/${CH}/github/automation/check`));
+    expect(await screen.findByText('Checking…')).toBeTruthy();
+    await openForm();
+    expect(screen.queryByText('Save automation')).toBeNull();
+    expect(screen.getByText(/Only the server owner changes the automation/)).toBeTruthy();
+  });
+
+  it('marks cards made by the rule, a queued agent and an issue closed on GitHub', async () => {
+    serve(board([
+      card({ id: 'T1', title: 'From rule', fromRule: true, issue: { repo: 'o/r', number: 7, url: 'https://github.com/o/r/issues/7' }, issueClosedAt: '2026-11-01T00:00:00Z',
+        session: { ...session, running: false, queued: true } }),
+      card({ id: 'T2', title: 'By hand' }),
+    ]));
+    render(<TasksPanel />);
+    expect(await screen.findByText('from rule')).toBeTruthy();
+    expect(screen.getAllByText('from rule')).toHaveLength(1);
+    expect(screen.getByText(/Queued: waits for a free slot/)).toBeTruthy();
+    fireEvent.click(screen.getByText('From rule'));
+    expect(screen.getByText(/issue closed on GitHub/)).toBeTruthy();
+  });
+
+  it('shows nothing when the server has no automation (an older Agora)', async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path.endsWith('/tasks')) return board([]);
+      if (path.endsWith('/github')) return { link: LINK, canLink: true, canImport: true };
+      if (path.endsWith('/github/automation')) throw new ApiError(404, 'not_found');
+      return {};
+    });
+    render(<TasksPanel />);
+    expect(await screen.findByText('o/r')).toBeTruthy();
+    expect(screen.queryByText(/Automation/)).toBeNull();
+  });
+});

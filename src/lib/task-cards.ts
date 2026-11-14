@@ -20,6 +20,8 @@ export const CARD_SELECT = `SELECT t.*, p.name AS profile_name, sp.name AS sessi
         s.tokens_used, COALESCE(s.token_budget, sp.token_budget) AS token_budget, s.last_active_at, s.sleeping_until,
         s.wakes_used, sp.wake_budget, s.limit_stop,
         EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') AS running,
+        -- Started but waiting its turn: a host runs only maxConcurrent agents at once
+        EXISTS (SELECT 1 FROM agent_inbox i WHERE i.session_id = s.id AND i.batch_id IS NULL AND i.acked_at IS NULL) AS queued,
         (SELECT r.changed_paths FROM agent_runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS changed_paths
     FROM task_cards t
     LEFT JOIN agent_profiles p ON p.id = t.profile_id
@@ -33,7 +35,7 @@ export function cardJson(r: any) {
         threadId: r.thread_id?.trim() ?? null,
         session: r.session_id ? {
             id: r.session_id.trim(), profile: r.session_profile, state: r.session_state, endReason: r.session_end_reason ?? null,
-            running: !!r.running, sleepingUntil: r.sleeping_until ?? null,
+            running: !!r.running, queued: !!r.queued && !r.running, sleepingUntil: r.sleeping_until ?? null,
             branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
             // Limits: null is none (docs/agent-limits.md); limitStop: what stopped a session shelved as 'budget'
             tokensUsed: Number(r.tokens_used), tokenBudget: limitOf(r.token_budget), wakesUsed: r.wakes_used, wakeBudget: limitOf(r.wake_budget),
@@ -42,6 +44,8 @@ export function cardJson(r: any) {
         } : null,
         // The GitHub issue the card was made from (docs/github-issues.md)
         issue: r.issue_number ? { repo: r.issue_repo, number: Number(r.issue_number), url: r.issue_url ?? null } : null,
+        // Made by the channel's automation rule, and whether its issue was closed on GitHub while the card is open (docs/github-issues.md)
+        fromRule: !!r.from_rule, issueClosedAt: r.issue_closed_at ?? null,
         prUrl: r.pr_url ?? null, prState: r.pr_state ?? null, prCheckedAt: r.pr_checked_at ?? null, mergedSha: r.merged_sha ?? null,
         createdBy: r.created_by?.trim() ?? null, createdAt: r.created_at, updatedAt: r.updated_at,
     };

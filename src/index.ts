@@ -9,6 +9,7 @@ import { startFileTaggingWorker } from './workers/file-tagging';
 import { startTermsWatchWorker } from './workers/terms-watch';
 import { startPushSender } from './workers/push-sender';
 import { startHandoffNudgeWorker } from './workers/handoff-nudge';
+import { startGithubPollWorker } from './workers/github-poll';
 import { agentPresence } from './lib/agent-presence';
 import { sweepExpiredRuns, type Notice } from './lib/agent-runs';
 
@@ -55,6 +56,9 @@ async function main() {
         isConnected: botId => agentPresence.status(botId).status !== 'offline',
         emit: e => app.io.to(e.room).emit(e.event, e.data) });
 
+    // GitHub issue automation: queue a scan for each channel whose rule is on (idle while none is)
+    const stopGithubPolls = startGithubPollWorker({ db, log: app.log });
+
     // Agent runs: expire claims whose host stopped heartbeating, then retry or drop their work
     const runSweeper = setInterval(() => {
         const notices: Notice[] = [];
@@ -76,6 +80,7 @@ async function main() {
         await stopTermsWatch();
         await stopPush();
         await stopNudges();
+        await stopGithubPolls();
         // Let a tagging job in flight finish its write before the pool goes away
         await stopTagging().catch(() => {});
         await app.close();

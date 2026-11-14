@@ -11,6 +11,7 @@ import {
     ISSUE_BODY_MAX, ISSUE_LIST_LIMIT, LIST_FRESH_MINUTES, REPO_PATTERN, commentFailed, commentPosted, issueDescription, issueUrlOk, validRepo,
     type ListedIssue,
 } from '../lib/github-issues';
+import { SCAN_LIMIT, applyScan, scanFailed, type ScannedIssue } from '../lib/github-rules';
 import { CommandError, profileByName } from './agent-commands';
 import { cleanTitle, startCard } from './task-board';
 
@@ -114,10 +115,15 @@ export async function githubIssueRoutes(app: FastifyInstance) {
             if (!host) return null;
             const before = (await db.query('SELECT repo, host_id FROM channel_github_repos WHERE channel_id = $1 FOR UPDATE', [channelId])).rows[0];
             if (before && (before.repo !== b.repo || before.host_id.trim() !== b.hostId)) notices.push(...await cancelQueued(db, channelId));
+            // Another repository is another set of strangers: its automation starts off again
+            const reset = before && before.repo.toLowerCase() !== b.repo.toLowerCase();
             await db.query(
                 `INSERT INTO channel_github_repos (channel_id, server_id, repo, host_id, linked_by) VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (channel_id) DO UPDATE SET repo = EXCLUDED.repo, host_id = EXCLUDED.host_id, linked_by = EXCLUDED.linked_by, updated_at = NOW()`,
                 [channelId, serverId, b.repo, b.hostId, request.userId]);
+            if (reset) await db.query(
+                `UPDATE channel_github_repos SET import_mode = 'off', import_label = NULL, import_authors = '{}', import_since = NULL, autostart_profile_id = NULL,
+                        autostart_open_ack = FALSE, comment_on_pickup = FALSE, last_check_status = NULL, last_checked_at = NULL, last_notice_code = NULL WHERE channel_id = $1`, [channelId]);
             return readLink(db, channelId);
         });
         if (!link) return reply.status(400).send({ error: 'host_not_found' });
@@ -228,6 +234,11 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                      SELECT $1, c.server_id, c.id, $3, $4, 'todo', $5, $6, $7, $8, $9 FROM channels c WHERE c.id = $2`,
                     [taskId, channelId, title.slice(0, 200), sanitizeMessageText(issueDescription(issue)), profileId, request.userId,
                      list.repo, issue.number, issueUrlOk(issue.url, issue.number) ? issue.url : null]);
+                // By hand always wins over "do not bring it back": the issue is a live card again
+                await db.query(
+                    `INSERT INTO github_issue_imports (channel_id, issue_repo, issue_number, card_id, source) VALUES ($1, lower($2), $3, $4, 'manual')
+                     ON CONFLICT (channel_id, issue_repo, issue_number) DO UPDATE SET card_id = EXCLUDED.card_id, source = 'manual'`,
+                    [channelId, list.repo, issue.number, taskId]);
                 let action = 'created';
                 if (b.start) {
                     const who = (await db.query('SELECT username FROM users WHERE id = $1', [request.userId])).rows[0]?.username ?? 'someone';
@@ -253,29 +264,39 @@ export async function githubIssueRoutes(app: FastifyInstance) {
     app.get('/agent-hosts/@me/github-commands/next', async (request, reply) => {
         const db = request.dbClient!, host = request.agentHost!;
         const notices: Notice[] = [];
+        // `?v=2`: this host knows issue_scan (automatic import). An older host never asks and is never offered one
+        const knowsScan = (request.query as any)?.v === '2';
         const r = await asService(db, async () => {
             if (!(await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL FOR SHARE', [host.id, host.serverId])).rows.length)
                 return { status: 401, body: { error: 'host_revoked' } };
+            if (knowsScan) await db.query('UPDATE agent_hosts SET github_scan_seen_at = NOW() WHERE id = $1', [host.id]);
             // A claim the host never answered: a list is asked again by the person; a comment may
             // have posted, so it is said in the card's thread and not retried
             // Any host of the server expires them, so a dead host's claims don't wait for it to return
             const expired = (await db.query(`UPDATE github_commands SET status = 'failed', result = '{"error":"host_timeout"}', finished_at = NOW()
                 WHERE server_id = $1 AND status = 'claimed' AND lease_until < NOW() RETURNING *`, [host.serverId])).rows;
-            for (const c of expired) if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, 'host_timeout'));
+            for (const c of expired) {
+                if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, 'host_timeout'));
+                if (c.action === 'issue_scan') await scanFailed(db, c, 'host_timeout', notices);
+            }
             const candidates = (await db.query(
-                `SELECT * FROM github_commands WHERE host_id = $1 AND server_id = $2 AND status = 'queued' ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED`,
-                [host.id, host.serverId])).rows;
+                `SELECT * FROM github_commands WHERE host_id = $1 AND server_id = $2 AND status = 'queued' AND ($3 OR action <> 'issue_scan')
+                 ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED`,
+                [host.id, host.serverId, knowsScan])).rows;
             for (const c of candidates) {
                 // Every call runs only on the host the owner linked, for the repository still linked to
                 // the channel; a list also only for someone who may still direct agents there
                 const link = (await db.query('SELECT repo, host_id FROM channel_github_repos WHERE channel_id = $1', [c.channel_id])).rows[0];
                 const bound = link && link.repo.toLowerCase() === c.repo.toLowerCase() && link.host_id.trim() === host.id;
-                const ok = bound && (c.action !== 'issue_list'
-                    || c.requested_by && await stampAuthority(db, c.channel_id.trim(), c.requested_by.trim(), false));
+                // A scan also needs its rule still on; one a person asked for (Check now) needs that person still directing
+                const ruleOn = c.action !== 'issue_scan' || (await db.query(`SELECT 1 FROM channel_github_repos WHERE channel_id = $1 AND import_mode <> 'off'`, [c.channel_id])).rows.length > 0;
+                const ok = bound && ruleOn && (c.action === 'issue_comment'
+                    || (c.requested_by ? await stampAuthority(db, c.channel_id.trim(), c.requested_by.trim(), false) : c.action === 'issue_scan'));
                 if (!ok) {
-                    const error = c.action === 'issue_list' ? 'binding_or_authority_changed' : 'binding_changed';
+                    const error = c.action === 'issue_list' ? 'binding_or_authority_changed' : !ruleOn ? 'rule_off' : 'binding_changed';
                     await db.query(`UPDATE github_commands SET status = 'failed', result = $2, finished_at = NOW() WHERE id = $1`, [c.id, { error }]);
                     if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, error));
+                    if (c.action === 'issue_scan' && error !== 'rule_off') await scanFailed(db, c, error, notices);
                     continue;
                 }
                 const token = randomBytes(32).toString('hex');
@@ -298,11 +319,14 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                 result: { type: 'object', additionalProperties: false, properties: {
                     error: { type: 'string', pattern: '^[a-z][a-z_]{0,100}$' },
                     url: { type: 'string', maxLength: 2048 },
-                    issues: { type: 'array', maxItems: ISSUE_LIST_LIMIT, items: {
+                    truncated: { type: 'boolean' },
+                    watched: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: false, required: ['number', 'closed'],
+                        properties: { number: { type: 'integer', minimum: 1, maximum: 2147483647 }, closed: { type: 'boolean' } } } },
+                    issues: { type: 'array', maxItems: SCAN_LIMIT, items: {
                         type: 'object', additionalProperties: false, required: ['number', 'title', 'url', 'author', 'updatedAt', 'body'], properties: {
                             number: { type: 'integer', minimum: 1, maximum: 2147483647 }, title: { type: 'string', maxLength: 256 },
                             url: { type: 'string', maxLength: 2048 }, author: { type: 'string', maxLength: 64 },
-                            updatedAt: { type: 'string', maxLength: 40 }, body: { type: 'string', maxLength: ISSUE_BODY_MAX + 1 },
+                            updatedAt: { type: 'string', maxLength: 40 }, createdAt: { type: 'string', maxLength: 40 }, body: { type: 'string', maxLength: ISSUE_BODY_MAX + 1 },
                         },
                     } },
                 } },
@@ -311,6 +335,7 @@ export async function githubIssueRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const db = request.dbClient!, host = request.agentHost!, { commandId } = request.params as any, b = request.body as any;
         let notice: Notice | null = null;
+        const scanNotices: Notice[] = [];
         const r = await asService(db, async () => {
             if (!(await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL FOR SHARE', [host.id, host.serverId])).rows.length)
                 return { status: 401, body: { error: 'host_revoked' } };
@@ -322,12 +347,23 @@ export async function githubIssueRoutes(app: FastifyInstance) {
             if (c.status !== 'claimed' || c.expired) return { status: 409, body: { error: 'lease_expired' } };
             let result: any = b.success ? {} : { error: b.result.error ?? 'github_command_failed' };
             if (b.success && c.action === 'issue_list') {
-                if (!Array.isArray(b.result.issues)) return { status: 400, body: { error: 'invalid_issue_list' } };
+                if (!Array.isArray(b.result.issues) || b.result.issues.length > ISSUE_LIST_LIMIT) return { status: 400, body: { error: 'invalid_issue_list' } };
                 // Only issues whose link points where it should; text is cleaned as chat text is
                 result = { issues: b.result.issues.filter((i: ListedIssue) => issueUrlOk(i.url, i.number)).map((i: ListedIssue) => ({
                     number: i.number, title: sanitizeMessageText(i.title).slice(0, 256), url: i.url, author: sanitizeMessageText(i.author).slice(0, 64),
                     updatedAt: i.updatedAt, body: sanitizeMessageText(i.body).slice(0, ISSUE_BODY_MAX + 1),
                 })) };
+            }
+            if (c.action === 'issue_scan') {
+                if (b.success) {
+                    if (!Array.isArray(b.result.issues)) return { status: 400, body: { error: 'invalid_issue_list' } };
+                    // Cleaned as a list is; the link must point at the issue, and a scan must say when it was opened
+                    const issues: ScannedIssue[] = b.result.issues.filter((i: ScannedIssue) => issueUrlOk(i.url, i.number) && typeof i.createdAt === 'string').map((i: ScannedIssue) => ({
+                        number: i.number, title: sanitizeMessageText(i.title).slice(0, 256), url: i.url, author: sanitizeMessageText(i.author).slice(0, 64),
+                        updatedAt: i.updatedAt, createdAt: i.createdAt, body: sanitizeMessageText(i.body).slice(0, ISSUE_BODY_MAX + 1),
+                    }));
+                    result = await applyScan(db, c, { issues, watched: b.result.watched ?? [], truncated: !!b.result.truncated }, scanNotices);
+                } else await scanFailed(db, c, result.error, scanNotices);
             }
             if (b.success && c.action === 'issue_comment') {
                 if (typeof b.result.url === 'string' && /^https:\/\/\S+$/.test(b.result.url)) result = { url: b.result.url };
@@ -339,7 +375,7 @@ export async function githubIssueRoutes(app: FastifyInstance) {
             if (!b.success && c.action === 'issue_comment') notice = await commentFailed(db, c, result.error);
             return { status: 200, body: { ok: true } };
         });
-        emit(request, [notice]);
+        emit(request, [notice, ...scanNotices]);
         return reply.status(r.status).send(r.body);
     });
 }

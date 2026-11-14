@@ -6,6 +6,7 @@ import { useSocket } from '../../hooks/useSocket';
 import type { AgentSessionUpdatePayload, TaskCardDeletePayload, TaskCardUpdatePayload } from '../../lib/contracts/ws-events';
 import { compactTokens, limitStopText, limitValue, listProfiles, runAgentCommand, stopLabel, validLimit, type AgentProfile } from '../agents/agentSessions';
 import { SessionWorkspace } from '../agents/SessionWorkspace';
+import { GithubAutomation } from './GithubAutomation';
 import {
   SESSION_LABEL, STATUSES, STATUS_LABEL, cardSessionState, githubApi, groupCards, safeUrl, startError, taskApi, taskError, upsertCard,
   type AgentHost, type Board, type CardSessionState, type CardStatus, type GithubIssue, type GithubState, type TaskCard,
@@ -23,7 +24,7 @@ const BTN_PRIMARY = 'inline-flex min-h-[44px] items-center justify-center rounde
 const INPUT = 'min-h-[44px] w-full rounded-lg border border-border bg-surface px-3 py-2 text-[16px] md:text-sm text-text placeholder:text-text-muted/70 focus:outline-none';
 
 const DOT: Record<CardSessionState, string> = {
-  working: 'bg-online motion-safe:animate-pulse', idle: 'bg-online', shelved: 'bg-warn', ended: 'bg-text-dim', none: 'bg-text-dim',
+  working: 'bg-online motion-safe:animate-pulse', queued: 'bg-warn', idle: 'bg-online', shelved: 'bg-warn', ended: 'bg-text-dim', none: 'bg-text-dim',
 };
 
 export function TasksPanel() {
@@ -219,6 +220,7 @@ function GithubRow({ channelId, serverId, profiles, onImported }: {
       ) : mode !== 'link' && (
         <button type="button" className={BTN} onClick={() => setMode('link')}>Link GitHub repo</button>
       )}
+      {link && !link.hostRevoked && <GithubAutomation channelId={channelId} canCheck={gh.canImport} />}
       {mode === 'link' && !link && serverId && (
         <LinkRepoForm channelId={channelId} serverId={serverId}
           onDone={next => { setMode('none'); if (next) setGh({ ...gh, link: next }); }} />
@@ -381,6 +383,7 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
           <span className="block text-xs text-text-muted">
             {card.profile ? card.profile.name : 'Unassigned'} · {SESSION_LABEL[state]}
             {card.prState ? ` · PR ${card.prState}` : ''}
+            {card.fromRule && <span className="ml-1 rounded border border-border px-1 text-[11px]" title="Made by this channel's GitHub automation rule">from rule</span>}
           </span>
         </span>
       </button>
@@ -399,6 +402,7 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
               <span className="text-text-muted">GitHub issue </span>
               {issueUrl ? <a className="break-all text-primary underline" href={issueUrl} target="_blank" rel="noreferrer">{issueRef}</a>
                 : <span className="break-all font-mono">{issueRef}</span>}
+              {card.issueClosedAt && <span className="ml-2 text-text-muted">· issue closed on GitHub</span>}
             </p>
           )}
 
