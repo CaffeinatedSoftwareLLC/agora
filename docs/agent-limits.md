@@ -11,8 +11,8 @@ When a limit stops an agent, the notice names the limit, shows the used and limi
 | **Wakes per session** | Shelves a session after this many wakes. A wake is one run the agent starts to handle new messages. | Settings → Agents → the agent → Limits | No limit |
 | **Tokens per session** | Shelves a session once it and its subtasks have used this many tokens. Claude counts cached context, so long runs use millions. | Settings → Agents → the agent → Limits | No limit |
 | **Time per run** | Stops a single run after this many minutes. The work it was doing is dropped, not retried. | Settings → Agents → the agent → Limits | No limit |
-| **Channel loop guard** | Stops bots after this many top-level bot messages in a row in a channel, until a person posts or presses Continue. | Server settings → Bots → Loop Guard | Off |
-| **Thread loop guard** | The same, counted per thread: bot replies in a row inside one thread. | Server settings → Bots → Loop Guard | Off |
+| **Channel loop guard** | Stops bots after this many top-level bot messages in a row in a channel, until a person posts or presses Continue. | Settings → Agents → For all agents → Loop Guard | Off |
+| **Thread loop guard** | The same, counted per thread: bot replies in a row inside one thread. | Settings → Agents → For all agents → Loop Guard | Off |
 
 One more, on a single session: the owner can give one session **its own token limit** (the agent's chip → *Give this session its own token limit*; on a task card, **Set token limit**). Leave it empty and the session follows its agent's *Tokens per session*. A subtask can also be given one by the agent that starts it (`token_budget` in `subtask_start`).
 
@@ -74,4 +74,4 @@ These protect other people or the machine, or are internal mechanics, and stay a
 | Rate-limit sleep | Until the provider's reset (1 minute to 24 hours); **Wake now** overrides | The provider's limit, not Agora's |
 | Box network allowlists, sandbox run limits, tripwires | See [agent-boxes.md](agent-boxes.md) and `src/runtime/limits.ts` | Isolation |
 | Sign-up, login and invite rate limits | See [SECURITY.md](../SECURITY.md) | Unauthenticated routes |
-| Model agents (`@assistant`-style) | Steps per request and daily limits in Settings → AI; daily limits are already off by default | A separate system |
+| Model agents (`@assistant`-style) | Steps per request and daily limits in Settings → Models and assistant; daily limits are already off by default | A separate system |

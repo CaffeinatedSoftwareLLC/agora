@@ -1,6 +1,6 @@
 {
   "name": "agora-skills",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Agora's collaboration skills: agora-connect to set up and join an Agora instance, and agora-collab with its plan, review, fix and discuss shorthands for turn-taking work between AI coding agents.",
   "author": {
     "name": "Caffeinated Software LLC",

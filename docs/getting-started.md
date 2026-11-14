@@ -136,7 +136,7 @@ npm install -g .
 cd ..
 ```
 
-1. In Server Settings → Bots, click **Invite Agent**, enter a new bot username, and choose where the agent will run: **On another computer** fills in the instance's HTTPS address, **On the same computer as Agora** fills in `http://localhost:<API port>`. The server reports both (its `CORS_ORIGIN` and `AGORA_API_PORT`); when it only knows a localhost address the dialog shows that one, and you can always type another. New bots get #general access. For an existing bot, open its row, check Channel Access, then click Invite Agent in Tokens.
+1. In Server Settings → Agents, choose **Add an agent**, then **From someone's own terminal**, click **Invite Agent**, enter a new name for the agent, and choose where the agent will run: **On another computer** fills in the instance's HTTPS address, **On the same computer as Agora** fills in `http://localhost:<API port>`. The server reports both (its `CORS_ORIGIN` and `AGORA_API_PORT`); when it only knows a localhost address the dialog shows that one, and you can always type another. New bots get #general access. For an existing bot, open its row, check Channel Access, then click Invite Agent in Tokens.
 2. Click **Create Invite**, select Claude Code, Codex or Gemini CLI, and run the dialog's two commands on the agent's computer in order: **1. Install agora-mcp** (once per computer; skip it if `agora-mcp --version` already works there) and **2. Connect**. The bot owner or a server administrator who is a member can invite an existing bot; creating a new bot requires server owner/administrator permission.
 3. Give the connect command to your agent and **restart it within 10 minutes**. The invite is single-use. First startup exchanges it for a bot token and saves it locally; no long-lived token passes through chat.
 4. After restart, ask it to list Agora channels. It should see general (or the existing bot's grants).
@@ -329,7 +329,7 @@ docker run -d --name agora-cap-forwarder --add-host=host.docker.internal:host-ga
 docker network connect --alias cap-gateway agora_sandbox agora-cap-forwarder
 ```
 
-To let a bot run code, set its **Code runs** option in Settings → Bots (`Need approval` or `Auto-run`). Agents submit code with the MCP `runtime_exec` tool. With `Need approval`, the run appears in the thread with View code / Approve / Deny.
+To let a bot run code, set its **Code runs** option in Settings → Agents → the agent (`Need approval` or `Auto-run`). Agents submit code with the MCP `runtime_exec` tool. With `Need approval`, the run appears in the thread with View code / Approve / Deny.
 
 If you also run the production stack on the same machine, remove the dev network first (`docker network rm agora_sandbox`). The prod compose file creates its own `agora_sandbox`.
 
@@ -423,7 +423,7 @@ Installing `agora-mcp` and connecting an agent is the same on macOS as anywhere 
 
 ### Capabilities for run code
 
-Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImage`, `tts`). Each one uses the provider and model you route it to in Settings → AI. Everything except chat is off until you enable its route.
+Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImage`, `tts`). Each one uses the provider and model you route it to in Settings → Models and assistant. Everything except chat is off until you enable its route.
 
 | Capability | Providers | Notes |
 |---|---|---|
@@ -436,7 +436,7 @@ Run code calls capabilities through `agora:std` (`chat`, `search`, `generateImag
 
 **Test reports.** `testReport(results, { title })` takes JUnit XML, Vitest/Jest JSON, or `{ totals, suites, failures }`. It posts a results card into the thread, with the full report attached as Markdown. If the run declares `chat`, the chat model writes the summary; otherwise the summary is computed from the counts. The report doesn't need any other capability.
 
-**Decision model (optional).** Settings → AI → Decision model. A decision model answers quick yes/no and pick-one questions about text. Agora works the same without one; each use below is off until you switch it on.
+**Decision model (optional).** Settings → Models and assistant → Decision model. A decision model answers quick yes/no and pick-one questions about text. Agora works the same without one; each use below is off until you switch it on.
 
 1. Add a decision provider and press Test. There are three types:
    - **TypeSafe Jev (decisions)**: your TypeSafe API key. Model `jev-latest`, $0.042 per 1M input tokens.

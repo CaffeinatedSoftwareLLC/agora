@@ -228,7 +228,7 @@ export async function botRoutes(app: FastifyInstance) {
         return reply.send({ bots, hasMore, nextCursor: hasMore ? bots[bots.length - 1].id : null });
     });
 
-    // ─── Bot Management (human auth, requires ManageBots) ───
+    // ─── Bot accounts (human auth, requires ManageBots) ───
 
     // POST /servers/:serverId/bots → 201 { id, username, serverId }
     app.post('/servers/:serverId/bots', {

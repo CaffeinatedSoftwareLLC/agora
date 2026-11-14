@@ -30,7 +30,7 @@ export function AssistantSection({ serverId, config, hasChatRoute, channels, bot
       <section className="mb-10">
         <h3 className="text-lg font-semibold text-text mb-2">Built-in assistant</h3>
         <p className="text-sm text-text-muted mb-3">
-          A bot members can @mention in channels and threads. It answers using the Chat capability above.
+          The built-in agent members can @mention in channels and threads. It answers using the Chat capability above.
         </p>
         {!hasChatRoute && <p className="text-warn text-sm mb-3">Set up the Chat capability first so it has something to answer with.</p>}
         {error && <p className="text-danger text-sm mb-3">{error}</p>}
@@ -48,7 +48,7 @@ export function AssistantSection({ serverId, config, hasChatRoute, channels, bot
             }
           }}
         >
-          Create assistant bot
+          Create the assistant
         </Button>
       </section>
     );

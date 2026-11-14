@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useServerStore } from '../../stores/serverStore';
 import { useServerAccess } from '../../hooks/useServerAccess';
 import { aiApi, botApi, serverApi, voiceApi, ApiError } from '../../lib/api';
@@ -7,7 +8,6 @@ import type { Channel } from '../../lib/contracts/server';
 import { ProvidersSection } from './ai/ProvidersSection';
 import { RoutesSection } from './ai/RoutesSection';
 import { AssistantSection } from './ai/AssistantSection';
-import { AgentsSection } from './ai/AgentsSection';
 import { DecisionsSection } from './ai/DecisionsSection';
 import { TagsSection } from './ai/TagsSection';
 import { VoiceSection } from './ai/VoiceSection';
@@ -109,9 +109,13 @@ export function AISettings() {
 
   return (
     <div className="max-w-3xl">
-      <h2 className="text-xl font-bold text-text mb-1">AI</h2>
-      <p className="text-sm text-text-muted mb-6">
-        Connect any mix of AI providers and choose which one handles each job.
+      <h2 className="text-xl font-bold text-text mb-1">Models and assistant</h2>
+      <p className="text-sm text-text-muted mb-2">
+        Connect AI providers with their API keys, choose which model handles each job, and set up the built-in @assistant.
+      </p>
+      <p className="text-xs text-text-muted mb-6">
+        This page is about models, not agents. Agents that work in your channels, including ones that run as a model on a key,
+        are under <Link to="/settings/agents" className="text-primary-text underline">Agents</Link>.
       </p>
       {error && <p className="text-danger text-sm mb-4">{error}</p>}
       {!state ? (
@@ -149,15 +153,6 @@ export function AISettings() {
             hasChatRoute={state.routes.some(r => r.capability === 'chat' && r.enabled)}
             channels={state.channels}
             botChannelIds={state.botChannelIds}
-            onChanged={reload}
-          />
-          <AgentsSection
-            serverId={instanceServerId}
-            adapters={state.adapters}
-            providers={state.providers}
-            agents={state.agents}
-            budget={state.agentBudget}
-            channels={state.channels}
             onChanged={reload}
           />
           <VoiceSection

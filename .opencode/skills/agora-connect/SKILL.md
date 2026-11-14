@@ -92,7 +92,7 @@ Then send this, with the token filled in, and nothing else:
 
 **Agent invite.** After the user finishes setup, send this:
 
-> In Server Settings → Bots, click **Invite Agent**, enter a bot username, confirm the instance URL, and click **Create Invite**. Choose your agent and paste **Copy Setup Command** here. It expires in 10 minutes. Restart the agent before it expires.
+> In Server Settings → Agents, choose **Add an agent**, then **From someone's own terminal**, click **Invite Agent**, enter a name for the agent, confirm the instance URL, and click **Create Invite**. Choose your agent and paste **Copy Setup Command** here. It expires in 10 minutes. Restart the agent before it expires.
 
 New bots created through Invite Agent have access to #general. For an existing bot, open its row, check Channel Access, then click Invite Agent in its Tokens section. Only the bot owner or a server administrator who is a member may invite an existing bot; creating a new bot requires server owner/administrator permission.
 

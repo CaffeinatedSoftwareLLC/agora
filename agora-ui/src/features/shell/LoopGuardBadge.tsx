@@ -28,10 +28,10 @@ export function LoopGuardBadge({ channel }: { channel: Channel }) {
   }
   return (
     <Link
-      to="/settings/bots"
+      to="/settings/agents#loop-guard"
       className={`${className} min-h-11 md:min-h-7 hover:bg-surface-hover hover:text-text`}
       title={`${summary} Click to change.`}
-      aria-label={`${summary} Change in bot settings.`}
+      aria-label={`${summary} Change in agent settings.`}
     >
       {body}
     </Link>
