@@ -18,8 +18,8 @@ import { BoxModeBadge } from '../boxes/BoxModeBadge';
  */
 
 /** kind 'box': the agora-host inside a box (docs/agent-boxes.md §8.1); listed under Boxes, not here. */
-interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null; kind?: 'machine' | 'box' }
-interface Profile {
+export interface Host { id: string; name: string; createdAt: string; lastSeenAt: string | null; revokedAt: string | null; kind?: 'machine' | 'box' }
+export interface Profile {
   id: string; name: string; botId: string; hostId: string; adapter: 'codex' | 'claude' | 'gemini' | 'opencode' | 'omp' | 'devin';
   model: string | null; effort: string | null; workdirAlias: string; workspaceId?: string;
   /** Session limits; null: no limit, the default (docs/agent-limits.md). */
@@ -52,7 +52,7 @@ function errorText(err: unknown): string {
   return 'Request failed';
 }
 
-function OnceToken({ label, token, onDone }: { label: string; token: string; onDone: () => void }) {
+export function OnceToken({ label, token, onDone }: { label: string; token: string; onDone: () => void }) {
   return (
     <div className="mb-4 rounded border border-primary/50 bg-primary/10 p-3 text-sm">
       <p className="mb-2 text-text">{label} It is shown only now; put it in the host's config file.</p>
@@ -190,8 +190,8 @@ export function SubscriptionWakesSection({ serverId, isOwner }: { serverId: stri
   );
 }
 
-function HostsSection({ serverId, hosts, onChange, onToken, onError }: {
-  serverId: string; hosts: Host[]; onChange: () => void;
+export function HostsSection({ serverId, hosts, onChange, onToken, onError, title = 'Hosts' }: {
+  serverId: string; hosts: Host[]; title?: string; onChange: () => void;
   onToken: (s: { label: string; token: string }) => void; onError: (e: string) => void;
 }) {
   const [name, setName] = useState('');
@@ -209,7 +209,7 @@ function HostsSection({ serverId, hosts, onChange, onToken, onError }: {
   };
   return (
     <section className="mb-8">
-      <h3 className="text-lg font-semibold text-text mb-3">Hosts</h3>
+      <h3 className="text-sm font-semibold text-text mb-2">{title}</h3>
       <ul className="mb-3 flex flex-col gap-1">
         {hosts.length === 0 && <li className="text-text-muted text-sm">No hosts yet.</li>}
         {hosts.map(h => (
@@ -232,8 +232,9 @@ function HostsSection({ serverId, hosts, onChange, onToken, onError }: {
   );
 }
 
-function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, onChange, onToken, onError }: {
-  serverId: string; hosts: Host[]; allHosts: Host[]; profiles: Profile[]; channels: Channel[]; plans: PlanConnection[]; onChange: () => void;
+/** The Create agent form: an agent on one of the owner's machines (unboxed). Shown on Add an agent. */
+export function CreateAgentForm({ serverId, hosts, channels, onChange, onToken, onError }: {
+  serverId: string; hosts: Host[]; channels: Channel[]; onChange: () => void;
   onToken: (s: { label: string; token: string }) => void; onError: (e: string) => void;
 }) {
   const [form, setForm] = useState({ name: '', adapter: 'codex', hostId: '', workdirAlias: 'agora', workspaceId: 'primary', model: '', effort: 'high', channelId: '' });
@@ -261,6 +262,70 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
   };
 
   return (
+      <div className="rounded border border-border bg-surface p-3">
+        <h4 className="mb-2 text-sm font-semibold text-text">Create agent</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+          <label className="flex flex-col gap-1 text-text-muted">Name (what you type after /start)
+            <input className={input} value={form.name} maxLength={32} placeholder="codex" onChange={set('name')} />
+          </label>
+          <label className="flex flex-col gap-1 text-text-muted">CLI
+            <select className={input} value={form.adapter} onChange={set('adapter')}>
+              <option value="codex">Codex</option>
+              <option value="claude">Claude Code</option>
+              {/* The host runs it over ACP (gemini --acp) and only with an API key */}
+              <option value="gemini">Gemini CLI (ACP, API key)</option>
+              {/* opencode acp on an OpenRouter key: any OpenRouter model, one model per agent */}
+              <option value="opencode">opencode (ACP, OpenRouter key)</option>
+              {/* omp acp on an OpenRouter key only; every write, command and Agora tool asks on a machine */}
+              <option value="omp">oh-my-pi (ACP, OpenRouter key)</option>
+              {/* devin acp on the owner's own Devin login; only the owner can wake it */}
+              <option value="devin">Devin (ACP, your Devin login)</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-text-muted">Host
+            <select className={input} value={hostId} onChange={set('hostId')}>
+              {hosts.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-text-muted">Workdir alias (mapped to a folder in the host config)
+            <input className={input} value={form.workdirAlias} maxLength={64} onChange={set('workdirAlias')} />
+          </label>
+          <label className="flex flex-col gap-1 text-text-muted">{opencode ? 'OpenRouter model ID (required)' : 'Model (optional)'}
+            <input className={input} value={form.model} maxLength={64} placeholder={opencode ? 'qwen/qwen3-coder' : 'gpt-6.1-sol'} onChange={set('model')} />
+          </label>
+          <label className="flex flex-col gap-1 text-text-muted">Workspace ID (same repository = same ID across hosts)
+            <input className={input} value={form.workspaceId} maxLength={64} onChange={set('workspaceId')} />
+          </label>
+          <label className="flex flex-col gap-1 text-text-muted">Effort
+            <select className={input} value={form.effort} onChange={set('effort')}>
+              {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
+            </select>
+          </label>
+          <label className="sm:col-span-2 flex flex-col gap-1 text-text-muted">Add to channel (optional)
+            <select className={input} value={form.channelId} onChange={set('channelId')}>
+              <option value="">None</option>
+              {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <label className="mt-3 flex min-h-11 md:min-h-8 items-start gap-2 text-sm text-text">
+          <input type="checkbox" className="mt-1" checked={unboxedAck} onChange={e => setUnboxedAck(e.target.checked)} />
+          <span>Run unboxed on this machine (it can read and change your files). <span className="text-text-muted">Only you can wake an unboxed agent. For anything that doesn&apos;t need this machine, create a box instead.</span></span>
+        </label>
+        <div className="mt-3">
+          <Button onClick={() => void create()} disabled={!unboxedAck || !/^[a-z0-9][a-z0-9_-]*$/i.test(form.name.trim()) || !form.workdirAlias.trim() || (opencode && !form.model.trim())}>
+            Create agent
+          </Button>
+        </div>
+      </div>
+  );
+}
+
+function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, onChange, onToken, onError }: {
+  serverId: string; hosts: Host[]; allHosts: Host[]; profiles: Profile[]; channels: Channel[]; plans: PlanConnection[]; onChange: () => void;
+  onToken: (s: { label: string; token: string }) => void; onError: (e: string) => void;
+}) {
+  return (
     <section>
       <h3 className="text-lg font-semibold text-text mb-3">Agents</h3>
       <ul className="mb-4 flex flex-col gap-2">
@@ -274,62 +339,7 @@ function AgentsSection({ serverId, hosts, allHosts, profiles, channels, plans, o
       {hosts.length === 0 ? (
         <p className="text-text-muted text-sm">Create a host first.</p>
       ) : (
-        <div className="rounded border border-border bg-surface p-3">
-          <h4 className="mb-2 text-sm font-semibold text-text">Create agent</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-            <label className="flex flex-col gap-1 text-text-muted">Name (bot and /start name)
-              <input className={input} value={form.name} maxLength={32} placeholder="codex" onChange={set('name')} />
-            </label>
-            <label className="flex flex-col gap-1 text-text-muted">CLI
-              <select className={input} value={form.adapter} onChange={set('adapter')}>
-                <option value="codex">Codex</option>
-                <option value="claude">Claude Code</option>
-                {/* The host runs it over ACP (gemini --acp) and only with an API key */}
-                <option value="gemini">Gemini CLI (ACP, API key)</option>
-                {/* opencode acp on an OpenRouter key: any OpenRouter model, one model per agent */}
-                <option value="opencode">opencode (ACP, OpenRouter key)</option>
-                {/* omp acp on an OpenRouter key only; every write, command and Agora tool asks on a machine */}
-                <option value="omp">oh-my-pi (ACP, OpenRouter key)</option>
-                {/* devin acp on the owner's own Devin login; only the owner can wake it */}
-                <option value="devin">Devin (ACP, your Devin login)</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-text-muted">Host
-              <select className={input} value={hostId} onChange={set('hostId')}>
-                {hosts.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-text-muted">Workdir alias (mapped to a folder in the host config)
-              <input className={input} value={form.workdirAlias} maxLength={64} onChange={set('workdirAlias')} />
-            </label>
-            <label className="flex flex-col gap-1 text-text-muted">{opencode ? 'OpenRouter model ID (required)' : 'Model (optional)'}
-              <input className={input} value={form.model} maxLength={64} placeholder={opencode ? 'qwen/qwen3-coder' : 'gpt-6.1-sol'} onChange={set('model')} />
-            </label>
-            <label className="flex flex-col gap-1 text-text-muted">Workspace ID (same repository = same ID across hosts)
-              <input className={input} value={form.workspaceId} maxLength={64} onChange={set('workspaceId')} />
-            </label>
-            <label className="flex flex-col gap-1 text-text-muted">Effort
-              <select className={input} value={form.effort} onChange={set('effort')}>
-                {EFFORTS.map(e => <option key={e} value={e}>{e || 'CLI default'}</option>)}
-              </select>
-            </label>
-            <label className="sm:col-span-2 flex flex-col gap-1 text-text-muted">Add to channel (optional)
-              <select className={input} value={form.channelId} onChange={set('channelId')}>
-                <option value="">None</option>
-                {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
-              </select>
-            </label>
-          </div>
-          <label className="mt-3 flex min-h-11 md:min-h-8 items-start gap-2 text-sm text-text">
-            <input type="checkbox" className="mt-1" checked={unboxedAck} onChange={e => setUnboxedAck(e.target.checked)} />
-            <span>Run unboxed on this machine (it can read and change your files). <span className="text-text-muted">Only you can wake an unboxed agent. For anything that doesn&apos;t need this machine, create a box instead.</span></span>
-          </label>
-          <div className="mt-3">
-            <Button onClick={() => void create()} disabled={!unboxedAck || !/^[a-z0-9][a-z0-9_-]*$/i.test(form.name.trim()) || !form.workdirAlias.trim() || (opencode && !form.model.trim())}>
-              Create agent
-            </Button>
-          </div>
-        </div>
+        <CreateAgentForm serverId={serverId} hosts={hosts} channels={channels} onChange={onChange} onToken={onToken} onError={onError} />
       )}
     </section>
   );
@@ -349,7 +359,7 @@ function limitSummary(p: Pick<Profile, 'wakeBudget' | 'tokenBudget' | 'runTimeou
   return set.length ? set.join(' · ') : 'no limits';
 }
 
-function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
+export function ProfileRow({ serverId, profile, host, plan, onChange, onError }: {
   serverId: string; profile: Profile; host: Host | undefined; plan?: PlanConnection; onChange: () => void; onError: (e: string) => void;
 }) {
   const [model, setModel] = useState(profile.model ?? '');

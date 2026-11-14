@@ -1,7 +1,7 @@
 import type { BotToken } from '../../lib/api';
 
 /**
- * The "who does this token count as" badge in Settings → Bots (docs/provider-terms.md, "Owner
+ * The "who does this token count as" badge in Settings → Agents → the agent (docs/provider-terms.md, "Owner
  * bots"). A personal or invite token counts as the bot's owner when no other person made it:
  * the owner made it, or it predates Agora recording makers. Then the agent's messages and
  * hand-offs wake the owner's subscription agents (with Settings → Agents set to Only you, only

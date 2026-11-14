@@ -4,17 +4,21 @@ import { snap } from '../lib/snap';
 import { e2eEnv } from '../lib/env';
 import { freshChannel, makeBot, scrubText, uniq } from '../lib/helpers';
 
-/** A bot's expandable row on /settings/bots. */
-const botRow = (page: Page, name: string) => page.locator('div.rounded-lg.overflow-hidden').filter({ has: page.getByText(name, { exact: true }) });
-/** The list is virtualized (#241): search first, so the row is mounted however many bots the instance has. */
+/** An agent's own page under Settings, Agents: the account panel (tokens, channel access) and the pause control are all inside main. */
+const botRow = (page: Page) => page.locator('main');
+/** Search the list of agents, open the agent's page and return it. */
 async function findBot(page: Page, name: string) {
-    await page.getByLabel('Search bots').fill(name);
-    return botRow(page, name);
+    await page.goto('/settings/agents');
+    await page.getByLabel('Search agents').fill(name);
+    await page.getByRole('link', { name: new RegExp(`${name} `) }).first().click();
+    await expect(page.getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 15_000 });
+    return botRow(page);
 }
 
-async function openBots(page: Page) {
-    await page.goto('/settings/bots');
-    await expect(page.getByRole('heading', { name: 'Bot Management' })).toBeVisible({ timeout: 15_000 });
+/** The Add an agent page, with the way the agent runs already chosen. */
+async function openAdd(page: Page, how: 'terminal' | 'account') {
+    await page.goto('/settings/agents/new');
+    if (how === 'terminal') await page.getByRole('radio', { name: /From someone's own terminal/ }).check();
 }
 
 /** Mirrors inviteCommand() in agora-ui/src/features/settings/CreateAgentInviteModal.tsx. */
@@ -29,8 +33,8 @@ test.describe('bots, tokens and agent invites', () => {
     test('[ID-05.bot-token-once] create a bot and mint a token: shown once, then only metadata', async ({ page, seed, sensitive }, ti) => {
         const { owner, anon } = apis(seed);
         const name = uniq(seed, 'tokenbot');
-        await openBots(page);
-        await page.getByRole('button', { name: 'Create Bot' }).click();
+        await openAdd(page, 'account');
+        await page.getByRole('button', { name: 'Create an account only' }).click();
         const createDlg = page.getByRole('dialog', { name: 'Create Bot' });
         await createDlg.getByLabel('Bot Username').fill(name);
         const created = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/servers/${seed.serverId}/bots`);
@@ -42,7 +46,6 @@ test.describe('bots, tokens and agent invites', () => {
         const botId: string = mine[0].id;
 
         const row = await findBot(page, name);
-        await row.getByRole('button').filter({ has: page.getByText(name, { exact: true }) }).click();
         // The token is on screen from this click on: failure evidence keeps no PNG and is scrubbed
         sensitive.begin();
         const minted = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/servers/${seed.serverId}/bots/${botId}/tokens`);
@@ -72,9 +75,8 @@ test.describe('bots, tokens and agent invites', () => {
         expect(Object.keys(tokens[0]).sort()).toEqual(['createdAt', 'id', 'lastUsedAt', 'name', 'revokedAt']);
 
         await page.reload();
-        await expect(page.getByRole('heading', { name: 'Bot Management' })).toBeVisible({ timeout: 15_000 });
+        await expect(page.getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 15_000 });
         const row2 = await findBot(page, name);
-        await row2.getByRole('button').filter({ has: page.getByText(name, { exact: true }) }).click();
         const tokenRow = row2.getByText('Unnamed');
         await expect(tokenRow).toBeVisible();
         await expect(row2.getByRole('button', { name: 'Revoke' })).toHaveCount(1);
@@ -86,7 +88,7 @@ test.describe('bots, tokens and agent invites', () => {
     test('[ID-05.invite-dialog] Invite Agent shows the setup command for Claude Code, Codex and Gemini with an expiry', async ({ page, seed, sensitive }, ti) => {
         const instance = e2eEnv().baseURL;
         const name = uniq(seed, 'invbot');
-        await openBots(page);
+        await openAdd(page, 'terminal');
         await page.getByRole('button', { name: 'Invite Agent' }).first().click();
         const dlg = page.getByRole('dialog', { name: 'Invite Agent' });
         await dlg.getByLabel('New bot username').fill(name);
@@ -154,13 +156,12 @@ test.describe('bots, tokens and agent invites', () => {
         const before = await bot.api.req('POST', `/channels/${ch.id}/messages`, { content: `Before pause ${seed.runTag}` });
         expect(before.status).toBe(201);
 
-        await openBots(page);
         const row = await findBot(page, name);
         page.once('dialog', d => { expect(d.type()).toBe('prompt'); void d.accept('e2e pause'); });
         const pauseRes = page.waitForResponse(r => r.request().method() === 'PATCH' && new URL(r.url()).pathname === `/servers/${seed.serverId}/bots/${bot.botId}/pause`);
         await row.getByRole('button', { name: 'Pause', exact: true }).click();
         expect((await pauseRes).status()).toBe(200);
-        const badge = row.getByText('PAUSED', { exact: true });
+        const badge = row.getByTestId('agent-state').filter({ hasText: 'Paused' });
         await expect(badge).toBeVisible();
         await snap(page, ti, 'ID-05.bot-pause', '01-paused', 'A bot row marked PAUSED with a Resume button', { ready: badge });
         const listed = ((await owner.ok('GET', `/servers/${seed.serverId}/bots`)) as any[]).find(b => b.id === bot.botId);

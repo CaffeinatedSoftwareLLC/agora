@@ -26,7 +26,7 @@ function mount(path = '/settings') {
   } /></Routes></MemoryRouter>);
 }
 
-it.each(['Roles', 'Role Assignment', 'Channel Overrides', 'Bots', 'Agents', 'AI', 'Instance Settings', 'File Storage'])('phone opens the list, then %s full-width, then returns with one Back control', label => {
+it.each(['Roles', 'Role Assignment', 'Channel Overrides', 'Agents', 'Models and assistant', 'Instance Settings', 'File Storage'])('phone opens the list, then %s full-width, then returns with one Back control', label => {
   mount();
   expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeTruthy();
   expect(screen.queryByRole('main')).toBeNull();
@@ -46,9 +46,26 @@ it('phone list opens with no section focused, so none looks selected', () => {
 });
 
 it('phone Back from a deep-linked section focuses that section link', () => {
-  mount('/settings/bots');
+  mount('/settings/agents');
   fireEvent.click(screen.getByRole('link', { name: 'Back to settings' }));
-  expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Bots' }));
+  expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Agents' }));
+});
+
+it('phone Back from one agent focuses the Agents link', () => {
+  mount('/settings/agents/01ABC');
+  fireEvent.click(screen.getByRole('link', { name: 'Back to settings' }));
+  expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Agents' }));
+});
+
+it('groups the sections by what the person wants to do, with no Bots or AI section', () => {
+  narrow = false;
+  mount();
+  const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+  const text = nav.textContent ?? '';
+  for (const heading of ['Who can do what', 'Agents and models', 'This server']) expect(text).toContain(heading);
+  expect(screen.queryByRole('link', { name: 'Bots' })).toBeNull();
+  expect(screen.queryByRole('link', { name: 'AI' })).toBeNull();
+  expect(text.indexOf('Agents and models')).toBeLessThan(text.indexOf('This server'));
 });
 
 it('supports deep links and switches to two columns when rotated wider', () => {
@@ -72,4 +89,5 @@ it('keeps the desktop default section and hides admin-only sections from other v
   expect(screen.getByRole('heading', { name: 'Section content' })).toBeTruthy();
   expect(screen.queryByRole('link', { name: 'Instance Settings' })).toBeNull();
   expect(screen.queryByRole('link', { name: 'File Storage' })).toBeNull();
+  expect(screen.queryByText('This server')).toBeNull();
 });

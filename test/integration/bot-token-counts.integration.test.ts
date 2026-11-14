@@ -2,7 +2,7 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { generateUlid } from '../../src/utils/ulid';
 
 /**
- * Settings → Bots says who each token counts as (docs/provider-terms.md, "Owner bots"):
+ * Settings → Agents → the agent says who each token counts as (docs/provider-terms.md, "Owner bots"):
  * GET /servers/:id/bots/:id/tokens returns purpose, createdBy, createdByName and countsAsYou for
  * the caller. countsAsYou: a live personal or invite token on a bot the caller owns, that no
  * other person made (the caller made it, or no recorded maker). An agent host's or box's token

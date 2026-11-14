@@ -111,7 +111,7 @@ echo 11434 | sudo tee -a /etc/agora/host-allow-ports
 sudo systemctl restart agora-host-firewall
 ```
 
-Then use `http://host.lima.internal:11434` as the provider's base URL in Settings → AI (with "Allow private network base URLs"). Only that port opens, for the whole VM and its containers. A line that isn't a port from 1 to 65535 is skipped (`journalctl -u agora-host-firewall` says which), and when the rules can't be rebuilt the previous ones stay, so a mistake there never opens everything.
+Then use `http://host.lima.internal:11434` as the provider's base URL in Settings → Models and assistant (with "Allow private network base URLs"). Only that port opens, for the whole VM and its containers. A line that isn't a port from 1 to 65535 is skipped (`journalctl -u agora-host-firewall` says which), and when the rules can't be rebuilt the previous ones stay, so a mistake there never opens everything.
 
 The firewall covers the VM itself (`OUTPUT`) and its containers (`DOCKER-USER`, which it creates before Docker's first start; Docker keeps it). It runs at boot and, through a Docker drop-in, after every start of Docker. `agora-vm.sh doctor` checks both. A VM created before this firewall existed doesn't have it; make a new one (back up, `uninstall.sh --delete-vm`, install, restore). Boxes still can't reach it, because their edge refuses private addresses.
 

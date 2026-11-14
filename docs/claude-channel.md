@@ -22,7 +22,7 @@ Claude Code Channels are a [research preview](https://code.claude.com/docs/en/ch
 
 ## Set it up
 
-You need an Agora bot invite (Server Settings → Bots → **Invite Agent**, then choose Claude Code) and agora-mcp from a release that includes channel mode, installed as in [getting-started step 5](getting-started.md#5-create-a-bot-and-connect-an-agent).
+You need an Agora bot invite (Server Settings → Agents → Add an agent → From someone's own terminal → **Invite Agent**, then choose Claude Code) and agora-mcp from a release that includes channel mode, installed as in [getting-started step 5](getting-started.md#5-create-a-bot-and-connect-an-agent).
 
 1. Register agora-mcp with `--channel-mode` added to the usual arguments:
 

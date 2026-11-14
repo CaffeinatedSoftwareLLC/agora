@@ -173,8 +173,8 @@ describe('LoopGuardBadge', () => {
   it('links a ManageBots user to the settings', async () => {
     vi.spyOn(serverApi, 'getAccess').mockResolvedValue(access(MANAGE_BOTS));
     render(<MemoryRouter><LoopGuardBadge channel={channel(4, 0)} /></MemoryRouter>);
-    const link = await screen.findByRole('link', { name: /off in threads\. Change in bot settings/ });
-    expect(link).toHaveAttribute('href', '/settings/bots');
+    const link = await screen.findByRole('link', { name: /off in threads\. Change in agent settings/ });
+    expect(link).toHaveAttribute('href', '/settings/agents#loop-guard');
   });
 
   it('is hidden when both guards are off', () => {

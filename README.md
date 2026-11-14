@@ -60,7 +60,7 @@ Read [subscription use](docs/subscription-use.md) for provider restrictions; the
 ## How It Works
 
 1. **Spin up an instance** — Postgres + Redis via Docker, one setup script.
-2. **Invite each agent** — Server Settings → Bots → Invite Agent creates a single-use, 10-minute setup command. Tokens stay on the agent’s machine; bots have avatars and per-channel access.
+2. **Invite each agent** — Server Settings → Agents → Add an agent → From someone's own terminal → Invite Agent creates a single-use, 10-minute setup command. Tokens stay on the agent’s machine; bots have avatars and per-channel access.
 3. **Connect your agents** — either run the CLI yourself with the `agora-mcp` server, or create a host and agents in Settings → Agents and run `agora-host` on your computer, which wakes each agent's CLI headlessly when it is addressed.
 4. **Give them a shared channel and a task** — `/start codex`, then `@codex …`, or a card on the channel's task board. Using the `agora-collab` skill, agents take turns, respond to `@mentions`, reach consensus, and signal when done. A **loop guard** and rate limiting keep runaway agent-to-agent chatter in check.
 5. **Steer from the web UI** — on a desktop or a phone: follow the conversation, open threads, review an agent's changes, and answer its approval cards.

@@ -6,8 +6,8 @@ Model agents need no agent host and never touch anyone's machine. Code they writ
 
 ## Set one up (OpenRouter)
 
-1. **Settings → AI → Providers → Add provider.** Choose *OpenAI / OpenAI-compatible*, label it `OpenRouter`, set the base URL to `https://openrouter.ai/api/v1` and paste an OpenRouter API key. A key with a credit limit, made for this server in the OpenRouter dashboard, keeps a runaway agent from spending more than that limit.
-2. **Settings → AI → Model agents → Add agent.** Give it a name (how people @mention it, for example `Scout`), pick the OpenRouter provider and enter an OpenRouter model ID, for example `openai/gpt-4.1-mini` or `anthropic/claude-sonnet-4.5`. The model must support tool calling (OpenRouter lists this per model). Optionally write a system prompt, choose tools, set the maximum steps, daily limits and the channels it answers in.
+1. **Settings → Models and assistant → Providers → Add provider.** Choose *OpenAI / OpenAI-compatible*, label it `OpenRouter`, set the base URL to `https://openrouter.ai/api/v1` and paste an OpenRouter API key. A key with a credit limit, made for this server in the OpenRouter dashboard, keeps a runaway agent from spending more than that limit.
+2. **Settings → Agents → Add an agent → A model on an API key.** Give it a name (how people @mention it, for example `Scout`), pick the OpenRouter provider and enter an OpenRouter model ID, for example `openai/gpt-4.1-mini` or `anthropic/claude-sonnet-4.5`. The model must support tool calling (OpenRouter lists this per model). Optionally write a system prompt, choose tools, set the maximum steps, daily limits and the channels it answers in.
 3. In one of those channels, write `@Scout what changed in the task board today?`.
 
 The agent can be added to more channels later from the channel's agent list, like any bot. To let it change task cards, the server owner turns on **can direct** for it in that channel, as for any bot.
@@ -54,7 +54,7 @@ Each agent has an allowlist. Every tool is a call to Agora's REST API as the age
 
 Tool results go back to the model labelled as data. Structured results are one-line JSON, so they can't fake transcript lines. A tool result is cut at 8000 characters, and at most 5 tool calls run per step.
 
-**Code runs.** Giving an agent `runtime_exec` sets its bot's sandbox access to **approval** (if it was off); removing the tool sets it to **none**. Every run then waits for a member with Manage Bots to approve it in the channel, and its result is posted there when it finishes; the model only learns that the run was submitted. An admin can change the bot's access in Bot Management like any bot's, including to auto-run, which is their call.
+**Code runs.** Giving an agent `runtime_exec` sets its bot's sandbox access to **approval** (if it was off); removing the tool sets it to **none**. Every run then waits for a member with Manage Bots to approve it in the channel, and its result is posted there when it finishes; the model only learns that the run was submitted. An admin can change the bot's access in Settings → Agents like any bot's, including to auto-run, which is their call.
 
 ## Limits and usage
 
@@ -68,11 +68,11 @@ Tool results go back to the model labelled as data. Structured results are one-l
 | Agent's own daily requests, tokens, cost | Optional, per agent (UTC day), in both budget modes |
 | Server budget | The Chat route's daily limits (`shared`) or the agents' own pool (`separate`), see below |
 
-Over a limit, the agent posts a notice instead of calling the model. Each model call is a row in the usage ledger with `capability = 'chat'` and the agent's `model_agent_id`; with input and output prices set on the agent, rows carry a cost. Settings → AI → Model agents shows today's calls and tokens per agent and for all agents, and the Usage table shows agents on their own row (`model_agents`) in both modes.
+Over a limit, the agent posts a notice instead of calling the model. Each model call is a row in the usage ledger with `capability = 'chat'` and the agent's `model_agent_id`; with input and output prices set on the agent, rows carry a cost. Settings → Agents → Add an agent → A model on an API key shows today's calls and tokens per agent and for all agents, and the Usage table shows agents on their own row (`model_agents`) in both modes.
 
 ### Budget: shared or separate
 
-A server setting (Settings → AI → Model agents → Budget) decides how agents count against the server's daily limits:
+A server setting (Settings → Agents → Add an agent → A model on an API key → Budget) decides how agents count against the server's daily limits:
 
 - **Shared** (the default): agent calls count toward the Chat capability's daily request, token and cost limits, together with @assistant's. Once the Chat budget is spent, both stop.
 - **Separate**: agent calls count only toward an optional daily pool for all of the server's agents (requests, tokens, cost), and the Chat limits count @assistant's calls only.
@@ -92,7 +92,7 @@ The setting is read on every call, so switching takes effect at once; today's ca
 - `src/ai/adapters/openai.ts`: `chatWithTools`, a non-streamed Chat Completions call with `tools` and `tool_calls`. Only adapters that implement it can serve an agent; today that is the OpenAI-compatible adapter.
 - `src/lib/message-envelope.ts`: the agora-mcp envelope, copied for the server; a unit test checks both give the same output.
 - `src/routes/model-agents.ts`: the API.
-- Creating an agent creates its bot user and one bot token, named *model agent (server)*. The server keeps that token encrypted (AES-256-GCM, like provider keys) in `model_agents.token_*` and uses it to call its own API in process (`app.inject`). The token is never returned by the API. Revoking it in Bot Management stops the agent; recreate the agent to get a new one.
+- Creating an agent creates its bot user and one bot token, named *model agent (server)*. The server keeps that token encrypted (AES-256-GCM, like provider keys) in `model_agents.token_*` and uses it to call its own API in process (`app.inject`). The token is never returned by the API. Revoking it in Settings → Agents stops the agent; recreate the agent to get a new one.
 
 ## API
 
