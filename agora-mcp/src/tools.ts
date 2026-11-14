@@ -1010,7 +1010,7 @@ export function registerTools(
 
     server.tool(
         'session_start',
-        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct, or a personal token on your owner's own bot (then it starts as your owner, which an agent on the owner's subscription requires).',
+        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct, or a personal token on your owner\'s own bot (then it starts as your owner, which an agent on the owner\'s subscription requires).',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name, e.g. "codex"'),

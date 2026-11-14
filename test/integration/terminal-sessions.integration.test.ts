@@ -278,8 +278,10 @@ describe('authority is unchanged', () => {
         expect(await notices('is connected from a terminal')).toBe(1);
 
         // Being connected from a terminal gives the bot no authority to start agents
+        // (a bot that doesn't count as its owner: the owner's own bots act as the owner, owner-bots.integration.test.ts)
+        await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [claude.id, member.userId]);
         const res = await command(claude.auth, { command: 'start', profile: claude.name });
-        expect(res.status).toBe(403);
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
         expect(res.body.error).toBe('cannot_direct');
     });
 });
