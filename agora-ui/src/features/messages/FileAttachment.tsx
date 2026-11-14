@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
 import type { Attachment } from '../../stores/messageStore';
 import { api, getAuthHeaders } from '../../lib/api';
@@ -179,7 +180,9 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
           />
         )}
       </button>
-      {expanded && blobUrl && (
+      {/* Portaled: message rows are positioned with a transform, which would make the row the
+          containing block of this fixed overlay (clipped to the row, painted under the next ones) */}
+      {expanded && blobUrl && createPortal(
         <button
           ref={closeRef}
           type="button"
@@ -188,7 +191,8 @@ function ImageAttachment({ attachment }: { attachment: Attachment }) {
           aria-label={`Close image ${attachment.name}`}
         >
           <img src={blobUrl} alt={attachment.name} className="max-w-[90vw] max-h-[90vh] object-contain" />
-        </button>
+        </button>,
+        document.body,
       )}
     </>
   );
