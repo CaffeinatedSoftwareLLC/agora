@@ -31,6 +31,7 @@ import socket
 import struct
 import sys
 import termios
+import time
 import tty
 
 SOCKET = os.environ.get('AGORA_AS_AGENT_SOCKET', '/run/as-agent/server.sock')
@@ -41,6 +42,14 @@ MAX_BUFFER = 4 << 20          # received bytes held, never more
 MAX_PENDING_OUT = 1 << 20     # bytes for the terminal still unwritten: past it, reading from the server waits
 MAX_PENDING_SEND = 1 << 20    # bytes for the server still unsent: past it, the server is not reading and we leave
 ESCAPE_STATUS = 130
+# Said to the terminal before anything else: box/agora-pty (the operator's own helper, which reads the
+# terminal's output) reports "agent side" the moment it sees it, instead of at its next scan. Keep both in step.
+AS_AGENT_MARK = b']7777;agora-as-agent'
+STDIN_QUIET = 0.5             # keystrokes typed before the page shows the agent side are thrown away this long
+# After the session: leave the alternate screen, mouse reporting, bracketed paste and application keys, show the
+# cursor, reset attributes. An explicit list, so nothing the agent's side drew can stay on the owner's terminal.
+TERMINAL_RESET = (b'[?1049l[?1000l[?1002l[?1003l[?1005l[?1006l[?1015l'
+                  b'[?2004l[?1l>[?7h[?25h[0m')
 REFUSALS = {b'forbidden': 'not allowed', b'bad_request': 'bad request', b'failed': 'could not run it', b'busy': 'busy, try again'}
 
 
@@ -51,6 +60,17 @@ def frame(kind, payload=b''):
 def fail(message, status):
     sys.stderr.write('as-agent: %s\n' % message)
     sys.exit(status)
+
+
+def tty_write(data):
+    """Write to the owner's terminal: stdout when it is one, else stdin's (both may be the same device)."""
+    for fd in (1, 0):
+        if os.isatty(fd):
+            try:
+                os.write(fd, data)
+            except OSError:
+                pass
+            return
 
 
 def window_size(fd):
@@ -109,7 +129,11 @@ def main():
         argv = argv[1:]
     if not argv:
         argv = ['/bin/bash', '-i']
-    interactive = os.isatty(0) and os.isatty(1)
+    # A terminal on stdin is what makes it interactive (raw keys, the `Enter ~ .` escape), even if stdout
+    # is redirected: the keyboard must not reach the agent's side without the escape in front of it
+    interactive = os.isatty(0)
+    if interactive:
+        tty_write(AS_AGENT_MARK)       # first, before the banner and before stdin is read
 
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -117,7 +141,8 @@ def main():
     except OSError:
         fail("the agent's side is not running (no one is listening at %s)" % SOCKET, 69)
     conn.setblocking(False)
-    cols, rows = window_size(1) if interactive else (80, 24)
+    size_fd = 1 if os.isatty(1) else 0
+    cols, rows = window_size(size_fd) if interactive else (80, 24)
     request = {'v': 1, 'argv': argv, 'tty': interactive, 'cols': cols, 'rows': rows, 'term': os.environ.get('TERM', 'xterm')}
     sendq = bytearray(frame(b'Q', json.dumps(request).encode()))
 
@@ -135,7 +160,8 @@ def main():
     saved = None
     if interactive:
         saved = termios.tcgetattr(0)
-        tty.setraw(0)
+        tty.setraw(0, termios.TCSAFLUSH)
+    quiet_until = time.monotonic() + STDIN_QUIET
     escape = Escape()
     buf = bytearray()
     outq = {1: bytearray(), 2: bytearray()}
@@ -149,7 +175,7 @@ def main():
         while True:
             if resize and interactive:
                 resize.clear()
-                c, r = window_size(1)
+                c, r = window_size(size_fd)
                 sendq += frame(b'R', ('%d %d' % (c, r)).encode())
             while forwarded:
                 sendq += frame(b'S', forwarded.pop(0).encode())
@@ -204,7 +230,9 @@ def main():
             if 0 in r:
                 data = os.read(0, CHUNK)
                 if data:
-                    if interactive:
+                    if interactive and time.monotonic() < quiet_until:
+                        pass       # typed ahead of the side indicator: dropped
+                    elif interactive:
                         data, leave = escape.feed(data)
                         if data:
                             sendq += frame(b'I', data)
@@ -263,6 +291,7 @@ def main():
     finally:
         if saved is not None:
             termios.tcsetattr(0, termios.TCSADRAIN, saved)
+            tty_write(TERMINAL_RESET)
         try:
             conn.close()
         except OSError:

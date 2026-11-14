@@ -16,6 +16,7 @@ privilege at all.
   * exit status 2 means the relay refused its arguments, user or credential: starting it again
     cannot help, so it is not started again.
 """
+import ctypes
 import os
 import re
 import signal
@@ -68,8 +69,18 @@ def sleep(seconds):
         time.sleep(0.2)
 
 
+def not_dumpable():
+    """PR_SET_DUMPABLE 0: nothing but root can read this process's memory or attach to it, even a process
+    of the same user, and the relay it starts is not made readable through it either."""
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0)    # PR_SET_DUMPABLE = 4
+    except (OSError, AttributeError):
+        log('cannot mark this process not dumpable')
+
+
 def main():
     global child
+    not_dumpable()
     token = read_token(3)
     if token is None:
         log('the relay credential is missing or malformed: no terminal in this box')

@@ -21,7 +21,7 @@ ALTER TABLE agent_boxes
 -- protocol 2. Nothing shipped with protocol 1, where agora-host itself held the terminal.
 ALTER TABLE agent_hosts ADD COLUMN shell_protocol INTEGER;
 
--- The terminal relay's own credential (ar_<hostId>.<secret>), hashed like the host token's secret.
+-- The terminal relay's own credential (ar_<hostId>.<secret>), stored as a SHA-256 digest.
 -- Minted with the box's generation, delivered only to the relay's Unix user, and the only thing
 -- the terminal hub accepts from a box. The host token (secret_hash) cannot register a terminal.
 ALTER TABLE agent_hosts ADD COLUMN relay_secret_hash TEXT;

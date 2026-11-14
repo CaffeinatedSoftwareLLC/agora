@@ -47,6 +47,10 @@ Run the agent's code with `as-agent`, **not from your own shell**. Plain `git st
 
 **What you type in an `as-agent` session is on the agent's side of the wall.** The program runs as the agent, so the agent can see it, and can show you a fake prompt there, even a byte-exact copy of your own. **Tell the sides apart by the frame around the terminal, not by the prompt:** the page draws a red frame and "AGENT SIDE: everything you type here goes to the agent" above the terminal while you are in an `as-agent` session, and a plain "Your own shell (operator)" line otherwise. It comes from the box's relay, outside the terminal, so nothing the shell or the agent prints can change it; if the box stops reporting it says "SIDE UNKNOWN" and looks the same as the agent's side. To leave an `as-agent` session at any time, press **Enter, then `~` and `.`**: this is handled by the client before anything reaches the agent's side, so the agent cannot intercept it (`~~` types one `~`). A short reminder is printed when an interactive session starts. Never type a password, a token or a login code into the box.
 
+Two limits of the indicator. It can trail by a moment right after you start `as-agent` (the program announces itself to the box's helper as its first act, and keys typed in its first half second are thrown away, but a fast fingertip or a slow report can still beat it). And it does not see `as-agent` run inside `tmux`, `screen` or `script`: those hold the real terminal, so the page keeps showing "your own shell" while you are on the agent's side. Do not start `as-agent` inside them.
+
+Any program you run in your own shell can take over this terminal's connection: it runs as `operator`, the same user as the relay that carries your keystrokes. Run only what you trust there, and use `as-agent` for anything the agent wrote.
+
 How it is checked: `as-agent` talks to a small server on the agent's side over a Unix socket in a directory only the agent and you can enter. The server accepts a connection only from the operator user, by the kernel's own record of who connected (`SO_PEERCRED`), not by anything in the request, so the agent cannot ask for itself or for you.
 
 ## What the agent cannot do
@@ -103,7 +107,6 @@ It never writes your clipboard, never changes the tab's title, never follows a l
 | `git status` says "dubious ownership" | You ran git in a repository the agent owns. That is the point: use `as-agent git status`. |
 | `as-agent` says the agent's side is not running | The agent's host is starting or restarting; try again in a moment. |
 | The page says the terminal is unavailable although the box runs | The relay in the box kept dying (five starts in a minute) and was left down so it cannot disturb the agent; the box's log says why. Restart the box to bring it back. |
-| `Too many attempts` from the box's relay (`rate_limited`) | Five failed relay handshakes for this box in a minute; it retries by itself. |
 
 ## For operators
 

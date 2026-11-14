@@ -3,7 +3,7 @@ import supertest from 'supertest';
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
-import { relayFailures, shellHub } from '../../src/lib/boxes/shell-hub';
+import { shellHub } from '../../src/lib/boxes/shell-hub';
 import { config } from '../../src/config';
 import { refreshGatewayAccess } from '../../src/lib/gateway-access';
 
@@ -137,7 +137,6 @@ beforeAll(async () => {
     api = supertest(base);
 });
 beforeEach(async () => {
-    relayFailures.reset();
     await cleanDatabase(ctx.db);
     owner = await authedUser(api, 'termowner');
     member = await authedUser(api, 'termmember');
@@ -426,24 +425,19 @@ describe('the box host\'s socket', () => {
         expect((await rows(`SELECT shell_protocol FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0].shell_protocol).toBe(2);
     });
 
-    test('failed relay handshakes are throttled per credential id before any hash is checked, without touching other boxes or the audit log', async () => {
+    test('bad handshakes with the right host id never lock out the genuine relay, and leave no trace in the audit log', async () => {
         const fresh = await makeBox('throttled');
-        const other = await makeBox('bystander');
         const idOf = (b: Box) => b.relayToken.slice(3, b.relayToken.indexOf('.'));
         const mk = (b: Box, token: string) => { const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(b), auth: { type: 'relay', token, shellProtocol: 2 } }); sockets.push(s); return s; };
         const guess = `ar_${idOf(fresh)}.${'0'.repeat(64)}`;
         const auditBefore = (await rows(`SELECT count(*)::int AS n FROM audit_log`))[0].n;
-        for (let i = 0; i < 5; i++) expect(await refusal(mk(fresh, guess))).toBe('Invalid relay token');
-        // From the sixth, nothing is hashed or looked up for this id: not even the right credential gets in until the minute passes
-        expect(await refusal(mk(fresh, guess))).toBe('rate_limited');
-        expect(await refusal(mk(fresh, fresh.relayToken))).toBe('rate_limited');
-        // Another box's relay is not affected, and the garbage left no trace in the audit log
-        expect(await refusal(mk(other, other.relayToken))).toBe('connected');
-        expect((await rows(`SELECT count(*)::int AS n FROM audit_log`))[0].n).toBe(auditBefore);
-        // Unknown ids and malformed tokens are not counted against anyone's box
-        for (let i = 0; i < 7; i++) expect(await refusal(mk(other, 'ar_nope'))).toBe('Malformed relay token');
-        relayFailures.reset();
+        for (let i = 0; i < 12; i++) expect(await refusal(mk(fresh, guess))).toBe('Invalid relay token');
+        // The agent knows the id and can guess as often as it likes: the real credential still gets in
         expect(await refusal(mk(fresh, fresh.relayToken))).toBe('connected');
+        expect((await rows(`SELECT count(*)::int AS n FROM audit_log`))[0].n).toBe(auditBefore);
+        // Stored as a SHA-256 digest of the secret, never the secret
+        const row = (await rows(`SELECT relay_secret_hash FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0];
+        expect(row.relay_secret_hash).toMatch(/^[0-9a-f]{64}$/);
     });
 
     test('the side event passes from the box\'s relay to the paired browser only, as operator or agent, and nothing else', async () => {

@@ -35,8 +35,8 @@ import { GESTURE_EVENTS, GESTURE_WINDOW_MS, TOOLBAR_KEYS, binaryToBytes, closeTe
 
 /** Which side the owner types on. `unknown` is shown like the agent's side: when in doubt, the agent's. */
 type Side = 'operator' | 'agent' | 'unknown';
-/** The box reports the side about once a second; silence for this long is shown as unknown */
-const SIDE_STALE_MS = 6000;
+/** The box reports the side twice a second (box/agora-pty); silence for this long is shown as unknown */
+const SIDE_STALE_MS = 2000;
 
 type Phase = 'loading' | 'blocked' | 'confirm' | 'connecting' | 'live' | 'ended';
 
@@ -147,13 +147,13 @@ export function BoxTerminalPage() {
     };
     socket.on('connect', () => socket.emit('shell:start', { cols: term.cols, rows: term.rows }));
     socket.on('shell:ready', (m: { limits?: TerminalLimits }) => { setLimits(m?.limits ?? null); setPhase('live'); term.focus(); });
-    // Which side the owner is typing on comes from the box's relay (about once a second), never from the
+    // Which side the owner is typing on comes from the box's relay (twice a second), never from the
     // terminal's output, and is drawn in the page around the terminal, where what the shell prints can't reach.
     // Only an explicit "operator" shows the operator frame; anything else, or silence, shows the agent's.
     sideAt.current = Date.now();
     setSide('unknown');
     socket.on('shell:side', (m: { side?: unknown }) => { sideAt.current = Date.now(); setSide(m?.side === 'operator' ? 'operator' : 'agent'); });
-    const sideTimer = setInterval(() => { if (Date.now() - sideAt.current > SIDE_STALE_MS) setSide('unknown'); }, 1000);
+    const sideTimer = setInterval(() => { if (Date.now() - sideAt.current > SIDE_STALE_MS) setSide('unknown'); }, 500);
     socket.on('shell:output', (d: ArrayBuffer | Uint8Array) => term.write(new Uint8Array(d)));
     socket.on('shell:exit', (m: { reason?: string }) => end(closeText(m?.reason)));
     socket.on('connect_error', (err: Error) => end(socketError(err.message)));
@@ -227,7 +227,7 @@ export function BoxTerminalPage() {
             <li>Your shell runs as a separate user in the box (<code>operator</code>), not as the agent. An autonomous agent that may be running now cannot read or change your shell, its terminal or its files.</li>
             <li>Do not run the agent&apos;s code from your own shell. To act as the agent, in its workspace, with its login, use <code>as-agent &lt;command&gt;</code>.</li>
             <li>What you type in an as-agent session is on the agent&apos;s side of the wall: the agent can see it and can show a fake prompt there. Tell the sides apart by the frame around the terminal, not by the prompt: it turns red and says AGENT SIDE while you are on the agent&apos;s side, and shows your own shell otherwise. To leave an as-agent session at any time, press Enter, then ~ and . (a dot). Agora asks for your password only on this page, never inside the terminal.</li>
-            <li>Never type a password, token, login code or git credential into the box.</li>
+            <li>Never type a password, token, login code or git credential into the box. Any program you run in your own shell can take over this terminal&apos;s connection.</li>
             <li>New wakes for this agent are paused while the terminal is open{status.activeRun ? '; a run already working keeps going, so you share the box with it' : '; a run already working keeps going'}. The channel is told that a terminal is open.</li>
             <li>Closing the tab ends the shell; anything started with <code>setsid</code>, <code>nohup</code> or <code>disown</code> keeps running.</li>
             <li>An agent that runs on an API key keeps that key to itself: it is not in your shell, but it is in what <code>as-agent</code> runs.</li>

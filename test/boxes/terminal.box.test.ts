@@ -437,14 +437,24 @@ def w(path, text, mode=0o755):
     os.chmod(path, mode)
 for d, tag in (('.local/bin', 'local'), ('.npm-global/bin', 'npm')):
     for name, real in (('python3', '/usr/bin/python3'), ('python', '/usr/bin/python3'), ('node', '/usr/local/bin/node'), ('env', '/usr/bin/env')):
-        w('%s/%s/%s' % (home, d, name), '#!/bin/sh\\n/usr/bin/id -u >> /tmp/m-%s-%s 2>/dev/null\\nexec %s "$@"\\n' % (name, tag, real))
-mark = lambda tag: "import os; open('/tmp/m-%s', 'a').write(str(os.getuid()) + chr(10))\\n" % tag
+        w('%s/%s/%s' % (home, d, name), '#!/bin/sh\\nU=$(/usr/bin/id -u)\\necho $U >> /tmp/m-%s-%s-$U 2>/dev/null\\nexec %s "$@"\\n' % (name, tag, real))
+# One marker file per uid, so a write by root or the operator can never be hidden behind a file the agent owns
+mark = lambda tag: "import os; u = os.getuid(); open('/tmp/m-" + tag + "-%d' % u, 'a').write(str(u) + chr(10))" + chr(10)
+# Modules shadowing the standard library: loaded only by a Python that puts a folder of the agent's on its path
+# (the isolated-mode interpreters of root and the operator must not); for the agent they pass through to the real module
+shadow = lambda name, through: chr(10).join(['import posix, sys', 'u = posix.getuid()', "open('/tmp/m-shadow-" + name + "-%d' % u, 'a').write(str(u) + chr(10))"] + ([
+    'import importlib.machinery, importlib.util, os',
+    'here = os.path.dirname(os.path.abspath(__file__))',
+    'spec = importlib.machinery.PathFinder.find_spec(__name__, [p for p in sys.path if os.path.abspath(p or ".") != here])',
+    'm = importlib.util.module_from_spec(spec)', 'sys.modules[__name__] = m', 'spec.loader.exec_module(m)'] if through else [])) + chr(10)
 for minor in range(8, 16):
     sp = '%s/.local/lib/python3.%d/site-packages' % (home, minor)
     w(sp + '/usercustomize.py', mark('usercustomize'), 0o644)
     w(sp + '/evil.pth', mark('pth').replace('import os; ', 'import os; ', 1), 0o644)
 for d in (home, home + '/scratch', home + '/work', home + '/.agora'):
     w(d + '/sitecustomize.py', mark('sitecustomize'), 0o644)
+    w(d + '/os.py', shadow('os', False), 0o644)
+    w(d + '/json.py', shadow('json', True), 0o644)
 w(home + '/usercustomize.py', mark('homeusercustomize'), 0o644)
 os.chmod(home, 0o711)
 # the dirs agora-box-start made are 0700 (umask 077): the agent opens up every directory it planted in
@@ -456,7 +466,7 @@ for base, dirs, _files in os.walk(home):
 print('planted')`, 60_000);
         expect(plant.stdout).toContain('planted');
         // Sanity: the plants do work for the agent's own python, so absence below means something
-        expect((await inBox(box.container, 'rm -f /tmp/m-usercustomize; python3 -c pass; cat /tmp/m-usercustomize')).stdout.trim()).toBe('1000');
+        expect((await inBox(box.container, 'rm -f /tmp/m-usercustomize; python3 -c pass; cat /tmp/m-usercustomize-1000')).stdout.trim()).toBe('1000');
         await inBox(box.container, 'rm -f /tmp/m-*');
 
         // The agent forces a restart the way it can: it ends its own agora-host; Docker restarts the box on the same volume
@@ -471,7 +481,8 @@ print('planted')`, 60_000);
         // (the markers are mode 0600 files of whoever ran the plant; root holds no capability, so it is the agent who reads them: a file it cannot read
         // is a file someone else made, and is reported as such)
         const markers = (await inBox(box.container, 'for f in /tmp/m-*; do [ -e "$f" ] && echo "$f $(cat $f 2>/dev/null | sort -u | tr "\n" " ")"; done; true')).stdout.trim().split('\n').filter(Boolean);
-        for (const line of markers) expect(line, line).toMatch(/ 1000 ?$/);
+        // (one file per uid: the name ends in the uid that wrote it, and so does the content)
+        for (const line of markers) expect(line, line).toMatch(/-1000 1000 ?$/);
         expect(markers.some(l => l.startsWith('/tmp/m-usercustomize') || l.includes('-npm') || l.includes('-local')), 'the agent\'s own processes still use its plants (it is the agent\'s PATH)').toBe(true);
 
         // PID 1: the init, started as the absolute interpreter in isolated mode, holding CAP_KILL alone

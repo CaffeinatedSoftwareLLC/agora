@@ -281,6 +281,9 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (!empty(hc.PortBindings) || hc.PublishAllPorts) out.push('ports');
     if (!empty(hc.PidMode) || !empty(hc.UsernsMode) || !empty(hc.UTSMode) || hc.IpcMode !== 'private') out.push('namespaces');
     if (!empty(hc.Links)) out.push('links');
+    // An init injected as PID 1 would stand in front of ours; kernel parameters change what the box's processes may do
+    if (hc.Init) out.push('init');
+    if (!empty(hc.Sysctls)) out.push('sysctls');
     if (hc.NetworkMode !== network) out.push('network-mode');
     if (!same(hc.ExtraHosts ?? [], [`${EDGE_HOSTNAME}:${edgeAddress(e.subnet)}`])) out.push('extra-hosts');
     const mounts = (info?.Mounts ?? []) as any[];

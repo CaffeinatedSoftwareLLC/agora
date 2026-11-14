@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { generateBotToken } from '../../auth/bot-tokens';
 import { hashPassword } from '../../auth/passwords';
@@ -51,7 +51,8 @@ export async function rotateBoxTokens(pool: Pool, boxId: string): Promise<BoxTok
     const hostHash = await hashPassword(hostSecret);
     // The terminal relay's credential is its own secret: the host token proves nothing to the terminal hub
     const relaySecret = randomBytes(32).toString('hex');
-    const relayHash = await hashPassword(relaySecret);
+    // 256 random bits: a fast digest is enough (and means the hub needs no failure limiter, shell-hub.ts)
+    const relayHash = createHash('sha256').update(relaySecret).digest('hex');
     const bot = await generateBotToken();
 
     return inTransaction(pool, async (db) => {
@@ -100,7 +101,7 @@ export async function prepareBoxRestore(pool: Pool): Promise<{ boxes: number; ho
             `UPDATE agent_boxes SET generation = generation + 1, updated_at = NOW() RETURNING id`
         );
         const hosts = await db.query(
-            `UPDATE agent_hosts SET secret_hash = $1, relay_secret_hash = $1, box_generation = NULL WHERE kind = 'box' OR box_id IS NOT NULL`,
+            `UPDATE agent_hosts SET secret_hash = $1, relay_secret_hash = NULL, box_generation = NULL WHERE kind = 'box' OR box_id IS NOT NULL`,
             [deadHash]
         );
         const tokens = await db.query(

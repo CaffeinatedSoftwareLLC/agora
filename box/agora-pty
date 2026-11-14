@@ -17,8 +17,13 @@ operator's prompt, so what the screen shows proves nothing. This helper reports 
 agent cannot fake: whether a process running /usr/local/bin/as-agent has the terminal (it is in the
 foreground process group: tcgetpgrp on the master, then /proc; where the kernel does not answer that, any
 such process of the shell's tree counts). It reports on
-every change and once a second; when it cannot tell, it says "agent". The page draws it outside the
+every change and twice a second; when it cannot tell, it says "agent". The page draws it outside the
 terminal.
+
+Sooner than the scan: as-agent writes a private OSC sequence (AS_AGENT_MARK) to the terminal as its very
+first act, and this helper, which reads the terminal's output, reports "agent" the moment it sees it and
+removes it from what goes on. Anyone can forge that sequence, and all it can do is move the display
+toward "agent", the safe direction: going back to "operator" is decided only by the /proc check above.
 
 Why Python and not a native Node module: the box image already has python3 and its `pty` module
 is in the standard library, so there is nothing to compile for amd64 or arm64 and nothing to keep
@@ -39,7 +44,9 @@ import termios
 import time
 
 AS_AGENT_CLIENT = '/usr/local/bin/as-agent'
-SIDE_EVERY = 1.0
+SIDE_EVERY = 0.5            # the page treats a side older than about 2 s as unknown: leave room for lost reports
+AS_AGENT_MARK = b']7777;agora-as-agent'   # written by box/as-agent; keep both in step
+MARK_HOLD = 0.05            # a partial mark at the end of a read waits this long for the rest
 SIDE_POLL = 0.2
 MAX_TO_CHILD = 1 << 20      # unwritten input kept before we stop reading stdin
 MAX_TO_NODE = 1 << 18       # unwritten output kept before we stop reading the terminal
@@ -73,10 +80,14 @@ def processes():
         names = os.listdir('/proc')
     except OSError:
         return None
+    me = os.getuid()
     for name in names:
         if not name.isdigit():
             continue
         try:
+            # Only the operator's own processes can be the client; the agent's cannot slow this scan
+            if os.stat('/proc/' + name).st_uid != me:
+                continue
             with open('/proc/%s/stat' % name, 'rb') as f:
                 stat = f.read()
             fields = stat[stat.rindex(b')') + 2:].split()
@@ -172,6 +183,8 @@ def main(argv):
 
     side_open = True
     last_side = None
+    held = bytearray()          # the start of a mark cut by the end of a read
+    held_at = 0.0
     last_side_at = 0.0
     last_poll = 0.0
     try:
@@ -193,6 +206,16 @@ def main(argv):
     hung_up_at = None
     status = None
     status_at = None
+
+    def report(side, now):
+        nonlocal last_side, last_side_at, side_open
+        last_side, last_side_at = side, now
+        try:
+            os.write(4, ('S %s' % side + chr(10)).encode())
+        except BlockingIOError:
+            last_side = None        # the pipe is full: say it again next time
+        except OSError:
+            side_open = False       # nobody listens (or the pipe is full): keep serving the shell
 
     def hang_up():
         nonlocal hung_up_at
@@ -230,14 +253,11 @@ def main(argv):
             last_poll = time.monotonic()
             side = foreground_side(master, client, pid)
             if side != last_side or last_poll - last_side_at >= SIDE_EVERY:
-                last_side, last_side_at = side, last_poll
-                try:
-                    os.write(4, ('S %s' % side + chr(10)).encode())
-                except BlockingIOError:
-                    last_side = None        # the pipe is full: say it again next time
-                except OSError:
-                    side_open = False       # nobody listens (or the pipe is full): keep serving the shell
+                report(side, last_poll)
 
+        if held and time.monotonic() - held_at > MARK_HOLD:
+            to_node += held
+            held.clear()
         readers = []
         writers = []
         if stdin_open and len(to_child) < MAX_TO_CHILD:
@@ -294,8 +314,23 @@ def main(argv):
             try:
                 data = os.read(master, CHUNK)
                 if data:
+                    data = bytes(held) + data
+                    held.clear()
+                    if AS_AGENT_MARK in data:
+                        data = data.replace(AS_AGENT_MARK, b'')
+                        if side_open:
+                            report('agent', time.monotonic())
+                    # keep back the end of a read that could be the start of a mark
+                    for n in range(min(len(AS_AGENT_MARK) - 1, len(data)), 0, -1):
+                        if AS_AGENT_MARK.startswith(data[-n:]):
+                            held += data[-n:]
+                            held_at = time.monotonic()
+                            data = data[:-n]
+                            break
                     to_node += data
                 else:
+                    to_node += held
+                    held.clear()
                     master_open = False
             except BlockingIOError:
                 pass

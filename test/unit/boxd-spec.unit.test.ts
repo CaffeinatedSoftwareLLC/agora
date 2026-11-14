@@ -183,6 +183,8 @@ describe('boxd start check (drift)', () => {
         ['devices', i => { i.HostConfig.Devices = [{ PathOnHost: '/dev/kvm' }]; }],
         ['ports', i => { i.HostConfig.PortBindings = { '22/tcp': [{ HostPort: '2222' }] }; }],
         ['namespaces', i => { i.HostConfig.PidMode = 'host'; }],
+        ['init', i => { i.HostConfig.Init = true; }],
+        ['sysctls', i => { i.HostConfig.Sysctls = { 'net.ipv4.ip_unprivileged_port_start': '0' }; }],
         ['network-mode', i => { i.HostConfig.NetworkMode = 'host'; }],
         ['networks', i => { i.NetworkSettings.Networks.agora_default = { IPAMConfig: null }; }],
         ['address', i => { i.NetworkSettings.Networks['agora_box_01jbxa0000000000000000000z'].IPAMConfig.IPv4Address = '10.213.0.20'; }],

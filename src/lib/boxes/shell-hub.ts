@@ -1,9 +1,9 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { Socket } from 'socket.io';
 import { generateUlid } from '../../utils/ulid';
 import { verifyToken, sessionEndsAt, sessionLimitError } from '../../auth/tokens';
 import { isTokenBlacklisted } from '../../auth/token-blacklist';
-import { verifyBotSecret } from '../../auth/bot-tokens';
 import { originAllowed, originSchemeMatches, sessionTokenFromHeaders } from '../../auth/session-cookie';
 import { postNotice, type Notice } from '../agent-runs';
 import type { ProvenanceCredential } from './provenance';
@@ -491,35 +491,16 @@ export interface ShellAuthDeps {
 }
 
 /**
- * Failed relay handshakes per credential id. Checking a relay secret is a password-grade hash, and the
- * handshake is open to anything that can reach the gateway, so after a few failures for one id further
- * attempts for it are refused ("rate_limited") before any hash is computed, until the window passes.
- * Only failures count, nothing is written to the audit log (a guess is not an event), and a correct
- * credential never extends the window. The cost: whoever can reach the gateway and knows a box's host
- * id (that box's own agent does) can keep that one box's terminal unavailable, which the same agent can
- * already do to its own box in other ways; other boxes are not affected.
+ * The relay secret is 256 random bits, so it is stored and compared as a SHA-256 digest (hex): guessing
+ * is hopeless whatever the hash costs, and a fast hash means a wrong guess costs the hub nothing, so
+ * there is no per-id failure limit for the agent (which knows its own host id) to use against the owner.
  */
-export class RelayFailureLimiter {
-    private failures = new Map<string, number[]>();
-    constructor(private max = 5, private windowMs = 60_000, private now: () => number = Date.now) {}
-    private recent(id: string): number[] {
-        const t = this.now();
-        const list = (this.failures.get(id) ?? []).filter(x => t - x < this.windowMs);
-        if (list.length) this.failures.set(id, list); else this.failures.delete(id);
-        return list;
-    }
-    blocked(id: string): boolean { return this.recent(id).length >= this.max; }
-    /** For tests */
-    reset(): void { this.failures.clear(); }
-    fail(id: string): void {
-        const list = this.recent(id);
-        list.push(this.now());
-        this.failures.set(id, list);
-        // Bounded: past 10 000 ids the oldest are forgotten (a Map keeps insertion order)
-        if (this.failures.size > 10_000) for (const k of this.failures.keys()) { this.failures.delete(k); if (this.failures.size <= 5_000) break; }
-    }
-}
-export const relayFailures = new RelayFailureLimiter();
+export const relaySecretDigest = (secret: string): string => createHash('sha256').update(secret).digest('hex');
+const relaySecretMatches = (secret: string, stored: string): boolean => {
+    const a = Buffer.from(relaySecretDigest(secret), 'hex');
+    const b = Buffer.from(stored, 'hex');
+    return b.length === a.length && timingSafeEqual(a, b);
+};
 
 /** The relay credential: `ar_<hostId>.<secret>`. A host token (`ah_`) does not parse. */
 const RELAY_TOKEN = /^ar_([0-9A-HJKMNP-TV-Z]{26})\.(.+)$/;
@@ -549,14 +530,13 @@ async function relayHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: Err
     const auth = socket.handshake.auth as { token?: unknown; shellProtocol?: unknown };
     const m = typeof auth.token === 'string' ? RELAY_TOKEN.exec(auth.token) : null;
     if (!m) return next(new Error('Malformed relay token'));
-    if (relayFailures.blocked(m[1])) return next(new Error('rate_limited'));
     // The relay credential only: the host token's hash is never consulted here
     const row = (await d.db.query(
         `SELECT h.id, h.server_id, h.relay_secret_hash, h.kind, h.box_id, h.box_generation, b.generation AS box_current_generation, b.desired_state
          FROM agent_hosts h LEFT JOIN agent_boxes b ON b.id = h.box_id
          WHERE h.id = $1 AND h.revoked_at IS NULL`, [m[1]]
     )).rows[0];
-    if (!row || !row.relay_secret_hash || !await verifyBotSecret(m[2], row.relay_secret_hash)) { relayFailures.fail(m[1]); return next(new Error('Invalid relay token')); }
+    if (!row || !row.relay_secret_hash || !relaySecretMatches(m[2], row.relay_secret_hash)) { return next(new Error('Invalid relay token')); }
     const refused = await d.provenanceRefused(socket.handshake.headers, {
         kind: 'relay', id: row.id.trim(), serverId: row.server_id.trim(), boxId: row.box_id?.trim() || null,
         generation: intOrNull(row.box_generation), currentGeneration: intOrNull(row.box_current_generation),

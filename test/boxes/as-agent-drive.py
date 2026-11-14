@@ -40,7 +40,7 @@ while time.time() - start < 25 and status is None:
         except OSError:
             paste = b''
     if not sent and b'AGENT SIDE' in out:
-        time.sleep(0.5)
+        time.sleep(1.0)       # as-agent drops keys typed in its first half second
         if action == 'escape':
             os.write(fd, b'\r~.')
         sent = True
