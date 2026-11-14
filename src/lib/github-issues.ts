@@ -135,6 +135,9 @@ export async function commentPosted(c: any, command: any): Promise<void> {
  * never posted twice; if it certainly didn't, the next Check PR tries again.
  */
 export async function commentFailed(c: any, command: any, error: string): Promise<Notice> {
+    // The rule's "Picked up in Agora" comment has no card state to retry: one notice, never retried
+    if (command.payload?.pickup) return postNotice(c, command.channel_id.trim(),
+        `Couldn't comment "Picked up in Agora" on GitHub issue ${command.repo}#${command.payload.number} (${error}). It is not retried.`);
     const card = (await c.query('SELECT thread_id FROM task_cards WHERE id = $1', [command.payload?.cardId ?? ''])).rows[0];
     const retry = NOTHING_POSTED.has(error);
     if (!retry) await commentPosted(c, command);

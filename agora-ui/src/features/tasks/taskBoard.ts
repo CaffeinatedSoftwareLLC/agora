@@ -16,6 +16,8 @@ export interface TaskCardSession {
   state: 'live' | 'shelved' | 'ended';
   endReason: string | null;
   running: boolean;
+  /** Started, but waiting for a free slot on its host (a host runs only so many agents at once). */
+  queued?: boolean;
   sleepingUntil: string | null;
   branch: string | null;
   baseSha: string | null;
@@ -46,6 +48,12 @@ export interface TaskCard {
   mergedSha: string | null;
   /** The GitHub issue this card was imported from (docs/github-issues.md). */
   issue: { repo: string; number: number; url: string | null } | null;
+  /** Made by the channel's automation rule (docs/github-issues.md). */
+  fromRule?: boolean;
+  /** Why the rule did not start this card's agent; the owner can start it from here. */
+  ruleNote?: string | null;
+  /** Set when the card's issue was closed on GitHub while the card is open. */
+  issueClosedAt?: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -111,6 +119,39 @@ export interface GithubState {
   canImport: boolean;
 }
 export interface GithubIssue { number: number; title: string; url: string; author: string; updatedAt: string; body: string; cardId: string | null }
+/** The automation rule on the linked repository (src/lib/github-rules.ts). Everything in it is off until the owner turns it on. */
+export interface GithubRule {
+  import: { mode: 'off' | 'label' | 'all'; label: string | null };
+  authors: string[];
+  autostart: { profile: string | null; confirmedOpen: boolean; maxPerCheck?: number | null };
+  /** The GitHub login the linked host's gh is signed in as (null until the host has said). */
+  hostLogin?: string | null;
+  hostLoginError?: string | null;
+  pollMinutes: number;
+  commentOnPickup: boolean;
+  status: { lastPolledAt: string | null; lastCheckedAt: string | null; result: string | null; found: number | null; created: number | null };
+  limits: { defaultPollMinutes: number; minPollMinutes: number; maxPollMinutes: number; scanLimit: number };
+}
+export interface AutostartOption { name: string; planOwned: boolean; allowed: boolean; never?: boolean; reason: string | null }
+export interface GithubRuleState { rule: GithubRule | null; canConfigure: boolean; autostartOptions: AutostartOption[] }
+export interface GithubRuleInput {
+  import: { mode: 'off' | 'label' | 'all'; label?: string };
+  authors: string[];
+  autostart: { profile: string | null; confirmOpen?: boolean; maxPerCheck?: number | null };
+  pollMinutes: number;
+  commentOnPickup: boolean;
+}
+
+/** What the rule's last check says, in a sentence. */
+export const CHECK_RESULT: Record<string, string> = {
+  ok: 'checked, nothing wrong', truncated: 'checked, but only the newest open issues were looked at',
+  host_offline: 'the host is offline, so nothing was checked', host_old: 'the host runs an older agora-host that cannot check yet: update it',
+  host_revoked: 'the host was revoked: link the repository again with another host', host_timeout: 'the host took the check and never answered',
+  gh_not_installed: 'gh is not installed on the host', gh_not_signed_in: 'gh is not signed in on the host (gh auth login)',
+  repo_not_found: "the host's gh can't find the repository", binding_changed: 'the link changed before the host ran it',
+  rule_changed: 'the rule was changed before the host answered',
+};
+
 export interface AgentHost { id: string; name: string; revokedAt: string | null }
 
 interface GithubCommand { id: string; status: string; result?: { error?: string; issues?: GithubIssue[] } | null }
@@ -122,6 +163,10 @@ export const githubApi = {
   link: (channelId: string, repo: string, hostId: string) =>
     api.put<{ link: GithubLink }>(`/channels/${channelId}/github`, { repo, hostId }),
   unlink: (channelId: string) => api.delete<void>(`/channels/${channelId}/github`),
+  rule: (channelId: string) => inBackground(() => api.get<GithubRuleState>(`/channels/${channelId}/github/automation`)),
+  saveRule: (channelId: string, body: GithubRuleInput) => api.put<{ rule: GithubRule }>(`/channels/${channelId}/github/automation`, body),
+  /** Ask the host to check now; resolves once it is queued. */
+  checkNow: (channelId: string) => api.post<{ id: string; status: string }>(`/channels/${channelId}/github/automation/check`),
   /** Ask the linked host for the repository's open issues; resolves with them once it answers (null if aborted). */
   async listIssues(channelId: string, signal?: AbortSignal): Promise<{ commandId: string; issues: GithubIssue[] } | null> {
     let command = await api.post<GithubCommand>(`/channels/${channelId}/github/issues`);
@@ -158,7 +203,16 @@ const GITHUB_ERRORS: Record<string, string> = {
   no_assignee: 'Pick an assignee to start the agent now.',
   invalid_repo: 'Use the owner/name form, for example octocat/hello-world.',
   host_not_found: 'That host is gone or revoked. Pick another.',
-  owner_only: 'Only the server owner can link or unlink a repository.',
+  owner_only: 'Only the server owner can link, unlink or change the automation.',
+  invalid_label: 'Use a label name of letters, numbers, spaces and . _ : / - (up to 50 characters).',
+  autostart_not_allowed: 'That agent cannot be started by the rule.',
+  confirmation_required: 'Confirm the warning to save.',
+  too_soon: 'Checked a moment ago. Wait a few seconds.',
+  check_limit: 'Check now is limited to 12 times an hour per channel and 30 per person. The rule keeps checking on its own schedule.',
+  rule_off: 'Turn on an import first.',
+  host_offline: 'The host is offline, so nothing can be checked.',
+  host_old: 'The host runs an older agora-host that cannot check yet: update it.',
+  host_revoked: 'The host was revoked: link the repository again with another host.',
 };
 
 /** A failed board call as a sentence. */
@@ -199,17 +253,17 @@ export function upsertCard(cards: TaskCard[], card: TaskCard): TaskCard[] {
   return next;
 }
 
-export type CardSessionState = 'working' | 'idle' | 'shelved' | 'ended' | 'none';
+export type CardSessionState = 'working' | 'queued' | 'idle' | 'shelved' | 'ended' | 'none';
 
 export function cardSessionState(card: TaskCard): CardSessionState {
   const s = card.session;
   if (!s) return 'none';
-  if (s.state === 'live') return s.running ? 'working' : 'idle';
+  if (s.state === 'live') return s.running ? 'working' : s.queued ? 'queued' : 'idle';
   return s.state;
 }
 
 export const SESSION_LABEL: Record<CardSessionState, string> = {
-  working: 'Agent working', idle: 'Agent idle', shelved: 'Session shelved', ended: 'Session ended', none: 'Not started',
+  working: 'Agent working', queued: 'Queued: waits for a free slot on its host', idle: 'Agent idle', shelved: 'Session shelved', ended: 'Session ended', none: 'Not started',
 };
 
 /** Pull request links come from the host's `gh`: show https links only. */
