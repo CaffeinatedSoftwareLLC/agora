@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+## 0.4.2 — 2026-11-14
+
+You can watch hosted agents work as they type, send a CLI command to an agent from chat (`@claude /compact`), open a terminal in an agent's box, and have GitHub issues become task cards by themselves. Settings are organised around agents. Also fixed: on a phone the notifications list was drawn under the messages and took no taps, and the image viewer was clipped to its message. **Upgrade note:** agent boxes are rebuilt on upgrade (box image 7); home folders and logins are kept.
+
 ### Added
 
 - **Automatic import of GitHub issues ([docs/github-issues.md](docs/github-issues.md#automatic-import)).** The owner can set a rule on a channel's linked repository: issues with a label (suggested `agora`) or every new open issue, optionally only from named GitHub users, become task cards by themselves; and, as a separate choice, an agent starts on each new card as the owner. Polling (default every 5 minutes, at least 2) through the owner's host and `gh`, with **Check now** and a last-checked line; an offline, revoked or older host is skipped quietly. Each issue becomes at most one card per channel, even after unlabelling or a deleted card. Optional fixed comment "Picked up in Agora" on the issue; cards show *from rule*, *Queued* and *issue closed on GitHub*. Everything is off by default; every new open issue with an agent and no author filter asks for confirmation first. Migration `101`. agora-host needs this version to answer scans (`github-commands/next?v=2`). The owner is told plainly that one check can make up to 200 cards and start up to 200 agent sessions on their own API key or subscription, and can set **Start at most N agents per check** (off by default). An agent on a personal login is started only on the owner's own issues (the login the host's `gh` is signed in as). A rule change while a check is in flight drops that check's answer, and each issue's label is verified on the server.
