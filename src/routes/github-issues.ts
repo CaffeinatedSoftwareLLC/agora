@@ -11,7 +11,7 @@ import {
     ISSUE_BODY_MAX, ISSUE_LIST_LIMIT, LIST_FRESH_MINUTES, REPO_PATTERN, commentFailed, commentPosted, issueDescription, issueUrlOk, validRepo,
     type ListedIssue,
 } from '../lib/github-issues';
-import { SCAN_LIMIT, applyScan, scanFailed, type ScannedIssue } from '../lib/github-rules';
+import { SCAN_LIMIT, applyLinkInfo, applyScan, linkInfoFailed, queueLinkInfo, scanFailed, type ScannedIssue } from '../lib/github-rules';
 import { CommandError, profileByName } from './agent-commands';
 import { cleanTitle, startCard } from './task-board';
 
@@ -113,17 +113,25 @@ export async function githubIssueRoutes(app: FastifyInstance) {
         const link = await asService(db, async () => {
             const host = (await db.query('SELECT 1 FROM agent_hosts WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL', [b.hostId, serverId])).rows[0];
             if (!host) return null;
-            const before = (await db.query('SELECT repo, host_id FROM channel_github_repos WHERE channel_id = $1 FOR UPDATE', [channelId])).rows[0];
+            const before = (await db.query('SELECT repo, host_id, repo_node_id FROM channel_github_repos WHERE channel_id = $1 FOR UPDATE', [channelId])).rows[0];
             if (before && (before.repo !== b.repo || before.host_id.trim() !== b.hostId)) notices.push(...await cancelQueued(db, channelId));
-            // Another repository is another set of strangers: its automation starts off again
-            const reset = before && before.repo.toLowerCase() !== b.repo.toLowerCase();
+            // Another repository is another set of strangers, and another host is another machine with another gh login:
+            // the automation starts off again. A repository linked again on the same host keeps its rule.
+            const renamed = !!before && before.repo.toLowerCase() !== b.repo.toLowerCase();
+            const reset = renamed || (!!before && before.host_id.trim() !== b.hostId);
             await db.query(
                 `INSERT INTO channel_github_repos (channel_id, server_id, repo, host_id, linked_by) VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (channel_id) DO UPDATE SET repo = EXCLUDED.repo, host_id = EXCLUDED.host_id, linked_by = EXCLUDED.linked_by, updated_at = NOW()`,
                 [channelId, serverId, b.repo, b.hostId, request.userId]);
             if (reset) await db.query(
                 `UPDATE channel_github_repos SET import_mode = 'off', import_label = NULL, import_authors = '{}', import_since = NULL, autostart_profile_id = NULL,
-                        autostart_open_ack = FALSE, comment_on_pickup = FALSE, last_check_status = NULL, last_checked_at = NULL, last_notice_code = NULL WHERE channel_id = $1`, [channelId]);
+                        autostart_open_ack = FALSE, autostart_max_per_check = NULL, comment_on_pickup = FALSE, last_check_status = NULL, last_checked_at = NULL, notice_log = '{}',
+                        rule_version = rule_version + 1, gh_login = NULL, gh_login_checked_at = NULL, gh_login_error = NULL,
+                        repo_node_id = CASE WHEN $2 THEN NULL ELSE repo_node_id END,
+                        prev_repo = CASE WHEN $2 THEN $3 ELSE prev_repo END, prev_repo_node_id = CASE WHEN $2 THEN $4 ELSE prev_repo_node_id END
+                 WHERE channel_id = $1`, [channelId, renamed, before?.repo ?? null, before?.repo_node_id ?? null]);
+            // Ask the new host who its gh is and what the repository's id is
+            if (!before || reset) await queueLinkInfo(db, channelId);
             return readLink(db, channelId);
         });
         if (!link) return reply.status(400).send({ error: 'host_not_found' });
@@ -278,9 +286,10 @@ export async function githubIssueRoutes(app: FastifyInstance) {
             for (const c of expired) {
                 if (c.action === 'issue_comment') notices.push(await commentFailed(db, c, 'host_timeout'));
                 if (c.action === 'issue_scan') await scanFailed(db, c, 'host_timeout', notices);
+                if (c.action === 'link_info') await linkInfoFailed(db, c, 'host_timeout');
             }
             const candidates = (await db.query(
-                `SELECT * FROM github_commands WHERE host_id = $1 AND server_id = $2 AND status = 'queued' AND ($3 OR action <> 'issue_scan')
+                `SELECT * FROM github_commands WHERE host_id = $1 AND server_id = $2 AND status = 'queued' AND ($3 OR action NOT IN ('issue_scan', 'link_info'))
                  ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED`,
                 [host.id, host.serverId, knowsScan])).rows;
             for (const c of candidates) {
@@ -290,7 +299,7 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                 const bound = link && link.repo.toLowerCase() === c.repo.toLowerCase() && link.host_id.trim() === host.id;
                 // A scan also needs its rule still on; one a person asked for (Check now) needs that person still directing
                 const ruleOn = c.action !== 'issue_scan' || (await db.query(`SELECT 1 FROM channel_github_repos WHERE channel_id = $1 AND import_mode <> 'off'`, [c.channel_id])).rows.length > 0;
-                const ok = bound && ruleOn && (c.action === 'issue_comment'
+                const ok = bound && ruleOn && (c.action === 'issue_comment' || c.action === 'link_info'
                     || (c.requested_by ? await stampAuthority(db, c.channel_id.trim(), c.requested_by.trim(), false) : c.action === 'issue_scan'));
                 if (!ok) {
                     const error = c.action === 'issue_list' ? 'binding_or_authority_changed' : !ruleOn ? 'rule_off' : 'binding_changed';
@@ -320,13 +329,16 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                     error: { type: 'string', pattern: '^[a-z][a-z_]{0,100}$' },
                     url: { type: 'string', maxLength: 2048 },
                     truncated: { type: 'boolean' },
+                    // link_info: the login the host's gh is signed in as, and the repository's stable id
+                    login: { type: 'string', maxLength: 64 }, repoId: { type: 'string', maxLength: 100 },
                     watched: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: false, required: ['number', 'closed'],
                         properties: { number: { type: 'integer', minimum: 1, maximum: 2147483647 }, closed: { type: 'boolean' } } } },
                     issues: { type: 'array', maxItems: SCAN_LIMIT, items: {
                         type: 'object', additionalProperties: false, required: ['number', 'title', 'url', 'author', 'updatedAt', 'body'], properties: {
                             number: { type: 'integer', minimum: 1, maximum: 2147483647 }, title: { type: 'string', maxLength: 256 },
                             url: { type: 'string', maxLength: 2048 }, author: { type: 'string', maxLength: 64 },
-                            updatedAt: { type: 'string', maxLength: 40 }, createdAt: { type: 'string', maxLength: 40 }, body: { type: 'string', maxLength: ISSUE_BODY_MAX + 1 },
+                            updatedAt: { type: 'string', maxLength: 40 }, createdAt: { type: 'string', maxLength: 40 },
+                            labels: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 50 } }, body: { type: 'string', maxLength: ISSUE_BODY_MAX + 1 },
                         },
                     } },
                 } },
@@ -361,9 +373,14 @@ export async function githubIssueRoutes(app: FastifyInstance) {
                     const issues: ScannedIssue[] = b.result.issues.filter((i: ScannedIssue) => issueUrlOk(i.url, i.number) && typeof i.createdAt === 'string').map((i: ScannedIssue) => ({
                         number: i.number, title: sanitizeMessageText(i.title).slice(0, 256), url: i.url, author: sanitizeMessageText(i.author).slice(0, 64),
                         updatedAt: i.updatedAt, createdAt: i.createdAt, body: sanitizeMessageText(i.body).slice(0, ISSUE_BODY_MAX + 1),
+                        labels: Array.isArray(i.labels) ? i.labels.filter(l => typeof l === 'string').slice(0, 100) : [],
                     }));
                     result = await applyScan(db, c, { issues, watched: b.result.watched ?? [], truncated: !!b.result.truncated }, scanNotices);
                 } else await scanFailed(db, c, result.error, scanNotices);
+            }
+            if (c.action === 'link_info') {
+                if (b.success) await applyLinkInfo(db, c, b.result);
+                else await linkInfoFailed(db, c, result.error);
             }
             if (b.success && c.action === 'issue_comment') {
                 if (typeof b.result.url === 'string' && /^https:\/\/\S+$/.test(b.result.url)) result = { url: b.result.url };

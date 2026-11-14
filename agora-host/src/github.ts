@@ -13,13 +13,13 @@ const exec = promisify(execFile);
 export interface GithubCommand {
     id: string;
     claimToken: string;
-    action: 'issue_list' | 'issue_comment' | 'issue_scan';
+    action: 'issue_list' | 'issue_comment' | 'issue_scan' | 'link_info';
     repo: string;
     payload: { limit?: number; number?: number; body?: string; mode?: 'label' | 'all'; label?: string; watch?: number[] };
 }
-export type GithubResult = { error: string } | { issues: ListedIssue[] } | { url?: string }
+export type GithubResult = { error: string } | { issues: ListedIssue[] } | { url?: string } | { login: string; repoId?: string }
     | { issues: ListedIssue[]; watched: Array<{ number: number; closed: boolean }>; truncated: boolean };
-export interface ListedIssue { number: number; title: string; url: string; author: string; updatedAt: string; body: string; createdAt?: string }
+export interface ListedIssue { number: number; title: string; url: string; author: string; updatedAt: string; body: string; createdAt?: string; labels?: string[] }
 
 export type Gh = (args: string[], signal?: AbortSignal) => Promise<string>;
 export const gh: Gh = async (args, signal) => (await exec('gh', args, {
@@ -33,6 +33,8 @@ const BODY_MAX = 2000;
 export const SCAN_MAX = 200;
 export const WATCH_MAX = 20;
 export const LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,49}$/;
+export const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const NODE_ID = /^[A-Za-z0-9_=-]{4,100}$/;
 const clip = (s: unknown, n: number) => (typeof s === 'string' ? s : '').slice(0, n);
 
 /** Run one command. Errors are short codes only: gh output can hold local paths or tokens. */
@@ -57,6 +59,7 @@ export async function runGithub(cmd: GithubCommand, runGh: Gh = gh, signal?: Abo
         return { issues };
     }
     if (cmd.action === 'issue_scan') return scan(cmd, runGh, signal);
+    if (cmd.action === 'link_info') return linkInfo(cmd, runGh, signal);
     if (cmd.action === 'issue_comment') {
         const number = cmd.payload.number, body = cmd.payload.body;
         if (!Number.isInteger(number) || number! < 1 || typeof body !== 'string' || !body.trim() || body.length > 1000) throw new Error('invalid_comment');
@@ -83,16 +86,19 @@ async function scan(cmd: GithubCommand, runGh: Gh, signal?: AbortSignal): Promis
     if (watch.length > WATCH_MAX || !watch.every(n => Number.isInteger(n) && n >= 1 && n <= 2147483647)) throw new Error('invalid_scan');
 
     const args = ['issue', 'list', `--repo=${cmd.repo}`, '--state=open', `--limit=${limit}`,
-        ...(p.mode === 'label' ? [`--label=${p.label}`] : []), '--json', 'number,title,url,author,createdAt,updatedAt,body'];
+        ...(p.mode === 'label' ? [`--label=${p.label}`] : []), '--json', 'number,title,url,author,createdAt,updatedAt,body,labels'];
     let rows: any[];
     try { rows = JSON.parse(await runGh(args, signal)); } catch (err) {
         if (err instanceof SyntaxError) throw new Error('issue_list_failed');
         throw new Error(ghError(err));
     }
     if (!Array.isArray(rows)) throw new Error('issue_list_failed');
-    const issues = rows.filter(r => Number.isInteger(r?.number) && r.number > 0 && typeof r.url === 'string' && /^https:\/\/\S+$/.test(r.url))
+    const labelsOf = (r: any): string[] => (Array.isArray(r?.labels) ? r.labels : []).map((l: any) => clip(l?.name, 50)).filter(Boolean).slice(0, 100);
+    // For a label rule, an issue that does not carry the label in gh's own answer is not passed on (the server checks again)
+    const issues = rows.filter(r => Number.isInteger(r?.number) && r.number > 0 && typeof r.url === 'string' && /^https:\/\/\S+$/.test(r.url)
+            && (p.mode !== 'label' || labelsOf(r).some(l => l.toLowerCase() === p.label!.toLowerCase())))
         .slice(0, limit).map(r => ({ number: r.number, title: clip(r.title, 256), url: clip(r.url, 2048), author: clip(r.author?.login, 64),
-            createdAt: clip(r.createdAt, 40), updatedAt: clip(r.updatedAt, 40), body: clip(r.body, BODY_MAX + 1) }));
+            createdAt: clip(r.createdAt, 40), updatedAt: clip(r.updatedAt, 40), body: clip(r.body, BODY_MAX + 1), labels: labelsOf(r) }));
 
     // One issue gone or unreadable is skipped; gh not installed or signed in ends the scan
     const watched = (await Promise.all(watch.map(async number => {
@@ -106,6 +112,27 @@ async function scan(cmd: GithubCommand, runGh: Gh, signal?: AbortSignal): Promis
         }
     }))).filter((w): w is { number: number; closed: boolean } => w !== null);
     return { issues, watched, truncated: rows.length >= limit };
+}
+
+/**
+ * Which GitHub account this machine's gh is signed in as, and the repository's stable id
+ * (docs/github-issues.md "Who may start which agent"). `gh api user` is a read of the signed-in
+ * account and needs no scope. Anything gh prints is checked against the shape of a login or an id
+ * before it is sent; nothing else leaves the host. A repository that cannot be read still reports the login.
+ */
+async function linkInfo(cmd: GithubCommand, runGh: Gh, signal?: AbortSignal): Promise<GithubResult> {
+    let login: string;
+    try { login = (await runGh(['api', 'user', '--jq', '.login'], signal)).trim(); } catch (err) { throw new Error(ghError(err)); }
+    if (!LOGIN.test(login)) throw new Error('no_login');
+    let repoId: string | undefined;
+    try {
+        const id = (await runGh(['repo', 'view', cmd.repo, '--json', 'id', '--jq', '.id'], signal)).trim();
+        if (NODE_ID.test(id)) repoId = id;
+    } catch (err) {
+        const code = ghError(err);
+        if (code === 'gh_not_installed' || code === 'gh_not_signed_in') throw new Error(code);
+    }
+    return { login, ...(repoId ? { repoId } : {}) };
 }
 
 function ghError(err: any): string {

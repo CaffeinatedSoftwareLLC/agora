@@ -93,6 +93,7 @@ function RuleForm({ channelId, state, onSaved }: { channelId: string; state: Git
   const [authors, setAuthors] = useState(rule.authors.join(', '));
   const [start, setStart] = useState<string | null>(rule.autostart.profile);
   const [poll, setPoll] = useState(String(rule.pollMinutes));
+  const [cap, setCap] = useState(rule.autostart.maxPerCheck ? String(rule.autostart.maxPerCheck) : '');
   const [pickup, setPickup] = useState(rule.commentOnPickup);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -104,17 +105,28 @@ function RuleForm({ channelId, state, onSaved }: { channelId: string; state: Git
   const pollNumber = Number(poll);
   const pollOk = Number.isInteger(pollNumber) && pollNumber >= rule.limits.minPollMinutes && pollNumber <= rule.limits.maxPollMinutes;
   const option = state.autostartOptions.find(o => o.name === start);
-  // Plan-owned agents need the author filter; the server checks it too
-  const startBlocked = !!start && !!option && option.planOwned && names.length === 0;
+  // An agent on a personal login (a subscription, host mode, the owner's ChatGPT plan) may be started by the rule only on the owner's own
+  // issues: the author list must be exactly the login the host's gh is signed in as. The server checks it too, at save and at every start.
+  const hostLogin = rule.hostLogin ?? null;
+  const ownOnly = !!hostLogin && names.length === 1 && names[0].toLowerCase() === hostLogin.toLowerCase();
+  const startBlocked = !!start && !!option && (option.never || (option.planOwned && !ownOnly));
+  const startReason = !option ? '' : option.never ? (option.reason ?? 'The rule cannot start this agent.')
+    : !hostLogin ? "This agent runs on a personal login, so the rule may start it only on your own issues. Agora does not yet know which GitHub account the host's gh is signed in as (it asks the host when the repository is linked; the host needs an up-to-date agora-host with gh signed in). Try again in a minute."
+      : `This agent runs on a personal login, and other people's issues must never drive it. The rule may start it only on your own issues: choose "Only these" and enter exactly your login on this machine (${hostLogin}).`;
   const open = mode === 'all' && !!start && names.length === 0;
-  const invalid = (mode === 'label' && !label.trim()) || !!badLogin || (onlyThese && names.length === 0) || !pollOk || startBlocked || (open && !confirmed);
+  const capNumber = cap.trim() === '' ? null : Number(cap);
+  const capOk = capNumber === null || (Number.isInteger(capNumber) && capNumber >= 1 && capNumber <= rule.limits.scanLimit);
+  const savedCount = mode === 'label' && rule.import.mode === 'label' && rule.import.label === label.trim()
+    && (rule.status.result === 'ok' || rule.status.result === 'truncated') && rule.status.found != null ? rule.status.found : null;
+  const invalid = (mode === 'label' && !label.trim()) || !!badLogin || (onlyThese && names.length === 0) || !pollOk || !capOk || startBlocked || (open && !confirmed);
 
   const save = async () => {
     setBusy(true); setError(''); setSaved(false);
     try {
       const res = await githubApi.saveRule(channelId, {
         import: mode === 'label' ? { mode, label: label.trim() } : { mode },
-        authors: names, autostart: { profile: mode === 'off' ? null : start, ...(open ? { confirmOpen: true } : {}) },
+        authors: names,
+        autostart: { profile: mode === 'off' ? null : start, ...(open ? { confirmOpen: true } : {}), ...(mode !== 'off' && start && (capNumber !== null || rule.autostart.maxPerCheck) ? { maxPerCheck: capNumber } : {}) },
         pollMinutes: pollNumber, commentOnPickup: pickup,
       });
       setSaved(true); onSaved(res.rule);
@@ -123,6 +135,10 @@ function RuleForm({ channelId, state, onSaved }: { channelId: string; state: Git
 
   return (
     <form className="space-y-1" onSubmit={e => { e.preventDefault(); if (!invalid && editable) void save(); }}>
+      <p className="text-xs text-text-muted">
+        Your GitHub login on this machine: {hostLogin ? <strong className="text-text">{hostLogin}</strong>
+          : <span>not known yet{rule.hostLoginError ? ` (${rule.hostLoginError})` : ''}. Agora asks the host's gh when the repository is linked.</span>}
+      </p>
       <fieldset disabled={!editable || busy} className="min-w-0 border-t border-border py-2 first:border-t-0">
         <legend className="text-sm font-medium text-text">Import issues as cards</legend>
         <label className={CHOICE}><input type="radio" name={`${id}-import`} className="accent-primary" checked={mode === 'off'} onChange={() => setMode('off')} />Off</label>
@@ -132,6 +148,18 @@ function RuleForm({ channelId, state, onSaved }: { channelId: string; state: Git
         )}
         <label className={CHOICE}><input type="radio" name={`${id}-import`} className="accent-primary" checked={mode === 'all'} onChange={() => setMode('all')} />Every new open issue</label>
         <p className="text-xs text-text-muted">Off is the default: nothing is imported unless you import it. A label is the safest rule, because only people who can label the issue pick what is imported. Every new open issue takes only issues opened after you turn it on.</p>
+        {mode === 'label' && (
+          <p className="text-xs text-text-muted">
+            Open issues that already carry this label are picked up on the first check, not only new ones.
+            {savedCount !== null ? ` The last check found ${savedCount} open ${savedCount === 1 ? 'issue' : 'issues'} with it.` : ''}
+          </p>
+        )}
+        {mode !== 'off' && (
+          <p className="text-xs text-text-muted" data-testid="volume-note">
+            One check can make up to {rule.limits.scanLimit} task cards{start ? ` and start up to ${rule.limits.scanLimit} agent sessions` : ' and, if you choose an agent below, start up to ' + rule.limits.scanLimit + ' agent sessions'}.
+            {mode === 'all' && names.length === 0 ? ' With "Every new open issue" on a public repository, anyone can open issues, so anyone can cause this again and again.' : ''}
+          </p>
+        )}
       </fieldset>
 
       {mode !== 'off' && (<>
@@ -159,14 +187,29 @@ function RuleForm({ channelId, state, onSaved }: { channelId: string; state: Git
               {state.autostartOptions.map(o => <option key={o.name} value={o.name}>{o.name}{o.planOwned ? ' (personal login)' : ''}</option>)}
             </select>
           )}
-          {startBlocked && <p role="alert" className="text-xs text-danger">{option!.reason ?? 'Set the author filter first.'}</p>}
+          {startBlocked && <p role="alert" className="text-xs text-danger">{startReason}</p>}
           {open && (
             <div role="alert" className="mt-1 space-y-2 rounded-lg border border-danger p-2 text-sm">
               <p><strong>Warning.</strong> This starts an agent on every new issue, whoever opens it. If the repository is public, strangers' text will reach the agent without anyone reading it first. Restrict the authors, or use a label, to keep control.</p>
+              <p>One check can make up to {rule.limits.scanLimit} task cards and start up to {rule.limits.scanLimit} agent sessions (the host runs only as many at once as its concurrency limit allows; the rest wait). With every new open issue on a public repository, anyone can cause this again and again.</p>
               <label className={CHOICE}><input type="checkbox" className="accent-primary" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />I understand, start it on every issue</label>
             </div>
           )}
+          {start !== null && (
+            <div className="space-y-1 pt-1">
+              <label className="block text-sm font-medium text-text" htmlFor={`${id}-cap`}>Start at most N agents per check</label>
+              <input id={`${id}-cap`} type="number" inputMode="numeric" min={1} max={rule.limits.scanLimit} step={1} placeholder="No limit" disabled={!editable || busy}
+                className={`${INPUT} w-40`} value={cap} aria-invalid={!capOk} onChange={e => setCap(e.target.value)} />
+              <p className="text-xs text-text-muted">Off is the default: every new card gets an agent. With a number, the rest of the new cards stay on the board, marked, and you start them yourself. Agora adds no other cap.</p>
+            </div>
+          )}
           <p className="text-xs text-text-muted">Off is the default: cards wait on the board until a person starts them. The agent works in its own box and opens a pull request; it never merges. Cards start one after another as its host has room.</p>
+          {start !== null && (
+            <p className="text-xs text-text-muted" data-testid="cost-note">
+              These agents run on your API key or subscription, and nothing limits that spend until you set a limit: the number above, or Settings → Agents → the agent → Limits (wakes, tokens, minutes; all off unless you turn them on).
+              {option?.planOwned ? ' An agent on a personal login is started only on your own issues.' : ''}
+            </p>
+          )}
         </fieldset>
 
         <div className="min-w-0 space-y-1 border-t border-border py-2">

@@ -406,6 +406,8 @@ function CardItem({ card, board, profiles, open, onToggle, onChanged, onDeleted 
             </p>
           )}
 
+          {card.ruleNote && <p className="text-xs text-text-muted">{card.ruleNote}</p>}
+
           {card.session && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
               <dt className="text-text-muted">Session</dt>

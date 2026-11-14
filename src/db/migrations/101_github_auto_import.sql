@@ -28,21 +28,36 @@ ALTER TABLE channel_github_repos
     ADD COLUMN last_check_status  VARCHAR(40),
     ADD COLUMN last_check_found   INTEGER,
     ADD COLUMN last_check_created INTEGER,
-    -- The error code already said in the channel, so one failure is one notice, not one per poll
-    ADD COLUMN last_notice_code   VARCHAR(40),
+    -- When each error code was last said in the channel ({"gh_not_signed_in": "<time>"}): one notice per code per hour, however often the host flaps
+    ADD COLUMN notice_log         JSONB NOT NULL DEFAULT '{}',
+    -- Bumped by every save of the rule (and by a reset on relink). A scan carries the version it was queued under; an answer for another version is dropped
+    ADD COLUMN rule_version       INTEGER NOT NULL DEFAULT 0,
+    -- Off (NULL, the default) or the most agents one check may start; the rest of the new cards stay on the board, marked
+    ADD COLUMN autostart_max_per_check INTEGER CHECK (autostart_max_per_check BETWEEN 1 AND 200),
+    -- What the linked host's own `gh` says: the GitHub login it is signed in as, and the repository's stable (node) id.
+    -- The login decides which issues may start a personal-login agent (docs/provider-terms.md); the id survives a rename.
+    ADD COLUMN gh_login           VARCHAR(39) CHECK (gh_login ~ '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$'),
+    ADD COLUMN gh_login_checked_at TIMESTAMPTZ,
+    ADD COLUMN gh_login_error     VARCHAR(40),
+    ADD COLUMN repo_node_id       VARCHAR(100),
+    -- The previous link, kept until the host says whether the new name is the same repository renamed
+    ADD COLUMN prev_repo          VARCHAR(140),
+    ADD COLUMN prev_repo_node_id  VARCHAR(100),
     ADD CONSTRAINT github_rule_label_needed CHECK (import_mode <> 'label' OR import_label IS NOT NULL);
 
 -- A host that polls with `?v=2` knows `issue_scan`; the server offers one only to a host that did so lately
 ALTER TABLE agent_hosts ADD COLUMN github_scan_seen_at TIMESTAMPTZ;
 
 ALTER TABLE github_commands DROP CONSTRAINT IF EXISTS github_commands_action_check;
-ALTER TABLE github_commands ADD CONSTRAINT github_commands_action_check CHECK (action IN ('issue_list', 'issue_comment', 'issue_scan'));
+ALTER TABLE github_commands ADD CONSTRAINT github_commands_action_check CHECK (action IN ('issue_list', 'issue_comment', 'issue_scan', 'link_info'));
 
 -- ─── Cards made by a rule, and issues closed on GitHub ───
 ALTER TABLE task_cards
     ADD COLUMN from_rule BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN issue_closed_at TIMESTAMPTZ,
-    ADD COLUMN issue_state_checked_at TIMESTAMPTZ;
+    ADD COLUMN issue_state_checked_at TIMESTAMPTZ,
+    -- Why the rule did not start this card's agent (limit per check, a personal login, a refusal); the owner can start it by hand
+    ADD COLUMN rule_note VARCHAR(600);
 
 -- ─── Once an issue has become a card in a channel, a rule never makes it again ───
 -- The row outlives its card (card_id goes NULL when a person deletes it, which means "do not bring

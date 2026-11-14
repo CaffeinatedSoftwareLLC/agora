@@ -299,11 +299,12 @@ describe('card session limits', () => {
 
 describe('GitHub automation', () => {
   const RULE = (over: Record<string, unknown> = {}) => ({
-    import: { mode: 'off', label: null }, authors: [], autostart: { profile: null, confirmedOpen: false }, pollMinutes: 5, commentOnPickup: false,
+    import: { mode: 'off', label: null }, authors: [], autostart: { profile: null, confirmedOpen: false, maxPerCheck: null }, hostLogin: 'owner-gh', hostLoginError: null, pollMinutes: 5, commentOnPickup: false,
     status: { lastPolledAt: null, lastCheckedAt: null, result: null, found: null, created: null },
     limits: { defaultPollMinutes: 5, minPollMinutes: 2, maxPollMinutes: 1440, scanLimit: 200 }, ...over,
   });
-  const OPTIONS = [{ name: 'codex', planOwned: false, allowed: true, reason: null }, { name: 'claude', planOwned: true, allowed: false, reason: 'Set the author filter first' }];
+  const OPTIONS = [{ name: 'codex', planOwned: false, allowed: true, reason: null }, { name: 'claude', planOwned: true, allowed: false, reason: 'Set the author filter first' },
+    { name: 'gpt', planOwned: true, allowed: false, never: true, reason: "This agent runs on someone else's ChatGPT plan, and only they can start it." }];
   const owner = (rule = RULE(), canConfigure = true) => serve(board([]), {
     '/github': { link: LINK, canLink: true, canImport: true },
     '/github/automation': { rule, canConfigure, autostartOptions: OPTIONS },
@@ -373,8 +374,112 @@ describe('GitHub automation', () => {
     await openForm();
     fireEvent.click(screen.getByLabelText('Start'));
     fireEvent.change(screen.getByLabelText('Agent to start'), { target: { value: 'claude' } });
-    expect(screen.getByRole('alert').textContent).toContain('Set the author filter first');
+    expect(screen.getByRole('alert').textContent).toContain('only on your own issues');
+    expect(screen.getByRole('alert').textContent).toContain('owner-gh');
     expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(true);
+    // Someone else's login, or yours and someone else's: still blocked. Exactly yours (case aside): allowed.
+    fireEvent.click(screen.getByLabelText('Only these'));
+    const logins = screen.getByLabelText('GitHub logins');
+    fireEvent.change(logins, { target: { value: 'ann' } });
+    expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(logins, { target: { value: 'owner-gh, ann' } });
+    expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(logins, { target: { value: 'Owner-GH' } });
+    expect((screen.getByText('Save automation') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an agent on someone else\'s plan is blocked whatever the authors, and an unknown login is said plainly', async () => {
+    owner(RULE({ import: { mode: 'label', label: 'agora' }, hostLogin: null }));
+    render(<TasksPanel />);
+    await openForm();
+    expect(screen.getByText(/Your GitHub login on this machine:/).textContent).toContain('not known yet');
+    fireEvent.click(screen.getByLabelText('Start'));
+    fireEvent.change(screen.getByLabelText('Agent to start'), { target: { value: 'claude' } });
+    expect(screen.getByRole('alert').textContent).toContain('does not yet know which GitHub account');
+    fireEvent.change(screen.getByLabelText('Agent to start'), { target: { value: 'gpt' } });
+    expect(screen.getByRole('alert').textContent).toContain('someone else');
+  });
+
+  it('shows the owner\'s login on this machine', async () => {
+    owner();
+    render(<TasksPanel />);
+    await openForm();
+    expect(screen.getByText(/Your GitHub login on this machine:/).textContent).toContain('owner-gh');
+  });
+
+  it('says plainly how many cards and sessions one check can make, and whose money the agents use', async () => {
+    owner();
+    render(<TasksPanel />);
+    await openForm();
+    expect(screen.queryByTestId('volume-note')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Issues with the label'));
+    expect(screen.getByTestId('volume-note').textContent).toContain('up to 200 task cards');
+    expect(screen.getByTestId('volume-note').textContent).toContain('start up to 200 agent sessions');
+    expect(screen.getByTestId('volume-note').textContent).not.toContain('anyone can cause this again');
+    expect(screen.queryByTestId('cost-note')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Start'));
+    const cost = screen.getByTestId('cost-note').textContent!;
+    expect(cost).toContain('API key or subscription');
+    expect(cost).toContain('nothing limits that spend until you set a limit');
+    expect(cost).toContain('Settings → Agents → the agent → Limits');
+    fireEvent.click(screen.getByLabelText('Every new open issue'));
+    expect(screen.getByTestId('volume-note').textContent).toContain('anyone can open issues, so anyone can cause this again and again');
+    // The warning repeats it
+    expect(screen.getByRole('alert').textContent).toContain('up to 200 task cards and start up to 200 agent sessions');
+    // An author filter removes the public-repository sentence
+    fireEvent.click(screen.getByLabelText('Only these'));
+    fireEvent.change(screen.getByLabelText('GitHub logins'), { target: { value: 'ann' } });
+    expect(screen.getByTestId('volume-note').textContent).not.toContain('anyone can cause this again');
+  });
+
+  it('in label mode says that issues already carrying the label are picked up on the first check, with the count when the last check has one', async () => {
+    owner();
+    render(<TasksPanel />);
+    await openForm();
+    fireEvent.click(screen.getByLabelText('Issues with the label'));
+    expect(screen.getByText(/already carry this label are picked up on the first check/)).toBeTruthy();
+    expect(screen.queryByText(/The last check found/)).toBeNull();
+  });
+
+  it('shows how many the last check found for the saved label', async () => {
+    owner(RULE({ import: { mode: 'label', label: 'agora' }, status: { lastPolledAt: null, lastCheckedAt: new Date().toISOString(), result: 'ok', found: 37, created: 3 } }));
+    render(<TasksPanel />);
+    await openForm();
+    expect(screen.getByText(/The last check found 37 open issues with it/)).toBeTruthy();
+    // Another label: the count belongs to the old one
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'other' } });
+    expect(screen.queryByText(/The last check found/)).toBeNull();
+  });
+
+  it('the optional "Start at most N agents per check" row: off by default, validated, sent only with an agent', async () => {
+    owner(RULE({ import: { mode: 'label', label: 'agora' } }));
+    put.mockResolvedValue({ rule: RULE({ import: { mode: 'label', label: 'agora' }, autostart: { profile: 'codex', confirmedOpen: false, maxPerCheck: 5 } }) });
+    render(<TasksPanel />);
+    await openForm();
+    expect(screen.queryByLabelText('Start at most N agents per check')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Start'));
+    const cap = screen.getByLabelText('Start at most N agents per check') as HTMLInputElement;
+    expect(cap.value).toBe('');
+    expect(cap.placeholder).toBe('No limit');
+    expect(screen.getByText(/Agora adds no other cap/)).toBeTruthy();
+    for (const bad of ['0', '201', '1.5']) {
+      fireEvent.change(cap, { target: { value: bad } });
+      expect((screen.getByText('Save automation') as HTMLButtonElement).disabled, bad).toBe(true);
+    }
+    fireEvent.change(cap, { target: { value: '5' } });
+    fireEvent.click(screen.getByText('Save automation'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith(`/channels/${CH}/github/automation`, expect.objectContaining({
+      autostart: { profile: 'codex', maxPerCheck: 5 },
+    })));
+  });
+
+  it('shows why the rule did not start a card, on the card', async () => {
+    serve(board([card({ id: 'T3', title: 'Waiting', fromRule: true, issue: { repo: 'o/r', number: 9, url: 'https://github.com/o/r/issues/9' },
+      ruleNote: 'Not started: the limit of 2 agents per check was reached. Start it from here.' })]));
+    render(<TasksPanel />);
+    fireEvent.click(await screen.findByText('Waiting'));
+    expect(screen.getByText('Not started: the limit of 2 agents per check was reached. Start it from here.')).toBeTruthy();
   });
 
   it('Check now asks the host and shows the latest result; directors get it too but cannot save', async () => {
