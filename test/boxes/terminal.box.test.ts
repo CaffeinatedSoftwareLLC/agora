@@ -601,8 +601,13 @@ describe('which side the owner is typing on, and a hostile agent side', () => {
     /** Start the hostile server as the agent on a socket and drive as-agent against it as the operator. */
     async function hostile(mode: string, action: string, sock = `/tmp/hostile-${mode}.sock`) {
         await inBox(box.container, `rm -f ${sock}; (setsid python3 /tmp/hostile.py ${mode} ${sock} </dev/null >/dev/null 2>&1 &) ; for i in 1 2 3 4 5 6 7 8 9 10; do [ -S ${sock} ] && break; sleep 0.3; done; echo up`);
-        const r = await inBox(box.container, `python3 /tmp/drive.py ${action} ${sock}`, 90_000, OPERATOR);
-        expect(r.code, r.stderr).toBe(0);
+        // (the driver is the harness's own: one retry covers a docker exec that dies on a loaded engine)
+        let r = await inBox(box.container, `python3 /tmp/drive.py ${action} ${sock}`, 90_000, OPERATOR);
+        if (r.code !== 0) {
+            await inBox(box.container, `rm -f ${sock}; (setsid python3 /tmp/hostile.py ${mode} ${sock} </dev/null >/dev/null 2>&1 &) ; sleep 1`);
+            r = await inBox(box.container, `python3 /tmp/drive.py ${action} ${sock}`, 90_000, OPERATOR);
+        }
+        expect(r.code, `${r.stderr} ${r.stdout}`).toBe(0);
         return JSON.parse(r.stdout.trim().split('\n').pop()!) as { exited: boolean; status: number | null; seconds: number; output: string };
     }
 
