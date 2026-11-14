@@ -3,7 +3,7 @@ import supertest from 'supertest';
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
-import { shellHub } from '../../src/lib/boxes/shell-hub';
+import { relayFailures, shellHub } from '../../src/lib/boxes/shell-hub';
 import { config } from '../../src/config';
 import { refreshGatewayAccess } from '../../src/lib/gateway-access';
 
@@ -137,6 +137,7 @@ beforeAll(async () => {
     api = supertest(base);
 });
 beforeEach(async () => {
+    relayFailures.reset();
     await cleanDatabase(ctx.db);
     owner = await authedUser(api, 'termowner');
     member = await authedUser(api, 'termmember');
@@ -423,6 +424,51 @@ describe('the box host\'s socket', () => {
         expect(await refused({ token: machine.body.token ?? machine.body.hostToken, headers: {} })).toMatch(/Malformed relay token/);
         expect(await refused({})).toBe('connected');
         expect((await rows(`SELECT shell_protocol FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0].shell_protocol).toBe(2);
+    });
+
+    test('failed relay handshakes are throttled per credential id before any hash is checked, without touching other boxes or the audit log', async () => {
+        const fresh = await makeBox('throttled');
+        const other = await makeBox('bystander');
+        const idOf = (b: Box) => b.relayToken.slice(3, b.relayToken.indexOf('.'));
+        const mk = (b: Box, token: string) => { const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(b), auth: { type: 'relay', token, shellProtocol: 2 } }); sockets.push(s); return s; };
+        const guess = `ar_${idOf(fresh)}.${'0'.repeat(64)}`;
+        const auditBefore = (await rows(`SELECT count(*)::int AS n FROM audit_log`))[0].n;
+        for (let i = 0; i < 5; i++) expect(await refusal(mk(fresh, guess))).toBe('Invalid relay token');
+        // From the sixth, nothing is hashed or looked up for this id: not even the right credential gets in until the minute passes
+        expect(await refusal(mk(fresh, guess))).toBe('rate_limited');
+        expect(await refusal(mk(fresh, fresh.relayToken))).toBe('rate_limited');
+        // Another box's relay is not affected, and the garbage left no trace in the audit log
+        expect(await refusal(mk(other, other.relayToken))).toBe('connected');
+        expect((await rows(`SELECT count(*)::int AS n FROM audit_log`))[0].n).toBe(auditBefore);
+        // Unknown ids and malformed tokens are not counted against anyone's box
+        for (let i = 0; i < 7; i++) expect(await refusal(mk(other, 'ar_nope'))).toBe('Malformed relay token');
+        relayFailures.reset();
+        expect(await refusal(mk(fresh, fresh.relayToken))).toBe('connected');
+    });
+
+    test('the side event passes from the box\'s relay to the paired browser only, as operator or agent, and nothing else', async () => {
+        const hostA = host;
+        const term = await openTerminal(box, ownerSession);
+        const sessionId = hostA.opened[0].sessionId;
+        const seen: any[] = [];
+        term.on('shell:side', m => seen.push(m));
+        const bystander = await connectHost(await makeBox('other-side'));
+        hostA.socket.emit('shell:side', { sessionId, side: 'operator' });
+        await settle(150);
+        hostA.socket.emit('shell:side', { sessionId, side: 'agent' });
+        await settle(150);
+        hostA.socket.emit('shell:side', { sessionId, side: 'Operator' });
+        await settle(150);
+        hostA.socket.emit('shell:side', { sessionId, side: { evil: 1 } });
+        await settle(150);
+        // Another box's relay, and a wrong session id, cannot speak for this terminal
+        bystander.socket.emit('shell:side', { sessionId, side: 'operator' });
+        hostA.socket.emit('shell:side', { sessionId: 'X'.repeat(26), side: 'operator' });
+        await settle(300);
+        expect(seen).toEqual([{ side: 'operator' }, { side: 'agent' }, { side: 'agent' }, { side: 'agent' }]);
+        // Not in the channel, not stored
+        expect(JSON.stringify(await notices())).not.toContain('side');
+        expect(JSON.stringify(await sessionRows())).not.toContain('"side"');
     });
 
     test('the host token cannot register as a terminal endpoint at all: not as the old host handshake, not as a relay, not on any route', async () => {

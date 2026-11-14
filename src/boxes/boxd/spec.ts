@@ -28,10 +28,29 @@ export const BOX_USER = '0:0';
 export const AGENT_USER = `${BOX_UID}:${BOX_UID}`;
 /** The only capabilities the container gets, all for the init (the Docker names without CAP_). */
 export const INIT_CAPS = ['KILL', 'SETGID', 'SETPCAP', 'SETUID'] as const;
+/**
+ * What PID 1 is: the absolute interpreter in isolated mode (no PYTHON* variable, no user site, no
+ * current directory on the path) and the absolute script. boxd sets this on the container, so the
+ * start of the root process never depends on the image's shebang, its PATH, or anything in the
+ * agent's volume; containerDrift refuses a container that differs.
+ */
+export const BOX_ENTRYPOINT = ['/usr/bin/python3', '-I', '/opt/agora/agora-box-init'] as const;
+/**
+ * The container's PATH: root-owned directories first, the agent's own folders (its volume) last. Anything
+ * that relies on PATH (docker exec, a root-run step) can't be shadowed from the volume. The agent's own
+ * processes get their installs first: the init sets that for them. The same string is ENV PATH in
+ * box/Dockerfile (a unit test compares).
+ */
+export const BOX_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.npm-global/bin:/home/agent/.local/bin';
+/** Variables that change how a process loads code: none may be set in the container. */
+export const LOADER_ENV = /^(LD_|PYTHON|NODE_(?!VERSION$)|BASH_ENV$|ENV$|GCONV_PATH$|GLIBC_|LOCPATH$|NLSPATH$|HOSTALIASES$|RESOLV_HOST_CONF$|MALLOC_|PERL|RUBY|IFS$|PS4$|SHELLOPTS$|TMPDIR$)/;
 export const RUN_AGORA_DIR = '/run/agora';
 export const TMPFS: Record<string, string> = {
-    // Builds and package managers run things from /tmp, so it stays exec
-    '/tmp': 'rw,nosuid,nodev,size=1g,mode=1777',
+    // noexec, as Docker has always made it when the options do not say `exec`: nothing runs from /tmp.
+    // This was never an isolation boundary (the agent's volume is exec); it keeps a dropped file from
+    // starting by accident. A build that must run its own output uses a folder under the home volume
+    // (TMPDIR=$HOME/tmp). Said explicitly so the spec, this comment and the drift check agree.
+    '/tmp': 'rw,noexec,nosuid,nodev,size=1g,mode=1777',
     // agora-host's config with the tokens (§8.1); readable by the agent only
     [RUN_AGORA_DIR]: `rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=${BOX_UID},gid=${BOX_UID}`,
     // The owner's home (the terminal relay and shell): the operator's alone, mode 0700, gone at restart
@@ -104,6 +123,7 @@ export function containerEnv(input: BoxSpecInput): string[] {
     const proxy = `http://${EDGE_HOSTNAME}:${EDGE_PROXY_PORT}`;
     const env = [
         `HOME=${BOX_HOME}`,
+        `PATH=${BOX_PATH}`,
         `AGORA_BOX_ID=${input.boxId.trim()}`,
         `AGORA_BOX_GENERATION=${input.generation}`,
         `AGORA_INSTANCE_URL=http://${EDGE_HOSTNAME}:${EDGE_AGORA_PORT}`,
@@ -158,6 +178,8 @@ export function containerSpec(input: BoxSpecInput): ContainerCreateOptions {
         name: boxContainerName(input.instance, input.boxId),
         Image: input.image,
         Env: containerEnv(input),
+        Entrypoint: [...BOX_ENTRYPOINT],
+        Cmd: [],
         User: BOX_USER,
         WorkingDir: BOX_HOME,
         AttachStdin: false,
@@ -237,6 +259,14 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (name !== boxContainerName(e.instance, e.boxId)) out.push('name');
     if (cfg.Image !== e.image) out.push('image');
     if (cfg.User !== BOX_USER) out.push('user');
+    // What PID 1 is, and the environment a process would start with
+    if (!same(cfg.Entrypoint ?? [], [...BOX_ENTRYPOINT])) out.push('entrypoint');
+    if (!empty(cfg.Cmd)) out.push('command');
+    const env = envMap(cfg.Env);
+    if (env.PATH !== BOX_PATH) out.push('env-path');
+    if (env.HOME !== BOX_HOME) out.push('env-home');
+    if (Object.keys(env).some(k => LOADER_ENV.test(k))) out.push('env-loader');
+    if (cfg.WorkingDir !== BOX_HOME) out.push('working-dir');
     if ((hc.Runtime || 'runc') !== e.runtime) out.push('runtime');
     if (hc.Privileged !== false) out.push('privileged');
     if (hc.ReadonlyRootfs !== true) out.push('read-only');
@@ -262,6 +292,12 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     const labels = cfg.Labels ?? {};
     if (labels[LABEL_INSTANCE] !== e.instance || labels[LABEL_BOX] !== e.boxId.trim()
         || labels[LABEL_BOX_VERSION] !== String(e.imageVersion)) out.push('labels');
+    return out;
+}
+
+function envMap(v: unknown): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const e of Array.isArray(v) ? v : []) { const s = String(e); const i = s.indexOf('='); if (i > 0) out[s.slice(0, i)] = s.slice(i + 1); }
     return out;
 }
 

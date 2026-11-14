@@ -45,7 +45,7 @@ The command runs **as the agent** (uid 1000, in the agent's workspace, with the 
 
 Run the agent's code with `as-agent`, **not from your own shell**. Plain `git status` in a repository the agent wrote is refused on purpose; `as-agent git status` is the way to run it.
 
-**What you type in an `as-agent` session is on the agent's side of the wall.** The program runs as the agent, so the agent can see it, and can show you a fake prompt there. A short reminder is printed when an interactive session starts. Never type a password, a token or a login code into the box.
+**What you type in an `as-agent` session is on the agent's side of the wall.** The program runs as the agent, so the agent can see it, and can show you a fake prompt there, even a byte-exact copy of your own. **Tell the sides apart by the frame around the terminal, not by the prompt:** the page draws a red frame and "AGENT SIDE: everything you type here goes to the agent" above the terminal while you are in an `as-agent` session, and a plain "Your own shell (operator)" line otherwise. It comes from the box's relay, outside the terminal, so nothing the shell or the agent prints can change it; if the box stops reporting it says "SIDE UNKNOWN" and looks the same as the agent's side. To leave an `as-agent` session at any time, press **Enter, then `~` and `.`**: this is handled by the client before anything reaches the agent's side, so the agent cannot intercept it (`~~` types one `~`). A short reminder is printed when an interactive session starts. Never type a password, a token or a login code into the box.
 
 How it is checked: `as-agent` talks to a small server on the agent's side over a Unix socket in a directory only the agent and you can enter. The server accepts a connection only from the operator user, by the kernel's own record of who connected (`SO_PEERCRED`), not by anything in the request, so the agent cannot ask for itself or for you.
 
@@ -55,7 +55,9 @@ An agent that has been fed a hostile prompt runs as `agent`. Each of these fails
 
 | The agent tries to | Why it fails |
 |---|---|
-| read the relay's credential | it is in no file; it reaches the relay through a pipe only the relay inherits; PID 1's environment and the relay's memory, environment and files are another user's |
+| read the relay's credential | it is in no file; it reaches the relay through a pipe only the relay's supervisor inherits; PID 1's environment is empty and its memory is root's; the relay's and supervisor's memory, environment and files are another user's |
+| get its own code run as root (planted `python3`, `env` or `node` in its `PATH` folders, `usercustomize.py`, `.pth` files) | the root init starts as an absolute interpreter in isolated mode on an absolute script, looks nothing up in `PATH`, `HOME` or the working directory, and re-executes with an empty environment; boxd checks the entrypoint and environment before every start |
+| make you believe you are in your own shell | the page's frame and label come from the box's relay, not from the screen; `~.` leaves an `as-agent` session |
 | read or list `/home/operator` | mode 0700, owned by `operator` |
 | read the shell's or the relay's `environ`, `fd/*`, `mem`, `maps`, `cwd`, `exe` | another user's process |
 | attach to them with `ptrace` | another user's process |
@@ -100,7 +102,9 @@ It never writes your clipboard, never changes the tab's title, never follows a l
 | It closed because ... | The reason is on the page and in the history: idle limit, longest time, output limit, input limit, the box restarted or was rebuilt, the connection to the box changed, this page stopped reading, Agora restarted, you were signed out. |
 | `git status` says "dubious ownership" | You ran git in a repository the agent owns. That is the point: use `as-agent git status`. |
 | `as-agent` says the agent's side is not running | The agent's host is starting or restarting; try again in a moment. |
+| The page says the terminal is unavailable although the box runs | The relay in the box kept dying (five starts in a minute) and was left down so it cannot disturb the agent; the box's log says why. Restart the box to bring it back. |
+| `Too many attempts` from the box's relay (`rate_limited`) | Five failed relay handshakes for this box in a minute; it retries by itself. |
 
 ## For operators
 
-No new service, port or proxy rule: the terminal uses Agora's existing WebSocket (`/socket.io`) and the box routes (`/boxes/:id/terminal…`). Migration `100_box_terminal.sql`. The box image version is 7 (`box/agora-box-init`, `box/as-agent`, `box/as-agent-server`, the operator account); boxd rebuilds boxes onto it like any image change, so **boxes restart once on upgrade**. A box's container now starts as root, for its init only, with `SETUID`, `SETGID`, `SETPCAP` and `KILL` and nothing else, and every process of both users has an empty capability set (details and tests in [agent-boxes.md §17](agent-boxes.md#17-the-owners-terminal)). A single API process is assumed, as for the rest of the gateway.
+No new service, port or proxy rule: the terminal uses Agora's existing WebSocket (`/socket.io`) and the box routes (`/boxes/:id/terminal…`). Migration `100_box_terminal.sql`. The box image version is 7 (`box/agora-box-init`, `box/agora-relay-supervisor`, `box/as-agent`, `box/as-agent-server`, the operator account); boxd rebuilds boxes onto it like any image change, so **boxes restart once on upgrade**. A box's container now starts as root, for its init only, with `SETUID`, `SETGID`, `SETPCAP` and `KILL` and nothing else, and every process of both users has an empty capability set (details and tests in [agent-boxes.md §17](agent-boxes.md#17-the-owners-terminal)). A single API process is assumed, as for the rest of the gateway.

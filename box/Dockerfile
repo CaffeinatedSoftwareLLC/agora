@@ -57,6 +57,8 @@ COPY --from=build /build/agora-mcp/node_modules /opt/agora/agora-mcp/node_module
 COPY --from=build /build/agora-mcp/dist /opt/agora/agora-mcp/dist
 COPY box/agora-box-init /opt/agora/agora-box-init
 COPY box/agora-box-start /opt/agora/agora-box-start
+# The operator's relay supervisor (restarts the relay with a back-off, as the operator, with no capability)
+COPY box/agora-relay-supervisor /opt/agora/agora-relay-supervisor
 COPY box/agora-pr /usr/local/bin/agora-pr
 # The pseudo-terminal behind the owner's terminal in Agora (docs/box-terminal.md): Python's own pty
 # module, so nothing native to build for amd64 or arm64. Root-owned and read-only like the rest of /opt/agora.
@@ -68,15 +70,20 @@ COPY box/as-agent-server /opt/agora/as-agent-server
 COPY box/operator.bashrc /opt/agora/operator.bashrc
 COPY box/operator.gitconfig /opt/agora/operator.gitconfig
 COPY box/AGENTS.md /opt/agora/AGENTS.md
-RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /usr/local/bin/agora-pr /opt/agora/agora-pty /usr/local/bin/as-agent /opt/agora/as-agent-server \
+RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /opt/agora/agora-relay-supervisor /usr/local/bin/agora-pr /opt/agora/agora-pty /usr/local/bin/as-agent /opt/agora/as-agent-server \
  && chmod 0644 /opt/agora/AGENTS.md /opt/agora/operator.bashrc /opt/agora/operator.gitconfig
+# PATH lists root-owned directories first: anything that relies on it (docker exec, a root-run step) can't be
+# shadowed from the agent's volume. The agent's own runs get its installs first (agora-box-init sets that).
 ENV HOME=/home/agent \
-    PATH=/home/agent/.npm-global/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.npm-global/bin:/home/agent/.local/bin \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 LABEL org.agora.box.version=${BOX_VERSION}
 WORKDIR /home/agent
-# PID 1: starts as root (boxd sets the user), then runs the agent and the owner's relay as their own users
-ENTRYPOINT ["/opt/agora/agora-box-init"]
+# PID 1: starts as root (boxd sets the user), then runs the agent and the owner's relay as their own users.
+# The interpreter, its isolated mode (-I: no PYTHON* variable, no user site, no current directory on the
+# path) and the script are absolute, so nothing the agent can write (its volume, its PATH entries) is
+# ever looked up or loaded by a root process. boxd sets the same entrypoint on the container and checks it.
+ENTRYPOINT ["/usr/bin/python3", "-I", "/opt/agora/agora-box-init"]
 
 # ---- test: fake CLIs that answer agora-host's headless modes, ACP and the login relay
 FROM base AS test

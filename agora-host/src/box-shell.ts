@@ -40,6 +40,8 @@ export interface PtyChild {
     onData(cb: (data: Buffer) => void): void;
     onExit(cb: (code: number | null) => void): void;
     onError(cb: (code: string) => void): void;
+    /** Which side the owner is typing on, as the helper sees it (it says so about once a second) */
+    onSide(cb: (side: 'operator' | 'agent') => void): void;
 }
 export interface PtyOptions { cols: number; rows: number; cwd: string; env: NodeJS.ProcessEnv; command: string[] }
 export type SpawnPty = (o: PtyOptions) => PtyChild;
@@ -114,6 +116,9 @@ export class ShellRelay {
         this.queue = []; this.queued = 0; this.paused = false;
         this.rate = rate as number; this.tokens = this.rate; this.lastRefill = this.now();
         pty.onData(data => this.output(data));
+        // Which side the owner types on, from the one fact the agent cannot fake (see box/agora-pty). Anything
+        // but a plain "operator" is reported as the agent's side. Agora relays it to the owner's page only.
+        pty.onSide(side => { if (this.current?.pty === pty) this.transport.emit('shell:side', { sessionId: id, side: side === 'operator' ? 'operator' : 'agent' }); });
         pty.onError(code => { if (this.current?.pty === pty) { this.o.log(`box_shell_failed ${code}`); this.end(true, 'failed'); } });
         pty.onExit(() => { if (this.current?.pty === pty) this.end(true); });
         this.o.log('box_shell_opened');
@@ -167,9 +172,26 @@ export class ShellRelay {
 // ─── The real pseudo-terminal: box/agora-pty ───
 
 /** Start `agora-pty` (Python's pty module) with the control pipe on fd 3. The path is the image's; tests pass the repo's copy. */
-export const makeHelperPty = (helper: string): SpawnPty => o => {
-    const child: ChildProcess = spawn('python3', [helper, String(o.cols), String(o.rows), o.cwd, '--', ...o.command], {
-        cwd: o.cwd, env: o.env, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+export const PYTHON = '/usr/bin/python3';
+export const AS_AGENT_CLIENT = '/usr/local/bin/as-agent';
+export const makeHelperPty = (helper: string, client: string = AS_AGENT_CLIENT): SpawnPty => o => {
+    // Absolute interpreter in isolated mode: nothing from PATH, PYTHON* or the current directory is loaded
+    const child: ChildProcess = spawn(PYTHON, ['-I', helper, '--client', client, String(o.cols), String(o.rows), o.cwd, '--', ...o.command], {
+        cwd: o.cwd, env: o.env, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'],
+    });
+    const sideCbs: Array<(s: 'operator' | 'agent') => void> = [];
+    let sideText = '';
+    const sideStream = child.stdio[4] as NodeJS.ReadableStream;
+    sideStream.on('error', () => {});
+    sideStream.on('data', (d: Buffer) => {
+        sideText = (sideText + d.toString('latin1')).slice(-256);
+        let nl: number;
+        while ((nl = sideText.indexOf('\n')) >= 0) {
+            const line = sideText.slice(0, nl);
+            sideText = sideText.slice(nl + 1);
+            if (line === 'S operator') for (const cb of sideCbs) cb('operator');
+            else if (line === 'S agent') for (const cb of sideCbs) cb('agent');
+        }
     });
     const dataCbs: Array<(d: Buffer) => void> = [], exitCbs: Array<(c: number | null) => void> = [], errCbs: Array<(c: string) => void> = [];
     let exited = false;
@@ -202,6 +224,7 @@ export const makeHelperPty = (helper: string): SpawnPty => o => {
         onData: cb => { dataCbs.push(cb); },
         onExit: cb => { exitCbs.push(cb); },
         onError: cb => { errCbs.push(cb); },
+        onSide: cb => { sideCbs.push(cb); },
     };
 };
 export const spawnHelperPty: SpawnPty = makeHelperPty(PTY_HELPER);

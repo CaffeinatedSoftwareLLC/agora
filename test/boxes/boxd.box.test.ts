@@ -62,7 +62,9 @@ beforeAll(async () => {
     if (v.code !== 0) throw new Error(`Docker is not reachable: ${v.stderr}`);
 
     // Stand-in box image: alpine with the version label, /home/agent owned by the box user, a long sleep
-    await must('run', '--name', IMGSRC, 'alpine:latest', 'sh', '-c', 'mkdir -p /home/agent && chown 1000:1000 /home/agent');
+    await must('run', '--name', IMGSRC, 'alpine:latest', 'sh', '-c',
+        // boxd sets the real image's entrypoint (python3 -I agora-box-init): the stand-in's python3 just sleeps
+        'mkdir -p /home/agent /usr/bin && chown 1000:1000 /home/agent && printf "#!/bin/sh\\nexec sleep 1000000\\n" > /usr/bin/python3 && chmod 755 /usr/bin/python3');
     await must('commit', '--change', 'LABEL org.agora.box.version=1', '--change', 'CMD ["sleep", "1000000"]', '--change', 'WORKDIR /home/agent',
         // sleep as PID 1 ignores SIGTERM; the real image's PID 1 is agora-box-init, which handles it
         '--change', 'STOPSIGNAL SIGKILL', IMGSRC, IMAGE);

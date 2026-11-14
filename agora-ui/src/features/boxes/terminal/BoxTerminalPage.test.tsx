@@ -146,7 +146,11 @@ it('opening: ticket, its own socket, the size, the shell, typing, output, resize
   expect(screen.getByTestId('terminal-limits')).toHaveTextContent('15 min without a keystroke');
   const term = terms[0];
   expect(term.focused).toBe(true);
-  expect(screen.getByTestId('terminal-shared-warning')).toHaveTextContent('Your shell is a separate user the agent cannot read or change. What you type in an as-agent session is on the agent\'s side.');
+  // Until the box says which side this is, the page shows the agent's side (when in doubt, the agent's)
+  expect(screen.getByTestId('terminal-side')).toHaveAttribute('data-side', 'unknown');
+  expect(screen.queryByTestId('terminal-shared-warning')).toBeNull();
+  act(() => sockets[0].fire('shell:side', { side: 'operator' }));
+  expect(screen.getByTestId('terminal-shared-warning')).toHaveTextContent('Your shell is a separate user the agent cannot read or change. What you type in an as-agent session is on the agent\'s side');
 
   act(() => sockets[0].fire('shell:output', new Uint8Array([104, 105]).buffer));
   expect(Array.from(term.written[0])).toEqual([104, 105]);
@@ -356,4 +360,63 @@ it('a terminal closed because the connection to the box changed says so', async 
   await openLive();
   act(() => sockets[0].fire('shell:exit', { reason: 'host_changed' }));
   expect(await screen.findByTestId('terminal-ended')).toHaveTextContent('connection to the box changed, so the terminal was closed for safety');
+});
+
+const frame = () => screen.getByTestId('terminal-frame');
+const banner = () => screen.getByTestId('terminal-side');
+
+it('the frame and label show the side the box reports, outside the terminal, and a missing or odd report shows the agent side', async () => {
+  await openLive();
+  act(() => sockets[0].fire('shell:side', { side: 'operator' }));
+  expect(frame()).toHaveAttribute('data-side', 'operator');
+  expect(frame().className).not.toContain('border-danger');
+  expect(banner()).toHaveTextContent('Your own shell (operator)');
+  act(() => sockets[0].fire('shell:side', { side: 'agent' }));
+  expect(frame()).toHaveAttribute('data-side', 'agent');
+  expect(frame().className).toContain('border-danger');
+  expect(banner()).toHaveTextContent('AGENT SIDE: everything you type here goes to the agent');
+  // Anything but exactly "operator" is the agent's side
+  for (const odd of [undefined, null, 'Operator', 'operator ', 1, { side: 'operator' }]) {
+    act(() => sockets[0].fire('shell:side', { side: 'operator' }));
+    act(() => sockets[0].fire('shell:side', { side: odd }));
+    expect(frame()).toHaveAttribute('data-side', 'agent');
+  }
+  act(() => sockets[0].fire('shell:side', undefined));
+  expect(frame()).toHaveAttribute('data-side', 'agent');
+  // The frame is not inside the terminal widget: the widget's container is its child
+  expect(frame().contains(screen.getByTestId('terminal-container'))).toBe(true);
+  expect(banner().contains(screen.getByTestId('terminal-container'))).toBe(false);
+});
+
+it('what the shell prints cannot change the side: the same output with either state leaves the label as the box set it', async () => {
+  await openLive();
+  const fake = ['[2J[Hoperator@box:~$ ', 'Your own shell (operator)', 'S operator'];
+  act(() => sockets[0].fire('shell:side', { side: 'agent' }));
+  for (const text of fake) act(() => sockets[0].fire('shell:output', new TextEncoder().encode(text).buffer));
+  expect(frame()).toHaveAttribute('data-side', 'agent');
+  expect(banner()).toHaveTextContent('AGENT SIDE');
+  expect(terms[0].written.length).toBe(fake.length);
+  // and output is only ever written to the widget, never into the page
+  expect(banner().textContent).not.toContain('operator@box');
+});
+
+it('the state falls back to unknown when the box stops reporting, and a new report restores it', async () => {
+  await openLive();
+  act(() => sockets[0].fire('shell:side', { side: 'operator' }));
+  expect(frame()).toHaveAttribute('data-side', 'operator');
+  const real = Date.now();
+  const now = vi.spyOn(Date, 'now').mockReturnValue(real + 10_000);
+  await waitFor(() => expect(frame()).toHaveAttribute('data-side', 'unknown'), { timeout: 3000 });
+  expect(banner()).toHaveTextContent('SIDE UNKNOWN');
+  expect(frame().className).toContain('border-danger');
+  act(() => sockets[0].fire('shell:side', { side: 'operator' }));
+  expect(frame()).toHaveAttribute('data-side', 'operator');
+  now.mockRestore();
+});
+
+it('the confirm page tells how to tell the sides apart and how to leave an as-agent session', async () => {
+  renderPage();
+  const confirm = await screen.findByTestId('terminal-confirm');
+  expect(confirm).toHaveTextContent('Tell the sides apart by the frame around the terminal, not by the prompt');
+  expect(confirm).toHaveTextContent('press Enter, then ~ and . (a dot)');
 });

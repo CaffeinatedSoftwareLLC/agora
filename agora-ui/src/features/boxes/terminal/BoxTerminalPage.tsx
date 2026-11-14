@@ -33,6 +33,11 @@ import { GESTURE_EVENTS, GESTURE_WINDOW_MS, TOOLBAR_KEYS, binaryToBytes, closeTe
  * (OSC 8 links are shown but their activation is a no-op) and never answers a window report.
  */
 
+/** Which side the owner types on. `unknown` is shown like the agent's side: when in doubt, the agent's. */
+type Side = 'operator' | 'agent' | 'unknown';
+/** The box reports the side about once a second; silence for this long is shown as unknown */
+const SIDE_STALE_MS = 6000;
+
 type Phase = 'loading' | 'blocked' | 'confirm' | 'connecting' | 'live' | 'ended';
 
 const THEME = { background: '#0b0f14', foreground: '#d6deeb', cursor: '#d6deeb', selectionBackground: '#3a4a64' };
@@ -51,6 +56,8 @@ export function BoxTerminalPage() {
   const termRef = useRef<Terminal | null>(null);
   const gestureAt = useRef(0);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
+  const [side, setSide] = useState<Side>('unknown');
+  const sideAt = useRef(0);
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -140,6 +147,13 @@ export function BoxTerminalPage() {
     };
     socket.on('connect', () => socket.emit('shell:start', { cols: term.cols, rows: term.rows }));
     socket.on('shell:ready', (m: { limits?: TerminalLimits }) => { setLimits(m?.limits ?? null); setPhase('live'); term.focus(); });
+    // Which side the owner is typing on comes from the box's relay (about once a second), never from the
+    // terminal's output, and is drawn in the page around the terminal, where what the shell prints can't reach.
+    // Only an explicit "operator" shows the operator frame; anything else, or silence, shows the agent's.
+    sideAt.current = Date.now();
+    setSide('unknown');
+    socket.on('shell:side', (m: { side?: unknown }) => { sideAt.current = Date.now(); setSide(m?.side === 'operator' ? 'operator' : 'agent'); });
+    const sideTimer = setInterval(() => { if (Date.now() - sideAt.current > SIDE_STALE_MS) setSide('unknown'); }, 1000);
     socket.on('shell:output', (d: ArrayBuffer | Uint8Array) => term.write(new Uint8Array(d)));
     socket.on('shell:exit', (m: { reason?: string }) => end(closeText(m?.reason)));
     socket.on('connect_error', (err: Error) => end(socketError(err.message)));
@@ -156,6 +170,7 @@ export function BoxTerminalPage() {
     socket.connect();
     return () => {
       finished = true;
+      clearInterval(sideTimer);
       for (const ev of GESTURE_EVENTS) box.removeEventListener(ev, markGesture, true);
       box.removeEventListener('paste', onPaste, true);
       observer.disconnect();
@@ -189,7 +204,7 @@ export function BoxTerminalPage() {
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface px-4 py-2">
         <span className="text-sm font-semibold" data-testid="terminal-box-name">Terminal in {name}</span>
         {status && <span className="text-xs text-text-muted">{status.box.adapter} box</span>}
-        {phase === 'live' && <span className="text-xs text-warn" data-testid="terminal-shared-warning">Your shell is a separate user the agent cannot read or change. What you type in an as-agent session is on the agent&apos;s side.</span>}
+        {phase === 'live' && side === 'operator' && <span className="text-xs text-warn" data-testid="terminal-shared-warning">Your shell is a separate user the agent cannot read or change. What you type in an as-agent session is on the agent&apos;s side: the frame around the terminal turns red there.</span>}
         {phase === 'live' && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none text-warn" data-testid="terminal-live">live</span>}
         <span className="grow" />
         {(phase === 'live' || phase === 'connecting') && <Button variant="danger" onClick={close} className="min-h-11 md:min-h-9">Close terminal</Button>}
@@ -211,7 +226,7 @@ export function BoxTerminalPage() {
           <ul className="list-disc space-y-1 pl-5 text-text-muted">
             <li>Your shell runs as a separate user in the box (<code>operator</code>), not as the agent. An autonomous agent that may be running now cannot read or change your shell, its terminal or its files.</li>
             <li>Do not run the agent&apos;s code from your own shell. To act as the agent, in its workspace, with its login, use <code>as-agent &lt;command&gt;</code>.</li>
-            <li>What you type in an as-agent session is on the agent&apos;s side of the wall: the agent can see it and can show a fake prompt there. Agora asks for your password only on this page, never inside the terminal.</li>
+            <li>What you type in an as-agent session is on the agent&apos;s side of the wall: the agent can see it and can show a fake prompt there. Tell the sides apart by the frame around the terminal, not by the prompt: it turns red and says AGENT SIDE while you are on the agent&apos;s side, and shows your own shell otherwise. To leave an as-agent session at any time, press Enter, then ~ and . (a dot). Agora asks for your password only on this page, never inside the terminal.</li>
             <li>Never type a password, token, login code or git credential into the box.</li>
             <li>New wakes for this agent are paused while the terminal is open{status.activeRun ? '; a run already working keeps going, so you share the box with it' : '; a run already working keeps going'}. The channel is told that a terminal is open.</li>
             <li>Closing the tab ends the shell; anything started with <code>setsid</code>, <code>nohup</code> or <code>disown</code> keeps running.</li>
@@ -239,7 +254,18 @@ export function BoxTerminalPage() {
 
       {(phase === 'connecting' || phase === 'live') && (
         <>
-          <div ref={container} className="min-h-0 flex-1 p-2" style={{ background: THEME.background }} data-testid="terminal-container" aria-label={`Terminal in ${name}`} />
+          {/* The side banner and the frame are page chrome: nothing the shell prints can reach them */}
+          {phase === 'live' && (
+            <div role="status" data-testid="terminal-side" data-side={side}
+              className={side === 'operator' ? 'border-b border-border bg-surface px-4 py-1 text-xs text-text-muted' : 'bg-danger px-4 py-2 text-sm font-bold uppercase tracking-wide text-black'}>
+              {side === 'operator' && 'Your own shell (operator)'}
+              {side === 'agent' && 'AGENT SIDE: everything you type here goes to the agent. Press Enter, then ~ and . to leave.'}
+              {side === 'unknown' && 'SIDE UNKNOWN: treat everything you type here as visible to the agent. Press Enter, then ~ and . to leave an as-agent session.'}
+            </div>
+          )}
+          <div className={`flex min-h-0 flex-1 flex-col ${phase === 'live' && side !== 'operator' ? 'border-8 border-danger' : 'border-8 border-transparent'}`} data-testid="terminal-frame" data-side={phase === 'live' ? side : 'connecting'}>
+            <div ref={container} className="min-h-0 flex-1 p-2" style={{ background: THEME.background }} data-testid="terminal-container" aria-label={`Terminal in ${name}`} />
+          </div>
           {pendingPaste !== null && (
             <div className="flex flex-wrap items-center gap-2 border-b border-warn/40 bg-warn/10 px-4 py-2 text-xs text-warn" role="alert" data-testid="terminal-paste-confirm">
               <span>This paste has {pendingPaste.split(/\r\n|\r|\n/).length} lines and the shell did not ask for bracketed paste, so each line runs as soon as it arrives. Send it?</span>

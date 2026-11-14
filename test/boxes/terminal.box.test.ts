@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { API, OPERATOR, api, createBox, docker, inBox, inBoxInput, instance, nodeInBox, psql, until, waitRunning, type Box, type Instance } from './harness';
+import { API, OPERATOR, api, createBox, docker, inBox, inBoxInput, inspectBox, instance, nodeInBox, psql, until, waitRunning, type Box, type Instance } from './harness';
 
 /**
  * The terminal in a real box (docs/box-terminal.md): the owner's browser socket, the gateway, the
@@ -60,8 +60,10 @@ async function openTerminal() {
     sockets.push(socket);
     let out = '';
     let exit: { reason: string } | null = null;
+    const sides: string[] = [];
     socket.on('shell:output', (d: ArrayBuffer) => { out += Buffer.from(d).toString('utf8'); });
     socket.on('shell:exit', (m: { reason: string }) => { exit = m; });
+    socket.on('shell:side', (m: { side: string }) => { sides.push(m.side); });
     await new Promise<void>((resolve, reject) => {
         socket.once('connect_error', e => reject(new Error(e.message)));
         socket.once('connect', () => resolve());
@@ -73,6 +75,7 @@ async function openTerminal() {
     return {
         socket,
         out: () => out,
+        sides,
         exit: () => exit,
         /**
          * Type a line and wait for the shell to finish it. The end marker is computed by the shell
@@ -351,7 +354,8 @@ ${probe}`, 180_000);
         expect(out).toContain('30 100');
         expect(out).toContain('status=7');
         // Said once, where it matters: this is the agent's side
-        expect(out).toContain("the agent can see what you type here");
+        expect(out).toContain('AGENT SIDE');
+        expect(out).toContain('~ and .');
         // Ctrl-C reaches the job on the agent's side
         t.socket.emit('shell:input', 'as-agent sleep 600\n');
         await until('the job to run as the agent', async () => (await inBoxCount('[s]leep 600')) !== '0', 30_000, 300);
@@ -399,4 +403,272 @@ s.sendall(b'Q' + struct.pack('>I', len(r)) + r)
 print(s.recv(100))`, 60_000);
         expect(res.stdout).toContain('forbidden');
     }, 120_000);
+});
+
+// ─── Second security review (docs/box-terminal.md): the root init, the side indicator, a hostile agent side ───
+
+/** Kill processes by command line, as the user given (the image has no pkill). */
+const killMatching = (pattern: string) => `for f in /proc/[0-9]*/cmdline; do p=\${f#/proc/}; p=\${p%/cmdline}; if tr '\\0' ' ' < $f 2>/dev/null | grep -q '${pattern.replace(/^(.)/, '[$1]')}'; then kill -9 $p; fi; done`;
+const startedAt = async () => JSON.parse((await docker('inspect', box.container)).stdout)[0].State.StartedAt as string;
+const asRoot = (script: string, timeout = 60_000) => inBox(box.container, script, timeout, '0');
+
+/** Every process with its ids, capability sets and no-new-privileges, read as root: `pid|uid|ppid|inh|prm|eff|bnd|amb|nnp|cmd`. */
+async function table() {
+    const r = await asRoot(`for d in /proc/[0-9]*; do p=\${d#/proc/}; awk -v p=$p 'BEGIN{OFS="|"} /^Uid:/{u=$2} /^PPid:/{pp=$2} /^CapInh:/{i=$2} /^CapPrm:/{pr=$2} /^CapEff:/{e=$2} /^CapBnd:/{b=$2} /^CapAmb:/{a=$2} /^NoNewPrivs:/{n=$2} END{printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|", p,u,pp,i,pr,e,b,a,n}' $d/status 2>/dev/null; tr '\\0' ' ' < $d/cmdline 2>/dev/null; echo; done`);
+    return r.stdout.trim().split('\n').filter(Boolean).map(l => {
+        const [pid, uid, ppid, inh, prm, eff, bnd, amb, nnp, ...cmd] = l.split('|');
+        return { pid: Number(pid), uid: Number(uid), ppid: Number(ppid), inh, prm, eff, bnd, amb, nnp, cmd: cmd.join('|').trim() };
+    });
+}
+const ZERO = '0000000000000000';
+
+describe('the root init trusts nothing the agent can write', () => {
+    beforeAll(async () => { box = await inspectBox(box.id); await cookieLogin(); }, 120_000);
+
+    it('planted interpreters, python startup files and shadowed commands never run as root or the operator, across a forced restart; PID 1 keeps CAP_KILL only, the children none, the credential stays out of reach, the terminal works', async () => {
+        const secret = box.relayToken.slice(box.relayToken.indexOf('.') + 1);
+        // As the agent: everything the agent can plant, world-readable, with its home made traversable
+        const plant = await inBoxInput(box.container, 'python3 -', `
+import os, sys
+home = os.path.expanduser('~')
+def w(path, text, mode=0o755):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, 'w').write(text)
+    os.chmod(path, mode)
+for d, tag in (('.local/bin', 'local'), ('.npm-global/bin', 'npm')):
+    for name, real in (('python3', '/usr/bin/python3'), ('python', '/usr/bin/python3'), ('node', '/usr/local/bin/node'), ('env', '/usr/bin/env')):
+        w('%s/%s/%s' % (home, d, name), '#!/bin/sh\\n/usr/bin/id -u >> /tmp/m-%s-%s 2>/dev/null\\nexec %s "$@"\\n' % (name, tag, real))
+mark = lambda tag: "import os; open('/tmp/m-%s', 'a').write(str(os.getuid()) + chr(10))\\n" % tag
+for minor in range(8, 16):
+    sp = '%s/.local/lib/python3.%d/site-packages' % (home, minor)
+    w(sp + '/usercustomize.py', mark('usercustomize'), 0o644)
+    w(sp + '/evil.pth', mark('pth').replace('import os; ', 'import os; ', 1), 0o644)
+for d in (home, home + '/scratch', home + '/work', home + '/.agora'):
+    w(d + '/sitecustomize.py', mark('sitecustomize'), 0o644)
+w(home + '/usercustomize.py', mark('homeusercustomize'), 0o644)
+os.chmod(home, 0o711)
+# the dirs agora-box-start made are 0700 (umask 077): the agent opens up every directory it planted in
+for base, dirs, _files in os.walk(home):
+    dirs[:] = [d for d in dirs if d in ('.local', '.npm-global', 'bin', 'lib', 'site-packages', 'scratch', 'work', '.agora') or d.startswith('python3')]
+    for d in dirs:
+        try: os.chmod(os.path.join(base, d), 0o755)
+        except OSError: pass
+print('planted')`, 60_000);
+        expect(plant.stdout).toContain('planted');
+        // Sanity: the plants do work for the agent's own python, so absence below means something
+        expect((await inBox(box.container, 'rm -f /tmp/m-usercustomize; python3 -c pass; cat /tmp/m-usercustomize')).stdout.trim()).toBe('1000');
+        await inBox(box.container, 'rm -f /tmp/m-*');
+
+        // The agent forces a restart the way it can: it ends its own agora-host; Docker restarts the box on the same volume
+        const started = await startedAt();
+        await inBox(box.container, killMatching('agora-host/dist/index.js --config'));
+        await until('the container to restart', async () => (await startedAt()) !== started, 120_000, 1000);
+        await waitRunning(inst, box.id);
+        await until('the terminal relay to reconnect', async () => (await api(`/boxes/${box.id}/terminal`, { headers: { Cookie: cookie } })).body.hostConnected === true, 120_000, 2000);
+        // The home was made traversable before the restart; the init ran with it that way (agora-box-start resets it only later)
+
+        // Whatever ran, ran as the agent. Nothing ran as root (0) or as the operator (1001)
+        // (the markers are mode 0600 files of whoever ran the plant; root holds no capability, so it is the agent who reads them: a file it cannot read
+        // is a file someone else made, and is reported as such)
+        const markers = (await inBox(box.container, 'for f in /tmp/m-*; do [ -e "$f" ] && echo "$f $(cat $f 2>/dev/null | sort -u | tr "\n" " ")"; done; true')).stdout.trim().split('\n').filter(Boolean);
+        for (const line of markers) expect(line, line).toMatch(/ 1000 ?$/);
+        expect(markers.some(l => l.startsWith('/tmp/m-usercustomize') || l.includes('-npm') || l.includes('-local')), 'the agent\'s own processes still use its plants (it is the agent\'s PATH)').toBe(true);
+
+        // PID 1: the init, started as the absolute interpreter in isolated mode, holding CAP_KILL alone
+        const procs = await table();
+        const init = procs.find(p => p.pid === 1)!;
+        expect(init.cmd).toMatch(/^\/usr\/bin\/python3 -I \/opt\/agora\/agora-box-init --stage2 \d+$/);
+        expect({ uid: init.uid, inh: init.inh, prm: init.prm, eff: init.eff, bnd: init.bnd, amb: init.amb, nnp: init.nnp })
+            .toEqual({ uid: 0, inh: ZERO, prm: '0000000000000020', eff: '0000000000000020', bnd: '0000000000000020', amb: ZERO, nnp: '1' });
+        // Its children: no capability at all
+        for (const p of procs.filter(q => (q.uid === 1000 || q.uid === 1001) && /agora-box-start|agora-host|agora-relay-supervisor|box-relay|as-agent-server/.test(q.cmd))) {
+            expect({ cmd: p.cmd.slice(0, 50), inh: p.inh, prm: p.prm, eff: p.eff, bnd: p.bnd, amb: p.amb, nnp: p.nnp }).toEqual({ cmd: p.cmd.slice(0, 50), inh: ZERO, prm: ZERO, eff: ZERO, bnd: ZERO, amb: ZERO, nnp: '1' });
+        }
+        expect(procs.some(p => p.uid === 1001 && /agora-relay-supervisor/.test(p.cmd))).toBe(true);
+        expect(procs.some(p => p.uid === 1001 && /box-relay --token-fd/.test(p.cmd))).toBe(true);
+
+        // The credential: gone from PID 1's environment (root can read that file), and from the supervisor's and relay's
+        // (PID 1 is root's own process: root can read its environment; every other process's environment is read by its own user)
+        const environ = (await asRoot('cat /proc/1/environ > /tmp/.pid1env && echo readable; tr "\\0" "\\n" < /tmp/.pid1env; rm -f /tmp/.pid1env')).stdout;
+        expect(environ.trim()).toBe('readable');
+        for (const p of procs.filter(q => q.pid !== 1 && (q.uid === 1000 || q.uid === 1001))) {
+            const read = await inBox(box.container, `cat /proc/${p.pid}/environ > /dev/null 2>&1 && tr "\\0" "\\n" < /proc/${p.pid}/environ | sed 's/^/E /'; true`, 60_000, String(p.uid));
+            expect(read.stdout, p.cmd.slice(0, 40)).not.toContain('AGORA_RELAY_TOKEN');
+            expect(read.stdout, p.cmd.slice(0, 40)).not.toContain(secret);
+        }
+        // The supervisor's and the relay's environments were readable (it is the operator's own) and fixed
+        const relayProc = procs.find(q => q.uid === 1001 && /box-relay --token-fd/.test(q.cmd))!;
+        const relayEnv = (await inBox(box.container, `tr "\\0" "\\n" < /proc/${relayProc.pid}/environ`, 60_000, OPERATOR)).stdout;
+        expect(relayEnv).toContain('PATH=/opt/agora/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+        expect(relayEnv).not.toMatch(/^(NODE_OPTIONS|NODE_PATH|PYTHON\w*|LD_\w+|AGORA_HOST_TOKEN|AGORA_BOT_TOKEN)=/m);
+        // As the agent: nothing readable in /proc, in its home, its run directory or /tmp holds it
+        const hunt = await inBoxInput(box.container, 'python3 -', `
+import os
+secret = '${secret}'.encode()
+found = []
+def look(path):
+    try:
+        if secret in open(path, 'rb').read(1 << 22): found.append(path)
+    except OSError:
+        pass
+# (this probe was itself started by the harness's docker exec, which gives its processes the container's configured environment: it and
+# its parents are not the agent's, and are left out)
+mine = set()
+pid = os.getpid()
+while pid > 1:
+    mine.add(str(pid))
+    try:
+        pid = int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        break
+for pid in filter(str.isdigit, os.listdir('/proc')):
+    if pid in mine: continue
+    for f in ('environ', 'cmdline', 'maps'):
+        look('/proc/%s/%s' % (pid, f))
+for root in ('/home/agent', '/run', '/tmp', '/etc', '/opt'):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d != 'node_modules']
+        for f in files: look(os.path.join(dirpath, f))
+print('found=%s' % found)`, 180_000);
+        expect(hunt.stdout.trim()).toBe('found=[]');
+
+        // And the terminal works after all of it
+        const t = await openTerminal();
+        await until('the side to be reported', async () => t.sides.length > 0, 15_000, 200);
+        expect(t.sides[0]).toBe('operator');
+        expect(await t.run('echo id=$(id -u)')).toContain('id=1001');
+        t.socket.emit('shell:close');
+        await inBox(box.container, 'chmod 700 ~');
+    }, 900_000);
+
+    it('/tmp does not run programs (noexec), as the spec says, and is the agent\'s scratch otherwise', async () => {
+        const r = await inBox(box.container, `grep ' /tmp ' /proc/mounts; printf '#!/bin/sh\\necho ran\\n' > /tmp/x.sh; chmod +x /tmp/x.sh; /tmp/x.sh 2>&1; sh /tmp/x.sh; mkdir -p ~/tmpexec && cp /tmp/x.sh ~/tmpexec/ && ~/tmpexec/x.sh`);
+        expect(r.stdout).toMatch(/\/tmp tmpfs rw,[^ ]*noexec/);
+        expect(r.stdout).toMatch(/Permission denied/);
+        // A script is still run by naming its interpreter; a program under the home volume runs
+        expect(r.stdout.match(/ran/g)?.length).toBe(2);
+    }, 120_000);
+
+    it('a process with empty capability sets under no-new-privileges gets nothing from a setuid binary, as the agent and as the operator', async () => {
+        // The probe runs inside the box's own process trees: the operator's shell, and (through as-agent) the agent's side
+        const probe = `
+import os, pty, select, time, json
+found = []
+for path in ('/bin/su', '/usr/bin/su', '/usr/bin/passwd', '/usr/bin/mount', '/usr/bin/newgrp', '/usr/bin/chsh', '/usr/bin/gpasswd'):
+    if os.path.exists(path) and os.stat(path).st_mode & 0o4000: found.append(path)
+res = {'setuid': found, 'me': os.getuid()}
+# su asks for a password on the terminal and waits: look at the process while it waits
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv('/bin/su', ['su', 'root'])
+out = b''
+end = time.time() + 6
+while time.time() < end and b'assword' not in out:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try: out += os.read(fd, 4096)
+        except OSError: break
+st = open('/proc/%d/status' % pid).read()
+res['su'] = {k: v for k, v in (l.split(':\\t', 1) for l in st.splitlines() if l.split(':', 1)[0] in ('Uid', 'Gid', 'CapEff', 'CapPrm', 'CapBnd', 'NoNewPrivs'))}
+os.kill(pid, 9)
+print('RESULT ' + json.dumps(res))
+`;
+        const t = await openTerminal();
+        await t.run(`cat > /tmp/suprobe.py <<'PROBEEOF'\n${probe}\nPROBEEOF\nchmod 644 /tmp/suprobe.py`);
+        const parse = (text: string) => JSON.parse(/RESULT (\{.*\})/.exec(text)![1]);
+        for (const [who, cmd, uid] of [['operator', '/usr/bin/python3 -I /tmp/suprobe.py', 1001], ['agent', 'as-agent /usr/bin/python3 -I /tmp/suprobe.py', 1000]] as const) {
+            const res = parse(await t.run(cmd, 60_000));
+            expect(res.setuid.length, `${who}: the image has setuid binaries to try`).toBeGreaterThan(0);
+            expect(res.me).toBe(uid);
+            // Without no-new-privileges `su` would be running with an effective user id of 0
+            expect(res.su.Uid.trim().split(/\s+/).slice(0, 2), who).toEqual([String(uid), String(uid)]);
+            expect(res.su.NoNewPrivs.trim()).toBe('1');
+            expect(res.su.CapEff.trim()).toBe(ZERO);
+            expect(res.su.CapBnd.trim()).toBe(ZERO);
+        }
+        t.socket.emit('shell:close');
+    }, 300_000);
+});
+
+describe('which side the owner is typing on, and a hostile agent side', () => {
+    beforeAll(async () => {
+        await inBoxInput(box.container, 'cat > /tmp/hostile.py', readFileSync(join(__dirname, 'as-agent-hostile.py'), 'utf8'), 60_000);
+        await inBoxInput(box.container, 'cat > /tmp/drive.py', readFileSync(join(__dirname, 'as-agent-drive.py'), 'utf8'), 60_000);
+        await inBox(box.container, 'chmod 644 /tmp/hostile.py /tmp/drive.py');
+    }, 120_000);
+
+    const REAL = '/run/as-agent/server.sock';
+    /** Start the hostile server as the agent on a socket and drive as-agent against it as the operator. */
+    async function hostile(mode: string, action: string, sock = `/tmp/hostile-${mode}.sock`) {
+        await inBox(box.container, `rm -f ${sock}; (setsid python3 /tmp/hostile.py ${mode} ${sock} </dev/null >/dev/null 2>&1 &) ; for i in 1 2 3 4 5 6 7 8 9 10; do [ -S ${sock} ] && break; sleep 0.3; done; echo up`);
+        const r = await inBox(box.container, `python3 /tmp/drive.py ${action} ${sock}`, 90_000, OPERATOR);
+        expect(r.code, r.stderr).toBe(0);
+        return JSON.parse(r.stdout.trim().split('\n').pop()!) as { exited: boolean; status: number | null; seconds: number; output: string };
+    }
+
+    it('the side event: operator in the own shell, agent for as-agent even while the agent side draws the operator\'s prompt and stays open, operator again when the session ends; the agent replaced the server socket', async () => {
+        const t = await openTerminal();
+        await until('operator to be reported', async () => t.sides.at(-1) === 'operator', 15_000, 200);
+        // The agent replaces the real server's socket with its own (it owns the directory)
+        await inBox(box.container, `rm -f ${REAL}; (setsid python3 /tmp/hostile.py prompt ${REAL} </dev/null >/dev/null 2>&1 &); for i in 1 2 3 4 5 6 7 8 9 10; do [ -S ${REAL} ] && break; sleep 0.3; done`);
+        t.socket.emit('shell:input', 'as-agent echo hi\n');
+        await until('the agent side to be reported', async () => t.sides.at(-1) === 'agent', 15_000, 100);
+        // It has drawn a byte-exact copy of the operator's prompt, and the session stays open: still the agent's side, on every report
+        await until('the fake prompt to be drawn', async () => t.out().includes('\x1b[2J\x1b[Hoperator@box:~$ '), 15_000, 100);
+        const n = t.sides.length;
+        await new Promise(r => setTimeout(r, 3500));
+        expect(t.sides.length).toBeGreaterThan(n + 1);
+        expect(t.sides.slice(n - 1).every(s => s === 'agent')).toBe(true);
+        // Typing into it goes nowhere the owner sees; the local escape works although the server ignores input
+        t.socket.emit('shell:input', '\r~.');
+        await until('the session to end', async () => t.out().includes('left the agent'), 15_000, 100);
+        await until('operator to be reported again', async () => t.sides.at(-1) === 'operator', 15_000, 100);
+        expect(await t.run('echo back-$((6*7))')).toContain('back-42');
+        t.socket.emit('shell:close');
+        // The real server again: ending it makes agora-host start it afresh on the same path
+        await inBox(box.container, killMatching('hostile.py'));
+        await inBox(box.container, killMatching('as-agent-server'));
+        await until('the real as-agent server to be back', async () => (await inBoxInput(box.container, 'python3 -', 'import socket\ns = socket.socket(socket.AF_UNIX)\ns.connect("/run/as-agent/server.sock")\nprint("up")', 20_000)).stdout.includes('up'), 120_000, 3000);
+    }, 600_000);
+
+    it('a hostile agent side cannot hold the owner: the escape works with the server silent or flooding; oversize frames, hostile exit frames and refusals end the session with a short fixed message', async () => {
+        const escaped = await hostile('noread', 'escape');
+        expect(escaped).toMatchObject({ exited: true, status: 130 });
+        expect(escaped.output).toContain('left the agent');
+        const flooded = await hostile('flood', 'escape');
+        expect(flooded).toMatchObject({ exited: true, status: 130 });
+        expect(flooded.seconds).toBeLessThan(20);
+
+        const huge = await hostile('huge', 'wait');
+        expect(huge).toMatchObject({ exited: true, status: 76 });
+        expect(huge.output).toContain('too large');
+        expect(huge.output).not.toContain('\xff');
+
+        const badx = await hostile('badx', 'wait');
+        expect(badx.exited).toBe(true);
+        expect(badx.status).toBe(1);
+        expect(badx.output).not.toMatch(/Traceback|Error/);
+
+        const evil = await hostile('evilf', 'wait');
+        expect(evil.status).toBe(77);
+        expect(evil.output).toContain('refused');
+        expect(evil.output).not.toContain('EVIL');
+        expect(evil.output).not.toContain('\x07');
+        expect(evil.output.length).toBeLessThan(600);
+
+        const closed = await hostile('closed', 'wait');
+        expect(closed.exited).toBe(true);
+        expect(closed.output).toContain('connection to the agent side closed');
+
+        // Unknown frame types are ignored, and a hostile exit code is clamped
+        const odd = await hostile('badkind', 'wait');
+        expect(odd.output).toContain('visible-output');
+        expect(odd.status).toBe(1);
+
+        // A server that never reads while the owner pastes: the client gives up instead of growing without bound
+        const paste = await hostile('noread', 'paste');
+        expect(paste.exited).toBe(true);
+        expect(paste.status).toBe(76);
+        expect(paste.output).toContain('stopped reading');
+    }, 600_000);
 });

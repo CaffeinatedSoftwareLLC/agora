@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-    containerDrift, containerSpec, limitsDiffer, networkDrift, networkSpec, validApiKeyEnv, volumeSpec, type BoxSpecInput, type ExpectedBox,
+    BOX_PATH, LOADER_ENV, containerDrift, containerSpec, limitsDiffer, networkDrift, networkSpec, validApiKeyEnv, volumeSpec, type BoxSpecInput, type ExpectedBox,
 } from '../../src/boxes/boxd/spec';
 import { BOX_IMAGE_VERSION } from '../../src/boxes/boxd/version';
 import { inspectFrom } from '../boxes/boxd-fake-docker';
@@ -22,6 +22,26 @@ const expected = (over: Partial<ExpectedBox> = {}): ExpectedBox => ({
 const env = (spec: any) => Object.fromEntries((spec.Env as string[]).map(e => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)]));
 
 describe('boxd container spec', () => {
+    it('PID 1 is the absolute interpreter in isolated mode on the absolute script, with a root-first PATH that box/Dockerfile shares', () => {
+        const s: any = containerSpec(input());
+        expect(s.Entrypoint).toEqual(['/usr/bin/python3', '-I', '/opt/agora/agora-box-init']);
+        expect(s.Cmd).toEqual([]);
+        expect(env(s).PATH).toBe(BOX_PATH);
+        expect(BOX_PATH.split(':').slice(0, 6).every(p => !p.startsWith('/home/'))).toBe(true);
+        const dockerfile = readFileSync(path.join(__dirname, '../../box/Dockerfile'), 'utf8');
+        expect(dockerfile).toContain(`ENTRYPOINT ["/usr/bin/python3", "-I", "/opt/agora/agora-box-init"]`);
+        expect(dockerfile).toContain(`PATH=${BOX_PATH} `);
+        for (const f of ['agora-box-init', 'agora-relay-supervisor', 'as-agent', 'agora-pty', 'as-agent-server']) {
+            expect(readFileSync(path.join(__dirname, '../../box', f), 'utf8').split(/\r?\n/)[0]).toBe('#!/usr/bin/python3 -I');
+        }
+    });
+
+    it('/tmp is noexec, said in the spec, and no loader variable is set in the container', () => {
+        const s: any = containerSpec(input());
+        expect(s.HostConfig.Tmpfs['/tmp']).toBe('rw,noexec,nosuid,nodev,size=1g,mode=1777');
+        expect(Object.keys(env(s)).filter(k => LOADER_ENV.test(k))).toEqual([]);
+    });
+
     it('box/VERSION matches the constant boxd is built with', () => {
         const file = readFileSync(path.join(__dirname, '../../box/VERSION'), 'utf8').trim();
         expect(Number(file)).toBe(BOX_IMAGE_VERSION);
@@ -125,6 +145,23 @@ describe('boxd start check (drift)', () => {
 
     const cases: [string, (i: any) => void][] = [
         ['image', i => { i.Config.Image = 'evil/image:latest'; }],
+        ['entrypoint', i => { i.Config.Entrypoint = ['/opt/agora/agora-box-init']; }],
+        ['entrypoint', i => { i.Config.Entrypoint = ['/usr/bin/env', 'python3', '/opt/agora/agora-box-init']; }],
+        ['entrypoint', i => { i.Config.Entrypoint = ['/usr/bin/python3', '/opt/agora/agora-box-init']; }],
+        ['entrypoint', i => { i.Config.Entrypoint = ['/usr/bin/python3', '-I', '/home/agent/init']; }],
+        ['entrypoint', i => { i.Config.Entrypoint = null; }],
+        ['command', i => { i.Config.Cmd = ['--stage2', '3']; }],
+        ['env-path', i => { i.Config.Env = i.Config.Env.map((e: string) => e.startsWith('PATH=') ? 'PATH=/home/agent/.local/bin:' + e.slice(5) : e); }],
+        ['env-path', i => { i.Config.Env = i.Config.Env.filter((e: string) => !e.startsWith('PATH=')); }],
+        ['env-home', i => { i.Config.Env = i.Config.Env.map((e: string) => e.startsWith('HOME=') ? 'HOME=/root' : e); }],
+        ['env-loader', i => { i.Config.Env.push('LD_PRELOAD=/home/agent/evil.so'); }],
+        ['env-loader', i => { i.Config.Env.push('PYTHONPATH=/home/agent/py'); }],
+        ['env-loader', i => { i.Config.Env.push('PYTHONSTARTUP=/home/agent/s.py'); }],
+        ['env-loader', i => { i.Config.Env.push('NODE_OPTIONS=--require /home/agent/x.js'); }],
+        ['env-loader', i => { i.Config.Env.push('NODE_PATH=/home/agent/m'); }],
+        ['env-loader', i => { i.Config.Env.push('BASH_ENV=/home/agent/rc'); }],
+        ['working-dir', i => { i.Config.WorkingDir = '/'; }],
+        ['tmpfs', i => { i.HostConfig.Tmpfs['/tmp'] = 'rw,exec,nosuid,nodev,size=1g,mode=1777'; }],
         ['user', i => { i.Config.User = '1000:1000'; }],
         ['user', i => { i.Config.User = '1001:1001'; }],
         ['runtime', i => { i.HostConfig.Runtime = 'runc'; }],

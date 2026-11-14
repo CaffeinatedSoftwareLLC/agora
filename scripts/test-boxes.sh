@@ -9,15 +9,15 @@
 # With gVisor (runsc) on the engine the boxes run under it; without it (Docker Desktop) they
 # run under runc with AGORA_BOX_INSECURE_DEV=1 and the kernel check is skipped.
 #
-# The stack is named agora-boxtest: it never touches another install's containers, networks
+# The stack is named agora-boxtest (BOXTEST_INSTANCE=agora-other runs a second one beside it, with its own BOXTEST_API_PORT, BOXTEST_HTTP_PORT, BOXTEST_HTTPS_PORT and BOXTEST_SUBNETS): it never touches another install's containers, networks
 # or volumes, and it is removed at the end (BOXTEST_KEEP=1 keeps it for debugging).
 # BOXTEST_ALLOW_DAEMON_RESTART=1 adds the reboot test, which restarts the Docker daemon: only
 # on a machine that runs nothing else (CI).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-INSTANCE=agora-boxtest
-ENV_FILE=.env.boxtest
+INSTANCE=${BOXTEST_INSTANCE:-agora-boxtest}
+ENV_FILE=.env.${INSTANCE#agora-}
 export BOXTEST_INSTANCE="$INSTANCE"
 export BOXTEST_COMPOSE="docker compose -p $INSTANCE -f docker-compose.prod.yml --env-file $ENV_FILE"
 export BOXTEST_API="http://127.0.0.1:${BOXTEST_API_PORT:-13000}"

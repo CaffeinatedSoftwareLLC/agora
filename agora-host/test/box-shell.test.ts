@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +14,7 @@ const SID = '01J00000000000000000000001';
 const TOKEN = `ar_${'0'.repeat(26)}.${'a'.repeat(64)}`;
 const HELPER = fileURLToPath(new URL('../../box/agora-pty', import.meta.url));
 const unix = process.platform !== 'win32';
-const hasPython = unix && spawnSync('python3', ['-c', 'import pty, termios']).status === 0;
+const hasPython = unix && spawnSync('/usr/bin/python3', ['-I', '-c', 'import pty, termios']).status === 0;
 
 /** The server's side of the socket: what the relay emits is recorded, what Agora sends is fired in. */
 class FakeTransport implements ShellTransport {
@@ -38,6 +39,8 @@ class FakePty implements PtyChild {
     onData(cb: (d: Buffer) => void) { this.data = cb; }
     onExit(cb: (c: number | null) => void) { this.exit = cb; }
     onError(cb: (c: string) => void) { this.error = cb; }
+    side: (s: 'operator' | 'agent') => void = () => {};
+    onSide(cb: (s: 'operator' | 'agent') => void) { this.side = cb; }
 }
 
 function setup(over: { now?: () => number; setTimer?: any; spawn?: (o: PtyOptions) => PtyChild } = {}) {
@@ -51,6 +54,31 @@ function setup(over: { now?: () => number; setTimer?: any; spawn?: (o: PtyOption
     const open = (extra: object = {}) => t.fire('shell:open', { sessionId: SID, cols: 100, rows: 30, rateBytesPerSecond: 512 * 1024, ...extra });
     return { t, relay, ptys, opts, logs, open };
 }
+
+describe('the side event (which side the owner types on)', () => {
+    it('is sent to Agora as the helper reports it, with the session id, and anything odd counts as the agent side', () => {
+        const { t, ptys, open } = setup();
+        open();
+        ptys[0].side('operator');
+        ptys[0].side('agent');
+        ptys[0].side('operator');
+        ptys[0].side('Operator' as any);
+        ptys[0].side(undefined as any);
+        expect(t.of('shell:side')).toEqual([
+            { sessionId: SID, side: 'operator' }, { sessionId: SID, side: 'agent' }, { sessionId: SID, side: 'operator' },
+            { sessionId: SID, side: 'agent' }, { sessionId: SID, side: 'agent' },
+        ]);
+    });
+
+    it('is not sent once the shell has ended', () => {
+        const { t, ptys, open } = setup();
+        open();
+        const old = ptys[0];
+        t.fire('shell:close', { sessionId: SID });
+        old.side('operator');
+        expect(t.of('shell:side')).toEqual([]);
+    });
+});
 
 describe('the relay with a fake shell', () => {
     it('opens a shell at the size asked, in the profile\'s folder with its environment, and says so', () => {
@@ -464,6 +492,67 @@ describe.skipIf(!hasPython)('the real pseudo-terminal (box/agora-pty, Python\'s 
     it('a command that does not exist is an error code from the helper or the shell, not a hang', async () => {
         const r = run(['/nonexistent/command']);
         expect(await r.exited).toBe(127);
+    });
+
+    describe('which side the owner is typing on (the foreground process group of the terminal)', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agora-side-'));
+        // Stands in for /usr/local/bin/as-agent: the helper looks for this path among the first arguments of a foreground process
+        const CLIENT = join(dir, 'as-agent');
+        writeFileSync(CLIENT, `import sys, time
+sys.stdout.write('operator@box:~$ ')
+sys.stdout.flush()
+time.sleep(float(sys.argv[1]) if len(sys.argv) > 1 else 2)
+`);
+        const runSide = (command: string[]) => {
+            const pty = makeHelperPty(HELPER, CLIENT)({ cols: 90, rows: 20, cwd: '/tmp', env: { PATH: process.env.PATH, TERM: 'xterm' }, command });
+            const sides: string[] = [];
+            let out = '';
+            pty.onSide(s => sides.push(s));
+            pty.onData(d => { out += d.toString('utf8'); });
+            pty.onExit(() => {});
+            return { pty, sides, out: () => out };
+        };
+        const last = (sides: string[]) => sides[sides.length - 1];
+
+        it('says operator in the operator own shell, agent while an as-agent client is in the foreground (even if it draws the operator prompt and stays open), and operator again when it ends', async () => {
+            const r = runSide(['/bin/bash', '--norc', '--noprofile', '-i']);
+            await until(() => last(r.sides) === 'operator');
+            r.pty.write(Buffer.from(`/usr/bin/python3 -I ${CLIENT} 2
+`));
+            await until(() => last(r.sides) === 'agent');
+            // It has drawn a copy of the operator's prompt, and keeps the session open: still the agent's side
+            await until(() => r.out().includes('operator@box:~$ '));
+            await new Promise(res => setTimeout(res, 800));
+            expect(last(r.sides)).toBe('agent');
+            // Only the helper's own report that the client left turns it back
+            await until(() => last(r.sides) === 'operator', 6000);
+            r.pty.write(Buffer.from('exit' + String.fromCharCode(10)));
+            r.pty.kill();
+        }, 20_000);
+
+        it('a client run in a pipeline, a subshell or by exec is still the agent side', async () => {
+            const r = runSide(['/bin/bash', '--norc', '--noprofile', '-i']);
+            await until(() => last(r.sides) === 'operator');
+            r.pty.write(Buffer.from(`(/usr/bin/python3 -I ${CLIENT} 1.5 | cat)
+`));
+            await until(() => last(r.sides) === 'agent');
+            await until(() => last(r.sides) === 'operator', 6000);
+            r.pty.write(Buffer.from(`exec /usr/bin/python3 -I ${CLIENT} 1.5
+`));
+            await until(() => last(r.sides) === 'agent');
+            r.pty.kill();
+        }, 20_000);
+
+        it('a background client does not make the shell the agent side, and the report repeats about once a second', async () => {
+            const r = runSide(['/bin/bash', '--norc', '--noprofile', '-i']);
+            await until(() => last(r.sides) === 'operator');
+            r.pty.write(Buffer.from(`/usr/bin/python3 -I ${CLIENT} 3 &
+`));
+            const n = r.sides.length;
+            await until(() => r.sides.length >= n + 2, 4000);
+            expect(r.sides.slice(n)).not.toContain('agent');
+            r.pty.kill();
+        }, 15_000);
     });
 
     it('the shell does not inherit the resize pipe (fd 3), while resizing still works', async () => {
