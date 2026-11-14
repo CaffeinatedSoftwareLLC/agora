@@ -753,6 +753,35 @@ export function BotDetailPanel({
         )}
       </section>
 
+      {/* ── Acts with its owner's authority (migration 102): the bot's owner or the server owner ── */}
+      {detail.canManageTokens && (
+        <section className="mb-4">
+          <label className="flex min-h-11 md:min-h-8 items-start gap-2 text-sm text-text">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={detail.actsAsOwner !== false}
+              onChange={async (e) => {
+                const enabled = e.target.checked;
+                try {
+                  await botApi.update(serverId, botId, { actsAsOwner: enabled });
+                  setDetail(prev => prev ? { ...prev, actsAsOwner: enabled } : prev);
+                } catch (err) {
+                  setError(err instanceof ApiError ? err.code : 'Could not change this');
+                }
+              }}
+            />
+            <span>
+              Acts with your authority: its messages can direct your agents and start or resume them as you
+              <span className="block text-xs text-text-muted">
+                Only for posts on a personal token you made on this bot, and only where you can direct agents. Off: it keeps only its own
+                &quot;can direct&quot; setting and the rule that lets it wake your own subscription agents.
+              </span>
+            </span>
+          </label>
+        </section>
+      )}
+
       {/* ── Tokens (owner / admin only) ── */}
       {detail.canManageTokens && (
         <section>

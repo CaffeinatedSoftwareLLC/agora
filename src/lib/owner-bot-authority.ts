@@ -1,21 +1,26 @@
 import { asService } from './agent-sessions';
 import { stampAuthority } from './direct-agents';
-import { ownerBotOf, serverSubscriptionWakes } from './provider-terms';
+import { actsAsOwner, ownerBotOf, serverSubscriptionWakes } from './provider-terms';
 
 /**
  * Owner bots and directing authority (docs/provider-terms.md, "Counts as you").
  *
- * A bot whose post counts as person X (ownerBotOf: X's own bot, on a token nobody else made, not
- * a model agent, no mixed terminal) has X's authority to direct agents for that post: it may
- * address every agent X could address by typing the same message (X is the server owner or holds
- * DirectAgents here). Whether a plan-owned agent actually runs is still the plan-owner rule's
- * call (termsAllow in agent-sessions.ts, recheckRows in agent-runs.ts).
+ * Two things hold for a bot whose post counts as its owner (ownerBotOf: the owner's own bot, on a
+ * token nobody else made, not a model agent, no mixed terminal):
+ * - it may wake the owner's plan-owned agents (the main rule, agent-sessions.ts termsAllow);
+ * - NEW, narrower: it acts with the owner's authority (this file). Only for a post on a PERSONAL
+ *   token the bot's owner made (not an agent host's, a box's or an invite token: an invite code can
+ *   be redeemed by someone else), and only while the bot's own switch is on
+ *   (users.bot_acts_as_owner, migration 102, default on). It may then direct every agent its
+ *   owner could direct (the owner is the server owner or holds DirectAgents there) without
+ *   can_direct, and start, end, resume and wake them as the owner. Budgets and CLI commands stay
+ *   with the person.
  *
- * The message keeps its own stamp: messages.author_could_direct stays false, so agents are
- * never shown [OWNER] or [DIRECTOR] for it. The host tags it [OWNER'S BOT] instead (ownerBot on
- * the claim's inbox item).
+ * The message keeps its own stamp: messages.author_could_direct stays false, so agents are never
+ * shown [OWNER] or [DIRECTOR] for it; the claim marks ownerBotDirect and the host tags it
+ * [OWNER'S BOT].
  *
- * Needs the service role (ownerBotOf and stampAuthority read agent and role tables).
+ * Needs the service role (reads agent, token and role tables).
  */
 export interface CountingBot {
     /** The person the bot's posts count as. */
@@ -24,20 +29,19 @@ export interface CountingBot {
     personCanDirect: boolean;
 }
 
+/** The person this post acts as, with the new authority; null when it doesn't (or the person can't direct here). */
 export async function countingBot(db: any, input: { botId: string; tokenId: string | null | undefined; channelId: string }): Promise<CountingBot | null> {
     if (!input.tokenId) return null;
     const server = (await db.query('SELECT server_id FROM channels WHERE id = $1', [input.channelId])).rows[0];
     if (!server || await serverSubscriptionWakes(db, server.server_id.trim()) !== 'owner_bots') return null;
     const personId = await ownerBotOf(db, input);
-    if (!personId) return null;
+    if (!personId || !await actsAsOwner(db, { botId: input.botId, tokenId: input.tokenId, personId })) return null;
     return { personId, personCanDirect: await stampAuthority(db, input.channelId, personId, false) };
 }
 
 /**
  * May this caller direct agents here: its own authority (stampAuthority), or, for a bot, that of
- * the person its token counts as. `actor` is who the action is done as: the bot itself, or the
- * person whose bot it is (their authority and, for a session start or resume, their name on
- * the session: a start by a counting bot is the person's own start).
+ * the person it acts as. `actorId` is who the action is done as.
  */
 export async function directingActor(db: any, input: { channelId: string; userId: string; isBot: boolean; tokenId: string | null | undefined }):
     Promise<{ actorId: string; asBotOf: string | null } | null> {

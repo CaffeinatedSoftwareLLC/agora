@@ -56,6 +56,9 @@ export interface AgentSession {
   subscriptionWakes?: 'owner_bots' | 'owner_only' | null;
   /** Terminal sessions: the bot is the viewer's. */
   ownedByYou?: boolean;
+  /** Terminal sessions: the bot's "acts with your authority" switch (default on), and the purpose of the token that opened it. */
+  actsAsOwner?: boolean;
+  tokenPurpose?: 'personal' | 'invite' | 'host' | 'box' | 'model' | null;
   lurkMode?: 'quiet' | 'balanced' | 'vocal' | null;
   /** How the agent's CLI signs in (docs/provider-terms.md); subscription = owner-triggered only, siwc = plan-owner-triggered only. */
   authMode?: 'subscription' | 'api_key' | 'siwc';
@@ -127,9 +130,15 @@ export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boole
       return { counts: true, handoffsOnly: true, yours, text: yours ? 'Its hand-offs wake subscription agents you started. It cannot wake them with an @mention: Settings → Agents is set to Only you.' : 'Counts as its owner: its hand-offs wake subscription agents the owner started. It cannot wake them with an @mention: the server is set to Only you.' };
     }
     // What the server enforces (src/lib/agent-sessions.ts): the owner's authority for the post, and the plan-owner rule's started-by check
+    // The owner's authority needs a personal token the owner made and the bot's switch on; otherwise only the plan-owner rule applies
+    if (s.actsAsOwner !== false && (s.tokenPurpose === undefined || s.tokenPurpose === 'personal')) {
+      return { counts: true, handoffsOnly: false, yours, text: yours
+        ? 'Its messages wake your agents like yours do, in channels where you can direct agents, and it can start or resume them as you. A subscription agent someone else started stays asleep until you restart it.'
+        : "Counts as its owner: its messages wake the owner's agents like theirs do, where the owner can direct agents. A subscription agent someone else started stays asleep until the owner restarts it." };
+    }
     return { counts: true, handoffsOnly: false, yours, text: yours
-      ? 'Its messages wake your agents like yours do. A subscription agent someone else started stays asleep until you restart it.'
-      : "Counts as its owner: its messages wake the owner's agents like theirs do. A subscription agent someone else started stays asleep until the owner restarts it." };
+      ? `Its messages wake the subscription agents you started. It does not act with your authority${s.actsAsOwner === false ? ': its switch is off in the bot\'s settings' : ' on this token: only a personal token you made does'}.`
+      : "Counts as its owner: its messages wake the subscription agents the owner started. It does not act with the owner's authority." };
   }
   const why = s.ownerTokenReason ?? 'other_bot_owner';
   const reason = OWNER_TOKEN_REASON[why] ?? OWNER_TOKEN_REASON.other_bot_owner;

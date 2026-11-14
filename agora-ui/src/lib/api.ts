@@ -167,6 +167,8 @@ export interface Bot {
   pausedAt?: string | null;
   pausedReason?: string | null;
   runtimeAccess?: RuntimeAccess;
+  /** Acts with its owner's authority on a personal token the owner made (migration 102, docs/provider-terms.md). Default on. */
+  actsAsOwner?: boolean;
 }
 
 export interface BotDetail extends Bot {
@@ -245,8 +247,8 @@ export const botApi = {
   create: (serverId: string, username: string) =>
     api.post<Bot & { bot: true; serverId: string }>(`/servers/${serverId}/bots`, { username }),
 
-  update: (serverId: string, botId: string, data: { username?: string; avatarUrl?: string | null }) =>
-    api.patch<{ id: string; username: string; avatarUrl: string | null }>(`/servers/${serverId}/bots/${botId}`, data),
+  update: (serverId: string, botId: string, data: { username?: string; avatarUrl?: string | null; actsAsOwner?: boolean }) =>
+    api.patch<{ id: string; username: string; avatarUrl: string | null; actsAsOwner?: boolean }>(`/servers/${serverId}/bots/${botId}`, data),
 
   remove: (serverId: string, botId: string) =>
     api.delete<{ deleted: true }>(`/servers/${serverId}/bots/${botId}`),

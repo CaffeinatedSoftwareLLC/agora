@@ -93,6 +93,8 @@ beforeAll(async () => {
 afterAll(async () => { await ctx.close(); });
 
 beforeEach(async () => {
+    // Bot-triggered notices are deduplicated for ten minutes (channel, thread, text): each test starts without earlier ones
+    await ctx.db.query(`DELETE FROM messages WHERE channel_id = $1 AND author_id IS NULL AND system_event = 'agent_session'`, [channelId]);
     await ctx.db.query('TRUNCATE agent_plan_connections, agent_tool_requests, agent_runs, agent_inbox, agent_batches, agent_session_threads, agent_sessions CASCADE');
     await bindTo(null);
 });

@@ -86,6 +86,8 @@ export const claimSchema = z.object({
         // Plan-owned sessions: the author is the plan owner's own bot and the server lets owner
         // bots wake it (subscription_wakes 'owner_bots'); checkTerms (terms.ts) reads it
         ownerBot: z.boolean().optional(),
+        // A direct wake by the owner's own bot, counted as the owner's automation: the prompt tags it [OWNER'S BOT]
+        ownerBotDirect: z.boolean().optional(),
     })).min(1).max(20),
     // Handoff offers in this batch addressed to this session, and handoffs that made it a
     // thread's owner (server src/lib/handoffs.ts); handoff.ts turns them into prompt lines

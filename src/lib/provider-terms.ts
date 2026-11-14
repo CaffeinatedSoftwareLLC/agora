@@ -168,6 +168,23 @@ export async function ownerBotOf(db: any, input: { botId: string; tokenId: strin
 }
 
 /**
+ * The owner-bot authority's token and switch conditions for a bot that already counts as `personId`
+ * (docs/provider-terms.md): a live PERSONAL token the owner made (or Agora made), not an agent
+ * host's, box's, model or invite token, and the bot's own switch (users.bot_acts_as_owner, migration
+ * 102) on. Needs the service role.
+ */
+export async function actsAsOwner(db: any, input: { botId: string; tokenId: string | null | undefined; personId: string }): Promise<boolean> {
+    if (!input.tokenId) return false;
+    const row = (await db.query(
+        `SELECT 1 FROM users u JOIN bot_tokens t ON t.id = $2::char(26) AND t.bot_id = u.id
+         WHERE u.id = $1 AND u.bot = true AND u.bot_acts_as_owner AND u.bot_owner_id = $3::char(26)
+           AND t.revoked_at IS NULL AND t.purpose = 'personal' AND (t.created_by IS NULL OR t.created_by = u.bot_owner_id)`,
+        [input.botId, input.tokenId, input.personId]
+    )).rows;
+    return row.length > 0;
+}
+
+/**
  * The channel notice for a wake of the plan owner's session by one of their own bots, refused
  * because someone else started (or last resumed) the session. `owner`: the plan owner,
  * `starter`: who started it, when known. The fix is the plan owner's: a start by them is the

@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
+import { displayName } from './message-envelope';
 import { claimHandoffs } from './handoffs';
 import { readAuthorities, stampAuthority } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, startedByNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
+import { actsAsOwner, consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, startedByNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { SESSION_COMMAND_HOLDS_SQL } from './session-commands';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { onRunFinished } from './receipts';
@@ -176,6 +177,12 @@ export interface ClaimResult {
          * owner's (provider-terms.ts). The host's checkTerms reads it.
          */
         ownerBot?: boolean;
+        /**
+         * A direct wake by the owner's own bot, which the server counted as the owner's automation (the
+         * owner's authority or the main owner-bot rule): the host's prompt tags the message [OWNER'S BOT].
+         * Never set on lurk, hand-off or protocol rows.
+         */
+        ownerBotDirect?: boolean;
     }>;
     /** Handoff offers in this batch addressed to the session, and handoffs that made it a thread's owner (handoffs.ts). */
     handoffs: Array<{ offerId: string; threadId: string; from: string; status: 'pending' | 'accepted';
@@ -348,7 +355,7 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
             // The session's starter is the blocker for everyone, the plan owner included: say so and how to fix it
             const named = planOwnerId
                 ? (await c.query('SELECT id, username FROM users WHERE id = ANY($1)', [[planOwnerId, session.started_by?.trim() ?? planOwnerId]])).rows : [];
-            const nameOf = (id: string | null | undefined) => named.find((u: any) => u.id.trim() === id?.trim())?.username ?? null;
+            const nameOf = (id: string | null | undefined) => { const u = named.find((x: any) => x.id.trim() === id?.trim()); return u ? displayName(u.username) : null; };
             notices.push(await postNotice(c, channelId, session.auth_mode === 'siwc' || !planOwnerId
                 ? planNotice(session.profile_name, session.auth_mode, !!planOwnerId)
                 : startedByNotice(session.profile_name, nameOf(planOwnerId) ?? 'the owner', nameOf(session.started_by))));
@@ -529,13 +536,16 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
             const key = `${m.author_id.trim()}:${tokenId}`;
             if (!ownerBots.has(key)) ownerBots.set(key, await ownerBotOf(c, { botId: m.author_id.trim(), tokenId, channelId }) === terms.planOwnerId);
             ownerBot = ownerBots.get(key)!;
-        } else if (!terms && ownerBotsOn && m.author_bot && m.author_active && m.author_bot_owner) {
+        } else if (!terms && ownerBotsOn && row.reason === 'direct' && !authority && m.author_bot && m.author_active && m.author_bot_owner) {
             // An agent anyone who can direct may wake: the owner's own bot has its owner's authority for the post
-            // (owner-bot-authority.ts), when the owner could direct here. The post keeps its own stamp (no [OWNER]).
+            // (owner-bot-authority.ts): counted as theirs, on a personal token they made, its switch on, and the owner could
+            // direct here. Rechecked now (revoked token, switch off, owner demoted since the post). Direct rows only.
+            // The post keeps its own stamp (no [OWNER]).
             const key = `${m.author_id.trim()}:${tokenId}`;
             if (!ownerBots.has(key)) {
                 const person = await ownerBotOf(c, { botId: m.author_id.trim(), tokenId, channelId });
-                ownerBots.set(key, !!person && await stampAuthority(c, channelId, person, false));
+                ownerBots.set(key, !!person && await actsAsOwner(c, { botId: m.author_id.trim(), tokenId, personId: person })
+                    && await stampAuthority(c, channelId, person, false));
             }
             ownerBot = ownerBots.get(key)!;
         }
@@ -570,7 +580,9 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
                 authority,
                 content: m.content,
                 createdAt: new Date(m.created_at).toISOString(),
+                // ownerBot: the plan-owner check at the host (checkTerms). ownerBotDirect: the prompt tag, direct rows only
                 ...(terms || ownerBot ? { ownerBot } : {}),
+                ...(ownerBot && !authority && row.reason === 'direct' ? { ownerBotDirect: true } : {}),
             },
         });
     }

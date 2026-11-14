@@ -292,7 +292,7 @@ export async function botRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
 
         const result = await db.query(
-            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_paused_at, bot_paused_reason, runtime_access
+            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_paused_at, bot_paused_reason, runtime_access, bot_acts_as_owner
              FROM users
              WHERE bot = true AND server_id = $1
              ORDER BY created_at`,
@@ -308,6 +308,7 @@ export async function botRoutes(app: FastifyInstance) {
             pausedAt: r.bot_paused_at,
             pausedReason: r.bot_paused_reason,
             runtimeAccess: r.runtime_access,
+            actsAsOwner: r.bot_acts_as_owner !== false,
         }));
 
         return reply.status(200).send(bots);
@@ -322,7 +323,7 @@ export async function botRoutes(app: FastifyInstance) {
         const db = request.dbClient!;
 
         const botRow = await db.query(
-            `SELECT id, username, bot_owner_id, created_at, avatar_url
+            `SELECT id, username, bot_owner_id, created_at, avatar_url, bot_acts_as_owner
              FROM users
              WHERE id = $1 AND bot = true AND server_id = $2`,
             [botId, serverId]
@@ -353,6 +354,7 @@ export async function botRoutes(app: FastifyInstance) {
             ownerId: bot.bot_owner_id?.trim() || null,
             createdAt: bot.created_at,
             avatarUrl: bot.avatar_url || null,
+            actsAsOwner: bot.bot_acts_as_owner !== false,
             canManageTokens,
             channels: channelsResult.rows.map((c: any) => ({
                 id: c.id.trim(),
@@ -372,12 +374,14 @@ export async function botRoutes(app: FastifyInstance) {
                 properties: {
                     username: { type: 'string', minLength: 1, maxLength: 32 },
                     avatarUrl: { type: ['string', 'null'] },
+                    // Acts with its owner's authority (migration 102, docs/provider-terms.md); its owner or the server owner sets it
+                    actsAsOwner: { type: 'boolean' },
                 },
             },
         },
     }, async (request, reply) => {
         const { serverId, id: botId } = request.params as any;
-        const { username, avatarUrl } = request.body as any;
+        const { username, avatarUrl, actsAsOwner } = request.body as any;
         const db = request.dbClient!;
 
         // Verify bot belongs to this server
@@ -387,6 +391,15 @@ export async function botRoutes(app: FastifyInstance) {
         );
         if (!botRow.rows[0]) {
             return reply.status(404).send({ error: 'Bot not found in this server' });
+        }
+
+        if (actsAsOwner !== undefined) {
+            const ownerRow = await db.query('SELECT bot_owner_id FROM users WHERE id = $1', [botId]);
+            const botOwner = ownerRow.rows[0]?.bot_owner_id?.trim();
+            if (botOwner !== request.userId.trim() && !await isServerOwner(db, serverId, request.userId)) {
+                return reply.status(403).send({ error: 'owner_only' });
+            }
+            await db.query('UPDATE users SET bot_acts_as_owner = $2 WHERE id = $1', [botId, actsAsOwner]);
         }
 
         if (avatarUrl !== undefined && avatarUrl !== null) {
@@ -423,6 +436,7 @@ export async function botRoutes(app: FastifyInstance) {
             id: botId.trim(),
             username: username || botRow.rows[0].username,
             avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : (botRow.rows[0].avatar_url || null),
+            ...(actsAsOwner !== undefined ? { actsAsOwner } : {}),
         });
     });
 

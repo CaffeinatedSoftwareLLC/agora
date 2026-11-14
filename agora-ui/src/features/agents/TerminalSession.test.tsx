@@ -193,9 +193,9 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     expect(ownerTokenNote(hosted())).toBeNull();
     expect(ownerTokenNote(terminal())).toBeNull(); // a server that doesn't say
     expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: true })))
-      .toEqual({ counts: true, handoffsOnly: false, yours: true, text: 'Its messages wake your agents like yours do. A subscription agent someone else started stays asleep until you restart it.' });
+      .toEqual({ counts: true, handoffsOnly: false, yours: true, text: 'Its messages wake your agents like yours do, in channels where you can direct agents, and it can start or resume them as you. A subscription agent someone else started stays asleep until you restart it.' });
     expect(ownerTokenNote(terminal({ ownerToken: true, ownerTokenReason: null, ownedByYou: false }))?.text)
-      .toBe("Counts as its owner: its messages wake the owner's agents like theirs do. A subscription agent someone else started stays asleep until the owner restarts it.");
+      .toBe("Counts as its owner: its messages wake the owner's agents like theirs do, where the owner can direct agents. A subscription agent someone else started stays asleep until the owner restarts it.");
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'other_maker', ownedByYou: true }))?.text)
       .toBe("This terminal won't wake subscription agents: its token was made by someone other than the bot's owner.");
     expect(ownerTokenNote(terminal({ ownerToken: false, ownerTokenReason: 'started_by_other', ownedByYou: true }))?.text)
@@ -224,11 +224,11 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: 'claude: terminal session, working, counts as you. Open session details' });
-    expect(chip.getAttribute('title')).toContain('Its messages wake your agents like yours do.');
+    expect(chip.getAttribute('title')).toContain('Its messages wake your agents like yours do,');
     expect(screen.getByTestId('owner-token').textContent).toContain('counts as you');
     fireEvent.click(chip);
     await screen.findByRole('dialog');
-    expect(screen.getByTestId('terminal-owner-token').textContent).toBe('Counts as you. Its messages wake your agents like yours do. A subscription agent someone else started stays asleep until you restart it.');
+    expect(screen.getByTestId('terminal-owner-token').textContent).toBe('Counts as you. Its messages wake your agents like yours do, in channels where you can direct agents, and it can start or resume them as you. A subscription agent someone else started stays asleep until you restart it.');
   });
 
   it("a terminal on someone else's token says it doesn't count, and why", async () => {
@@ -245,7 +245,7 @@ describe('terminal chip: does it count as the owner (docs/provider-terms.md)', (
     useAgentPresenceStore.getState().setAll([{ userId: CLAUDE, username: 'claude', channelId: CH, status: 'listening', mode: 'mcp' }]);
     render(<ConsoleStrip channelId={CH} onOpenThread={() => {}} />);
     const chip = await screen.findByRole('button', { name: 'claude: terminal session, working. Open session details' });
-    expect(chip.getAttribute('title')).toContain("Counts as its owner: its messages wake the owner's agents like theirs do.");
+    expect(chip.getAttribute('title')).toContain("Counts as its owner: its messages wake the owner's agents like theirs do,");
     expect(screen.queryByTestId('owner-token')).toBeNull();
   });
 });

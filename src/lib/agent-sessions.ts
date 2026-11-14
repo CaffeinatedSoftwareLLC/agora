@@ -2,9 +2,11 @@ import { generateUlid, ulidFloor } from '../utils/ulid';
 import type { ProtocolInfo } from './protocol';
 import { postNotice, threadReplyCounted, type Notice } from './agent-runs';
 import { expireLiveRequests } from './agent-permissions';
-import { ownerBotOf, ownerOnlyNotice, planNotice, startedByNotice, PLAN_OWNER_SQL, subscriptionWakesOf, WAKE_AUTH_SQL, type SubscriptionWakes } from './provider-terms';
+import { actsAsOwner, ownerBotOf, ownerOnlyNotice, planNotice, startedByNotice, PLAN_OWNER_SQL, subscriptionWakesOf, WAKE_AUTH_SQL, type SubscriptionWakes } from './provider-terms';
 import { noticeStandby } from './terminal-sessions';
 import { stampAuthority } from './direct-agents';
+import { displayName } from './message-envelope';
+import { mentionTokens } from '../routes/shared';
 
 /**
  * Agent sessions: which posts wake which agent (docs/planning/agent-sessions-wbs.md,
@@ -128,7 +130,10 @@ interface RouteContext {
     /** A bot author: the token the post was made with (stored on its wakes), and its purpose. */
     tokenId: string | null;
     tokenPurpose: string | null;
-    /** A bot author that counts as a person: that person could direct agents here (stampAuthority). */
+    /**
+     * A bot author acting with its person's authority (owner-bot-authority.ts: a personal token the owner made, the
+     * bot's switch on) and that person could direct agents here: the post may address any agent they could.
+     */
     countsAsDirects: boolean;
     /** Sessions refused because of the subscription rule; one notice each. */
     refused: Map<string, LiveSession>;
@@ -266,8 +271,8 @@ function termsRefusal(target: LiveSession, reason: 'direct' | 'handoff' | 'proto
 function mayDirect(target: LiveSession, ctx: RouteContext): boolean {
     if (ctx.couldDirect) return true;
     if (ctx.authorHuman || ctx.wakes !== 'owner_bots' || !ctx.countsAs) return false;
-    // A bot that counts as a person has that person's authority for the post: every agent they
-    // could address by typing it (the server owner, or someone holding DirectAgents here) ...
+    // A bot acting with a person's authority (a personal token they made, its switch on) may address every agent
+    // they could address by typing it (the server owner, or someone holding DirectAgents here) ...
     if (ctx.countsAsDirects) return true;
     // ... and a plan owner's own plan-owned agents, whatever their roles (ChatGPT plans)
     return target.subscription && !!target.planOwnerId && ctx.countsAs === target.planOwnerId;
@@ -371,6 +376,103 @@ async function closeThread(db: any, threadId: string, sessionIds: string[], canc
     }
 }
 
+interface Built {
+    ctx: RouteContext;
+    terminals: LiveSession[];
+    terminalBots: Set<string>;
+    standby: LiveSession[];
+    sessions: LiveSession[];
+    authorSession: LiveSession | undefined;
+    /** Bots the owner runs themselves get notices for an @mention that wakes nobody (hosted and model agents none). */
+    noticeBot: boolean;
+}
+
+/** Who wrote the message and which sessions it can reach (service role). */
+async function buildContext(db: any, msg: RoutedMessage): Promise<Built> {
+    const authorId = msg.authorId.trim();
+    // Single responder: an agent connected from a terminal answers there, not through its hosted session
+    const terminals = await terminalSessions(db, msg.channelId);
+    const terminalBots = new Set<string>(terminals.map(s => s.botId));
+    const all = await liveSessions(db, msg.channelId);
+    const standby = all.filter(s => terminalBots.has(s.botId));
+    const sessions = all.filter(s => !terminalBots.has(s.botId));
+    // An agent writing from its terminal is that terminal session (its hosted one is on
+    // standby), when the post was made with the token that opened it. Any other post by
+    // the bot (another token: a hosted run, a plain API call) keeps the old rules.
+    const authorSession = sessions.find(s => s.botId === authorId)
+        ?? terminals.find(s => s.botId === authorId && !!s.tokenId && s.tokenId === msg.authorTokenId);
+    const author = await db.query(
+        `SELECT u.bot, btrim(u.bot_owner_id) AS bot_owner_id, srv.subscription_wakes, t.purpose AS token_purpose
+         FROM users u CROSS JOIN channels c JOIN servers srv ON srv.id = c.server_id
+         LEFT JOIN bot_tokens t ON t.id = $3::char(26) AND t.bot_id = u.id AND t.revoked_at IS NULL
+         WHERE u.id = $1 AND c.id = $2`,
+        [authorId, msg.channelId, msg.authorTokenId ?? null]
+    );
+    const tokenId = author.rows[0]?.bot === true ? msg.authorTokenId ?? null : null;
+    const authorHuman = author.rows[0]?.bot === false;
+    const wakes = subscriptionWakesOf(author.rows[0]?.subscription_wakes);
+    // Whose own automation a bot's post is, for plan-owned targets (owner bots)
+    const countsAs = author.rows[0]?.bot === true && wakes === 'owner_bots'
+        ? await ownerBotOf(db, { botId: authorId, tokenId: msg.authorTokenId, channelId: msg.channelId })
+        : null;
+    // Acting with that person's authority needs more: a personal token they made and the bot's switch on (owner-bot-authority.ts)
+    const countsAsDirects = countsAs && await actsAsOwner(db, { botId: authorId, tokenId: msg.authorTokenId, personId: countsAs })
+        ? await stampAuthority(db, msg.channelId, countsAs, false) : false;
+    const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, wakes, countsAs,
+        tokenId, tokenPurpose: tokenId ? author.rows[0]?.token_purpose ?? null : null,
+        countsAsDirects, botOwnerId: author.rows[0]?.bot_owner_id ?? null, refused: new Map(), directRefused: new Set(), startedByRefused: new Map() };
+    const noticeBot = author.rows[0]?.bot === true && (!!countsAs || ['personal', 'invite'].includes(ctx.tokenPurpose ?? ''));
+    return { ctx, terminals, terminalBots, standby, sessions, authorSession, noticeBot };
+}
+
+/**
+ * The text for a wake the plan-owner rule refused, naming the real cause and the one fix. `direct`: the
+ * refused wake was a direct one (an @mention, the sole agent, a task thread).
+ */
+async function refusalText(db: any, msg: RoutedMessage, ctx: RouteContext, s: LiveSession, why: 'plan' | 'started_by', direct: boolean): Promise<string> {
+    if (why === 'started_by') {
+        const names = await namesOf(db, [ctx.countsAs, s.startedBy]);
+        return startedByNotice(displayName(s.profileName), names.get(ctx.countsAs ?? '') ?? 'the owner', s.startedBy ? names.get(s.startedBy) ?? null : null);
+    }
+    // The plan owner's own bot, refused because the server is set to Only you: name the setting, not the generic rule
+    if (!ctx.authorHuman && ctx.wakes === 'owner_only' && direct && s.planOwnerId && ctx.botOwnerId === s.planOwnerId && s.authMode !== 'siwc') {
+        const names = await namesOf(db, [ctx.authorId, s.planOwnerId]);
+        return ownerOnlyNotice(names.get(ctx.authorId) ?? 'This bot', displayName(s.profileName), names.get(s.planOwnerId) ?? 'the owner');
+    }
+    // The plan owner's own bot on a personal token that doesn't count: name why (what its chip says) and the fix
+    const named = !ctx.authorHuman && ctx.wakes === 'owner_bots' && !ctx.countsAs && s.planOwnerId && ctx.botOwnerId === s.planOwnerId
+        && ['personal', 'invite'].includes(ctx.tokenPurpose ?? '') && s.authMode !== 'siwc'
+        ? await whyNotCounting(db, msg, ctx, s.planOwnerId) : null;
+    return named
+        ? `${named.bot} is ${named.owner}'s bot, but its messages don't count as ${named.owner}'s, so they can't wake ${displayName(s.profileName)}: ${named.reason}.`
+        : planNotice(displayName(s.profileName), s.authMode, !!s.planOwnerId);
+}
+
+/**
+ * Would a bot's post that @mentions these usernames be refused by the plan-owner rule? Used up front
+ * by a wake with require_direct (session_wake), so nothing is posted that routing would refuse. The
+ * texts are the ones routing would post. Empty: nothing refuses. Service role.
+ */
+export async function wakePreflight(db: any, input: { channelId: string; authorId: string; authorTokenId: string | null; couldDirect: boolean; content: string }): Promise<string[]> {
+    const names = mentionTokens(input.content).filter(n => n !== 'everyone');
+    if (names.length === 0) return [];
+    const msg: RoutedMessage = { channelId: input.channelId, messageId: '', threadId: null, authorId: input.authorId, couldDirect: input.couldDirect,
+        protocol: null, mentionedUserIds: [], authorTokenId: input.authorTokenId };
+    return asService(db, async () => {
+        const ids = (await db.query(
+            `SELECT btrim(u.id) AS id FROM users u JOIN bot_channel_access bca ON bca.bot_id = u.id AND bca.channel_id = $2
+             WHERE lower(u.username) = ANY($1)`, [names, input.channelId])).rows.map((r: any) => r.id as string);
+        const { ctx, sessions } = await buildContext(db, msg);
+        const out: string[] = [];
+        for (const s of sessions.filter(x => ids.includes(x.botId) && x.botId !== ctx.authorId)) {
+            if (!mayDirect(s, ctx)) continue;
+            const why = termsRefusal(s, 'direct', ctx);
+            if (why) out.push(await refusalText(db, msg, ctx, s, why, true));
+        }
+        return out;
+    });
+}
+
 /**
  * Record the wakes a newly inserted message causes. Returns the notices for wakes the
  * subscription rule refused, to emit after the transaction commits.
@@ -388,40 +490,8 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
     }
 
     return asService(db, async () => {
-        const authorId = msg.authorId.trim();
-        // Single responder: an agent connected from a terminal answers there, not through its hosted session
-        const terminals = await terminalSessions(db, msg.channelId);
-        const terminalBots = new Set<string>(terminals.map(s => s.botId));
-        const all = await liveSessions(db, msg.channelId);
-        const standby = all.filter(s => terminalBots.has(s.botId));
-        const sessions = all.filter(s => !terminalBots.has(s.botId));
-        // An agent writing from its terminal is that terminal session (its hosted one is on
-        // standby), when the post was made with the token that opened it. Any other post by
-        // the bot (another token: a hosted run, a plain API call) keeps the old rules.
-        const authorSession = sessions.find(s => s.botId === authorId)
-            ?? terminals.find(s => s.botId === authorId && !!s.tokenId && s.tokenId === msg.authorTokenId);
-        const author = await db.query(
-            `SELECT u.bot, btrim(u.bot_owner_id) AS bot_owner_id, srv.subscription_wakes, t.purpose AS token_purpose
-             FROM users u CROSS JOIN channels c JOIN servers srv ON srv.id = c.server_id
-             LEFT JOIN bot_tokens t ON t.id = $3::char(26) AND t.bot_id = u.id AND t.revoked_at IS NULL
-             WHERE u.id = $1 AND c.id = $2`,
-            [authorId, msg.channelId, msg.authorTokenId ?? null]
-        );
-        const tokenId = author.rows[0]?.bot === true ? msg.authorTokenId ?? null : null;
-        const authorHuman = author.rows[0]?.bot === false;
-        const wakes = subscriptionWakesOf(author.rows[0]?.subscription_wakes);
-        // Whose own automation a bot's post is, for plan-owned targets (owner bots)
-        const countsAs = author.rows[0]?.bot === true && wakes === 'owner_bots'
-            ? await ownerBotOf(db, { botId: authorId, tokenId: msg.authorTokenId, channelId: msg.channelId })
-            : null;
-        // A bot that counts as a person has that person's authority for this post (owner-bot-authority.ts)
-        const countsAsDirects = countsAs ? await stampAuthority(db, msg.channelId, countsAs, false) : false;
-        const ctx: RouteContext = { authorId, couldDirect: msg.couldDirect, authorHuman, authorSession, wakes, countsAs,
-            tokenId, tokenPurpose: tokenId ? author.rows[0]?.token_purpose ?? null : null,
-            countsAsDirects, botOwnerId: author.rows[0]?.bot_owner_id ?? null, refused: new Map(), directRefused: new Set(), startedByRefused: new Map() };
-        // Bots the owner runs themselves (a terminal or script on a personal or invite token, or one that counts as them)
-        // get a notice when their @mention wakes nobody; hosted agents and model agents talk a lot and get none
-        const noticeBot = author.rows[0]?.bot === true && (!!countsAs || ['personal', 'invite'].includes(ctx.tokenPurpose ?? ''));
+        const { ctx, terminals, terminalBots, standby, sessions, authorSession, noticeBot } = await buildContext(db, msg);
+        const authorId = ctx.authorId, authorHuman = ctx.authorHuman, wakes = ctx.wakes;
 
         if (msg.threadId === null) {
             const agents = new Set([...sessions.map(s => s.botId), ...terminalBots]).size;
@@ -435,6 +505,18 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
             await addInbox(db, permitted(sessions.filter(s => s.lurkMode && s.botId !== authorId), 'lurk', ctx),
                 msg.messageId, msg.threadId, 'lurk', ctx.tokenId);
         }
+        // The plan owner, in person, woke a subscription session with no recorded starter (a restore, a deleted starter): it is theirs now.
+        // A session another known person started is never adopted.
+        if (authorHuman && msg.couldDirect) {
+            await db.query(
+                `UPDATE agent_sessions s SET started_by = $1::char(26)
+                 FROM agent_profiles p JOIN servers srv ON srv.id = p.server_id
+                 WHERE p.id = s.profile_id AND s.started_by IS NULL AND s.state = 'live' AND s.kind = 'hosted'
+                   AND ${PLAN_OWNER_SQL} = $1::char(26)
+                   AND EXISTS (SELECT 1 FROM agent_inbox i WHERE i.session_id = s.id AND i.message_id = $2 AND i.reason = 'direct')`,
+                [authorId, msg.messageId]
+            );
+        }
         const notices: Notice[] = [];
         // Someone who can direct addressed an agent on standby: say once why its hosted session stays quiet
         if (msg.couldDirect || noticeBot) {
@@ -447,34 +529,20 @@ export async function routeMessage(db: any, msg: RoutedMessage): Promise<Notice[
             notices.push(await postNotice(db, msg.channelId, content, msg.threadId));
             if (msg.threadId) notices.push(await threadReplyCounted(db, msg.channelId, msg.threadId));
         };
-        // The new bot notices (botMentionNotices) are said once per ten minutes: a bot that keeps mentioning the same agent must not flood the channel
+        // Bot-triggered notices are said once per ten minutes (channel, thread and text): a bot that keeps
+        // mentioning the same agent must not flood the channel. A person's own message always gets its answer.
+        const floor = ulidFloor(Date.now() - 10 * 60 * 1000);
         const sayOnce = async (content: string) => {
             const same = await db.query(
-                `SELECT 1 FROM messages WHERE channel_id = $1 AND thread_id IS NOT DISTINCT FROM $2 AND author_id IS NULL
-                   AND system_event = 'agent_session' AND content = $3 AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
-                [msg.channelId, msg.threadId, content]
+                `SELECT 1 FROM messages WHERE channel_id = $1 AND id > $4 AND thread_id IS NOT DISTINCT FROM $2 AND author_id IS NULL
+                   AND system_event = 'agent_session' AND content = $3 LIMIT 1`,
+                [msg.channelId, msg.threadId, content, floor]
             );
             if (same.rows.length === 0) await say(content);
         };
-        for (const s of ctx.refused.values()) {
-            // The plan owner's own bot, refused because the server is set to Only you: name the setting, not the generic rule
-            if (!authorHuman && wakes === 'owner_only' && ctx.directRefused.has(s.id) && s.planOwnerId && ctx.botOwnerId === s.planOwnerId && s.authMode !== 'siwc') {
-                const names = await namesOf(db, [ctx.authorId, s.planOwnerId]);
-                await say(ownerOnlyNotice(names.get(ctx.authorId) ?? 'This bot', s.profileName, names.get(s.planOwnerId) ?? 'the owner'));
-            } else {
-                // The plan owner's own bot on a personal token that doesn't count: name why (what its chip says) and the fix
-                const why = !authorHuman && wakes === 'owner_bots' && !ctx.countsAs && s.planOwnerId && ctx.botOwnerId === s.planOwnerId
-                    && ['personal', 'invite'].includes(ctx.tokenPurpose ?? '') && s.authMode !== 'siwc'
-                    ? await whyNotCounting(db, msg, ctx, s.planOwnerId) : null;
-                await say(why ? `${why.bot} is ${why.owner}'s bot, but its messages don't count as ${why.owner}'s, so they can't wake ${s.profileName}: ${why.reason}.` : planNotice(s.profileName, s.authMode, !!s.planOwnerId));
-            }
-        }
-        if (ctx.startedByRefused.size > 0) {
-            const names = await namesOf(db, [ctx.countsAs, ...[...ctx.startedByRefused.values()].map(s => s.startedBy)]);
-            for (const s of ctx.startedByRefused.values()) {
-                await say(startedByNotice(s.profileName, names.get(ctx.countsAs ?? '') ?? 'the owner', s.startedBy ? names.get(s.startedBy) ?? null : null));
-            }
-        }
+        const emit = authorHuman ? say : sayOnce;
+        for (const s of ctx.refused.values()) await emit(await refusalText(db, msg, ctx, s, 'plan', ctx.directRefused.has(s.id)));
+        for (const s of ctx.startedByRefused.values()) await emit(await refusalText(db, msg, ctx, s, 'started_by', true));
         if (msg.couldDirect && authorHuman) {
             const refusedBots = new Set([...ctx.refused.values()].map(s => s.botId));
             for (const name of await unreachable(db, msg, authorId, terminalBots, refusedBots)) {
@@ -498,24 +566,25 @@ async function whyNotCounting(db: any, msg: RoutedMessage, ctx: RouteContext, ow
                 (SELECT m.username FROM bot_tokens t JOIN users m ON m.id = t.created_by
                  WHERE t.id = $2::char(26) AND t.created_by IS NOT NULL AND t.created_by <> $3) AS maker,
                 EXISTS (SELECT 1 FROM agent_sessions s WHERE s.bot_id = u.id AND s.channel_id = $4 AND s.kind = 'terminal' AND s.state = 'live' AND s.token_mixed) AS mixed,
-                (SELECT x.username FROM agent_sessions s JOIN users x ON x.id = s.started_by
+                (SELECT CASE WHEN s.channel_id = $4 THEN x.username ELSE 'someone else' END
+                 FROM agent_sessions s JOIN users x ON x.id = s.started_by
                  WHERE s.bot_id = u.id AND s.kind = 'hosted' AND s.state = 'live' AND s.started_by <> $3 LIMIT 1) AS other_starter
          FROM users u JOIN users o ON o.id = $3 WHERE u.id = $1`,
         [ctx.authorId, msg.authorTokenId ?? null, owner, msg.channelId]
     )).rows[0];
     if (!row) return null;
-    const reason = row.maker ? `this token was made by ${row.maker}, not ${row.owner}; ${row.owner} should make a new personal token for the bot (Settings → Agents) and connect with it`
+    const reason = row.maker ? `this token was made by ${displayName(row.maker)}, not ${displayName(row.owner)}; ${displayName(row.owner)} should make a new personal token for the bot (Settings → Agents) and connect with it`
         : row.mixed ? 'two different tokens share this bot\'s terminal session; close the terminal and reconnect with only the new token'
-        : row.other_starter ? `a hosted session of this bot was started by ${row.other_starter}; ${row.owner} should end it`
+        : row.other_starter ? `a hosted session of this bot was started by ${displayName(row.other_starter)}; ${displayName(row.owner)} should end it`
         : null;
-    return reason ? { bot: row.bot, owner: row.owner, reason } : null;
+    return reason ? { bot: displayName(row.bot), owner: displayName(row.owner), reason } : null;
 }
 
 async function namesOf(db: any, ids: Array<string | null | undefined>): Promise<Map<string, string>> {
     const wanted = [...new Set(ids.filter((i): i is string => !!i).map(i => i.trim()))];
     if (wanted.length === 0) return new Map();
     const rows = await db.query('SELECT id, username FROM users WHERE id = ANY($1)', [wanted]);
-    return new Map(rows.rows.map((r: any) => [r.id.trim(), r.username]));
+    return new Map(rows.rows.map((r: any) => [r.id.trim(), displayName(r.username)]));
 }
 
 /** Why a session is shelved, from agent_sessions.end_reason and limit_stop (docs/agent-limits.md). */
@@ -555,7 +624,7 @@ async function botMentionNotices(db: any, msg: RoutedMessage, ctx: RouteContext,
     )).rows.filter((r: any) => !r.woken);
     if (agents.length === 0) return [];
     const authorRow = (await db.query('SELECT username, bot_owner_id FROM users WHERE id = $1', [ctx.authorId])).rows[0];
-    const bot = authorRow?.username ?? 'This bot';
+    const bot = displayName(authorRow?.username ?? 'This bot');
     const ownerId: string | null = authorRow?.bot_owner_id?.trim() ?? null;
     const names = await namesOf(db, [ctx.countsAs, ownerId]);
     const person = names.get(ctx.countsAs ?? '') ?? 'its owner';
@@ -565,23 +634,20 @@ async function botMentionNotices(db: any, msg: RoutedMessage, ctx: RouteContext,
         const live = sessions.some(s => s.botId === a.bot_id) || a.live;
         if (live) {
             if (ctx.wakes === 'owner_only' && a.subscription) {
-                out.push(`${bot} can't wake ${a.name}: Settings → Agents, "Who can wake subscription agents", is set to "Only you". `
+                out.push(`${bot} can't wake ${displayName(a.name)}: Settings → Agents, "Who can wake subscription agents", is set to "Only you". `
                     + `Set it to "You and your own agents" so ${botOwner}'s bots can, or post the message yourself.`);
             } else if (ctx.countsAs && !ctx.countsAsDirects) {
-                out.push(`${bot} counts as ${person}, but ${person} can't direct agents in this channel, so ${bot} can't wake ${a.name}. `
+                out.push(`${bot} counts as ${person}, but ${person} can't direct agents in this channel, so ${bot} can't wake ${displayName(a.name)}. `
                     + `Give ${person} the Direct Agents permission here (only the server owner can).`);
             } else {
                 const why = ownerId && ['personal', 'invite'].includes(ctx.tokenPurpose ?? '') ? await whyNotCounting(db, msg, ctx, ownerId) : null;
-                out.push(`${bot} can't wake ${a.name}: it can't direct agents here, and its messages don't count as ${botOwner}'s`
+                out.push(`${bot} can't wake ${displayName(a.name)}: it can't direct agents here, and its messages don't count as ${botOwner}'s`
                     + (why ? `: ${why.reason}.` : `. Its chip in the Sessions list says why; the server owner can also let it direct agents (Server settings → Bots).`));
             }
         } else if (a.shelved) {
-            const resume = ctx.countsAs && ctx.countsAsDirects
-                ? `Resume it: /resume ${a.shelved.id} (${bot} may do that too, with session_start, as ${person}'s bot).`
-                : `Resume it: /resume ${a.shelved.id}. ${bot} can't resume it; someone who can direct agents here does.`;
-            out.push(`${a.name} is shelved (${shelvedReason(a.shelved)}), so nothing woke it. ${resume}`);
+            out.push(`${displayName(a.name)} is shelved (${shelvedReason(a.shelved)}), so nothing woke it. Resume it: /resume ${a.shelved.id}.`);
         } else {
-            out.push(`${a.username} has no live session here, so nothing woke it. Start one with /start ${a.name}.`);
+            out.push(`${displayName(a.username)} has no live session here, so nothing woke it. Start one with /start ${displayName(a.name)}.`);
         }
     }
     return out;
