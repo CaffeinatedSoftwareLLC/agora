@@ -1,6 +1,9 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useNotificationStore } from '../../stores/notificationStore';
+import { useUIStore } from '../../stores/uiStore';
+import { shellHistorySettled } from '../shell/shellHistory';
 import { relativeTime } from '../../lib/relativeTime';
 import type { AppNotification } from '../../lib/contracts/notifications';
 
@@ -8,6 +11,12 @@ import type { AppNotification } from '../../lib/contracts/notifications';
  * The notification bell: unread badge and, when opened, the list. Tapping a notification
  * marks it read and opens its channel (and thread). On a phone the list spans the screen
  * width under the header; on wider screens it drops down from the bell.
+ *
+ * The list is rendered in a portal on document.body. The bell sits in a header with a
+ * backdrop-filter, which makes the header the containing block of `fixed` descendants and
+ * traps their z-index in its own stacking context: inside it the list was positioned against
+ * the 48px header and painted under the message list, so text overlapped and taps landed on
+ * the messages. It is also a shell overlay, so Back (and Escape) close it like other sheets.
  */
 export function NotificationBell({ className = '' }: { className?: string }) {
   const navigate = useNavigate();
@@ -16,15 +25,37 @@ export function NotificationBell({ className = '' }: { className?: string }) {
   const hasMore = useNotificationStore(s => s.hasMore);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
+  const [anchor, setAnchor] = useState({ top: 56, right: 8 });
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const listId = useId();
+  const overlayId = `notifications-${listId}`;
+
+  // Wider screens: drop down from the bell (the panel is fixed to the viewport, not the bell)
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (r) setAnchor({ top: Math.round(r.bottom + 8), right: Math.max(8, Math.round(window.innerWidth - r.right)) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    useUIStore.getState().openOverlay({ kind: 'notifications', id: overlayId, onClose: () => setOpen(false) });
+    return () => useUIStore.getState().releaseOverlay(overlayId);
+  }, [open, overlayId]);
 
   useEffect(() => {
     if (!open) return;
     useNotificationStore.getState().load().catch(() => setError("Couldn't load notifications."));
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     const onPointer = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!rootRef.current?.contains(t) && !panelRef.current?.contains(t)) setOpen(false);
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onPointer);
@@ -34,9 +65,13 @@ export function NotificationBell({ className = '' }: { className?: string }) {
     };
   }, [open]);
 
-  const select = (n: AppNotification) => {
+  const select = async (n: AppNotification) => {
+    // Close through the overlay stack, then wait for the history entry it pushed to be
+    // popped; navigating first would let that pop undo the thread the link opens.
+    useUIStore.getState().closeOverlay();
     setOpen(false);
     void useNotificationStore.getState().markRead(n.id).catch(() => {});
+    await shellHistorySettled();
     // Only paths inside this UI: the server builds them, but never follow anything else
     if (n.url.startsWith('/') && !n.url.startsWith('//')) navigate(n.url);
   };
@@ -66,12 +101,14 @@ export function NotificationBell({ className = '' }: { className?: string }) {
         )}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
+          ref={panelRef}
           id={listId}
           role="dialog"
           aria-label="Notifications"
-          className="fixed left-2 right-2 top-14 md:absolute md:left-auto md:right-0 md:top-full md:mt-2 md:w-[360px] z-50 max-h-[70vh] flex flex-col rounded-xl border border-border bg-surface shadow-xl"
+          style={{ '--np-top': `${anchor.top}px`, '--np-right': `${anchor.right}px` } as React.CSSProperties}
+          className="fixed left-2 right-2 top-14 md:left-auto md:right-[var(--np-right)] md:top-[var(--np-top)] md:w-[360px] z-[60] max-h-[70vh] flex flex-col rounded-xl border border-border bg-surface shadow-xl"
         >
           <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
             <h2 className="text-sm font-semibold text-text">Notifications</h2>
@@ -87,12 +124,12 @@ export function NotificationBell({ className = '' }: { className?: string }) {
           {error && <p className="px-4 py-3 text-sm text-danger" role="alert">{error}</p>}
           {!error && items.length === 0 && <p className="px-4 py-6 text-sm text-text-muted text-center">No notifications yet.</p>}
           {items.length > 0 && (
-            <ul className="overflow-y-auto" aria-label="Notification list">
+            <ul className="overflow-y-auto overscroll-contain" aria-label="Notification list">
               {items.map(n => (
                 <li key={n.id}>
                   <button
                     type="button"
-                    onClick={() => select(n)}
+                    onClick={() => { void select(n); }}
                     className={`w-full text-left min-h-11 px-4 py-2.5 flex items-start gap-3 hover:bg-surface-hover border-b border-border/50 ${n.readAt ? 'opacity-70' : ''}`}
                   >
                     <span
@@ -118,7 +155,8 @@ export function NotificationBell({ className = '' }: { className?: string }) {
               Show older
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

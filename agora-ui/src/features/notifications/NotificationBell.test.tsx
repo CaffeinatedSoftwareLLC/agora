@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { useNotificationStore } from '../../stores/notificationStore';
 import type { AppNotification } from '../../lib/contracts/notifications';
+import { useUIStore } from '../../stores/uiStore';
 import { NotificationBell } from './NotificationBell';
 
 const CH = 'C'.repeat(26);
@@ -63,7 +64,7 @@ test('tapping a notification marks it read and opens its url', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   fireEvent.click(await screen.findByText('Approval waiting in #general'));
   expect(post).toHaveBeenCalledWith(`/me/notifications/${approval.id}/read`);
-  expect(screen.getByTestId('where')).toHaveTextContent(`/app/${CH}?thread=${TH}`);
+  await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent(`/app/${CH}?thread=${TH}`));
   expect(screen.queryByRole('dialog', { name: 'Notifications' })).toBeNull();
   await waitFor(() => expect(useNotificationStore.getState().unread).toBe(0));
 });
@@ -102,4 +103,41 @@ test('never follows a url that is not a path in this UI', async () => {
   fireEvent.click(await screen.findByText('Approval waiting in #general'));
   expect(screen.getByTestId('where')).toHaveTextContent('/app');
   expect(screen.getByTestId('where')).not.toHaveTextContent('evil');
+});
+
+// The bell sits in a header with a backdrop-filter. A `fixed` list rendered inside it is laid out
+// against that 48px header and painted under the message list: rows overlapped the messages and
+// taps landed on them. jsdom lays nothing out, so assert the structure that prevents it.
+test('the list is rendered outside the header, on document.body', async () => {
+  const { container } = render(
+    <MemoryRouter initialEntries={['/app']}>
+      <header style={{ backdropFilter: 'blur(12px)' }}><NotificationBell /></header>
+    </MemoryRouter>,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Notifications' });
+  expect(container.contains(dialog)).toBe(false);
+  expect(dialog.parentElement).toBe(document.body);
+  expect(dialog.className).toMatch(/fixed/);
+  expect(dialog.className).toMatch(/bg-surface/);
+});
+
+test('is a shell overlay: Back (dismissTop) closes it, and opening is tracked', async () => {
+  renderBell();
+  fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+  await screen.findByRole('dialog', { name: 'Notifications' });
+  expect(useUIStore.getState().activeOverlay?.kind).toBe('notifications');
+  act(() => useUIStore.getState().dismissTop());
+  expect(screen.queryByRole('dialog', { name: 'Notifications' })).toBeNull();
+  expect(useUIStore.getState().activeOverlay).toBeNull();
+});
+
+test('a tap outside the list closes it, a tap inside does not', async () => {
+  renderBell();
+  fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Notifications' });
+  fireEvent.pointerDown(within(dialog).getByText('Notifications'));
+  expect(screen.getByRole('dialog', { name: 'Notifications' })).toBeInTheDocument();
+  fireEvent.pointerDown(document.body);
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Notifications' })).toBeNull());
 });
