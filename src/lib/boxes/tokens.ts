@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { generateBotToken } from '../../auth/bot-tokens';
 import { hashPassword } from '../../auth/passwords';
@@ -18,6 +18,8 @@ export interface BoxTokens {
     hostId: string;
     /** ah_<hostId>.<secret> */
     hostToken: string;
+    /** ar_<hostId>.<secret>: the terminal relay's own credential (docs/box-terminal.md); never the host token */
+    relayToken: string;
     botId: string;
     /** bot_<tokenId>.<secret> */
     botToken: string;
@@ -47,6 +49,10 @@ export async function rotateBoxTokens(pool: Pool, boxId: string): Promise<BoxTok
     // Hash outside the transaction: Argon2 is slow and the row lock should be short
     const hostSecret = randomBytes(32).toString('hex');
     const hostHash = await hashPassword(hostSecret);
+    // The terminal relay's credential is its own secret: the host token proves nothing to the terminal hub
+    const relaySecret = randomBytes(32).toString('hex');
+    // 256 random bits: a fast digest is enough (and means the hub needs no failure limiter, shell-hub.ts)
+    const relayHash = createHash('sha256').update(relaySecret).digest('hex');
     const bot = await generateBotToken();
 
     return inTransaction(pool, async (db) => {
@@ -66,9 +72,9 @@ export async function rotateBoxTokens(pool: Pool, boxId: string): Promise<BoxTok
         )).rows[0].generation as number;
         // The host is live again whatever revoked it before (a delete that was then restored)
         await db.query(
-            `UPDATE agent_hosts SET secret_hash = $2, box_generation = $3, revoked_at = NULL
+            `UPDATE agent_hosts SET secret_hash = $2, relay_secret_hash = $5, box_generation = $3, revoked_at = NULL
              WHERE id = $1 AND kind = 'box' AND box_id = $4`,
-            [hostId, hostHash, gen, boxId]
+            [hostId, hostHash, gen, boxId, relayHash]
         ).then(r => { if (r.rowCount !== 1) throw new Error(`Box ${boxId} has no box host`); });
         // Every token the bot had: a box bot never holds an unbound one
         await db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE bot_id = $1 AND revoked_at IS NULL`, [botId]);
@@ -76,7 +82,9 @@ export async function rotateBoxTokens(pool: Pool, boxId: string): Promise<BoxTok
             `INSERT INTO bot_tokens (id, bot_id, secret_hash, name, box_id, box_generation, purpose) VALUES ($1, $2, $3, 'box', $4, $5, 'box')`,
             [bot.tokenId, botId, bot.secretHash, boxId, gen]
         );
-        return { generation: gen, hostId, hostToken: `ah_${hostId}.${hostSecret}`, botId, botToken: bot.raw };
+        return {
+            generation: gen, hostId, hostToken: `ah_${hostId}.${hostSecret}`, relayToken: `ar_${hostId}.${relaySecret}`, botId, botToken: bot.raw,
+        };
     });
 }
 
@@ -93,7 +101,7 @@ export async function prepareBoxRestore(pool: Pool): Promise<{ boxes: number; ho
             `UPDATE agent_boxes SET generation = generation + 1, updated_at = NOW() RETURNING id`
         );
         const hosts = await db.query(
-            `UPDATE agent_hosts SET secret_hash = $1, box_generation = NULL WHERE kind = 'box' OR box_id IS NOT NULL`,
+            `UPDATE agent_hosts SET secret_hash = $1, relay_secret_hash = NULL, box_generation = NULL WHERE kind = 'box' OR box_id IS NOT NULL`,
             [deadHash]
         );
         const tokens = await db.query(

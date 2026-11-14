@@ -146,6 +146,9 @@ export interface PatchBoxInput {
     memoryMb?: number;
     pids?: number;
     homeChannelId?: string;
+    terminalIdleMinutes?: number;
+    terminalMaxHours?: number;
+    terminalRateKbps?: number;
 }
 
 export async function patchBox(db: any, box: { id: string; server_id: string; bot_id: string }, patch: PatchBoxInput, userId: string): Promise<void> {
@@ -161,9 +164,12 @@ export async function patchBox(db: any, box: { id: string; server_id: string; bo
         `UPDATE agent_boxes SET
             allowed_domains = COALESCE($2, allowed_domains),
             cpus = COALESCE($3, cpus), memory_mb = COALESCE($4, memory_mb), pids = COALESCE($5, pids),
-            home_channel_id = COALESCE($6, home_channel_id), updated_at = NOW()
+            home_channel_id = COALESCE($6, home_channel_id),
+            terminal_idle_minutes = COALESCE($7, terminal_idle_minutes), terminal_max_hours = COALESCE($8, terminal_max_hours),
+            terminal_rate_kbps = COALESCE($9, terminal_rate_kbps), updated_at = NOW()
          WHERE id = $1`,
-        [box.id, domains, patch.cpus ?? null, patch.memoryMb ?? null, patch.pids ?? null, patch.homeChannelId ?? null]
+        [box.id, domains, patch.cpus ?? null, patch.memoryMb ?? null, patch.pids ?? null, patch.homeChannelId ?? null,
+         patch.terminalIdleMinutes ?? null, patch.terminalMaxHours ?? null, patch.terminalRateKbps ?? null]
     );
     if (patch.repos) {
         // Keep rows that stay (their default branch is cached)

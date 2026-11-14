@@ -1,0 +1,126 @@
+#!/usr/bin/python3 -I
+"""agora-relay-supervisor: keeps the owner's terminal relay running (docs/box-terminal.md).
+
+Started by agora-box-init as the OPERATOR (uid 1001) with no capability, with the relay credential
+on fd 3 (a pipe only this process inherits). It holds the credential in memory and hands it to each
+relay it starts through a fresh pipe. It exists so that the init does not have to keep SETUID/SETGID
+for the life of the box just to restart a relay: restarting a process of the same user needs no
+privilege at all.
+
+  * the relay is `node /opt/agora/agora-host/dist/index.js box-relay --token-fd N`, absolute paths,
+    in this process's environment (fixed by the init: a root-owned PATH, HOME=/home/operator, no
+    NODE_* or interpreter setting);
+  * if it ends, it is started again with a back-off (1, 2, 4, 8 s), at most 5 starts a minute; after
+    that the relay stays down and this process only waits (the box and the agent are unaffected, and
+    the terminal is shown as unavailable for this box);
+  * exit status 2 means the relay refused its arguments, user or credential: starting it again
+    cannot help, so it is not started again.
+"""
+import ctypes
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+NODE = '/usr/local/bin/node'
+HOST = '/opt/agora/agora-host/dist/index.js'
+TOKEN = re.compile(r'^ar_[0-9A-HJKMNP-TV-Z]{26}\.[0-9a-f]{64}$')
+MAX_STARTS = 5
+WINDOW = 60.0
+BACKOFF = (1.0, 2.0, 4.0, 8.0, 16.0)
+stopping = False
+child = None
+
+
+def log(message):
+    sys.stderr.write('agora-relay-supervisor: %s\n' % message)
+    sys.stderr.flush()
+
+
+def on_term(_signum, _frame):
+    global stopping
+    stopping = True
+    if child is not None:
+        try:
+            child.terminate()
+        except OSError:
+            pass
+
+
+def read_token(fd):
+    data = b''
+    while True:
+        part = os.read(fd, 4096)
+        if not part:
+            break
+        data += part
+        if len(data) > 4096:
+            break
+    os.close(fd)
+    text = data.decode('ascii', 'replace').strip()
+    return text if TOKEN.match(text) else None
+
+
+def sleep(seconds):
+    end = time.monotonic() + seconds
+    while not stopping and time.monotonic() < end:
+        time.sleep(0.2)
+
+
+def not_dumpable():
+    """PR_SET_DUMPABLE 0: nothing but root can read this process's memory or attach to it, even a process
+    of the same user, and the relay it starts is not made readable through it either."""
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0)    # PR_SET_DUMPABLE = 4
+    except (OSError, AttributeError):
+        log('cannot mark this process not dumpable')
+
+
+def main():
+    global child
+    not_dumpable()
+    token = read_token(3)
+    if token is None:
+        log('the relay credential is missing or malformed: no terminal in this box')
+        return 2
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_term)
+    starts = []
+    while not stopping:
+        now = time.monotonic()
+        starts = [t for t in starts if now - t < WINDOW]
+        if len(starts) >= MAX_STARTS:
+            log('the relay ended %d times in a minute: leaving it down; the terminal is unavailable until the box restarts' % MAX_STARTS)
+            while not stopping:
+                time.sleep(1.0)
+            break
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, token.encode())
+        os.close(write_fd)
+        try:
+            child = subprocess.Popen([NODE, HOST, 'box-relay', '--token-fd', str(read_fd)],
+                                     pass_fds=(read_fd,), stdin=subprocess.DEVNULL, close_fds=True)
+        except OSError as err:
+            os.close(read_fd)
+            log('cannot start the relay: %s' % err.strerror)
+            return 70
+        os.close(read_fd)
+        starts.append(now)
+        code = child.wait()
+        child = None
+        if stopping:
+            break
+        if code == 2:
+            log('the relay refused its arguments or credential (status 2): not starting it again')
+            while not stopping:
+                time.sleep(1.0)
+            break
+        log('the relay ended (status %d)' % code)
+        sleep(BACKOFF[min(len(starts), len(BACKOFF)) - 1])
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

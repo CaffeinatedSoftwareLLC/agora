@@ -99,6 +99,9 @@ check "API prefix /servers is proxied" /servers '*/*' application/json no
 check "/administrator is not an API route" /administrator "$HTML" text/html no
 check "/files-page is not an API route" /files-page "$HTML" text/html no
 check "SPA route /settings/agents is the app shell" /settings/agents "$HTML" text/html no
+# The owner's terminal (docs/box-terminal.md): its page is an SPA route, its REST routes sit under /boxes
+check "SPA route /terminal/<box> is the app shell" /terminal/01JABCDEFGHJKMNPQRSTVWXYZ0 "$HTML" text/html no
+check "/boxes/<box>/terminal is proxied to the API" /boxes/01JABCDEFGHJKMNPQRSTVWXYZ0/terminal '*/*' application/json no
 
 # body <name> <path> <expected body>: which upstream answered
 body() {

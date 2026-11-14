@@ -15,7 +15,7 @@ export function inspectFrom(spec: ContainerCreateOptions, id = 'c'.repeat(64)): 
         Name: `/${spec.name}`,
         RestartCount: 0,
         State: { Running: false, Restarting: false, Status: 'created' },
-        Config: { Image: spec.Image, User: spec.User, Env: spec.Env, Labels: { ...(spec.Labels ?? {}) } },
+        Config: { Image: spec.Image, User: spec.User, Env: spec.Env, Entrypoint: spec.Entrypoint, Cmd: spec.Cmd ?? null, WorkingDir: spec.WorkingDir, Labels: { ...(spec.Labels ?? {}) } },
         HostConfig: JSON.parse(JSON.stringify({ ...hc, Mounts: undefined })),
         Mounts: (hc.Mounts ?? []).map((m: any) => ({ Type: m.Type, Name: m.Source, Destination: m.Target, RW: !m.ReadOnly })),
         NetworkSettings: {

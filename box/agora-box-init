@@ -1,0 +1,360 @@
+#!/usr/bin/python3 -I
+"""agora-box-init: PID 1 of an agent box (docs/agent-boxes.md section 17, docs/box-terminal.md).
+
+A box runs two long-lived processes for two Unix users, so that the AI agent and the owner's
+terminal cannot reach each other:
+
+  agent     uid 1000   agora-box-start -> agora-host: claims runs, starts the agent's CLI
+  operator  uid 1001   agora-relay-supervisor -> agora-host box-relay: the terminal's socket, the owner's shell
+
+boxd starts the container as root, with only CAP_SETUID, CAP_SETGID, CAP_SETPCAP and CAP_KILL (no
+other capability, no-new-privileges on). This program is that root. It is the only code in the box
+that ever runs as root with a capability, so it is written to trust nothing the agent can write:
+
+  * It is started as `/usr/bin/python3 -I /opt/agora/agora-box-init` (boxd sets the entrypoint; the
+    shebang above says the same). The interpreter and the script are absolute paths in the
+    read-only root filesystem; -I means no PYTHON* variable, no user site (so no usercustomize.py
+    or .pth file under $HOME), and no current directory or script directory on the import path.
+    Nothing is looked up through PATH, and nothing is read from $HOME, the working directory or
+    the agent's volume (the agent's home is /home/agent, a volume the agent controls; PATH in the
+    image lists root-owned directories first, and root does not use it anyway).
+  * It starts again at once (exec, still PID 1) with an environment of its own choosing: empty.
+    The container's environment, which holds the credentials, is handed to the second stage in a
+    memory file descriptor and never stays in /proc/1/environ, which the kernel keeps for the life
+    of the process. The second stage's environ is empty, so a root reading it (or a crash dump of
+    this process) finds no credential there.
+  * It reads no input after that: no file, no socket, no signal payload but SIGTERM/INT/HUP and
+    the exit of its children.
+
+For each child, before exec:
+
+  1. empty the bounding capability set (needs CAP_SETPCAP),
+  2. drop supplementary groups and set uid/gid (needs CAP_SETUID/CAP_SETGID); leaving root clears
+     the permitted and effective sets,
+  3. clear the inheritable and ambient sets, set no-new-privileges,
+  4. read /proc/self/status and refuse to exec if any capability set is not empty.
+
+So no process of either user holds a capability, and none can gain one by exec. After the children
+run, this process gives up everything but CAP_KILL, which it keeps only to pass a stop on to the
+children (it is root, and they are not).
+
+The terminal relay's credential (AGORA_RELAY_TOKEN) goes to the relay's supervisor alone, through
+a pipe only that process inherits, and is in no child's environment. The supervisor
+(box/agora-relay-supervisor) runs as the operator with no capability and starts the relay again,
+with a capped back-off, if it dies: this init does not need SETUID for its whole life to do that.
+
+If the agent runner ends, the box ends (Docker's restart policy brings it back). If the terminal side
+ends, the box stays up and the terminal is unavailable until the box restarts.
+"""
+import ctypes
+import errno
+import json
+import os
+import re
+import signal
+import sys
+import time
+
+PYTHON = '/usr/bin/python3'
+SELF = '/opt/agora/agora-box-init'
+AGENT_UID = AGENT_GID = 1000
+OPERATOR_UID = OPERATOR_GID = 1001
+AGENT_HOME = '/home/agent'
+OPERATOR_HOME = '/home/operator'
+SUPERVISOR = '/opt/agora/agora-relay-supervisor'
+AGENT_START = '/opt/agora/agora-box-start'
+# The agent's own search path, as it always was: its installs (npm -g, pip --user) first. It is the
+# AGENT's environment only; this program and the operator never use it.
+ROOT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+AGENT_PATH = '/home/agent/.npm-global/bin:/home/agent/.local/bin:' + ROOT_PATH
+OPERATOR_PATH = '/opt/agora/bin:' + ROOT_PATH
+RELAY_TOKEN = re.compile(r'^ar_[0-9A-HJKMNP-TV-Z]{26}\.[0-9a-f]{64}$')
+PROXY_VARS = ('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+MAX_ENV_BYTES = 1 << 20
+GRACE_SECONDS = 25.0       # Docker's stop timeout is 30
+CAP_KILL = 5
+
+PR_CAPBSET_DROP = 24
+PR_SET_NO_NEW_PRIVS = 38
+PR_CAP_AMBIENT = 47
+PR_CAP_AMBIENT_CLEAR_ALL = 4
+CAP_V3 = 0x20080522
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+
+def log(message):
+    sys.stderr.write('agora-box-init: %s\n' % message)
+    sys.stderr.flush()
+
+
+def die(message, status=64):
+    log(message)
+    sys.exit(status)
+
+
+class _Header(ctypes.Structure):
+    _fields_ = [('version', ctypes.c_uint32), ('pid', ctypes.c_int)]
+
+
+class _Data(ctypes.Structure):
+    _fields_ = [('effective', ctypes.c_uint32), ('permitted', ctypes.c_uint32), ('inheritable', ctypes.c_uint32)]
+
+
+def capset(effective, permitted, inheritable):
+    header = _Header(CAP_V3, 0)
+    data = (_Data * 2)(
+        _Data(effective & 0xFFFFFFFF, permitted & 0xFFFFFFFF, inheritable & 0xFFFFFFFF),
+        _Data(effective >> 32, permitted >> 32, inheritable >> 32),
+    )
+    if libc.capset(ctypes.byref(header), data) != 0:
+        raise OSError(ctypes.get_errno(), 'capset')
+
+
+def prctl(option, a2=0, a3=0, a4=0, a5=0):
+    if libc.prctl(option, a2, a3, a4, a5) != 0:
+        raise OSError(ctypes.get_errno(), 'prctl %d' % option)
+
+
+def drop_bounding(keep=()):
+    """Remove every capability from the bounding set but `keep`. Needs CAP_SETPCAP."""
+    for cap in range(0, 64):
+        if cap in keep:
+            continue
+        if libc.prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0:
+            err = ctypes.get_errno()
+            if err == errno.EINVAL:   # past the kernel's last capability
+                break
+            raise OSError(err, 'PR_CAPBSET_DROP %d' % cap)
+
+
+def capability_sets():
+    sets = {}
+    with open('/proc/self/status') as f:
+        for line in f:
+            for key in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb'):
+                if line.startswith(key + ':'):
+                    sets[key] = int(line.split(':', 1)[1].strip(), 16)
+    return sets
+
+
+def require_no_capabilities():
+    sets = capability_sets()
+    if not all(k in sets for k in ('CapPrm', 'CapEff', 'CapBnd')):
+        raise RuntimeError('cannot read the capability sets')
+    bad = [k for k, v in sets.items() if v != 0]
+    if bad:
+        raise RuntimeError('capabilities left: ' + ','.join(bad))
+
+
+def start(name, uid, gid, argv, env, cwd, token_pipe=None):
+    """Fork a child that becomes `uid`/`gid` with no capability and runs argv. Returns its pid."""
+    pid = os.fork()
+    if pid:
+        return pid
+    try:
+        # Signals: back to the defaults (Python ignores SIGPIPE, and ignored stays ignored across exec)
+        for sig in (signal.SIGPIPE, signal.SIGXFSZ, signal.SIGINT, signal.SIGTERM, signal.SIGCHLD):
+            signal.signal(sig, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_SETMASK, [])
+        os.setsid()
+        null = os.open('/dev/null', os.O_RDWR)
+        os.dup2(null, 0)
+        if null > 2:
+            os.close(null)
+        keep = {}
+        if token_pipe is not None:
+            keep[3] = token_pipe
+        # Every inherited descriptor but the standard three (and the supervisor's token pipe, as fd 3)
+        if keep:
+            os.dup2(token_pipe, 3)
+            os.set_inheritable(3, True)
+        os.closerange(4 if keep else 3, 4096)
+        drop_bounding()
+        os.setgroups([])
+        os.setresgid(gid, gid, gid)
+        os.setresuid(uid, uid, uid)
+        capset(0, 0, 0)
+        prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL)
+        prctl(PR_SET_NO_NEW_PRIVS, 1)
+        require_no_capabilities()
+        if os.getuid() != uid or os.geteuid() != uid or os.getgid() != gid or os.getgroups():
+            raise RuntimeError('did not become %d' % uid)
+        os.chdir(cwd)
+        os.execve(argv[0], argv, env)
+    except BaseException as err:   # noqa: BLE001 - nothing may survive in the child
+        try:
+            os.write(2, ('agora-box-init: could not start %s: %s\n' % (name, err)).encode())
+        finally:
+            os._exit(70)
+    os._exit(70)
+
+
+def stage_one():
+    """First stage: runs with the container's environment. Hands it on in a memory descriptor and
+    starts the second stage with an empty environment, as the same process (still PID 1)."""
+    try:
+        os.chdir('/')   # not the agent's home, which is the container's working directory
+    except OSError as err:
+        die('cannot enter /: %s' % err)
+    if os.geteuid() != 0:
+        die('the box must start as root (boxd sets the user); this box was made by an older Agora')
+    payload = json.dumps(dict(os.environ)).encode()
+    if len(payload) > MAX_ENV_BYTES:
+        die('the container environment is too large')
+    try:
+        fd = os.memfd_create('agora-box-env', 0)
+        os.write(fd, payload)
+        os.lseek(fd, 0, os.SEEK_SET)
+    except (AttributeError, OSError) as err:
+        die('cannot hand the environment on (memfd_create): %s' % err)
+    os.set_inheritable(fd, True)
+    try:
+        os.execve(PYTHON, [PYTHON, '-I', SELF, '--stage2', str(fd)], {})
+    except OSError as err:
+        die('cannot start the second stage: %s' % err)
+
+
+def read_environment(fd):
+    chunks = []
+    total = 0
+    while True:
+        part = os.read(fd, 1 << 16)
+        if not part:
+            break
+        total += len(part)
+        if total > MAX_ENV_BYTES:
+            die('the container environment is too large')
+        chunks.append(part)
+    os.close(fd)
+    try:
+        env = json.loads(b''.join(chunks))
+    except ValueError:
+        die('the container environment could not be read')
+    if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        die('the container environment could not be read')
+    return env
+
+
+def stage_two(fd):
+    if os.geteuid() != 0:
+        die('the box must start as root')
+    os.chdir('/')
+    env = read_environment(fd)
+    relay_token = env.pop('AGORA_RELAY_TOKEN', '')
+    if not RELAY_TOKEN.match(relay_token):
+        die('AGORA_RELAY_TOKEN is not set or is malformed; boxd sets it when it creates the box')
+    for name in ('AGORA_INSTANCE_URL', 'AGORA_BOX_ID'):
+        if not env.get(name):
+            die('%s is not set; boxd sets it when it creates the box' % name)
+
+    # The agent's environment is the container's, with the relay credential gone and its own
+    # search path. Nothing else of ours reaches it.
+    agent_env = dict(env)
+    agent_env['PATH'] = AGENT_PATH
+    agent_env['HOME'] = AGENT_HOME
+    # The supervisor and the relay get a fixed environment built from nothing but constants and the
+    # few values they need; no PATH entry, library or interpreter setting of the container reaches them
+    relay_env = {
+        'PATH': OPERATOR_PATH, 'HOME': OPERATOR_HOME, 'USER': 'operator', 'LOGNAME': 'operator',
+        'LANG': env.get('LANG', 'C.UTF-8') if re.match(r'^[A-Za-z0-9_.@-]{1,40}$', env.get('LANG', 'C.UTF-8')) else 'C.UTF-8',
+        'NODE_ENV': 'production',
+        'AGORA_HOST_IN_BOX': '1', 'AGORA_INSTANCE_URL': env['AGORA_INSTANCE_URL'], 'AGORA_BOX_ID': env['AGORA_BOX_ID'],
+    }
+    if env.get('AGORA_BOX_GENERATION'):
+        relay_env['AGORA_BOX_GENERATION'] = env['AGORA_BOX_GENERATION']
+    for name in PROXY_VARS:
+        if env.get(name):
+            relay_env[name] = env[name]
+
+    # Signals are taken here, in one place, so nothing is lost between a fork and the wait
+    wanted = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGCHLD}
+    signal.pthread_sigmask(signal.SIG_BLOCK, wanted)
+
+    # The relay's credential: a pipe only the supervisor inherits, written and closed before anything runs
+    token_read, token_write = os.pipe()
+    os.write(token_write, relay_token.encode())
+    os.close(token_write)
+    del relay_token
+
+    children = {}
+    children[start('agent', AGENT_UID, AGENT_GID, [AGENT_START], agent_env, AGENT_HOME)] = 'agent'
+    children[start('relay', OPERATOR_UID, OPERATOR_GID, [PYTHON, '-I', SUPERVISOR], relay_env, OPERATOR_HOME, token_read)] = 'relay'
+    os.close(token_read)
+    env.clear()
+    agent_env.clear()
+    relay_env.clear()
+
+    # Now give up everything but CAP_KILL
+    drop_bounding(keep={CAP_KILL})
+    capset(1 << CAP_KILL, 1 << CAP_KILL, 0)
+    prctl(PR_SET_NO_NEW_PRIVS, 1)
+    log('started (agent pid %d, operator relay supervisor pid %d)' % tuple(sorted(children)))
+
+    stopping = False
+    first_exit = None          # status to exit with
+    deadline = None
+    killed = False
+
+    def signal_children(sig):
+        for pid in list(children):
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+            except OSError as err:
+                log('could not signal pid %d: %s' % (pid, err))
+
+    while True:
+        try:
+            got = signal.sigtimedwait(wanted, 1.0)
+        except InterruptedError:
+            got = None
+        if got is not None and got.si_signo in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP) and not stopping:
+            stopping = True
+            first_exit = 0 if first_exit is None else first_exit
+            deadline = time.monotonic() + GRACE_SECONDS
+            signal_children(signal.SIGTERM)
+        # Reap everything, ours or an orphan's
+        while True:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                pid = 0
+                children.clear()
+            if pid == 0:
+                break
+            name = children.pop(pid, None)
+            if name is None:
+                continue
+            code = os.waitstatus_to_exitcode(status)
+            code = code if code >= 0 else 128 - code
+            if stopping:
+                continue
+            if name == 'relay':
+                # The terminal side is not the agent's work: the box goes on without it
+                log('the terminal side ended (status %d): the terminal is unavailable until the box restarts' % code)
+                continue
+            log('%s ended (status %d): stopping the box' % (name, code))
+            stopping = True
+            first_exit = code
+            deadline = time.monotonic() + GRACE_SECONDS
+            signal_children(signal.SIGTERM)
+        if not children:
+            sys.exit(first_exit if first_exit is not None else 0)
+        if stopping and deadline is not None and time.monotonic() > deadline and not killed:
+            killed = True
+            signal_children(signal.SIGKILL)
+
+
+def main(argv):
+    if len(argv) == 1:
+        stage_one()
+    elif len(argv) == 3 and argv[1] == '--stage2' and argv[2].isdigit():
+        stage_two(int(argv[2]))
+    else:
+        die('usage: agora-box-init (started by the container runtime)')
+
+
+if __name__ == '__main__':
+    main(sys.argv)

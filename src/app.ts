@@ -48,6 +48,7 @@ import { accountDeletionRoutes } from './routes/account-deletion';
 import { notificationRoutes } from './routes/notifications';
 import { boxRoutes } from './routes/boxes';
 import { boxHostRoutes } from './routes/box-hosts';
+import { boxTerminalRoutes } from './routes/box-terminal';
 import { startNotificationListener } from './lib/notifications';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { startModelAgentHandler } from './ai/model-agent-handler';
@@ -428,6 +429,7 @@ export async function buildApp(opts?: {
     // Agent boxes (docs/agent-boxes.md): owner API and the box host's login routes
     await app.register(boxRoutes);
     await app.register(boxHostRoutes);
+    await app.register(boxTerminalRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

@@ -22,7 +22,7 @@ export function hasEdgeHeaders(headers: Record<string, unknown>): boolean {
 }
 
 export interface ProvenanceCredential {
-    kind: 'bot' | 'host' | 'user';
+    kind: 'bot' | 'host' | 'relay' | 'user';
     /** Bot or user ID (users.id), or the agent host's ID */
     id: string;
     serverId: string | null;
@@ -72,7 +72,7 @@ export async function recordRefusal(db: any, cred: ProvenanceCredential, verdict
     await db.query(
         `INSERT INTO audit_log (id, server_id, actor_id, action, target_type, target_id, changes)
          VALUES ($1, $2, $3, 'box_provenance_refused', $4, $5, $6)`,
-        [generateUlid(), serverId, cred.kind === 'host' ? null : cred.id, cred.kind === 'host' ? 'agent_host' : cred.kind, cred.id,
+        [generateUlid(), serverId, cred.kind === 'host' || cred.kind === 'relay' ? null : cred.id, cred.kind === 'host' || cred.kind === 'relay' ? 'agent_host' : cred.kind, cred.id,
          JSON.stringify({ code: verdict.code, credentialBox: cred.boxId?.trim() ?? null, edgeBox: verdict.edgeBoxId, method: where.method, route: where.route })]
     );
     if (!box?.home_channel_id || !noticeBoxId) return [];
@@ -90,7 +90,7 @@ export async function recordRefusal(db: any, cred: ProvenanceCredential, verdict
          VALUES ($1, $2, NULL, 'box_provenance_notice', 'box', $3, $4)`,
         [generateUlid(), box.server_id, noticeBoxId, JSON.stringify({ code: verdict.code })]
     );
-    const what = cred.kind === 'user' ? 'A person\'s login' : cred.kind === 'host' ? 'A host token' : 'A bot token';
+    const what = cred.kind === 'user' ? 'A person\'s login' : cred.kind === 'host' ? 'A host token' : cred.kind === 'relay' ? 'A terminal relay credential' : 'A bot token';
     const text = `Box **${box.name}**: ${what} ${NOTICE_TEXT[verdict.code]} (\`${verdict.code}\`). It is in the audit log; further refusals for this box are not posted for an hour.`;
     return [await postNotice(db, box.home_channel_id.trim(), text)];
 }

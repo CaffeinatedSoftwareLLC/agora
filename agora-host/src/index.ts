@@ -9,6 +9,8 @@ import { siwcCommand } from './siwc/cli.js';
 import { autostartCommand } from './autostart.js';
 import { creditLine } from './openrouter.js';
 import { boxConfigCommand, inBox } from './box.js';
+import { boxRelayCommand } from './box-shell.js';
+import { runAsAgentServer } from './box-as-agent.js';
 import { devinCommand } from './devin.js';
 
 async function main() {
@@ -18,6 +20,8 @@ async function main() {
     if (process.argv[2] === 'autostart') { process.exitCode = await autostartCommand(process.argv.slice(3)); return; }
     // agora-host box-config --repos | --state | --out <file>: the agent box entrypoint's config (box.ts)
     if (process.argv[2] === 'box-config') { process.exitCode = await boxConfigCommand(process.argv.slice(3)); return; }
+    // agora-host box-relay --token-fd <n>: the owner's terminal relay, a process of its own user (box-shell.ts)
+    if (process.argv[2] === 'box-relay') { process.exitCode = await boxRelayCommand(process.argv.slice(3)); return; }
     // agora-host devin login --profile <name> --config <file> [--paste]: a Devin profile's own login (devin.ts)
     if (process.argv[2] === 'devin') { process.exitCode = await devinCommand(process.argv.slice(3)); return; }
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
@@ -37,9 +41,17 @@ async function main() {
     // Agora applies the subscription rule from this report; the host enforces it too
     try { await client.reportProfiles(profileReport(config.profiles)); } catch (err) { console.error(`profile_report_failed ${errorCode(err)}`); }
     const scheduler = new Scheduler(config, client, new ProcessRunner(), { log: code => console.error(code) });
-    process.once('SIGINT', () => { void scheduler.stop(); });
-    process.once('SIGTERM', () => { void scheduler.stop(); });
-    await scheduler.run();
+    // as-agent (docs/box-terminal.md): box mode only. The owner's terminal is NOT here: it is another
+    // process of another user (box-relay), so nothing of the terminal passes through the agent's host.
+    const shell = new AbortController();
+    void runAsAgentServer(config, { signal: shell.signal, log: code => console.error(code) }).catch(() => console.error('as_agent_loop_failed'));
+    process.once('SIGINT', () => { shell.abort(); void scheduler.stop(); });
+    process.once('SIGTERM', () => { shell.abort(); void scheduler.stop(); });
+    try { await scheduler.run(); } finally {
+        // The host is done (stopped, or its token was refused): the as-agent server goes with it, so the
+        // process ends as it always did and a box's restart policy can start it again
+        shell.abort();
+    }
 }
 main().catch(err => {
     // Never print raw config, API responses, CLI output or exceptions containing credentials.

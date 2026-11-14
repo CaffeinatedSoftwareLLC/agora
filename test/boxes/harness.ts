@@ -37,10 +37,17 @@ export async function shEnv(cmd: string, args: string[], env: Record<string, str
 }
 export const docker = (...args: string[]) => sh('docker', args);
 export const compose = (...args: string[]) => sh(COMPOSE[0], [...COMPOSE.slice(1), ...args], 300_000);
+/**
+ * The users inside a box (docs/box-terminal.md). The container itself starts as root (its init,
+ * with no capability but CAP_KILL once started), so the harness always says who it runs as: by
+ * default the AGENT, the adversary the box suites model; `operator` is the owner's account.
+ */
+export const AGENT = '1000';
+export const OPERATOR = '1001';
 /** Run a script inside a container with `input` on its stdin (keeps secrets off command lines). */
-export function inBoxInput(container: string, script: string, input: string, timeout = 180_000): Promise<Exec> {
+export function inBoxInput(container: string, script: string, input: string, timeout = 180_000, user = AGENT): Promise<Exec> {
     return new Promise(resolve => {
-        const child = spawn('docker', ['exec', '-i', container, 'sh', '-c', script]);
+        const child = spawn('docker', ['exec', '-i', '-u', user, container, 'sh', '-c', script]);
         let stdout = ''; let stderr = '';
         const timer = setTimeout(() => child.kill(), timeout);
         child.stdout.on('data', d => { stdout += d; });
@@ -49,10 +56,10 @@ export function inBoxInput(container: string, script: string, input: string, tim
         child.stdin.end(input);
     });
 }
-/** Run a command inside a container as its own user. */
-export const inBox = (container: string, script: string, timeout = 60_000) => sh('docker', ['exec', container, 'sh', '-c', script], timeout);
-/** Node one-liner inside a box (the image has Node); prints what the script prints. */
-export const nodeInBox = (container: string, js: string, timeout = 60_000) => sh('docker', ['exec', container, 'node', '-e', js], timeout);
+/** Run a command inside a container as the agent (uid 1000), unless `user` says otherwise. */
+export const inBox = (container: string, script: string, timeout = 60_000, user = AGENT) => sh('docker', ['exec', '-u', user, container, 'sh', '-c', script], timeout);
+/** Node one-liner inside a box (the image has Node), as the agent; prints what the script prints. */
+export const nodeInBox = (container: string, js: string, timeout = 60_000, user = AGENT) => sh('docker', ['exec', '-u', user, container, 'node', '-e', js], timeout);
 
 export async function psql(sql: string): Promise<string> {
     const r = await docker('exec', `${INSTANCE}-postgres-1`, 'psql', '-U', 'accord', '-d', 'agora', '-tAc', sql);
@@ -105,7 +112,7 @@ export async function instance(): Promise<Instance> {
     return { admin, serverId, channelId: general.id };
 }
 
-export interface Box { id: string; name: string; container: string; botToken: string; hostToken: string; generation: number; address: string }
+export interface Box { id: string; name: string; container: string; botToken: string; hostToken: string; relayToken: string; generation: number; address: string }
 
 export const containerOf = (boxId: string) => `${INSTANCE}-box-${boxId.toLowerCase()}`;
 
@@ -119,7 +126,7 @@ export async function inspectBox(boxId: string): Promise<Box> {
     const nets = Object.values(info.NetworkSettings.Networks) as any[];
     return {
         id: boxId, name: env.AGORA_BOX_PROFILE ? JSON.parse(env.AGORA_BOX_PROFILE).name : '', container,
-        botToken: env.AGORA_BOT_TOKEN, hostToken: env.AGORA_HOST_TOKEN, generation: Number(env.AGORA_BOX_GENERATION),
+        botToken: env.AGORA_BOT_TOKEN, hostToken: env.AGORA_HOST_TOKEN, relayToken: env.AGORA_RELAY_TOKEN, generation: Number(env.AGORA_BOX_GENERATION),
         address: nets[0]?.IPAddress ?? '',
     };
 }

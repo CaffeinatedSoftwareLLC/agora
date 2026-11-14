@@ -1,7 +1,7 @@
 import type { ContainerCreateOptions } from 'dockerode';
 import type { BoxAdapter } from '../../lib/boxes/adapters';
 import {
-    BOX_HOME, BOX_UID, EDGE_AGORA_PORT, EDGE_HOSTNAME, EDGE_PROXY_PORT,
+    AS_AGENT_DIR, BOX_HOME, BOX_OPERATOR_HOME, BOX_OPERATOR_UID, BOX_UID, EDGE_AGORA_PORT, EDGE_HOSTNAME, EDGE_PROXY_PORT,
     LABEL_BOX, LABEL_BOX_BUILD, LABEL_BOX_GENERATION, LABEL_BOX_VERSION, LABEL_INSTANCE,
     boxContainerName, boxNetworkName, boxVolumeName,
 } from '../../lib/boxes/contract';
@@ -16,13 +16,47 @@ import { boxAddress, edgeAddress, gatewayAddress } from './subnets';
  * Nothing a person or a box sends reaches Docker as a flag, a mount or a capability.
  */
 
-export const BOX_USER = `${BOX_UID}:${BOX_UID}`;
+/**
+ * The user the container starts as: root, only so the box's init (box/agora-box-init, PID 1) can
+ * start the agent's processes and the owner's relay each under its own user. It holds exactly
+ * INIT_CAPS, uses CAP_SETUID/SETGID/SETPCAP to drop each child to no capability at all, then keeps
+ * only CAP_KILL (to pass a stop on to the two). No process of either user holds a capability, and
+ * no-new-privileges is on for all of them.
+ */
+export const BOX_USER = '0:0';
+/** The agent's user: what its processes run as (the volume's owner). */
+export const AGENT_USER = `${BOX_UID}:${BOX_UID}`;
+/** The only capabilities the container gets, all for the init (the Docker names without CAP_). */
+export const INIT_CAPS = ['KILL', 'SETGID', 'SETPCAP', 'SETUID'] as const;
+/**
+ * What PID 1 is: the absolute interpreter in isolated mode (no PYTHON* variable, no user site, no
+ * current directory on the path) and the absolute script. boxd sets this on the container, so the
+ * start of the root process never depends on the image's shebang, its PATH, or anything in the
+ * agent's volume; containerDrift refuses a container that differs.
+ */
+export const BOX_ENTRYPOINT = ['/usr/bin/python3', '-I', '/opt/agora/agora-box-init'] as const;
+/**
+ * The container's PATH: root-owned directories first, the agent's own folders (its volume) last. Anything
+ * that relies on PATH (docker exec, a root-run step) can't be shadowed from the volume. The agent's own
+ * processes get their installs first: the init sets that for them. The same string is ENV PATH in
+ * box/Dockerfile (a unit test compares).
+ */
+export const BOX_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.npm-global/bin:/home/agent/.local/bin';
+/** Variables that change how a process loads code: none may be set in the container. */
+export const LOADER_ENV = /^(LD_|PYTHON|NODE_(?!VERSION$)|BASH_ENV$|ENV$|GCONV_PATH$|GLIBC_|LOCPATH$|NLSPATH$|HOSTALIASES$|RESOLV_HOST_CONF$|MALLOC_|PERL|RUBY|IFS$|PS4$|SHELLOPTS$|TMPDIR$)/;
 export const RUN_AGORA_DIR = '/run/agora';
 export const TMPFS: Record<string, string> = {
-    // Builds and package managers run things from /tmp, so it stays exec
-    '/tmp': 'rw,nosuid,nodev,size=1g,mode=1777',
-    // agora-host's config with the tokens (§8.1); readable by the box user only
+    // noexec, as Docker has always made it when the options do not say `exec`: nothing runs from /tmp.
+    // This was never an isolation boundary (the agent's volume is exec); it keeps a dropped file from
+    // starting by accident. A build that must run its own output uses a folder under the home volume
+    // (TMPDIR=$HOME/tmp). Said explicitly so the spec, this comment and the drift check agree.
+    '/tmp': 'rw,noexec,nosuid,nodev,size=1g,mode=1777',
+    // agora-host's config with the tokens (§8.1); readable by the agent only
     [RUN_AGORA_DIR]: `rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=${BOX_UID},gid=${BOX_UID}`,
+    // The owner's home (the terminal relay and shell): the operator's alone, mode 0700, gone at restart
+    [BOX_OPERATOR_HOME]: `rw,nosuid,nodev,size=256m,mode=0700,uid=${BOX_OPERATOR_UID},gid=${BOX_OPERATOR_UID}`,
+    // Where `as-agent` reaches the agent's side: the agent owns it, the operator's group may only traverse (0710)
+    [AS_AGENT_DIR]: `rw,noexec,nosuid,nodev,size=1m,mode=0710,uid=${BOX_UID},gid=${BOX_OPERATOR_UID}`,
 };
 export const STOP_TIMEOUT_SECONDS = 30;
 
@@ -50,6 +84,8 @@ export interface BoxSpecInput {
     subnet: string;
     limits: BoxLimits;
     hostToken: string;
+    /** The terminal relay's credential (ar_…): goes to the init, which hands it to the operator's relay only */
+    relayToken: string;
     botId: string;
     botToken: string;
     profile: BoxProfileEnv;
@@ -87,10 +123,12 @@ export function containerEnv(input: BoxSpecInput): string[] {
     const proxy = `http://${EDGE_HOSTNAME}:${EDGE_PROXY_PORT}`;
     const env = [
         `HOME=${BOX_HOME}`,
+        `PATH=${BOX_PATH}`,
         `AGORA_BOX_ID=${input.boxId.trim()}`,
         `AGORA_BOX_GENERATION=${input.generation}`,
         `AGORA_INSTANCE_URL=http://${EDGE_HOSTNAME}:${EDGE_AGORA_PORT}`,
         `AGORA_HOST_TOKEN=${input.hostToken}`,
+        `AGORA_RELAY_TOKEN=${input.relayToken}`,
         `AGORA_BOT_ID=${input.botId.trim()}`,
         `AGORA_BOT_TOKEN=${input.botToken}`,
         `AGORA_BOX_PROFILE=${JSON.stringify(profile)}`,
@@ -140,6 +178,8 @@ export function containerSpec(input: BoxSpecInput): ContainerCreateOptions {
         name: boxContainerName(input.instance, input.boxId),
         Image: input.image,
         Env: containerEnv(input),
+        Entrypoint: [...BOX_ENTRYPOINT],
+        Cmd: [],
         User: BOX_USER,
         WorkingDir: BOX_HOME,
         AttachStdin: false,
@@ -163,7 +203,7 @@ export function containerSpec(input: BoxSpecInput): ContainerCreateOptions {
             Binds: [],
             Mounts: [{ Type: 'volume', Source: boxVolumeName(input.instance, input.boxId), Target: BOX_HOME, ReadOnly: false }],
             CapDrop: ['ALL'],
-            CapAdd: [],
+            CapAdd: [...INIT_CAPS],
             SecurityOpt: ['no-new-privileges'],
             PidsLimit: limits.pids,
             Memory: memoryBytes,
@@ -219,11 +259,20 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (name !== boxContainerName(e.instance, e.boxId)) out.push('name');
     if (cfg.Image !== e.image) out.push('image');
     if (cfg.User !== BOX_USER) out.push('user');
+    // What PID 1 is, and the environment a process would start with
+    if (!same(cfg.Entrypoint ?? [], [...BOX_ENTRYPOINT])) out.push('entrypoint');
+    if (!empty(cfg.Cmd)) out.push('command');
+    const env = envMap(cfg.Env);
+    if (env.PATH !== BOX_PATH) out.push('env-path');
+    if (env.HOME !== BOX_HOME) out.push('env-home');
+    if (Object.keys(env).some(k => LOADER_ENV.test(k))) out.push('env-loader');
+    if (cfg.WorkingDir !== BOX_HOME) out.push('working-dir');
     if ((hc.Runtime || 'runc') !== e.runtime) out.push('runtime');
     if (hc.Privileged !== false) out.push('privileged');
     if (hc.ReadonlyRootfs !== true) out.push('read-only');
     if (!same(hc.CapDrop, ['ALL'])) out.push('cap-drop');
-    if (!empty(hc.CapAdd)) out.push('cap-add');
+    // Exactly the init's capabilities, however this Docker spells them (SETUID or CAP_SETUID)
+    if (!same(capNames(hc.CapAdd), [...INIT_CAPS])) out.push('cap-add');
     if (!same(hc.SecurityOpt, ['no-new-privileges'])) out.push('security-opt');
     if (!same(sortKeys(hc.Tmpfs ?? {}), sortKeys(TMPFS))) out.push('tmpfs');
     if (!empty(hc.Binds)) out.push('binds');
@@ -232,6 +281,9 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (!empty(hc.PortBindings) || hc.PublishAllPorts) out.push('ports');
     if (!empty(hc.PidMode) || !empty(hc.UsernsMode) || !empty(hc.UTSMode) || hc.IpcMode !== 'private') out.push('namespaces');
     if (!empty(hc.Links)) out.push('links');
+    // An init injected as PID 1 would stand in front of ours; kernel parameters change what the box's processes may do
+    if (hc.Init) out.push('init');
+    if (!empty(hc.Sysctls)) out.push('sysctls');
     if (hc.NetworkMode !== network) out.push('network-mode');
     if (!same(hc.ExtraHosts ?? [], [`${EDGE_HOSTNAME}:${edgeAddress(e.subnet)}`])) out.push('extra-hosts');
     const mounts = (info?.Mounts ?? []) as any[];
@@ -244,6 +296,17 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (labels[LABEL_INSTANCE] !== e.instance || labels[LABEL_BOX] !== e.boxId.trim()
         || labels[LABEL_BOX_VERSION] !== String(e.imageVersion)) out.push('labels');
     return out;
+}
+
+function envMap(v: unknown): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const e of Array.isArray(v) ? v : []) { const s = String(e); const i = s.indexOf('='); if (i > 0) out[s.slice(0, i)] = s.slice(i + 1); }
+    return out;
+}
+
+/** Capability names without the CAP_ prefix, upper case, sorted. */
+function capNames(v: unknown): string[] {
+    return (Array.isArray(v) ? v : []).map(c => String(c).toUpperCase().replace(/^CAP_/, '')).sort();
 }
 
 function sortKeys(o: Record<string, string>): Record<string, string> {

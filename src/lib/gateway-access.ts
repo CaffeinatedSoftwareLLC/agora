@@ -1,3 +1,4 @@
+import { shellHub } from './boxes/shell-hub';
 import type { Pool } from 'pg';
 import type { Server, Socket } from 'socket.io';
 import { canViewChannel } from './channel-access';
@@ -34,6 +35,9 @@ export async function visibleChannels<T extends { id: string }>(db: Pick<Pool, '
 
 /** Revalidate after committed authorization changes, before returning success. */
 export async function refreshGatewayAccess(io: Server, db: Pool): Promise<void> {
+    // An open box terminal ends now if its owner no longer owns the server or the account changed
+    // (the hub also re-checks every 15 seconds)
+    await shellHub()?.recheckAccess().catch(() => {});
     for (const socket of io.sockets.sockets.values()) {
         try {
             const { userId, isBot } = socket.data;

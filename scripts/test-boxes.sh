@@ -9,15 +9,15 @@
 # With gVisor (runsc) on the engine the boxes run under it; without it (Docker Desktop) they
 # run under runc with AGORA_BOX_INSECURE_DEV=1 and the kernel check is skipped.
 #
-# The stack is named agora-boxtest: it never touches another install's containers, networks
+# The stack is named agora-boxtest (BOXTEST_INSTANCE=agora-other runs a second one beside it, with its own BOXTEST_API_PORT, BOXTEST_HTTP_PORT, BOXTEST_HTTPS_PORT and BOXTEST_SUBNETS): it never touches another install's containers, networks
 # or volumes, and it is removed at the end (BOXTEST_KEEP=1 keeps it for debugging).
 # BOXTEST_ALLOW_DAEMON_RESTART=1 adds the reboot test, which restarts the Docker daemon: only
 # on a machine that runs nothing else (CI).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-INSTANCE=agora-boxtest
-ENV_FILE=.env.boxtest
+INSTANCE=${BOXTEST_INSTANCE:-agora-boxtest}
+ENV_FILE=.env.${INSTANCE#agora-}
 export BOXTEST_INSTANCE="$INSTANCE"
 export BOXTEST_COMPOSE="docker compose -p $INSTANCE -f docker-compose.prod.yml --env-file $ENV_FILE"
 export BOXTEST_API="http://127.0.0.1:${BOXTEST_API_PORT:-13000}"
@@ -87,4 +87,20 @@ done
 curl -fsS "$BOXTEST_API/health" >/dev/null
 
 echo "==> box suites"
-npx vitest run --config vitest.box.config.ts "$@"
+status=0
+npx vitest run --config vitest.box.config.ts "$@" || status=$?
+if [ "$status" != 0 ]; then
+    # A suite that times out waiting for a box says nothing about why: show what the stack said
+    echo "==> the suites failed; the stack's last log lines"
+    docker ps -a --filter "label=org.agora.instance=$INSTANCE" --format '{{.Names}} {{.Status}}' || true
+    for service in boxd box-edge api; do
+        echo "--- $service"
+        "${DC[@]}" logs --no-color --tail 80 "$service" 2>&1 | cut -c1-300 || true
+    done
+    # The boxes' own agora-host output: a box that never checks in says why here
+    for box in $(docker ps -aq --filter "label=org.agora.instance=$INSTANCE" --filter "label=org.agora.box"); do
+        echo "--- box $(docker inspect -f '{{.Name}} {{.State.Status}} restarts={{.RestartCount}}' "$box")"
+        docker logs --tail 25 "$box" 2>&1 | cut -c1-300 || true
+    done
+fi
+exit "$status"

@@ -139,10 +139,10 @@ export async function accountDeletionRoutes(app: FastifyInstance) {
     });
 }
 
-type Reauth = 'ok' | 'reauth_failed' | 'challenge_invalid' | 'locked' | 'unavailable';
+export type Reauth = 'ok' | 'reauth_failed' | 'challenge_invalid' | 'locked' | 'unavailable';
 
 /** Password check, counted against the same per-account limit as POST /auth/login. */
-async function passwordReauth(app: FastifyInstance, request: FastifyRequest, userId: string, hash: string | null, password: string): Promise<Reauth> {
+export async function passwordReauth(app: FastifyInstance, request: FastifyRequest, userId: string, hash: string | null, password: string): Promise<Reauth> {
     const limiter: LoginLimiter | null = (app as any).loginLimiter;
     if (limiter) {
         try {

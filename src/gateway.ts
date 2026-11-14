@@ -14,6 +14,7 @@ import { attachTerminal, cleanToolName, endTerminal, heartbeatTerminals, reattac
 import type { Notice } from './lib/agent-runs';
 import { hopLimitOf } from './lib/agent-budget-notice';
 import { checkProvenance, recordRefusal, type ProvenanceCredential } from './lib/boxes/provenance';
+import { ShellHub, isShellHandshake, setShellHub, shellConnection, shellHandshake } from './lib/boxes/shell-hub';
 
 /** How often open human sockets are re-checked against revocation and account state. */
 const SESSION_SWEEP_MS = 5 * 60 * 1000;
@@ -46,6 +47,11 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     const emitNotices = (notices: Notice[]) => {
         for (const n of notices) io.to(`channel:${n.channelId}`).emit(n.eventName ?? 'Message', n.event);
     };
+    // The terminal in a box (src/lib/boxes/shell-hub.ts): its two kinds of socket meet there
+    const shell = new ShellHub(db, emitNotices);
+    setShellHub(shell);
+    void shell.start().catch(() => {});
+    app.addHook('onClose', async () => { await shell.stop().catch(() => {}); setShellHub(null); });
     const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const terminalBeat = setInterval(() => {
         void heartbeatTerminals(db, agentPresence.bots())
@@ -98,6 +104,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     // Auth middleware — verify JWT or bot token from handshake
     io.use(async (socket, next) => {
         socket.data.accessRevision = gatewayAccessRevision(io);
+        // A terminal socket (browser or box host) has its own handshake, decided on auth.type alone
+        if (isShellHandshake(socket.handshake.auth)) return shellHandshake({ db, jwtSecret, hub: shell, provenanceRefused }, socket, next);
         const type = socket.handshake.auth?.type;
         let token = socket.handshake.auth?.token;
         let fromCookie = false;
@@ -230,7 +238,9 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         }
     });
 
-    io.on('connection', (socket) => { void readGatewayAccess(io, async () => {
+    io.on('connection', (socket) => {
+        if (socket.data.shell || socket.data.shellHost) { shellConnection(shell, socket); return; }
+        void readGatewayAccess(io, async () => {
         const userId = (socket as any).userId;
         if (!socket.data.isBot) {
             const remaining = socket.data.tokenExpiresAt - Date.now();

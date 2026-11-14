@@ -1,0 +1,368 @@
+#!/usr/bin/python3 -I
+"""agora-pty: run one command in a pseudo-terminal for the box terminal (docs/box-terminal.md).
+
+    agora-pty [--client PATH] COLS ROWS CWD -- COMMAND [ARGS...]
+
+agora-host (in the box) starts this with its stdin, stdout and a control pipe on fd 3:
+  stdin   bytes for the command's terminal (what the owner types)
+  stdout  bytes the terminal produced
+  fd 3    lines "R COLS ROWS": resize the terminal
+  fd 4    (output) lines "S operator" or "S agent": which side the owner is typing on, see below
+  stderr  a fixed error code if the command could not start (exec_failed, bad_arguments, pty_failed)
+  exit    the command's exit status (128+N when a signal N ended it)
+
+Which side: the owner's terminal can be in the operator's own shell, or inside `as-agent`, a program
+that shows what the AGENT's side prints. The agent can draw anything there, even a copy of the
+operator's prompt, so what the screen shows proves nothing. This helper reports the one thing the
+agent cannot fake: whether a process running /usr/local/bin/as-agent has the terminal (it is in the
+foreground process group: tcgetpgrp on the master, then /proc; where the kernel does not answer that, any
+such process of the shell's tree counts). It reports on
+every change and twice a second; when it cannot tell, it says "agent". The page draws it outside the
+terminal.
+
+Sooner than the scan: as-agent writes a private OSC sequence (AS_AGENT_MARK) to the terminal as its very
+first act, and this helper, which reads the terminal's output, reports "agent" the moment it sees it and
+removes it from what goes on. Anyone can forge that sequence, and all it can do is move the display
+toward "agent", the safe direction: going back to "operator" is decided only by the /proc check above.
+
+Why Python and not a native Node module: the box image already has python3 and its `pty` module
+is in the standard library, so there is nothing to compile for amd64 or arm64 and nothing to keep
+in step with Node. This process only moves bytes: it never reads, logs or stores them.
+
+Closing stdin, or SIGHUP/SIGTERM, hangs the command's process group up; a command that ignores
+that is killed after two seconds.
+"""
+import errno
+import fcntl
+import os
+import pty
+import select
+import signal
+import struct
+import sys
+import termios
+import time
+
+AS_AGENT_CLIENT = '/usr/local/bin/as-agent'
+SIDE_EVERY = 0.5            # the page treats a side older than about 2 s as unknown: leave room for lost reports
+AS_AGENT_MARK = b']7777;agora-as-agent'   # written by box/as-agent; keep both in step
+MARK_HOLD = 0.05            # a partial mark at the end of a read waits this long for the rest
+SIDE_POLL = 0.2
+MAX_TO_CHILD = 1 << 20      # unwritten input kept before we stop reading stdin
+MAX_TO_NODE = 1 << 18       # unwritten output kept before we stop reading the terminal
+CHUNK = 1 << 14
+KILL_AFTER = 2.0
+
+stop_requested = False
+
+
+def request_stop(_signum, _frame):
+    global stop_requested
+    stop_requested = True
+
+
+def set_size(fd, cols, rows):
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+    except OSError:
+        pass
+
+
+def fail(code, status=2):
+    os.write(2, (code + '\n').encode())
+    sys.exit(status)
+
+
+def processes():
+    """pid -> (ppid, pgrp, first three arguments) of every process whose files can be read."""
+    table = {}
+    try:
+        names = os.listdir('/proc')
+    except OSError:
+        return None
+    me = os.getuid()
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            # Only the operator's own processes can be the client; the agent's cannot slow this scan
+            if os.stat('/proc/' + name).st_uid != me:
+                continue
+            with open('/proc/%s/stat' % name, 'rb') as f:
+                stat = f.read()
+            fields = stat[stat.rindex(b')') + 2:].split()
+            with open('/proc/%s/cmdline' % name, 'rb') as f:
+                args = f.read().split(bytes(1))
+            table[int(name)] = (int(fields[1]), int(fields[2]), args[:3])
+        except (OSError, ValueError, IndexError):
+            continue        # the process went away between the reads
+    return table
+
+
+def foreground_side(master, client, shell):
+    """'agent' when an as-agent client has the terminal, or when that cannot be told; 'operator' otherwise.
+
+    Exact where the kernel answers TIOCGPGRP on the pty master (Linux): a process running the client is
+    in the terminal's foreground process group. Where it does not (gVisor answers only on the slave side),
+    the helper falls back to what it can see: any process of the shell's tree running the client counts,
+    foreground or not. That can only over-report the agent's side (a client left in the background), never
+    miss a client that is running."""
+    table = processes()
+    if table is None:
+        return 'agent'
+    want = client.encode()
+    try:
+        pgrp = os.tcgetpgrp(master)
+    except OSError:
+        pgrp = None
+    # An answer that names no process group we can see is no answer
+    if pgrp is not None and not any(group == pgrp for _ppid, group, _args in table.values()):
+        pgrp = None
+    for pid, (ppid, group, args) in table.items():
+        if pgrp is not None:
+            if group != pgrp:
+                continue
+        else:
+            # in the shell's tree: the shell itself (it may have exec'd the client) or a descendant
+            walker, hops = pid, 0
+            while walker != shell and walker in table and hops < 64:
+                walker = table[walker][0]
+                hops += 1
+            if walker != shell:
+                continue
+        # python3 -I /usr/local/bin/as-agent ...  (or the script run directly)
+        if want in args:
+            return 'agent'
+    return 'operator'
+
+
+def main(argv):
+    client = AS_AGENT_CLIENT
+    if len(argv) > 2 and argv[1] == '--client':
+        client = argv[2]
+        argv = [argv[0]] + argv[3:]
+    if '--' not in argv or len(argv) < 6:
+        fail('bad_arguments')
+    split = argv.index('--')
+    try:
+        cols, rows, cwd = int(argv[1]), int(argv[2]), argv[3]
+    except (ValueError, IndexError):
+        fail('bad_arguments')
+    command = argv[split + 1:]
+    if split != 4 or not command or not (1 <= cols <= 500 and 1 <= rows <= 200):
+        fail('bad_arguments')
+
+    signal.signal(signal.SIGHUP, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
+    try:
+        pid, master = pty.fork()
+    except OSError:
+        fail('pty_failed')
+    if pid == 0:
+        # The child: session leader with the terminal as its controlling terminal. Ignored signals
+        # stay ignored across exec, so give the shell and its jobs the defaults back (Python ignores
+        # SIGPIPE, and this process ignores SIGINT): without it Ctrl-C would not stop a job.
+        for sig in (signal.SIGINT, signal.SIGPIPE, signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT):
+            signal.signal(sig, signal.SIG_DFL)
+        # The control pipe (fd 3) and anything else inherited stays in the helper: the shell, and
+        # whatever the agent leaves running in it, must not hold the resize channel
+        try:
+            os.closerange(3, 4096)   # includes the side channel (fd 4)
+        except OSError:
+            pass
+        try:
+            os.chdir(cwd)
+            os.execvp(command[0], command)
+        except OSError:
+            os.write(2, b'exec_failed\n')
+            os._exit(127)
+    set_size(master, cols, rows)
+
+    side_open = True
+    last_side = None
+    held = bytearray()          # the start of a mark cut by the end of a read
+    held_at = 0.0
+    last_side_at = 0.0
+    last_poll = 0.0
+    try:
+        os.fstat(4)
+    except OSError:
+        side_open = False
+    for fd in (0, 1, 3, 4, master):
+        try:
+            os.set_blocking(fd, False)
+        except OSError:
+            pass
+
+    to_child = bytearray()
+    to_node = bytearray()
+    ctl = bytearray()
+    stdin_open = True
+    ctl_open = True
+    master_open = True
+    hung_up_at = None
+    status = None
+    status_at = None
+
+    def report(side, now):
+        nonlocal last_side, last_side_at, side_open
+        last_side, last_side_at = side, now
+        try:
+            os.write(4, ('S %s' % side + chr(10)).encode())
+        except BlockingIOError:
+            last_side = None        # the pipe is full: say it again next time
+        except OSError:
+            side_open = False       # nobody listens (or the pipe is full): keep serving the shell
+
+    def hang_up():
+        nonlocal hung_up_at
+        if hung_up_at is None:
+            hung_up_at = time.monotonic()
+            try:
+                os.killpg(pid, signal.SIGHUP)
+            except OSError:
+                pass
+
+    while True:
+        if stop_requested or not stdin_open:
+            hang_up()
+        if hung_up_at is not None and time.monotonic() - hung_up_at > KILL_AFTER:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+        if status is None:
+            try:
+                done, st = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    status = (os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
+                    status_at = time.monotonic()
+            except ChildProcessError:
+                status = 0
+                status_at = time.monotonic()
+        # Done once the command is gone and its output delivered; a background process that kept
+        # the terminal open gets a short grace to say its last words, then goes with the group
+        if status is not None and not to_node and (not master_open or time.monotonic() - status_at > 0.3):
+            break
+
+        if side_open and time.monotonic() - last_poll >= SIDE_POLL:
+            last_poll = time.monotonic()
+            side = foreground_side(master, client, pid)
+            if side != last_side or last_poll - last_side_at >= SIDE_EVERY:
+                report(side, last_poll)
+
+        if held and time.monotonic() - held_at > MARK_HOLD:
+            to_node += held
+            held.clear()
+        readers = []
+        writers = []
+        if stdin_open and len(to_child) < MAX_TO_CHILD:
+            readers.append(0)
+        if ctl_open:
+            readers.append(3)
+        if master_open and len(to_node) < MAX_TO_NODE:
+            readers.append(master)
+        if master_open and to_child:
+            writers.append(master)
+        if to_node:
+            writers.append(1)
+        try:
+            r, w, _ = select.select(readers, writers, [], 0.2)
+        except (InterruptedError, OSError):
+            continue
+
+        if 0 in r:
+            try:
+                data = os.read(0, CHUNK)
+                if data:
+                    to_child += data
+                else:
+                    stdin_open = False
+            except BlockingIOError:
+                pass
+            except OSError:
+                stdin_open = False
+        if 3 in r:
+            try:
+                data = os.read(3, 256)
+                if data:
+                    ctl += data
+                else:
+                    ctl_open = False
+            except BlockingIOError:
+                pass
+            except OSError:
+                ctl_open = False
+            while b'\n' in ctl:
+                line, _, rest = bytes(ctl).partition(b'\n')
+                ctl = bytearray(rest)
+                parts = line.split()
+                if len(parts) == 3 and parts[0] == b'R':
+                    try:
+                        c, rw = int(parts[1]), int(parts[2])
+                        if 1 <= c <= 500 and 1 <= rw <= 200:
+                            set_size(master, c, rw)
+                    except ValueError:
+                        pass
+            if len(ctl) > 1024:
+                ctl = bytearray()
+        if master in r:
+            try:
+                data = os.read(master, CHUNK)
+                if data:
+                    data = bytes(held) + data
+                    held.clear()
+                    if AS_AGENT_MARK in data:
+                        data = data.replace(AS_AGENT_MARK, b'')
+                        if side_open:
+                            report('agent', time.monotonic())
+                    # keep back the end of a read that could be the start of a mark
+                    for n in range(min(len(AS_AGENT_MARK) - 1, len(data)), 0, -1):
+                        if AS_AGENT_MARK.startswith(data[-n:]):
+                            held += data[-n:]
+                            held_at = time.monotonic()
+                            data = data[:-n]
+                            break
+                    to_node += data
+                else:
+                    to_node += held
+                    held.clear()
+                    master_open = False
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                # EIO: every process on the terminal has gone
+                master_open = False if e.errno in (errno.EIO, errno.EBADF) else master_open
+        if master in w and to_child:
+            try:
+                n = os.write(master, to_child[:CHUNK])
+                del to_child[:n]
+            except BlockingIOError:
+                pass
+            except OSError:
+                to_child.clear()
+        if 1 in w and to_node:
+            try:
+                n = os.write(1, to_node[:CHUNK])
+                del to_node[:n]
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                if e.errno == errno.EPIPE:
+                    # The reader is gone: nothing to deliver to
+                    to_node.clear()
+                    stdin_open = False
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    sys.exit(status if status is not None else 0)
+
+
+if __name__ == '__main__':
+    main(sys.argv)

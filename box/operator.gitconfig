@@ -1,0 +1,13 @@
+# git for the owner's shell in an Agora box (docs/box-terminal.md): GIT_CONFIG_GLOBAL points here
+# and GIT_CONFIG_NOSYSTEM is set, so no other file configures git for the operator. Root-owned.
+#
+# Hooks and fsmonitor are off so that nothing a repository carries runs as the operator. There is
+# deliberately no [safe] directory entry: git refuses a repository owned by another user (the
+# agent's) outright. Use `as-agent git ...` to work in those, as the agent.
+[core]
+	hooksPath = /dev/null
+	fsmonitor = false
+[protocol "ext"]
+	allow = never
+[init]
+	defaultBranch = main

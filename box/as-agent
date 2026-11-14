@@ -1,0 +1,308 @@
+#!/usr/bin/python3 -I
+"""as-agent: run a command with the AGENT's rights, from the owner's shell (docs/box-terminal.md).
+
+    as-agent claude            the agent's CLI, logged in as the agent, interactive
+    as-agent git status        a repository the agent wrote, with the agent's own hooks
+    as-agent npm test          the agent's project scripts, as the agent
+    as-agent                   a shell on the agent's side
+
+The command runs in the agent's workspace, as the agent's Unix user, through the agent's side of
+the box (as-agent-server). Hooks and scripts the agent wrote therefore run as the agent and never
+as you. In exchange, what you type in an as-agent session is on the agent's side of the wall: the
+agent can see it, and can draw anything on your screen, even a copy of your own prompt. Do not type
+a password or token into it. Agora's page shows which side you are on in a frame around the
+terminal (red, "AGENT SIDE"); the prompt proves nothing.
+
+To leave an interactive session at any time, press Enter, then ~ and . (a dot). This is handled
+here, before anything is sent to the agent's side, so it cannot be intercepted; "~~" types one ~.
+
+With a terminal this is interactive (resize and Ctrl-C work); without one, stdin, stdout, stderr
+and the exit status pass through.
+
+The agent's side is not trusted: its frames are size-limited, malformed ones end the session, and
+nothing it sends is put into an error message.
+"""
+import fcntl
+import json
+import os
+import select
+import signal
+import socket
+import struct
+import sys
+import termios
+import time
+import tty
+
+SOCKET = os.environ.get('AGORA_AS_AGENT_SOCKET', '/run/as-agent/server.sock')
+CHUNK = 1 << 14
+WRITE_CHUNK = 4096            # at most PIPE_BUF: a write the kernel said had room does not block
+MAX_FRAME = 1 << 20           # the largest frame the agent's side may send
+MAX_BUFFER = 4 << 20          # received bytes held, never more
+MAX_PENDING_OUT = 1 << 20     # bytes for the terminal still unwritten: past it, reading from the server waits
+MAX_PENDING_SEND = 1 << 20    # bytes for the server still unsent: past it, the server is not reading and we leave
+ESCAPE_STATUS = 130
+# Said to the terminal before anything else: box/agora-pty (the operator's own helper, which reads the
+# terminal's output) reports "agent side" the moment it sees it, instead of at its next scan. Keep both in step.
+AS_AGENT_MARK = b']7777;agora-as-agent'
+STDIN_QUIET = 0.5             # keystrokes typed before the page shows the agent side are thrown away this long
+# After the session: leave the alternate screen, mouse reporting, bracketed paste and application keys, show the
+# cursor, reset attributes. An explicit list, so nothing the agent's side drew can stay on the owner's terminal.
+TERMINAL_RESET = (b'[?1049l[?1000l[?1002l[?1003l[?1005l[?1006l[?1015l'
+                  b'[?2004l[?1l>[?7h[?25h[0m')
+REFUSALS = {b'forbidden': 'not allowed', b'bad_request': 'bad request', b'failed': 'could not run it', b'busy': 'busy, try again'}
+
+
+def frame(kind, payload=b''):
+    return kind + struct.pack('>I', len(payload)) + payload
+
+
+def fail(message, status):
+    sys.stderr.write('as-agent: %s\n' % message)
+    sys.exit(status)
+
+
+def tty_write(data):
+    """Write to the owner's terminal: stdout when it is one, else stdin's (both may be the same device)."""
+    for fd in (1, 0):
+        if os.isatty(fd):
+            try:
+                os.write(fd, data)
+            except OSError:
+                pass
+            return
+
+
+def window_size(fd):
+    try:
+        rows, cols, _x, _y = struct.unpack('HHHH', fcntl.ioctl(fd, termios.TIOCGWINSZ, b'\0' * 8))
+        if rows and cols:
+            return cols, rows
+    except OSError:
+        pass
+    return 80, 24
+
+
+class Escape:
+    """The local escape: at the start of a line, `~.` leaves, `~~` types one `~`. Runs on the bytes
+    the owner types, before they are sent anywhere."""
+
+    def __init__(self):
+        self.line_start = True
+        self.held = False
+
+    def feed(self, data):
+        """Returns (bytes to send, whether to leave)."""
+        out = bytearray()
+        for b in data:
+            if self.held:
+                self.held = False
+                if b == 0x2e:
+                    return bytes(out), True
+                out.append(0x7e)
+                if b == 0x7e:
+                    self.line_start = False
+                    continue
+            elif self.line_start and b == 0x7e:
+                self.held = True
+                continue
+            out.append(b)
+            self.line_start = b in (0x0d, 0x0a)
+        return bytes(out), False
+
+
+def exit_status(body):
+    """The status the agent's side reports, whatever it sent."""
+    try:
+        code = json.loads(body).get('code')
+    except Exception:  # noqa: BLE001 - hostile input: any failure is just "failed"
+        return 1
+    return code if isinstance(code, int) and not isinstance(code, bool) and 0 <= code <= 255 else 1
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv[:1] in (['-h'], ['--help']):
+        sys.stdout.write(__doc__)
+        return 0
+    if argv[:1] == ['--']:
+        argv = argv[1:]
+    if not argv:
+        argv = ['/bin/bash', '-i']
+    # A terminal on stdin is what makes it interactive (raw keys, the `Enter ~ .` escape), even if stdout
+    # is redirected: the keyboard must not reach the agent's side without the escape in front of it
+    interactive = os.isatty(0)
+    if interactive:
+        tty_write(AS_AGENT_MARK)       # first, before the banner and before stdin is read
+
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        conn.connect(SOCKET)
+    except OSError:
+        fail("the agent's side is not running (no one is listening at %s)" % SOCKET, 69)
+    conn.setblocking(False)
+    size_fd = 1 if os.isatty(1) else 0
+    cols, rows = window_size(size_fd) if interactive else (80, 24)
+    request = {'v': 1, 'argv': argv, 'tty': interactive, 'cols': cols, 'rows': rows, 'term': os.environ.get('TERM', 'xterm')}
+    sendq = bytearray(frame(b'Q', json.dumps(request).encode()))
+
+    if interactive:
+        sys.stderr.write("\033[1;33mas-agent: AGENT SIDE. Everything you type here goes to the agent, and the agent can draw anything on this screen, even your own prompt. "
+                         "Never type a password or token. Agora's page frames this terminal in red while you are on the agent's side. "
+                         "To leave at any time: press Enter, then ~ and . (handled here; the agent cannot intercept it).\033[0m\r\n")
+
+    resize = []
+    forwarded = []
+    signal.signal(signal.SIGWINCH, lambda *_: resize.append(1))
+    if not interactive:
+        for name in ('INT', 'TERM', 'HUP', 'QUIT'):
+            signal.signal(getattr(signal, 'SIG' + name), lambda s, _f, n=name: forwarded.append(n))
+    saved = None
+    if interactive:
+        saved = termios.tcgetattr(0)
+        tty.setraw(0, termios.TCSAFLUSH)
+    quiet_until = time.monotonic() + STDIN_QUIET
+    escape = Escape()
+    buf = bytearray()
+    outq = {1: bytearray(), 2: bytearray()}
+    stdin_open = True
+    conn_open = True
+    status = 1
+    message = None
+    finished = False       # the agent's side reported an end, or we are leaving
+    nl = '\r\n' if interactive else '\n'
+    try:
+        while True:
+            if resize and interactive:
+                resize.clear()
+                c, r = window_size(size_fd)
+                sendq += frame(b'R', ('%d %d' % (c, r)).encode())
+            while forwarded:
+                sendq += frame(b'S', forwarded.pop(0).encode())
+            if len(sendq) > MAX_PENDING_SEND:
+                status, message = 76, "the agent's side stopped reading; disconnected"
+                break
+            # Frames already received are handled one at a time, so the keyboard is looked at in between
+            progressed = True
+            while progressed and not finished and len(outq[1]) + len(outq[2]) < MAX_PENDING_OUT:
+                progressed = False
+                if len(buf) >= 5:
+                    length = struct.unpack('>I', bytes(buf[1:5]))[0]
+                    if length > MAX_FRAME:
+                        status, message = 76, "the agent's side sent a frame that is too large; disconnected"
+                        finished = True
+                        break
+                    if len(buf) >= 5 + length:
+                        kind, body = bytes(buf[0:1]), bytes(buf[5:5 + length])
+                        del buf[:5 + length]
+                        progressed = True
+                        if kind == b'O':
+                            outq[1] += body
+                        elif kind == b'E':
+                            outq[2] += body
+                        elif kind == b'X':
+                            status = exit_status(body)
+                            finished = True
+                        elif kind == b'F':
+                            status = 77
+                            message = 'refused (%s)' % REFUSALS.get(body, 'refused')
+                            finished = True
+                        # any other kind is ignored
+            if finished and not outq[1] and not outq[2]:
+                break
+            readers = []
+            if conn_open and not finished and len(buf) < MAX_BUFFER and len(outq[1]) + len(outq[2]) < MAX_PENDING_OUT:
+                readers.append(conn)
+            # The keyboard is always read, so the local escape works even when the server reads nothing;
+            # a file or pipe on stdin waits for room instead
+            if stdin_open and (interactive or len(sendq) < MAX_PENDING_SEND // 2):
+                readers.append(0)
+            writers = [conn] if sendq and conn_open else []
+            writers += [fd for fd in (1, 2) if outq[fd]]
+            if not readers and not writers:
+                if not conn_open:
+                    break
+                readers = [conn]
+            try:
+                r, w, _ = select.select(readers, writers, [], 0.5)
+            except InterruptedError:
+                continue
+            if 0 in r:
+                data = os.read(0, CHUNK)
+                if data:
+                    if interactive and time.monotonic() < quiet_until:
+                        pass       # typed ahead of the side indicator: dropped
+                    elif interactive:
+                        data, leave = escape.feed(data)
+                        if data:
+                            sendq += frame(b'I', data)
+                        if leave:
+                            status, message = ESCAPE_STATUS, "left the agent's side"
+                            break
+                    else:
+                        sendq += frame(b'I', data)
+                else:
+                    stdin_open = False
+                    if not interactive:
+                        sendq += frame(b'D')
+                    elif conn_open:
+                        # a terminal whose input ended: the session is over
+                        try:
+                            conn.shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+            if conn in w and sendq:
+                try:
+                    n = conn.send(sendq[:CHUNK * 4])
+                    del sendq[:n]
+                except (BlockingIOError, InterruptedError):
+                    pass
+                except OSError:
+                    conn_open = False
+                    sendq.clear()
+            if conn in r:
+                try:
+                    data = conn.recv(CHUNK * 4)
+                except (BlockingIOError, InterruptedError):
+                    data = None
+                except OSError:
+                    data = b''
+                if data == b'':
+                    conn_open = False
+                elif data:
+                    buf += data
+                    if len(buf) > MAX_BUFFER:
+                        status, message = 76, "the agent's side sent too much at once; disconnected"
+                        break
+            for fd in (1, 2):
+                if fd in w and outq[fd]:
+                    try:
+                        n = os.write(fd, bytes(outq[fd][:WRITE_CHUNK]))
+                        del outq[fd][:n]
+                    except (BlockingIOError, InterruptedError):
+                        pass
+                    except BrokenPipeError:
+                        outq[fd].clear()
+                    except OSError:
+                        outq[fd].clear()
+            if not conn_open and len(buf) < 5 and not (outq[1] or outq[2]) and not finished:
+                message = 'the connection to the agent side closed'
+                break
+    finally:
+        if saved is not None:
+            termios.tcsetattr(0, termios.TCSADRAIN, saved)
+            tty_write(TERMINAL_RESET)
+        try:
+            conn.close()
+        except OSError:
+            pass
+    if message:
+        sys.stderr.write('%sas-agent: %s%s' % (nl if interactive else '', message, nl))
+    return status
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, ConnectionResetError):
+        sys.exit(1)
